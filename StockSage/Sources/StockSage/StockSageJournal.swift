@@ -280,7 +280,11 @@ struct HoldingPeriod: Sendable, Equatable {
     nonisolated var ridingLosers: Bool { winCount > 0 && lossCount > 0 && avgWinDays < avgLossDays }
 
     nonisolated var note: String {
-        let base = String(format: "Avg hold: winners %.0fd vs non-winners %.0fd", avgWinDays, avgLossDays)
+        // Review fix 2026-07-16: an empty bucket rendered its sentinel 0 as a measured
+        // "winners 0d" average — a side with no trades reads "—", never a fake figure.
+        let winStr = winCount > 0 ? String(format: "%.0fd", avgWinDays) : "—"
+        let lossStr = lossCount > 0 ? String(format: "%.0fd", avgLossDays) : "—"
+        let base = "Avg hold: winners \(winStr) vs non-winners \(lossStr)"
         guard winCount > 0, lossCount > 0 else { return base + "." }
         if avgWinDays < avgLossDays { return base + " — you cut winners early / ride non-winners." }
         if avgWinDays > avgLossDays { return base + " — you give winners room and cut non-winners fast." }
@@ -680,12 +684,17 @@ enum StockSageJournal {
         cal.timeZone = TimeZone(identifier: "UTC")!
         var groups: [String: (count: Int, r: Double)] = [:]
         for t in trades where !t.isOpen {
-            guard let closed = t.closedAt, let r = t.realizedR else { continue }
+            guard let closed = t.closedAt else { continue }
             let c = cal.dateComponents([.year, .month], from: closed)
             guard let y = c.year, let m = c.month else { continue }
             let key = String(format: "%04d-%02d", y, m)
             var g = groups[key] ?? (0, 0)
-            g.count += 1; g.r += r
+            // Review fix 2026-07-16: an R-undefined closed trade (entry==stop legacy)
+            // was dropped from the month's COUNT while yearlyPnL and stats.closed count
+            // it — the same trade showed in the year row and vanished from its month.
+            // Convention now matches: every closed trade counts; only defined Rs sum.
+            g.count += 1
+            if let r = t.realizedR { g.r += r }
             groups[key] = g
         }
         return groups.map { MonthlyPnL(month: $0.key, trades: $0.value.count, totalR: $0.value.r) }
