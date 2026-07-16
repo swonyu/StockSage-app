@@ -3781,6 +3781,11 @@ struct MarketsView: View {
             HStack(spacing: IdeaSpace.chipGap) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(idea.symbol).font(.system(size: mvFont15, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                    // Tadawul numeric tickers are unreadable at a glance (owner, 2026-07-16):
+                    // bilingual company name as a READING AID — the symbol stays the identity.
+                    if let n = StockSageTadawulNames.displayLine(for: idea.symbol) {
+                        Text(n).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     Text(idea.market).font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -4396,7 +4401,12 @@ struct MarketsView: View {
                             .accessibilityHidden(true)
                     }
                     HStack(spacing: DS.Space.sm) {
-                        Text(idea.symbol).font(.system(size: mvFont16, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(idea.symbol).font(.system(size: mvFont16, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                            if let n = StockSageTadawulNames.displayLine(for: idea.symbol) {
+                                Text(n).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
                         ideaMetric("Est. EV", String(format: "%+.2fR (gross)", ev.evR),
                                    color: DS.Palette.successSoft,
                                    sub: cardNetEV.map { String(format: "≈%+.2fR net est.", $0) },
@@ -6287,7 +6297,7 @@ struct MarketsView: View {
             regimeIsStale: store.regimeIsStale, hasRegime: store.regime != nil,
             liquidityTier: store.liquidity[idea.symbol.uppercased()]?.tier)
         // House pattern: ScrollViewReader is the outer view; ScrollView is its content.
-        // This matches ContentView and CodeView usage throughout the repo and ensures the
+        // ScrollViewReader outside, ScrollView inside — the proxy stays available to .onChange and the
         // proxy is available to modifiers (.onChange) placed on the ScrollView itself.
         return ScrollViewReader { proxy in
             ScrollView {
@@ -6297,10 +6307,13 @@ struct MarketsView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(idea.symbol).font(.system(size: mvFont20, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                        if let n = StockSageTadawulNames.displayLine(for: idea.symbol) {
+                            Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
                         Text(idea.market).font(.caption).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(idea.symbol), \(idea.market)")
+                    .accessibilityLabel("\(idea.symbol)\(StockSageTadawulNames.name(for: idea.symbol).map { ", \($0.english)" } ?? ""), \(idea.market)")
                     Spacer()
                     Text(a.action.rawValue)
                         .font(.system(size: mvFont12, weight: .bold)).foregroundStyle(actionTextColor(a.action))
@@ -7890,7 +7903,7 @@ enum BacktestVerdict {
 
 /// Pure resolution for the ideas detail-sheet prev/next stepper. Kept top-level (internal,
 /// NOT nested private inside MarketsView) so `Salehman AITests` reaches it via
-/// `@testable import Salehman_AI`.
+/// `@testable import StockSage`.
 ///
 /// Board order = `displayedIdeas` (post sort/filter/search) — the SAME order the user sees.
 /// The board mutates under background refresh, so callers pass a FRESH `ids` snapshot and

@@ -62,7 +62,9 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     nonisolated static func diskURL() -> URL? {
         guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                      in: .userDomainMask, appropriateFor: nil, create: true) else { return nil }
-        return dir.appendingPathComponent("salehman_quote_cache.json")
+        // STANDALONE DEVIATION (review HIGH, 2026-07-16): own filename — see
+        // StockSageHistoryCache for the two-writer rationale.
+        return dir.appendingPathComponent("stocksage_quote_cache.json")
     }
 
     nonisolated static func load() -> StockSageQuoteCache? {

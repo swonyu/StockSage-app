@@ -7,8 +7,9 @@ import UserNotifications
 // parts — the cancellable monitoring loop and real `UNUserNotificationCenter`
 // strong-signal alerts. Changes from the package:
 //   * Namespaced (no collision with Chat A's agent backbone).
-//   * Throttle decision uses the app's real `MemoryManager` instead of the
-//     package's `testingHooks.shouldThrottleForThermal` shim.
+//   * Throttle decision uses a real machine-stress read instead of the package's
+//     `testingHooks.shouldThrottleForThermal` shim (standalone: ProcessInfo thermal
+//     state — see the STANDALONE DEVIATION in start()).
 //   * **Dropped the fabricated swarm-spawn / device-migration calls** — the
 //     package "spawned" agents into a dictionary and printed fake migration
 //     success. Shipping nothing that lies.
@@ -47,8 +48,8 @@ final class StockSageMonitor {
     }
 
     /// Start the monitoring loop. Re-evaluates every `interval` seconds (doubled
-    /// automatically when `MemoryManager` reports the machine is under
-    /// memory/thermal pressure). Throws if already running.
+    /// automatically when `ProcessInfo` reports serious/critical thermal state —
+    /// see the STANDALONE DEVIATION below). Throws if already running.
     /// `firstCycleDelay` staggers the monitor's first refresh so it doesn't race
     /// the view's onAppear refresh that fires at the same moment on launch.
     func start(interval: TimeInterval = 45, firstCycleDelay: TimeInterval = 20) throws {

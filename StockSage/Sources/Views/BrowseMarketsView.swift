@@ -162,6 +162,10 @@ struct BrowseMarketsView: View {
             Text(s.symbol).font(.system(size: bmFont13, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 96, alignment: .leading).lineLimit(1)
             Text(s.market).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            // Tadawul numeric tickers get their bilingual company name (owner, 2026-07-16).
+            if let n = StockSageTadawulNames.displayLine(for: s.symbol) {
+                Text(n).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
             Spacer(minLength: 4)
             if isTracked {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: bmFont14)).foregroundStyle(DS.Palette.successSoft)

@@ -89,7 +89,12 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     nonisolated static func diskURL() -> URL? {
         guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                      in: .userDomainMask, appropriateFor: nil, create: true) else { return nil }
-        return dir.appendingPathComponent("salehman_history_cache.json")
+        // STANDALONE DEVIATION (review HIGH, 2026-07-16): the parent app writes
+        // "salehman_history_cache.json" at this same path with a whole-file replace and no
+        // cross-process coordination — two apps sharing one cache silently destroy each
+        // other's entries and make savedAt lie. The standalone uses its OWN file; the cache
+        // is re-fetchable 429-protection, so starting empty costs one scan, never data.
+        return dir.appendingPathComponent("stocksage_history_cache.json")
     }
 
     /// Decode + validate the schema version. Separated from the disk read so the version guard
