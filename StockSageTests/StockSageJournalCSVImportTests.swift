@@ -180,15 +180,38 @@ struct StockSageJournalCSVImportTests {
         #expect(errors.isEmpty)
     }
 
+    // Semantics corrected WITH the 2026-07-16 review fix (not to make a failing test pass):
+    // the old expectation `skipped == 1` pinned the conflation bug — a bad-number row (a
+    // FAILURE, no duplicates present) counted as a "skipped duplicate" because preview()
+    // set skipped = errors.count. Hand-derived: 1 good row imported, 1 malformed row
+    // failed, 0 duplicates skipped.
     @Test func previewSummarizesImportedSkippedAndErrors() {
         let csv = StockSageJournalCSV.header + "\n" +
             "AAPL,Long,100,90,,10,1970-01-01T00:00:00Z,,,,\n" +
             "BAD,Long,abc,90,,10,1970-01-01T00:00:00Z,,,,"
         let preview = StockSageJournalCSVImport.preview(csv)
         #expect(preview.imported == 1)
-        #expect(preview.skipped == 1)
+        #expect(preview.skipped == 0)
         #expect(preview.errors.count == 1)
         #expect(preview.trades.count == 1)
+    }
+
+    // The partition itself: one duplicate (intentional skip) + one malformed row (failure)
+    // must land in DISJOINT counts. Hand-derived: MSFT matches `existing`'s dupe key
+    // (symbol/side/entry/shares/openedAt-to-the-minute) → skipped == 1; the abc-entry row
+    // fails parsing → errors == 1 (and its reason is NOT the duplicate reason); AAPL imports.
+    @Test func previewSeparatesDuplicatesFromFailures() {
+        let existing = TradeRecord(symbol: "MSFT", side: .long, entry: 100, stop: 90,
+                                   target: nil, shares: 10, openedAt: Date(timeIntervalSince1970: 0))
+        let csv = StockSageJournalCSV.header + "\n" +
+            "AAPL,Long,100,90,,10,1970-01-01T00:00:00Z,,,,\n" +
+            "MSFT,Long,100,90,,10,1970-01-01T00:00:00Z,,,,\n" +
+            "BAD,Long,abc,90,,10,1970-01-01T00:00:00Z,,,,"
+        let preview = StockSageJournalCSVImport.preview(csv, existing: [existing])
+        #expect(preview.imported == 1)
+        #expect(preview.skipped == 1)
+        #expect(preview.errors.count == 1)
+        #expect(preview.errors.first?.reason != StockSageJournalCSVImport.duplicateReason)
     }
 
     @Test func targetAndExitPriceRejectNonPositive() {

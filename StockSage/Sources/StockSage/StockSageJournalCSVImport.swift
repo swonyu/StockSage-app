@@ -92,7 +92,7 @@ enum StockSageJournalCSVImport {
 
             let key = dupeKey(symbol: symbol, side: side, entry: entry, shares: shares, openedAt: openedAt)
             if existingKeys.contains(key) {
-                errors.append((line, "duplicate of existing trade — skipped"))
+                errors.append((line, Self.duplicateReason))
                 continue
             }
 
@@ -103,10 +103,20 @@ enum StockSageJournalCSVImport {
         return (trades, errors)
     }
 
-    /// Same as `parse(_:existing:)` but wrapped as an `ImportPreview` for the UI's confirmation alert.
+    /// The one row-error reason that is an intentional skip, not a failure — shared between
+    /// parse()'s append and preview()'s partition so the two can never drift.
+    static let duplicateReason = "duplicate of existing trade — skipped"
+
+    /// Same as `parse(_:existing:)` but wrapped as an `ImportPreview` for the UI's confirmation
+    /// alert. Duplicates are intentional SKIPS, failures are FAILURES — partitioned so the UI's
+    /// "skipped N duplicates" and "M rows failed" count disjoint sets (review fix 2026-07-16:
+    /// `skipped` was errors.count, so every parse failure displayed as a fabricated "duplicate"
+    /// and every duplicate double-reported as a "failed row").
     static func preview(_ csv: String, existing: [TradeRecord] = []) -> ImportPreview {
-        let (trades, errors) = parse(csv, existing: existing)
-        return ImportPreview(trades: trades, imported: trades.count, skipped: errors.count, errors: errors)
+        let (trades, rowErrors) = parse(csv, existing: existing)
+        let dupes = rowErrors.filter { $0.reason == duplicateReason }
+        let failures = rowErrors.filter { $0.reason != duplicateReason }
+        return ImportPreview(trades: trades, imported: trades.count, skipped: dupes.count, errors: failures)
     }
 
     private static func dupeKey(symbol: String, side: TradeRecord.Side, entry: Double, shares: Double, openedAt: Date) -> String {
