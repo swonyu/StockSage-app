@@ -1795,12 +1795,15 @@ struct MarketsView: View {
                 // 2026-07-16): before anything closes or a scan marks the book this
                 // session, the experiment is ALREADY running — the old bare "run a
                 // scan" empty state read as "nothing is happening" over a live book.
+                // Review fix (2026-07-16): the since-date is min over ALL trades, so
+                // attribute it to the EXPERIMENT, not the open positions — a closed
+                // trade can own the earliest openedAt, and openCount can be 0.
                 let openCount = paperStore.open.count
                 let closedCount = paperStore.closed.count
                 let since = paperStore.trades.map(\.openedAt).min()
                     .map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—"
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Paper experiment live: \(openCount) fake-money position\(openCount == 1 ? "" : "s") open since \(since)\(closedCount > 0 ? " · \(closedCount) closed" : "").")
+                    Text("Paper experiment live since \(since): \(openCount) fake-money position\(openCount == 1 ? "" : "s") open · \(closedCount) closed.")
                         .font(.caption).foregroundStyle(.white)
                     Text("Closes land when a later scan's new daily bars cross a stop/target/time-stop — run a scan to mark the book and fill this scoreboard in. Fills are net-of-cost; paper never mixes into your real journal or win-rate calibration.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -5326,7 +5329,11 @@ struct MarketsView: View {
                     if !split.crypto.isEmpty {
                         DSSegmentPicker(cases: Array(FastLaneBoard.allCases),
                                         selection: $fastLaneBoard) { $0.rawValue }
-                        .frame(width: 170)
+                        // 170 (the old NSSegmentedControl width) truncated two of the
+                        // three equal-width pill segments ("Cry…"/"Equi…") — DSSegment-
+                        // Picker splits width evenly; "Equities" at 12pt semibold needs
+                        // ~200 total (review 2026-07-16, offscreen-render verified).
+                        .frame(width: 200)
                         .accessibilityLabel("Fast-lane board filter")
                     }
                 }

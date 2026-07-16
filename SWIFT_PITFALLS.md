@@ -49,11 +49,11 @@ relying on container/morphing specifics.
    The OS 26 design blurs/fades content under system bars automatically; custom
    materials/darkening behind `safeAreaInset` bar items interfere. Apple's remedy:
    remove custom bar backgrounds, tune with `.scrollEdgeEffectStyle(.hard, for: .top)`.
-   *StockSage status (2026-07-16):* the disclaimer footer and the detail-sheet CTA bar
-   carry explicit `.ultraThinMaterial` — pixel-verified correct on macOS 26.5, kept
-   because the Apple demo evidence is iOS-framed and exact macOS visuals were not
-   independently confirmed. Open experiment: bare bar + scrollEdgeEffectStyle, owner
-   to eyeball.
+   *StockSage status (2026-07-16):* three bars carry explicit `.ultraThinMaterial` —
+   the pinned top toolbar (wave 2), the disclaimer footer, and the detail-sheet CTA
+   bar — each pixel-verified correct on macOS 26.5, kept because the Apple demo
+   evidence is iOS-framed and exact macOS visuals were not independently confirmed.
+   Open experiment: bare bar + scrollEdgeEffectStyle, owner to eyeball.
 9. **`.preferredColorScheme` stops at presentation boundaries.** It sets the scheme for
    the nearest enclosing presentation (window/sheet/popover) and its children — it
    never crosses scene boundaries. Every scene that must be dark needs its own:

@@ -169,9 +169,9 @@ struct Card<Content: View>: View {
 }
 
 // MARK: - Button styles
-/// Gravity-pull press: 0.97 settle on the lux curve — heavier, more deliberate
-/// than PressableStyle's press curve. Use on tinted pill/capsule CTAs that
-/// provide their own chrome (brand gradient, accent border, etc.).
+/// Gravity-pull press: 0.97 settle on the lux curve — heavier and more
+/// deliberate than a plain press-curve settle. Use on tinted pill/capsule CTAs
+/// that provide their own chrome (brand gradient, accent border, etc.).
 /// Moved from CodeView so all tabs share one definition. (Marathon EN)
 struct LuxPressStyle: ButtonStyle {
     func makeBody(configuration c: Configuration) -> some View {
