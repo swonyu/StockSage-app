@@ -71,11 +71,9 @@ struct ExecutionQualityPanel: View {
         }
         .padding(DS.Space.md)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }

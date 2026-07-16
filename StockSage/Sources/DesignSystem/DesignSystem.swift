@@ -111,6 +111,9 @@ enum DS {
         /// the coreInnerHighlight stroke. Matches all per-view inline cards.
         /// 0.035 → 0.045 (macOS 27 overhaul): the darker canvas needs cards a
         /// step more present to keep the same perceived layering.
+        /// Card sites chain .fill(cardFill).strokeBorder(coreInnerHighlight) on ONE
+        /// shape view (goal-2 merge, 2026-07-16): identical pixels to the old
+        /// 2-shape ZStack, one less view+layer per card — switch-commit work.
         static let cardFill             = Color.white.opacity(0.045)
     }
 

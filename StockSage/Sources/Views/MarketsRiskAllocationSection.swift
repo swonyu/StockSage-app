@@ -81,11 +81,9 @@ struct MarketsRiskAllocationSection: View {
     /// hover lift. Factors the three panels' identical background/overlay so the
     /// polish is consistent and centralized.
     private func cardChrome(hovering: Bool) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-        }
+        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+            .fill(DS.Bezel.cardFill)
+            .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(hovering ? DS.Palette.accent.opacity(0.35) : DS.Palette.surfaceStroke,
                     lineWidth: 1))

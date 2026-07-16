@@ -507,11 +507,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(store.regime.map { regimeColor($0.state).opacity(0.35) } ?? DS.Palette.surfaceStroke, lineWidth: 1))
@@ -782,12 +780,9 @@ struct MarketsView: View {
             .padding(DS.Space.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                        .fill(DS.Bezel.cardFill)
-                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                        .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-                }
+                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                    .fill(DS.Bezel.cardFill)
+                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
             )
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -808,12 +803,9 @@ struct MarketsView: View {
                 }
                 .animation(DS.Motion.smooth, value: alertSignals.count)
                 .background(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                            .fill(DS.Bezel.cardFill)
-                        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                            .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-                    }
+                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                        .fill(DS.Bezel.cardFill)
+                        .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
                 )
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
                     .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -866,11 +858,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -1201,12 +1191,9 @@ struct MarketsView: View {
                 }
                 .animation(DS.Motion.smooth, value: portfolio.positions.count)
                 .background(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                            .fill(DS.Bezel.cardFill)
-                        RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                            .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-                    }
+                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                        .fill(DS.Bezel.cardFill)
+                        .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
                 )
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
                     .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -1273,12 +1260,9 @@ struct MarketsView: View {
         }
         .padding(DS.Space.sm)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -1483,11 +1467,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -1652,11 +1634,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -1741,11 +1721,9 @@ struct MarketsView: View {
             .padding(DS.Space.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                        .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-                }
+                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                    .fill(DS.Bezel.cardFill)
+                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
             )
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -1818,11 +1796,9 @@ struct MarketsView: View {
         }
         .padding(DS.Space.md)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }
@@ -2286,11 +2262,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -2506,7 +2480,7 @@ struct MarketsView: View {
         guard !draftSymbol.trimmingCharacters(in: .whitespaces).isEmpty,
               let e = StockSageInput.positiveAmount(draftEntry),
               let st = StockSageInput.positiveAmount(draftStop),
-              let sh = StockSageInput.positiveAmount(draftShares),
+              StockSageInput.positiveAmount(draftShares) != nil,
               e != st,
               // Stop must be PROTECTIVE, else the recorded R is meaningless.
               (draftSide == .long ? st < e : st > e) else { return false }
@@ -2842,11 +2816,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -2959,11 +2931,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -3257,12 +3227,9 @@ struct MarketsView: View {
         }
         .padding(DS.Space.sm)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .fill(hovered ? Color.white.opacity(0.055) : DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(hovered ? Color.white.opacity(0.055) : DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(hovered ? DS.Palette.accent.opacity(0.35) : DS.Palette.surfaceStroke, lineWidth: 1))
@@ -3366,18 +3333,15 @@ struct MarketsView: View {
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
         // Reset a generated briefing when the watched symbol list changes so stale
         // LLM text naming removed tickers is never presented as current.
-        .onChange(of: store.symbols.map(\.symbol).sorted().joined()) { _ in
+        .onChange(of: store.symbols.map(\.symbol).sorted().joined()) {
             briefing = ""
             briefingGeneratedAt = nil
         }
@@ -3759,11 +3723,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -4078,7 +4040,6 @@ struct MarketsView: View {
                     // Stop distance % in parentheses — glanceable risk without
                     // opening the sheet. price > 0 guard matches rewardRisk()'s own pattern — a
                     // malformed zero price must not render "(inf%)"/"(nan%)".
-                    let stopPct = abs(idea.price - stop) / idea.price * 100
                     // VO/edge lens 2026-07-09: sign from DIRECTION, not a hardcoded '−' — a
                     // sell-family stop sits ABOVE entry (+x.x% away); the hardcoded minus claimed
                     // the adverse move was downward for shorts.
@@ -4144,12 +4105,9 @@ struct MarketsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(boardIsStale ? 0.85 : 1.0)   // dim stale cards — 0.85 keeps .secondary text ≥4.5:1 AA (was 0.75 → 3.84:1); clock badge + a11y label + help still carry staleness
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .fill(hovered ? Color.white.opacity(0.055) : DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(hovered ? Color.white.opacity(0.055) : DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(hovered ? DS.Palette.accent.opacity(0.35) : DS.Palette.surfaceStroke, lineWidth: 1))
@@ -4346,11 +4304,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -5680,11 +5636,9 @@ struct MarketsView: View {
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Bezel.cardFill)
-                RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-            }
+            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(DS.Bezel.cardFill)
+                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -7309,7 +7263,11 @@ struct MarketsView: View {
                                     .help("\(chipGate.decision.rawValue) — \(chipGate.caveat)")
                                     .accessibilityLabel("Pre-trade gate: \(chipGate.decision.rawValue)")
                             } else {
-                                Label("Set risk %", systemImage: "questionmark.circle")
+                                // "Risk %" not "Set risk %": at the sheet's natural width the
+                                // 45pt chip slot truncated the longer label to "…" (driven QA
+                                // 2026-07-16) — same compact-vocabulary fix the verdict chip
+                                // ratified; full instruction stays in .help and VoiceOver.
+                                Label("Risk %", systemImage: "questionmark.circle")
                                     .font(.system(size: mvFont9, weight: .semibold))
                                     .foregroundStyle(DS.Palette.textSecondary)
                                     .lineLimit(1)
@@ -7498,7 +7456,9 @@ struct MarketsView: View {
         let c: Text = Text(" → ").font(font).foregroundStyle(color)
         let d: Text = Text(netLabel).font(font).foregroundStyle(color)
         let e: Text = Text(suffix).font(font).foregroundStyle(color)
-        return a + b + c + d + e
+        // Text-in-Text interpolation preserves per-segment styling; the Text `+`
+        // operator is deprecated on macOS 26.
+        return Text("\(a)\(b)\(c)\(d)\(e)")
     }
 
     // UI wave #6: one row of the net-edge ledger — label left, value right (monospaced digits
