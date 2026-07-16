@@ -262,10 +262,6 @@ struct MarketsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    header
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 10)
-                        .animation(DS.Motion.lux, value: appeared)
                     feedBanner
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
@@ -307,6 +303,23 @@ struct MarketsView: View {
                 // Centered content column, same as the chat surfaces.
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity)
+            }
+            // Pinned frosted top toolbar (macOS 27 overhaul wave 2): identity +
+            // feed-provenance + session clocks stay visible while the board scrolls
+            // beneath — provenance is an honesty surface, so it should never scroll
+            // away. Fade-only entrance (an offset would slide a PINNED bar over
+            // content). Same auto-inset behavior as the bottom bar.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                header
+                    .opacity(appeared ? 1 : 0)
+                    .animation(DS.Motion.lux, value: appeared)
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.vertical, DS.Space.sm)
+                    .frame(maxWidth: 780, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .background(.ultraThinMaterial)
+                    .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1),
+                             alignment: .bottom)
             }
             // Frosted footer (macOS 27 overhaul): content scrolls beneath it —
             // macOS 26.5 auto-insets ScrollView content for safeAreaInset (see the
