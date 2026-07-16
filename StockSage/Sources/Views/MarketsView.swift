@@ -1787,11 +1787,26 @@ struct MarketsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
                 Text("The truth sits between the two. Only \(String(format: "%.0f%%", sb.resolvedFrac * 100)) has closed, and stops resolve before targets, so “closed only” over-states the loss; the full-book mark counts open positions at their current price (unrealized — they can still reverse). Both are typically ≈0 — the engine's value is risk-discipline, not a proven edge.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(paperStore.trades.isEmpty
-                     ? "No paper trades yet — the engine opens one per long idea on each scan."
-                     : "Run a scan to update — the scoreboard needs current prices to mark the open book.")
+            } else if paperStore.trades.isEmpty {
+                Text("No paper trades yet — the engine opens one per long idea on each scan.")
                     .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 10)
+            } else {
+                // Live-book disclosure (owner asked to "try it with fake money",
+                // 2026-07-16): before anything closes or a scan marks the book this
+                // session, the experiment is ALREADY running — the old bare "run a
+                // scan" empty state read as "nothing is happening" over a live book.
+                let openCount = paperStore.open.count
+                let closedCount = paperStore.closed.count
+                let since = paperStore.trades.map(\.openedAt).min()
+                    .map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—"
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Paper experiment live: \(openCount) fake-money position\(openCount == 1 ? "" : "s") open since \(since)\(closedCount > 0 ? " · \(closedCount) closed" : "").")
+                        .font(.caption).foregroundStyle(.white)
+                    Text("Closes land when a later scan's new daily bars cross a stop/target/time-stop — run a scan to mark the book and fill this scoreboard in. Fills are net-of-cost; paper never mixes into your real journal or win-rate calibration.")
+                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 6)
             }
 
             // The contrast: engine vs the owner's own realized trades.
