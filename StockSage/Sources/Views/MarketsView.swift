@@ -31,6 +31,9 @@ struct MarketsView: View {
     @AppStorage("marketsIdeaSort") private var ideaSort: IdeaSort = .velocity
     /// Hide ideas below this conviction (0 = show all).
     @AppStorage("marketsIdeaMinConv") private var ideaMinConv = 0.0
+    /// UTC day (epoch-days, StockSageScanChunking.utcDayKey) of the last automatic
+    /// on-open scan — the once-daily auto-scan guard (owner-approved 2026-07-16).
+    @AppStorage("stocksage.autoscan.day") private var lastAutoScanDay = 0
 
     /// F19/F20 (2026-07-15): moved to the engine (StockSageIdeaProjection.Filter) — see IdeaSort.
     typealias IdeaFilter = StockSageIdeaProjection.Filter
@@ -345,7 +348,16 @@ struct MarketsView: View {
             await store.refresh()
             // Auto-scan the EV ideas so the board the app lands on is already populated —
             // 0 taps from open to the best move. refreshIdeas self-guards re-entry/ToolPolicy.
-            if store.ideas.isEmpty { await store.refreshIdeas() }
+            // Once daily even with a populated board (owner-approved 2026-07-16 — "okay" to
+            // the auto-advance offer): the scan is what marks/advances the PAPER book, so
+            // the fake-money experiment moves on any day the app gets opened. Stamped
+            // BEFORE the await so a mid-scan relaunch can't double-fire; a failed scan
+            // retries on the next day's first open.
+            let today = StockSageScanChunking.utcDayKey(Date())
+            if store.ideas.isEmpty || lastAutoScanDay != today {
+                lastAutoScanDay = today
+                await store.refreshIdeas()
+            }
             // F8 (rotation-3 triage, first-run honesty): a fresh install's Deploy-capital plan
             // and every regime-aware sizing path silently ran with ZERO risk-off/on brake until
             // the owner noticed the ungauged state and tapped Gauge by hand — same "0 taps to
