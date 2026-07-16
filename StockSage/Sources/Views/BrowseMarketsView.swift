@@ -118,10 +118,8 @@ struct BrowseMarketsView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Asset class").font(.caption2).foregroundStyle(.secondary)
-                Picker("Asset class", selection: $asset) {
-                    ForEach(Self.availableFilters) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden()
+                DSSegmentPicker(cases: Self.availableFilters, selection: $asset) { $0.rawValue }
+                    .accessibilityLabel("Asset class")
             }
 
             if let err = localAddError {
@@ -148,7 +146,10 @@ struct BrowseMarketsView: View {
         }
         .padding(DS.Space.lg)
         .frame(minWidth: 420, minHeight: 520)
-        .background(DS.Palette.modalBG)
+        // System sheet chrome (macOS 27 overhaul): the opaque modalBG panel fought
+        // the native sheet material and mismatched OnboardingSheet, which already
+        // (correctly) defers to the system background. Dark is guaranteed by the
+        // app-level .preferredColorScheme(.dark).
         // localAddError is seeded only by adds performed inside this sheet (see row Task),
         // so it never shows a stale error from the watchlist box in MarketsView.
         // Reset on appear so reopening the sheet starts clean.

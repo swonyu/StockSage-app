@@ -308,10 +308,16 @@ struct MarketsView: View {
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            MarketDisclaimerFooter()
+            // Frosted footer (macOS 27 overhaul): content scrolls beneath it —
+            // macOS 26.5 auto-insets ScrollView content for safeAreaInset (see the
+            // 72px-spacer note in the detail sheet's pinned bar).
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                MarketDisclaimerFooter()
+            }
         }
-        // Flat opaque working canvas (design language).
-        .background(DS.Palette.codeSurface.ignoresSafeArea())
+        // Canvas with atmosphere (macOS 27 overhaul): slate wash + faint crimson
+        // aurora — the depth Liquid Glass materials sample. Was flat codeSurface.
+        .background(DSCanvasBackground().ignoresSafeArea())
         .onAppear {
             appeared = true
             // Sync the toggle with the singleton: the monitor is a process-lifetime task that
@@ -834,10 +840,10 @@ struct MarketsView: View {
             }
             HStack(spacing: 6) {
                 journalField("Ticker", text: $paSymbol, width: 78)
-                Picker("", selection: $paDirection) {
-                    Text("≥").tag(PriceAlert.Direction.above)
-                    Text("≤").tag(PriceAlert.Direction.below)
-                }.pickerStyle(.segmented).frame(width: 74).labelsHidden()
+                DSSegmentPicker(cases: [PriceAlert.Direction.above, .below],
+                                selection: $paDirection) { $0 == .above ? "≥" : "≤" }
+                    .frame(width: 74)
+                    .accessibilityLabel("Alert direction")
                 journalField("Price", text: $paTarget, width: 78)
                 Button { addPriceAlert() } label: {
                     Text("Add").font(.system(size: mvFont11_5, weight: .semibold)).foregroundStyle(.white)
@@ -2425,9 +2431,10 @@ struct MarketsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: DS.Space.sm) {
                 journalField("Symbol", text: $draftSymbol, width: 90)
-                Picker("", selection: $draftSide) {
-                    ForEach(TradeRecord.Side.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
+                DSSegmentPicker(cases: Array(TradeRecord.Side.allCases),
+                                selection: $draftSide) { $0.rawValue }
+                    .frame(width: 130)
+                    .accessibilityLabel("Trade side")
                 Spacer(minLength: 0)
             }
             HStack(spacing: DS.Space.sm) {
@@ -5333,9 +5340,9 @@ struct MarketsView: View {
                     // watchlisted crypto name that yields ideas) — data-driven visibility, so the
                     // "Crypto" segment is offered exactly when a crypto lane can render.
                     if !split.crypto.isEmpty {
-                        Picker("", selection: $fastLaneBoard) {
-                            ForEach(FastLaneBoard.allCases) { b in Text(b.rawValue).tag(b) }
-                        }.labelsHidden().pickerStyle(.segmented).frame(width: 170)
+                        DSSegmentPicker(cases: Array(FastLaneBoard.allCases),
+                                        selection: $fastLaneBoard) { $0.rawValue }
+                        .frame(width: 170)
                         .accessibilityLabel("Fast-lane board filter")
                     }
                 }
@@ -7319,12 +7326,10 @@ struct MarketsView: View {
                 .padding(.vertical, DS.Space.sm)
                 .frame(maxWidth: 680)
                 .frame(maxWidth: .infinity)
-                .background(
-                    ZStack {
-                        DS.Palette.codeSurface
-                        DS.Bezel.shellFill
-                    }
-                )
+                // Frosted pinned bar (macOS 27 overhaul): the textbook material case —
+                // a floating bar the evidence content scrolls beneath. Background-only
+                // change: the visually-QA'd 440pt width budgets above are untouched.
+                .background(.ultraThinMaterial)
             }
         } // end safeAreaInset closure
         // onChange fires when the run STARTS (Store sets backtestSymbol
@@ -7346,8 +7351,11 @@ struct MarketsView: View {
         } // end ScrollViewReader (house pattern — proxy stays in scope for .onChange)
         .frame(minWidth: 440, maxWidth: 680, minHeight: 480)
         .background(
+            // Sheet root stays owner-drawn (the QA snapshot path renders this view
+            // outside a real .sheet, so it needs an opaque backing) — but the dead
+            // grey becomes the canvas wash (macOS 27 overhaul).
             ZStack {
-                DS.Palette.codeSurface
+                DS.Gradient.bg
                 RoundedRectangle(cornerRadius: DS.Radius.modal, style: .continuous)
                     .fill(DS.Bezel.shellFill)
                 RoundedRectangle(cornerRadius: DS.Radius.modal, style: .continuous)
@@ -7857,8 +7865,9 @@ struct MarketDisclaimerFooter: View {
             .multilineTextAlignment(.leading)
             .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Flat opaque footer + hairline (was translucent material).
-            .background(DS.Palette.codeSurfaceSide)
+            // Frosted footer bar (macOS 27 overhaul): board content scrolls beneath
+            // it via normalBody's safeAreaInset; the hairline keeps the edge crisp.
+            .background(.ultraThinMaterial)
             .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1), alignment: .top)
     }
 }

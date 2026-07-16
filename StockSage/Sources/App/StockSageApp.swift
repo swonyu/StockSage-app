@@ -25,6 +25,11 @@ struct StockSageApp: App {
         WindowGroup(id: "main") {
             MarketsView()
                 .frame(minWidth: 900, minHeight: 700)
+                // Dark-committed brand (macOS 27 overhaul, 2026-07-16): the app paints a
+                // dark canvas, so declare dark — otherwise system controls (pickers,
+                // Form, menus) follow the OS scheme and render light-on-dark-canvas in
+                // light mode, and materials would sample incoherently.
+                .preferredColorScheme(.dark)
                 .sheet(isPresented: $showOnboarding) {
                     OnboardingSheet(isPresented: $showOnboarding)
                 }
@@ -45,6 +50,9 @@ struct StockSageApp: App {
 
         Settings {
             StockSageSettingsView()
+                // Same dark commitment as the main window: the Form's DS.Palette
+                // captions (white-opacity) were unreadable on a light system Form.
+                .preferredColorScheme(.dark)
         }
     }
 }
