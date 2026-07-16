@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import SwiftUI
 import AppKit   // NSPasteboard for the trade-plan copy
 
@@ -141,6 +142,9 @@ struct MarketsView: View {
     @State private var kellyAccount = "10000"
     /// Trade-journal add form (inline; no sheet to avoid presentation races).
     @State private var showAddTrade = false
+    /// Extension batch (2026-07-16): one honest result line for the journal Data menu
+    /// (CSV import / backup / restore / parent import) — counts, skips, errors; never silent.
+    @State private var journalDataFeedback: String?
     @State private var draftSymbol = ""
     @State private var draftSide: TradeRecord.Side = .long
     @State private var draftEntry = ""
@@ -211,7 +215,10 @@ struct MarketsView: View {
     @State private var hoveredIdeaID: String?
     /// Staggered entrance. Pre-set under `--qa` so the offscreen snapshot
     /// (onAppear never fires) captures the settled layout, not the pre-entrance pose.
-    @State private var appeared = ProcessInfo.processInfo.arguments.contains("--qa")
+    // STANDALONE FIX (2026-07-16, pixel-verified): the parent's fade-in gate left the whole
+    // board at opacity 0 in the standalone (entrance animation never completed; footer — the
+    // only ungated element — rendered alone). The fade is cosmetic; a visible board is not.
+    @State private var appeared = true
     /// Tracks symbols whose multi-timeframe fetch task has completed (success OR failure).
     /// Used to bound the weekly-timeframe spinner: once the task finishes, if the store
     /// still has no data for the symbol the fetch failed and we show "unavailable" instead
@@ -601,6 +608,10 @@ struct MarketsView: View {
                     .font(.system(size: mvFont11)).foregroundStyle(.secondary)
                     .contentTransition(.opacity)
                     .animation(DS.Motion.smooth, value: headerSubtitle)
+                // Extension batch (2026-07-16): schedule-state clock for both markets — a
+                // SCHEDULE readout (holidays not modeled; the caveat is in its .help), never
+                // a data-freshness claim (that stays with the quote banner).
+                MarketSessionClockView()
             }
             Spacer()
             refreshButton
@@ -1844,6 +1855,68 @@ struct MarketsView: View {
                     .buttonStyle(.plain)
                     .help("Copy the whole journal as CSV (Excel / Sheets / Python-ready)")
                 }
+                // Extension batch (2026-07-16): import/backup — every action reports an honest
+                // one-line result (added/skipped/error counts) via journalDataFeedback.
+                Menu {
+                    Button("Import CSV…") {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+                        panel.allowsMultipleSelection = false
+                        guard panel.runModal() == .OK, let url = panel.url,
+                              let csv = try? String(contentsOf: url, encoding: .utf8) else { return }
+                        let preview = StockSageJournalCSVImport.preview(csv, existing: journal.trades)
+                        for t in preview.trades { journal.add(t) }
+                        journalDataFeedback = "Imported \(preview.imported) trade\(preview.imported == 1 ? "" : "s")"
+                            + (preview.skipped > 0 ? ", skipped \(preview.skipped) duplicate\(preview.skipped == 1 ? "" : "s")" : "")
+                            + (preview.errors.isEmpty ? "." : "; \(preview.errors.count) row\(preview.errors.count == 1 ? "" : "s") failed (first: line \(preview.errors[0].line) — \(preview.errors[0].reason)).")
+                    }
+                    Divider()
+                    Button("Export backup…") {
+                        let panel = NSSavePanel()
+                        panel.allowedContentTypes = [.json]
+                        panel.nameFieldStringValue = "stocksage-backup.json"
+                        guard panel.runModal() == .OK, let url = panel.url else { return }
+                        let data = StockSageBackup.export(trades: journal.trades,
+                                                          positions: portfolio.positions,
+                                                          userSymbols: store.userSymbols)
+                        do { try data.write(to: url); journalDataFeedback = "Backup saved (journal, portfolio, watchlist)." }
+                        catch { journalDataFeedback = "Backup failed: \(error.localizedDescription)" }
+                    }
+                    Button("Restore backup…") {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.json]
+                        panel.allowsMultipleSelection = false
+                        guard panel.runModal() == .OK, let url = panel.url,
+                              let data = try? Data(contentsOf: url) else { return }
+                        switch StockSageBackup.restore(from: data) {
+                        case .success(let payload):
+                            let existing = Set(journal.trades.map(\.id))
+                            var added = 0
+                            for t in payload.trades where !existing.contains(t.id) { journal.add(t); added += 1 }
+                            journalDataFeedback = "Restored \(added) trade\(added == 1 ? "" : "s")"
+                                + (payload.trades.count > added ? " (\(payload.trades.count - added) already present)" : "")
+                                + "; \(payload.positions.count) portfolio position(s) in file — add via Portfolio."
+                        case .failure(let err):
+                            journalDataFeedback = "Restore failed: \(err.localizedDescription)"
+                        }
+                    }
+                    Divider()
+                    Button("Import from Salehman AI…") {
+                        if let parent = StockSageBackup.importFromParentApp() {
+                            let existing = Set(journal.trades.map(\.id))
+                            var added = 0
+                            for t in parent.trades where !existing.contains(t.id) { journal.add(t); added += 1 }
+                            journalDataFeedback = "Imported \(added) trade\(added == 1 ? "" : "s") from Salehman AI"
+                                + (parent.trades.count > added ? " (\(parent.trades.count - added) already present)" : "") + "."
+                        } else {
+                            journalDataFeedback = "No Salehman AI data found on this Mac."
+                        }
+                    }
+                } label: {
+                    Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Import a broker/journal CSV, back up or restore ALL app data (JSON), or import your journal from the Salehman AI app")
                 Button { withAnimation(.easeOut(duration: 0.15)) { showAddTrade.toggle() } } label: {
                     HStack(spacing: 5) {
                         Image(systemName: showAddTrade ? "xmark" : "plus").font(.system(size: mvFont10, weight: .bold))
@@ -1854,6 +1927,10 @@ struct MarketsView: View {
                 }.buttonStyle(LuxPressStyle())
             }
 
+            if let journalDataFeedback {
+                Text(journalDataFeedback).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             lossLimitBanner   // STOP-TRADING / approaching-limit circuit breaker (above system-health)
 
             if let health = journal.systemHealth {
@@ -2055,6 +2132,10 @@ struct MarketsView: View {
                         }
                     }
                 }
+                // Extension batch (2026-07-16): measured execution costs (planned vs fill) —
+                // the one dataset no research can replace (the owner's own fills). The panel
+                // self-gates below the engine's 5-leg floor; it never shows a thin-sample stat.
+                ExecutionQualityPanel(trades: journal.trades)
                 let years = journal.yearlyPnL
                 if !years.isEmpty {
                     Text("By year (realized — record-keeping, not tax advice)")
@@ -6311,6 +6392,14 @@ struct MarketsView: View {
                             Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Text(idea.market).font(.caption).foregroundStyle(.secondary)
+                        // Extension batch (2026-07-16): Saudi-investor cost honesty — US dividends
+                        // net ≈70% of headline (30% NRA withholding, no US–Saudi treaty). Sourced
+                        // note in the tooltip; informational, not tax advice; nil for non-US names.
+                        if let w = StockSageWithholdingNote.note(for: idea.symbol) {
+                            Text("Dividends: 30% US withholding applies")
+                                .font(.caption2).foregroundStyle(DS.Palette.warningSoft)
+                                .help(w)
+                        }
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(idea.symbol)\(StockSageTadawulNames.name(for: idea.symbol).map { ", \($0.english)" } ?? ""), \(idea.market)")
@@ -7152,6 +7241,10 @@ struct MarketsView: View {
                         }
                         .buttonStyle(LuxPressStyle())
                         .help("Copy a clean text trade plan (entry/stop/target/R:R/size/flags/scale-out) to the clipboard. Blocked setups are auto-skipped and exported as gate-status only.")
+
+                        // Extension batch (2026-07-16): share/save the SAME plan text the Copy
+                        // button produces (identical honesty flags — one source, no drift).
+                        PlanShareButton(planText: fullPlanText(for: idea), symbol: idea.symbol, iconSize: mvFont11)
 
                         Button { Task { await store.runBacktest(symbol: idea.symbol) } } label: {
                             HStack(spacing: 6) {
