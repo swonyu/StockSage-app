@@ -2418,29 +2418,30 @@ struct MarketsView: View {
             .accessibilityLabel("Stop trading. \(state.haltReason ?? ""). \(state.caveat)")
         case .warn:
             // The warn trigger can come from either the daily-R gate OR the weekly-R gate (or
-            // both). LossLimitState exposes dailyRealizedR but not weeklyRealizedR, so we cannot
-            // reliably attribute the warning to one gate — show both readings so the copy is
-            // honest regardless of which gate fired. Daily R is the precise engine value; weekly
-            // loss is shown in dollars (the only weekly figure the state exposes) so the trader
-            // can see the actual weekly exposure even when daily R is near-zero.
+            // both) — show both readings, BOTH in R (review fix 2026-07-16: the weekly figure
+            // was previously state.weeklyRealized labeled "$", but realizedProfit sums the
+            // symbols' NATIVE currencies — a mixed SAR/USD number for this book — and the
+            // fabricated "(weekly limit varies by account)" hid the real gate, which is the
+            // concrete R limit in the policy above). The 3R/6R copy mirrors the
+            // LossLimitPolicy literals at this view's evaluate() call — keep them in sync.
             // Signs come from the raw realized values, NOT a hardcoded "−": the warn can fire
             // from the daily-R gate while the week is net positive (or vice versa), so a fixed
-            // minus would render "−-0.3R" / "−$-350". Negative = loss; the U+2212 glyph is kept.
-            let dailyR    = state.dailyRealizedR
-            let weeklyUsd = state.weeklyRealized      // dollars (negative = loss)
+            // minus would render "−-0.3R". Negative = loss; the U+2212 glyph is kept.
+            let dailyR  = state.dailyRealizedR
+            let weekR   = state.weeklyRealizedR
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Approaching your loss limit \u{2014} ease off and size down.")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Text(String(format: "Today: %@%.1fR (daily limit 3R) \u{B7} This week: %@$%.0f (weekly limit varies by account).",
-                                dailyR < 0 ? "\u{2212}" : "+", abs(dailyR), weeklyUsd < 0 ? "\u{2212}" : "+", abs(weeklyUsd)))
+                    Text(String(format: "Today: %@%.1fR (daily limit 3R) \u{B7} This week: %@%.1fR (weekly limit 6R).",
+                                dailyR < 0 ? "\u{2212}" : "+", abs(dailyR), weekR < 0 ? "\u{2212}" : "+", abs(weekR)))
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.vertical, 4)
-            .accessibilityLabel(String(format: "Approaching loss limit. %@ %.1fR today and %@ $%.0f this week. Ease off and size down.",
-                                       dailyR < 0 ? "Down" : "Up", abs(dailyR), weeklyUsd < 0 ? "down" : "up", abs(weeklyUsd)))
+            .accessibilityLabel(String(format: "Approaching loss limit. %@ %.1fR today and %@ %.1fR this week. Ease off and size down.",
+                                       dailyR < 0 ? "Down" : "Up", abs(dailyR), weekR < 0 ? "down" : "up", abs(weekR)))
         }
     }
 

@@ -30,9 +30,14 @@ struct LossLimitPolicy: Sendable, Equatable {
 struct LossLimitState: Sendable, Equatable {
     enum Status: String, Sendable { case ok, warn, halted }
     let status: Status
-    let dailyRealized: Double      // today's realized $ (losses negative)
+    let dailyRealized: Double      // today's realized P&L, NATIVE currency units summed (losses negative)
     let weeklyRealized: Double
     let dailyRealizedR: Double
+    /// This week's realized R — exposed so the warn banner can report the weekly reading
+    /// in the same unit as the weekly gate (review fix 2026-07-16: the banner previously
+    /// showed `weeklyRealized` labeled "$", but realizedProfit is the symbol's NATIVE
+    /// currency — a mixed SAR/USD sum for this owner — and the live weekly gate is R-based).
+    let weeklyRealizedR: Double
     let lossRun: Int               // current consecutive-loss streak (breakeven/win breaks it)
     let haltReason: String?
     let caveat: String
@@ -111,7 +116,7 @@ enum StockSageLossLimit {
 
         let status: LossLimitState.Status = !halts.isEmpty ? .halted : (warn ? .warn : .ok)
         return LossLimitState(status: status, dailyRealized: day.dollars, weeklyRealized: week.dollars,
-                              dailyRealizedR: day.r, lossRun: lossRun,
+                              dailyRealizedR: day.r, weeklyRealizedR: week.r, lossRun: lossRun,
                               haltReason: halts.isEmpty ? nil : halts.joined(separator: "; "), caveat: caveat)
     }
 }
