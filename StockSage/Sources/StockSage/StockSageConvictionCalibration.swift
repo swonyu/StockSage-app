@@ -757,7 +757,12 @@ extension StockSageConvictionCalibration {
         case .platt:
             return "Win-rate fit from \(sampleSize) realized trades with Platt scaling — a central MLE estimate, NOT conservative (no sampling-uncertainty haircut)."
         case .identity:
-            return "No fitted map beat the honesty floor out-of-sample, so conviction — capped at the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior when the sample is too thin to validate out-of-sample — is used as the win probability (identity map) — an ASSUMPTION, not a rate measured from your \(sampleSize) outcomes. More closed trades let a real fit earn 'measured'."
+            // "the N realized trades … (your journal when it has enough, else the
+            // backtest)", NOT "your N outcomes": with a backtest-sourced fit the old
+            // wording claimed the owner's fills existed when the journal was empty
+            // (verified against the live snapshot, source=strategy-backtest-5y,
+            // 2026-07-16; owner-approved wording fix). Mirrors the sibling cases.
+            return "No fitted map beat the honesty floor out-of-sample, so conviction — capped at the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior when the sample is too thin to validate out-of-sample — is used as the win probability (identity map) — an ASSUMPTION, not a rate measured from the \(sampleSize) realized trades behind this fit (your journal when it has enough, else the backtest). More closed trades let a real fit earn 'measured'."
         }
     }
 }
