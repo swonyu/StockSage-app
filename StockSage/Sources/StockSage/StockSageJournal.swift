@@ -254,7 +254,14 @@ struct ExpectancyCI: Sendable, Equatable {
     let stdErrR: Double       // sample stdev ÷ √n
     let n: Int
     /// Distinguishable from zero only when the mean is ≥1 standard error away.
-    nonisolated var isSignificant: Bool { abs(expectancyR) >= stdErrR }
+    /// NOTE: a 1σ bar (~p 0.32 at the boundary), NOT the 2σ confirmation standard the
+    /// panel's "≈N more trades" line names — surfaces must say "1σ", never "significant".
+    /// Degenerate guard (review fix 2026-07-16): stdErr == 0 (e.g. two identical
+    /// scratch trades) made 0 ≥ 0 read as distinguishable-from-zero; a zero mean
+    /// never is. With zero spread, distinguishable ⇔ the mean itself is nonzero.
+    nonisolated var isSignificant: Bool {
+        stdErrR > 0 ? abs(expectancyR) >= stdErrR : abs(expectancyR) > 0
+    }
 
     nonisolated var note: String {
         let tail = isSignificant ? "" : " — not yet distinguishable from zero (thin/noisy sample)"
@@ -426,19 +433,23 @@ enum StockSageJournal {
             return SystemHealth(verdict: .negative,
                                 reason: "Losing so far (PF \(pfStr), expectancy \(expStr)R). Cut size or stand down.")
         }
+        // Wording (review fix 2026-07-16): the `significant` input is ExpectancyCI's 1σ
+        // bar — calling that "Significant edge" over-claimed against the panel's own 2σ
+        // confirmation standard ("≈N more trades to confirm at 2σ"). Same thresholds,
+        // honest names: say "1σ", never bare "significant".
         if n < minTrades || !significant {
             return SystemHealth(verdict: .unproven,
-                                reason: "Too little to trust (n=\(n)\(significant ? "" : ", not significant")). Keep logging before sizing up.")
+                                reason: "Too little to trust (n=\(n)\(significant ? "" : ", mean <1σ from zero")). Keep logging before sizing up.")
         }
         let pfStrong = profitFactor.map { $0 >= 1.5 } ?? true   // no losses ⇒ effectively ∞
         if pfStrong && maxDrawdownR < deepDrawdownR {
             return SystemHealth(verdict: .strong,
-                                reason: "Significant edge — PF \(pfStr), expectancy \(expStr)R over \(n), worst DD −\(ddStr)R.")
+                                reason: "Edge ≥1σ above zero (not yet 2σ-confirmed) — PF \(pfStr), expectancy \(expStr)R over \(n), worst DD −\(ddStr)R.")
         }
         return SystemHealth(verdict: .developing,
                             reason: maxDrawdownR >= deepDrawdownR
                                 ? "Real edge but a deep −\(ddStr)R drawdown (PF \(pfStr), n=\(n)) — robust? not proven."
-                                : "Real but thin edge (PF \(pfStr), significant, n=\(n)) — promising, keep building.")
+                                : "Real but thin edge (PF \(pfStr), ≥1σ, n=\(n)) — promising, keep building.")
     }
 
     /// System health over the journal's closed trades. nil with no closed-with-R.
