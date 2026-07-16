@@ -1997,8 +1997,14 @@ struct MarketsView: View {
                     HStack(spacing: DS.Space.sm) {
                         ideaMetric("Expectancy", String(format: "%+.2fR", edge.expectancyR),
                                    color: edge.expectancyR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
-                        ideaMetric("Avg win", String(format: "+%.2fR", edge.avgWinR), color: DS.Palette.successSoft)
-                        ideaMetric("Avg loss", String(format: "−%.2fR", edge.avgLossR), color: DS.Palette.danger)
+                        // Review fix 2026-07-17: avgWinR/avgLossR are sentinel 0 over an EMPTY
+                        // bucket (a real win averages > 0; loss magnitude > 0) — render "—"
+                        // like the sibling Payoff/PF degenerates, never a colored ±0.00R that
+                        // claims a measured average over zero trades.
+                        ideaMetric("Avg win", edge.avgWinR > 0 ? String(format: "+%.2fR", edge.avgWinR) : "—",
+                                   color: edge.avgWinR > 0 ? DS.Palette.successSoft : .white)
+                        ideaMetric("Avg loss", edge.avgLossR > 0 ? String(format: "−%.2fR", edge.avgLossR) : "—",
+                                   color: edge.avgLossR > 0 ? DS.Palette.danger : .white)
                         ideaMetric("Payoff", edge.payoffRatio > 0 ? String(format: "%.2f", edge.payoffRatio) : "—")
                         ideaMetric("PF", edge.profitFactor.map { String(format: "%.2f", $0) } ?? "—",
                                    // nil means no losing trades — the engine treats this as pfStrong (∞).
@@ -2014,7 +2020,11 @@ struct MarketsView: View {
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     let excludedNoR = journal.closed.count - edge.closedWithR
                     if excludedNoR > 0 {
-                        Text("\(excludedNoR) closed trade\(excludedNoR == 1 ? "" : "s") excluded from the edge — logged with entry == stop, so R is undefined (no risk to measure against).")
+                        // Review fix 2026-07-17: realizedR is nil for entry == stop AND for a
+                        // closed trade with no exit price recorded (decoded/edited data, CSV
+                        // import with a blank exitPrice) — the old copy attributed every
+                        // exclusion to entry == stop, fabricating a cause.
+                        Text("\(excludedNoR) closed trade\(excludedNoR == 1 ? "" : "s") excluded from the edge — no usable R (entry == stop, or no exit price recorded).")
                             .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                     }
                     if let ci = journal.expectancyCI {
