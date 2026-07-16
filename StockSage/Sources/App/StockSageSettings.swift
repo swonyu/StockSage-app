@@ -16,6 +16,7 @@ import ServiceManagement
 struct StockSageSettingsView: View {
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
+    @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
 
     @State private var loginItemOn = false
     @State private var loginItemError: String?
@@ -39,6 +40,17 @@ struct StockSageSettingsView: View {
                     .foregroundStyle(DS.Palette.textSecondary)
 
                 Toggle("Show menu-bar ticker", isOn: $menuBarEnabled)
+            }
+
+            Section {
+                // OnboardingSheet's header comment promised "reopenable from Settings"
+                // since the extension batch — this is that affordance (auto-shift
+                // backlog #2, 2026-07-16). The main window re-presents live via
+                // StockSageApp's onChange; a closed window shows it on next open.
+                Button("Show the welcome checklist again") { onboardingDone = false }
+                Text("Reopens the first-trade checklist (and the Salehman AI import) in the main window.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
 
             Section {

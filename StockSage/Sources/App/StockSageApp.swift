@@ -39,6 +39,12 @@ struct StockSageApp: App {
                     // gates (no sample/cached/stale pushes) still apply to every cycle.
                     if monitorAutostart { try? StockSageMonitor.shared.start() }
                 }
+                // Settings' "Show the welcome checklist again" flips onboardingDone to
+                // false — re-present live (the .task above runs once per window; without
+                // this the reopen would silently wait for the next launch).
+                .onChange(of: onboardingDone) {
+                    if !onboardingDone { showOnboarding = true }
+                }
         }
         .windowResizability(.contentMinSize)
 
