@@ -7180,7 +7180,9 @@ struct MarketsView: View {
                             && idea.advice.action != .hold && idea.advice.action != .avoid
                         HStack(alignment: .top, spacing: 6) {
                             Image(systemName: "calendar").font(.system(size: mvFont11)).foregroundStyle(.secondary)
-                            Text(stat.note(monthName: DateFormatter().monthSymbols[m - 1])
+                            // Cached formatter — a fresh DateFormatter() per body eval is the
+                            // verified hitch pattern (SWIFT_PITFALLS.md §11).
+                            Text(stat.note(monthName: Self.timeFormatter.monthSymbols[m - 1])
                                  + (tiltFires ? " With the seasonal tilt on, this month stat nudges this name's EV-board rank (capped ±0.03; sign flips for sell ideas)." : ""))
                                 .font(.caption2)
                                 .foregroundStyle(stat.isReliable ? .secondary : DS.Palette.textSecondary)
