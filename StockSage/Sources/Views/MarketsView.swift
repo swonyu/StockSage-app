@@ -2070,7 +2070,12 @@ struct MarketsView: View {
                         // simulated futures at your configured risk %, the complement to the single
                         // historical path above. nil under 20 R-defined trades (the engine self-gates).
                         if let mc = StockSageMonteCarloRuin.simulate(journal.trades, riskFraction: riskFrac) {
-                            Text(String(format: "Forward ruin risk (%d sims @ %g%%/trade): P(ruin) %.1f%% · P(>20%% drawdown) %.0f%% · max drawdown ~%.0f%% typical, %.0f%% 95th-pct — bootstrapped from your %d closed trades.",
+                            // "equity halves"/"100 trades" mirror simulate()'s ruinLevel (0.5) and
+                            // horizon (100) defaults, which this call site uses — keep in sync.
+                            // Review fix 2026-07-16: bare "P(ruin)" read as account wipe-out; the
+                            // measured event (equity ≤ 50% of start, within the horizon) was
+                            // stated nowhere user-visible, unlike its labeled P(>20% dd) neighbor.
+                            Text(String(format: "Forward ruin risk (%d sims @ %g%%/trade): P(ruin: equity halves within 100 trades) %.1f%% · P(>20%% drawdown) %.0f%% · max drawdown ~%.0f%% typical, %.0f%% 95th-pct — bootstrapped from your %d closed trades.",
                                         mc.sims, riskFrac * 100, mc.pRuin * 100, mc.p20DrawdownProb * 100,
                                         mc.medianMaxDD * 100, mc.p95MaxDD * 100, mc.sampleSize))
                                 .font(.caption2)
@@ -2081,7 +2086,7 @@ struct MarketsView: View {
                                 // spoken as at-sign, middle dots dropped, P(ruin) as bare letters
                                 // with lost parens. Same figures, speech-safe phrasing; the
                                 // engine caveat moves to the hint (hover .help kept for sighted).
-                                .accessibilityLabel(String(format: "Forward ruin risk from %d simulations at %g percent risk per trade. Probability of ruin %.1f percent. Probability of a drawdown over 20 percent, %.0f percent. Typical maximum drawdown %.0f percent, 95th percentile %.0f percent. Bootstrapped from your %d closed trades.",
+                                .accessibilityLabel(String(format: "Forward ruin risk from %d simulations at %g percent risk per trade. Probability of ruin, meaning equity halving within 100 trades, %.1f percent. Probability of a drawdown over 20 percent, %.0f percent. Typical maximum drawdown %.0f percent, 95th percentile %.0f percent. Bootstrapped from your %d closed trades.",
                                         mc.sims, riskFrac * 100, mc.pRuin * 100, mc.p20DrawdownProb * 100,
                                         mc.medianMaxDD * 100, mc.p95MaxDD * 100, mc.sampleSize))
                                 .accessibilityHint(StockSageMonteCarloRuin.caveat)
