@@ -400,12 +400,19 @@ struct MarketsRiskAllocationSection: View {
                                     .frame(width: 46, alignment: .leading).lineLimit(1)
                                 ForEach(c.symbols.indices, id: \.self) { j in
                                     let v = c.matrix[i][j]
-                                    Rectangle().fill(correlationColor(v))
+                                    // F3 parity (review fix 2026-07-16): this extracted copy predated
+                                    // MarketsView's audit-F3 fix — an undefined pair (zero-variance
+                                    // series) holds a display-only 0; render "—", never a green
+                                    // "0.0 independent" cell that fabricates a diversification claim.
+                                    let defined = c.isDefined(i, j)
+                                    Rectangle().fill(defined ? correlationColor(v) : DS.Palette.surfaceAlt)
                                         .frame(width: 26, height: 18)
-                                        .overlay(Text(String(format: "%.1f", v))
-                                            .font(.system(size: mvFont7, weight: .bold)).foregroundStyle(.white.opacity(0.92)))
+                                        .overlay(Text(defined ? String(format: "%.1f", v) : "—")
+                                            .font(.system(size: mvFont7, weight: .bold)).foregroundStyle(.white.opacity(defined ? 0.92 : 0.5)))
                                         .accessibilityElement(children: .ignore)
-                                        .accessibilityLabel("\(c.symbols[i]) vs \(c.symbols[j]), correlation \(String(format: "%.1f", v))")
+                                        .accessibilityLabel(defined
+                                            ? "\(c.symbols[i]) vs \(c.symbols[j]), correlation \(String(format: "%.1f", v))"
+                                            : "\(c.symbols[i]) vs \(c.symbols[j]), correlation undefined — one series has no price variation over the window")
                                 }
                             }
                         }

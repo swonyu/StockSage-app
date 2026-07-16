@@ -113,7 +113,7 @@ enum StockSageGlossary {
 
     nonisolated static let kellyHelp = """
     Kelly = the bet fraction that maximizes long-run growth GIVEN your edge (win-rate W and payoff ratio R): f* = W − (1−W)/R. \
-    Full Kelly is famously too aggressive — one bad streak ruins it — so this shows HALF and QUARTER Kelly and caps the suggestion at 20%. \
+    Full Kelly is famously too aggressive — one bad streak ruins it — so the panel shows Full (for reference only), HALF, and a suggestion capped at 20%. \
     Garbage in, garbage out: if your W and R estimates are optimistic, so is the size.
     """
 
