@@ -2032,7 +2032,12 @@ struct MarketsView: View {
                             .foregroundStyle(ci.isSignificant ? DS.Palette.successSoft : DS.Palette.warningSoft)
                             .fixedSize(horizontal: false, vertical: true)
                         if let sig = journal.tradesToSignificance, sig.more > 0 {
-                            Text("≈ \(sig.more) more trades to confirm the edge at 2σ (95%).")
+                            // Review fix 2026-07-17: the count is |mean|-based — with a
+                            // NEGATIVE expectancy it estimates confirming a LOSING record;
+                            // calling that "the edge" fabricated one.
+                            Text(ci.expectancyR >= 0
+                                 ? "≈ \(sig.more) more trades to confirm the edge at 2σ (95%)."
+                                 : "≈ \(sig.more) more trades to 2σ-confirm the current expectancy — which is NEGATIVE: that would confirm a losing record, not an edge.")
                                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                         if let trend = journal.expectancyTrend {
@@ -2492,6 +2497,12 @@ struct MarketsView: View {
             if let e = StockSageInput.positiveAmount(draftEntry),
                let st = StockSageInput.positiveAmount(draftStop),
                let tg = StockSageInput.positiveAmount(draftTarget),
+               // Review fix 2026-07-17: assess() is direction-blind (abs on both legs) —
+               // a wrong-side target/stop (e.g. Long with target BELOW entry) rendered a
+               // flattering "gross R:R" while Save was separately blocked. Preview only a
+               // well-formed setup (the same side predicates draftIsValid enforces); the
+               // Save hint explains the invalid states.
+               (draftSide == .long ? st < e && tg > e : st > e && tg < e),
                let rr = StockSageRewardRisk.assess(entry: e, stop: st, target: tg) {
                 Text(rr.note).font(.system(size: mvFont9))
                     .foregroundStyle(rr.quality == .poor ? DS.Palette.warningSoft : .secondary)
