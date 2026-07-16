@@ -5,9 +5,10 @@ import SwiftUI
 // The journal already captures planned/fill prices per leg (StockSageJournal.measuredSlippage).
 // This surfaces it: the ONE number no dataset can hand the owner — their own real execution
 // cost, vs. the flat bps assumption the engine's cost table uses for that same symbol. Display
-// only; feeds nothing (see the fence comment above `measuredSlippage` itself). nil < 5 legs is
-// BY DESIGN (a display floor, not a bug) — the empty state below says so honestly rather than
-// showing a noisy median off 1-2 fills.
+// only; feeds nothing (see the fence comment above `measuredSlippage` itself). Below the 5-leg
+// floor the panel shows ONLY the honest empty state (gated on `meetsFloor`, not nil-ness —
+// measuredSlippage returns nil solely for ZERO legs; review fix 2026-07-16: the old nil-only
+// check headlined a median off as little as one fill while claiming a 5-leg floor).
 
 /// Worst (most cost-positive) single leg among the owner's measured slippage — pure aggregation
 /// beyond what `measuredSlippage` itself returns, so it gets its own hand-derived test.
@@ -43,7 +44,7 @@ struct ExecutionQualityPanel: View {
                 Spacer()
             }
 
-            if let m = measured {
+            if let m = measured, m.meetsFloor {
                 let worst = ExecutionQualityMath.worstLegBps(trades)
                 HStack(spacing: DS.Space.sm) {
                     statCell(title: "Median slippage", value: String(format: "%+.1f bps", m.medianBps),
