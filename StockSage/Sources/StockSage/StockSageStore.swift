@@ -1464,7 +1464,10 @@ final class StockSageStore: ObservableObject {
             for r in rets { closes.append(closes[closes.count - 1] * (1 + r)) }
             return (weight: w, closes: closes)
         }
-        let computed = await Task.detached { StockSagePortfolioAnalytics.compute(holdings: alignedHoldings) }.value
+        let attemptedCount = positions.count   // capture the Int, not the array, in the detached task
+        let computed = await Task.detached {
+            StockSagePortfolioAnalytics.compute(holdings: alignedHoldings, attempted: attemptedCount)
+        }.value
         analytics = computed
         // Disclose (finding ③): weights are pence-normalized but NOT FX-converted, so a book spanning
         // >1 quote currency has approximate weights — the panel shows a caveat instead of implying the

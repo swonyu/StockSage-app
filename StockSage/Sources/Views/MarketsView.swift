@@ -2965,9 +2965,13 @@ struct MarketsView: View {
                     Text("\(a.observations) days · \(a.holdingsAnalyzed) holdings (previous analysis) · \(a.caveat)")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    let totalPositions = StockSagePortfolio.shared.positions.count
-                    let excludedCount = max(0, totalPositions - a.holdingsAnalyzed)
-                    Text("\(a.observations) days · \(a.holdingsAnalyzed) of \(totalPositions) holdings\(excludedCount > 0 ? " — \(excludedCount) had no history and are excluded" : "") · \(a.caveat)")
+                    // Review fix 2026-07-16: counts come from the SNAPSHOT's own recorded
+                    // facts (attempted at analysis time), never the live book — an add/remove
+                    // after Analyze fabricated "N had no history" or impossible "3 of 2"
+                    // copy. Live-count drift gets its own honest line instead.
+                    let excludedCount = max(0, a.holdingsAttempted - a.holdingsAnalyzed)
+                    let liveCount = StockSagePortfolio.shared.positions.count
+                    Text("\(a.observations) days · \(a.holdingsAnalyzed) of \(a.holdingsAttempted) holdings\(excludedCount > 0 ? " — \(excludedCount) had no history and are excluded" : "")\(liveCount != a.holdingsAttempted ? " · book changed since this analysis — re-run Analyze" : "") · \(a.caveat)")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }

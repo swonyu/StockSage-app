@@ -24,6 +24,11 @@ struct PortfolioAnalytics: Sendable, Equatable {
     let avgCorrelation: Double        // −1…1, average pairwise across holdings
     let diversificationScore: Double  // 0…100 (higher = better diversified)
     let holdingsAnalyzed: Int
+    /// Positions in the book WHEN THE ANALYSIS RAN (review fix 2026-07-16): the footer
+    /// previously compared holdingsAnalyzed against the LIVE portfolio count — after an
+    /// add/remove that fabricated "N had no history" exclusions or impossible "3 of 2
+    /// holdings" copy. attempted − analyzed is the true recorded had-no-history count.
+    let holdingsAttempted: Int
     let observations: Int             // overlapping daily samples used
     let caveat: String
 }
@@ -50,8 +55,11 @@ enum StockSagePortfolioAnalytics {
 
     /// Compute the suite. `holdings` = each a (dollar weight, daily closes newest-last).
     /// Weights are normalized; histories are aligned on their common (shortest) tail.
-    /// Returns nil when there isn't enough overlapping history.
+    /// Returns nil when there isn't enough overlapping history. `attempted` = the book's
+    /// position count when the analysis ran (defaults to holdings.count so pure-math
+    /// callers/tests are unchanged); the store passes the real pre-exclusion count.
     nonisolated static func compute(holdings: [(weight: Double, closes: [Double])],
+                                    attempted: Int? = nil,
                                     periodsPerYear: Double = 252) -> PortfolioAnalytics? {
         guard !holdings.isEmpty else { return nil }
         let series = holdings.map { dailyReturns($0.closes) }
@@ -132,6 +140,7 @@ enum StockSagePortfolioAnalytics {
             sharpe: sharpe, sortino: sortino, maxDrawdown: maxDD, calmar: calmar,
             valueAtRisk95: var95, cVaR95: cVar95, avgCorrelation: avgCorr,
             diversificationScore: divScore, holdingsAnalyzed: holdings.count,
+            holdingsAttempted: max(attempted ?? holdings.count, holdings.count),
             observations: minLen, caveat: caveat)
     }
 
