@@ -108,9 +108,13 @@ final class StockSageMonitor {
 
     /// One evaluation pass: derive a signal per tracked symbol and fire a
     /// notification for strong buy/sell. Returns the strong signals it found
-    /// (also used by the unit tests / tool, which don't want notifications).
+    /// (also used by the unit tests / tool, which don't want notifications) PLUS
+    /// how many symbols were actually examined (had a scoreable quote) — review fix
+    /// 2026-07-17: the alerts empty state said "mostly Hold" even when an offline
+    /// cycle examined zero names; the count lets the UI tell "scanned N, found
+    /// none" apart from "couldn't scan at all".
     @discardableResult
-    func runCycle(notify: Bool = true) async -> [StockSageSignal] {
+    func runCycle(notify: Bool = true) async -> (signals: [StockSageSignal], examined: Int) {
         // NEVER fire a notification on seeded SAMPLE data OR on STALE disk-cache prices.
         // seedSampleData() plants two strong movers (2222.SR, NVDA), so a failed first-launch
         // refresh would push a "Strong Buy" built on hardcoded demo prices; loadedFromCache means
@@ -122,6 +126,7 @@ final class StockSageMonitor {
         let liveNotify = notify && !store.isSampleData && !store.loadedFromCache
         var strong: [StockSageSignal] = []
         var nowStrong: [String: StockSageRecommendation] = [:]
+        var examined = 0
         for symbol in store.fetchAllSymbols() {
             // CONCURRENCY #2: stop() cancels the loop task, but a cancelled task keeps executing
             // past its awaits (the sendAlert below) unless it checks — without this, alerts kept
@@ -129,6 +134,7 @@ final class StockSageMonitor {
             // cycles on the same lastAlerted state (double-fired or suppressed pushes).
             guard !Task.isCancelled else { break }
             guard let signal = StockSageSignalEngine.generateSignal(for: symbol) else { continue }
+            examined += 1   // scoreable symbol (any recommendation) — see the return doc
             guard signal.recommendation == .strongBuy || signal.recommendation == .strongSell else { continue }
             strong.append(signal)
             // A quote whose latest MARKET timestamp is stale (a weekend/holiday close) is not
@@ -168,23 +174,26 @@ final class StockSageMonitor {
                 await checkIdeaAlerts(prices: freshPrices)
             }
         }
-        return strong
+        return (strong, examined)
     }
 
     /// Watchlist-only evaluation: fetch LIVE quotes for just the watchlist tickers and alert
     /// on strong buy/sell — self-contained (doesn't touch the board `symbols` or its
     /// sample/cache flags), so it stays honest (it fires only on quotes it just fetched) and
     /// cheap (no 250-name pull). Same NEW-or-flipped dedup as runCycle via `lastAlerted`.
+    /// Same examined-count contract as runCycle (review fix 2026-07-17).
     @discardableResult
-    func runWatchlistCycle(_ watch: [String], notify: Bool = true) async -> [StockSageSignal] {
+    func runWatchlistCycle(_ watch: [String], notify: Bool = true) async -> (signals: [StockSageSignal], examined: Int) {
         let quotes = await StockSageQuoteService.fetchQuotes(for: watch)
         var strong: [StockSageSignal] = []
         var nowStrong: [String: StockSageRecommendation] = [:]
         var freshPrices: [String: Double] = [:]
+        var examined = 0
         for ticker in watch {
             // CONCURRENCY #2: same cooperative-cancellation bail as runCycle.
             guard !Task.isCancelled else { break }
             guard let q = quotes[ticker.uppercased()], q.price > 0, q.previousClose > 0 else { continue }
+            examined += 1   // ticker had a usable quote this cycle
             let sym = StockSageSymbol(symbol: ticker, market: "★ My watchlist", quotes: [
                 StockSageQuote(price: q.previousClose, previousPrice: q.previousClose,
                                time: Date(timeIntervalSinceNow: -86_400)),
@@ -214,7 +223,7 @@ final class StockSageMonitor {
             await checkPriceAlerts()
             await checkIdeaAlerts(prices: freshPrices)
         }
-        return strong
+        return (strong, examined)
     }
 
     /// Check user-set price alerts against FRESHLY-FETCHED live prices (never the board's

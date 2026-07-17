@@ -228,6 +228,10 @@ struct MarketsView: View {
     /// True once the user has tapped "Check now" at least once, so the empty-state copy is
     /// honest ("no strong signals found") rather than pre-emptive ("no signals right now").
     @State private var hasScanned = false
+    /// Symbols the last Check-now actually examined (had a scoreable quote) — 0 means
+    /// the scan evaluated NOTHING (offline/feed failure), and the empty state must not
+    /// claim "mostly Hold" about names it never looked at (review fix 2026-07-17).
+    @State private var lastScanExamined = 0
     // Hover states — one per interactive surface type.
     @State private var hoveredSignalID: UUID?
     @State private var hoveredPositionID: UUID?
@@ -831,7 +835,9 @@ struct MarketsView: View {
 
             if alertSignals.isEmpty {
                 Text(hasScanned
-                     ? "No strong signals found — mostly Hold. Tap Check now to scan again."
+                     ? (lastScanExamined == 0
+                        ? "Couldn't scan — no quotes were available (offline or feed error), so nothing was evaluated. Tap Check now to retry."
+                        : "No strong signals across \(lastScanExamined) scanned name\(lastScanExamined == 1 ? "" : "s") — mostly Hold. Tap Check now to scan again.")
                      : "Not scanned yet — tap Check now to find strong signals.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 16)
@@ -1052,14 +1058,18 @@ struct MarketsView: View {
         // (Review fix 2026-07-17: the old comment claimed the scopes "match".)
         if watchlistOnly && !store.userSymbols.isEmpty {
             // runWatchlistCycle fetches fresh quotes internally — no pre-refresh needed.
-            alertSignals = await StockSageMonitor.shared.runWatchlistCycle(store.userSymbols, notify: false)
+            let result = await StockSageMonitor.shared.runWatchlistCycle(store.userSymbols, notify: false)
+            alertSignals = result.signals
+            lastScanExamined = result.examined
         } else {
             // Mirror the monitor's full-core loop: pull a fresh snapshot BEFORE scoring so
             // "Check now" never re-evaluates stale / sample-seeded prices. Without this
             // the else-branch would re-score hours-old quotes (or the sample-seeded strong
             // movers) and display them as current alerts with no caveat.
             await store.refresh()
-            alertSignals = await StockSageMonitor.shared.runCycle(notify: false)
+            let result = await StockSageMonitor.shared.runCycle(notify: false)
+            alertSignals = result.signals
+            lastScanExamined = result.examined
         }
         hasScanned = true
         checkingAlerts = false
