@@ -688,10 +688,19 @@ final class StockSageStore: ObservableObject {
             let (fromCache, toFetch): ([String], [String]) = cache != nil
                 ? StockSageScanChunking.partitionByCacheFreshness(symbols: symbols, cache: cache)
                 : ([], symbols)
-            var cachedHistories: [String: StockSagePriceHistory] = [:]
-            for sym in fromCache {
-                if let h = cachePriceHistories[sym.uppercased()] { cachedHistories[sym.uppercased()] = h }
-            }
+            // Built as a `let` (comprehension, not a mutating loop) so the `chunkWork` Task below
+            // captures an IMMUTABLE snapshot — silences the Swift 6 "mutated after capture by
+            // sendable closure" warning the mutating `var` raised (the var was re-declared and
+            // re-filled each loop iteration, which the compiler reads as a capture-then-mutate
+            // race even though each iteration's value is fully built before the Task is created).
+            // Behavior identical: same keys, same "cache hit wins" population.
+            // uniquingKeysWith (NOT uniqueKeysWithValues, which TRAPS on a collision): two chunk
+            // symbols differing only in case collapse to one uppercased key — the old `var`+assign
+            // loop took last-write-wins there, so keep that exact behavior, never crash.
+            let cachedHistories: [String: StockSagePriceHistory] = Dictionary(
+                fromCache.compactMap { sym in
+                    cachePriceHistories[sym.uppercased()].map { (sym.uppercased(), $0) }
+                }, uniquingKeysWith: { _, latest in latest })
 
             let priorAttempted = attemptedSoFar + cachedHistories.count
             let chunkWork = Task { () -> (histories: [String: StockSagePriceHistory], built: [StockSageIdea]) in
