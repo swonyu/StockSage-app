@@ -1855,7 +1855,11 @@ struct MarketsView: View {
                     scoreCell(title: "Full book", value: rTxt(sb.fullAvgR),
                               sub: "\(sb.fullN) marked", tint: sb.fullAvgR < 0 ? DS.Palette.danger : DS.Palette.successSoft)
                     scoreCell(title: "Resolved", value: String(format: "%.0f%%", sb.resolvedFrac * 100),
-                              sub: "\(sb.openMarked) open", tint: .white)
+                              // Review fix 2026-07-17 (self-verified): openMarked counts only
+                              // the open trades the scan could MARK (symbol had a latest
+                              // close) — after a partial mark it undercounts the real open
+                              // book, so the label says what the number actually is.
+                              sub: "\(sb.openMarked) open marked", tint: .white)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
                 Text("The truth sits between the two. Only \(String(format: "%.0f%%", sb.resolvedFrac * 100)) has closed, and stops resolve before targets, so “closed only” over-states the loss; the full-book mark counts open positions at their current price (unrealized — they can still reverse). Both are typically ≈0 — the engine's value is risk-discipline, not a proven edge.")
