@@ -82,7 +82,12 @@ struct BrowseMarketsView: View {
 
     private var sections: [(market: String, rows: [StockSageSymbol])] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        let base = q.isEmpty ? StockSageUniverse.catalog : StockSageUniverse.search(q, limit: 500)
+        // Review fix 2026-07-17: limit == the catalog size, so search can never
+        // silently truncate. The old `limit: 500` dropped 350+ matches on broad
+        // queries ("US" matches every 🇺🇸-labeled market row) with no notice, under
+        // a header claiming the full analyzed universe is browsable.
+        let base = q.isEmpty ? StockSageUniverse.catalog
+                             : StockSageUniverse.search(q, limit: StockSageUniverse.catalog.count)
         let filtered = base.filter(matches)
         return Dictionary(grouping: filtered, by: { $0.market })
             .map { (market: $0.key, rows: $0.value.sorted { $0.symbol < $1.symbol }) }
