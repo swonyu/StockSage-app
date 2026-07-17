@@ -249,8 +249,22 @@ final class StockSageMonitor {
         }
         let fired = StockSagePriceAlertEngine.newlyTriggered(armed, prices: prices)
         guard !fired.isEmpty else { return }
-        for a in fired { await sendPriceAlert(a, price: prices[a.symbol] ?? a.target) }
-        store.markPriceAlertsTriggered(fired.map(\.id))
+        // Review fix 2026-07-17: latch ONLY alerts whose push was ACCEPTED for delivery.
+        // The no-guard-between-push-and-latch invariant above still holds (no cancellation
+        // check is interposed) — but with notifications denied/blocked, `add` throws, and
+        // the old unconditional latch consumed the one-shot on a push that never left:
+        // the row read "triggered" while the owner heard nothing. A failed delivery now
+        // leaves the alert ARMED; the standing condition re-attempts next cycle, which is
+        // correct — the owner has not yet been notified — and delivers the moment
+        // permission returns. The latch remains the truthful record of pushes that
+        // actually went out.
+        var delivered: [UUID] = []
+        for a in fired {
+            if await sendPriceAlert(a, price: prices[a.symbol] ?? a.target) {
+                delivered.append(a.id)
+            }
+        }
+        if !delivered.isEmpty { store.markPriceAlertsTriggered(delivered) }
     }
 
     /// Drive stop-breach/target-hit pushes for TRACKED IDEAS via the tested
@@ -306,7 +320,10 @@ final class StockSageMonitor {
         try? await UNUserNotificationCenter.current().add(request)
     }
 
-    private func sendPriceAlert(_ alert: PriceAlert, price: Double) async {
+    /// Returns whether the push was ACCEPTED for delivery — the caller latches the
+    /// one-shot only on true (review fix 2026-07-17: `try?` swallowed the
+    /// notifications-denied error and the alert consumed its shot on nothing).
+    private func sendPriceAlert(_ alert: PriceAlert, price: Double) async -> Bool {
         let content = UNMutableNotificationContent()
         // ALERT-FMT-1 (round-3 honesty hunt): was bare `.formatted()` (locale grouping, dropped
         // trailing zeros, full float precision) — the ONE alert surface ALERT-FMT-1 missed when it
@@ -317,7 +334,12 @@ final class StockSageMonitor {
         content.body = "Now \(StockSageCurrency.adaptivePrice(price))."
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(request)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func sendAlert(signal: StockSageSignal, market: String) async {

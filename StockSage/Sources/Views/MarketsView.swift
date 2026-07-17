@@ -1,11 +1,13 @@
 import UniformTypeIdentifiers
 import SwiftUI
 import AppKit   // NSPasteboard for the trade-plan copy
+import UserNotifications   // permission read for the price-alerts denied banner
 
 /// The Markets tab — now wired to the live `StockSage` subsystem: per-symbol
 /// rule-based momentum signals (`StockSageSignalEngine`, deterministic
-/// |Δ%| thresholds) + an on-device daily briefing (`StockSageBriefingService`,
-/// routed through `LocalLLM.generateOnDevice`). Data comes from `StockSageStore`
+/// |Δ%| thresholds) + a rule-based daily briefing (`StockSageBriefingService`;
+/// the parent app's LocalLLM routing did not come along — review fix
+/// 2026-07-17, the old comment claimed it did). Data comes from `StockSageStore`
 /// (sample seed until a live feed lands — honestly flagged). Sections not yet
 /// built show a clear "coming soon".
 struct MarketsView: View {
@@ -204,6 +206,10 @@ struct MarketsView: View {
     @State private var paTarget = ""
     @State private var paDirection: PriceAlert.Direction = .above
     @State private var paError = ""
+    /// True when macOS notification permission is DENIED — the price-alert panel shows an
+    /// honest banner instead of letting green "armed" rows imply pushes can deliver
+    /// (review fix 2026-07-17). Re-checked whenever the panel appears.
+    @State private var notificationsDenied = false
     @State private var alertSignals: [StockSageSignal] = []
     @State private var checkingAlerts = false
     @State private var monitorError = ""
@@ -855,6 +861,14 @@ struct MarketsView: View {
                 }
                 Spacer()
             }
+            // Review fix 2026-07-17: with notifications DENIED, pushes throw and (since the
+            // monitor's delivery-conditional latch) alerts stay armed retrying — say so
+            // honestly instead of letting "armed" imply delivery works. Re-checked on appear.
+            if notificationsDenied {
+                Text("⚠ Notifications are blocked for StockSage in System Settings → Notifications — price alerts can't reach you. Alerts stay armed (nothing is consumed) and deliver once permission is restored.")
+                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 6) {
                 journalField("Ticker", text: $paSymbol, width: 78)
                 DSSegmentPicker(cases: [PriceAlert.Direction.above, .below],
@@ -926,6 +940,11 @@ struct MarketsView: View {
             }.buttonStyle(.plain).help("Remove alert")
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
+        // Permission read for the denied banner above — re-checked on panel appear.
+        .task {
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            notificationsDenied = settings.authorizationStatus == .denied
+        }
     }
 
     private func addPriceAlert() {
