@@ -752,14 +752,13 @@ struct MarketsView: View {
                     Image(systemName: "bell.badge.fill").font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Strong-signal alerts").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
-                        // POST2420-COPY item 5: across the full analyzed universe (901 names since
-                        // the 2026-07-16 restriction), an
-                        // unqualified "appears" reads as "anywhere in the analyzed universe" —
-                        // the monitor's unattended background cycle is scoped to
-                        // StockSageUniverse.core (~210) + the user's watchlist (StockSageMonitor's
-                        // runCycle, owner-ratified core+watchlist scoping), not the full universe.
-                        // Interpolated so it can't drift from the live count.
-                        Text("Get a Mac notification when a Strong Buy or Strong Sell appears among the \(StockSageUniverse.core.count)-name curated core + your watchlist.")
+                        // Review fix 2026-07-17 (supersedes POST2420-COPY item 5): the cycle
+                        // REFRESHES core + watchlist but EVALUATES the whole board — a
+                        // non-core name pushes too while a recent full refresh keeps its
+                        // quote fresh (the freshness gate, not the refresh scope, is what
+                        // blocks stale pushes). The old "among the core + watchlist" copy
+                        // under-claimed the scope. Interpolated so counts can't drift.
+                        Text("Get a Mac notification when a Strong Buy or Strong Sell appears. Each cycle refreshes the \(StockSageUniverse.core.count)-name curated core + your watchlist; other board names are included while a recent full refresh keeps their quotes fresh.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -772,7 +771,7 @@ struct MarketsView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Watch only my watchlist").font(.system(size: mvFont12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
                         Text(store.userSymbols.isEmpty
-                             ? "Add tickers to your watchlist to use this — alerts scan the curated \(StockSageUniverse.core.count)-name core + your watchlist — not the full \(StockSageUniverse.worldwide.count)-name analyzed universe (that runs on Find ideas)."
+                             ? "Add tickers to your watchlist to use this — each background cycle refreshes only the curated \(StockSageUniverse.core.count)-name core + your watchlist (a full \(StockSageUniverse.worldwide.count)-name pass runs on Find ideas / Refresh)."
                              : "Alerts scan only your \(store.userSymbols.count) watchlist name\(store.userSymbols.count == 1 ? "" : "s") (faster). The full board won't auto-refresh — tap Refresh for it.")
                             .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
@@ -1006,8 +1005,10 @@ struct MarketsView: View {
 
     private func checkAlertsNow() async {
         checkingAlerts = true
-        // Honour the watchlist-only scope here too, so "Check now" matches what the
-        // background monitor actually evaluates.
+        // Watchlist-only: identical scope to the background monitor. Full mode: BROADER
+        // refresh than a monitor cycle (full board vs core+watchlist) — deliberate, so
+        // "Check now" never scores stale prices; both paths evaluate the whole board.
+        // (Review fix 2026-07-17: the old comment claimed the scopes "match".)
         if watchlistOnly && !store.userSymbols.isEmpty {
             // runWatchlistCycle fetches fresh quotes internally — no pre-refresh needed.
             alertSignals = await StockSageMonitor.shared.runWatchlistCycle(store.userSymbols, notify: false)
