@@ -945,6 +945,14 @@ struct MarketsView: View {
                     .help("No live price found for \(a.symbol) — alert cannot fire until a quote is available. Check the ticker spelling.")
             } else {
                 Text("armed").font(.caption2.weight(.semibold)).foregroundStyle(.green.opacity(0.85))
+                    // Review fix 2026-07-17: an off-board ticker can be a perfectly valid
+                    // alert (the monitor fetches it independently — see the audit comment
+                    // above) OR an unfixable typo; the board can't tell them apart, so
+                    // "armed" carries the caveat instead of silently promising a push a
+                    // misspelling can never deliver.
+                    .help(onBoard
+                          ? "Armed — the monitor checks this level every cycle (needs monitoring on, or Check now)."
+                          : "Armed — \(a.symbol) isn't on the board, so its spelling can't be verified here. A valid ticker is still checked every cycle; a misspelled one can never fire.")
             }
             Button { store.removePriceAlert(a.id) } label: {
                 Image(systemName: "trash").font(.system(size: mvFont11)).foregroundStyle(.secondary)
@@ -968,6 +976,15 @@ struct MarketsView: View {
         // without adding, but the view would clear the fields and show no feedback).
         if store.priceAlerts.contains(where: { $0.isArmed && $0.symbol == sym && $0.target == p && $0.direction == paDirection }) {
             paError = "Already armed — this alert is already active."
+            return
+        }
+        // Review fix 2026-07-17: mirror the ideas-card menu's rule — the engine fires on
+        // a STANDING condition (PriceAlert.isMet's >=/<=, not a crossing), so an
+        // already-met alert pushes a meaningless notification on the next cycle and
+        // consumes its one shot. Checkable only when the board has a price; off-board
+        // tickers pass through (the row's help carries that caveat).
+        if let px = currentPrice(sym), paDirection == .above ? px >= p : px <= p {
+            paError = "Already met — \(sym) is \(adaptivePrice(px)) now, so this would fire instantly and disarm. Pick a level the price hasn't crossed."
             return
         }
         store.addPriceAlert(symbol: sym, target: p, direction: paDirection)
