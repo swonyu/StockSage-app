@@ -24,6 +24,12 @@ struct MarketsTodayActionsCard: View {
     /// lenses that can legitimately disagree with no cross-reference before this. Copy-only:
     /// nil (default) renders nothing, matching every other call site unaware of this parameter.
     var globalBestSymbol: String? = nil
+    /// FASTMONEY (owner, 2026-07-17): one-tap journal prefill for a row — the caller resolves
+    /// the symbol to its idea and runs the SAME prefill path as the detail sheet's "Log trade"
+    /// (side-correct stop/target, conviction recorded, jumps to the Portfolio journal form).
+    /// Logged real fills are the dataset that feeds calibration and execution-cost measurement.
+    /// nil (default) renders no quick-log affordance, keeping other call sites unchanged.
+    var onLogFill: ((String) -> Void)? = nil
     @ObservedObject private var paperStore = StockSagePaperTradeStore.shared
     @State private var executableOnly = false
 
@@ -273,8 +279,38 @@ struct MarketsTodayActionsCard: View {
                              blockedPotential)
     }
 
+    /// FASTMONEY (owner, 2026-07-17): pair the open-sheet row with a sibling "Log" quick action.
+    /// Sibling, not nested — a Button inside another Button's label doesn't reliably receive
+    /// clicks on macOS, so the row is an HStack of two independent buttons.
     @ViewBuilder
     private func row(_ rank: Int, _ plan: TodayActionPlan) -> some View {
+        if let onLogFill {
+            HStack(spacing: 6) {
+                rowOpenButton(rank, plan)
+                logFillButton(plan, onLogFill: onLogFill)
+            }
+        } else {
+            rowOpenButton(rank, plan)
+        }
+    }
+
+    private func logFillButton(_ plan: TodayActionPlan, onLogFill: @escaping (String) -> Void) -> some View {
+        Button { onLogFill(plan.symbol) } label: {
+            VStack(spacing: 2) {
+                Image(systemName: "square.and.pencil").font(.system(size: 12))
+                Text("Log").font(.system(size: font8, weight: .semibold))
+            }
+            .foregroundStyle(DS.Palette.accent)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Prefill the journal's add-trade form (Portfolio section) with this plan, including the planned entry — enter the fill you actually get and it feeds your calibration and execution-cost (slippage) measurement. Recording a decision, not endorsing it.")
+        .accessibilityLabel("Log trade for \(plan.symbol) — prefills the journal form in the Portfolio section")
+    }
+
+    @ViewBuilder
+    private func rowOpenButton(_ rank: Int, _ plan: TodayActionPlan) -> some View {
         let blocked = plan.gate?.decision == .blocked
         // D1 (rotation-3 triage): same utcDayKey staleness check `copyAllText` already gates
         // its "⚠ PRICE NOT LIVE" line on — nil priceAsOf ⇒ unknown, renders nothing.

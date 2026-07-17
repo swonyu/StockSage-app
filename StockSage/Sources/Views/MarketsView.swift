@@ -1903,6 +1903,36 @@ struct MarketsView: View {
                 .padding(.vertical, 6)
             }
 
+            // FASTMONEY (owner, 2026-07-17): path-to-proven-edge meter — honest progress toward
+            // the ONLY sanctioned route to trading a validated signal bigger: the forward paper
+            // DSR > 0.95 promotion bar. Display-only, and it never promises a pass date —
+            // performance decides, not time.
+            if !paperStore.trades.isEmpty {
+                Group {
+                    if let fwd = paperStore.forwardStats {
+                        // Review fix (2026-07-17, 2-vote): TRUNCATE the displayed percent — plain
+                        // %.0f let a non-passing DSR 0.947 render as "95%" right beside "below the
+                        // DSR > 0.95 promotion bar", a visible self-contradiction. Truncation can
+                        // never round UP across the named bar.
+                        let shownPct = Double(Int(fwd.deflated.dsr * 1000)) / 10
+                        // Review fix (2026-07-17, 2-vote): the first draft said "small samples
+                        // flatter" — the measured bias for this CLOSED-ONLY stat is the OPPOSITE
+                        // (stops resolve before targets, so early reads over-represent losers;
+                        // audit 2026-07-12 #2). Carry the same disclosure the Today's-plan DSR
+                        // line already does.
+                        Text(String(format: "Path to a proven edge: forward DSR %.1f%% on %d closed — %@ the DSR > 0.95 promotion bar. Closed-only read (%d still open): stops resolve before targets, so early it over-states the loss; it firms up as the book resolves.",
+                                    shownPct, fwd.closed,
+                                    fwd.passesForwardBar ? "currently above" : "below",
+                                    paperStore.open.count))
+                    } else {
+                        let closedWithR = paperStore.closed.compactMap(\.realizedR).count
+                        Text("Path to a proven edge: \(closedWithR) of the 4 closes needed for a first forward DSR read (promotion bar: DSR > 0.95). Performance decides, not time — most strategies never pass.")
+                    }
+                }
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .help(StockSageDeflatedSharpe.caveat)
+            }
+
             // The contrast: engine vs the owner's own realized trades.
             let ownEdge = journal.edgeStats
             if ownEdge.closedWithR > 0 {
@@ -2692,6 +2722,13 @@ struct MarketsView: View {
         // .map/?? still blanks the genuine degenerate case (advisor returned nil, e.g. huge ATR).
         draftStop = idea.advice.stopPrice.map { adaptivePrice($0) } ?? ""
         draftTarget = idea.advice.targetPrice.map { adaptivePrice($0) } ?? ""
+        // FASTMONEY review fix (2026-07-17, 2-vote): the idea's quoted price IS the planned
+        // entry — record it so the slippage pair (plannedEntry + the fill the user later types)
+        // actually measures entry cost. Without this, "feeds execution-cost measurement" on the
+        // quick-log buttons was false: measuredSlippage needs BOTH legs and the prefill set
+        // neither. plannedEntry alone adds no leg (nil fill ⇒ nil slippage), so nothing is
+        // fabricated when the user never enters a fill.
+        draftPlannedEntry = adaptivePrice(idea.price)
         draftShares = ""
         // T11 (rotation-3 triage): "N% conviction" read as a win-probability percent — F08
         // (wave-8) already relabeled this everywhere else to "signal strength N/100"
@@ -4696,6 +4733,17 @@ struct MarketsView: View {
             .accessibilityLabel(orderLabel)
             HStack(spacing: 6) {
                 Spacer()
+                // FASTMONEY (owner, 2026-07-17): one-tap journal prefill from the crown card —
+                // the same prefillTradeFromIdea path the detail sheet's "Log trade" CTA uses,
+                // surfaced one level up so recording a real fill costs one click, not three.
+                // Hold/Avoid aren't trades (isLoggableIdea) — no button rather than a dead one.
+                if isLoggableIdea(idea.advice.action) {
+                    Button { prefillTradeFromIdea(idea) } label: {
+                        Label("Log trade", systemImage: "square.and.pencil").font(.system(size: mvFont9, weight: .medium))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(DS.Palette.accent)
+                    .help("Prefill the journal's add-trade form (Portfolio section) with this idea's entry, stop, and target, including the planned entry — enter the fill you actually get and it feeds your calibration and execution-cost (slippage) measurement. Recording a decision, not endorsing it.")
+                }
                 Button {
                     let plan = StockSageTodayPlan.build(
                         idea: idea, ev: ev,
@@ -5653,7 +5701,14 @@ struct MarketsView: View {
         let globalBestSymbol = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)?.idea.symbol
         MarketsTodayActionsCard(plans: plans, isSampleData: store.isSampleData, onSelectSymbol: { symbol in
             if let idea = store.ideas.first(where: { $0.symbol == symbol }) { selectedIdea = idea }
-        }, globalBestSymbol: globalBestSymbol)
+        }, globalBestSymbol: globalBestSymbol,
+        // FASTMONEY (owner, 2026-07-17): one-tap "Log" on each plan row — resolve the row's
+        // idea and reuse the detail sheet's exact prefill path. Hold/Avoid ideas aren't trades
+        // (isLoggableIdea) — fall back to opening the sheet, same as tapping the row itself.
+        onLogFill: { symbol in
+            guard let idea = store.ideas.first(where: { $0.symbol == symbol }) else { return }
+            if isLoggableIdea(idea.advice.action) { prefillTradeFromIdea(idea) } else { selectedIdea = idea }
+        })
     }
 
     // Strategy backtest — the advisor's rules aggregated across the sample universe.
