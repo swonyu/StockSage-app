@@ -124,6 +124,18 @@ struct MarketsView: View {
     @ObservedObject private var paperStore = StockSagePaperTradeStore.shared
     @State private var briefing = ""
     @State private var briefingGeneratedAt: Date? = nil
+    /// Fingerprint of the symbol list the briefing was generated against — display is
+    /// gated on it still matching at RENDER time (review fix 2026-07-17: the old
+    /// onChange reset lived on the briefing section, which is unmounted on other tabs,
+    /// so a symbols edit made elsewhere never fired it and stale text naming removed
+    /// tickers re-appeared as current on remount).
+    @State private var briefingSymbolsKey = ""
+
+    /// The generated briefing, valid ONLY while the board still matches what it was
+    /// generated against; "" (→ the deterministic fallback) otherwise.
+    private var currentBriefing: String {
+        briefingSymbolsKey == store.symbols.map(\.symbol).sorted().joined() ? briefing : ""
+    }
     @State private var loadingBriefing = false
     @State private var newSymbol = ""
     @State private var newShares = ""
@@ -3410,13 +3422,13 @@ struct MarketsView: View {
                 .buttonStyle(LuxPressStyle())
                 .disabled(loadingBriefing)
             }
-            Text(briefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : briefing)
+            Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : currentBriefing)
                 .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .contentTransition(.opacity)
-                .animation(DS.Motion.smooth, value: briefing.isEmpty)
-            if !briefing.isEmpty, let generatedAt = briefingGeneratedAt {
+                .animation(DS.Motion.smooth, value: currentBriefing.isEmpty)
+            if !currentBriefing.isEmpty, let generatedAt = briefingGeneratedAt {
                 let stale = generatedAt < Date().addingTimeInterval(-4 * 3600)
                 Text((stale ? "⚠︎ Generated " : "Generated ")
                      + generatedAt.formatted(.relative(presentation: .named)))
@@ -3433,17 +3445,16 @@ struct MarketsView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-        // Reset a generated briefing when the watched symbol list changes so stale
-        // LLM text naming removed tickers is never presented as current.
-        .onChange(of: store.symbols.map(\.symbol).sorted().joined()) {
-            briefing = ""
-            briefingGeneratedAt = nil
-        }
+        // Staleness is enforced at RENDER time via `currentBriefing`'s fingerprint gate
+        // (see its doc) — the old onChange here couldn't fire for symbol edits made
+        // while this section was unmounted on another tab.
     }
 
     private func generateBriefing() async {
         loadingBriefing = true
-        briefing = await StockSageBriefingService.generateBriefing(for: store.symbols)
+        let symbols = store.symbols
+        briefing = await StockSageBriefingService.generateBriefing(for: symbols)
+        briefingSymbolsKey = symbols.map(\.symbol).sorted().joined()
         briefingGeneratedAt = Date()
         loadingBriefing = false
     }
