@@ -880,6 +880,15 @@ struct MarketsView: View {
                     .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Review fix 2026-07-17 (self-verified 1-vote finding): checkPriceAlerts runs
+            // ONLY in monitor cycles with notify:true — "Check now" (notify:false) skips
+            // it — so with monitoring off (the default) an "armed" row is never evaluated
+            // by anything. Say so instead of letting green rows imply active watching.
+            if !monitoring && store.priceAlerts.contains(where: \.isArmed) {
+                Text("⚠ Monitoring is off — armed price alerts aren't being checked. Turn on Strong-signal monitoring above to activate them.")
+                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 6) {
                 journalField("Ticker", text: $paSymbol, width: 78)
                 DSSegmentPicker(cases: [PriceAlert.Direction.above, .below],
@@ -950,9 +959,12 @@ struct MarketsView: View {
                     // above) OR an unfixable typo; the board can't tell them apart, so
                     // "armed" carries the caveat instead of silently promising a push a
                     // misspelling can never deliver.
+                    // (Corrected same-shift: 9e56315's help claimed "or Check now" also
+                    // checks price alerts — it doesn't; Check now passes notify:false,
+                    // which skips checkPriceAlerts. Monitoring is the only checker.)
                     .help(onBoard
-                          ? "Armed — the monitor checks this level every cycle (needs monitoring on, or Check now)."
-                          : "Armed — \(a.symbol) isn't on the board, so its spelling can't be verified here. A valid ticker is still checked every cycle; a misspelled one can never fire.")
+                          ? "Armed — checked every cycle while Strong-signal monitoring is ON (the manual Check now does not evaluate price alerts)."
+                          : "Armed — \(a.symbol) isn't on the board, so its spelling can't be verified here. A valid ticker is still checked every monitoring cycle; a misspelled one can never fire.")
             }
             Button { store.removePriceAlert(a.id) } label: {
                 Image(systemName: "trash").font(.system(size: mvFont11)).foregroundStyle(.secondary)
