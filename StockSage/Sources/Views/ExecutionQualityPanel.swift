@@ -60,6 +60,12 @@ struct ExecutionQualityPanel: View {
                                  tint: worst <= 0 ? DS.Palette.successSoft : DS.Palette.danger)
                             .help("The single costliest measured leg — one bad fill, not your typical execution.")
                     }
+                    // Cost in R (2026-07-17, owner "improve"): bps is abstract; R is the unit the rest
+                    // of the journal reasons in, so "execution shaved 0.15R off your average trade" is
+                    // the actionable discipline number. Reuses each leg's own price + risk-per-share.
+                    statCell(title: "Cost / trade", value: String(format: "%+.2fR", m.perTradeR),
+                             tint: m.perTradeR <= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                        .help(String(format: "Execution cost per trade in R (%.2fR total across %d legs) — subtract it from your expectancy to see the fills' real drag. Positive = cost. Same slippage as the bps at left, expressed in the journal's own R unit.", m.totalR, m.legs))
                     Spacer(minLength: 0)
                 }
                 Text("Broker-choice execution dispersion is real and measured: 0.07%–0.46% round-trip across brokers for the identical order (Schwarz, Barber, Huang, Jorion & Odean, \u{201C}Retail Broker Execution Quality,\u{201D} Journal of Finance, 2025). Your number above is YOUR own fills — a record, not a forecast of future fills.")

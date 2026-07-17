@@ -81,6 +81,20 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     /// Risk per share defined at entry (entry→stop distance).
     nonisolated var riskPerShare: Double { abs(entry - stop) }
 
+    /// Entry-leg execution cost expressed in R (the unit the rest of the journal reasons in):
+    /// slippage as a fraction of the planned price, times that price, divided by the trade's own
+    /// risk-per-share. nil unless the leg has both prices AND a defined risk. Positive = the fill
+    /// cost you R vs the plan. Reuses `entrySlippageBps` so the cost sign convention matches.
+    nonisolated var entrySlippageR: Double? {
+        guard let bps = entrySlippageBps, let p = plannedEntry, riskPerShare > 0 else { return nil }
+        return (bps / 10_000) * p / riskPerShare
+    }
+    /// Exit-leg execution cost in R — same construction as `entrySlippageR` off `exitSlippageBps`.
+    nonisolated var exitSlippageR: Double? {
+        guard let bps = exitSlippageBps, let p = plannedExit, riskPerShare > 0 else { return nil }
+        return (bps / 10_000) * p / riskPerShare
+    }
+
     /// P&L at a given mark price (sign respects side).
     nonisolated func profit(at price: Double) -> Double {
         side == .long ? (price - entry) * shares : (entry - price) * shares
@@ -322,6 +336,13 @@ struct MeasuredSlippage: Sendable, Equatable {
     let assumedMedianBpsPerLeg: Double   // median of defaultCosts(symbol).roundTripBps/2 over the SAME legs — apples-to-apples
     let legs: Int
     let minLegs: Int                    // 5
+    /// Total execution cost across all measured legs, in R — the unit the rest of the journal
+    /// reasons in. bps is abstract; "your fills shaved ≈0.15R off the average trade" is the
+    /// discipline number. Positive = cost; nil legs (no planned/fill pair, or zero risk) excluded.
+    let totalR: Double
+    /// R cost per CLOSED TRADE that contributed ≥1 measured leg — the per-trade drag, comparable
+    /// to the expectancy figures elsewhere in the panel.
+    let perTradeR: Double
     nonisolated var meetsFloor: Bool { legs >= minLegs }
 }
 
@@ -883,14 +904,24 @@ enum StockSageJournal {
     nonisolated static func measuredSlippage(_ trades: [TradeRecord], minLegs: Int = 5) -> MeasuredSlippage? {
         var measured: [Double] = []
         var assumed: [Double] = []
+        var totalR = 0.0
+        var contributingTrades = 0
         for t in trades where !t.isOpen {
             let assumedPerLeg = StockSageNetEdge.defaultCosts(forSymbol: t.symbol).roundTripBps / 2
             if let s = t.entrySlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
             if let s = t.exitSlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
+            // R cost accrues per LEG (each leg has its own planned/fill + the trade's risk).
+            let legR = (t.entrySlippageR ?? 0) + (t.exitSlippageR ?? 0)
+            if t.entrySlippageR != nil || t.exitSlippageR != nil {
+                totalR += legR
+                contributingTrades += 1
+            }
         }
         guard !measured.isEmpty else { return nil }
         return MeasuredSlippage(medianBps: median(measured), assumedMedianBpsPerLeg: median(assumed),
-                                legs: measured.count, minLegs: minLegs)
+                                legs: measured.count, minLegs: minLegs,
+                                totalR: totalR,
+                                perTradeR: contributingTrades > 0 ? totalR / Double(contributingTrades) : 0)
     }
 }
 

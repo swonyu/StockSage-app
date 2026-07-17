@@ -158,6 +158,31 @@ struct StockSageSlippageTests {
         #expect(StockSageJournal.measuredSlippage([open]) == nil)
     }
 
+    // MARK: Slippage in R (2026-07-17) — cost expressed in the journal's own R unit
+    @Test func slippageInRHandDerived() {
+        // riskPerShare = |entry−stop| = |100−95| = 5. Entry leg planned 100, fill 100.25 ⇒ +25 bps
+        // ⇒ price cost 0.25 ⇒ 0.25/5 = +0.05R. Exit leg planned 110, fill 109.78 (sell) ⇒ +20 bps
+        // ⇒ price cost 110·0.0020 = 0.22 ⇒ 0.22/5 = +0.044R.
+        let long = trade(side: .long, plannedEntry: 100, entryFill: 100.25, plannedExit: 110, exitFill: 109.78)
+        #expect(abs((long.entrySlippageR ?? .nan) - 0.05) < 1e-9)
+        #expect(abs((long.exitSlippageR ?? .nan) - 0.044) < 1e-9)
+        // A single-trade book meets no floor, but totalR/perTradeR are computed regardless of the floor.
+        // Five identical trades ⇒ meetsFloor, perTradeR = 0.05+0.044 = 0.094R, totalR = 5×0.094 = 0.47R.
+        let five = (0..<5).map { _ in trade(side: .long, plannedEntry: 100, entryFill: 100.25,
+                                            plannedExit: 110, exitFill: 109.78) }
+        guard let m = StockSageJournal.measuredSlippage(five) else { Issue.record("expected a fit"); return }
+        #expect(m.meetsFloor)
+        #expect(abs(m.perTradeR - 0.094) < 1e-9)
+        #expect(abs(m.totalR - 0.47) < 1e-9)
+        // Positive slippage ⇒ positive R cost (drag). A leg with no planned price ⇒ nil R, no fabrication.
+        #expect(trade(plannedEntry: nil, entryFill: 100.25).entrySlippageR == nil)
+        // Zero risk (entry == stop) ⇒ R undefined, not infinite.
+        let flat = TradeRecord(symbol: "X", side: .long, entry: 100, stop: 100, target: nil, shares: 1,
+                               openedAt: Date(timeIntervalSince1970: 0), exitPrice: 105,
+                               closedAt: Date(timeIntervalSince1970: 100), plannedEntry: 100, entryFill: 100.25)
+        #expect(flat.entrySlippageR == nil)
+    }
+
     // MARK: Store close() persistence + existing-call-site compatibility
 
     private func isolatedStore() -> (store: StockSageJournalStore, defaults: UserDefaults, suite: String) {
