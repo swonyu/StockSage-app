@@ -749,6 +749,24 @@ struct MarketsView: View {
             // DSSegmentPicker call site without a container label — segments speak
             // their titles but the group itself had no name for VoiceOver.
             .accessibilityLabel("Markets section")
+            // ⌘1–⌘7 section jumps (2026-07-17, owner "improve"): the primary nav sits mid-scroll,
+            // so Portfolio/Alerts/Briefing are all scroll-and-click today. Number-key jumps collapse
+            // that to one keystroke. Zero-size hidden buttons carry the shortcuts (the app has no
+            // .commands menu — every shortcut lives on an in-view control, matching the 3 that ship).
+            // Digit+⌘ never collides with text entry, so no @FocusState scoping is needed.
+            .background(sectionShortcutKeys)
+    }
+
+    /// Hidden ⌘1–⌘7 accelerators for the seven MarketSection tabs. Rendered zero-size behind the
+    /// picker; each sets `$section` so the shortcut mirrors a tab click exactly.
+    private var sectionShortcutKeys: some View {
+        ForEach(Array(MarketSection.allCases.enumerated()), id: \.element.id) { i, sec in
+            Button("") { section = sec }
+                .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -2269,6 +2287,23 @@ struct MarketsView: View {
                             }
                             Spacer(minLength: 0)
                         }
+                        // Shape of the R distribution (2026-07-17, owner "improve"): a positive mean
+                        // R with a LEFT-skewed shape (many small wins masking rare big losses) is the
+                        // fragile edge that blows up — already computed (RDistribution.shapeNote), never
+                        // shown. Review fix (2026-07-17): gate the shape VERDICT behind the same min-n
+                        // (5) as the reliability table below — a 3rd moment on 3 trades is noise. Below
+                        // the floor, name the sample instead of asserting a shape.
+                        if StockSageJournal.bucketReliability(closedWithR: dist.total).isReliable {
+                            Text(dist.shapeNote)
+                                .font(.system(size: mvFont9))
+                                .foregroundStyle(dist.skewness < -0.2 ? DS.Palette.warningSoft : .secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .help("Skew of your realized-R outcomes. Left-skewed (rare big losses) is fragile even at a positive average; right-skewed (rare big wins) is robust. Skew \(String(format: "%.2f", dist.skewness)), kurtosis \(String(format: "%.2f", dist.kurtosis)).")
+                        } else {
+                            Text("Shape (skew) needs ≥5 closed trades to read — \(dist.total) so far.")
+                                .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
                 let months = journal.monthlyPnL
@@ -2362,6 +2397,48 @@ struct MarketsView: View {
                 if sides.count == 2 || sectors.count >= 2 {
                     Text(StockSageJournal.attributionCaveat)
                         .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                // Calibration reliability (2026-07-17, owner "improve"): predicted win% (from the
+                // active calibration) vs the owner's OWN realized win% at that conviction — the
+                // reliability diagram, the most honest read on a win-probability model. Display-only;
+                // the calibration is NOT refit from this (it already trains on the journal via the
+                // leak-free OOS selector). Gated per-band by the same min-n discipline as by-side.
+                if let cal = store.convictionCalibration {
+                    let reliability = StockSageJournal.convictionReliability(journal.trades, calibration: cal)
+                    if !reliability.isEmpty {
+                        Text("Predicted vs your actual (by conviction)")
+                            .font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white)
+                        ForEach(reliability) { row in
+                            let rel = StockSageJournal.bucketReliability(closedWithR: row.n)
+                            HStack(spacing: DS.Space.sm) {
+                                Text(row.bandLabel).font(.system(size: mvFont11)).foregroundStyle(.white)
+                                    .frame(width: 72, alignment: .leading)
+                                if rel.isReliable {
+                                    Text(String(format: "said %d%% · you %d%% (n=%d)",
+                                                Int((row.predicted * 100).rounded()),
+                                                Int((row.actualWinRate * 100).rounded()), row.n))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                    Spacer()
+                                    // delta < 0 ⇒ the model was OPTIMISTIC at this conviction (you won
+                                    // less than it promised) — the dangerous direction, tinted as such.
+                                    Text(String(format: "%+d pts", Int((row.delta * 100).rounded())))
+                                        .font(.system(size: mvFont11, weight: .semibold))
+                                        .foregroundStyle(row.delta >= 0 ? DS.Palette.successSoft : DS.Palette.warningSoft)
+                                        .frame(minWidth: 56, alignment: .trailing)
+                                } else {
+                                    Text("said \(Int((row.predicted * 100).rounded()))% · \(rel.tooFewLabel)")
+                                        .font(.caption2).foregroundStyle(DS.Palette.warningSoft)
+                                    Spacer()
+                                }
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(rel.isReliable
+                                ? "Conviction \(row.bandLabel): predicted \(Int((row.predicted * 100).rounded())) percent, you realized \(Int((row.actualWinRate * 100).rounded())) percent over \(row.n) trades, \(row.delta >= 0 ? "ahead of" : "behind") the prediction."
+                                : "Conviction \(row.bandLabel): predicted \(Int((row.predicted * 100).rounded())) percent, \(rel.tooFewLabel).")
+                        }
+                        Text("What the engine PREDICTED for each conviction band vs what your closed trades actually did. A negative gap means the model was optimistic there. Descriptive of your record — not a forecast; thin bands read “too few to tell”.")
+                            .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
@@ -2790,6 +2867,31 @@ struct MarketsView: View {
                 Text("⏳ \(ts.rationale)").font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Time stop: held \(ts.daysHeld) days, past the \(plannedHold) day plan")
+            }
+            // Gap risk on the LIVE held position (2026-07-17, owner "improve"): a stop is a TRIGGER,
+            // not a fill — an overnight gap THROUGH it loses more than the planned −1R. The idea card
+            // already shows this for a hypothetical; the open trade is real money on the line tonight.
+            // Reuses StockSageGapRisk.scenario with the account converted to the symbol's native
+            // currency (same F4 currency fix as the idea card), and self-nils without an account.
+            if let acct = parsedAccount {
+                // Review fix (2026-07-17, 2-vote HIGH): use the SAME usdFactor the idea card uses
+                // (usdAmount bakes in majorUnitValue's ÷100 for pence/cents listings like .L/.JO) —
+                // a bare fxRateToUSD dropped that, expressing the account in POUNDS while the loss is
+                // in PENCE (100× mismatch → a false "could owe the broker" on an ordinary position).
+                // usdFactor 1 for USD and untracked FX (no-op).
+                let usdFactor = usdAmount(1, symbol: trade.symbol) ?? 1
+                let acctNative = acct / usdFactor
+                // GapRisk's TradeSide is a distinct enum from TradeRecord.Side — map across.
+                let gapSide: TradeSide = trade.side == .short ? .short : .long
+                if let gap = StockSageGapRisk.scenario(side: gapSide, entry: trade.entry, stop: trade.stop,
+                                                       shares: trade.shares, gapPct: 0.20, accountEquity: acctNative) {
+                    Text("⚠︎ " + gap.verdict)
+                        .font(.system(size: mvFont9))
+                        .foregroundStyle(gap.exceedsAccount ? DS.Palette.dangerSoft : DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(StockSageGapRisk.caveat)
+                        .accessibilityLabel("Gap risk on this held position. " + gap.verdict)
+                }
             }
             if let act {
                 Text("\(act.kind.rawValue) — \(act.detail)")

@@ -63,6 +63,48 @@ struct StockSageJournalTests {
         #expect(StockSageJournal.attributionCaveat.lowercased().contains("not predictive"))
     }
 
+    @Test func convictionReliabilityComparesPredictedToOwnActual() {
+        // Build a 5-band calibration (bands 0-20/20-40/40-60/60-80/80-100%). Explicit element
+        // type on the array so the fit() call's tuple inference stays within the type-checker budget.
+        var outcomes: [(conviction: Double, won: Bool)] = []
+        for i in 0..<200 { outcomes.append((conviction: Double(i % 5) / 5.0 + 0.1, won: i % 2 == 0)) }
+        guard let cal = StockSageConvictionCalibration.fit(outcomes, binCount: 5, minSamples: 30)
+        else { Issue.record("expected a fit"); return }
+        // Two closed trades at conviction 0.5 (→ band index 2, the 40-60% row): one win, one loss.
+        // One closed trade at conviction 0.9 (→ band 4, 80-100%): a win. One OPEN trade (ignored).
+        func closed(_ conv: Double, win: Bool) -> TradeRecord {
+            // exit above entry ⇒ realizedR > 0 (win); below ⇒ loss. entry 100, stop 90 (risk 10).
+            TradeRecord(symbol: "X", side: .long, entry: 100, stop: 90, target: nil, shares: 10,
+                        openedAt: Date(timeIntervalSince1970: 0),
+                        exitPrice: win ? 110 : 95, closedAt: Date(timeIntervalSince1970: 100), conviction: conv)
+        }
+        let openNoConv = TradeRecord(symbol: "O", side: .long, entry: 100, stop: 90, target: nil,
+                                     shares: 10, openedAt: Date(timeIntervalSince1970: 0), conviction: 0.5)
+        let noConv = TradeRecord(symbol: "N", side: .long, entry: 100, stop: 90, target: nil, shares: 10,
+                                 openedAt: Date(timeIntervalSince1970: 0), exitPrice: 110,
+                                 closedAt: Date(timeIntervalSince1970: 100), conviction: nil)   // no conviction ⇒ excluded
+        var trades: [TradeRecord] = []
+        trades.append(closed(0.5, win: true))
+        trades.append(closed(0.5, win: false))
+        trades.append(closed(0.9, win: true))
+        trades.append(openNoConv)
+        trades.append(noConv)
+        let rel = StockSageJournal.convictionReliability(trades, calibration: cal)
+        // Only the two populated bands appear (empty bands are dropped).
+        #expect(rel.count == 2)
+        let band50 = rel.first { $0.bandLabel == "40–60%" }
+        #expect(band50?.n == 2)                      // the two convicted closed trades in band 2
+        #expect(band50?.actualWinRate == 0.5)        // 1 win / 2
+        #expect(band50?.predicted == cal.bins[2].winProb)   // mirrors the calibration's own band
+        let band90 = rel.first { $0.bandLabel == "80–100%" }
+        #expect(band90?.n == 1 && band90?.actualWinRate == 1.0)
+        // delta = actual − predicted; negative ⇒ the model was optimistic at that conviction.
+        #expect(band50?.delta == 0.5 - cal.bins[2].winProb)
+        // No calibration bins ⇒ nothing to compare.
+        #expect(StockSageJournal.convictionReliability([closed(0.5, win: true)],
+                                                       calibration: StockSageConvictionCalibration(bins: [], sampleSize: 0, method: .identity)).isEmpty)
+    }
+
     @Test func longProfitAndRMultiple() {
         let trade = t(.long, entry: 100, stop: 90, shares: 10)   // risk/share = 10
         #expect(trade.profit(at: 120) == 200)                    // (120−100)*10

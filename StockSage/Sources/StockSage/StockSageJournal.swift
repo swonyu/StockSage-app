@@ -213,6 +213,22 @@ struct SectorPnL: Sendable, Equatable, Identifiable {
     var id: String { sector }
 }
 
+/// One conviction band's PREDICTED win% (from the active calibration) beside the owner's OWN
+/// realized win% at that conviction — the classic reliability-diagram row. The single most honest
+/// read on a win-probability model: "the engine said 60%, your fills at that conviction won 45%."
+/// Display-only; the calibration is NOT refit from this (it already trains on the same journal via
+/// the leak-free OOS selector) — this only VISUALISES predicted-vs-actual so the owner can judge it.
+struct ConvictionReliability: Sendable, Equatable, Identifiable {
+    let bandLabel: String    // e.g. "40–60%" — the conviction range this row covers
+    let predicted: Double    // calibration's winProb for the band (0–1)
+    let actualWinRate: Double // owner's realized win-rate among closed trades in this band (0–1)
+    let n: Int               // closed trades WITH a conviction that fell in this band
+    var id: String { bandLabel }
+    /// Gap between what was promised and what happened (actual − predicted). Negative = the model
+    /// was OPTIMISTIC at this conviction (you won less than it said) — the dangerous direction.
+    nonisolated var delta: Double { actualWinRate - predicted }
+}
+
 /// Honesty gate for per-bucket attribution (by-side / by-sector / by-setup): a bucket with too
 /// few closed trades is mostly luck, so the UI can show "too few to tell" instead of a win% that
 /// reads like an edge. Same min-n discipline systemHealth (n≥20) and kellyInputs (n≥10) already use.
@@ -675,6 +691,39 @@ enum StockSageJournal {
                            avgR: rs.isEmpty ? 0 : rs.reduce(0, +) / Double(rs.count),
                            winRate: Double(wins) / Double(ts.count),
                            closedWithR: rs.count)
+        }
+    }
+
+    /// Reliability diagram: for each of the calibration's conviction bands, the PREDICTED win% next
+    /// to the owner's OWN realized win% among closed trades whose recorded conviction fell in that
+    /// band. Buckets by the SAME half-open index math `calibration.winProb`/`fit` use, so a row's
+    /// actual sample is exactly the trades the predicted number was meant to cover. Only closed
+    /// trades that CARRY a conviction and a defined win/loss count. Empty (no calibration, or no
+    /// convicted closed trades) → []. Display-only; refits nothing.
+    nonisolated static func convictionReliability(_ trades: [TradeRecord],
+                                                  calibration: StockSageConvictionCalibration) -> [ConvictionReliability] {
+        let bins = calibration.bins
+        guard !bins.isEmpty else { return [] }
+        let nBands = bins.count
+        // wins[i]/total[i] over closed trades carrying a conviction, bucketed like winProb(_:).
+        var wins = Array(repeating: 0, count: nBands)
+        var total = Array(repeating: 0, count: nBands)
+        for t in trades where !t.isOpen {
+            guard let c = t.conviction, let r = t.realizedR else { continue }
+            let cc = Swift.max(0, Swift.min(1, c))
+            let idx = Swift.min(nBands - 1, Int(cc * Double(nBands)))
+            total[idx] += 1
+            if r > 0 { wins[idx] += 1 }
+        }
+        let width = 1.0 / Double(nBands)
+        return (0..<nBands).compactMap { i in
+            guard total[i] > 0 else { return nil }   // no convicted trades in this band ⇒ nothing to compare
+            let lo = Int((Double(i) * width * 100).rounded())
+            let hi = Int((Double(i + 1) * width * 100).rounded())
+            return ConvictionReliability(bandLabel: "\(lo)–\(hi)%",
+                                         predicted: bins[i].winProb,
+                                         actualWinRate: Double(wins[i]) / Double(total[i]),
+                                         n: total[i])
         }
     }
 
