@@ -745,6 +745,10 @@ struct MarketsView: View {
     private var sectionPicker: some View {
         DSSegmentPicker(cases: Array(MarketSection.allCases), selection: $section) { $0.title }
             .frame(maxWidth: 520)
+            // Review fix 2026-07-17: the app's primary navigation was the one
+            // DSSegmentPicker call site without a container label — segments speak
+            // their titles but the group itself had no name for VoiceOver.
+            .accessibilityLabel("Markets section")
     }
 
     @ViewBuilder private var content: some View {
@@ -2535,7 +2539,10 @@ struct MarketsView: View {
                 }
             }
             .padding(.vertical, 4)
-            .accessibilityLabel(String(format: "Approaching loss limit. %@ %.1fR today and %@ %.1fR this week. Ease off and size down.",
+            // Review fix 2026-07-17: VoiceOver now hears the LIMITS too — the sighted
+            // text shows "daily limit 3R / weekly limit 6R" but the label omitted the
+            // reference points, leaving "down 2.1R" with nothing to compare against.
+            .accessibilityLabel(String(format: "Approaching loss limit. %@ %.1fR today against a 3 R daily limit, and %@ %.1fR this week against a 6 R weekly limit. Ease off and size down.",
                                        dailyR < 0 ? "Down" : "Up", abs(dailyR), weekR < 0 ? "down" : "up", abs(weekR)))
         }
     }
