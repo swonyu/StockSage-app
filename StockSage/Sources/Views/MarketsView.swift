@@ -40,6 +40,11 @@ struct MarketsView: View {
     /// F19/F20 (2026-07-15): moved to the engine (StockSageIdeaProjection.Filter) — see IdeaSort.
     typealias IdeaFilter = StockSageIdeaProjection.Filter
     @AppStorage("marketsIdeaFilter") private var ideaFilter: IdeaFilter = .all
+    /// Sharia business-activity screen (owner, 2026-07-23): when on, the ideas board EXCLUDES
+    /// known-prohibited NASDAQ names (StockSageShariaScreen). Coarse exclusion, NOT certification —
+    /// the disclosure banner (shariaScreenBanner) states that unexcluded names are UNSCREENED and the
+    /// financial-ratio leg is not run. Default OFF so nothing changes until the owner opts in.
+    @AppStorage("stocksage.sharia.excludeProhibited") private var shariaExcludeProhibited = false
     /// Live name filter over the ideas list (by symbol / market).
     @State private var ideaSearch = ""
 
@@ -3653,6 +3658,7 @@ struct MarketsView: View {
     private var ideasSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             ideasHeader
+            shariaScreenBanner
             bestOpportunityCard
             capitalAllocationCard
             fastLaneStrip
@@ -3681,6 +3687,11 @@ struct MarketsView: View {
                     .menuStyle(.borderlessButton).fixedSize()
                     .accessibilityLabel("Sort ideas")
                     Menu {
+                        Divider()
+                        Button { shariaExcludeProhibited.toggle() } label: {
+                            Label("Sharia screen (exclude prohibited)", systemImage: shariaExcludeProhibited ? "checkmark" : "")
+                        }
+                        .help(StockSageShariaScreen.caveat)
                         ForEach(IdeaFilter.allCases) { f in
                             Button { ideaFilter = f } label: { Label(f.rawValue, systemImage: ideaFilter == f ? "checkmark" : "") }
                         }
@@ -3811,11 +3822,52 @@ struct MarketsView: View {
     /// F19/F20 (2026-07-15): delegates to the engine projection — the body moved VERBATIM to
     /// StockSageIdeaProjection.displayed so the sort/filter/search contract is testable (F16 pins).
     private var displayedIdeas: [StockSageIdea] {
-        StockSageIdeaProjection.displayed(store.ideas, sort: ideaSort, filter: ideaFilter,
+        let base = StockSageIdeaProjection.displayed(store.ideas, sort: ideaSort, filter: ideaFilter,
                                           minConviction: ideaMinConv, search: ideaSearch,
                                           regime: store.regime, earnings: store.earnings,
                                           liquidity: store.liquidity, seasonality: store.seasonality,
                                           holds: velocityHolds, calibration: store.convictionCalibration)
+        // Sharia exclusion (owner, 2026-07-23): applied LAST so it composes with sort/filter/search.
+        // Removes only KNOWN-prohibited names — everything shown is "not on the prohibited list,"
+        // which the banner is explicit is NOT the same as certified compliant.
+        return shariaExcludeProhibited ? base.filter { !StockSageShariaScreen.isProhibited($0.symbol) } : base
+    }
+
+    /// Count of ideas this scan that the Sharia screen removed — surfaced in the banner so the
+    /// exclusion is visible, not silent (a hidden filter that drops names with no notice is the
+    /// exact "looks screened but isn't" trap this whole feature is trying to avoid).
+    private var shariaExcludedCount: Int {
+        guard shariaExcludeProhibited else { return 0 }
+        let afterOtherFilters = StockSageIdeaProjection.displayed(
+            store.ideas, sort: ideaSort, filter: ideaFilter, minConviction: ideaMinConv,
+            search: ideaSearch, regime: store.regime, earnings: store.earnings,
+            liquidity: store.liquidity, seasonality: store.seasonality,
+            holds: velocityHolds, calibration: store.convictionCalibration)
+        return afterOtherFilters.filter { StockSageShariaScreen.isProhibited($0.symbol) }.count
+    }
+
+    /// Mandatory disclosure whenever the Sharia screen is active — it is a COARSE exclusion, not a
+    /// compliance certification. Rendered in the Ideas header so it can never be missed while the
+    /// board is filtered. Includes a toggle to turn it back off.
+    @ViewBuilder private var shariaScreenBanner: some View {
+        if shariaExcludeProhibited {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "moon.stars.fill").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.accent)
+                    Text("Sharia screen ON — \(shariaExcludedCount) known-prohibited name\(shariaExcludedCount == 1 ? "" : "s") hidden this scan")
+                        .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.white)
+                    Spacer()
+                    Button("Turn off") { shariaExcludeProhibited = false }
+                        .buttonStyle(.plain).font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.accent)
+                }
+                Text(StockSageShariaScreen.caveat)
+                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
+            .background(DS.Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.accent.opacity(0.3), lineWidth: 1))
+        }
     }
 
     /// Why the filtered ideas list is empty — names the active constraint so the user knows what to relax.
