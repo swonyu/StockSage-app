@@ -3616,7 +3616,7 @@ struct MarketsView: View {
                 .buttonStyle(LuxPressStyle())
                 .disabled(loadingBriefing)
             }
-            Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : currentBriefing)
+            Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: StockSageShariaScreen.screenedSymbols(store.symbols)) : currentBriefing)
                 .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -3646,7 +3646,9 @@ struct MarketsView: View {
 
     private func generateBriefing() async {
         loadingBriefing = true
-        let symbols = store.symbols
+        // Screened like every recommendation surface (review 2026-07-26) — the briefing names
+        // Strength/Weakness with buy/sell labels, so an active Sharia screen applies here too.
+        let symbols = StockSageShariaScreen.screenedSymbols(store.symbols)
         briefing = await StockSageBriefingService.generateBriefing(for: symbols)
         briefingSymbolsKey = symbols.map(\.symbol).sorted().joined()
         briefingGeneratedAt = Date()

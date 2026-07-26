@@ -125,6 +125,19 @@ struct StockSageBriefingTests {
         #expect(summary.contains("Weakness"))
     }
 
+
+    @Test func staleQuoteIsAnnotatedInBriefing() {
+        // marketTime 1970 ⇒ isStale() is unconditionally true regardless of wall clock; the
+        // +10% move makes it a strong buy — the Strength line must carry the stale marker.
+        let stale = [StockSageSymbol(symbol: "OLD", market: "TASI", quotes: [
+            StockSageQuote(price: 100, previousPrice: 100, marketTime: Date(timeIntervalSince1970: 0)),
+            StockSageQuote(price: 110, previousPrice: 100, marketTime: Date(timeIntervalSince1970: 0)),
+        ])]
+        let out = StockSageBriefingService.deterministicSummary(for: stale)
+        #expect(out.contains("OLD") && out.contains("stale quote"))
+        #expect(!out.contains("On-device"))   // provenance relabel pinned (rules-based, no LLM)
+    }
+
     @Test func allConsolidatingReportsNoStrongSignals() {
         let flat = [StockSageSymbol(symbol: "FLAT", market: "TASI", quotes: [
             StockSageQuote(price: 100, previousPrice: 100),

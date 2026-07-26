@@ -593,7 +593,11 @@ final class StockSageStore: ObservableObject {
         // publishes) — once, vs the full board. Using `ideas` here would compare the
         // just-published finalRanked to itself (see preScanBoard's doc comment above).
         if alertsEnabled, !preScanBoard.isEmpty {
-            let fired = StockSageAlerts.detect(previous: preScanBoard, current: finalRanked)
+            // Sharia screen applies to alert detection too (review 2026-07-26): both sides
+            // screened with the SAME live toggle read, so a crossing on a hidden name neither
+            // fires nor poisons the previous/current pairing.
+            let fired = StockSageAlerts.detect(previous: StockSageShariaScreen.screened(preScanBoard),
+                                               current: StockSageShariaScreen.screened(finalRanked))
             if !fired.isEmpty { alerts = Array((fired + alerts).prefix(Self.maxAlerts)) }
         }
         // Partial success is honest success: keep the names that priced, and NAME the ones that

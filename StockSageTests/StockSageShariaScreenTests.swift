@@ -45,6 +45,26 @@ struct StockSageShariaScreenTests {
         #expect(c.contains("financial-ratio") || c.contains("ratio"))  // names the missing leg
         #expect(c.contains("verify"))          // pushes the owner to a real authority
     }
+
+    @Test func engineSideScreenedHelpersRespectEnabledFlag() {
+        // Pure given `enabled` (injectable so the test never touches live UserDefaults).
+        let ideas = [
+            StockSageIdea(symbol: "AAPL", market: "US", price: 1,
+                          advice: TradeAdvice(action: .hold, conviction: 0.5, regime: .bullTrend, rationale: [],
+                                              stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: ""),
+                          spark: [1]),
+            StockSageIdea(symbol: "DKNG", market: "US", price: 1,
+                          advice: TradeAdvice(action: .hold, conviction: 0.5, regime: .bullTrend, rationale: [],
+                                              stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: ""),
+                          spark: [1]),
+        ]
+        #expect(StockSageShariaScreen.screened(ideas, enabled: true).map(\.symbol) == ["AAPL"])
+        #expect(StockSageShariaScreen.screened(ideas, enabled: false).count == 2)
+        let syms = [StockSageSymbol(symbol: "AAPL", market: "US", quotes: []),
+                    StockSageSymbol(symbol: "MO", market: "US", quotes: [])]
+        #expect(StockSageShariaScreen.screenedSymbols(syms, enabled: true).map(\.symbol) == ["AAPL"])
+        #expect(StockSageShariaScreen.screenedSymbols(syms, enabled: false).count == 2)
+    }
 }
 
 // Helper the test above asserts on — makes the "no compliant case" contract explicit and breakable:

@@ -37,19 +37,28 @@ enum StockSageBriefingService {
             return "No symbols are being tracked yet."
         }
 
-        let signals = symbols.compactMap { sym -> (String, StockSageSignal)? in
+        // Staleness carried per symbol (review 2026-07-26): the row-level UI already badges a
+        // stale quote "⚠︎ stale", but the briefing folded the same symbol into Strength/Weakness
+        // unannotated — a recommendation off a days-old quote must say so where it's read.
+        let signals = symbols.compactMap { sym -> (String, StockSageSignal, Bool)? in
             guard let s = StockSageSignalEngine.generateSignal(for: sym) else { return nil }
-            return (sym.symbol, s)
+            return (sym.symbol, s, sym.isStale())
         }
         let gainers = signals.filter { $0.1.recommendation == .strongBuy || $0.1.recommendation == .buy }
         let losers  = signals.filter { $0.1.recommendation == .strongSell || $0.1.recommendation == .sell }
+        func label(_ row: (String, StockSageSignal, Bool)) -> String {
+            "\(row.0) (\(row.1.recommendation.rawValue)\(row.2 ? ", stale quote" : ""))"
+        }
 
-        var out = "📊 On-device market briefing (\(symbols.count) symbols)\n"
+        // "Rules-based", not "On-device" (review 2026-07-26): this is a deterministic string
+        // join off the signal engine — "on-device briefing" implied model inference that never
+        // happens in this target (honesty floor: provenance must not overstate).
+        var out = "📊 Market briefing — rules-based (\(symbols.count) symbols)\n"
         if !gainers.isEmpty {
-            out += "\nStrength: " + gainers.map { "\($0.0) (\($0.1.recommendation.rawValue))" }.joined(separator: ", ")
+            out += "\nStrength: " + gainers.map(label).joined(separator: ", ")
         }
         if !losers.isEmpty {
-            out += "\nWeakness: " + losers.map { "\($0.0) (\($0.1.recommendation.rawValue))" }.joined(separator: ", ")
+            out += "\nWeakness: " + losers.map(label).joined(separator: ", ")
         }
         if gainers.isEmpty && losers.isEmpty {
             out += "\nAll tracked symbols are consolidating — no strong signals."

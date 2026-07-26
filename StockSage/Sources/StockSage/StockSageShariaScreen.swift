@@ -96,6 +96,29 @@ enum StockSageShariaScreen {
         prohibited[symbol.uppercased()]
     }
 
+    /// The live toggle state, readable OUTSIDE the view layer. The @AppStorage property on
+    /// MarketsView is private view state — the monitor/store alert paths couldn't see it, so
+    /// alerts pushed and logged prohibited names while every visible surface hid them (review
+    /// 2026-07-26, the one surface e68feda's "one screened source" rule missed). Same key the
+    /// toggle writes; UserDefaults is thread-safe.
+    nonisolated static var excludeProhibitedEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "stocksage.sharia.excludeProhibited")
+    }
+
+    /// Engine-side application of the screen to an idea list — the single helper alert/briefing/
+    /// monitor paths use so they cannot drift from the board's rule. `enabled` defaults to the
+    /// live toggle; injectable for tests (pure given `enabled`).
+    nonisolated static func screened(_ ideas: [StockSageIdea],
+                                     enabled: Bool = excludeProhibitedEnabled) -> [StockSageIdea] {
+        enabled ? ideas.filter { !isProhibited($0.symbol) } : ideas
+    }
+
+    /// Same, for tracked-symbol lists (the briefing's input universe).
+    nonisolated static func screenedSymbols(_ symbols: [StockSageSymbol],
+                                            enabled: Bool = excludeProhibitedEnabled) -> [StockSageSymbol] {
+        enabled ? symbols.filter { !isProhibited($0.symbol) } : symbols
+    }
+
     /// The MANDATORY disclosure any surface using this screen must show. States plainly that this is a
     /// coarse exclusion, not certification, and that unrecognised names are unscreened, not cleared.
     nonisolated static let caveat =
