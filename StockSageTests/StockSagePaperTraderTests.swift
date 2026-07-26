@@ -515,4 +515,53 @@ struct StockSagePaperTraderTests {
         #expect(sb.realizedN == 4)
         #expect(sb.resolvedFrac == 1.0) // nothing open counted → fully resolved
     }
+
+    // MARK: corporate-action rebase (2026-07-26, CLBK 2.2:1 split fabricated −13.46R)
+
+    @Test func retroSplitRebasesInsteadOfFabricatingStopOut() {
+        // Opened at entry 22, stop 20.9 (risk 1.1), target 24.2, 10 shares. The series was
+        // RETRO-ADJUSTED for a 2:1 split: the entry-day close reads 11.0, so storedEntry/barClose
+        // = 2.0 → rebase to entry 11, stop 10.45, target 12.1, 20 shares (value 220 preserved).
+        // Without the rebase, d2's open 10.9 "gaps" the stale 20.9 stop → fabricated ≈ −10R exit
+        // — the CLBK bug (−13.46R recorded on a trade that was actually slightly up).
+        let t = TradeRecord(symbol: "SPLT", side: .long, entry: 22.0, stop: 20.9, target: 24.2,
+                            shares: 10, openedAt: d(1))
+        let h = history("SPLT", dates: [d(1), d(2), d(3)],
+                        opens: [11.1, 10.9, 11.0], highs: [11.3, 11.2, 11.5],
+                        lows: [10.8, 10.7, 10.8], closes: [11.0, 11.0, 11.3])
+        let p = StockSagePaperTrader.markToMarket([t], history: h, costs: costs)[0]
+        #expect(p.isOpen)                                  // low 10.7 never hit the REBASED stop 10.45
+        #expect(abs(p.entry - 11.0) < 1e-9)
+        #expect(abs(p.stop - 10.45) < 1e-9)
+        #expect(abs((p.target ?? 0) - 12.1) < 1e-9)
+        #expect(abs(p.shares - 20.0) < 1e-9)
+        #expect(abs(p.entry * p.shares - 220.0) < 1e-9)    // position value preserved
+    }
+
+    @Test func rebasedStopStillFiresAtHonestMinusOneR() {
+        // Same split, but d2 opens 10.6 and prints low 10.3 — through the REBASED stop 10.45.
+        // Open is above the stop → exit AT the stop 10.45, minus cost 0.001·11 = 0.011 →
+        // exitPrice 10.439, R = (10.439 − 11)/0.55 ≈ −1.02: an honest ~−1R, not a fake −10R.
+        let t = TradeRecord(symbol: "SPLT", side: .long, entry: 22.0, stop: 20.9, target: 24.2,
+                            shares: 10, openedAt: d(1))
+        let h = history("SPLT", dates: [d(1), d(2)],
+                        opens: [11.1, 10.6], highs: [11.3, 10.8],
+                        lows: [10.8, 10.3], closes: [11.0, 10.5])
+        let p = StockSagePaperTrader.markToMarket([t], history: h, costs: costs)[0]
+        #expect(!p.isOpen)
+        let r = p.realizedR ?? .nan
+        #expect(r < -1.0 && r > -1.1)
+        #expect(abs((p.exitPrice ?? 0) - 10.439) < 1e-9)
+    }
+
+    @Test func normalBasisIsNeverRebased() {
+        // Ratio 22.0/21.8 ≈ 1.009 — inside [0.67, 1.5]: record byte-identical, still open.
+        let t = TradeRecord(symbol: "OK", side: .long, entry: 22.0, stop: 20.9, target: 24.2,
+                            shares: 10, openedAt: d(1))
+        let h = history("OK", dates: [d(1), d(2)],
+                        opens: [21.9, 22.1], highs: [22.3, 22.6],
+                        lows: [21.5, 21.4], closes: [21.8, 22.2])
+        let p = StockSagePaperTrader.markToMarket([t], history: h, costs: costs)[0]
+        #expect(p == t)
+    }
 }

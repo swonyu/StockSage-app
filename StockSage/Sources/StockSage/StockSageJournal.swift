@@ -17,10 +17,10 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let symbol: String
     let side: Side
-    let entry: Double
-    let stop: Double
-    let target: Double?
-    let shares: Double
+    private(set) var entry: Double
+    private(set) var stop: Double
+    private(set) var target: Double?
+    private(set) var shares: Double
     let openedAt: Date
     var exitPrice: Double?
     var closedAt: Date?
@@ -115,6 +115,22 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     /// Whole calendar days held — to `closedAt` if closed, else to `now`. Never negative.
     nonisolated func daysHeld(asOf now: Date) -> Int {
         Swift.max(0, Int(((closedAt ?? now).timeIntervalSince(openedAt) / 86_400).rounded(.down)))
+    }
+
+    /// Value-preserving corporate-action rebase (retro split adjustment, 2026-07-26 CLBK 2.2:1):
+    /// divide every price field by `ratio`, multiply shares by it — position VALUE and every
+    /// R-multiple are unchanged; only the quote basis moves to match a retro-adjusted price
+    /// series. entry/stop/target/shares are private(set) so this is the ONLY mutation path
+    /// after opening (a trade's terms are otherwise immutable).
+    /// ponytail: plannedEntry/entryFill stay `let` and unrebased — only PAPER trades are ever
+    /// rebased (StockSagePaperTrader.markToMarket) and paper trades never carry planned/fill
+    /// legs; revisit if the real journal ever marks through markToMarket.
+    nonisolated mutating func rebase(dividingBy ratio: Double) {
+        guard ratio > 0, ratio.isFinite else { return }
+        entry /= ratio
+        stop /= ratio
+        if let t = target { target = t / ratio }
+        shares *= ratio
     }
 }
 

@@ -70,16 +70,36 @@ enum StockSagePaperTrader {
         return open.map { t in
             guard t.isOpen, t.side == .long,
                   t.symbol.uppercased() == history.symbol.uppercased(),
-                  let target = t.target else { return t }
+                  t.target != nil else { return t }
             // First bar STRICTLY after the open — no look-ahead onto the entry bar itself.
             guard let startIdx = dates.firstIndex(where: { $0 > t.openedAt }) else { return t }
+            // CORPORATE-ACTION REBASE (2026-07-26, CLBK 2.2:1 split): Yahoo retro-adjusts the
+            // whole series after a split, so a position opened pre-split carries levels in a
+            // DEAD basis — the marker then fabricates a catastrophic stop-out (CLBK: entry
+            // 23.42 vs adjusted bars ~10.7 ⇒ fake −13.5R on a trade that was actually up).
+            // Detect: stored entry vs the adjusted close of the bar just before the first
+            // post-open bar. A >50% mismatch is a basis change, not a move we could have
+            // missed (the trade was OPENED at `entry` on that bar's date). Rebase all price
+            // fields by the raw ratio and scale shares inversely — value-preserving, and R is
+            // scale-invariant. Persisted via the returned record, so it happens once.
+            // ponytail: raw ratio, not the exact split factor — residual intraday delta is a
+            // few %, vs the 1300% error it prevents; exact factors would need a splits feed.
+            var pos = t
+            let entryBarIdx = Swift.max(0, startIdx - 1)
+            let entryBarClose = closes[entryBarIdx]
+            if entryBarClose > 0 {
+                let ratio = pos.entry / entryBarClose
+                if ratio > 1.5 || ratio < 0.67 {
+                    pos.rebase(dividingBy: ratio)
+                }
+            }
             let (exitIdx, grossExit, outcome) = StockSageBacktester.simulateExit(
-                entryIdx: startIdx, stop: t.stop, target: target,
+                entryIdx: startIdx, stop: pos.stop, target: pos.target ?? .infinity,
                 opens: opens, highs: highs, lows: lows, closes: closes, n: n,
                 mode: .timeStop(maxBars: maxHoldingBars))
-            guard outcome != .openAtEnd else { return t }   // neither level nor time-stop reached → hold
-            var closed = t
-            closed.exitPrice = grossExit - costFactor * t.entry   // long: net proceeds per share
+            guard outcome != .openAtEnd else { return pos }   // neither level nor time-stop reached → hold (rebased fields persist)
+            var closed = pos
+            closed.exitPrice = grossExit - costFactor * pos.entry   // long: net proceeds per share
             closed.closedAt = dates[exitIdx]
             return closed
         }
