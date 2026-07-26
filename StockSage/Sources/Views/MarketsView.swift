@@ -2502,6 +2502,17 @@ struct MarketsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel("\(act.symbol) \(act.kind.rawValue). \(act.detail)")
                     }
+                    // Split-basis ceiling (2026-07-26, from the paper-book CLBK incident): these
+                    // marks compare the feed's (retro-ADJUSTED) price to the levels logged at
+                    // entry — after a split/corporate action they are different bases, and a
+                    // false "Stop hit" here is an instruction to dump a healthy position. The
+                    // paper marker auto-rebases off its own bar history; this live path has no
+                    // history in hand, so the honest floor is a caveat at the point of action.
+                    if !urgentActs.isEmpty {
+                        Text("A crossed level is a trigger, not a fill — and after a stock split the feed's adjusted price no longer matches your logged levels. Verify the symbol before acting; re-log the position on its new basis after any corporate action.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     ForEach(journal.open) { journalOpenRow($0) }
                 }
                 if !journal.closed.isEmpty {
