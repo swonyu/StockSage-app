@@ -531,6 +531,7 @@ struct StockSagePaperTraderTests {
                         lows: [10.8, 10.7, 10.8], closes: [11.0, 11.0, 11.3])
         let p = StockSagePaperTrader.markToMarket([t], history: h, costs: costs)[0]
         #expect(p.isOpen)                                  // low 10.7 never hit the REBASED stop 10.45
+        #expect(p.note?.contains("[rebased") == true)      // never silent — the scoreboard discloses it
         #expect(abs(p.entry - 11.0) < 1e-9)
         #expect(abs(p.stop - 10.45) < 1e-9)
         #expect(abs((p.target ?? 0) - 12.1) < 1e-9)
@@ -563,5 +564,41 @@ struct StockSagePaperTraderTests {
                         lows: [21.5, 21.4], closes: [21.8, 22.2])
         let p = StockSagePaperTrader.markToMarket([t], history: h, costs: costs)[0]
         #expect(p == t)
+    }
+
+    // MARK: weekly digest (owner "more features" 2026-07-26) — hand-derived calendar buckets
+
+    @Test func weeklyDigestBucketsByCalendarWeek() {
+        // Fixed calendar: gregorian, UTC, weeks start SUNDAY. Epoch day 0 = Thu 1970-01-01,
+        // so day 3 = Sun Jan 4. now = day 10 (Sun Jan 11) ⇒ this week = days 10–16,
+        // last week = days 3–9. Trades (all entry 100 / stop 95, risk 5):
+        //   closed day 11 exit 110 → +2R WIN (this week)
+        //   closed day 12 exit  95 → −1R     (this week)
+        //   closed day  5 exit  95 → −1R     (last week)
+        //   closed day  1           → BEFORE last week: excluded
+        //   open                    → excluded
+        //   closed day 11, entry==stop → realizedR nil: excluded from the digest
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        cal.firstWeekday = 1
+        func day(_ n: Int) -> Date { Date(timeIntervalSince1970: Double(n) * 86_400 + 43_200) }
+        func closed(_ d: Int, exit: Double, entry: Double = 100, stop: Double = 95) -> TradeRecord {
+            TradeRecord(symbol: "X", side: .long, entry: entry, stop: stop, target: nil, shares: 1,
+                        openedAt: day(0), exitPrice: exit, closedAt: day(d))
+        }
+        let trades = [
+            closed(11, exit: 110), closed(12, exit: 95), closed(5, exit: 95), closed(1, exit: 95),
+            TradeRecord(symbol: "O", side: .long, entry: 100, stop: 95, target: nil, shares: 1, openedAt: day(0)),
+            closed(11, exit: 110, entry: 100, stop: 100),
+        ]
+        guard let d = StockSagePaperTrader.weeklyDigest(trades, asOf: day(10), calendar: cal) else {
+            Issue.record("expected a digest"); return
+        }
+        #expect(d.thisCloses == 2 && d.thisWins == 1)
+        #expect(abs(d.thisNetR - 1.0) < 1e-9)      // +2R − 1R
+        #expect(d.lastCloses == 1 && d.lastWins == 0)
+        #expect(abs(d.lastNetR - (-1.0)) < 1e-9)
+        // Both weeks empty ⇒ nil, never a zero-filled card.
+        #expect(StockSagePaperTrader.weeklyDigest([closed(1, exit: 95)], asOf: day(30), calendar: cal) == nil)
     }
 }

@@ -1901,6 +1901,22 @@ struct MarketsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
                 Text("The truth sits between the two. Only \(String(format: "%.0f%%", sb.resolvedFrac * 100)) has closed, and stops resolve before targets, so “closed only” over-states the loss; the full-book mark counts open positions at their current price (unrealized — they can still reverse). Both are typically ≈0 — the engine's value is risk-discipline, not a proven edge.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // Week-over-week digest (owner request 2026-07-26 "more features"; the repeated
+                // "fake money update" question, answered where the numbers live). Same realized
+                // set and the same selection-bias caveat as the closed-only bound above.
+                if let wk = StockSagePaperTrader.weeklyDigest(paperStore.trades, asOf: Date()) {
+                    Text(String(format: "This week: %d close%@ (%dW) %+.2fR · last week: %d (%dW) %+.2fR — closed-only, same selection bias as above.",
+                                wk.thisCloses, wk.thisCloses == 1 ? "" : "s", wk.thisWins, wk.thisNetR,
+                                wk.lastCloses, wk.lastWins, wk.lastNetR))
+                        .font(.caption2).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
+                }
+                // Corporate-action transparency (CLBK 2.2:1 incident): rebases are value-preserving
+                // but must never be silent — a split-spanning book that says nothing looks doctored.
+                let rebasedCount = paperStore.trades.filter { $0.note?.contains("[rebased") == true }.count
+                if rebasedCount > 0 {
+                    Text("\(rebasedCount) position\(rebasedCount == 1 ? "" : "s") auto-rebased for corporate actions (splits) — value-preserving re-basing; without it a split fabricates a catastrophic fake stop-out.")
+                        .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                }
             } else if paperStore.trades.isEmpty {
                 Text("No paper trades yet — the engine opens one per long idea on each scan.")
                     .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 10)

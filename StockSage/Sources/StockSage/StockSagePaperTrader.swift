@@ -354,3 +354,42 @@ final class StockSagePaperTradeStore: ObservableObject {
         }
     }
 }
+
+
+/// Week-over-week digest of the paper book's CLOSED trades — the owner's most-asked question
+/// ("fake money update") answered on the scoreboard itself. A trade counts in the calendar week
+/// its `closedAt` falls in; only closes with a defined `realizedR` contribute (the same
+/// realized set the scoreboard's closed-only bound uses). nil when both weeks are empty.
+struct WeeklyPaperDigest: Sendable, Equatable {
+    let thisCloses: Int
+    let thisWins: Int
+    let thisNetR: Double
+    let lastCloses: Int
+    let lastWins: Int
+    let lastNetR: Double
+}
+
+extension StockSagePaperTrader {
+    nonisolated static func weeklyDigest(_ trades: [TradeRecord], asOf now: Date,
+                                         calendar: Calendar = .current) -> WeeklyPaperDigest? {
+        guard let thisWeek = calendar.dateInterval(of: .weekOfYear, for: now),
+              let lastWeek = calendar.dateInterval(of: .weekOfYear,
+                                                   for: thisWeek.start.addingTimeInterval(-1))
+        else { return nil }
+        func bucket(_ i: DateInterval) -> (n: Int, w: Int, r: Double) {
+            var n = 0, w = 0
+            var r = 0.0
+            for t in trades {
+                guard let c = t.closedAt, i.contains(c), let rr = t.realizedR else { continue }
+                n += 1
+                if rr > 0 { w += 1 }
+                r += rr
+            }
+            return (n, w, r)
+        }
+        let a = bucket(thisWeek), b = bucket(lastWeek)
+        guard a.n > 0 || b.n > 0 else { return nil }
+        return WeeklyPaperDigest(thisCloses: a.n, thisWins: a.w, thisNetR: a.r,
+                                 lastCloses: b.n, lastWins: b.w, lastNetR: b.r)
+    }
+}

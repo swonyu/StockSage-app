@@ -131,6 +131,9 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
         stop /= ratio
         if let t = target { target = t / ratio }
         shares *= ratio
+        // Audit trail (2026-07-26): a silent rebase is invisible in the book — the note tag is
+        // what the scoreboard counts to disclose "N positions auto-rebased for corporate actions".
+        note = ((note?.isEmpty == false) ? note! + " " : "") + String(format: "[rebased ×%.4g]", ratio)
     }
 }
 
