@@ -3252,14 +3252,22 @@ struct MarketsView: View {
 
     // MARK: Heatmap
 
+    /// Board-symbol counterpart of `shariaScreenedIdeas` (heatmap review 2026-07-26): the
+    /// Watchlist, All and Heatmap tabs all draw from THIS — fixing only one tab leaves its
+    /// siblings painting the exact names every other surface hides. Same engine helper the
+    /// briefing/alerts paths use, so no surface can drift from the rule.
+    private var screenedBoardSymbols: [StockSageSymbol] {
+        StockSageShariaScreen.screenedSymbols(store.symbols)
+    }
+
     private var heatmap: some View {
         Group {
-            if store.symbols.isEmpty {
+            if screenedBoardSymbols.isEmpty {
                 emptyState
                     .transition(.opacity)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
-                    ForEach(store.symbols) { sym in
+                    ForEach(screenedBoardSymbols) { sym in
                         let change = sym.latest?.changePercent ?? 0
                         let heatHovered = hoveredHeatID == sym.id
                         // Per-row freshness: a days-old weekend/holiday close (or a stale crypto
@@ -3317,8 +3325,8 @@ struct MarketsView: View {
                 }
                 // .contain (not .combine) so each tile's own accessibilityLabel above survives.
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel("Market heatmap, \(store.symbols.count) symbols by price change")
-                .animation(DS.Motion.smooth, value: store.symbols.count)
+                .accessibilityLabel("Market heatmap, \(screenedBoardSymbols.count) symbols by price change")
+                .animation(DS.Motion.smooth, value: screenedBoardSymbols.count)
                 .transition(.opacity)
             }
         }
@@ -3341,8 +3349,8 @@ struct MarketsView: View {
     private func signalListView(watchlistOnly: Bool) -> some View {
         let userSet = Set(store.userSymbols.map { $0.uppercased() })
         let displayed: [StockSageSymbol] = watchlistOnly
-            ? store.symbols.filter { userSet.contains($0.symbol.uppercased()) }
-            : store.symbols
+            ? screenedBoardSymbols.filter { userSet.contains($0.symbol.uppercased()) }
+            : screenedBoardSymbols
         return VStack(spacing: DS.Space.sm) {
             addSymbolBar
             if store.symbols.isEmpty {
