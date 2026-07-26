@@ -343,6 +343,11 @@ struct MeasuredSlippage: Sendable, Equatable {
     /// R cost per CLOSED TRADE that contributed ≥1 measured leg — the per-trade drag, comparable
     /// to the expectancy figures elsewhere in the panel.
     let perTradeR: Double
+    /// Legs that actually fed totalR — a STRICTER population than `legs`: an R-leg additionally
+    /// needs riskPerShare > 0, so a bps-measured leg on an entry==stop trade counts in `legs`
+    /// but not here. The panel's Cost/trade .help must cite THIS count, not `legs` (review
+    /// 2026-07-26: the two silently diverge exactly on zero-risk trades).
+    let rLegs: Int
     nonisolated var meetsFloor: Bool { legs >= minLegs }
 }
 
@@ -906,12 +911,15 @@ enum StockSageJournal {
         var assumed: [Double] = []
         var totalR = 0.0
         var contributingTrades = 0
+        var rLegs = 0
         for t in trades where !t.isOpen {
             let assumedPerLeg = StockSageNetEdge.defaultCosts(forSymbol: t.symbol).roundTripBps / 2
             if let s = t.entrySlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
             if let s = t.exitSlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
             // R cost accrues per LEG (each leg has its own planned/fill + the trade's risk).
+            // Counted separately from `measured`: an R-leg also needs risk > 0 (see rLegs doc).
             let legR = (t.entrySlippageR ?? 0) + (t.exitSlippageR ?? 0)
+            rLegs += (t.entrySlippageR != nil ? 1 : 0) + (t.exitSlippageR != nil ? 1 : 0)
             if t.entrySlippageR != nil || t.exitSlippageR != nil {
                 totalR += legR
                 contributingTrades += 1
@@ -921,7 +929,8 @@ enum StockSageJournal {
         return MeasuredSlippage(medianBps: median(measured), assumedMedianBpsPerLeg: median(assumed),
                                 legs: measured.count, minLegs: minLegs,
                                 totalR: totalR,
-                                perTradeR: contributingTrades > 0 ? totalR / Double(contributingTrades) : 0)
+                                perTradeR: contributingTrades > 0 ? totalR / Double(contributingTrades) : 0,
+                                rLegs: rLegs)
     }
 }
 

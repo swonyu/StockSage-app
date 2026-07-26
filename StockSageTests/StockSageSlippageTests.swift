@@ -174,6 +174,10 @@ struct StockSageSlippageTests {
         #expect(m.meetsFloor)
         #expect(abs(m.perTradeR - 0.094) < 1e-9)
         #expect(abs(m.totalR - 0.47) < 1e-9)
+        // rLegs: 5 trades × 2 R-measured legs (all have risk 5 > 0) = 10, and here it equals
+        // the bps population. The zero-risk `flat` fixture below is where they diverge:
+        // its entry leg counts in `legs` (bps measurable) but NOT in rLegs (R undefined).
+        #expect(m.rLegs == 10 && m.legs == 10)
         // Positive slippage ⇒ positive R cost (drag). A leg with no planned price ⇒ nil R, no fabrication.
         #expect(trade(plannedEntry: nil, entryFill: 100.25).entrySlippageR == nil)
         // Zero risk (entry == stop) ⇒ R undefined, not infinite.
@@ -181,6 +185,12 @@ struct StockSageSlippageTests {
                                openedAt: Date(timeIntervalSince1970: 0), exitPrice: 105,
                                closedAt: Date(timeIntervalSince1970: 100), plannedEntry: 100, entryFill: 100.25)
         #expect(flat.entrySlippageR == nil)
+        // The legs/rLegs divergence pinned directly: a zero-risk trade's leg is bps-measurable
+        // (legs == 1) but R-undefined (rLegs == 0, totalR untouched) — the Cost/trade .help
+        // must therefore cite rLegs, never legs.
+        guard let mFlat = StockSageJournal.measuredSlippage([flat]) else { Issue.record("expected bps fit"); return }
+        #expect(mFlat.legs == 1 && mFlat.rLegs == 0)
+        #expect(abs(mFlat.totalR) < 1e-12)
     }
 
     // MARK: Store close() persistence + existing-call-site compatibility

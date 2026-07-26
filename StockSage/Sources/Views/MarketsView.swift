@@ -399,7 +399,7 @@ struct MarketsView: View {
             // universe scan aborted early on a 429-storm signature — store.scanThrottled) is ALSO
             // a partial board with the SAME poisoning risk, so it gets the same skip.
             if !store.lastScanCancelled && !store.scanThrottled {
-                let snap = StockSageExpectedValue.summary(store.ideas, trades: journal.trades, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
+                let snap = StockSageExpectedValue.summary(shariaScreenedIdeas, trades: journal.trades, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
                 if let wk = snap.weeklyR {
                     // Deliberately still the GROSS figure (F03/F44 net-headline, 2026-07-09):
                     // the durable per-day history must keep comparing like-with-like across
@@ -2586,7 +2586,7 @@ struct MarketsView: View {
         var s = base
         let days = tradingDays ?? StockSageExpectedValue.tradingDaysForLane(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration)
         if var note = StockSageExpectedValue.weeklyTurnoverNote(
-            store.ideas, tradingDays: days, holds: velocityHolds, calibration: store.convictionCalibration) {
+            shariaScreenedIdeas, tradingDays: days, holds: velocityHolds, calibration: store.convictionCalibration) {
             if netFigure {
                 note = note.replacingOccurrences(
                     of: "every re-entry pays the est. round-trip costs this gross figure excludes",
@@ -3821,29 +3821,34 @@ struct MarketsView: View {
 
     /// F19/F20 (2026-07-15): delegates to the engine projection — the body moved VERBATIM to
     /// StockSageIdeaProjection.displayed so the sort/filter/search contract is testable (F16 pins).
+    /// THE single Sharia-screened idea source (review 2026-07-26). Every idea-derived surface —
+    /// board, best-opportunity, fast lane, Today's plan, money velocity, compounding, CSV — must
+    /// draw from THIS list, never raw `store.ideas`: the board hiding DKNG while the best-opp card
+    /// one-tap-sizes the same name is the exact "looks screened but isn't" trap the feature exists
+    /// to avoid. Cheap O(n) dict lookups (NOT the projection); engine untouched (display-only fence).
+    private var shariaScreenedIdeas: [StockSageIdea] {
+        shariaExcludeProhibited
+            ? store.ideas.filter { !StockSageShariaScreen.isProhibited($0.symbol) }
+            : store.ideas
+    }
+
     private var displayedIdeas: [StockSageIdea] {
-        let base = StockSageIdeaProjection.displayed(store.ideas, sort: ideaSort, filter: ideaFilter,
+        // Sharia exclusion feeds the projection INPUT (shariaScreenedIdeas) — the old post-filter
+        // meant the banner count needed a SECOND full projection (the ~3 NetEdge evals/idea path
+        // the "Bind once" comment exists to prevent) just to count what was hidden.
+        StockSageIdeaProjection.displayed(shariaScreenedIdeas, sort: ideaSort, filter: ideaFilter,
                                           minConviction: ideaMinConv, search: ideaSearch,
                                           regime: store.regime, earnings: store.earnings,
                                           liquidity: store.liquidity, seasonality: store.seasonality,
                                           holds: velocityHolds, calibration: store.convictionCalibration)
-        // Sharia exclusion (owner, 2026-07-23): applied LAST so it composes with sort/filter/search.
-        // Removes only KNOWN-prohibited names — everything shown is "not on the prohibited list,"
-        // which the banner is explicit is NOT the same as certified compliant.
-        return shariaExcludeProhibited ? base.filter { !StockSageShariaScreen.isProhibited($0.symbol) } : base
     }
 
-    /// Count of ideas this scan that the Sharia screen removed — surfaced in the banner so the
-    /// exclusion is visible, not silent (a hidden filter that drops names with no notice is the
-    /// exact "looks screened but isn't" trap this whole feature is trying to avoid).
+    /// Count of THIS SCAN's ideas the Sharia screen removes — surfaced in the banner so the
+    /// exclusion is visible, not silent. Scan-level (matches the banner's "hidden this scan"
+    /// wording) and O(n) — no projection re-run, and no drift under search/min-conviction edits.
     private var shariaExcludedCount: Int {
         guard shariaExcludeProhibited else { return 0 }
-        let afterOtherFilters = StockSageIdeaProjection.displayed(
-            store.ideas, sort: ideaSort, filter: ideaFilter, minConviction: ideaMinConv,
-            search: ideaSearch, regime: store.regime, earnings: store.earnings,
-            liquidity: store.liquidity, seasonality: store.seasonality,
-            holds: velocityHolds, calibration: store.convictionCalibration)
-        return afterOtherFilters.filter { StockSageShariaScreen.isProhibited($0.symbol) }.count
+        return store.ideas.count - shariaScreenedIdeas.count
     }
 
     /// Mandatory disclosure whenever the Sharia screen is active — it is a COARSE exclusion, not a
@@ -4669,7 +4674,7 @@ struct MarketsView: View {
 
     // Best opportunity now — the single highest positive-EV buy idea (money velocity).
     @ViewBuilder private var bestOpportunityCard: some View {
-        if let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
+        if let best = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
             let idea = best.idea, ev = best.ev
             // D1 (2026-07-16 review): on the Ideas tab THIS card is the crown surface (the
             // bestOpportunityCTA is hidden here, section != .ideas), so it — not the CTA — must
@@ -4677,7 +4682,7 @@ struct MarketsView: View {
             // equities-first) names a different symbol than this highest-gross-EV pick. Same
             // inputs (incl. the FX-adjusted rankedActions call) the CTA and todaysActionsCard use.
             let todayFirstSymbol = StockSageTodayPlan.rankedActions(
-                store.ideas, account: StockSageInput.positiveAmount(sizerAccount),
+                shariaScreenedIdeas, account: StockSageInput.positiveAmount(sizerAccount),
                 riskFraction: StockSageInput.percent(sizerRiskPct).map { $0 / 100 },
                 holds: velocityHolds, calibration: store.convictionCalibration, marketRegime: store.regime,
                 earnings: store.earnings, liquidity: store.liquidity,
@@ -5227,7 +5232,7 @@ struct MarketsView: View {
         // OTHER content (best/fastest/weeklyR, unaffected by fraction) but then strip the
         // fraction-dependent brake fields — never show a drawdown number modeled on a risk %
         // the user never typed.
-        let rawSummary = StockSageExpectedValue.summary(store.ideas, trades: journal.trades, fraction: parsedRiskFraction ?? 0.01, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
+        let rawSummary = StockSageExpectedValue.summary(shariaScreenedIdeas, trades: journal.trades, fraction: parsedRiskFraction ?? 0.01, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
         let riskFrac = parsedRiskFraction
         let s = riskFrac != nil ? rawSummary : MoneyVelocitySummary(
             bestSymbol: rawSummary.bestSymbol, bestEV: rawSummary.bestEV,
@@ -5240,16 +5245,16 @@ struct MarketsView: View {
         // F4: the SAME earnings/liquidity-aware lane summary()'s weeklyRNet/weeklyRGrossSameBasket
         // sum over (see summary()'s own netAwareLane) — bound here once to check fundability of
         // the top-N the $/week line below dollarizes, without touching that line's own math.
-        let velocityLane = StockSageExpectedValue.fastLane(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
+        let velocityLane = StockSageExpectedValue.fastLane(shariaScreenedIdeas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         // PERF-MVCARD: computed once, reused at both the visual warning below and the a11y-label
         // closure that folds it in — was computed twice (byte-identical args) per render.
-        let conc = StockSageExpectedValue.fastLaneConcentration(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
+        let conc = StockSageExpectedValue.fastLaneConcentration(shariaScreenedIdeas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         // F7 (rotation-3 triage): first-ever scan only — see firstScanProgressCaption's doc.
         let firstScanCaption = Self.firstScanProgressCaption(isLoadingIdeas: store.isLoadingIdeas, ideasUpdated: store.ideasUpdated, progress: store.ideasProgress)
         if s.hasContent {
             VStack(alignment: .leading, spacing: 6) {
             Button {
-                if let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) { selectedIdea = best.idea }
+                if let best = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) { selectedIdea = best.idea }
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
@@ -5459,7 +5464,7 @@ struct MarketsView: View {
     /// 24h-range variance line from the idea's ALREADY-STORED `realizedVol` — no new volatility
     /// computation.
     @ViewBuilder private var bestOpportunityCTA: some View {
-        if let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
+        if let best = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
             let idea = best.idea, ev = best.ev
             let isCrypto = StockSageAllocation.assetClass(idea.symbol) == "Crypto"
             let variance: Double? = isCrypto ? StockSageExpectedValue.dailyVariancePct(annualizedVol: idea.realizedVol) : nil
@@ -5483,7 +5488,7 @@ struct MarketsView: View {
             // — copy-only fix: when they diverge, say so in this card's existing sub-line.
             // `max: 1` asks rankedActions for ONLY the #1 row (same inputs todaysActionsCard uses).
             let todayFirstSymbol = StockSageTodayPlan.rankedActions(
-                store.ideas, account: StockSageInput.positiveAmount(sizerAccount),
+                shariaScreenedIdeas, account: StockSageInput.positiveAmount(sizerAccount),
                 riskFraction: StockSageInput.percent(sizerRiskPct).map { $0 / 100 },
                 holds: velocityHolds, calibration: store.convictionCalibration, marketRegime: store.regime,
                 earnings: store.earnings, liquidity: store.liquidity,
@@ -5628,7 +5633,7 @@ struct MarketsView: View {
     }
 
     @ViewBuilder private var fastLaneStrip: some View {
-        let lane = StockSageExpectedValue.fastLane(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
+        let lane = StockSageExpectedValue.fastLane(shariaScreenedIdeas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         if lane.count >= 2 {
             // PERF-STRIP: pure filter of the already-computed `lane` above — byte-identical to
             // calling StockSageExpectedValue.fastLaneByClass(store.ideas, ...) (its body does
@@ -5835,7 +5840,7 @@ struct MarketsView: View {
     // Same fast-lane ordering as fastLaneStrip above; this adds the size + verdict it doesn't show.
     @ViewBuilder private var todaysActionsCard: some View {
         let plans = StockSageTodayPlan.rankedActions(
-            store.ideas,
+            shariaScreenedIdeas,
             account: StockSageInput.positiveAmount(sizerAccount),
             riskFraction: StockSageInput.percent(sizerRiskPct).map { $0 / 100 },
             holds: velocityHolds,
@@ -5852,7 +5857,7 @@ struct MarketsView: View {
         // F8 (2026-07-09): the global "Do this now" CTA's own pick, so this card can disclose it
         // when it names a different symbol than this list's own #1 row — the SAME bestOpportunity
         // call bestOpportunityCTA already makes (byte-identical inputs), just for its symbol.
-        let globalBestSymbol = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)?.idea.symbol
+        let globalBestSymbol = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)?.idea.symbol
         MarketsTodayActionsCard(plans: plans, isSampleData: store.isSampleData, onSelectSymbol: { symbol in
             if let idea = store.ideas.first(where: { $0.symbol == symbol }) { selectedIdea = idea }
         }, globalBestSymbol: globalBestSymbol,

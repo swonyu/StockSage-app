@@ -42,9 +42,17 @@ enum StockSageShariaScreen {
         case cannabis            = "Cannabis"
     }
 
-    /// Curated, AUDITABLE set of well-known NASDAQ-listed tickers whose CORE business is prohibited.
+    /// Curated, AUDITABLE set of well-known tickers whose CORE business is prohibited.
     /// Keyed by uppercased ticker. Not exhaustive — see the file header's known-ceiling note. Kept in
     /// one literal so the owner (or a reviewer) can read exactly what is excluded and why.
+    ///
+    /// COVERAGE NOTE (verified against the baked universe, 2026-07-26): roughly two-thirds of these
+    /// entries are NYSE-listed (e.g. MO, PM, BUD, STZ, TAP, MGM, USB, PNC, TFC, PGR, HRL, TSN) and
+    /// NEVER match this app's NASDAQ-only universe — retained for portability (the check is one dict
+    /// lookup either way) and as documentation of intent. The entries that intersect today's universe:
+    /// CBSH, CINF, CLBK, COLB, CZR, DKNG, ERIE, FFIN, FITB, NTRS, ONB, PENN, SLM, SOFI, WYNN, ZION.
+    /// Do NOT read a category's presence below as coverage of that category within the app — the
+    /// banner's "hidden this scan" count is the live truth.
     nonisolated static let prohibited: [String: Reason] = [
         // Conventional banks & lenders on NASDAQ (interest-based core business).
         "FITB": .conventionalFinance, "USB": .conventionalFinance, "PNC": .conventionalFinance,
