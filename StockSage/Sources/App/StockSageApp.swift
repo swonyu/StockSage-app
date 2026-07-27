@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 // MARK: - StockSage (standalone app entry)
 //
@@ -41,6 +42,16 @@ struct StockSageApp: App {
                     // Autostart is a Settings opt-in (default OFF): the monitor's own honesty
                     // gates (no sample/cached/stale pushes) still apply to every cycle.
                     if monitorAutostart { try? StockSageMonitor.shared.start() }
+                    #if os(iOS)
+                    // iOS (2026-07-27, owner: "make it also send notifications"): the monitor's
+                    // only start switch lives in the macOS-fenced Settings scene, and iOS has no
+                    // background daemon anyway — foreground polling IS the iOS monitor model, so
+                    // it starts with the app. Delegate first (foreground banners are suppressed
+                    // without it), then permission, then the same monitor the Mac runs.
+                    UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared
+                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+                    try? StockSageMonitor.shared.start()
+                    #endif
                 }
                 // Settings' "Show the welcome checklist again" flips onboardingDone to
                 // false — re-present live (the .task above runs once per window; without

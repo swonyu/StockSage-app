@@ -747,6 +747,16 @@ struct MarketsView: View {
     }
 
     private var sectionPicker: some View {
+        // iOS port: 7 full labels don't fit a 430pt phone — wrap the SAME fully-modified
+        // picker in a horizontal scroller there (labels stay complete, mac byte-identical).
+        #if os(iOS)
+        ScrollView(.horizontal, showsIndicators: false) { sectionPickerCore }
+        #else
+        sectionPickerCore
+        #endif
+    }
+
+    private var sectionPickerCore: some View {
         DSSegmentPicker(cases: Array(MarketSection.allCases), selection: $section) { $0.title }
             .frame(maxWidth: 520)
             // Review fix 2026-07-17: the app's primary navigation was the one

@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
@@ -30,5 +31,17 @@ extension View {
     func help(_ text: Text) -> some View { self }
     func help(_ text: String) -> some View { self }
     func help(_ text: Substring) -> some View { self }
+}
+#endif
+
+#if os(iOS)
+/// iOS suppresses notification banners while the app is FOREGROUND unless a delegate
+/// opts in — and foreground is exactly when the iOS monitor runs (no background daemon).
+/// Without this, every alert the monitor pushes on-phone would be silently invisible.
+final class StockSageNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = StockSageNotificationDelegate()
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async
+        -> UNNotificationPresentationOptions { [.banner, .sound] }
 }
 #endif
