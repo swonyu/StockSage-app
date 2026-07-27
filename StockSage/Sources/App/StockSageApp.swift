@@ -35,8 +35,9 @@ func bootlog(_ mark: String) {
 @main
 struct StockSageApp: App {
     private let bootA: Void = bootlog("A-props-begin")
-    @ObservedObject private var store = StockSageStore.shared
-    private let bootB: Void = bootlog("B-store-inited")
+    // Review 2026-07-27: the App-scope @ObservedObject store was UNUSED in this body yet
+    // re-evaluated the whole scene on every store publish (each quote tick). MarketsView
+    // owns its own observation; the App struct needs none.
     @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
@@ -106,7 +107,9 @@ struct StockSageApp: App {
                 // surfaced a spurious offline banner on return.
                 .onChange(of: scenePhase) {
                     switch scenePhase {
-                    case .active: try? StockSageMonitor.shared.start()
+                    case .active:
+                        try? StockSageMonitor.shared.start()
+                        StockSageMonitor.shared.clearBadge()   // alerts read on return — badge honest again
                     case .background: StockSageMonitor.shared.stop()
                     default: break
                     }

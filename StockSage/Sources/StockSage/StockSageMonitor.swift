@@ -22,6 +22,24 @@ final class StockSageMonitor {
 
     private var task: Task<Void, Never>?
     private(set) var isRunning = false
+    /// Unread-alert badge (iOS): bumped per ACCEPTED push, cleared when the app foregrounds.
+    private var pendingBadge = 0
+
+    func clearBadge() {
+        #if os(iOS)
+        pendingBadge = 0
+        Task { try? await UNUserNotificationCenter.current().setBadgeCount(0) }
+        #endif
+    }
+
+    /// Bump-and-set after an accepted push (iOS only — the .badge permission we request
+    /// finally does something; review 2026-07-27).
+    private func bumpBadge() async {
+        #if os(iOS)
+        pendingBadge += 1
+        try? await UNUserNotificationCenter.current().setBadgeCount(pendingBadge)
+        #endif
+    }
     /// When this UserDefaults flag is set AND the user has a non-empty watchlist, the loop
     /// scans ONLY the watchlist (fetching just those quotes) instead of pulling the whole
     /// ~210-name core every cycle (StockSageUniverse.core, post equity-2000 promotion —
@@ -342,7 +360,7 @@ final class StockSageMonitor {
         content.userInfo = ["symbol": alert.symbol]   // tap deep-link (2026-07-27)
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        do { try await UNUserNotificationCenter.current().add(request); return true }
+        do { try await UNUserNotificationCenter.current().add(request); await bumpBadge(); return true }
         catch { return false }
     }
 
@@ -363,6 +381,7 @@ final class StockSageMonitor {
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         do {
             try await UNUserNotificationCenter.current().add(request)
+            await bumpBadge()
             return true
         } catch {
             return false
@@ -377,7 +396,7 @@ final class StockSageMonitor {
         content.userInfo = ["symbol": signal.symbol]   // tap deep-link (2026-07-27)
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        do { try await UNUserNotificationCenter.current().add(request); return true }
+        do { try await UNUserNotificationCenter.current().add(request); await bumpBadge(); return true }
         catch { return false }
     }
 

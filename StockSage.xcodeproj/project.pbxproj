@@ -17,7 +17,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A100000000000000000000C1 /* StockSage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = StockSage.app; path = StockSageX.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000C1 /* StockSage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = StockSageX.app; path = StockSageX.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A100000000000000000000D1 /* StockSageTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockSageTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
