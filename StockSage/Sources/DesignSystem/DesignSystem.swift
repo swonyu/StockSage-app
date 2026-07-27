@@ -198,6 +198,8 @@ struct Eyebrow: View {
                 LinearGradient(colors: [color.opacity(0.40), color.opacity(0.08)],
                                startPoint: .top, endPoint: .bottom),
                 lineWidth: 0.5))
+            .accessibilityLabel(text)
+            .accessibilityAddTraits(.isStaticText)
     }
 }
 
@@ -239,6 +241,10 @@ struct DSSegmentPicker<T: Hashable>: View {
         HStack(spacing: 2) {
             ForEach(cases, id: \.self) { item in
                 Button {
+                    // TODO: Uncomment when HapticFeedback.swift is added to project
+                    // #if os(iOS)
+                    // HapticFeedback.trigger(.selection)
+                    // #endif
                     withAnimation(DS.Motion.spring) { selection = item }
                 } label: {
                     Text(label(item))

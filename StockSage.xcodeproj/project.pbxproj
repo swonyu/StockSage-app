@@ -260,6 +260,8 @@
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				CODE_SIGN_STYLE = Automatic;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
@@ -324,6 +326,8 @@
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				CODE_SIGN_STYLE = Automatic;
 				SUPPORTS_MACCATALYST = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
@@ -355,7 +359,14 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSageX;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSageX;
+				PRODUCT_NAME = StockSageX;
+				PRODUCT_MODULE_NAME = StockSage;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				"ENABLE_DEBUG_DYLIB[sdk=iphoneos*]" = NO;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -386,7 +397,14 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSageX;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSageX;
+				PRODUCT_NAME = StockSageX;
+				PRODUCT_MODULE_NAME = StockSage;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				"ENABLE_DEBUG_DYLIB[sdk=iphoneos*]" = NO;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -414,7 +432,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockSage.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StockSage";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockSageX.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StockSageX";
 			};
 			name = Debug;
 		};
@@ -436,7 +454,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockSage.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StockSage";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockSageX.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StockSageX";
 			};
 			name = Release;
 		};

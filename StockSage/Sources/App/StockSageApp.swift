@@ -14,21 +14,62 @@ import UserNotifications
 // Extension batch (2026-07-16): menu-bar ticker (toggle in Settings, default on), Settings
 // scene (launch-at-login, monitor autostart, menu bar), first-run onboarding sheet (the
 // first-trade checklist + parent-app data import), App Intents (Shortcuts/Spotlight).
+/// TEMP DIAGNOSTIC (2026-07-27, iOS 27-beta black-screen hunt): checkpoint trail, dual channel
+/// (NSLog → device syslog; Documents/boot.log → Files app + afc pull). Remove once the wedge
+/// is found — the last mark that appears is the boundary where boot stops.
+func bootlog(_ mark: String) {
+    NSLog("STOCKSAGE-BOOT %@", mark)
+    #if os(iOS)
+    if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+        let f = dir.appendingPathComponent("boot.log")
+        let line = "\(Date()) \(mark)\n"
+        if let h = try? FileHandle(forWritingTo: f) {
+            h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close()
+        } else {
+            try? line.data(using: .utf8)!.write(to: f)
+        }
+    }
+    #endif
+}
+
 @main
 struct StockSageApp: App {
+    private let bootA: Void = bootlog("A-props-begin")
     @ObservedObject private var store = StockSageStore.shared
+    private let bootB: Void = bootlog("B-store-inited")
     @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
     @State private var showOnboarding = false
+    
+    init() {
+        bootlog("C-init-body")
+        #if os(iOS)
+        // Set delegate BEFORE the app finishes launching so foreground banners work
+        UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared
+        #endif
+        bootlog("D-init-done")
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
+            let _ = bootlog("E-scene-eval")
+            // Review triage 2026-07-27: an Xcode-assistant edit wrapped this in a DEBUG
+            // fallback keyed on NSClassFromString("MarketsView") — always nil for a SwiftUI
+            // STRUCT, so every Debug build showed the error card instead of the app. Reverted
+            // to the direct view; its delegate-timing init() fix above was kept (it's better
+            // than the old onAppear wiring).
+            if ProcessInfo.processInfo.arguments.contains("--stocksage-minimal") {
+                // Diagnostic seam (2026-07-27, iOS 27 black-screen hunt): bare view with NONE
+                // of the app chrome (no sheet/task/monitor) — isolates toolchain vs view tree.
+                Text("MINIMAL OK — scene rendered").font(.title).padding().onAppear { bootlog("F-minimal-appeared") }
+            } else {
             MarketsView()
                 #if os(macOS)
                 .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
                                                         // a 900pt canvas onto a 430pt phone (clip)
                 #endif
+                .onAppear { bootlog("F-markets-appeared") }
                 // Dark-committed brand (macOS 27 overhaul, 2026-07-16): the app paints a
                 // dark canvas, so declare dark — otherwise system controls (pickers,
                 // Form, menus) follow the OS scheme and render light-on-dark-canvas in
@@ -46,10 +87,8 @@ struct StockSageApp: App {
                     // iOS (2026-07-27, owner: "make it also send notifications"): the monitor's
                     // only start switch lives in the macOS-fenced Settings scene, and iOS has no
                     // background daemon anyway — foreground polling IS the iOS monitor model, so
-                    // it starts with the app. Delegate first (foreground banners are suppressed
-                    // without it), then permission, then the same monitor the Mac runs.
-                    UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared
-                    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+                    // it starts with the app. Request permission with proper error handling.
+                    await requestNotificationAuthorization()
                     try? StockSageMonitor.shared.start()
                     #endif
                 }
@@ -59,6 +98,7 @@ struct StockSageApp: App {
                 .onChange(of: onboardingDone) {
                     if !onboardingDone { showOnboarding = true }
                 }
+            }
         }
         #if os(macOS)
         .windowResizability(.contentMinSize)
@@ -79,4 +119,19 @@ struct StockSageApp: App {
         }
         #endif
     }
+    
+    #if os(iOS)
+    /// Request notification authorization and log the result for debugging
+    private func requestNotificationAuthorization() async {
+        do {
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            if !granted {
+                print("⚠️ StockSage: Notification permission denied - alerts will not appear")
+            }
+        } catch {
+            print("⚠️ StockSage: Failed to request notification authorization: \(error)")
+        }
+    }
+    #endif
 }
