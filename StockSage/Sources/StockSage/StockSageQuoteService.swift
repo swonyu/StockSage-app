@@ -84,6 +84,13 @@ enum StockSageQuoteService {
     // MARK: One symbol
 
     private static func fetchOne(_ symbol: String) async -> LiveQuote? {
+        // HYBRID SOURCE (owner-provided EODHD key, 2026-07-28): US names go to the AUTHENTICATED
+        // feed first — Yahoo's keyless endpoint is the throttling that leaves symbols showing
+        // days-old prices during a 901-name scan. Tadawul (.SR) is NOT offered by EODHD at any
+        // tier (measured: no Saudi exchange in their list), so it stays on Yahoo below, and any
+        // EODHD miss falls through to Yahoo too — the board never loses a source.
+        if let viaEODHD = await StockSageEODHD.fetchOne(symbol) { return viaEODHD }
+
         // `^` (index marker) and other reserved chars must be percent-encoded.
         // Use .urlHostAllowed (stricter than .urlPathAllowed) so a symbol containing
         // '/' (e.g. a hypothetical BRK/B) doesn't silently rewrite the request path
