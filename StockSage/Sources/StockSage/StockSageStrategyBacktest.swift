@@ -133,6 +133,22 @@ enum StockSageStrategyBacktest {
     /// unproven edge to proven. Bump this if a future audit enumerates more variants.
     nonisolated static let estimatedStrategyTrials = 12
 
+    /// Trials count for the Deflated Sharpe selection-bias term, PCA-corrected when a parameter
+    /// sweep is available (external-report item 8, owner-signed 2026-07-28).
+    ///
+    /// `variantReturnStreams` is one per-trade return stream per strategy VARIANT. Collinear
+    /// variants (the same idea re-parameterised) collapse into a single effective trial via
+    /// `StockSagePCATrials`, so a 200-combo sweep does not inflate N toward infinity and collapse
+    /// the DSR to 0 — the failure mode the report named. With no sweep (this app's shipped state:
+    /// one FIXED rule set) there is nothing to correlate, so the hand-derived lower bound stands.
+    /// The result never drops BELOW the documented bound: under-counting trials would make the
+    /// DSR bar easier, and this must never silently weaken the honesty gate.
+    nonisolated static func trialsForDSR(variantReturnStreams: [[Double]] = []) -> Int {
+        guard let effective = StockSagePCATrials.effectiveTrials(returnStreams: variantReturnStreams)
+        else { return estimatedStrategyTrials }
+        return Swift.max(estimatedStrategyTrials, effective)
+    }
+
     nonisolated static let caveat = "Aggregate of the advisor's FIXED rules over ~5y of these names — backward-looking and small-sample-prone. SURVIVORSHIP-BIASED: the universe is only currently-listed names (delisted losers are absent), so the measured Sharpe is a CEILING, not an expectation. The Deflated Sharpe further discounts for ~\(estimatedStrategyTrials) estimated strategy variants tried (selection bias). Past performance is not future performance."
 
     /// `trades` (optional) are the POOLED per-trade records across all symbols — when supplied, the
