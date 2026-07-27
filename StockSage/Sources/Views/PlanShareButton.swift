@@ -1,6 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import AppKit   // NSSavePanel for the "Save as file…" fallback
+#if os(macOS)
+import AppKit   // NSSavePanel for the "Save as file…" fallback — iOS's share sheet
+                // already offers "Save to Files", so no iOS equivalent is needed.
+#endif
 
 /// Share/export button for a trade plan's text. Sits beside the sheet's "Copy plan"
 /// capsule (see `MarketsView.fullPlanText`) and offers a second transport for the
@@ -33,9 +36,11 @@ struct PlanShareButton: View {
         }
         .buttonStyle(LuxPressStyle())
         .help("Share this trade plan (Mail, Messages, AirDrop, and more). Right-click for \"Save as file…\".")
+        #if os(macOS)
         .contextMenu {
             Button("Save as file…") { saveToFile() }
         }
+        #endif
         .alert("Couldn't save plan", isPresented: .constant(saveError != nil), presenting: saveError) { _ in
             Button("OK") { saveError = nil }
         } message: { msg in
@@ -43,6 +48,7 @@ struct PlanShareButton: View {
         }
     }
 
+    #if os(macOS)
     /// NSSavePanel writing the identical `planText` string as UTF-8, suggested
     /// filename "<symbol>-plan.txt". No fabrication: whatever save fails, the
     /// error is surfaced (never silently swallowed) per the app's honesty floor.
@@ -58,4 +64,5 @@ struct PlanShareButton: View {
             saveError = error.localizedDescription
         }
     }
+    #endif
 }

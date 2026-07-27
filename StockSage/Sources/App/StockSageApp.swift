@@ -24,7 +24,10 @@ struct StockSageApp: App {
     var body: some Scene {
         WindowGroup(id: "main") {
             MarketsView()
-                .frame(minWidth: 900, minHeight: 700)
+                #if os(macOS)
+                .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
+                                                        // a 900pt canvas onto a 430pt phone (clip)
+                #endif
                 // Dark-committed brand (macOS 27 overhaul, 2026-07-16): the app paints a
                 // dark canvas, so declare dark — otherwise system controls (pickers,
                 // Form, menus) follow the OS scheme and render light-on-dark-canvas in

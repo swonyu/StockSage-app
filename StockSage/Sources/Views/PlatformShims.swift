@@ -28,6 +28,7 @@ enum PlatformClipboard {
 extension View {
     func help(_ text: LocalizedStringKey) -> some View { self }
     func help(_ text: Text) -> some View { self }
-    func help(_ text: some StringProtocol) -> some View { self }
+    func help(_ text: String) -> some View { self }
+    func help(_ text: Substring) -> some View { self }
 }
 #endif

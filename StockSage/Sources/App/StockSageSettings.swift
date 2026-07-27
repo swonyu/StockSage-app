@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(macOS)
 import ServiceManagement
+#endif
 
 // MARK: - Settings scene: launch-at-login, monitor autostart, menu-bar toggle
 //
@@ -24,6 +26,7 @@ struct StockSageSettingsView: View {
     var body: some View {
         Form {
             Section {
+                #if os(macOS)
                 Toggle("Launch StockSage at login", isOn: Binding(
                     get: { loginItemOn },
                     set: { setLoginItem($0) }
@@ -33,6 +36,7 @@ struct StockSageSettingsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(DS.Palette.dangerSoft)
                 }
+                #endif
 
                 Toggle("Start the market monitor on launch", isOn: $monitorAutostart)
                 Text("Polls prices in the background as soon as StockSage opens.")
@@ -61,9 +65,12 @@ struct StockSageSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 420)
+        #if os(macOS)
         .onAppear { refreshLoginItemStatus() }
+        #endif
     }
 
+    #if os(macOS)
     private func refreshLoginItemStatus() {
         loginItemOn = SMAppService.mainApp.status == .enabled
     }
@@ -82,6 +89,7 @@ struct StockSageSettingsView: View {
         // Never trust our own write — reflect whatever the OS actually confirms.
         refreshLoginItemStatus()
     }
+    #endif
 }
 
 #Preview {

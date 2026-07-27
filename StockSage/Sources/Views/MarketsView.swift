@@ -2029,6 +2029,7 @@ struct MarketsView: View {
                 // Extension batch (2026-07-16): import/backup — every action reports an honest
                 // one-line result (added/skipped/error counts) via journalDataFeedback.
                 Menu {
+                    #if os(macOS)
                     Button("Import CSV…") {
                         let panel = NSOpenPanel()
                         panel.allowedContentTypes = [.commaSeparatedText, .plainText]
@@ -2071,6 +2072,7 @@ struct MarketsView: View {
                             journalDataFeedback = "Restore failed: \(err.localizedDescription)"
                         }
                     }
+                    #endif
                     Divider()
                     Button("Import from Salehman AI…") {
                         if let parent = StockSageBackup.importFromParentApp() {
@@ -4436,8 +4438,13 @@ struct MarketsView: View {
                 // (line ~3563) so this can never diverge from the shipped sizer's math. nil on
                 // any unparseable/missing input ⇒ nothing new renders.
                 if let stop = a.stopPrice, let ps = atRisk, let acct = StockSageInput.positiveAmount(sizerAccount) {
-                    ideaMetric("At risk", "\(approxAmount(ps.dollarsAtRisk, symbol: idea.symbol)) · \(ps.shares) sh", color: DS.Palette.warningSoft)
-                        .help("Sizes the LOSS: a stop-out at \(adaptivePrice(stop)) costs ~\(approxAmount(ps.dollarsAtRisk, symbol: idea.symbol).dropFirst()) (\(String(format: "%.2f", (usdAmount(ps.dollarsAtRisk, symbol: idea.symbol) ?? ps.dollarsAtRisk) / acct * 100))% of the account). Not a profit promise.")
+                    // Hoisted (iOS port): the nested-interpolation literal blew the type-checker
+                    // budget under the iOS overload set — same class as the calc-wave timeout.
+                    let riskAmt = approxAmount(ps.dollarsAtRisk, symbol: idea.symbol)
+                    let riskPct = String(format: "%.2f", (usdAmount(ps.dollarsAtRisk, symbol: idea.symbol) ?? ps.dollarsAtRisk) / acct * 100)
+                    let atRiskHelp = "Sizes the LOSS: a stop-out at \(adaptivePrice(stop)) costs ~\(riskAmt.dropFirst()) (\(riskPct)% of the account). Not a profit promise."
+                    ideaMetric("At risk", "\(riskAmt) · \(ps.shares) sh", color: DS.Palette.warningSoft)
+                        .help(atRiskHelp)
                 }
                 if let target = a.targetPrice {
                     ideaMetric("Target", adaptivePrice(target), color: DS.Palette.successSoft)
@@ -4479,10 +4486,14 @@ struct MarketsView: View {
             // lineLimit(2) is a deliberate board-density clamp — but a clamped bullet must
             // never be UNREACHABLE (2026-07-09, harvested Copilot HELD finding #3): the full
             // rationale (all bullets, not just the displayed prefix(2)) is one hover away.
-            Text(a.rationale.prefix(2).joined(separator: " · ") + " · " + a.regime.rawValue)
+            // Hoisted (iOS port): string-concat chains inside modifiers blew the iOS
+            // type-checker budget — same class as the at-risk help two hunks up.
+            let rationaleLine = a.rationale.prefix(2).joined(separator: " · ") + " · " + a.regime.rawValue
+            let rationaleHelp = a.rationale.joined(separator: "\n") + "\n\nRegime: " + a.regime.rawValue
+            Text(rationaleLine)
                 .font(.caption).foregroundStyle(.secondary)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                .help(a.rationale.joined(separator: "\n") + "\n\nRegime: " + a.regime.rawValue)
+                .help(rationaleHelp)
         }
         .padding(IdeaSpace.cardPad)
         .frame(maxWidth: .infinity, alignment: .leading)
