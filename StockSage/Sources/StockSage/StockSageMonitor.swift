@@ -300,6 +300,9 @@ final class StockSageMonitor {
         // has a position on. Idea alerts ONLY — sendPriceAlert (user-set price alerts) is untouched.
         let holdingBySymbol = StockSagePortfolio.holdingBySymbol(in: StockSagePortfolio.shared.positions)
         for idea in ideas {
+            // CONCURRENCY #2 (review 2026-07-27): same cooperative-cancellation guard as the
+            // strong-signal and price-alert loops — stop() must halt idea pushes mid-batch too.
+            guard !Task.isCancelled else { break }
             guard let price = prices[idea.symbol.uppercased()], price > 0 else { continue }
             // First sighting this session: seed the baseline rather than claim a crossing that
             // may not be real (mirrors `lastAlerted`'s "no alert on first appearance" rule).

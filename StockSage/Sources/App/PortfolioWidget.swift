@@ -46,8 +46,10 @@ struct PortfolioWidgetProvider: TimelineProvider {
         }
         
         let closedTrades = journal.closed
-        let winRate = closedTrades.isEmpty ? 0.0 : 
-            Double(closedTrades.filter { ($0.exitPrice ?? $0.entry) > $0.entry }.count) / 
+        // Review 2026-07-27: side-aware — exit > entry is a LOSS for a short. realizedR
+        // carries the side; a missing exit contributes 0 (not a win) rather than a fake loss.
+        let winRate = closedTrades.isEmpty ? 0.0 :
+            Double(closedTrades.filter { ($0.realizedR ?? 0) > 0 }.count) /
             Double(closedTrades.count)
         
         // Find best/worst open positions by R-multiple

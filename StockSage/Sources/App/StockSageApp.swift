@@ -41,6 +41,7 @@ struct StockSageApp: App {
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
     @State private var showOnboarding = false
+    @Environment(\.scenePhase) private var scenePhase
     
     init() {
         bootlog("C-init-body")
@@ -98,6 +99,19 @@ struct StockSageApp: App {
                 .onChange(of: onboardingDone) {
                     if !onboardingDone { showOnboarding = true }
                 }
+                #if os(iOS)
+                // Review 2026-07-27: foreground polling IS the iOS monitor model — keep it
+                // strictly foreground. Backgrounding used to leave the poll loop running
+                // (battery + API quota burn) until iOS suspended us mid-cycle, which then
+                // surfaced a spurious offline banner on return.
+                .onChange(of: scenePhase) {
+                    switch scenePhase {
+                    case .active: try? StockSageMonitor.shared.start()
+                    case .background: StockSageMonitor.shared.stop()
+                    default: break
+                    }
+                }
+                #endif
             }
         }
         #if os(macOS)
