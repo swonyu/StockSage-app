@@ -39,7 +39,7 @@ struct CapitalAllocation: Sendable, Equatable {
 }
 
 enum StockSageCapitalAllocator {
-    nonisolated static let caveat = "Allocations are HALF-Kelly off ESTIMATED edges (conviction is not a probability); total open heat is hard-capped and whole shares floor each position, so realized heat stays ≤ the cap. Each line sizes the loss at its stop — a correlated gap can lose more."
+    nonisolated static let caveat = "Allocations are HALF-Kelly off ESTIMATED edges (conviction is not a probability); total open heat is hard-capped and whole shares floor each position, so realized heat stays ≤ the cap. Volatility is priced ONCE (the single most-binding brake), so a name that is both absolutely volatile and spiking versus its own history is sized larger than a compounded-brake model would allow. Each line sizes the loss at its stop — a correlated gap can lose more."
 
     /// Deploy capital across the buy-family, positive-EV ideas: weight by half-Kelly (which
     /// already encodes the edge — bigger win·payoff ⇒ bigger fraction), scale uniformly so the
@@ -99,21 +99,20 @@ enum StockSageCapitalAllocator {
             // book scales down uniformly, but up-scaling is clipped at the cap — deliberately
             // conservative (it only ever under-deploys the top names, never over-risks). nil → unchanged.
             var weight = regime.map { StockSageRegime.adjustedWeight(base: k.suggestedFraction, bias: $0.sizingBias, cap: StockSageKelly.maxFraction) } ?? k.suggestedFraction
-            // EXTERNAL-REPORT ITEM 6 ("consolidate double volatility scaling to a single tier")
-            // IMPLEMENTED, MEASURED, THEN REVERTED 2026-07-28 — the premise does not hold in this
-            // codebase. The two brakes measure ORTHOGONAL things, not one σ path twice:
-            //   • cryptoRiskScaler = max(1, vol / 0.20) — ABSOLUTE vol vs a fixed baseline.
-            //   • VolRegime.sizingMultiplier — RELATIVE: this symbol's vol vs its OWN history
-            //     (percentile CDF + median), whose own doc states it "composes with
-            //     cryptoRiskScaler" and exists BECAUSE percentile-of-own-history is regime-blind
-            //     (a structurally volatile name reads "calm" at absolutely dangerous vols).
-            // Taking min() keeps only the single most-binding brake, which removes protection in
-            // exactly the worst case — a name that is BOTH absolutely volatile AND spiking vs its
-            // own normal. Measured on the F06 spine: requestedHeat 0.00271875 → 0.00815625, a 3.0x
-            // larger position on the highest-gap-risk names. StockSageMultiBrakeTests (F06) pins
-            // the composition deliberately. Sequential composition retained; owner informed.
-            weight = idea.realizedVol.map { weight / StockSageExpectedValue.cryptoRiskScaler(annualizedVol: $0) } ?? weight
-            weight *= idea.volRegime?.sizingMultiplier ?? 1
+            // SINGLE-TIER VOL BRAKE — external-report item 6, OWNER-FORCED 2026-07-28 01:00
+            // after being shown the measured consequence. Volatility is now priced ONCE: the
+            // most-binding of the two brakes wins instead of both composing.
+            //   • cryptoRiskScaler — ABSOLUTE vol vs a 0.20 baseline.
+            //   • VolRegime.sizingMultiplier — RELATIVE, vs the symbol's own history.
+            // MEASURED EFFECT (F06 spine, crisis regime, vol 0.80, mult 0.25): pre-cap weight
+            // 0.00271875 -> 0.010875, i.e. 4x larger. A name that is BOTH absolutely volatile
+            // AND spiking vs its own normal now carries only one brake's protection, and the
+            // per-symbol regime brake is INERT whenever the absolute brake is at least as
+            // binding. The owner accepted this trade (size over dampening) with the numbers in
+            // hand; StockSageMultiBrakeTests carries the re-derived pins for the new contract.
+            let scalerBrake = idea.realizedVol.map { 1 / StockSageExpectedValue.cryptoRiskScaler(annualizedVol: $0) } ?? 1
+            let regimeBrake = idea.volRegime?.sizingMultiplier ?? 1
+            weight *= Swift.min(scalerBrake, regimeBrake)
             guard weight > 0 else { continue }
             fundable.append(Fundable(symbol: idea.symbol, entry: idea.price, stop: stop,
                                      weight: weight, halfKelly: k.halfKelly, evR: ev.evR,

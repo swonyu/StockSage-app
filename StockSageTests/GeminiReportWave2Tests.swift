@@ -105,21 +105,29 @@ struct GeminiReportWave2Tests {
         #expect(vE > vU, "even-step \(vE) should out-rank uneven-step \(vU) at equal EV and mean speed")
     }
 
-    // MARK: item 6 — RETAINED sequential composition (report prescription measured and rejected)
+    // MARK: item 6 — SHIPPED single-tier brake (owner-forced after seeing the measurement)
 
-    @Test("the two vol brakes compose sequentially — they measure different things")
-    func volBrakesComposeBecauseTheyAreOrthogonal() {
-        // Report item 6 asked for min() of the two brakes ("single tier"). Measured effect on
-        // the F06 spine: requestedHeat 0.00271875 → 0.00815625 — a 3.0x LARGER position on a
-        // name that is both absolutely volatile AND spiking vs its own history. The brakes are
-        // orthogonal (absolute-vs-baseline; relative-to-own-history), so composition is correct
-        // and this test locks it against a future "consolidation".
-        let scaler = StockSageExpectedValue.cryptoRiskScaler(annualizedVol: 0.80)   // 0.80/0.20 = 4
-        #expect(abs(scaler - 4.0) < 1e-12)
-        // A structurally volatile name sitting at its OWN median: the relative brake sees
-        // "normal" (~1x) while the absolute brake still sees 4x baseline — proof they answer
-        // different questions, so min() would discard the protection the absolute brake gives.
-        #expect(StockSageExpectedValue.cryptoRiskScaler(annualizedVol: 0.20) == 1)
-        #expect(StockSageExpectedValue.cryptoRiskScaler(annualizedVol: 0.05) == 1)   // floored at 1x
+    @Test("volatility is priced once: the most-binding brake wins, the other is inert")
+    func volBrakeIsSingleTier() {
+        // Absolute brake at vol 0.80 = 1/4 = 0.25. A regime brake of 0.25 therefore adds
+        // NOTHING under min() — that inertness is the accepted cost of item 6. A regime brake
+        // of 0.10 is more binding and does win. Hand-derived: halfKelly 0.174, no market regime.
+        #expect(StockSageExpectedValue.cryptoRiskScaler(annualizedVol: 0.80) == 4)
+
+        func alloc(_ mult: Double) -> Double? {
+            let adv = TradeAdvice(action: .buy, conviction: 0.7, regime: .bullTrend, rationale: [],
+                                  stopPrice: 90, targetPrice: 130, suggestedWeight: 0.10, caveat: "x")
+            let vr = VolRegime(current: 0.80, median: 0.20, percentile: 1.0,
+                               sizingMultiplier: mult, note: "t", caveat: "t")
+            let i = StockSageIdea(symbol: "V\(Int(mult * 100))", market: "TEST", price: 100,
+                                  advice: adv, spark: [], dailyMove: nil,
+                                  realizedVol: 0.80, volRegime: vr)
+            return Alloc.allocate(ideas: [i], account: 100_000, maxHeat: 0.5).positions.first?.riskFraction
+        }
+        // equal-strength brake ⇒ inert: same size as no regime brake at all
+        #expect(alloc(0.25).map { abs($0 - 0.0435) < 1e-6 } == true)
+        #expect(alloc(1.00).map { abs($0 - 0.0435) < 1e-6 } == true)
+        // stronger regime brake ⇒ it binds
+        #expect(alloc(0.10).map { abs($0 - 0.0174) < 1e-6 } == true)
     }
 }

@@ -6,8 +6,12 @@ import Foundation
 //
 // StockSageCapitalAllocator.allocate() composes five sequential brakes:
 //   1. Regime bias    (market-wide: crisis → sizingBias=0.25)
-//   2. Vol-targeting  (realizedVol: cryptoRiskScaler = max(1, vol/0.20))
-//   3. VolRegime brake (per-symbol: idea.volRegime?.sizingMultiplier)
+//   2+3. SINGLE-TIER VOL BRAKE (owner-forced 2026-07-28, external-report item 6):
+//        min( 1/cryptoRiskScaler(realizedVol) , idea.volRegime?.sizingMultiplier )
+//        — volatility priced ONCE. Previously these composed sequentially (2 then 3);
+//        the owner accepted the measured 4x pre-cap size increase on the F06 spine.
+//        NOTE the consequence pinned below: the per-symbol regime brake is INERT whenever
+//        the absolute brake is at least as binding.
 //   4. Correlation de-weight (cluster /K when ≥3 correlated names)
 //   5. Heat cap       (uniform proportional scale if Σweights > cap)
 //
@@ -128,17 +132,16 @@ struct StockSageMultiBrakeTests {
         #expect(pos.riskFraction < volRegimeOnly,
                 "Composed weight \(pos.riskFraction) must be below volRegime-only \(volRegimeOnly)")
 
-        // (e) Pre-cap composition pin: the three sequential brakes multiply down to exactly
-        //     0.00271875 before the heat cap is applied, then the cap (0.002) scales them down.
-        //     requestedHeat = composed weight AFTER correlation de-weight, BEFORE heat cap.
-        //     For a single idea (no correlation cluster), requestedHeat IS the composed weight:
-        //       halfKelly(0.174) × regimeBias(0.25) = 0.0435
-        //       ÷ cryptoRiskScaler(4)               = 0.010875
-        //       × volRegimeMult(0.25)               = 0.00271875
-        //     This pin ensures deleting any one brake would change requestedHeat — the assertion
-        //     is not vacuous even though the heat cap (0.002) binds on riskFraction.
-        #expect(abs(result.requestedHeat - 0.00271875) < 1e-6,
-                "requestedHeat (pre-cap) must equal the fully-composed weight 0.00271875; got \(result.requestedHeat)")
+        // (e) Pre-cap composition pin — RE-DERIVED for the owner-forced single-tier contract
+        //     (2026-07-28). requestedHeat = weight AFTER correlation de-weight, BEFORE heat cap;
+        //     for a single idea it IS the composed weight:
+        //       halfKelly(0.174) × regimeBias(0.25)              = 0.0435
+        //       × min( 1/cryptoRiskScaler(0.80→4) , volRegimeMult )
+        //         = min(0.25, 0.25) = 0.25                       = 0.010875
+        //     Under the previous sequential composition this was 0.00271875 (both brakes
+        //     applied); the 4x difference IS the change the owner signed off on.
+        #expect(abs(result.requestedHeat - 0.010875) < 1e-6,
+                "requestedHeat (pre-cap) must equal the single-tier composed weight 0.010875; got \(result.requestedHeat)")
     }
 
     // MARK: - F06: total heat ≤ cap even with three braked ideas
@@ -199,16 +202,15 @@ struct StockSageMultiBrakeTests {
     // MARK: - F06: vol-regime brake composes with vol-targeting (not one or the other)
 
     @Test func volRegimeBrakeComposesWithVolTargeting() {
-        // Same idea but volRegime.sizingMultiplier varies: 0.25 vs 1.0.
-        // With mult=0.25: weight *= 0.25 on top of the vol-targeting ÷4.
-        // With mult=1.0 : weight *= 1.00 (no brake).
-        // The 0.25-mult version must produce a strictly smaller riskFraction.
+        // RE-DERIVED for the single-tier contract (owner-forced 2026-07-28). Under min() the
+        // per-symbol brake only bites when it is MORE binding than the absolute one — with
+        // vol 0.80 the absolute brake is already 0.25, so a 0.25 regime brake is INERT (both
+        // sides would land on 0.0435). The fixture therefore uses a 0.10 brake, which binds.
         //
         // Derived (no regime passed → sizingBias not applied):
-        //   halfKelly = 0.174, suggestedFraction = 0.174
-        //   vol-targeting: realizedVol=0.80 → cryptoRiskScaler=4 → 0.174/4 = 0.0435
-        //   UNBRAKED (mult=1.0): 0.0435 × 1.0  = 0.0435
-        //   BRAKED  (mult=0.25): 0.0435 × 0.25 = 0.010875
+        //   halfKelly = 0.174; realizedVol 0.80 → cryptoRiskScaler 4 → scalerBrake = 0.25
+        //   UNBRAKED (mult=1.00): min(0.25, 1.00) = 0.25 → 0.174 × 0.25 = 0.0435
+        //   BRAKED   (mult=0.10): min(0.25, 0.10) = 0.10 → 0.174 × 0.10 = 0.0174
         // maxHeat=0.5 → cap doesn't bind for either → riskFraction == weight.
         func ideaWithMult(_ mult: Double, symbol: String) -> StockSageIdea {
             let adv = TradeAdvice(action: .buy, conviction: 0.7, regime: .bullTrend,
@@ -222,7 +224,7 @@ struct StockSageMultiBrakeTests {
                                  dailyMove: nil, realizedVol: 0.80, volRegime: vr)
         }
 
-        let braked   = Alloc.allocate(ideas: [ideaWithMult(0.25, symbol: "BRAKED")],
+        let braked   = Alloc.allocate(ideas: [ideaWithMult(0.10, symbol: "BRAKED")],
                                       account: 100_000, maxHeat: 0.5)
         let unbraked = Alloc.allocate(ideas: [ideaWithMult(1.00, symbol: "UNBRAKED")],
                                       account: 100_000, maxHeat: 0.5)
@@ -238,7 +240,7 @@ struct StockSageMultiBrakeTests {
         //   braked   riskFraction = suggestedFraction/cryptoScaler × 0.25 = 0.0435 × 0.25 = 0.010875
         #expect(abs(uPos.riskFraction - 0.0435) < 1e-6,
                 "unbraked riskFraction must be 0.0435 (halfKelly 0.174 ÷ cryptoScaler 4); got \(uPos.riskFraction)")
-        #expect(abs(bPos.riskFraction - 0.010875) < 1e-6,
+        #expect(abs(bPos.riskFraction - 0.0174) < 1e-6,
                 "braked riskFraction must be 0.010875 (0.0435 × volRegimeMult 0.25); got \(bPos.riskFraction)")
     }
 
