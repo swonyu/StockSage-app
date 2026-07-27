@@ -392,12 +392,9 @@ struct MarketsView: View {
                     .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1),
                              alignment: .bottom)
             }
-            // Frosted footer (macOS 27 overhaul): content scrolls beneath it —
-            // macOS 26.5 auto-insets ScrollView content for safeAreaInset (see the
-            // 72px-spacer note in the detail sheet's pinned bar).
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                MarketDisclaimerFooter()
-            }
+            // Disclaimer footer REMOVED (owner directive 2026-07-27: private build,
+            // "not needed"). If this app ever ships publicly, restore from git history
+            // (MarketDisclaimerFooter + StockSageMini, deleted this commit).
         }
         // Canvas with atmosphere (macOS 27 overhaul): slate wash + faint crimson
         // aurora — the depth Liquid Glass materials sample. Was flat codeSurface.
@@ -8348,20 +8345,7 @@ enum MarketSort: String, CaseIterable, Identifiable {
     }
 }
 
-/// Reusable disclaimer footer (reuses the canonical StockSageMini text).
-struct MarketDisclaimerFooter: View {
-    var body: some View {
-        Text(StockSageMini.disclaimer)
-            .font(.caption2).foregroundStyle(.secondary)
-            .multilineTextAlignment(.leading)
-            .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Frosted footer bar (macOS 27 overhaul): board content scrolls beneath
-            // it via normalBody's safeAreaInset; the hairline keeps the edge crisp.
-            .background(.ultraThinMaterial)
-            .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1), alignment: .top)
-    }
-}
+
 
 /// Purely presentational best-move order ticket — crimson flat-dark styling matching
 /// every other Markets card (DS tokens, LuxPressStyle, no system glass per

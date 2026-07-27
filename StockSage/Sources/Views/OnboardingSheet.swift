@@ -93,9 +93,6 @@ struct OnboardingSheet: View {
                 Spacer(minLength: 0)
             }
 
-            Text(StockSageMini.disclaimer)
-                .font(.caption2).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Spacer()
