@@ -1486,8 +1486,8 @@ struct MarketsView: View {
     private var addPositionForm: some View {
         HStack(spacing: DS.Space.sm) {
             field($newSymbol, "Symbol", width: 84, focus: .symbol)
-            field($newShares, "Shares", width: 66, focus: .shares)
-            field($newCost, "Cost/sh", width: 72, focus: .cost)
+            field($newShares, "Shares", width: 66, focus: .shares, numeric: true)
+            field($newCost, "Cost/sh", width: 72, focus: .cost, numeric: true)
             Button {
                 // Validated parse — an unparseable cost ("1,234.56" pasted from a broker, a blank
                 // field) must never default to $0 basis: that renders the ENTIRE value as fake
@@ -1509,10 +1509,11 @@ struct MarketsView: View {
         }
     }
 
-    private func field(_ text: Binding<String>, _ placeholder: String, width: CGFloat, focus: AddField) -> some View {
+    private func field(_ text: Binding<String>, _ placeholder: String, width: CGFloat, focus: AddField, numeric: Bool = false) -> some View {
         let active = focusedAddField == focus
         return TextField(placeholder, text: text)
             .textFieldStyle(.plain).font(.system(size: mvFont13))
+            .decimalKeyboardOnIOS(numeric)
             .focused($focusedAddField, equals: focus)
             .padding(.horizontal, 8).padding(.vertical, 6).frame(width: width)
             .background(Color.white.opacity(active ? 0.11 : 0.09), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
