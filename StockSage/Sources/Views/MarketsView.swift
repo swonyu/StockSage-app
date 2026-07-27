@@ -271,7 +271,16 @@ struct MarketsView: View {
     /// construction site) is byte-identical to today's body; never set outside QASnapshots.
     private let qaDetailSymbol: String?
     init(qaSection: MarketSection = .ideas, qaDetailSymbol: String? = nil) {
-        _section = State(initialValue: qaSection)
+        // Sweep seam (mirrors --qa, 2026-07-27): `--section heatmap` drives the initial tab
+        // from the command line so the iOS-simulator sweep can screenshot every section
+        // without UI scripting. Absent argument = byte-identical to today.
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "--section"), i + 1 < args.count,
+           let s = MarketSection(rawValue: args[i + 1]) {
+            _section = State(initialValue: s)
+        } else {
+            _section = State(initialValue: qaSection)
+        }
         self.qaDetailSymbol = qaDetailSymbol
     }
 
