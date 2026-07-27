@@ -3689,7 +3689,14 @@ struct MarketsView: View {
                     // SignalEngine hardcodes 0.65 for hold ("price consolidating"),
                     // which would read as "65% strength of doing nothing." Hide it.
                     if signal.recommendation != .hold {
-                        Text("strength \(Int(signal.confidence * 100))%").font(.caption2).foregroundStyle(.secondary)
+                        // ORDINAL STRENGTH (external-report item 12, owner-signed 2026-07-28):
+                        // was "strength 65%" — a two-significant-figure claim on a rules-agreement
+                        // count, which reads as a probability it is not (the engine's own doc:
+                        // "how many rules agree — NOT a win probability"). Five ordinal levels
+                        // carry exactly the information the number actually has.
+                        Text("strength \(Self.ordinalStrengthLabel(signal.confidence))")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .help("Rules-agreement level 1-5 (how many of the engine's rules align) — NOT a win probability. Shown as a level because the underlying score has no finer resolution than this.")
                     }
                 }
                 .frame(width: 96, alignment: .trailing)
@@ -5345,6 +5352,25 @@ struct MarketsView: View {
               let snap = store.persistedCalibrationSnapshot,
               cal.method != .identity else { return cal.chipHelp }
         return cal.chipHelp + " Fit from \(snap.source) · data as of \(snap.fittedAt.formatted(date: .abbreviated, time: .omitted)) · n=\(snap.sampleCount)"
+    }
+
+    /// Rules-agreement rendered as 1-5 rather than a spurious percentage (external-report
+    /// item 12). Bands are even fifths of the 0...1 score; the label says "level N of 5" so it
+    /// can never be misread as a probability. Values outside 0...1 clamp rather than crash.
+    nonisolated static func ordinalStrengthLabel(_ confidence: Double) -> String {
+        let level = ordinalStrengthLevel(confidence)
+        return "\(level)/5"
+    }
+
+    /// 1...5 band for a 0...1 score. 0.0-0.2 -> 1, 0.2-0.4 -> 2, 0.4-0.6 -> 3, 0.6-0.8 -> 4,
+    /// 0.8-1.0 -> 5 (upper edge inclusive at the top band only).
+    nonisolated static func ordinalStrengthLevel(_ confidence: Double) -> Int {
+        // NaN/inf must clamp to the WEAKEST level, never the strongest. Swift's min/max return
+        // the non-NaN operand, so a naive clamp turned NaN into 5/5 — an invalid score reading
+        // as maximum conviction. (Caught by this file's own test before it shipped.)
+        guard confidence.isFinite else { return 1 }
+        let c = Swift.max(0, Swift.min(1, confidence))
+        return Swift.min(5, Int(c * 5) + 1)
     }
 
     @ViewBuilder private var calibrationChip: some View {
