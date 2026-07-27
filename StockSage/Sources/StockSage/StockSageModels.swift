@@ -40,7 +40,10 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
     /// symbol with no prior price reports 0% rather than NaN/inf).
     var changePercent: Double {
         guard previousPrice != 0 else { return 0 }
-        return ((price - previousPrice) / previousPrice) * 100
+        // abs() divisor (owner-signed 2026-07-27, Gemini-report item 4): identical for every
+        // positive-price asset this app trades; guards sign-inversion if a negative-price
+        // instrument (commodity futures class) ever enters the universe.
+        return ((price - previousPrice) / abs(previousPrice)) * 100
     }
 }
 
@@ -74,12 +77,13 @@ struct StockSageSymbol: Sendable, Equatable, Identifiable {
 
 /// ONE definition of "is this quote materially old?", shared by the per-row display badge AND the
 /// price-alert firing gate so they can never disagree. Crypto trades 24/7 → fresh fast (6h);
-/// equities/FX/indices close, so tolerate an overnight gap (48h). nil marketTime ⇒ can't judge ⇒
-/// NOT stale (don't false-alarm a badge, and don't suppress an alert when the feed simply omitted
-/// a timestamp — Yahoo normally supplies one).
+/// equities/FX/indices close, so tolerate an overnight gap (48h). nil marketTime ⇒ STALE —
+/// FAIL-CLOSED (owner-signed contract change 2026-07-27, Gemini-report item 2): a quote whose
+/// freshness cannot be verified must never pass an alert gate; the stale-self-heal retry loop
+/// re-fetches such rows each refresh, so a transient feed omission self-corrects.
 enum StockSageQuoteFreshness {
     nonisolated static func isStale(symbol: String, marketTime: Date?, asOf now: Date = Date()) -> Bool {
-        guard let t = marketTime else { return false }
+        guard let t = marketTime else { return true }
         let tolerance: TimeInterval = StockSageAllocation.assetClass(symbol) == "Crypto" ? 6 * 3600 : 48 * 3600
         return now.timeIntervalSince(t) > tolerance
     }

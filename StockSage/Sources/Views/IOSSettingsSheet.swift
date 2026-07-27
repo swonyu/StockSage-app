@@ -24,7 +24,7 @@ struct StockSageIOSSettingsSheet: View {
                 } header: {
                     Text("Live data")
                 } footer: {
-                    Text("Refreshes quotes every 7 minutes while the app is open. The refresh button always works regardless.")
+                    Text("Refreshes quotes every 4.75 minutes while the app is open. The refresh button always works regardless.")
                 }
 
                 Section {

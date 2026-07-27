@@ -56,13 +56,14 @@ struct StockSageMonitorTests {
             StockSageQuote(price: 227, previousPrice: 226, marketTime: staleMarketTime),
         ])
         #expect(fixed.isStale(asOf: now) == true)
-        // Mirrors the PRE-FIX construction (marketTime omitted): "can't judge" ⇒ never stale,
-        // no matter how old the feed's own market timestamp actually was.
+        // Mirrors the PRE-FIX construction (marketTime omitted). Under the fail-closed
+        // contract (owner-signed 2026-07-27) an unverifiable timestamp is STALE — the very
+        // defect this test documents is now caught by the shared rule itself.
         let preFix = StockSageSymbol(symbol: "AAPL", market: "★ My watchlist", quotes: [
             StockSageQuote(price: 226, previousPrice: 226, time: now.addingTimeInterval(-86_400)),
             StockSageQuote(price: 227, previousPrice: 226),
         ])
-        #expect(preFix.isStale(asOf: now) == false)
+        #expect(preFix.isStale(asOf: now) == true)
     }
 
     // MARK: Finding 2 — tracked-idea stop/target pushes via StockSageAlertDecision.evaluate

@@ -370,12 +370,12 @@ struct MarketsView: View {
             #endif
             // Refresh-landed tick (iOS haptic; silent no-op on macOS).
             .sensoryFeedback(.success, trigger: store.lastUpdated)
-            // Auto-refresh (owner: 7 minutes). task(id:) restarts the loop when the toggle
-            // flips; sleep is cancellation-aware so scene teardown ends it cleanly.
+            // Auto-refresh (owner cadence 2026-07-27 23:53: 4.75 minutes = 285s). task(id:)
+            // restarts the loop when the toggle flips; sleep is cancellation-aware.
             .task(id: autoRefreshEnabled) {
                 guard autoRefreshEnabled else { return }
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(7 * 60))
+                    try? await Task.sleep(for: .seconds(285))
                     guard !Task.isCancelled, autoRefreshEnabled else { break }
                     await store.refresh()
                 }

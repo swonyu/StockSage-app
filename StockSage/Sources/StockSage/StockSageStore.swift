@@ -2030,7 +2030,9 @@ final class StockSageStore: ObservableObject {
         StockSageSymbol(symbol: ticker, market: market, quotes: [
             StockSageQuote(price: previous, previousPrice: previous,
                            time: Date(timeIntervalSinceNow: -3600)),
-            StockSageQuote(price: current, previousPrice: previous),
+            // marketTime present so fail-closed staleness (2026-07-27) doesn't badge the
+            // sample board — the SAMPLE label is the honesty surface for seeded data.
+            StockSageQuote(price: current, previousPrice: previous, marketTime: Date()),
         ])
     }
 
