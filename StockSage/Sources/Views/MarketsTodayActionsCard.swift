@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit   // NSPasteboard for "Copy all N"
 
 /// FASTMONEY_BACKLOG #4 — "Today's ranked action list": the top-N fast-lane setups (by
 /// velocity, i.e. EV/day) collapsed to one row each — symbol, velocity, the concrete order
@@ -103,8 +102,7 @@ struct MarketsTodayActionsCard: View {
                     Spacer()
                     Button {
                         let text = StockSageTodayPlan.copyAllText(shownPlans, isSample: isSampleData, mode: .equityExecutableFirst)
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
+                                                PlatformClipboard.copy(text)
                     } label: {
                         Label("Copy all \(shownPlans.count)", systemImage: "doc.on.doc").font(.system(size: font9, weight: .medium))
                     }

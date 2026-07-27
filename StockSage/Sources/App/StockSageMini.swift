@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Canonical Saudi/TASI educational disclaimer, rendered by MarketsView's footer.
@@ -8,3 +9,4 @@ enum StockSageMini {
     is not indicative of future results. Consult a licensed advisor.
     """
 }
+#endif

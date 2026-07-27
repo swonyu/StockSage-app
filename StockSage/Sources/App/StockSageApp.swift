@@ -46,7 +46,9 @@ struct StockSageApp: App {
                     if !onboardingDone { showOnboarding = true }
                 }
         }
+        #if os(macOS)
         .windowResizability(.contentMinSize)
+        #endif
 
         // MENU BAR PARKED (2026-07-16): with MenuBarExtra present, the main run loop wedges in
         // a nested RunCurrentEventLoopInMode inside SwiftUI's graph-flush observer (sampled) —
@@ -54,11 +56,13 @@ struct StockSageApp: App {
         // scene is disabled until the app is signed / the interaction is reworked; the views
         // (StockSageMenuBar.swift) stay compiled for that return.
 
+        #if os(macOS)
         Settings {
             StockSageSettingsView()
                 // Same dark commitment as the main window: the Form's DS.Palette
                 // captions (white-opacity) were unreadable on a light system Form.
                 .preferredColorScheme(.dark)
         }
+        #endif
     }
 }

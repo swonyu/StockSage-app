@@ -1,6 +1,5 @@
 import UniformTypeIdentifiers
 import SwiftUI
-import AppKit   // NSPasteboard for the trade-plan copy
 import UserNotifications   // permission read for the price-alerts denied banner
 
 /// The Markets tab — now wired to the live `StockSage` subsystem: per-symbol
@@ -2020,8 +2019,7 @@ struct MarketsView: View {
                 if !journal.trades.isEmpty {
                     Button {
                         let csv = StockSageJournalCSV.csv(journal.trades)
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(csv, forType: .string)
+                                                PlatformClipboard.copy(csv)
                     } label: {
                         Text("Copy CSV").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                     }
@@ -3966,10 +3964,7 @@ struct MarketsView: View {
                             .mapValues(\.shares)
                         let closedTrades = StockSageJournal.historyBySymbol(in: journal.trades)
                             .mapValues(\.count)
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(
-                            StockSageIdeasCSV.csv(displayedIdeas, heldShares: heldShares, closedTrades: closedTrades),
-                            forType: .string)
+                                                PlatformClipboard.copy(StockSageIdeasCSV.csv(displayedIdeas, heldShares: heldShares, closedTrades: closedTrades))
                         ideasCopied = true
                         Task { try? await Task.sleep(for: .seconds(2)); ideasCopied = false }
                     } label: {
@@ -4646,8 +4641,7 @@ struct MarketsView: View {
     /// win probability" disclaimer. Now routes through the same fullPlanText(for:) helper
     /// the sheet's Copy-plan button uses — the card export can never disagree with the sheet.
     private func copyIdeaPlan(_ idea: StockSageIdea) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(fullPlanText(for: idea), forType: .string)
+                PlatformClipboard.copy(fullPlanText(for: idea))
     }
 
     // Signal alerts — opt-in event log of flips / stop / target crossings.
@@ -4955,8 +4949,7 @@ struct MarketsView: View {
                         fxRatesToUSD: sizingFXRates(for: [idea.symbol]),
                         // A3: carry the same analysis-stale flag the card's pixels show.
                         analysisStale: analysisStaleOnly)
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(plan, forType: .string)
+                                        PlatformClipboard.copy(plan)
                 } label: {
                     Label("Copy today's plan", systemImage: "checklist").font(.system(size: mvFont9, weight: .medium))
                 }
@@ -5071,8 +5064,7 @@ struct MarketsView: View {
                             if store.isSampleData {
                                 lines.insert("⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.", at: 0)
                             }
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+                                                        PlatformClipboard.copy(lines.joined(separator: "\n"))
                         } label: {
                             Label("Copy allocation plan", systemImage: "doc.on.doc").font(.system(size: mvFont9, weight: .medium))
                         }
@@ -5482,8 +5474,7 @@ struct MarketsView: View {
                         // Parity with every sibling export: a sample-data playbook must carry the flag.
                         plan = "⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.\n" + plan
                     }
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(plan, forType: .string)
+                                        PlatformClipboard.copy(plan)
                 } label: {
                     Label("Copy plan", systemImage: "doc.on.doc").font(.system(size: mvFont9, weight: .medium))
                 }
@@ -5636,8 +5627,7 @@ struct MarketsView: View {
                         fxRatesToUSD: sizingFXRates(for: [idea.symbol]),
                         // A3: carry the same analysis-stale flag the card's pixels show.
                         analysisStale: analysisStaleOnly)
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(plan, forType: .string)
+                                        PlatformClipboard.copy(plan)
                 },
                 mvFont9: mvFont9,
                 mvFont10: mvFont10,
@@ -7594,8 +7584,7 @@ struct MarketsView: View {
                         }
 
                         Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(fullPlanText(for: idea), forType: .string)
+                                                        PlatformClipboard.copy(fullPlanText(for: idea))
                             planCopied = true
                             Task { try? await Task.sleep(for: .seconds(2)); planCopied = false }
                         } label: {

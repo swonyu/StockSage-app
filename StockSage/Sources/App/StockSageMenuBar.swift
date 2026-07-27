@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 // MARK: - Menu-bar ticker (extension E2, 2026-07-16)
@@ -56,3 +57,4 @@ struct StockSageMenuBarContent: View {
         Button("Quit StockSage") { NSApp.terminate(nil) }
     }
 }
+#endif
