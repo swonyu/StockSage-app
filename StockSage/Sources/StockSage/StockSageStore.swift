@@ -70,6 +70,18 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
         self.momentumQuality = momentumQuality; self.recentExtreme = recentExtreme
         self.recentExtremeSpan = recentExtremeSpan; self.priceAsOf = priceAsOf
     }
+
+    /// Same idea with a FRESHER market price/timestamp (stale self-heal, 2026-07-27). The
+    /// advice (stop/target/EV, computed at scan time) is deliberately untouched — those are
+    /// fixed LEVELS; `price`/`priceAsOf` are "where the market is now", which is exactly what
+    /// the live board and the monitor's crossing checks already treat them as.
+    nonisolated func withLivePrice(_ newPrice: Double, asOf: Date?) -> StockSageIdea {
+        StockSageIdea(symbol: symbol, market: market, price: newPrice, advice: advice,
+                      spark: spark, dailyMove: dailyMove, realizedVol: realizedVol,
+                      volRegime: volRegime, generatedAt: generatedAt,
+                      momentumQuality: momentumQuality, recentExtreme: recentExtreme,
+                      recentExtremeSpan: recentExtremeSpan, priceAsOf: asOf)
+    }
 }
 
 // MARK: - StockSageStore
@@ -1837,6 +1849,44 @@ final class StockSageStore: ObservableObject {
     /// could take the whole app's feed down). Nothing else about refresh()'s semantics changes —
     /// coverage-guard/bail, cache save, and the merge below all run over whichever `universe` this
     /// scope resolved to.
+    /// One targeted retry for board rows whose quotes remain materially stale (the freshness
+    /// definition already tolerates weekends/overnights, so these are genuine feed misses).
+    /// Successes merge into the board AND into any matching idea's price label.
+    private func healStaleQuotes() async {
+        let staleSymbols = symbols.filter { $0.isStale() }.map(\.symbol)
+        guard !staleSymbols.isEmpty else { return }
+        let recovered = await StockSageQuoteService.fetchQuotes(for: staleSymbols)
+        guard !recovered.isEmpty else { return }
+        for (sym, q) in recovered { mergeLiveQuote(q, symbol: sym) }
+    }
+
+    /// Fetch ONE symbol's quote now (idea detail opens call this) and merge it into the board
+    /// row and the matching idea's price/priceAsOf. Returns the quote, nil on feed miss.
+    @discardableResult
+    func refreshQuote(for symbol: String) async -> StockSageQuoteService.LiveQuote? {
+        guard ToolPolicy.webToolsDisabledReason() == nil else { return nil }
+        guard let q = await StockSageQuoteService.fetchQuotes(for: [symbol])[symbol.uppercased()]
+        else { return nil }
+        mergeLiveQuote(q, symbol: symbol)
+        return q
+    }
+
+    /// Shared merge for targeted fetches: rebuilds the board row with the fresh quote (same
+    /// two-quote shape refresh() commits) and relabels any matching idea's price honestly.
+    private func mergeLiveQuote(_ q: StockSageQuoteService.LiveQuote, symbol: String) {
+        let key = symbol.uppercased()
+        if let i = symbols.firstIndex(where: { $0.symbol.uppercased() == key }) {
+            symbols[i] = StockSageSymbol(symbol: symbols[i].symbol, market: symbols[i].market, quotes: [
+                StockSageQuote(price: q.previousClose, previousPrice: q.previousClose,
+                               time: Date(timeIntervalSinceNow: -86_400)),
+                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
+            ])
+        }
+        if let j = ideas.firstIndex(where: { $0.symbol.uppercased() == key }) {
+            ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime ?? Date())
+        }
+    }
+
     func refresh(scope: TrackedScope = .full) async {
         guard !isRefreshing else { return }
         if let reason = ToolPolicy.webToolsDisabledReason() {
@@ -1927,6 +1977,10 @@ final class StockSageStore: ObservableObject {
         // throttled-in-scope or genuinely out-of-scope — carries its flag forward untouched.
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: quotes)
         replaceAll(committed, isSample: false)
+        // STALE SELF-HEAL (owner directive 2026-07-27: "fix all stale stocks"): any row still
+        // MATERIALLY stale after this refresh (beyond the weekend-tolerant freshness window) is
+        // exactly what a throttled/partial sweep left behind — retry those alone, once.
+        await healStaleQuotes()
         lastUpdated = Date()
         // Newest MARKET time across the priced quotes — the banner uses this (not fetch time) to
         // tell live from a stale close. nil when the feed omitted timestamps for all of them.

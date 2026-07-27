@@ -4565,6 +4565,15 @@ struct MarketsView: View {
                     ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
                 } else {
                     ideaMetric("Price", adaptivePrice(idea.price))
+                        // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
+                        // live quote; on success the store relabels the idea and we re-point the
+                        // sheet at the refreshed copy (same id — the sheet updates in place).
+                        .task {
+                            if await store.refreshQuote(for: idea.symbol) != nil,
+                               let updated = store.ideas.first(where: { $0.id == idea.id }) {
+                                selectedIdea = updated
+                            }
+                        }
                 }
                 if let stop = a.stopPrice, idea.price > 0 {
                     // Stop distance % in parentheses — glanceable risk without
