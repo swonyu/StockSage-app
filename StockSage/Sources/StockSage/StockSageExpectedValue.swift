@@ -165,14 +165,32 @@ enum StockSageExpectedValue {
         return avg > 0 ? avg : nil
     }
 
-    /// Velocity = EV ÷ expected hold = expected R PER DAY, so a fast-turnover setup
-    /// beats a slow swing of equal EV (more compounding cycles). nil if no EV or no
+    /// Second-order Jensen hold inflation (owner-signed 2026-07-28, external-report item 5):
+    /// expectedHoldDays divides by the MEAN daily move, but hold time is distance ÷ a
+    /// STOCHASTIC move, and E[1/X] ≥ 1/E[X] (Jensen) — the naive hold UNDERestimates
+    /// expected days for erratic movers. Second-order Taylor: E[1/X] ≈ (1/μ)(1 + CoV²),
+    /// so the naive velocity is divided by (1 + CoV²) of the spark's |Δ| dispersion.
+    /// Flat/short spark ⇒ CoV 0 ⇒ factor 1 (unchanged). CoV² clamped at 3 so one wild
+    /// series dampens, never annihilates.
+    nonisolated static func jensenHoldInflation(_ spark: [Double]) -> Double {
+        guard spark.count >= 4 else { return 1 }
+        var moves: [Double] = []
+        moves.reserveCapacity(spark.count - 1)
+        for i in 1..<spark.count { moves.append(abs(spark[i] - spark[i - 1])) }
+        let mu = moves.reduce(0, +) / Double(moves.count)
+        guard mu > 0 else { return 1 }
+        let variance = moves.reduce(0) { $0 + ($1 - mu) * ($1 - mu) } / Double(moves.count)
+        return 1 + Swift.min(variance / (mu * mu), 3)
+    }
+
+    /// Velocity = EV ÷ Jensen-adjusted expected hold = expected R PER DAY, so a fast-turnover
+    /// setup beats a slow swing of equal EV (more compounding cycles). nil if no EV or no
     /// hold estimate. An estimate on an estimate — the UI says so.
     nonisolated static func velocity(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults,
                                      calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let e = ev(for: idea, calibration: calibration),
               let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
-        return e.evR / hold
+        return e.evR / (hold * jensenHoldInflation(idea.spark))
     }
 
     /// Ideas ranked by velocity (EV/day) desc; ideas without a velocity fall last (stable).

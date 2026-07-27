@@ -48,10 +48,18 @@ enum StockSageCapitalAllocator {
     // F3 wave-B (2026-07-16): `fxRatesToUSD` (ccy→USD) sizes non-USD names FX-correctly and
     // USD-normalizes the heat ledger (see step 4/5). Empty map (the default) keeps every
     // existing caller and the test-lock byte-identical — never guess a rate.
+    /// Greedy-knapsack option (owner-signed 2026-07-28, external-report item 1): instead of
+    /// shrinking EVERY position uniformly to fit the heat cap, allocate FULL size down the
+    /// velocity-sorted list and truncate at the cap (boundary position gets the remainder).
+    /// `.uniformScale` remains the API default so existing callers/tests are unchanged; the
+    /// deployed plan reads the owner's Settings choice.
+    enum AllocationStrategy: String { case uniformScale, greedyKnapsack }
+
     nonisolated static func allocate(ideas: [StockSageIdea], account: Double, maxHeat: Double = 0.08,
                                      calibration: StockSageConvictionCalibration? = nil,
                                      regime: MarketRegime? = nil,
-                                     fxRatesToUSD: [String: Double] = [:]) -> CapitalAllocation {
+                                     fxRatesToUSD: [String: Double] = [:],
+                                     strategy: AllocationStrategy = .uniformScale) -> CapitalAllocation {
         let cap = Swift.min(Swift.max(0, maxHeat), 1)
         func empty() -> CapitalAllocation {
             CapitalAllocation(positions: [], totalHeat: 0, requestedHeat: 0, scaleApplied: 1,
@@ -62,7 +70,7 @@ enum StockSageCapitalAllocator {
         // Step 1+2: fund only buy-family ideas with a defined R and positive EV; the raw weight
         // IS half-Kelly (already a FRACTION in [0,0.5] — do NOT divide by account; it also
         // already encodes the edge, so no separate EV multiplier — that would double-count).
-        struct Fundable { let symbol: String; let entry: Double; let stop: Double; let weight: Double; let halfKelly: Double; let evR: Double }
+        struct Fundable { let symbol: String; let entry: Double; let stop: Double; let weight: Double; let halfKelly: Double; let evR: Double; let velocity: Double }
         var fundable: [Fundable] = []
         for idea in ideas {
             let a = idea.advice
@@ -91,16 +99,25 @@ enum StockSageCapitalAllocator {
             // book scales down uniformly, but up-scaling is clipped at the cap — deliberately
             // conservative (it only ever under-deploys the top names, never over-risks). nil → unchanged.
             var weight = regime.map { StockSageRegime.adjustedWeight(base: k.suggestedFraction, bias: $0.sizingBias, cap: StockSageKelly.maxFraction) } ?? k.suggestedFraction
-            // Vol-targeting (match the advisor card): shrink the DEPLOYED risk for high realized vol so
-            // a ~70%-vol crypto/growth name isn't sized like a calm equity. nil vol ⇒ no shrink.
-            if let v = idea.realizedVol { weight /= StockSageExpectedValue.cryptoRiskScaler(annualizedVol: v) }
-            // Per-symbol vol regime brake (EDGE_RESEARCH #1, VIX-free): further reduces weight when
-            // this name's realized vol is historically elevated vs. its own 12-month distribution.
-            // Composes with cryptoRiskScaler (both apply); nil when history too short → no change.
-            if let mult = idea.volRegime?.sizingMultiplier { weight *= mult }
+            // EXTERNAL-REPORT ITEM 6 ("consolidate double volatility scaling to a single tier")
+            // IMPLEMENTED, MEASURED, THEN REVERTED 2026-07-28 — the premise does not hold in this
+            // codebase. The two brakes measure ORTHOGONAL things, not one σ path twice:
+            //   • cryptoRiskScaler = max(1, vol / 0.20) — ABSOLUTE vol vs a fixed baseline.
+            //   • VolRegime.sizingMultiplier — RELATIVE: this symbol's vol vs its OWN history
+            //     (percentile CDF + median), whose own doc states it "composes with
+            //     cryptoRiskScaler" and exists BECAUSE percentile-of-own-history is regime-blind
+            //     (a structurally volatile name reads "calm" at absolutely dangerous vols).
+            // Taking min() keeps only the single most-binding brake, which removes protection in
+            // exactly the worst case — a name that is BOTH absolutely volatile AND spiking vs its
+            // own normal. Measured on the F06 spine: requestedHeat 0.00271875 → 0.00815625, a 3.0x
+            // larger position on the highest-gap-risk names. StockSageMultiBrakeTests (F06) pins
+            // the composition deliberately. Sequential composition retained; owner informed.
+            weight = idea.realizedVol.map { weight / StockSageExpectedValue.cryptoRiskScaler(annualizedVol: $0) } ?? weight
+            weight *= idea.volRegime?.sizingMultiplier ?? 1
             guard weight > 0 else { continue }
             fundable.append(Fundable(symbol: idea.symbol, entry: idea.price, stop: stop,
-                                     weight: weight, halfKelly: k.halfKelly, evR: ev.evR))
+                                     weight: weight, halfKelly: k.halfKelly, evR: ev.evR,
+                                     velocity: StockSageExpectedValue.velocity(for: idea, calibration: calibration) ?? 0))
         }
         guard !fundable.isEmpty else { return empty() }
 
@@ -116,14 +133,33 @@ enum StockSageCapitalAllocator {
         let deweightedForCorrelation = zip(rawWeights, adjWeights).contains { $0 - $1 > 1e-12 }
         if deweightedForCorrelation {
             fundable = zip(fundable, adjWeights).map { f, w in
-                Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop, weight: w, halfKelly: f.halfKelly, evR: f.evR)
+                Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop, weight: w, halfKelly: f.halfKelly, evR: f.evR, velocity: f.velocity)
             }
         }
 
-        // Step 3: uniform proportional scaling pins Σ pre-floor heat to min(requested, cap) and
-        // preserves the edge ranking.
+        // Step 3: fit Σ pre-floor heat under the cap, by the selected strategy.
         let requestedHeat = fundable.reduce(0) { $0 + $1.weight }
-        let scaleApplied = requestedHeat > cap ? cap / requestedHeat : 1
+        var scaleApplied = requestedHeat > cap ? cap / requestedHeat : 1
+        if strategy == .greedyKnapsack, requestedHeat > cap {
+            // Full size down the velocity-sorted list; the boundary name takes the remainder;
+            // everything after is truncated (concentrates in the fastest expected payoff —
+            // the uniform mode's diversification trade-off is the owner's Settings choice).
+            var cum = 0.0
+            var kept: [Fundable] = []
+            for f in fundable.sorted(by: { $0.velocity > $1.velocity }) {
+                if cum + f.weight <= cap + 1e-12 {
+                    kept.append(f); cum += f.weight
+                } else if cap - cum > 1e-9 {
+                    kept.append(Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop,
+                                         weight: cap - cum, halfKelly: f.halfKelly, evR: f.evR,
+                                         velocity: f.velocity))
+                    cum = cap
+                    break
+                } else { break }
+            }
+            fundable = kept
+            scaleApplied = 1   // knapsack truncates instead of scaling
+        }
 
         // Step 4: the sizer is the ONLY place dollars/shares are produced; it floors shares DOWN,
         // so realized dollarsAtRisk ≤ scaledFraction·account (in USD terms once normalized below)

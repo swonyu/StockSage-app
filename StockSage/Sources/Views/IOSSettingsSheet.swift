@@ -15,6 +15,7 @@ struct StockSageIOSSettingsSheet: View {
     /// The board's sort identity key — horizon selects the default lens (raw values are
     /// StockSageIdeaProjection.Sort's STABLE storage identities; never rename).
     @AppStorage("marketsIdeaSort") private var ideaSortRaw = "EV / day"
+    @AppStorage("stocksage.allocStrategy") private var allocStrategy = "greedyKnapsack"
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,20 @@ struct StockSageIOSSettingsSheet: View {
                     // Both are existing, tested engine rankings — the horizon picks the lens;
                     // the board's own sort picker can still override at any time.
                     ideaSortRaw = horizon == "short" ? "EV / day" : "Expected value"
+                }
+
+                Section {
+                    Picker("Deploy-capital allocation", selection: $allocStrategy) {
+                        Text("Concentrated").tag("greedyKnapsack")
+                        Text("Balanced").tag("uniformScale")
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Allocation")
+                } footer: {
+                    Text(allocStrategy == "greedyKnapsack"
+                         ? "Full size to the fastest expected payoffs first; stops cold at the 8% heat cap. Fewer, bigger positions."
+                         : "Every qualifying idea gets a share, all scaled down together to fit the 8% heat cap. More, smaller positions.")
                 }
 
                 Section {
