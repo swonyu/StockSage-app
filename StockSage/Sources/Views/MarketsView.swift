@@ -4973,8 +4973,11 @@ struct MarketsView: View {
     // account AND at least one fundable position — never a manufactured plan.
     @ViewBuilder private var capitalAllocationCard: some View {
         if let acct = StockSageInput.positiveAmount(sizerAccount) {
-            let plan = StockSageCapitalAllocator.allocate(ideas: store.ideas, account: acct, calibration: store.convictionCalibration, regime: store.regime,
-                                                          fxRatesToUSD: sizingFXRates(for: store.ideas.map(\.symbol)))
+            // Kelly review 2026-07-27: the ONE prescriptive site e68eda's 13-site sweep missed —
+            // and the worst one to miss (REAL share counts / dollars-at-risk on names the active
+            // screen hides everywhere else). Same single screened source as every sibling.
+            let plan = StockSageCapitalAllocator.allocate(ideas: shariaScreenedIdeas, account: acct, calibration: store.convictionCalibration, regime: store.regime,
+                                                          fxRatesToUSD: sizingFXRates(for: shariaScreenedIdeas.map(\.symbol)))
             // F5 (2026-07-09): allocate() silently drops every position that floors to 0 shares —
             // this card used to just vanish when ALL of them did, indistinguishable from "nothing
             // qualified". Name the reason instead when there WERE fundable candidates.
