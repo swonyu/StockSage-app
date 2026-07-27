@@ -166,6 +166,9 @@ struct MarketsView: View {
     /// Extension batch (2026-07-16): one honest result line for the journal Data menu
     /// (CSV import / backup / restore / parent import) — counts, skips, errors; never silent.
     @State private var journalDataFeedback: String?
+    /// iOS restore flow (2026-07-27): fileImporter presentation — the document-picker
+    /// counterpart of the mac NSOpenPanel restore.
+    @State private var showRestoreImporter = false
     @State private var draftSymbol = ""
     @State private var draftSide: TradeRecord.Side = .long
     @State private var draftEntry = ""
@@ -2165,8 +2168,32 @@ struct MarketsView: View {
                               preview: SharePreview("StockSage backup (JSON)")) {
                         Label("Share full backup (JSON)", systemImage: "externaldrive.badge.icloud")
                     }
+                    Divider()
+                    Button { showRestoreImporter = true } label: {
+                        Label("Restore backup…", systemImage: "square.and.arrow.down")
+                    }
                 } label: {
                     Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
+                }
+                .fileImporter(isPresented: $showRestoreImporter, allowedContentTypes: [.json]) { result in
+                    // Same restore semantics as the mac path: merge by trade id, honest counts.
+                    guard case .success(let url) = result else { return }
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    guard let data = try? Data(contentsOf: url) else {
+                        journalDataFeedback = "Restore failed: couldn't read the file."; return
+                    }
+                    switch StockSageBackup.restore(from: data) {
+                    case .success(let payload):
+                        let existing = Set(journal.trades.map(\.id))
+                        var added = 0
+                        for t in payload.trades where !existing.contains(t.id) { journal.add(t); added += 1 }
+                        journalDataFeedback = "Restored \(added) trade\(added == 1 ? "" : "s")"
+                            + (payload.trades.count > added ? " (\(payload.trades.count - added) already present)" : "")
+                            + "; \(payload.positions.count) portfolio position(s) in file — add via Portfolio."
+                    case .failure(let err):
+                        journalDataFeedback = "Restore failed: \(err.localizedDescription)"
+                    }
                 }
                 #endif
                 Button { withAnimation(.easeOut(duration: 0.15)) { showAddTrade.toggle() } } label: {
