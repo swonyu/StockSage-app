@@ -28,6 +28,17 @@ enum PlatformClipboard {
 // was silently shadowing it app-wide, stripping every assistive hint.
 
 extension View {
+    /// ≥44pt hit area on iOS without changing visual layout (HIG floor for touch;
+    /// review 2026-07-27: caption-size row buttons were ~18pt tappable). The
+    /// grow-capture-shrink dance expands only the HIT shape, not the layout.
+    @ViewBuilder func touchHitArea() -> some View {
+        #if os(iOS)
+        self.padding(12).contentShape(Rectangle()).padding(-12)
+        #else
+        self
+        #endif
+    }
+
     /// Decimal pad for numeric entry on iOS; inert on macOS. (Review 2026-07-27: price/size
     /// fields showed a full QWERTY keyboard with autocorrect on iPhone.)
     @ViewBuilder func decimalKeyboardOnIOS(_ numeric: Bool = true) -> some View {

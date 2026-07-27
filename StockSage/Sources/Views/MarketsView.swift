@@ -1030,7 +1030,7 @@ struct MarketsView: View {
                 Text("triggered").font(.caption2.weight(.semibold)).foregroundStyle(DS.Palette.warningSoft)
                 Button { store.resetPriceAlert(a.id) } label: {
                     Text("Re-arm").font(.caption2.weight(.semibold)).foregroundStyle(DS.Palette.accent)
-                }.buttonStyle(.plain).help("Re-arm this alert")
+                }.buttonStyle(.plain).touchHitArea().help("Re-arm this alert")
             } else if noQuote {
                 // The monitor fetches quotes to check alerts; if this symbol returns nothing,
                 // the alert will never fire — show "no quote" rather than a false green "armed".
@@ -5766,7 +5766,11 @@ struct MarketsView: View {
                         // three equal-width pill segments ("Cry…"/"Equi…") — DSSegment-
                         // Picker splits width evenly; "Equities" at 12pt semibold needs
                         // ~200 total (review 2026-07-16, offscreen-render verified).
+                        #if os(macOS)
                         .frame(width: 200)
+                        #else
+                        .frame(maxWidth: 340)   // flexible on phone widths (375-440pt)
+                        #endif
                         .accessibilityLabel("Fast-lane board filter")
                     }
                 }
