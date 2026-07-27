@@ -2148,6 +2148,26 @@ struct MarketsView: View {
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 .help("Import a broker/journal CSV, back up or restore ALL app data (JSON), or import your journal from the Salehman AI app")
+                #else
+                // iOS Data affordance (2026-07-27): the mac menu above is NSOpenPanel-bound, so
+                // fencing it left iPhone with NO export path. Share sheet is the iOS-native
+                // equivalent — journal CSV and the full JSON backup travel via AirDrop/Files/
+                // Messages. Import/restore stay mac-side for now (no document-picker flow yet).
+                Menu {
+                    ShareLink(item: StockSageJournalCSV.csv(journal.trades),
+                              preview: SharePreview("StockSage journal (CSV)")) {
+                        Label("Share journal CSV", systemImage: "square.and.arrow.up")
+                    }
+                    ShareLink(item: String(data: StockSageBackup.export(trades: journal.trades,
+                                                                        positions: portfolio.positions,
+                                                                        userSymbols: store.userSymbols),
+                                           encoding: .utf8) ?? "{}",
+                              preview: SharePreview("StockSage backup (JSON)")) {
+                        Label("Share full backup (JSON)", systemImage: "externaldrive.badge.icloud")
+                    }
+                } label: {
+                    Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
+                }
                 #endif
                 Button { withAnimation(.easeOut(duration: 0.15)) { showAddTrade.toggle() } } label: {
                     HStack(spacing: 5) {
