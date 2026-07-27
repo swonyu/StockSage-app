@@ -107,6 +107,10 @@ struct OnboardingSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 560)
+        #if os(macOS)
+        .frame(width: 560)   // fixed mac sheet width — fenced: no iPhone is 560pt wide (review 2026-07-27)
+        #else
+        .frame(maxWidth: 560)
+        #endif
     }
 }

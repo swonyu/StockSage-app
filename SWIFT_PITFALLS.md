@@ -89,3 +89,16 @@ Full run artifacts (claims, votes, per-source evidence): workflow run wf_947a597
 2026-07-16. Sources are cited per-claim in the run journal; headline ones:
 developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views,
 WWDC25 sessions 323 & 306, WWDC23 session 10160.
+
+## iOS 27 beta: libswiftCore SIGSEGV on deep generic view trees (2026-07-27)
+Symptom: launch crash (or pre-reboot: silent black-screen hang) in
+`swift_getTypeByMangledName` → recursive `TypeDecoder` frames, message "Could not
+determine thread index for stack guard region", zero app frames above the runtime.
+Trigger: first evaluation of a HUGE composite SwiftUI generic (MarketsView.normalBody's
+six-card stack). SDK-independent: 26.5 AND matched 27.0 SDK builds both crash; macOS and
+iOS 26.5 run the identical code fine — an iOS 27 beta runtime regression.
+Fix: `erasedOnIOS(_:)` — AnyView-erase each card subtree (iOS only) so no single
+metadata tree gets pathologically deep. macOS keeps concrete types (diffing perf).
+Related launch-path rules while on beta: device Debug builds use
+`ENABLE_DEBUG_DYLIB[sdk=iphoneos*]=NO` (stub+dylib layout wedges), scheme Run has
+lldb attach OFF (attach wedges), orientations must be declared explicitly.

@@ -296,20 +296,33 @@ struct MarketsView: View {
         }
     }
 
+    /// iOS 27-beta runtime dodge (2026-07-27): the runtime SIGSEGVs in
+    /// swift_getTypeByMangledName while instantiating normalBody's full composite
+    /// generic (crash 162204, main thread, __swift_instantiateConcreteTypeFromMangledNameV2).
+    /// Erasing each card caps the depth of any single metadata tree; macOS keeps
+    /// concrete types (structural diffing, no behavior change).
+    private func erasedOnIOS<V: View>(_ v: V) -> some View {
+        #if os(iOS)
+        return AnyView(v)
+        #else
+        return v
+        #endif
+    }
+
     @ViewBuilder private var normalBody: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    feedBanner
+                    erasedOnIOS(feedBanner)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.05), value: appeared)
                         .transition(.opacity.combined(with: .offset(y: -4)))
-                    regimeCard
+                    erasedOnIOS(regimeCard)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.06), value: appeared)
-                    moneyVelocityCard
+                    erasedOnIOS(moneyVelocityCard)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.07), value: appeared)
@@ -322,16 +335,16 @@ struct MarketsView: View {
                     // length, not decision content. The CTA's own doc says its purpose is the
                     // OTHER tabs; it keeps serving them unchanged.
                     if section != .ideas {
-                        bestOpportunityCTA
+                        erasedOnIOS(bestOpportunityCTA)
                             .opacity(appeared ? 1 : 0)
                             .offset(y: appeared ? 0 : 8)
                             .animation(DS.Motion.lux.delay(0.075), value: appeared)
                     }
-                    sectionPicker
+                    erasedOnIOS(sectionPicker)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.08), value: appeared)
-                    content
+                    erasedOnIOS(content)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 6)
                         .animation(DS.Motion.lux.delay(0.12), value: appeared)
@@ -342,6 +355,13 @@ struct MarketsView: View {
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            #if os(iOS)
+            // Native pull-to-refresh (review 2026-07-27): same live-quote refresh as the header
+            // button — stdlib .refreshable, replacing the unwired custom PullToRefresh file.
+            .refreshable { await store.refresh() }
+            #endif
+            // Refresh-landed tick (iOS haptic; silent no-op on macOS).
+            .sensoryFeedback(.success, trigger: store.lastUpdated)
             // Pinned frosted top toolbar (macOS 27 overhaul wave 2): identity +
             // feed-provenance + session clocks stay visible while the board scrolls
             // beneath — provenance is an honesty surface, so it should never scroll
@@ -813,13 +833,18 @@ struct MarketsView: View {
                     Image(systemName: "bell.badge.fill").font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Strong-signal alerts").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
+                        // Review 2026-07-27: re-sync here, not only at root onAppear — on iOS the
+                        // app-level .task auto-starts the monitor AFTER first render, so the root
+                        // read races it and the toggle showed OFF while alerts were live.
+                        .onAppear { monitoring = StockSageMonitor.shared.isRunning }
+                        .sensoryFeedback(.selection, trigger: monitoring)
                         // Review fix 2026-07-17 (supersedes POST2420-COPY item 5): the cycle
                         // REFRESHES core + watchlist but EVALUATES the whole board — a
                         // non-core name pushes too while a recent full refresh keeps its
                         // quote fresh (the freshness gate, not the refresh scope, is what
                         // blocks stale pushes). The old "among the core + watchlist" copy
                         // under-claimed the scope. Interpolated so counts can't drift.
-                        Text("Get a Mac notification when a Strong Buy or Strong Sell appears. Each cycle refreshes the \(StockSageUniverse.core.count)-name curated core + your watchlist; other board names are included while a recent full refresh keeps their quotes fresh.")
+                        Text("Get a notification when a Strong Buy or Strong Sell appears. Each cycle refreshes the \(StockSageUniverse.core.count)-name curated core + your watchlist; other board names are included while a recent full refresh keeps their quotes fresh.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -946,7 +971,7 @@ struct MarketsView: View {
                                 selection: $paDirection) { $0 == .above ? "≥" : "≤" }
                     .frame(width: 74)
                     .accessibilityLabel("Alert direction")
-                journalField("Price", text: $paTarget, width: 78)
+                journalField("Price", text: $paTarget, width: 78, numeric: true)
                 Button { addPriceAlert() } label: {
                     Text("Add").font(.system(size: mvFont11_5, weight: .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 11).padding(.vertical, 6)
@@ -2047,6 +2072,10 @@ struct MarketsView: View {
                 }
                 // Extension batch (2026-07-16): import/backup — every action reports an honest
                 // one-line result (added/skipped/error counts) via journalDataFeedback.
+                #if os(macOS)
+                // Review 2026-07-27: whole menu fenced — every item is mac-only (NSOpenPanel
+                // CSV/backup/restore; parent-app import reads Salehman AI's MAC container), so
+                // iOS rendered a menu whose only live entry was a guaranteed "no data" dead end.
                 Menu {
                     #if os(macOS)
                     Button("Import CSV…") {
@@ -2109,6 +2138,7 @@ struct MarketsView: View {
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 .help("Import a broker/journal CSV, back up or restore ALL app data (JSON), or import your journal from the Salehman AI app")
+                #endif
                 Button { withAnimation(.easeOut(duration: 0.15)) { showAddTrade.toggle() } } label: {
                     HStack(spacing: 5) {
                         Image(systemName: showAddTrade ? "xmark" : "plus").font(.system(size: mvFont10, weight: .bold))
@@ -2716,15 +2746,15 @@ struct MarketsView: View {
                 Spacer(minLength: 0)
             }
             HStack(spacing: DS.Space.sm) {
-                journalField("Entry", text: $draftEntry)
-                journalField("Stop", text: $draftStop)
-                journalField("Target", text: $draftTarget)
-                journalField("Shares", text: $draftShares)
+                journalField("Entry", text: $draftEntry, numeric: true)
+                journalField("Stop", text: $draftStop, numeric: true)
+                journalField("Target", text: $draftTarget, numeric: true)
+                journalField("Shares", text: $draftShares, numeric: true)
             }
             HStack(spacing: DS.Space.sm) {
-                journalField("Planned px (opt)", text: $draftPlannedEntry, width: 100)
+                journalField("Planned px (opt)", text: $draftPlannedEntry, width: 100, numeric: true)
                     .help("What the plan quoted when you decided to enter. Measures your real execution cost vs. the plan — never changes P&L.")
-                journalField("Fill px (opt)", text: $draftEntryFill, width: 100)
+                journalField("Fill px (opt)", text: $draftEntryFill, width: 100, numeric: true)
                     .help("Your actual entry fill price. Measures your real execution cost vs. the plan — never changes P&L.")
                 Spacer(minLength: 0)
             }
@@ -2776,9 +2806,10 @@ struct MarketsView: View {
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
     }
 
-    private func journalField(_ placeholder: String, text: Binding<String>, width: CGFloat = 70) -> some View {
+    private func journalField(_ placeholder: String, text: Binding<String>, width: CGFloat = 70, numeric: Bool = false) -> some View {
         TextField(placeholder, text: text)
             .textFieldStyle(.plain).font(.system(size: mvFont12))
+            .decimalKeyboardOnIOS(numeric)
             .padding(.horizontal, 8).padding(.vertical, 6).frame(width: width)
             .background(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).fill(Color.white.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
@@ -2952,7 +2983,7 @@ struct MarketsView: View {
             }
             if closingTradeID == trade.id {
                 HStack(spacing: DS.Space.sm) {
-                    journalField("Exit px", text: $closeExitText, width: 80)
+                    journalField("Exit px", text: $closeExitText, width: 80, numeric: true)
                     journalField("Plan px (opt)", text: $closePlannedExitText, width: 100)
                         .help("What the plan quoted when you decided to exit. Measures your real execution cost vs. the plan — never changes P&L.")
                     journalField("Fill px (opt)", text: $closeExitFillText, width: 100)
@@ -3171,6 +3202,7 @@ struct MarketsView: View {
             Text(label).font(.system(size: mvFont9, weight: .semibold)).foregroundStyle(.secondary)
             TextField("", text: text)
                 .textFieldStyle(.plain).font(.system(size: mvFont13)).frame(width: width)
+                .decimalKeyboardOnIOS()
                 .padding(.horizontal, 8).padding(.vertical, 5)
                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
@@ -7741,7 +7773,11 @@ struct MarketsView: View {
             proxy.scrollTo("sheetTopAnchor", anchor: .top)
         }
         } // end ScrollViewReader (house pattern — proxy stays in scope for .onChange)
-        .frame(minWidth: 440, maxWidth: 680, minHeight: 480)
+        #if os(macOS)
+        .frame(minWidth: 440, maxWidth: 680, minHeight: 480)   // mac sheet floor — fenced: iPhones are 375-440pt (review 2026-07-27)
+        #else
+        .frame(maxWidth: 680)
+        #endif
         .background(
             // Sheet root stays owner-drawn (the QA snapshot path renders this view
             // outside a real .sheet, so it needs an opaque backing) — but the dead

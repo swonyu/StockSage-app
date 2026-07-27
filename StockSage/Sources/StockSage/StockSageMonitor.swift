@@ -142,15 +142,18 @@ final class StockSageMonitor {
             // notification NOR poison `lastAlerted` (that would silently suppress the legitimate
             // alert once a FRESH quote later confirms the same signal).
             let fresh = !symbol.isStale()
-            if fresh { nowStrong[signal.symbol] = signal.recommendation }
             // Fire only when this symbol's strong signal is NEW or has FLIPPED
             // (Strong Buy ⇄ Strong Sell) AND the quote is fresh — not the same alert on every
             // poll, and never off a stale close.
+            var delivered = true
             if liveNotify, Self.shouldPushStrongSignal(recommendation: signal.recommendation,
                                                         lastAlerted: lastAlerted[signal.symbol],
                                                         isFresh: fresh) {
-                await sendAlert(signal: signal, market: symbol.market)
+                delivered = await sendAlert(signal: signal, market: symbol.market)
             }
+            // Review 2026-07-27: latch the dedup state only when any attempted push was ACCEPTED —
+            // a denied/failed push must not consume the one-shot (sendPriceAlert's existing rule).
+            if fresh, delivered { nowStrong[signal.symbol] = signal.recommendation }
         }
         // MERGE rather than replace: update the symbols that are strong now, but KEEP the
         // last-alerted state of symbols that left "strong". Replacing with only the
@@ -301,7 +304,6 @@ final class StockSageMonitor {
             // First sighting this session: seed the baseline rather than claim a crossing that
             // may not be real (mirrors `lastAlerted`'s "no alert on first appearance" rule).
             let priorPrice = lastIdeaPrice[idea.symbol] ?? price
-            lastIdeaPrice[idea.symbol] = price
             guard let alert = StockSageAlertDecision.evaluate(
                 symbol: idea.symbol,
                 recommendation: Self.ideaAlertRecommendation(for: idea.advice.action),
@@ -311,12 +313,16 @@ final class StockSageMonitor {
                 // isPushableIdeaAlert only passes stop/target alerts, but a latent spam trap
                 // if that filter is ever relaxed to strong-signal/flip alerts).
                 lastAlertedRecommendation: lastAlerted[idea.symbol]
-            ), Self.isPushableIdeaAlert(alert) else { continue }
-            await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()])
+            ), Self.isPushableIdeaAlert(alert) else { lastIdeaPrice[idea.symbol] = price; continue }
+            // Review 2026-07-27: advance the crossing baseline only when the push was ACCEPTED —
+            // a failed push keeps the prior baseline so the same crossing re-fires next cycle.
+            if await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()]) {
+                lastIdeaPrice[idea.symbol] = price
+            }
         }
     }
 
-    private func sendIdeaAlert(_ alert: StockSageAlert, held: AggregatedHolding?) async {
+    private func sendIdeaAlert(_ alert: StockSageAlert, held: AggregatedHolding?) async -> Bool {
         let content = UNMutableNotificationContent()
         content.title = "\(alert.kind.rawValue): \(alert.symbol)"
         // ALERT-HELD-1: display-text only — held context makes the single most decision-relevant
@@ -332,7 +338,8 @@ final class StockSageMonitor {
         }
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(request)
+        do { try await UNUserNotificationCenter.current().add(request); return true }
+        catch { return false }
     }
 
     /// Returns whether the push was ACCEPTED for delivery — the caller latches the
@@ -357,13 +364,15 @@ final class StockSageMonitor {
         }
     }
 
-    private func sendAlert(signal: StockSageSignal, market: String) async {
+    /// Returns whether the push was ACCEPTED for delivery — runCycle latches dedup only on true.
+    private func sendAlert(signal: StockSageSignal, market: String) async -> Bool {
         let content = UNMutableNotificationContent()
         content.title = "\(signal.recommendation.rawValue): \(signal.symbol) (\(market))"
         content.body = signal.reason
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(request)
+        do { try await UNUserNotificationCenter.current().add(request); return true }
+        catch { return false }
     }
 
     private func requestNotificationPermission() {

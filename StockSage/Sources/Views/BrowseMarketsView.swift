@@ -150,7 +150,9 @@ struct BrowseMarketsView: View {
             }
         }
         .padding(DS.Space.lg)
-        .frame(minWidth: 420, minHeight: 520)
+        #if os(macOS)
+        .frame(minWidth: 420, minHeight: 520)   // mac sheet floor — fenced: clips 375-402pt iPhones (review 2026-07-27)
+        #endif
         // System sheet chrome (macOS 27 overhaul): the opaque modalBG panel fought
         // the native sheet material and mismatched OnboardingSheet, which already
         // (correctly) defers to the system background. Dark is guaranteed by the

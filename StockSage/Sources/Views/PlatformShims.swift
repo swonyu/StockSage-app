@@ -23,16 +23,21 @@ enum PlatformClipboard {
     }
 }
 
-#if os(iOS)
-// ponytail: tooltips vanish on iOS rather than being redesigned — a long-press hint
-// system is an owner design call, not a port decision. Accessibility labels remain.
+// Review 2026-07-27: the former iOS no-op `.help` shim is GONE — SwiftUI's native iOS
+// `.help` exists (accessibility hint + iPad pointer tooltip) and the same-module shim
+// was silently shadowing it app-wide, stripping every assistive hint.
+
 extension View {
-    func help(_ text: LocalizedStringKey) -> some View { self }
-    func help(_ text: Text) -> some View { self }
-    func help(_ text: String) -> some View { self }
-    func help(_ text: Substring) -> some View { self }
+    /// Decimal pad for numeric entry on iOS; inert on macOS. (Review 2026-07-27: price/size
+    /// fields showed a full QWERTY keyboard with autocorrect on iPhone.)
+    @ViewBuilder func decimalKeyboardOnIOS(_ numeric: Bool = true) -> some View {
+        #if os(iOS)
+        if numeric { self.keyboardType(.decimalPad).autocorrectionDisabled() } else { self }
+        #else
+        self
+        #endif
+    }
 }
-#endif
 
 #if os(iOS)
 /// iOS suppresses notification banners while the app is FOREGROUND unless a delegate
@@ -42,6 +47,6 @@ final class StockSageNotificationDelegate: NSObject, UNUserNotificationCenterDel
     static let shared = StockSageNotificationDelegate()
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async
-        -> UNNotificationPresentationOptions { [.banner, .sound] }
+        -> UNNotificationPresentationOptions { [.banner, .list, .sound] }   // .list: survive in Notification Center after the banner (review 2026-07-27)
 }
 #endif
