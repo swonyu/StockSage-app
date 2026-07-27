@@ -362,6 +362,16 @@ struct MarketsView: View {
             #endif
             // Refresh-landed tick (iOS haptic; silent no-op on macOS).
             .sensoryFeedback(.success, trigger: store.lastUpdated)
+            // Notification tap deep-link (2026-07-27): open the tapped symbol's idea sheet,
+            // falling back to the Alerts section when the symbol isn't on today's board.
+            .onReceive(NotificationCenter.default.publisher(for: .stockSageOpenSymbol)) { note in
+                guard let symbol = note.object as? String else { return }
+                if let idea = store.ideas.first(where: { $0.symbol.caseInsensitiveCompare(symbol) == .orderedSame }) {
+                    selectedIdea = idea
+                } else {
+                    section = .alerts
+                }
+            }
             // Pinned frosted top toolbar (macOS 27 overhaul wave 2): identity +
             // feed-provenance + session clocks stay visible while the board scrolls
             // beneath — provenance is an honesty surface, so it should never scroll

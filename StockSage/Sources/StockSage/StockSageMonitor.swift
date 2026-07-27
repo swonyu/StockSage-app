@@ -339,6 +339,7 @@ final class StockSageMonitor {
         } else {
             content.body = alert.reason
         }
+        content.userInfo = ["symbol": alert.symbol]   // tap deep-link (2026-07-27)
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         do { try await UNUserNotificationCenter.current().add(request); return true }
@@ -356,6 +357,7 @@ final class StockSageMonitor {
         // `StockSageCurrency.adaptivePrice` every board/card/sheet already renders, so this push's
         // numbers match what the user sees everywhere else in the app.
         content.title = "Price alert: \(alert.symbol) \(alert.direction.symbol) \(StockSageCurrency.adaptivePrice(alert.target))"
+        content.userInfo = ["symbol": alert.symbol]   // tap deep-link (2026-07-27)
         content.body = "Now \(StockSageCurrency.adaptivePrice(price))."
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
@@ -372,6 +374,7 @@ final class StockSageMonitor {
         let content = UNMutableNotificationContent()
         content.title = "\(signal.recommendation.rawValue): \(signal.symbol) (\(market))"
         content.body = signal.reason
+        content.userInfo = ["symbol": signal.symbol]   // tap deep-link (2026-07-27)
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         do { try await UNUserNotificationCenter.current().add(request); return true }

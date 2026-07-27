@@ -48,5 +48,23 @@ final class StockSageNotificationDelegate: NSObject, UNUserNotificationCenterDel
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions { [.banner, .list, .sound] }   // .list: survive in Notification Center after the banner (review 2026-07-27)
+
+    /// Tap deep-link (2026-07-27): route to the tapped symbol — MarketsView listens and opens
+    /// the symbol's idea sheet (or the Alerts section when no idea is on the board).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        guard let symbol = response.notification.request.content.userInfo["symbol"] as? String else { return }
+        await MainActor.run {
+            NotificationCenter.default.post(name: .stockSageOpenSymbol, object: symbol)
+        }
+    }
 }
+
 #endif
+
+// Cross-platform constant (the POSTER is iOS-only, but the MarketsView listener compiles
+// on both platforms — macOS simply never receives it).
+extension Notification.Name {
+    /// Payload: the tapped alert's symbol (String) in `object`.
+    static let stockSageOpenSymbol = Notification.Name("stocksage.openSymbol")
+}
