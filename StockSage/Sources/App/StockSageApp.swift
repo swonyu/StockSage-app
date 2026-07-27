@@ -29,6 +29,8 @@ struct StockSageApp: App {
         #if os(iOS)
         // Set delegate BEFORE the app finishes launching so foreground banners work
         UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared
+        // MetricKit field telemetry (external-report item 10) — local-only, nothing transmitted.
+        StockSageTelemetry.shared.start()
         #endif
     }
 
