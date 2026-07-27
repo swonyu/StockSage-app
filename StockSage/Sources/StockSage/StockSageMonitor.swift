@@ -164,7 +164,8 @@ final class StockSageMonitor {
             // (Strong Buy ⇄ Strong Sell) AND the quote is fresh — not the same alert on every
             // poll, and never off a stale close.
             var delivered = true
-            if liveNotify, Self.shouldPushStrongSignal(recommendation: signal.recommendation,
+            if liveNotify, StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.strongSignalsKey),
+               Self.shouldPushStrongSignal(recommendation: signal.recommendation,
                                                         lastAlerted: lastAlerted[signal.symbol],
                                                         isFresh: fresh) {
                 delivered = await sendAlert(signal: signal, market: symbol.market)
@@ -255,6 +256,8 @@ final class StockSageMonitor {
     /// drop any quote whose market timestamp is materially old — a level reached only at a stale
     /// close won't fire a push while the market is shut and the owner can't act.
     private func checkPriceAlerts() async {
+        // Muted type: check nothing, consume nothing — the user's armed alerts stay armed.
+        guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey) else { return }
         let store = StockSageStore.shared
         let armed = store.priceAlerts.filter { $0.isArmed }
         guard !armed.isEmpty else { return }
@@ -317,11 +320,15 @@ final class StockSageMonitor {
         // is the single most decision-relevant alert, so it should say whether the owner actually
         // has a position on. Idea alerts ONLY — sendPriceAlert (user-set price alerts) is untouched.
         let holdingBySymbol = StockSagePortfolio.holdingBySymbol(in: StockSagePortfolio.shared.positions)
+        let ideaAlertsOn = StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.ideaAlertsKey)
         for idea in ideas {
             // CONCURRENCY #2 (review 2026-07-27): same cooperative-cancellation guard as the
             // strong-signal and price-alert loops — stop() must halt idea pushes mid-batch too.
             guard !Task.isCancelled else { break }
             guard let price = prices[idea.symbol.uppercased()], price > 0 else { continue }
+            // Muted type: keep the crossing baseline advancing (else re-enabling would fire a
+            // flood of stale crossings), just never push.
+            guard ideaAlertsOn else { lastIdeaPrice[idea.symbol] = price; continue }
             // First sighting this session: seed the baseline rather than claim a crossing that
             // may not be real (mirrors `lastAlerted`'s "no alert on first appearance" rule).
             let priorPrice = lastIdeaPrice[idea.symbol] ?? price
@@ -434,5 +441,19 @@ final class StockSageMonitor {
     /// price-momentum strong-signal path above — never double-push it from here.
     nonisolated static func isPushableIdeaAlert(_ alert: StockSageAlert?) -> Bool {
         alert?.kind == .stopBreach || alert?.kind == .targetHit
+    }
+}
+
+
+/// Per-type notification switches (owner directive 2026-07-27: "not for everything —
+/// control from Settings"). Absent key = ENABLED, so existing installs keep behavior.
+/// Keys are shared with IOSSettingsSheet's @AppStorage bindings.
+enum StockSageNotifyPrefs {
+    static let strongSignalsKey = "stocksage.notify.strongSignals"
+    static let ideaAlertsKey = "stocksage.notify.ideaAlerts"
+    static let priceAlertsKey = "stocksage.notify.priceAlerts"
+
+    static func enabled(_ key: String) -> Bool {
+        UserDefaults.standard.object(forKey: key) == nil ? true : UserDefaults.standard.bool(forKey: key)
     }
 }

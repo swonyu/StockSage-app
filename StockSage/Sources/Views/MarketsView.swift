@@ -166,6 +166,11 @@ struct MarketsView: View {
     /// Extension batch (2026-07-16): one honest result line for the journal Data menu
     /// (CSV import / backup / restore / parent import) — counts, skips, errors; never silent.
     @State private var journalDataFeedback: String?
+    /// iOS Settings sheet (owner directive 2026-07-27: gear next to refresh).
+    @State private var showIOSSettings = false
+    /// Auto-refresh (owner: every 7 minutes while the app is open). Cross-platform — the
+    /// mac window benefits identically; iOS suspends the task with the scene.
+    @AppStorage("stocksage.autoRefresh") private var autoRefreshEnabled = true
     /// iOS restore flow (2026-07-27): fileImporter presentation — the document-picker
     /// counterpart of the mac NSOpenPanel restore.
     @State private var showRestoreImporter = false
@@ -365,6 +370,16 @@ struct MarketsView: View {
             #endif
             // Refresh-landed tick (iOS haptic; silent no-op on macOS).
             .sensoryFeedback(.success, trigger: store.lastUpdated)
+            // Auto-refresh (owner: 7 minutes). task(id:) restarts the loop when the toggle
+            // flips; sleep is cancellation-aware so scene teardown ends it cleanly.
+            .task(id: autoRefreshEnabled) {
+                guard autoRefreshEnabled else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(7 * 60))
+                    guard !Task.isCancelled, autoRefreshEnabled else { break }
+                    await store.refresh()
+                }
+            }
             // Notification tap deep-link (2026-07-27): open the tapped symbol's idea sheet,
             // falling back to the Alerts section when the symbol isn't on today's board.
             .onReceive(NotificationCenter.default.publisher(for: .stockSageOpenSymbol)) { note in
@@ -709,8 +724,32 @@ struct MarketsView: View {
             }
             Spacer()
             refreshButton
+            #if os(iOS)
+            settingsButton
+            #endif
         }
     }
+
+    #if os(iOS)
+    /// Gear beside refresh (owner directive 2026-07-27) — same visual family as refreshButton.
+    private var settingsButton: some View {
+        Button { showIOSSettings = true } label: {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: mvFont12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 30, height: 30)
+                .background(Color.white.opacity(0.08), in: Circle())
+                .overlay(Circle().stroke(
+                    LinearGradient(colors: [Color.white.opacity(0.20), Color.white.opacity(0.04)],
+                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                .padding(7)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
+        .sheet(isPresented: $showIOSSettings) { StockSageIOSSettingsSheet() }
+    }
+    #endif
 
     /// Live status line: once a real feed lands, show the freshness + market count;
     /// otherwise the educational tagline.
