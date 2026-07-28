@@ -128,4 +128,53 @@ struct StockSageNotificationBudgetTests {
         let reArmed = b.allow(symbol: "AAPL", price: 100.1, now: t0.addingTimeInterval(60))
         #expect(reArmed)
     }
+
+    // MARK: persistence — the cold-start burst (second review, 2026-07-28)
+
+    @Test("budget state survives a process kill — the cold-start burst cannot recur")
+    func statePersistsAcrossRelaunch() throws {
+        let suite = try #require(UserDefaults(suiteName: "budget.persist.test"))
+        suite.removePersistentDomain(forName: "budget.persist.test")
+
+        var first = B(loadingFrom: suite, now: t0)
+        first.record(symbol: "AAPL", price: 100, now: t0)
+        first.save(to: suite)
+
+        // Simulate the OS killing the app and the owner relaunching a minute later: a FRESH
+        // instance must still know AAPL is cooling down. In-memory-only state forgot this, and
+        // that is what pushed an alert for every threshold-crossing name ~20s after launch.
+        var relaunched = B(loadingFrom: suite, now: t0.addingTimeInterval(60))
+        let blocked = relaunched.allow(symbol: "AAPL", price: 100.1, now: t0.addingTimeInterval(60))
+        #expect(!blocked, "a relaunched process must honour the cooldown it recorded before dying")
+
+        suite.removePersistentDomain(forName: "budget.persist.test")
+    }
+
+    @Test("expired records are dropped on load rather than growing forever")
+    func expiredRecordsPrunedOnLoad() throws {
+        let suite = try #require(UserDefaults(suiteName: "budget.prune.test"))
+        suite.removePersistentDomain(forName: "budget.prune.test")
+
+        var b = B(loadingFrom: suite, now: t0)
+        b.record(symbol: "OLD", price: 50, now: t0)
+        b.save(to: suite)
+
+        // Reload a day later: the cooldown has long expired, so the record must not survive.
+        var later = B(loadingFrom: suite, now: t0.addingTimeInterval(86_400))
+        let allowed = later.allow(symbol: "OLD", price: 50, now: t0.addingTimeInterval(86_400))
+        #expect(allowed, "an expired cooldown must not keep refusing")
+        #expect(later.recentAlerts.isEmpty, "hour-old timestamps must be pruned on load")
+
+        suite.removePersistentDomain(forName: "budget.prune.test")
+    }
+
+    @Test("a corrupt or absent blob loads as empty rather than crashing")
+    func corruptBlobIsSafe() throws {
+        let suite = try #require(UserDefaults(suiteName: "budget.corrupt.test"))
+        suite.set(Data("not json".utf8), forKey: "stocksage.notify.budgetState.v1")
+        var b = B(loadingFrom: suite, now: t0)
+        let allowed = b.allow(symbol: "ANY", price: 1, now: t0)
+        #expect(allowed)
+        suite.removePersistentDomain(forName: "budget.corrupt.test")
+    }
 }

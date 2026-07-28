@@ -1932,12 +1932,42 @@ final class StockSageStore: ObservableObject {
     /// One targeted retry for board rows whose quotes remain materially stale (the freshness
     /// definition already tolerates weekends/overnights, so these are genuine feed misses).
     /// Successes merge into the board AND into any matching idea's price label.
+    /// Retry budget for the heal sweep. WHY (second review, 2026-07-28): the first version
+    /// refetched EVERY row `isStale()` flagged, on every refresh. The equity staleness tolerance
+    /// is 48h and a Friday close is ~65h old by Monday morning — so all weekend every equity row
+    /// read stale, all ~900 were refetched on every cycle, and the feed returned the same closing
+    /// price, which is still stale. A self-inflicted 429 storm against the keyless endpoint, and
+    /// very likely a cause of the staleness this heal was written to fix.
+    ///
+    /// Two brakes: only heal a symbol whose market is actually TRADING (a weekend close is not a
+    /// fetch failure, it is the truth), and cap how many are retried per sweep.
+    private static let healBatchCap = 40
+
     private func healStaleQuotes() async {
-        let staleSymbols = symbols.filter { $0.isStale() }.map(\.symbol)
+        let now = Date()
+        let staleSymbols = symbols
+            .filter { $0.isStale() && Self.marketIsTrading(symbol: $0.symbol, at: now) }
+            .map(\.symbol)
+            .prefix(Self.healBatchCap)
+            .map { $0 }
         guard !staleSymbols.isEmpty else { return }
         let recovered = await StockSageQuoteService.fetchQuotes(for: staleSymbols)
         guard !recovered.isEmpty else { return }
         for (sym, q) in recovered { mergeLiveQuote(q, symbol: sym) }
+    }
+
+    /// Is this symbol's venue currently trading? A closed market's last print is the correct
+    /// price, not a stale one worth refetching. Crypto is always trading; unknown venues are
+    /// treated as trading so a classification gap can never SUPPRESS a real heal.
+    nonisolated static func marketIsTrading(symbol: String, at date: Date = Date()) -> Bool {
+        if StockSageAllocation.assetClass(symbol) == "Crypto" { return true }
+        let cal = Calendar(identifier: .gregorian)
+        if symbol.uppercased().hasSuffix(".SR") {
+            return StockSageMarketHours.tadawulState(at: date, calendar: cal).phase == .open
+        }
+        let phase = StockSageMarketHours.nasdaqState(at: date, calendar: cal).phase
+        // Pre/after-hours DO print, so a stale row can genuinely be healed then.
+        return phase == .open || phase == .preMarket || phase == .afterHours
     }
 
     /// Fetch ONE symbol's quote now (idea detail opens call this) and merge it into the board

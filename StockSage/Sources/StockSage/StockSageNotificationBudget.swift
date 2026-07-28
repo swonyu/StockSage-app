@@ -25,7 +25,7 @@ import Foundation
 /// them without saying so would be an honesty-floor violation.
 struct StockSageNotificationBudget: Sendable {
 
-    struct AlertRecord: Sendable, Equatable {
+    struct AlertRecord: Sendable, Equatable, Codable {
         let at: Date
         let price: Double
     }
@@ -44,7 +44,37 @@ struct StockSageNotificationBudget: Sendable {
     /// How many pushes the budget has withheld since the last one it allowed.
     private(set) var suppressedSinceLastAllowed = 0
 
-    init() {}
+    // MARK: - Persistence
+    //
+    // WHY THIS EXISTS (second review, 2026-07-28): every brake here is worthless in memory
+    // alone. iOS kills backgrounded apps routinely, and a relaunch with an empty map means the
+    // monitor re-alerts on EVERY name currently past its threshold, ~20s after launch,
+    // uncapped. That cold-start burst is the loudest half of the spam the owner reported —
+    // hysteresis and cooldown cannot fire if the state they read was wiped by the OS.
+
+    private static let defaultsKey = "stocksage.notify.budgetState.v1"
+
+    /// Restore from disk. Records older than the cooldown are dropped on load: they can no
+    /// longer refuse anything, and keeping them would grow the blob without bound.
+    init(loadingFrom defaults: UserDefaults = .standard, now: Date = Date()) {
+        guard let raw = defaults.data(forKey: Self.defaultsKey),
+              let decoded = try? JSONDecoder().decode(Persisted.self, from: raw) else { return }
+        perSymbol = decoded.perSymbol
+            .filter { now.timeIntervalSince($0.value.at) < Self.symbolCooldown }
+        recentAlerts = decoded.recentAlerts.filter { now.timeIntervalSince($0) <= 3600 }
+    }
+
+    /// Write-through. Called after every state change; the blob is a few hundred bytes.
+    func save(to defaults: UserDefaults = .standard) {
+        let blob = Persisted(perSymbol: perSymbol, recentAlerts: recentAlerts)
+        guard let data = try? JSONEncoder().encode(blob) else { return }
+        defaults.set(data, forKey: Self.defaultsKey)
+    }
+
+    private struct Persisted: Codable {
+        let perSymbol: [String: AlertRecord]
+        let recentAlerts: [Date]
+    }
 
     // MARK: - Pure decision (no state mutation — trivially testable)
 

@@ -23,7 +23,10 @@ final class StockSageMonitor {
     private var task: Task<Void, Never>?
     private(set) var isRunning = false
     /// Rate control for every outbound push (owner report 2026-07-28: "it sends so much").
-    private var budget = StockSageNotificationBudget()
+    /// Loaded from disk, not fresh — see StockSageNotificationBudget's persistence note: an
+    /// in-memory-only budget is wiped by every OS app kill, which is exactly when the cold-start
+    /// alert burst happens.
+    private var budget = StockSageNotificationBudget(loadingFrom: .standard)
     /// Pushes the budget withheld since the last delivered one — surfaced so suppression is
     /// visible to the owner rather than silent.
     var suppressedAlertCount: Int { budget.suppressedSinceLastAllowed }
@@ -184,7 +187,7 @@ final class StockSageMonitor {
                 let alertPrice = symbol.latest?.price ?? 0
                 if budget.allow(symbol: signal.symbol, price: alertPrice) {
                     delivered = await sendAlert(signal: signal, market: symbol.market)
-                    if delivered { budget.record(symbol: signal.symbol, price: alertPrice) }
+                    if delivered { budget.record(symbol: signal.symbol, price: alertPrice); budget.save() }
                 }
                 // A budget REFUSAL is not a delivery failure: `delivered` stays true so the dedup
                 // state still advances. Otherwise the same alert re-queues every cycle and floods
@@ -251,10 +254,18 @@ final class StockSageMonitor {
             guard signal.recommendation == .strongBuy || signal.recommendation == .strongSell else { continue }
             strong.append(signal)
             if fresh { nowStrong[signal.symbol] = signal.recommendation }
-            if notify, Self.shouldPushStrongSignal(recommendation: signal.recommendation,
+            // FIX (second review, 2026-07-28): this path checked NEITHER the strong-signals
+            // preference NOR the budget, so in watchlist-only mode the Settings switch did
+            // nothing and every brake was bypassed. runCycle gated both; this one never did.
+            if notify, StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.strongSignalsKey),
+               Self.shouldPushStrongSignal(recommendation: signal.recommendation,
                                                     lastAlerted: lastAlerted[signal.symbol],
                                                     isFresh: fresh) {
-                await sendAlert(signal: signal, market: sym.market)
+                let px = q.price
+                if budget.allow(symbol: signal.symbol, price: px),
+                   await sendAlert(signal: signal, market: sym.market) {
+                    budget.record(symbol: signal.symbol, price: px); budget.save()
+                }
             }
         }
         if notify, !Task.isCancelled { for (s, r) in nowStrong { lastAlerted[s] = r } }
@@ -313,8 +324,15 @@ final class StockSageMonitor {
         // actually went out.
         var delivered: [UUID] = []
         for a in fired {
-            if await sendPriceAlert(a, price: prices[a.symbol] ?? a.target) {
+            // A user-set price alert is a ONE-SHOT the owner explicitly armed and it disarms on
+            // trigger, so it is exempt from hysteresis and cooldown. It still respects the GLOBAL
+            // hourly cap so a market-wide move cannot produce a flood.
+            let px = prices[a.symbol] ?? a.target
+            guard StockSageNotificationBudget.countWithinHour(budget.recentAlerts, now: Date())
+                    < StockSageNotificationBudget.hourlyCap else { break }
+            if await sendPriceAlert(a, price: px) {
                 delivered.append(a.id)
+                budget.record(symbol: a.symbol, price: px); budget.save()
             }
         }
         if !delivered.isEmpty { store.markPriceAlertsTriggered(delivered) }
@@ -371,7 +389,7 @@ final class StockSageMonitor {
             }
             if await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()]) {
                 lastIdeaPrice[idea.symbol] = price
-                budget.record(symbol: idea.symbol, price: price)
+                budget.record(symbol: idea.symbol, price: price); budget.save()
             }
         }
     }
