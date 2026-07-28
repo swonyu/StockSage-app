@@ -3909,7 +3909,10 @@ struct MarketsView: View {
                 }
             }
         }
-        .animation(DS.Motion.smooth, value: displayed.count)
+        // Same guard as the ideas board: quotes stream in during a refresh, so animating on
+        // every count change put the watchlist/All list into continuous re-layout too. The
+        // animation still plays when the USER adds or removes a symbol.
+        .animation(store.isRefreshing ? nil : DS.Motion.smooth, value: displayed.count)
     }
 
     private var addSymbolBar: some View {
@@ -4322,7 +4325,15 @@ struct MarketsView: View {
                 }
             }
         }
-        .animation(DS.Motion.smooth, value: store.ideas.count)
+        // NOT animated while a scan streams (owner, on device 2026-07-28: "when i press find
+        // ideas it zooms and i cant go to other tabs"). `performRefreshIdeas` assigns
+        // `ideas = ranked` after EVERY chunk, so across a ~4-minute whole-universe scan this
+        // count changes dozens of times — each one animating a re-layout of the entire section,
+        // with every new card also running a .move transition. The board never settles: it
+        // reads as continuous zooming, and a view that is permanently mid-animation swallows
+        // touches, so the nav drawer could not be opened until the scan finished.
+        // The animation still plays for the things a USER does — filter, sort, search.
+        .animation(store.isLoadingIdeas ? nil : DS.Motion.smooth, value: store.ideas.count)
     }
 
     /// At-a-glance overview of the shown ideas: count, action breakdown (tap to filter),
