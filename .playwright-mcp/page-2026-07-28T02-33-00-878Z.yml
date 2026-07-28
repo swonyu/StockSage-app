@@ -1,0 +1,20 @@
+- main [ref=e4]:
+  - generic [ref=e8]:
+    - generic: play_arrow
+    - link "About Gemini Opens in a new window" [ref=e9] [cursor=pointer]:
+      - /url: https://gemini.google/about/?utm_source=gemini&utm_medium=web&utm_campaign=gemini_zero_state_link_to_marketing_microsite
+      - text: About Gemini
+      - generic [ref=e10]: Opens in a new window
+    - link "Get Gemini App Opens in a new window" [ref=e11] [cursor=pointer]:
+      - /url: https://gemini.google.com/app/download
+      - text: Get Gemini App
+      - generic [ref=e12]: Opens in a new window
+    - link "Subscriptions Opens in a new window" [ref=e13] [cursor=pointer]:
+      - /url: https://one.google.com/ai
+      - text: Subscriptions
+      - generic [ref=e14]: Opens in a new window
+    - link "For Business Opens in a new window" [ref=e15] [cursor=pointer]:
+      - /url: https://business.gemini.google/?utm_source=cloud_sfdc&utm_medium=et&utm_campaign=FY26-Q2-global-gemini-app&utm_content=-&utm_term=-
+      - text: For Business
+      - generic [ref=e16]: Opens in a new window
+    - button "Sign in" [ref=e19]

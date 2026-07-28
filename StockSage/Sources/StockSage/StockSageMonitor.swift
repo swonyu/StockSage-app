@@ -22,6 +22,14 @@ final class StockSageMonitor {
 
     private var task: Task<Void, Never>?
     private(set) var isRunning = false
+    /// Rate control for every outbound push (owner report 2026-07-28: "it sends so much").
+    private var budget = StockSageNotificationBudget()
+    /// Pushes the budget withheld since the last delivered one — surfaced so suppression is
+    /// visible to the owner rather than silent.
+    var suppressedAlertCount: Int { budget.suppressedSinceLastAllowed }
+    /// Rolling-hour timestamps, so the price-alert path can honour the GLOBAL cap while staying
+    /// exempt from the per-symbol hysteresis/cooldown a one-shot alert should not face.
+    private var budgetRecentAlerts: [Date] { budget.recentAlerts }
     /// Unread-alert badge (iOS): bumped per ACCEPTED push, cleared when the app foregrounds.
     private var pendingBadge = 0
 
@@ -70,7 +78,11 @@ final class StockSageMonitor {
     /// see the STANDALONE DEVIATION below). Throws if already running.
     /// `firstCycleDelay` staggers the monitor's first refresh so it doesn't race
     /// the view's onAppear refresh that fires at the same moment on launch.
-    func start(interval: TimeInterval = 45, firstCycleDelay: TimeInterval = 20) throws {
+    /// Cadence raised 45s -> 180s (owner report 2026-07-28). At 45 seconds the monitor
+    /// re-evaluated every alert path ~80 times an hour against a keyless endpoint; combined with
+    /// the missing hysteresis that WAS the alert spam. US names stream live now, so the poll's
+    /// remaining job is Tadawul coverage between refreshes, where 3 minutes is ample.
+    func start(interval: TimeInterval = 180, firstCycleDelay: TimeInterval = 20) throws {
         guard !isRunning else { throw MonitorError.alreadyRunning }
         isRunning = true
         requestNotificationPermission()
@@ -168,7 +180,15 @@ final class StockSageMonitor {
                Self.shouldPushStrongSignal(recommendation: signal.recommendation,
                                                         lastAlerted: lastAlerted[signal.symbol],
                                                         isFresh: fresh) {
-                delivered = await sendAlert(signal: signal, market: symbol.market)
+                // Budget gate (2026-07-28): hysteresis + per-symbol cooldown + rolling hourly cap.
+                let alertPrice = symbol.latest?.price ?? 0
+                if budget.allow(symbol: signal.symbol, price: alertPrice) {
+                    delivered = await sendAlert(signal: signal, market: symbol.market)
+                    if delivered { budget.record(symbol: signal.symbol, price: alertPrice) }
+                }
+                // A budget REFUSAL is not a delivery failure: `delivered` stays true so the dedup
+                // state still advances. Otherwise the same alert re-queues every cycle and floods
+                // the instant the cooldown expires — the exact spam this is meant to stop.
             }
             // Review 2026-07-27: latch the dedup state only when any attempted push was ACCEPTED —
             // a denied/failed push must not consume the one-shot (sendPriceAlert's existing rule).
@@ -344,8 +364,14 @@ final class StockSageMonitor {
             ), Self.isPushableIdeaAlert(alert) else { lastIdeaPrice[idea.symbol] = price; continue }
             // Review 2026-07-27: advance the crossing baseline only when the push was ACCEPTED —
             // a failed push keeps the prior baseline so the same crossing re-fires next cycle.
+            guard budget.allow(symbol: idea.symbol, price: price) else {
+                // Refused by the budget — advance the baseline anyway so this crossing is not
+                // re-detected and queued on every subsequent cycle.
+                lastIdeaPrice[idea.symbol] = price; continue
+            }
             if await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()]) {
                 lastIdeaPrice[idea.symbol] = price
+                budget.record(symbol: idea.symbol, price: price)
             }
         }
     }
