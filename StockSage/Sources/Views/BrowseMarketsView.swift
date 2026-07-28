@@ -36,7 +36,10 @@ struct BrowseMarketsView: View {
     @ScaledMetric(relativeTo: .caption2) private var bmFont15: CGFloat = 15
 
     enum AssetFilter: String, CaseIterable, Identifiable {
-        case all = "All", stocks = "Stocks", etf = "ETFs", crypto = "Crypto", fx = "Forex", index = "Indices"
+        // No `crypto` case: the owner removed crypto from the app entirely (2026-07-28), and
+        // `StockSageStore.validateNewSymbol` now refuses `-USD` outright, so the segment could
+        // never match a row again.
+        case all = "All", stocks = "Stocks", etf = "ETFs", fx = "Forex", index = "Indices"
         var id: String { rawValue }
     }
 
@@ -60,7 +63,6 @@ struct BrowseMarketsView: View {
         let sym = s.symbol.uppercased()
         switch filter {
         case .all:    return true
-        case .crypto: return sym.hasSuffix("-USD")
         case .fx:     return sym.hasSuffix("=X")
         case .index:  return sym.hasPrefix("^")
         case .etf:    return s.market.localizedCaseInsensitiveContains("ETF")

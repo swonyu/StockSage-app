@@ -383,6 +383,11 @@ final class StockSageStore: ObservableObject {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !s.isEmpty else { return (nil, "Enter a ticker.") }
         guard s.count <= 20, !s.contains(" ") else { return (nil, "That doesn't look like a ticker.") }
+        // Crypto is out of scope by owner decision (2026-07-28). The curated universe already
+        // carries none, but a hand-typed ticker was the one remaining way in — refusing it HERE
+        // rather than at each call site is what makes "this app holds no crypto" an enforced
+        // property instead of a default that the next added symbol could quietly break.
+        guard !s.hasSuffix("-USD") else { return (nil, "This app doesn't trade crypto.") }
         guard !alreadyTracked.contains(s) else { return (nil, "\(s) is already tracked.") }
         return (s, nil)
     }
@@ -402,7 +407,7 @@ final class StockSageStore: ObservableObject {
         let quotes = await StockSageQuoteService.fetchQuotes(for: [symbol])
         isAddingSymbol = false
         guard let q = quotes[symbol] else {
-            addSymbolError = "Couldn't find a tradeable price for “\(symbol)”. Check the ticker (e.g. AAPL, 2222.SR, BTC-USD)."
+            addSymbolError = "Couldn't find a tradeable price for “\(symbol)”. Check the ticker (e.g. AAPL, 2222.SR)."
             return
         }
         userSymbols.append(symbol)
@@ -2167,7 +2172,7 @@ final class StockSageStore: ObservableObject {
             StockSageSymbol(symbol: "NVDA",    market: "NASDAQ"),  // strongBuy, bullTrend
             StockSageSymbol(symbol: "AAPL",    market: "NASDAQ"),  // buy (+ seeded earnings warning)
             StockSageSymbol(symbol: "1120.SR", market: "TASI"),    // sell-family, bearTrend (short plan)
-            StockSageSymbol(symbol: "BTC-USD", market: "Crypto"),  // crypto strongBuy
+            StockSageSymbol(symbol: "MSFT",    market: "NASDAQ"),  // strongBuy (was BTC-USD; crypto removed 2026-07-28)
             StockSageSymbol(symbol: "7010.SR", market: "TASI"),    // vol-regime brake ⚠ note
         ]
     }
@@ -2204,9 +2209,10 @@ final class StockSageStore: ObservableObject {
             "NVDA":    hist("NVDA", up250),
             "AAPL":    hist("AAPL", up70),
             "1120.SR": hist("1120.SR", down250),
-            // ×600 scale puts BTC at a plausible price level; the advisor is scale-invariant
-            // (returns/ATR%/momentum are all ratios), so the action is identical to up250's.
-            "BTC-USD": hist("BTC-USD", up250.map { $0 * 600 }),
+            // The advisor is scale-invariant (returns/ATR%/momentum are all ratios), so this
+            // reuses up250 unscaled — same demo action the BTC-USD row produced before crypto
+            // was removed (2026-07-28).
+            "MSFT": hist("MSFT", up250),
             "7010.SR": hist("7010.SR", brake),
         ]
     }

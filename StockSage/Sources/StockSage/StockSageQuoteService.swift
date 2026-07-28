@@ -375,8 +375,6 @@ enum StockSageUniverse {
         ("🌍 World indices",       ["^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX", "^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^N225", "^HSI", "^NSEI", "^TWII", "^STI", "^BVSP", "^AXJO", "^GSPTSE", "^TASI.SR"]),
         // Forex (Yahoo `=X` pairs) — trades ~24×5; SAR included for the owner's home currency.
         ("💱 Forex (24×5)",        ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDSAR=X", "USDCNY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X"]),
-        // Crypto (Yahoo `-USD`) — trades 24/7 and is far more volatile than equities.
-        ("₿ Crypto (24/7)",        ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD"]),
     ]
 
     // Discovery long-tail — PROMOTED (Stage 2, 2026-07-08): now bulk-fetched/analyzed exactly
@@ -406,7 +404,6 @@ enum StockSageUniverse {
         ("🌎 Americas+",           ["BBDC4.SA", "GFNORTEO.MX", "TD.TO", "CNR.TO", "BN.TO"]),
         ("🇪🇺 Europe+",            ["UBSG.SW", "ZURN.SW", "INGA.AS", "PRX.AS", "BBVA.MC", "UCG.MI", "ATCO-A.ST", "INVE-B.ST"]),
         ("💱 Forex+",              ["NZDUSD=X", "EURGBP=X", "EURJPY=X", "GBPJPY=X"]),
-        ("₿ Crypto+",              ["MATIC-USD", "LTC-USD", "BCH-USD", "ATOM-USD", "UNI-USD", "ETC-USD", "NEAR-USD", "APT-USD"]),
         // ── 2000-stock expansion (2026-07-07): live-sourced (Nasdaq screener, mktcap-ranked),
         //    EVERY symbol verified fetchable via the app's Yahoo v8 path (2001 checked, 6 dropped).
         //    PROMOTED into the analyzed universe (PLAN_2026-07-08_equity2000.md Stage 2,

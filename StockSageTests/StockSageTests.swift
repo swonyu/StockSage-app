@@ -425,8 +425,10 @@ struct StockSageSymbolValidationTests {
 
     @Test func acceptsSuffixedAndPairSymbols() {
         #expect(StockSageStore.validateNewSymbol("2222.SR", alreadyTracked: []).symbol == "2222.SR")
-        #expect(StockSageStore.validateNewSymbol("btc-usd", alreadyTracked: []).symbol == "BTC-USD")
         #expect(StockSageStore.validateNewSymbol("eurusd=x", alreadyTracked: []).symbol == "EURUSD=X")
+        // "btc-usd" was pinned here as an accepted pair-style ticker until 2026-07-28, when the
+        // owner removed crypto from the app. Its refusal is now pinned in StockSageNoCryptoTests
+        // alongside the rest of that decision, rather than left as a hole in this list.
     }
 }
 

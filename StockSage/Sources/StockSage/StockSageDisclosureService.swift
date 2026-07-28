@@ -132,8 +132,19 @@ enum StockSageDisclosureService {
         var req = URLRequest(url: url)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
         guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let filings = root["filings"] as? [String: Any],
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [] }
+        return parseFilings(root, cik: cik, forms: forms, limit: limit)
+    }
+
+    /// Pure parse of a submissions payload — no network, so it can be unit-tested.
+    /// Split out of `recentFilings` for exactly that reason: the column-oriented
+    /// layout and the accession-number path quirk are where this silently breaks.
+    nonisolated static func parseFilings(_ root: [String: Any],
+                                         cik: String,
+                                         forms: Set<String> = ["8-K"],
+                                         limit: Int = 20) -> [Filing] {
+        guard let filings = root["filings"] as? [String: Any],
               let recent = filings["recent"] as? [String: Any]
         else { return [] }
 

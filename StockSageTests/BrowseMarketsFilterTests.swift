@@ -8,7 +8,12 @@ import Foundation
 // instead of sitting as stale affordances. Hand-derived expectation from the restricted
 // catalog (901 = 29 .SR incl. ^TASI.SR + 872 NASDAQ incl. the ETF-group QQQ/TLT):
 //   .all (always) · .stocks (AAPL…) · .etf (QQQ/TLT carry the "ETFs" group label) ·
-//   .index (^TASI.SR) — present;  .crypto (no -USD) · .fx (no =X) — absent.
+//   .index (^TASI.SR) — present;  .fx (no =X) — absent.
+// UPDATE 2026-07-28 (owner: "i dont want crypto in my app"): the crypto case is GONE from the
+// enum, not merely empty — StockSageStore.validateNewSymbol now refuses "-USD" outright, so no
+// catalog row and no hand-typed ticker can ever be crypto again. A case that cannot match is
+// worse than an absent one: it implies the app still has an opinion about an asset class it
+// refuses to hold.
 @MainActor
 struct BrowseMarketsFilterTests {
     typealias F = BrowseMarketsView.AssetFilter
@@ -19,7 +24,6 @@ struct BrowseMarketsFilterTests {
         #expect(avail.contains(.stocks))
         #expect(avail.contains(.etf))          // QQQ/TLT — NASDAQ-listed, ETF group label
         #expect(avail.contains(.index))        // ^TASI.SR — Tadawul's own index
-        #expect(!avail.contains(.crypto))      // crypto left the universe 2026-07-16
         #expect(!avail.contains(.fx))          // forex left the universe 2026-07-16
     }
 
@@ -28,13 +32,17 @@ struct BrowseMarketsFilterTests {
         func sym(_ s: String, market: String = "M") -> StockSageSymbol {
             StockSageSymbol(symbol: s, market: market)
         }
-        #expect(BrowseMarketsView.matches(sym("BTC-USD"), filter: .crypto))
         #expect(BrowseMarketsView.matches(sym("USDSAR=X"), filter: .fx))
         #expect(BrowseMarketsView.matches(sym("^TASI.SR"), filter: .index))
         #expect(BrowseMarketsView.matches(sym("QQQ", market: "ETFs (broad)"), filter: .etf))
         #expect(BrowseMarketsView.matches(sym("AAPL"), filter: .stocks))
-        #expect(!BrowseMarketsView.matches(sym("AAPL"), filter: .crypto))
         #expect(!BrowseMarketsView.matches(sym("^TASI.SR"), filter: .stocks))   // index ≠ stock
         #expect(BrowseMarketsView.matches(sym("ANY"), filter: .all))
+        // Crypto has no home class any more: a -USD symbol matches only `all`. Pinned so that
+        // re-adding a crypto case later has to be a deliberate act, not an accident.
+        #expect(!BrowseMarketsView.matches(sym("BTC-USD"), filter: .stocks))
+        #expect(!BrowseMarketsView.matches(sym("BTC-USD"), filter: .fx))
+        #expect(!BrowseMarketsView.matches(sym("BTC-USD"), filter: .index))
+        #expect(!BrowseMarketsView.matches(sym("BTC-USD"), filter: .etf))
     }
 }

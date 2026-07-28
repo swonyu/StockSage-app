@@ -32,8 +32,11 @@ struct StockSageQAFixtureIdeasTests {
             #expect(stop > price)   // short setup: stop sits above entry
         }
 
-        let btc = idea("BTC-USD")
-        #expect(btc?.advice.action == .strongBuy)
+        // Was BTC-USD until crypto was removed (2026-07-28). MSFT inherits the same up-trending
+        // fixture history, so this still covers "a second strongBuy card renders" — the reason
+        // the row existed — without the app carrying an asset class it refuses to trade.
+        let msft = idea("MSFT")
+        #expect(msft?.advice.action == .strongBuy)
 
         let sr7010 = idea("7010.SR")
         #expect(sr7010?.advice.rationale.contains { $0.contains("⚠") } == true)
