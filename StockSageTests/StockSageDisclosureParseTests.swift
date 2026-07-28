@@ -114,4 +114,44 @@ struct StockSageDisclosureParseTests {
         #expect(StockSageDisclosureService.parseFilings([:], cik: "0000320193").isEmpty)
         #expect(StockSageDisclosureService.parseFilings(["filings": "nope"], cik: "0").isEmpty)
     }
+
+    // MARK: - publicFor: the disclosure clock (added 2026-07-28 when the service went LIVE on
+    // the idea sheet). "8-K filed 2h ago" next to a price move is a claim about WHEN news became
+    // public — the one number here a person would actually act on, so it gets its own coverage.
+
+    private func filing(acceptedAt: Date?) -> StockSageDisclosureService.Filing {
+        StockSageDisclosureService.Filing(
+            accessionNumber: "0000000000-26-000001", form: "8-K",
+            filingDate: Date(timeIntervalSince1970: 1_700_000_000),
+            acceptedAt: acceptedAt, items: [], documentURL: nil)
+    }
+
+    @Test("elapsed time reads in the plain words a person would use")
+    func publicForPlainWords() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: now.addingTimeInterval(-60)), now: now) == "just now")
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: now.addingTimeInterval(-3600)), now: now) == "1h ago")
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: now.addingTimeInterval(-23 * 3600)), now: now) == "23h ago")
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: now.addingTimeInterval(-25 * 3600)), now: now) == "yesterday")
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: now.addingTimeInterval(-72 * 3600)), now: now) == "3d ago")
+    }
+
+    @Test("refuses to guess when the feed omits the acceptance time")
+    func publicForRefusesToGuess() {
+        // acceptanceDateTime IS the disclosure instant; filingDate can be a full business day
+        // later, so substituting it would overstate how long the news has been public.
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: nil)) == nil)
+    }
+
+    @Test("device clock ahead of the SEC renders nothing, never negative time")
+    func publicForHandlesClockSkew() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(StockSageDisclosureService.publicFor(filing(acceptedAt: now.addingTimeInterval(600)), now: now) == nil)
+    }
+
+    @Test("the caveat refuses to let absence read as evidence")
+    func caveatIsHonestAboutBothLimits() {
+        #expect(StockSageDisclosureService.caveat.localizedCaseInsensitiveContains("not evidence"))
+        #expect(StockSageDisclosureService.caveat.localizedCaseInsensitiveContains("not a prediction"))
+    }
 }

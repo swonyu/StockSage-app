@@ -190,6 +190,29 @@ enum StockSageDisclosureService {
         return out
     }
 
+    /// What the UI must say alongside any filing it renders. This is a DISCLOSURE CLOCK: it
+    /// reports the instant something became public, never what the news means or where the price
+    /// goes next. It also cannot prove a negative — an empty result means "nothing found in the
+    /// window we looked at", never "this company has disclosed nothing".
+    nonisolated static let caveat =
+        "SEC 8-K filings — the moment news became public, not a prediction of what it does to the "
+        + "price. Absence of a filing here is not evidence that nothing was filed."
+
+    /// How long ago a filing became public, in the plain words a person would use. `nil` when the
+    /// feed omitted the acceptance time — the field that carries the actual disclosure instant —
+    /// because guessing it from the filing DATE would be wrong by up to a business day (a filing
+    /// accepted 17:40 ET carries the NEXT day as its filing date).
+    nonisolated static func publicFor(_ filing: Filing, now: Date = Date()) -> String? {
+        guard let at = filing.acceptedAt else { return nil }
+        let secs = now.timeIntervalSince(at)
+        guard secs >= 0 else { return nil }              // clock skew: say nothing, never "in -2h"
+        let hours = Int(secs / 3600)
+        if hours < 1 { return "just now" }
+        if hours < 24 { return "\(hours)h ago" }
+        let days = hours / 24
+        return days == 1 ? "yesterday" : "\(days)d ago"
+    }
+
     /// The one question this service exists to answer: is there a public filing for
     /// `symbol` at or after `date`?
     ///

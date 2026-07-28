@@ -21,6 +21,11 @@ struct MarketsView: View {
         .filter { StockSageAllocation.assetClass($0.symbol) == "Equity" }.count
 
     @State private var section: MarketSection
+    #if os(iOS)
+    /// iPhone left navigation drawer. Not persisted — a drawer left open across launches
+    /// would hide the board on cold start, which is the opposite of the fix.
+    @State private var navOpen = false
+    #endif
     @AppStorage("marketsWatchSort") private var sort: MarketSort = .feed
     @State private var showBrowseMarkets = false
     /// Ideas board ordering: by expected value, EV-per-day velocity, or signal rank.
@@ -39,11 +44,6 @@ struct MarketsView: View {
     /// F19/F20 (2026-07-15): moved to the engine (StockSageIdeaProjection.Filter) — see IdeaSort.
     typealias IdeaFilter = StockSageIdeaProjection.Filter
     @AppStorage("marketsIdeaFilter") private var ideaFilter: IdeaFilter = .all
-    /// Sharia business-activity screen (owner, 2026-07-23): when on, the ideas board EXCLUDES
-    /// known-prohibited NASDAQ names (StockSageShariaScreen). Coarse exclusion, NOT certification —
-    /// the disclosure banner (shariaScreenBanner) states that unexcluded names are UNSCREENED and the
-    /// financial-ratio leg is not run. Default OFF so nothing changes until the owner opts in.
-    @AppStorage("stocksage.sharia.excludeProhibited") private var shariaExcludeProhibited = false
     /// Live name filter over the ideas list (by symbol / market).
     @State private var ideaSearch = ""
 
@@ -173,6 +173,8 @@ struct MarketsView: View {
     /// never swept across the board.
     @State private var insiderSummary: StockSageInsider.Summary?
     @State private var insiderLoading = false
+    @State private var disclosures: [StockSageDisclosureService.Filing] = []
+    @State private var disclosuresLoading = false
     /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
     /// than a refresh button.
     @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
@@ -368,10 +370,16 @@ struct MarketsView: View {
                             .offset(y: appeared ? 0 : 8)
                             .animation(DS.Motion.lux.delay(0.075), value: appeared)
                     }
-                    erasedOnIOS(sectionPicker)
+                    // iPhone: primary navigation moved OUT of the scroll to the pinned bottom
+                    // bar (`phoneTabBar`) — rendering the strip here as well would be the same
+                    // control twice, and burying it mid-scroll is the confusion being fixed.
+                    // macOS keeps the wide segmented picker inline, byte-identical to before.
+                    #if !os(iOS)
+                    sectionPicker
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.08), value: appeared)
+                    #endif
                     erasedOnIOS(content)
                         #if os(iOS)
                         // SWIPE BETWEEN SECTIONS (2026-07-28): the seven tabs sit mid-scroll on a
@@ -388,6 +396,11 @@ struct MarketsView: View {
                                 .onEnded { g in
                                     let dx = g.translation.width, dy = g.translation.height
                                     guard abs(dx) > 60, abs(dx) > abs(dy) * 2 else { return }
+                                    // Leading-edge drags belong to the nav drawer (2026-07-28).
+                                    // Both gestures are `simultaneous`, so without this guard one
+                                    // rightward edge swipe would open the drawer AND step back a
+                                    // section — two navigations from one intent.
+                                    guard g.startLocation.x > 44 else { return }
                                     if let next = section.neighbour(after: dx < 0) {
                                         withAnimation(DS.Motion.smooth) { section = next }
                                     }
@@ -462,6 +475,34 @@ struct MarketsView: View {
             // Disclaimer footer REMOVED (owner directive 2026-07-27: private build,
             // "not needed"). If this app ever ships publicly, restore from git history
             // (MarketDisclaimerFooter + StockSageMini, deleted this commit).
+            #if os(iOS)
+            // Left slide-out navigation (2026-07-28, owner: "tabs on the left … with a slider
+            // thing"). The grip rides the leading edge, vertically centred so it sits under the
+            // thumb; the drawer slides over the board rather than insetting it, so the board
+            // keeps its full width when closed.
+            .overlay(alignment: .leading) {
+                phoneNavHandle
+                    .padding(.leading, 2)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(DS.Motion.lux, value: appeared)
+            }
+            .overlay(alignment: .leading) { phoneNavDrawer }
+            // Edge swipe to open — the drawer's expected gesture. Bounded to a pull that starts
+            // near the leading edge and is decisively horizontal, so it cannot fight the board's
+            // vertical scroll or the existing section swipe attached to `content`.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { g in
+                        let dx = g.translation.width, dy = g.translation.height
+                        guard abs(dx) > abs(dy) * 2 else { return }
+                        if dx > 60, g.startLocation.x < 40 {
+                            withAnimation(DS.Motion.smooth) { navOpen = true }
+                        } else if dx < -60, navOpen {
+                            withAnimation(DS.Motion.smooth) { navOpen = false }
+                        }
+                    }
+            )
+            #endif
         }
         // Canvas with atmosphere (macOS 27 overhaul): slate wash + faint crimson
         // aurora — the depth Liquid Glass materials sample. Was flat codeSurface.
@@ -504,7 +545,7 @@ struct MarketsView: View {
             // universe scan aborted early on a 429-storm signature — store.scanThrottled) is ALSO
             // a partial board with the SAME poisoning risk, so it gets the same skip.
             if !store.lastScanCancelled && !store.scanThrottled {
-                let snap = StockSageExpectedValue.summary(shariaScreenedIdeas, trades: journal.trades, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
+                let snap = StockSageExpectedValue.summary(store.ideas, trades: journal.trades, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
                 if let wk = snap.weeklyR {
                     // Deliberately still the GROSS figure (F03/F44 net-headline, 2026-07-09):
                     // the durable per-day history must keep comparing like-with-like across
@@ -931,6 +972,107 @@ struct MarketsView: View {
                 .accessibilityHidden(true)
         }
     }
+
+    #if os(iOS)
+    /// iPhone primary navigation (2026-07-28, owner: "the app is confusing … improve tabs
+    /// layout"). REPLACES the mid-scroll horizontal strip: `sectionPicker` rendered BELOW six
+    /// preamble cards, so switching section meant scrolling down ~1.5 screens and then sideways
+    /// through labels that don't all fit 430pt. A pinned bottom bar is the platform idiom —
+    /// always visible, thumb-reachable, costs no scrolling.
+    ///
+    /// Nothing is sacrificed: four sections hold permanent slots, the other three live one tap
+    /// deep in the More menu, which highlights while one of them is active so the current
+    /// location is never ambiguous. macOS is untouched — it keeps the wide segmented picker.
+    private var phoneNavDrawer: some View {
+        ZStack(alignment: .leading) {
+            // Scrim. Only hit-testable while open, so it never eats board taps when closed.
+            Color.black.opacity(navOpen ? 0.35 : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(navOpen)
+                .onTapGesture { withAnimation(DS.Motion.smooth) { navOpen = false } }
+
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text("Sections")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, DS.Space.md)
+                        .padding(.top, DS.Space.lg)
+                        .padding(.bottom, DS.Space.xs)
+
+                    ForEach(MarketSection.allCases) { sec in
+                        Button {
+                            withAnimation(DS.Motion.smooth) { section = sec; navOpen = false }
+                        } label: {
+                            phoneNavRow(sec)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(width: 232, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                // Liquid Glass (iOS 26+): the drawer samples the board sliding beneath it
+                // instead of sitting on an opaque slab. Deployment target is 26.5, so the
+                // API is unconditional here.
+                .glassEffect(.regular, in: .rect(cornerRadius: 0))
+                .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1),
+                         alignment: .trailing)
+                .offset(x: navOpen ? 0 : -232)
+
+                Spacer(minLength: 0)
+            }
+        }
+        .animation(DS.Motion.smooth, value: navOpen)
+        .sensoryFeedback(.selection, trigger: section)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Markets sections")
+        .accessibilityHidden(!navOpen)
+    }
+
+    /// One drawer row. 44pt minimum height is the Apple touch-target floor — the
+    /// 2026-07-27 review flagged sub-44pt controls elsewhere in this file for that reason.
+    private func phoneNavRow(_ sec: MarketSection) -> some View {
+        let active = section == sec
+        return HStack(spacing: DS.Space.sm) {
+            // Selected marker: a solid left bar, so position is readable without relying
+            // on colour alone (the palette's accent on grey is not a safe sole channel).
+            RoundedRectangle(cornerRadius: 2)
+                .fill(active ? DS.Palette.accent : .clear)
+                .frame(width: 3, height: 20)
+            Image(systemName: sec.icon)
+                .font(.system(size: 15, weight: active ? .semibold : .regular))
+                .frame(width: 22, alignment: .center)
+            Text(sec.title)
+                .font(.system(size: 15, weight: active ? .semibold : .regular))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(active ? DS.Palette.accent : Color.primary)
+        .padding(.trailing, DS.Space.md)
+        .frame(minHeight: 44)
+        .background(active ? DS.Palette.accent.opacity(0.10) : .clear)
+        .contentShape(Rectangle())
+        .accessibilityLabel(sec.title)
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The "slider" handle: a slim always-visible grip pinned to the left edge. Tapping it
+    /// opens the drawer; it is the discoverable affordance for the edge swipe, since a
+    /// swipe-only drawer is invisible to anyone who doesn't already know it's there.
+    private var phoneNavHandle: some View {
+        Button { withAnimation(DS.Motion.smooth) { navOpen.toggle() } } label: {
+            Image(systemName: navOpen ? "chevron.left" : "chevron.right")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 56)
+                .glassEffect(.regular, in: .rect(cornerRadius: 13))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(navOpen ? "Close sections" : "Open sections")
+        .opacity(navOpen ? 0 : 1)
+    }
+    #endif
 
     @ViewBuilder private var content: some View {
         switch section {
@@ -2827,7 +2969,7 @@ struct MarketsView: View {
         var s = base
         let days = tradingDays ?? StockSageExpectedValue.tradingDaysForLane(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration)
         if var note = StockSageExpectedValue.weeklyTurnoverNote(
-            shariaScreenedIdeas, tradingDays: days, holds: velocityHolds, calibration: store.convictionCalibration) {
+            store.ideas, tradingDays: days, holds: velocityHolds, calibration: store.convictionCalibration) {
             if netFigure {
                 note = note.replacingOccurrences(
                     of: "every re-entry pays the est. round-trip costs this gross figure excludes",
@@ -3484,22 +3626,20 @@ struct MarketsView: View {
 
     // MARK: Heatmap
 
-    /// Board-symbol counterpart of `shariaScreenedIdeas` (heatmap review 2026-07-26): the
-    /// Watchlist, All and Heatmap tabs all draw from THIS — fixing only one tab leaves its
-    /// siblings painting the exact names every other surface hides. Same engine helper the
-    /// briefing/alerts paths use, so no surface can drift from the rule.
-    private var screenedBoardSymbols: [StockSageSymbol] {
-        StockSageShariaScreen.screenedSymbols(store.symbols)
-    }
+    // The Watchlist / All / Heatmap tabs read `store.symbols` directly. They used to share a
+    // `screenedBoardSymbols` wrapper that applied the Sharia screen; with the screen removed
+    // (2026-07-28) the wrapper became a pass-through whose name promised a filter it no longer
+    // performed, so it is gone. If a board-wide exclusion ever returns, it belongs in the store
+    // — one source all three tabs already read — not in a view-level wrapper each must remember.
 
     private var heatmap: some View {
         Group {
-            if screenedBoardSymbols.isEmpty {
+            if store.symbols.isEmpty {
                 emptyState
                     .transition(.opacity)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
-                    ForEach(screenedBoardSymbols) { sym in
+                    ForEach(store.symbols) { sym in
                         let change = sym.latest?.changePercent ?? 0
                         let heatHovered = hoveredHeatID == sym.id
                         // Per-row freshness: a days-old weekend/holiday close (or a stale crypto
@@ -3557,8 +3697,8 @@ struct MarketsView: View {
                 }
                 // .contain (not .combine) so each tile's own accessibilityLabel above survives.
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel("Market heatmap, \(screenedBoardSymbols.count) symbols by price change")
-                .animation(DS.Motion.smooth, value: screenedBoardSymbols.count)
+                .accessibilityLabel("Market heatmap, \(store.symbols.count) symbols by price change")
+                .animation(DS.Motion.smooth, value: store.symbols.count)
                 .transition(.opacity)
             }
         }
@@ -3581,8 +3721,8 @@ struct MarketsView: View {
     private func signalListView(watchlistOnly: Bool) -> some View {
         let userSet = Set(store.userSymbols.map { $0.uppercased() })
         let displayed: [StockSageSymbol] = watchlistOnly
-            ? screenedBoardSymbols.filter { userSet.contains($0.symbol.uppercased()) }
-            : screenedBoardSymbols
+            ? store.symbols.filter { userSet.contains($0.symbol.uppercased()) }
+            : store.symbols
         // Stop/target for the row come from the ADVISOR (ideas board), never from
         // StockSageSignalEngine — that engine is a |Δ%| threshold map with no stop/target
         // concept, so deriving one from it would fabricate a risk level. Built ONCE here as a
@@ -3905,7 +4045,7 @@ struct MarketsView: View {
                 .buttonStyle(LuxPressStyle())
                 .disabled(loadingBriefing)
             }
-            Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: StockSageShariaScreen.screenedSymbols(store.symbols)) : currentBriefing)
+            Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : currentBriefing)
                 .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -3936,8 +4076,8 @@ struct MarketsView: View {
     private func generateBriefing() async {
         loadingBriefing = true
         // Screened like every recommendation surface (review 2026-07-26) — the briefing names
-        // Strength/Weakness with buy/sell labels, so an active Sharia screen applies here too.
-        let symbols = StockSageShariaScreen.screenedSymbols(store.symbols)
+        // Strength/Weakness with buy/sell labels, drawn from the same board every other surface uses.
+        let symbols = store.symbols
         briefing = await StockSageBriefingService.generateBriefing(for: symbols)
         briefingSymbolsKey = symbols.map(\.symbol).sorted().joined()
         briefingGeneratedAt = Date()
@@ -3949,7 +4089,6 @@ struct MarketsView: View {
     private var ideasSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             ideasHeader
-            shariaScreenBanner
             bestOpportunityCard
             capitalAllocationCard
             fastLaneStrip
@@ -3978,11 +4117,6 @@ struct MarketsView: View {
                     .menuStyle(.borderlessButton).fixedSize()
                     .accessibilityLabel("Sort ideas")
                     Menu {
-                        Divider()
-                        Button { shariaExcludeProhibited.toggle() } label: {
-                            Label("Sharia screen (exclude prohibited)", systemImage: shariaExcludeProhibited ? "checkmark" : "")
-                        }
-                        .help(StockSageShariaScreen.caveat)
                         ForEach(IdeaFilter.allCases) { f in
                             Button { ideaFilter = f } label: { Label(f.rawValue, systemImage: ideaFilter == f ? "checkmark" : "") }
                         }
@@ -4112,58 +4246,20 @@ struct MarketsView: View {
 
     /// F19/F20 (2026-07-15): delegates to the engine projection — the body moved VERBATIM to
     /// StockSageIdeaProjection.displayed so the sort/filter/search contract is testable (F16 pins).
-    /// THE single Sharia-screened idea source (review 2026-07-26). Every idea-derived surface —
-    /// board, best-opportunity, fast lane, Today's plan, money velocity, compounding, CSV — must
-    /// draw from THIS list, never raw `store.ideas`: the board hiding DKNG while the best-opp card
-    /// one-tap-sizes the same name is the exact "looks screened but isn't" trap the feature exists
-    /// to avoid. Cheap O(n) dict lookups (NOT the projection); engine untouched (display-only fence).
-    private var shariaScreenedIdeas: [StockSageIdea] {
-        shariaExcludeProhibited
-            ? store.ideas.filter { !StockSageShariaScreen.isProhibited($0.symbol) }
-            : store.ideas
-    }
-
+    ///
+    /// Until 2026-07-28 this projected a Sharia-screened idea source; the owner removed that
+    /// screen, so the board projects `store.ideas` directly. The invariant that OUTLIVED the
+    /// screen: every idea-derived surface — board, best-opportunity, fast lane, Today's plan,
+    /// money velocity, compounding, CSV — draws from ONE shared source, never its own private
+    /// filter of the board. The board hiding a name while the best-opportunity card one-tap-sizes
+    /// that same name is the trap; a single source is what makes it unreachable. Any future
+    /// board-wide exclusion belongs at this input, not in the surfaces downstream of it.
     private var displayedIdeas: [StockSageIdea] {
-        // Sharia exclusion feeds the projection INPUT (shariaScreenedIdeas) — the old post-filter
-        // meant the banner count needed a SECOND full projection (the ~3 NetEdge evals/idea path
-        // the "Bind once" comment exists to prevent) just to count what was hidden.
-        StockSageIdeaProjection.displayed(shariaScreenedIdeas, sort: ideaSort, filter: ideaFilter,
+        StockSageIdeaProjection.displayed(store.ideas, sort: ideaSort, filter: ideaFilter,
                                           minConviction: ideaMinConv, search: ideaSearch,
                                           regime: store.regime, earnings: store.earnings,
                                           liquidity: store.liquidity, seasonality: store.seasonality,
                                           holds: velocityHolds, calibration: store.convictionCalibration)
-    }
-
-    /// Count of THIS SCAN's ideas the Sharia screen removes — surfaced in the banner so the
-    /// exclusion is visible, not silent. Scan-level (matches the banner's "hidden this scan"
-    /// wording) and O(n) — no projection re-run, and no drift under search/min-conviction edits.
-    private var shariaExcludedCount: Int {
-        guard shariaExcludeProhibited else { return 0 }
-        return store.ideas.count - shariaScreenedIdeas.count
-    }
-
-    /// Mandatory disclosure whenever the Sharia screen is active — it is a COARSE exclusion, not a
-    /// compliance certification. Rendered in the Ideas header so it can never be missed while the
-    /// board is filtered. Includes a toggle to turn it back off.
-    @ViewBuilder private var shariaScreenBanner: some View {
-        if shariaExcludeProhibited {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "moon.stars.fill").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.accent)
-                    Text("Sharia screen ON — \(shariaExcludedCount) known-prohibited name\(shariaExcludedCount == 1 ? "" : "s") hidden this scan")
-                        .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.white)
-                    Spacer()
-                    Button("Turn off") { shariaExcludeProhibited = false }
-                        .buttonStyle(.plain).font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.accent)
-                }
-                Text(StockSageShariaScreen.caveat)
-                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.accent.opacity(0.3), lineWidth: 1))
-        }
     }
 
     /// Why the filtered ideas list is empty — names the active constraint so the user knows what to relax.
@@ -4675,13 +4771,24 @@ struct MarketsView: View {
                 } else {
                     ideaMetric("Price", adaptivePrice(idea.price))
                         .task(id: idea.symbol) {
-                            // SEC Form 4 — public disclosure, fetched only for the sheet the owner
-                            // actually opened. US listings only; .SR returns nil and renders nothing.
+                            // SEC public disclosure, fetched only for the sheet the owner actually
+                            // opened. US listings only; .SR returns nil/[] and renders nothing.
+                            //
+                            // Form 4 (who traded) and 8-K (what was announced) are INDEPENDENT
+                            // SEC endpoints, so they run concurrently — one sheet open costs one
+                            // round-trip of latency, not two. Each lands as it finishes.
                             insiderSummary = nil
+                            disclosures = []
                             guard !idea.symbol.contains(".") else { return }
                             insiderLoading = true
-                            insiderSummary = await StockSageInsider.recentActivity(for: idea.symbol)
+                            disclosuresLoading = true
+                            async let form4 = StockSageInsider.recentActivity(for: idea.symbol)
+                            async let filings = StockSageDisclosureService.recentFilings(
+                                for: idea.symbol, forms: ["8-K"], limit: 5)
+                            insiderSummary = await form4
                             insiderLoading = false
+                            disclosures = await filings
+                            disclosuresLoading = false
                         }
                         // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
                         // live quote; on success the store relabels the idea and we re-point the
@@ -5003,7 +5110,7 @@ struct MarketsView: View {
 
     // Best opportunity now — the single highest positive-EV buy idea (money velocity).
     @ViewBuilder private var bestOpportunityCard: some View {
-        if let best = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
+        if let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
             let idea = best.idea, ev = best.ev
             // D1 (2026-07-16 review): on the Ideas tab THIS card is the crown surface (the
             // bestOpportunityCTA is hidden here, section != .ideas), so it — not the CTA — must
@@ -5011,7 +5118,7 @@ struct MarketsView: View {
             // equities-first) names a different symbol than this highest-gross-EV pick. Same
             // inputs (incl. the FX-adjusted rankedActions call) the CTA and todaysActionsCard use.
             let todayFirstSymbol = StockSageTodayPlan.rankedActions(
-                shariaScreenedIdeas, account: StockSageInput.positiveAmount(sizerAccount),
+                store.ideas, account: StockSageInput.positiveAmount(sizerAccount),
                 riskFraction: StockSageInput.percent(sizerRiskPct).map { $0 / 100 },
                 holds: velocityHolds, calibration: store.convictionCalibration, marketRegime: store.regime,
                 earnings: store.earnings, liquidity: store.liquidity,
@@ -5272,8 +5379,8 @@ struct MarketsView: View {
             // selectable ("Balanced").
             let strategyRaw = UserDefaults.standard.string(forKey: "stocksage.allocStrategy") ?? "greedyKnapsack"
             let strategy = StockSageCapitalAllocator.AllocationStrategy(rawValue: strategyRaw) ?? .greedyKnapsack
-            let plan = StockSageCapitalAllocator.allocate(ideas: shariaScreenedIdeas, account: acct, calibration: store.convictionCalibration, regime: store.regime,
-                                                          fxRatesToUSD: sizingFXRates(for: shariaScreenedIdeas.map(\.symbol)),
+            let plan = StockSageCapitalAllocator.allocate(ideas: store.ideas, account: acct, calibration: store.convictionCalibration, regime: store.regime,
+                                                          fxRatesToUSD: sizingFXRates(for: store.ideas.map(\.symbol)),
                                                           strategy: strategy)
             // F5 (2026-07-09): allocate() silently drops every position that floors to 0 shares —
             // this card used to just vanish when ALL of them did, indistinguishable from "nothing
@@ -5653,6 +5760,46 @@ struct MarketsView: View {
         }
     }
 
+    /// Recent 8-K filings — the disclosure clock (2026-07-28). Idea sheet only.
+    ///
+    /// WHY IT SITS BESIDE THE CATALYST CARD: the catalyst detector says "unusual volume and an
+    /// unusual move happened here"; it cannot say WHY. An 8-K accepted hours earlier is very often
+    /// the why, and it is the public record of it. Together they turn "something moved" into
+    /// "something moved and here is the filing that became public first".
+    ///
+    /// Renders NOTHING when the list is empty — deliberately. The service's own contract says an
+    /// empty result means "nothing found in the window we looked at", not "nothing was filed", so
+    /// printing "no filings" would state a fact this app cannot establish.
+    @ViewBuilder private func disclosureRow() -> some View {
+        if disclosuresLoading {
+            Text("Checking SEC filings…").font(.system(size: mvFont9)).foregroundStyle(.secondary)
+        } else if let latest = disclosures.first {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text.fill")
+                        .font(.system(size: mvFont10)).foregroundStyle(DS.Palette.accent)
+                    Text("8-K filed\(StockSageDisclosureService.publicFor(latest).map { " \($0)" } ?? "")")
+                        .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.white)
+                    if disclosures.count > 1 {
+                        Text("+\(disclosures.count - 1) more")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                // The item codes ARE the news. "Item 2.02" means nothing to a person; "Results of
+                // operations and financial condition" is the same fact in words they can act on.
+                // Codes outside the taxonomy pass through unlabelled rather than being guessed at.
+                if !latest.itemDescriptions.isEmpty {
+                    Text(latest.itemDescriptions.joined(separator: " · "))
+                        .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(StockSageDisclosureService.caveat)
+                    .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     /// Forward-test progress, on the MAIN board (2026-07-28).
     ///
     /// WHY IT IS HERE and not only in Portfolio: the owner's stated goal is fast money, and the
@@ -5771,7 +5918,7 @@ struct MarketsView: View {
         // OTHER content (best/fastest/weeklyR, unaffected by fraction) but then strip the
         // fraction-dependent brake fields — never show a drawdown number modeled on a risk %
         // the user never typed.
-        let rawSummary = StockSageExpectedValue.summary(shariaScreenedIdeas, trades: journal.trades, fraction: parsedRiskFraction ?? 0.01, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
+        let rawSummary = StockSageExpectedValue.summary(store.ideas, trades: journal.trades, fraction: parsedRiskFraction ?? 0.01, holds: velocityHolds, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)
         let riskFrac = parsedRiskFraction
         let s = riskFrac != nil ? rawSummary : MoneyVelocitySummary(
             bestSymbol: rawSummary.bestSymbol, bestEV: rawSummary.bestEV,
@@ -5784,16 +5931,16 @@ struct MarketsView: View {
         // F4: the SAME earnings/liquidity-aware lane summary()'s weeklyRNet/weeklyRGrossSameBasket
         // sum over (see summary()'s own netAwareLane) — bound here once to check fundability of
         // the top-N the $/week line below dollarizes, without touching that line's own math.
-        let velocityLane = StockSageExpectedValue.fastLane(shariaScreenedIdeas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
+        let velocityLane = StockSageExpectedValue.fastLane(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         // PERF-MVCARD: computed once, reused at both the visual warning below and the a11y-label
         // closure that folds it in — was computed twice (byte-identical args) per render.
-        let conc = StockSageExpectedValue.fastLaneConcentration(shariaScreenedIdeas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
+        let conc = StockSageExpectedValue.fastLaneConcentration(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         // F7 (rotation-3 triage): first-ever scan only — see firstScanProgressCaption's doc.
         let firstScanCaption = Self.firstScanProgressCaption(isLoadingIdeas: store.isLoadingIdeas, ideasUpdated: store.ideasUpdated, progress: store.ideasProgress)
         if s.hasContent {
             VStack(alignment: .leading, spacing: 6) {
             Button {
-                if let best = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) { selectedIdea = best.idea }
+                if let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) { selectedIdea = best.idea }
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
@@ -6002,7 +6149,7 @@ struct MarketsView: View {
     /// 24h-range variance line from the idea's ALREADY-STORED `realizedVol` — no new volatility
     /// computation.
     @ViewBuilder private var bestOpportunityCTA: some View {
-        if let best = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
+        if let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration) {
             let idea = best.idea, ev = best.ev
             let isCrypto = StockSageAllocation.assetClass(idea.symbol) == "Crypto"
             let variance: Double? = isCrypto ? StockSageExpectedValue.dailyVariancePct(annualizedVol: idea.realizedVol) : nil
@@ -6026,7 +6173,7 @@ struct MarketsView: View {
             // — copy-only fix: when they diverge, say so in this card's existing sub-line.
             // `max: 1` asks rankedActions for ONLY the #1 row (same inputs todaysActionsCard uses).
             let todayFirstSymbol = StockSageTodayPlan.rankedActions(
-                shariaScreenedIdeas, account: StockSageInput.positiveAmount(sizerAccount),
+                store.ideas, account: StockSageInput.positiveAmount(sizerAccount),
                 riskFraction: StockSageInput.percent(sizerRiskPct).map { $0 / 100 },
                 holds: velocityHolds, calibration: store.convictionCalibration, marketRegime: store.regime,
                 earnings: store.earnings, liquidity: store.liquidity,
@@ -6170,7 +6317,7 @@ struct MarketsView: View {
     }
 
     @ViewBuilder private var fastLaneStrip: some View {
-        let lane = StockSageExpectedValue.fastLane(shariaScreenedIdeas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
+        let lane = StockSageExpectedValue.fastLane(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         if lane.count >= 2 {
             // PERF-STRIP: pure filter of the already-computed `lane` above — byte-identical to
             // calling StockSageExpectedValue.fastLaneByClass(store.ideas, ...) (its body does
@@ -6381,7 +6528,7 @@ struct MarketsView: View {
     // Same fast-lane ordering as fastLaneStrip above; this adds the size + verdict it doesn't show.
     @ViewBuilder private var todaysActionsCard: some View {
         let plans = StockSageTodayPlan.rankedActions(
-            shariaScreenedIdeas,
+            store.ideas,
             account: StockSageInput.positiveAmount(sizerAccount),
             riskFraction: StockSageInput.percent(sizerRiskPct).map { $0 / 100 },
             holds: velocityHolds,
@@ -6398,7 +6545,7 @@ struct MarketsView: View {
         // F8 (2026-07-09): the global "Do this now" CTA's own pick, so this card can disclose it
         // when it names a different symbol than this list's own #1 row — the SAME bestOpportunity
         // call bestOpportunityCTA already makes (byte-identical inputs), just for its symbol.
-        let globalBestSymbol = StockSageExpectedValue.bestOpportunity(shariaScreenedIdeas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)?.idea.symbol
+        let globalBestSymbol = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)?.idea.symbol
         MarketsTodayActionsCard(plans: plans, isSampleData: store.isSampleData, onSelectSymbol: { symbol in
             if let idea = store.ideas.first(where: { $0.symbol == symbol }) { selectedIdea = idea }
         }, globalBestSymbol: globalBestSymbol,
@@ -7489,6 +7636,9 @@ struct MarketsView: View {
                 holdingOverlapRow(idea)
                 // SEC Form 4 insider activity — the lawful answer to "can we use MNPI".
                 insiderRow()
+                // The 8-K disclosure clock, directly under it: Form 4 says who traded, 8-K says
+                // what the company announced. Same source, same sheet, read in that order.
+                disclosureRow()
                 if let stop = a.stopPrice, let target = a.targetPrice,
                    let rr = StockSageRewardRisk.assess(entry: idea.price, stop: stop, target: target) {
                     let c = rr.quality == .strong ? DS.Palette.successSoft
@@ -8713,6 +8863,21 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .briefing:  return "Briefing"
         }
     }
+
+    /// SF Symbol for the iPhone bottom tab bar. macOS keeps the text-only segmented
+    /// picker, so this is read only by `phoneTabBar`.
+    var icon: String {
+        switch self {
+        case .watchlist: return "star.fill"
+        case .ideas:     return "lightbulb.fill"
+        case .all:       return "chart.bar.fill"
+        case .heatmap:   return "square.grid.3x3.fill"
+        case .portfolio: return "briefcase.fill"
+        case .alerts:    return "bell.fill"
+        case .briefing:  return "doc.text.fill"
+        }
+    }
+
 }
 
 /// Watchlist ordering (Chat C feature). `apply` is pure → unit-tested.

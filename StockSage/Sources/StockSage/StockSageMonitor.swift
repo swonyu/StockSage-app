@@ -349,10 +349,9 @@ final class StockSageMonitor {
     /// this never fires off a price it didn't just observe fresh.
     private func checkIdeaAlerts(prices: [String: Double]) async {
         guard !prices.isEmpty else { return }
-        // Screened like every other idea-derived surface (review 2026-07-26): a stop-breach
-        // PUSH for a name the active Sharia screen hides everywhere else was the last
-        // unscreened surface — the exact "looks screened but isn't" trap.
-        let ideas = StockSageShariaScreen.screened(StockSageStore.shared.ideas)
+        // Same board every other idea-derived surface draws from (the Sharia screen that used
+        // to filter this was removed 2026-07-28).
+        let ideas = StockSageStore.shared.ideas
         guard !ideas.isEmpty else { return }
         // ALERT-HELD-1: looked up ONCE per cycle (not per idea) — a stop-breach/target-hit push
         // is the single most decision-relevant alert, so it should say whether the owner actually
