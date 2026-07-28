@@ -1726,6 +1726,25 @@ final class StockSageStore: ObservableObject {
         }.value
     }
 
+    // Volume-confirmed catalysts (external-report item 9) — computed from the SAME on-disk
+    // history the scan already caches, so surfacing them costs zero extra network calls.
+    // Empty until a scan has cached histories; empty is the honest state, never a placeholder.
+    @Published private(set) var catalysts: [StockSageCatalyst.Signal] = []
+
+    /// Recompute catalysts from cached history. Pure read of what is already on disk — no
+    /// fetching, so it is safe to call after any scan/refresh without touching the API budget.
+    func refreshCatalysts() async {
+        let cache = await Task.detached { StockSageHistoryCache.load() }.value
+        guard let histories = cache?.priceHistories(), !histories.isEmpty else {
+            catalysts = []; return
+        }
+        let advBySymbol = liquidity.mapValues(\.avgDollarVolume)
+        let found = await Task.detached {
+            StockSageCatalyst.scan(histories, advDollarBySymbol: advBySymbol)
+        }.value
+        catalysts = found
+    }
+
     // Liquidity — avg daily $ volume + tier, cached per symbol (equities/crypto only).
     @Published private(set) var liquidity: [String: LiquidityProfile] = [:]
 

@@ -330,6 +330,9 @@ struct MarketsView: View {
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.06), value: appeared)
+                    erasedOnIOS(catalystCard)
+                        .opacity(appeared ? 1 : 0)
+                        .animation(DS.Motion.lux.delay(0.065), value: appeared)
                     erasedOnIOS(moneyVelocityCard)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
@@ -394,6 +397,7 @@ struct MarketsView: View {
             .sensoryFeedback(.success, trigger: store.lastUpdated)
             // Auto-refresh (owner cadence 2026-07-27 23:53: 4.75 minutes = 285s). task(id:)
             // restarts the loop when the toggle flips; sleep is cancellation-aware.
+            .task(id: store.lastUpdated) { await store.refreshCatalysts() }
             .task(id: autoRefreshEnabled) {
                 guard autoRefreshEnabled else { return }
                 while !Task.isCancelled {
@@ -5473,6 +5477,70 @@ struct MarketsView: View {
                     style: StrokeStyle(lineWidth: 1, dash: assumed ? [3, 2] : [])
                 )
             )
+    }
+
+    /// Volume-confirmed catalysts (external-report item 9, surfaced 2026-07-28). Renders ONLY
+    /// when the detector found something — an empty catalyst card would be permanent clutter on
+    /// a board that already fights for vertical space. Carries the UNVALIDATED word the detector
+    /// ships with: this describes unusual volume alongside an unusual move, and says nothing
+    /// about what happens next.
+    @ViewBuilder private var catalystCard: some View {
+        let hits = Array(store.catalysts.prefix(3))
+        if !hits.isEmpty {
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                HStack(spacing: DS.Space.sm) {
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                        .font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Volume-confirmed moves")
+                            .font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
+                        Text("Unusual volume AND an unusual move on the same bar.")
+                            .font(.system(size: mvFont11)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Text("unvalidated")
+                        .font(.system(size: fontChipLabel, weight: .semibold))
+                        .foregroundStyle(DS.Palette.warningSoft)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().strokeBorder(DS.Palette.warningSoft.opacity(0.55),
+                                                           style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                }
+                ForEach(hits, id: \.symbol) { c in
+                    HStack(spacing: DS.Space.sm) {
+                        Text(c.symbol)
+                            .font(.system(size: mvFont13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(String(format: "%.1f× volume", c.rvol))
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(String(format: "%+.1f%%", c.priceChangePct))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(c.priceChangePct >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                        if c.likelyMechanicalFlow {
+                            Text("index flow?")
+                                .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
+                        }
+                        Spacer(minLength: 0)
+                        Text(c.tier.rawValue).font(.system(size: mvFont9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .touchHitArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if let idea = store.ideas.first(where: { $0.symbol.caseInsensitiveCompare(c.symbol) == .orderedSame }) {
+                            selectedIdea = idea
+                        }
+                    }
+                }
+                Text("A spike marks a takeover and a collapse alike — direction here is description, not a forecast.")
+                    .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(DS.Space.lg)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(Color.white.opacity(0.04)))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+        }
     }
 
     @ViewBuilder private var moneyVelocityCard: some View {
