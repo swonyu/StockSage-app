@@ -7687,7 +7687,11 @@ struct MarketsView: View {
                         if let n = StockSageTadawulNames.displayLine(for: idea.symbol) {
                             Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
-                        Text(idea.market).font(.caption).foregroundStyle(.secondary)
+                        // Same cohort-tag strip as the card, so the two surfaces name a sector
+                        // identically. Here it also reclaims a wrapped second line at the very
+                        // top of the sheet, above the chart.
+                        Text(Self.phoneMarketLabel(idea.market)).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel(idea.market)
                         // Extension batch (2026-07-16): Saudi-investor cost honesty — US dividends
                         // net ≈70% of headline (30% NRA withholding, no US–Saudi treaty). Sourced
                         // note in the tooltip; informational, not tax advice; nil for non-US names.
