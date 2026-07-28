@@ -4688,7 +4688,22 @@ struct MarketsView: View {
                 }
                 let rr = rewardRisk(idea)
                 if rr > 0 {
-                    ideaMetric("R:R", String(format: "%.1f", rr))
+                    // Gross->net on the CARD (2026-07-28). The detail sheet already fuses these
+                    // (grossToNetText); the card showed gross alone, which is the number most
+                    // likely to be read and anchored on because it is the one seen first and
+                    // most often. Net is appended only when it genuinely resolves — a nil net
+                    // renders exactly as before, never a fabricated second figure.
+                    // Uses the SAME netRR convenience the sheet uses, so the card and the sheet
+                    // can never quote different net figures for one idea.
+                    if let stop = a.stopPrice, let target = a.targetPrice,
+                       let net = StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price,
+                                                        stop: stop, target: target,
+                                                        winProb: a.conviction),
+                       net > 0, net < rr {
+                        ideaMetric("R:R", String(format: "%.1f→%.1f net", rr, net))
+                    } else {
+                        ideaMetric("R:R", String(format: "%.1f", rr))
+                    }
                 }
                 // Momentum dot on the main card, same logic as fastLaneRow.
                 // nil momentumQuality → show nothing (honesty floor preserved).
