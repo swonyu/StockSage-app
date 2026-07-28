@@ -774,7 +774,7 @@ struct MarketsView: View {
                     .foregroundStyle(store.regime.map { regimeColor($0.state) } ?? DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(store.regime?.state.rawValue ?? "Market regime")
-                        .font(.system(size: mvFont14, weight: .semibold)).foregroundStyle(.white)
+                        .font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
                         .help(StockSageGlossary.regimeHelp)
                     // iPhone renders this below the row at full width (see after the HStack).
                     #if !os(iOS)
@@ -4559,7 +4559,7 @@ struct MarketsView: View {
                 Image(systemName: "sparkles.rectangle.stack.fill")
                     .font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Trade ideas").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
+                    Text("Trade ideas").font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
                     // iPhone: the blurb + calibration caveat render BELOW this row at full width
                     // (see after the HStack). Sharing the row with the Find-ideas button left them
                     // ~200pt on a 402pt screen, wrapping the sentence into a 5-line ribbon.
@@ -5341,7 +5341,7 @@ struct MarketsView: View {
             HStack(spacing: DS.Space.sm) {
                 Image(systemName: "bell.badge.fill").font(.system(size: mvFont16)).foregroundStyle(DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Signal alerts").font(DS.Typography.titleM).foregroundStyle(.white)
+                    Text("Signal alerts").font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
                     // iPhone renders the description below the row at full width.
                     #if !os(iOS)
                     Text("Flags when an idea turns bullish/bearish or its price crosses the advised stop or target — between refreshes.")
@@ -6190,7 +6190,7 @@ struct MarketsView: View {
                         .font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Volume-confirmed moves")
-                            .font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
+                            .font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
                         // iPhone renders the definition below the row at full width.
                         #if !os(iOS)
                         Text("Unusual volume AND an unusual move on the same bar.")
@@ -6917,7 +6917,7 @@ struct MarketsView: View {
             HStack(spacing: DS.Space.sm) {
                 Image(systemName: "chart.bar.xaxis").font(.system(size: mvFont16)).foregroundStyle(DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Strategy backtest").font(DS.Typography.titleM).foregroundStyle(.white)
+                    Text("Strategy backtest").font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
                         .help(StockSageGlossary.strategyHelp)
                     Text(store.strategyBacktest.map { "Tested \($0.symbolsTested)/\(StockSageStrategyBacktest.sampleSymbols.count) names, ~5 years — does the system hold up?" }
                          ?? "The advisor's rules across the sample (~\(StockSageStrategyBacktest.sampleSymbols.count) names), ~5 years — does the system hold up?")
