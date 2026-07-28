@@ -116,6 +116,25 @@ struct MarketsView: View {
     /// (its sm=10 / md=14 are off-grid); these roles apply ONLY to the ideas card +
     /// detail sheet. Values chosen so the surface tightens INSIDE groups (stack 8)
     /// and breathes BETWEEN groups (cardPad/section 12) — rhythm, not uniform padding.
+    /// Whether the detail sheet's pinned action bar may pin its labels to intrinsic width.
+    ///
+    /// macOS: YES — the sheet has a 440pt floor, so the labels always fit and `.fixedSize()`
+    /// keeps capsule widths stable through label transitions ("Copy plan" → "Copied").
+    ///
+    /// iPhone: NO. Those `.fixedSize()` calls made the bar's four buttons non-compressible;
+    /// their combined intrinsic width (~450pt with padding) exceeded a 402pt screen, so the
+    /// bar stretched the sheet's whole VStack wider than the viewport and EVERY row centred
+    /// and clipped — "Price" rendered as "rice", and the price itself lost a digit. A clipped
+    /// price on the primary decision surface is not cosmetic. Found by driving the device
+    /// 2026-07-28; the bar was sized for the macOS floor and never re-checked on a phone.
+    private static let barPinsLabelWidth: Bool = {
+        #if os(iOS)
+        return false
+        #else
+        return true
+        #endif
+    }()
+
     private enum IdeaSpace {
         static let chipH: CGFloat = 8    // tinted-chip horizontal inset (was 7 and 8)
         static let chipV: CGFloat = 3    // tinted-chip vertical inset (was 3 and 4)
@@ -1115,8 +1134,17 @@ struct MarketsView: View {
             Text(sec.title)
                 .font(.system(size: 15, weight: active ? .semibold : .regular))
                 .lineLimit(1)
+                // Selected LABEL stays white, not accent (contrast audit 2026-07-28): accent
+                // measures 3.89:1 on the card surface — under WCAG AA 4.5:1 for sub-18pt text.
+                // Lightening accent to clear AA lands on (0.99,0.48,0.55), which is visually
+                // indistinguishable from dangerSoft (1.0,0.50,0.50) — that trades a contrast
+                // bug for a semantic one ("selected" reading as "danger"). Selection is already
+                // carried by the accent bar, the accent icon, the row tint and semibold weight;
+                // the label does not need to be the fourth channel.
+                .foregroundStyle(Color.primary)
             Spacer(minLength: 0)
         }
+        // Icon + bar keep accent: non-text elements answer to the 3:1 bar, which accent clears.
         .foregroundStyle(active ? DS.Palette.accent : Color.primary)
         .padding(.trailing, DS.Space.md)
         .frame(minHeight: 44)
@@ -3831,8 +3859,17 @@ struct MarketsView: View {
                     .menuStyle(.borderlessButton).fixedSize()
                     .accessibilityLabel("Sort watchlist")
                 }
-                ForEach(sort.apply(displayed)) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()])
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                // LAZY (2026-07-28, owner: "the app lags so much when i open the all tab").
+                // The All tab's `displayed` is the WHOLE analyzed universe — ~900 names — and a
+                // plain VStack builds every signalCard eagerly on every body evaluation, on
+                // screen or not. Each card is itself non-trivial (sparkline, advisor lookup,
+                // target/stop, chips), so the tab paid ~900 card builds before it could show
+                // the first row. LazyVStack materialises only what is near the viewport.
+                // Watchlist is unaffected in practice (a handful of names) but shares the path.
+                LazyVStack(spacing: DS.Space.sm) {
+                    ForEach(sort.apply(displayed)) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()])
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                    }
                 }
             }
         }
@@ -4664,7 +4701,15 @@ struct MarketsView: View {
                     if let n = StockSageTadawulNames.displayLine(for: idea.symbol) {
                         Text(n).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    // Bounded (2026-07-28): unbounded, a long sector like "US Consumer
+                    // Discretionary (2000-expansion)" stacked FOUR lines in this narrow column
+                    // beside the action chip, pushing the whole card taller than its own
+                    // metrics. Two lines is the cap; the sector is orienting context, not the
+                    // decision content (that's the chips and the metric row below).
                     Text(idea.market).font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 // Badge row order: risk warnings FIRST (earnings/floor), then
@@ -4947,7 +4992,15 @@ struct MarketsView: View {
                                                         stop: stop, target: target,
                                                         winProb: a.conviction),
                        net > 0, net < rr {
+                        // "net" rides in the LABEL on iPhone (2026-07-28): as part of the value
+                        // the string outran its column and truncated to "2.0→1.4…", clipping the
+                        // net figure itself. A cut-off number is worse than a longer label —
+                        // the whole point of this metric is the gross→net drop.
+                        #if os(iOS)
+                        ideaMetric("R:R net", String(format: "%.1f→%.1f", rr, net))
+                        #else
                         ideaMetric("R:R", String(format: "%.1f→%.1f net", rr, net))
+                        #endif
                     } else {
                         ideaMetric("R:R", String(format: "%.1f", rr))
                     }
@@ -8387,7 +8440,9 @@ struct MarketsView: View {
                                     // Short label: the bar packs 3 buttons + the verdict chip into the
                                     // 440pt-minWidth sheet — long labels wrap mid-word (visual QA 2026-07-02).
                                     Text("Log trade").font(.system(size: mvFont11_5, weight: .semibold))
-                                        .lineLimit(1).fixedSize()
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: Self.barPinsLabelWidth, vertical: false)
+                                        .minimumScaleFactor(0.75)
                                 }
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 11).padding(.vertical, 6)
@@ -8408,11 +8463,19 @@ struct MarketsView: View {
                                     .contentTransition(.symbolEffect(.replace))
                                 // Fixed-width frame so the capsule width stays stable when the
                                 // label transitions from "Copy plan" (9 chars) to "Copied" (6).
-                                Text(planCopied ? "Copied" : "Copy plan")
-                                    .font(.system(size: mvFont11_5, weight: .semibold))
-                                    .frame(minWidth: 58, alignment: .leading)
-                                    .lineLimit(1).fixedSize()
-                                    .contentTransition(.opacity)
+                                // iPhone: icon only. With all four labels present the bar could
+                                // only fit by truncating every one ("Log t…", "Copy…", "Backt…"),
+                                // which is worst for the PRIMARY action. Dropping the two
+                                // secondary labels buys "Log trade" its full text; the
+                                // checkmark symbol transition still signals the copy landed,
+                                // and .help + accessibilityLabel carry the name for VoiceOver.
+                                if Self.barPinsLabelWidth {
+                                    Text(planCopied ? "Copied" : "Copy plan")
+                                        .font(.system(size: mvFont11_5, weight: .semibold))
+                                        .frame(minWidth: 58, alignment: .leading)
+                                        .lineLimit(1).fixedSize()
+                                        .contentTransition(.opacity)
+                                }
                             }
                             .foregroundStyle(.white).padding(.horizontal, 11).padding(.vertical, 6)
                             .background(Color.white.opacity(0.10), in: Capsule())
@@ -8420,6 +8483,9 @@ struct MarketsView: View {
                         }
                         .buttonStyle(LuxPressStyle())
                         .help("Copy a clean text trade plan (entry/stop/target/R:R/size/flags/scale-out) to the clipboard. Blocked setups are auto-skipped and exported as gate-status only.")
+                        // Explicit label: on iPhone this button is icon-only, so the Text no
+                        // longer supplies VoiceOver's name (it would fall back to the symbol).
+                        .accessibilityLabel(planCopied ? "Plan copied" : "Copy plan")
 
                         // Extension batch (2026-07-16): share/save the SAME plan text the Copy
                         // button produces (identical honesty flags — one source, no drift).
@@ -8428,8 +8494,11 @@ struct MarketsView: View {
                         Button { Task { await store.runBacktest(symbol: idea.symbol) } } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "clock.arrow.circlepath").font(.system(size: mvFont11, weight: .semibold))
-                                Text("Backtest 5y").font(.system(size: mvFont11_5, weight: .semibold))
-                                    .lineLimit(1).fixedSize()
+                                // iPhone: icon only — see the Copy-plan note above.
+                                if Self.barPinsLabelWidth {
+                                    Text("Backtest 5y").font(.system(size: mvFont11_5, weight: .semibold))
+                                        .lineLimit(1).fixedSize()
+                                }
                             }
                             .foregroundStyle(.white)
                             .padding(.horizontal, 11).padding(.vertical, 6)
@@ -8438,6 +8507,8 @@ struct MarketsView: View {
                         }
                         .buttonStyle(LuxPressStyle()).disabled(store.isBacktesting)
                         .help("Run a 5-year backtest of the advisor's rules on this symbol — results appear in the Evidence section")
+                        // Explicit label: icon-only on iPhone (see Copy plan).
+                        .accessibilityLabel("Backtest 5 years")
 
                         Spacer(minLength: 0)
 
