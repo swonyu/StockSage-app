@@ -1,0 +1,192 @@
+import Foundation
+
+// MARK: - StockSageDisclosureService
+//
+// "Has this been disclosed yet?" — the public-filing timeline for a symbol.
+//
+// **Why this exists.** Material information has a lifecycle: it starts inside the
+// company (material, non-public — trading on it is illegal), and at one specific
+// instant it becomes public. That instant is a filing's ACCEPTANCE time at the SEC.
+// This service reports that instant and nothing else. It is a *disclosure clock*,
+// not a signal: it answers "is this already public?", never "what is about to happen."
+//
+// **Source:** `data.sec.gov/submissions/CIK##########.json` — the SEC's own
+// submissions feed. Keyless, free, and authoritative (it IS the disclosure record,
+// not a vendor's copy of it). One request per symbol; the CIK map is fetched once.
+//
+// **Why not EDGAR full-text search.** `efts.sec.gov` searches document TEXT and
+// cannot tell you a filing's 8-K item codes. The submissions feed carries `items`
+// and `acceptanceDateTime` directly, which is exactly — and only — what a
+// disclosure clock needs.
+//
+// **Cost:** free / keyless, so it is safe under the app's local-first, never-spend
+// `.auto` philosophy. It IS network, so every fetch is gated by
+// `ToolPolicy.isExternalAllowed`, like every other feed in this subsystem.
+//
+// SEC's access policy requires a declared User-Agent identifying the client; we
+// send one. Requests are serialized with a small delay — the published fair-access
+// limit is 10 requests/second and we stay far under it.
+enum StockSageDisclosureService {
+
+    /// One public filing. `acceptedAt` is the moment it became public — the field
+    /// that matters — which is NOT the same as `filingDate` (a filing accepted at
+    /// 17:40 ET carries the next business day as its filing date).
+    struct Filing: Sendable, Equatable, Identifiable {
+        let accessionNumber: String
+        let form: String            // "8-K", "10-Q", "4", ...
+        let filingDate: Date
+        /// When the SEC accepted it = when it became public. nil if the feed omits it.
+        let acceptedAt: Date?
+        /// 8-K item codes, e.g. ["2.02", "9.01"]. Empty for forms that have none.
+        let items: [String]
+        let documentURL: URL?
+
+        var id: String { accessionNumber }
+
+        /// Plain-language reading of the 8-K item codes, for the ones that carry
+        /// the most price-relevant news. Unknown codes are passed through as-is
+        /// rather than guessed at — an unlabeled code is honest, a wrong label is not.
+        var itemDescriptions: [String] {
+            items.map { Self.itemNames[$0] ?? "Item \($0)" }
+        }
+
+        /// SEC 8-K item taxonomy (subset). Deliberately partial: these are the items
+        /// whose disclosure most often moves a price. Codes outside the map render
+        /// as "Item X.XX" — see `itemDescriptions`.
+        static let itemNames: [String: String] = [
+            "1.01": "Material agreement entered",
+            "1.02": "Material agreement terminated",
+            "1.03": "Bankruptcy or receivership",
+            "2.01": "Assets acquired or disposed",
+            "2.02": "Earnings released",
+            "2.03": "Direct financial obligation created",
+            "2.04": "Obligation accelerated",
+            "2.05": "Exit or disposal costs",
+            "2.06": "Material impairment",
+            "3.01": "Delisting notice / listing rule failure",
+            "4.01": "Auditor changed",
+            "4.02": "Prior financials no longer reliable",
+            "5.01": "Change in control",
+            "5.02": "Director or officer change",
+            "5.07": "Shareholder vote results",
+            "7.01": "Reg FD disclosure",
+            "8.01": "Other material event",
+            "9.01": "Exhibits",
+        ]
+    }
+
+    /// SEC asks that automated clients identify themselves. This is not optional
+    /// politeness — undeclared clients get blocked.
+    /// `nonisolated` so the nested `CIKMap` actor can read it off the main actor —
+    /// same reason `StockSageQuoteService.ua` is nonisolated.
+    nonisolated static let ua = "StockSageX/1.0 (github.com/Salman-bot; contact via app)"
+
+    // MARK: CIK lookup
+
+    /// ticker (uppercased) -> zero-padded 10-digit CIK. Fetched once per process:
+    /// the file is ~1 MB and changes at most daily, so re-fetching per lookup would
+    /// be pure waste.
+    private actor CIKMap {
+        static let shared = CIKMap()
+        private var map: [String: String]?
+
+        func cik(for symbol: String) async -> String? {
+            if map == nil { map = await Self.load() }
+            return map?[symbol.uppercased()]
+        }
+
+        private static func load() async -> [String: String] {
+            guard let url = URL(string: "https://www.sec.gov/files/company_tickers.json") else { return [:] }
+            var req = URLRequest(url: url)
+            req.setValue(ua, forHTTPHeaderField: "User-Agent")
+            guard let (data, _) = try? await URLSession.shared.data(for: req),
+                  // The file is a JSON object keyed by row index, not an array.
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return [:] }
+            var out: [String: String] = [:]
+            for case let row as [String: Any] in raw.values {
+                guard let ticker = row["ticker"] as? String,
+                      let cik = row["cik_str"] as? Int else { continue }
+                out[ticker.uppercased()] = String(format: "%010d", cik)
+            }
+            return out
+        }
+    }
+
+    // MARK: Public fetch
+
+    /// Recent public filings for a symbol, newest first.
+    ///
+    /// Returns `[]` — never throws — when external access is off, the ticker has no
+    /// CIK (non-US listings are absent from the SEC map), or the feed is unreachable.
+    /// An empty list means "nothing to show", NOT "nothing was filed": callers must
+    /// not render absence as evidence that a company has disclosed nothing.
+    static func recentFilings(for symbol: String,
+                              forms: Set<String> = ["8-K"],
+                              limit: Int = 20) async -> [Filing] {
+        guard ToolPolicy.isExternalAllowed else { return [] }
+        guard let cik = await CIKMap.shared.cik(for: symbol),
+              let url = URL(string: "https://data.sec.gov/submissions/CIK\(cik).json")
+        else { return [] }
+
+        var req = URLRequest(url: url)
+        req.setValue(ua, forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let filings = root["filings"] as? [String: Any],
+              let recent = filings["recent"] as? [String: Any]
+        else { return [] }
+
+        // The feed is column-oriented: parallel arrays sharing one index.
+        let formCol = recent["form"] as? [String] ?? []
+        let accCol = recent["accessionNumber"] as? [String] ?? []
+        let dateCol = recent["filingDate"] as? [String] ?? []
+        let acceptCol = recent["acceptanceDateTime"] as? [String] ?? []
+        let itemsCol = recent["items"] as? [String] ?? []
+        let docCol = recent["primaryDocument"] as? [String] ?? []
+
+        let day = ISO8601DateFormatter()
+        day.formatOptions = [.withFullDate]
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime]
+
+        var out: [Filing] = []
+        // Bound by the shortest column so a truncated feed can't index out of range.
+        let n = min(formCol.count, accCol.count, dateCol.count)
+        for i in 0..<n where forms.contains(formCol[i]) {
+            guard let filed = day.date(from: dateCol[i]) else { continue }
+            let acc = accCol[i]
+            let items = i < itemsCol.count
+                ? itemsCol[i].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                : []
+            // Document URL wants the accession number stripped of dashes in the path
+            // but intact in the filename — an EDGAR quirk, not a typo.
+            var docURL: URL?
+            if i < docCol.count, !docCol[i].isEmpty {
+                let bare = acc.replacingOccurrences(of: "-", with: "")
+                docURL = URL(string: "https://www.sec.gov/Archives/edgar/data/\(Int(cik) ?? 0)/\(bare)/\(docCol[i])")
+            }
+            out.append(Filing(
+                accessionNumber: acc,
+                form: formCol[i],
+                filingDate: filed,
+                acceptedAt: i < acceptCol.count ? stamp.date(from: acceptCol[i]) : nil,
+                items: items,
+                documentURL: docURL))
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
+    /// The one question this service exists to answer: is there a public filing for
+    /// `symbol` at or after `date`?
+    ///
+    /// Use it to check whether something a user heard about has actually been
+    /// disclosed yet. A `false` means "no filing found in the window we looked at" —
+    /// it is NOT a determination that the information is non-public, and must never
+    /// be presented as clearance to trade on anything.
+    static func hasDisclosure(for symbol: String, since date: Date) async -> Bool {
+        await recentFilings(for: symbol).contains { ($0.acceptedAt ?? $0.filingDate) >= date }
+    }
+}

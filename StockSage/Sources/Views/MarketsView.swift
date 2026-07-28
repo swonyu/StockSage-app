@@ -5579,6 +5579,35 @@ struct MarketsView: View {
             )
     }
 
+    /// "You already own this bet" (2026-07-28). Correlates the open idea against the positions
+    /// actually held — the gap StockSageCorrelationCluster left, since it only de-weights within
+    /// one proposed batch and never looks at the existing book. Uses the sparklines already on
+    /// the board, so it costs no network.
+    @ViewBuilder private func holdingOverlapRow(_ idea: StockSageIdea) -> some View {
+        let heldSymbols = Set(portfolio.positions.map { $0.symbol.uppercased() })
+        if !heldSymbols.isEmpty {
+            let candidateReturns = StockSagePortfolioAnalytics.dailyReturns(idea.spark)
+            let heldReturns: [String: [Double]] = Dictionary(
+                uniqueKeysWithValues: store.ideas
+                    .filter { heldSymbols.contains($0.symbol.uppercased()) }
+                    .map { ($0.symbol.uppercased(), StockSagePortfolioAnalytics.dailyReturns($0.spark)) })
+            let overlaps = StockSageHoldingOverlap.overlaps(candidate: idea.symbol,
+                                                            candidateReturns: candidateReturns,
+                                                            heldReturns: heldReturns)
+            if let warning = StockSageHoldingOverlap.warning(for: overlaps) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
+                    Text(warning)
+                        .font(.system(size: mvFont10)).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 2)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
     /// Recent insider activity from SEC Form 4 (2026-07-28). Shown in the idea sheet only.
     ///
     /// Answers the owner's MNPI question the lawful way: officers must disclose their own trades
@@ -7455,6 +7484,9 @@ struct MarketsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 sizingBrakeWaterfall(idea)
+                // Concentration check against the book already held — placed ABOVE the insider
+                // row deliberately: a risk warning outranks an information row.
+                holdingOverlapRow(idea)
                 // SEC Form 4 insider activity — the lawful answer to "can we use MNPI".
                 insiderRow()
                 if let stop = a.stopPrice, let target = a.targetPrice,
