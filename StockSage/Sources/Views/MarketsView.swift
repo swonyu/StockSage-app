@@ -353,6 +353,28 @@ struct MarketsView: View {
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.08), value: appeared)
                     erasedOnIOS(content)
+                        #if os(iOS)
+                        // SWIPE BETWEEN SECTIONS (2026-07-28): the seven tabs sit mid-scroll on a
+                        // phone, so reaching Briefing meant scroll-up-then-tap every time.
+                        // Attached to the section CONTENT, deliberately NOT to the whole board:
+                        // the tab strip above is itself a horizontal ScrollView, and a board-level
+                        // gesture fired while the user was merely scrolling the strip to see
+                        // "Briefing" — changing section under their finger.
+                        // Still guarded so it cannot fight vertical scrolling or the heatmap grid:
+                        // fires only when the drag is decisively horizontal (|dx| > 60 AND
+                        // |dx| > 2*|dy|). No wrap-around — the ends are walls (neighbour(after:)).
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 30)
+                                .onEnded { g in
+                                    let dx = g.translation.width, dy = g.translation.height
+                                    guard abs(dx) > 60, abs(dx) > abs(dy) * 2 else { return }
+                                    if let next = section.neighbour(after: dx < 0) {
+                                        withAnimation(DS.Motion.smooth) { section = next }
+                                    }
+                                }
+                        )
+                        .sensoryFeedback(.selection, trigger: section)
+                        #endif
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 6)
                         .animation(DS.Motion.lux.delay(0.12), value: appeared)
@@ -8377,6 +8399,16 @@ struct MarketsView: View {
 enum MarketSection: String, CaseIterable, Identifiable {
     case watchlist, ideas, all, heatmap, portfolio, alerts, briefing
     var id: String { rawValue }
+
+    /// Neighbour in tab order for swipe navigation (iOS). Deliberately does NOT wrap:
+    /// hitting a wall tells you where you are; silently teleporting from Briefing back to
+    /// Watchlist loses that orientation. nil at each end.
+    func neighbour(after: Bool) -> MarketSection? {
+        let all = Self.allCases
+        guard let i = all.firstIndex(of: self) else { return nil }
+        let j = after ? i + 1 : i - 1
+        return all.indices.contains(j) ? all[j] : nil
+    }
     var title: String {
         switch self {
         case .watchlist: return "Watchlist"
