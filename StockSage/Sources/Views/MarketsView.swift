@@ -154,6 +154,40 @@ struct MarketsView: View {
     }
     #endif
 
+    /// Teaching prose, collapsed by default on iPhone (owner 2026-07-28: "i dont like the
+    /// layout of everything"). The board spent 2–4 lines per card EXPLAINING itself before
+    /// showing anything actionable — four bullets and two paragraphs on the regime card, an
+    /// eight-line essay under Sizing brakes — which on a 402pt screen pushes the numbers you
+    /// act on below the fold.
+    ///
+    /// This is ONLY for definitions and methodology — text that teaches. It is never used for
+    /// a warning, a caveat, or a freshness claim: "EV win-rates are assumed", "NOT live",
+    /// "unvalidated" and the correlation warning all stay permanently visible, because a
+    /// caveat you have to tap to discover is a caveat that does not exist. The distinction is
+    /// the honesty floor, not a style choice.
+    ///
+    /// macOS renders it inline exactly as before — it has the room.
+    @ViewBuilder private func explainer(_ text: String) -> some View {
+        #if os(iOS)
+        DisclosureGroup {
+            Text(text)
+                .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+        } label: {
+            Text("How this works")
+                .font(.system(size: mvFont9, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .tint(.secondary)
+        .accessibilityHint(text)
+        #else
+        Text(text)
+            .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        #endif
+    }
+
     /// Market-group label as the iPhone shows it. Drops the universe-cohort suffix
     /// ("US Consumer Discretionary (2000-expansion)" → "US Consumer Discretionary"): the tag
     /// records which scan cohort a name entered from, which is bookkeeping, not a fact anyone
@@ -6168,8 +6202,7 @@ struct MarketsView: View {
                         }
                     }
                 }
-                Text("A spike marks a takeover and a collapse alike — direction here is description, not a forecast.")
-                    .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                explainer("A spike marks a takeover and a collapse alike — direction here is description, not a forecast.")
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(DS.Space.lg)
@@ -6704,8 +6737,7 @@ struct MarketsView: View {
                         .font(.system(size: mvFont9, weight: .medium))
                         .foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                 }
-                Text(MoneyVelocityCopy.fastLane)
-                    .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                explainer(MoneyVelocityCopy.fastLane)
                 // iPhone stacks these (2026-07-28). Side by side, "Hold est:" plus two 132pt
                 // steppers plus spacing needs ~360pt inside a card that has ~354pt, so each
                 // Stepper's label was squeezed to roughly ONE CHARACTER and wrapped per letter:
@@ -7239,8 +7271,7 @@ struct MarketsView: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(s.label) \(String(format: "%.1f", s.value * 100)) percent")
                     }
-                    Text("Correlation de-weighting and the heat cap apply at the portfolio level, not shown per-idea. Each brake is shown applied to Base independently — they compound in the Deploy plan. " + Self.sizeMetricHelp)
-                        .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    explainer("Correlation de-weighting and the heat cap apply at the portfolio level, not shown per-idea. Each brake is shown applied to Base independently — they compound in the Deploy plan. " + Self.sizeMetricHelp)
                 }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
