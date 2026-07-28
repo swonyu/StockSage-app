@@ -916,7 +916,16 @@ struct MarketsView: View {
         }
         if store.loadedFromCache, let saved = store.cacheSavedAt {
             // Use a date-aware format so a Friday cache opened Monday isn't shown as just "16:42".
+            #if os(iOS)
+            // Phone-compact (2026-07-28): the long form broke across lines mid-date
+            // ("as of 28 Jul / 2026 at 9:53 AM"), which reads as two different timestamps.
+            // Day+month+time still distinguishes a Friday cache opened on Monday — the whole
+            // point of the date-aware format — and the word "Cached" plus the live-banner
+            // directly below keep the not-live claim explicit. Year is the only thing dropped.
+            return "Cached \(saved.formatted(.dateTime.day().month(.abbreviated).hour().minute())) · refresh for live"
+            #else
             return "Last-good (cached) as of \(saved.formatted(date: .abbreviated, time: .shortened)) · refresh for live"
+            #endif
         }
         if store.isSampleData {
             // Be unmistakable that these are NOT real prices — tap refresh for live data.
