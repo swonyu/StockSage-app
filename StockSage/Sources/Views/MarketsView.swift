@@ -464,7 +464,7 @@ struct MarketsView: View {
             // away. Fade-only entrance (an offset would slide a PINNED bar over
             // content). Same auto-inset behavior as the bottom bar.
             .safeAreaInset(edge: .top, spacing: 0) {
-                header
+                headerBody
                     .opacity(appeared ? 1 : 0)
                     .animation(DS.Motion.lux, value: appeared)
                     .padding(.horizontal, DS.Space.xl)
@@ -852,7 +852,10 @@ struct MarketsView: View {
                 // Extension batch (2026-07-16): schedule-state clock for both markets — a
                 // SCHEDULE readout (holidays not modeled; the caveat is in its .help), never
                 // a data-freshness claim (that stays with the quote banner).
+                // iPhone renders the clocks BELOW this row at full width — see headerBody.
+                #if !os(iOS)
                 MarketSessionClockView()
+                #endif
             }
             Spacer()
             liveStreamIndicator
@@ -861,6 +864,21 @@ struct MarketsView: View {
             settingsButton
             #endif
         }
+    }
+
+    /// What the top bar actually renders. On iPhone the market clocks move out of the title
+    /// column onto their own full-width row (2026-07-28): sharing ~200pt with the refresh and
+    /// settings buttons truncated the Tadawul line to "Scheduled open 10:00 R…", eating the
+    /// countdown — which is the only actionable part of a schedule readout.
+    @ViewBuilder private var headerBody: some View {
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: 3) {
+            header
+            MarketSessionClockView()
+        }
+        #else
+        header
+        #endif
     }
 
     #if os(iOS)

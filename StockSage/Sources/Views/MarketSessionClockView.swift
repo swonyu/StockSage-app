@@ -26,9 +26,22 @@ struct MarketSessionClockView: View {
             Text("·")
             Text(state.phaseLabel + countdownSuffix(state.nextTransition))
         }
+        // NO layoutPriority here: giving the phase text priority starved the flag and market
+        // name to zero width, so the Tadawul row rendered as a bare "Scheduled open 10:00
+        // Riyadh (8m)" with no indication of WHICH market (caught on device 2026-07-28).
+        // The whole line shrinks together instead.
         .font(.system(size: 11))
+        // One market = one line (2026-07-28). Unbounded, a long phase like "Scheduled open
+        // 10:00 Riyadh (1h 4m)" wrapped inside the header's narrow column on iPhone, turning
+        // two clocks into four ragged lines and shoving the header taller than the content
+        // it labels. Shrink-to-fit rather than truncate: a clipped countdown is useless.
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
         .foregroundStyle(DS.Palette.textSecondary)
         .help(state.caveat)
+        // Both markets read as one status group to VoiceOver instead of four fragments.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(state.phaseLabel)")
     }
 
     private func countdownSuffix(_ next: Date?) -> String {
