@@ -1730,29 +1730,67 @@ final class StockSageStore: ObservableObject {
     /// place and stamps a real market time, so every downstream honesty surface (staleness
     /// badge, "live" banner, quoteAsOf) sees a genuinely fresh quote rather than a synthetic one.
     /// Ignores symbols not on the board — the stream must never invent a row.
+    /// Pending streamed ticks, keyed by symbol — only the NEWEST price per symbol matters, so
+    /// this is a dictionary rather than a queue.
+    private var pendingTicks: [String: (price: Double, at: Date?)] = [:]
+    private var tickFlushTask: Task<Void, Never>?
+    /// Coalescing window. A liquid name can print many trades per second; applying each one
+    /// individually would republish the whole board that many times and re-evaluate an
+    /// 8,000-line view with it. Two flushes a second is well past what an eye can follow and
+    /// turns an unbounded invalidation storm into a bounded one.
+    private static let tickFlushInterval = Duration.milliseconds(500)
+
+    /// Accept one streamed trade tick. Buffered, not applied immediately — see `flushPendingTicks`.
     func applyLiveTick(symbol: String, price: Double, at when: Date?) {
-        let key = symbol.uppercased()
-        guard price > 0, price.isFinite,
-              let i = symbols.firstIndex(where: { $0.symbol.uppercased() == key }) else { return }
-        let prev = symbols[i].quotes.first?.price ?? price
-        symbols[i] = StockSageSymbol(symbol: symbols[i].symbol, market: symbols[i].market, quotes: [
-            StockSageQuote(price: prev, previousPrice: prev,
-                           time: Date(timeIntervalSinceNow: -86_400)),
-            StockSageQuote(price: price, previousPrice: prev, marketTime: when ?? Date()),
-        ])
-        // A streamed trade IS a live observation — keep the board's freshness clock honest.
-        lastUpdated = Date()
-        quoteAsOf = when ?? Date()
-        // Mirror onto the matching idea so the card and the row can never disagree.
-        if let j = ideas.firstIndex(where: { $0.symbol.uppercased() == key }) {
-            ideas[j] = ideas[j].withLivePrice(price, asOf: when ?? Date())
+        guard price > 0, price.isFinite else { return }
+        pendingTicks[symbol.uppercased()] = (price, when)
+        guard tickFlushTask == nil else { return }
+        tickFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.tickFlushInterval)
+            guard let self else { return }
+            self.tickFlushTask = nil
+            self.flushPendingTicks()
         }
+    }
+
+    /// Apply every buffered tick in ONE pass, so the board republishes once per window instead
+    /// of once per trade.
+    private func flushPendingTicks() {
+        guard !pendingTicks.isEmpty else { return }
+        let batch = pendingTicks
+        pendingTicks = [:]
+        var newestMarketTime: Date?
+        for (key, tick) in batch {
+            guard let i = symbols.firstIndex(where: { $0.symbol.uppercased() == key }) else { continue }
+            let prev = symbols[i].quotes.first?.price ?? tick.price
+            let stamp = tick.at ?? Date()
+            symbols[i] = StockSageSymbol(symbol: symbols[i].symbol, market: symbols[i].market, quotes: [
+                StockSageQuote(price: prev, previousPrice: prev,
+                               time: Date(timeIntervalSinceNow: -86_400)),
+                StockSageQuote(price: tick.price, previousPrice: prev, marketTime: stamp),
+            ])
+            // Mirror onto the matching idea so the card and the row can never disagree.
+            if let j = ideas.firstIndex(where: { $0.symbol.uppercased() == key }) {
+                ideas[j] = ideas[j].withLivePrice(tick.price, asOf: stamp)
+            }
+            if newestMarketTime == nil || stamp > newestMarketTime! { newestMarketTime = stamp }
+        }
+        // A streamed trade IS a live observation — keep the freshness clock honest. NOTE this
+        // deliberately does NOT touch `lastFullRefreshAt`: work keyed to a full refresh (the
+        // catalyst rescan, which reads the whole history cache off disk) must never run per tick.
+        lastUpdated = Date()
+        if let newestMarketTime { quoteAsOf = newestMarketTime }
     }
 
     // Volume-confirmed catalysts (external-report item 9) — computed from the SAME on-disk
     // history the scan already caches, so surfacing them costs zero extra network calls.
     // Empty until a scan has cached histories; empty is the honest state, never a placeholder.
     @Published private(set) var catalysts: [StockSageCatalyst.Signal] = []
+
+    /// Stamped ONLY by a full `refresh()` — never by a streamed tick. Expensive derived work
+    /// (the catalyst rescan reloads the entire on-disk history) keys off this instead of
+    /// `lastUpdated`, which now moves twice a second while streaming.
+    @Published private(set) var lastFullRefreshAt: Date?
 
     /// Recompute catalysts from cached history. Pure read of what is already on disk — no
     /// fetching, so it is safe to call after any scan/refresh without touching the API budget.
@@ -2024,6 +2062,7 @@ final class StockSageStore: ObservableObject {
         // exactly what a throttled/partial sweep left behind — retry those alone, once.
         await healStaleQuotes()
         lastUpdated = Date()
+        lastFullRefreshAt = Date()
         // Newest MARKET time across the priced quotes — the banner uses this (not fetch time) to
         // tell live from a stale close. nil when the feed omitted timestamps for all of them.
         quoteAsOf = quotes.values.compactMap(\.marketTime).max()

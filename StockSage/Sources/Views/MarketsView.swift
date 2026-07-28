@@ -407,7 +407,9 @@ struct MarketsView: View {
             .sensoryFeedback(.success, trigger: store.lastUpdated)
             // Auto-refresh (owner cadence 2026-07-27 23:53: 4.75 minutes = 285s). task(id:)
             // restarts the loop when the toggle flips; sleep is cancellation-aware.
-            .task(id: store.lastUpdated) { await store.refreshCatalysts() }
+            // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
+            // entire on-disk history, and lastUpdated now moves twice a second while streaming.
+            .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
             // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). Subscribes
             // the board's US names to EODHD's trade socket; prices then move on their own. Saudi
             // names have no stream (EODHD carries no Saudi exchange) and keep polling.
