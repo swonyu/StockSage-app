@@ -4307,6 +4307,35 @@ struct MarketsView: View {
         StockSageIdeaProjection.rewardRisk(idea)
     }
 
+    /// Ideas-card blurb + the EV-calibration honesty caveat. Extracted 2026-07-28 so the phone
+    /// can render it at full width beneath the title row instead of inside it — the caveat is a
+    /// primary honesty surface and must stay legible, never compressed into a narrow column.
+    @ViewBuilder private var ideasHeaderBlurb: some View {
+        Text("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
+        // assumed — right where they're read. F01/F02: keyed on the calibration METHOD,
+        // not on non-nil (an identity calibration is an assumption, not a measurement).
+        if let cal = store.convictionCalibration {
+            if cal.method == .identity {
+                Label("EV win-rates are assumed (identity floor) — conviction, capped at the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior when the sample is too thin to validate out-of-sample, used as win% until a fit beats it out-of-sample", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(cal.chipHelp)
+            } else {
+                Label("EV win-rates \(cal.method == .platt ? "fitted" : "measured") from \(cal.sampleSize) realized trades (your journal, else the backtest)", systemImage: "checkmark.seal.fill")
+                    .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.successSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(cal.chipHelp)
+            }
+        } else {
+            Label("EV win-rates are an assumed estimate — run the Strategy backtest to calibrate", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                .help("Until a backtest runs, EV uses a cautious hand-set win-prob band (\(StockSageExpectedValue.assumedWinBandLabel)), not measured rates.")
+        }
+    }
+
     private var ideasHeader: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack(spacing: DS.Space.sm) {
@@ -4314,26 +4343,12 @@ struct MarketsView: View {
                     .font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Trade ideas").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
-                    Text("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
-                    // assumed — right where they're read. F01/F02: keyed on the calibration METHOD,
-                    // not on non-nil (an identity calibration is an assumption, not a measurement).
-                    if let cal = store.convictionCalibration {
-                        if cal.method == .identity {
-                            Label("EV win-rates are assumed (identity floor) — conviction, capped at the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior when the sample is too thin to validate out-of-sample, used as win% until a fit beats it out-of-sample", systemImage: "exclamationmark.triangle.fill")
-                                .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
-                                .help(cal.chipHelp)
-                        } else {
-                            Label("EV win-rates \(cal.method == .platt ? "fitted" : "measured") from \(cal.sampleSize) realized trades (your journal, else the backtest)", systemImage: "checkmark.seal.fill")
-                                .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.successSoft)
-                                .help(cal.chipHelp)
-                        }
-                    } else {
-                        Label("EV win-rates are an assumed estimate — run the Strategy backtest to calibrate", systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
-                            .help("Until a backtest runs, EV uses a cautious hand-set win-prob band (\(StockSageExpectedValue.assumedWinBandLabel)), not measured rates.")
-                    }
+                    // iPhone: the blurb + calibration caveat render BELOW this row at full width
+                    // (see after the HStack). Sharing the row with the Find-ideas button left them
+                    // ~200pt on a 402pt screen, wrapping the sentence into a 5-line ribbon.
+                    #if !os(iOS)
+                    ideasHeaderBlurb
+                    #endif
                 }
                 Spacer()
                 // EXPORT-03: sample/QA-seeded prices are indistinguishable from live once pasted —
@@ -4423,6 +4438,10 @@ struct MarketsView: View {
                 Text("Scanning the \(StockSageUniverse.worldwide.count)-name universe — first scan of the day takes several minutes; results stream in as they complete.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            // iPhone: blurb + calibration caveat at FULL card width, below the title/CTA row.
+            #if os(iOS)
+            ideasHeaderBlurb
+            #endif
             if let when = store.ideasUpdated {
                 // POST2420-COPY item 1(b): a re-scan already in progress must never instruct
                 // the user to start one — `store.ideasIsStale` is keyed on `ideasUpdated`,
