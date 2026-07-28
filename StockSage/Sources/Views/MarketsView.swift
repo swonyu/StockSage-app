@@ -4375,6 +4375,21 @@ struct MarketsView: View {
                     .accessibilityLabel("Search ideas by symbol")
                     Spacer()
                 }
+                // SCROLL THIS ROW ON iPHONE (root cause of the clipped nav drawer, found by
+                // bisecting sections on device 2026-07-29: the drawer rendered perfectly on
+                // Briefing and clipped only on Ideas).
+                //
+                // Three .fixedSize() Menus ("Sort: EV / day", "Filter", "Signal strength") plus a
+                // width:84 search capsule sum to ~440pt of NON-COMPRESSIBLE content on a 402pt
+                // screen. That demand widened the board's VStack past the viewport, and the nav
+                // drawer — an .overlay on that same VStack — had its leading ~20pt pushed
+                // off-screen, rendering "Sections" as "ections".
+                //
+                // Same failure class as the detail sheet's action bar: fixed-width children
+                // summing past the screen. Scrolling contains the demand instead of leaking it.
+                #if os(iOS)
+                .modifier(HScrollStrip())
+                #endif
                 // Bind once — displayedIdeas re-runs a full velocity re-rank (≈3 NetEdge evals/idea
                 // + sort) on every access; the three sites below used to each call it separately.
                 let shown = displayedIdeas
