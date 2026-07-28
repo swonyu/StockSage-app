@@ -4510,8 +4510,9 @@ struct MarketsView: View {
     /// can render it at full width beneath the title row instead of inside it — the caveat is a
     /// primary honesty surface and must stay legible, never compressed into a narrow column.
     @ViewBuilder private var ideasHeaderBlurb: some View {
-        Text("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
-            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        // Definition of the scan's scope — teaching, so it collapses. The EV-calibration
+        // caveat immediately below is a WARNING and stays permanently visible.
+        explainer("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
         // assumed — right where they're read. F01/F02: keyed on the calibration METHOD,
         // not on non-nil (an identity calibration is an assumption, not a measurement).
@@ -5336,8 +5337,7 @@ struct MarketsView: View {
             // iPhone: description at FULL card width — beside the switch it wrapped to three
             // lines and collided with the toggle's touch target.
             #if os(iOS)
-            Text("Flags when an idea turns bullish/bearish or its price crosses the advised stop or target — between refreshes.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            explainer("Flags when an idea turns bullish/bearish or its price crosses the advised stop or target — between refreshes.")
             #endif
             if !store.alertsEnabled {
                 Text("Off — turn on, then refresh ideas to start detecting events. Events fire on a crossing, so they don't repeat every refresh.")
