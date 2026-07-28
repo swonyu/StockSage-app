@@ -434,6 +434,18 @@ struct MarketsView: View {
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.05), value: appeared)
                         .transition(.opacity.combined(with: .offset(y: -4)))
+                    // ── iPhone reading order (owner 2026-07-28: "wrong order — wrong things on
+                    // top"). The section the user actually SELECTED renders here, directly under
+                    // the freshness banner, instead of below five context cards. Previously
+                    // reaching your own ideas meant scrolling past regime → forward-test →
+                    // catalysts → money-velocity → CTA every single time.
+                    //
+                    // feedBanner stays above it: it states whether prices are live, and a
+                    // staleness claim must be read BEFORE the numbers it qualifies, never after.
+                    // Context cards still render — just below the thing you came for.
+                    #if os(iOS)
+                    sectionContent
+                    #endif
                     erasedOnIOS(regimeCard)
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
@@ -472,37 +484,11 @@ struct MarketsView: View {
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.08), value: appeared)
                     #endif
-                    erasedOnIOS(content)
-                        #if os(iOS)
-                        // SWIPE BETWEEN SECTIONS (2026-07-28): the seven tabs sit mid-scroll on a
-                        // phone, so reaching Briefing meant scroll-up-then-tap every time.
-                        // Attached to the section CONTENT, deliberately NOT to the whole board:
-                        // the tab strip above is itself a horizontal ScrollView, and a board-level
-                        // gesture fired while the user was merely scrolling the strip to see
-                        // "Briefing" — changing section under their finger.
-                        // Still guarded so it cannot fight vertical scrolling or the heatmap grid:
-                        // fires only when the drag is decisively horizontal (|dx| > 60 AND
-                        // |dx| > 2*|dy|). No wrap-around — the ends are walls (neighbour(after:)).
-                        .simultaneousGesture(
-                            DragGesture(minimumDistance: 30)
-                                .onEnded { g in
-                                    let dx = g.translation.width, dy = g.translation.height
-                                    guard abs(dx) > 60, abs(dx) > abs(dy) * 2 else { return }
-                                    // Leading-edge drags belong to the nav drawer (2026-07-28).
-                                    // Both gestures are `simultaneous`, so without this guard one
-                                    // rightward edge swipe would open the drawer AND step back a
-                                    // section — two navigations from one intent.
-                                    guard g.startLocation.x > 44 else { return }
-                                    if let next = section.neighbour(after: dx < 0) {
-                                        withAnimation(DS.Motion.smooth) { section = next }
-                                    }
-                                }
-                        )
-                        .sensoryFeedback(.selection, trigger: section)
-                        #endif
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 6)
-                        .animation(DS.Motion.lux.delay(0.12), value: appeared)
+                    // macOS keeps the original reading order: context first, section last.
+                    // On iPhone `sectionContent` is rendered ABOVE, right under the banner.
+                    #if !os(iOS)
+                    sectionContent
+                    #endif
                 }
                 .animation(DS.Motion.smooth, value: store.isSampleData)
                 .padding(DS.Space.xl)
@@ -881,6 +867,39 @@ struct MarketsView: View {
     /// on-screen caption both call this on the SAME computed `EffectiveBets`, so they can't drift).
     static func effectiveBetsCaption(_ eb: EffectiveBets) -> String {
         String(format: "Effective bets ≈ %.1f of %d — correlated positions count less", eb.nEff, eb.n)
+    }
+
+    /// The section the user selected, plus the iPhone swipe-between-sections gesture.
+    /// Extracted 2026-07-28 so the phone can render it FIRST (directly under the freshness
+    /// banner) while macOS keeps it last — one definition, so the gesture and the entrance
+    /// animation cannot drift between the two orders.
+    @ViewBuilder private var sectionContent: some View {
+        erasedOnIOS(content)
+            #if os(iOS)
+            // SWIPE BETWEEN SECTIONS: attached to the section CONTENT, deliberately not the
+            // whole board — a board-level gesture fired while the user was merely scrolling
+            // a horizontal strip, changing section under their finger. Guarded so it cannot
+            // fight vertical scrolling or the heatmap grid: fires only when the drag is
+            // decisively horizontal (|dx| > 60 AND |dx| > 2*|dy|). No wrap-around.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 30)
+                    .onEnded { g in
+                        let dx = g.translation.width, dy = g.translation.height
+                        guard abs(dx) > 60, abs(dx) > abs(dy) * 2 else { return }
+                        // Leading-edge drags belong to the nav drawer: both gestures are
+                        // `simultaneous`, so without this guard one rightward edge swipe would
+                        // open the drawer AND step back a section — two navigations, one intent.
+                        guard g.startLocation.x > 44 else { return }
+                        if let next = section.neighbour(after: dx < 0) {
+                            withAnimation(DS.Motion.smooth) { section = next }
+                        }
+                    }
+            )
+            .sensoryFeedback(.selection, trigger: section)
+            #endif
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 6)
+            .animation(DS.Motion.lux.delay(0.12), value: appeared)
     }
 
     private var header: some View {
