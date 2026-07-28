@@ -1726,6 +1726,29 @@ final class StockSageStore: ObservableObject {
         }.value
     }
 
+    /// Apply one streamed trade tick (StockSageLiveStream). Updates the board row's price in
+    /// place and stamps a real market time, so every downstream honesty surface (staleness
+    /// badge, "live" banner, quoteAsOf) sees a genuinely fresh quote rather than a synthetic one.
+    /// Ignores symbols not on the board — the stream must never invent a row.
+    func applyLiveTick(symbol: String, price: Double, at when: Date?) {
+        let key = symbol.uppercased()
+        guard price > 0, price.isFinite,
+              let i = symbols.firstIndex(where: { $0.symbol.uppercased() == key }) else { return }
+        let prev = symbols[i].quotes.first?.price ?? price
+        symbols[i] = StockSageSymbol(symbol: symbols[i].symbol, market: symbols[i].market, quotes: [
+            StockSageQuote(price: prev, previousPrice: prev,
+                           time: Date(timeIntervalSinceNow: -86_400)),
+            StockSageQuote(price: price, previousPrice: prev, marketTime: when ?? Date()),
+        ])
+        // A streamed trade IS a live observation — keep the board's freshness clock honest.
+        lastUpdated = Date()
+        quoteAsOf = when ?? Date()
+        // Mirror onto the matching idea so the card and the row can never disagree.
+        if let j = ideas.firstIndex(where: { $0.symbol.uppercased() == key }) {
+            ideas[j] = ideas[j].withLivePrice(price, asOf: when ?? Date())
+        }
+    }
+
     // Volume-confirmed catalysts (external-report item 9) — computed from the SAME on-disk
     // history the scan already caches, so surfacing them costs zero extra network calls.
     // Empty until a scan has cached histories; empty is the honest state, never a placeholder.

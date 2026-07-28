@@ -168,6 +168,16 @@ struct MarketsView: View {
     @State private var journalDataFeedback: String?
     /// iOS Settings sheet (owner directive 2026-07-27: gear next to refresh).
     @State private var showIOSSettings = false
+    @State private var livePulse = false
+    /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
+    /// than a refresh button.
+    @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
+    /// Recompute the subscription only when the SET of board symbols changes — not on every
+    /// price tick, which would tear the socket down and rebuild it continuously.
+    private var streamSubscriptionKey: String {
+        liveStreamEnabled ? StockSageLiveStream.streamable(store.symbols.map(\.symbol)).joined(separator: ",") : ""
+    }
+
     /// Auto-refresh (owner: every 7 minutes while the app is open). Cross-platform — the
     /// mac window benefits identically; iOS suspends the task with the scene.
     @AppStorage("stocksage.autoRefresh") private var autoRefreshEnabled = true
@@ -398,6 +408,13 @@ struct MarketsView: View {
             // Auto-refresh (owner cadence 2026-07-27 23:53: 4.75 minutes = 285s). task(id:)
             // restarts the loop when the toggle flips; sleep is cancellation-aware.
             .task(id: store.lastUpdated) { await store.refreshCatalysts() }
+            // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). Subscribes
+            // the board's US names to EODHD's trade socket; prices then move on their own. Saudi
+            // names have no stream (EODHD carries no Saudi exchange) and keep polling.
+            .task(id: streamSubscriptionKey) {
+                guard liveStreamEnabled else { StockSageLiveStream.shared.stop(); return }
+                StockSageLiveStream.shared.start(symbols: store.symbols.map(\.symbol))
+            }
             .task(id: autoRefreshEnabled) {
                 guard autoRefreshEnabled else { return }
                 while !Task.isCancelled {
@@ -749,6 +766,7 @@ struct MarketsView: View {
                 MarketSessionClockView()
             }
             Spacer()
+            liveStreamIndicator
             refreshButton
             #if os(iOS)
             settingsButton
@@ -798,6 +816,24 @@ struct MarketsView: View {
             return "⚠︎ SAMPLE prices (not real) — tap ↻ to load live data"
         }
         return "Rule-based momentum signals · educational, not financial advice"
+    }
+
+    /// Pulsing dot shown ONLY while the socket is genuinely open — bound to isStreaming, so it
+    /// can never claim "live" over a dropped connection (the honesty floor applies to indicators
+    /// exactly as it applies to prices).
+    @ViewBuilder private var liveStreamIndicator: some View {
+        if liveStreamEnabled, StockSageLiveStream.shared.isStreaming {
+            HStack(spacing: 4) {
+                Circle().fill(DS.Palette.successSoft).frame(width: 6, height: 6)
+                    .opacity(livePulse ? 1 : 0.25)
+                    .animation(.easeInOut(duration: 1).repeatForever(autoreverses: true), value: livePulse)
+                Text("LIVE").font(.system(size: mvFont9, weight: .bold))
+                    .foregroundStyle(DS.Palette.successSoft)
+            }
+            .accessibilityLabel("Live streaming prices")
+            .help("Streaming trades in real time for US names. Saudi names refresh on the timer — no stream exists for that exchange.")
+            .onAppear { livePulse = true }
+        }
     }
 
     private var refreshButton: some View {

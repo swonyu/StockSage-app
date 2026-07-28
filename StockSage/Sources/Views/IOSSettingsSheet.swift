@@ -8,6 +8,7 @@ import SwiftUI
 struct StockSageIOSSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("stocksage.autoRefresh") private var autoRefresh = true
+    @AppStorage("stocksage.liveStream") private var liveStream = true
     @AppStorage("stocksage.horizon") private var horizon = "short"
     @AppStorage(StockSageNotifyPrefs.strongSignalsKey) private var notifyStrong = true
     @AppStorage(StockSageNotifyPrefs.ideaAlertsKey) private var notifyIdeas = true
@@ -21,11 +22,14 @@ struct StockSageIOSSettingsSheet: View {
         NavigationStack {
             Form {
                 Section {
+                    Toggle("Real-time streaming", isOn: $liveStream)
                     Toggle("Auto-refresh live markets", isOn: $autoRefresh)
                 } header: {
                     Text("Live data")
                 } footer: {
-                    Text("Refreshes quotes every 4.75 minutes while the app is open. The refresh button always works regardless.")
+                    Text(liveStream
+                         ? "US names stream trade-by-trade while the app is open — prices move on their own. Saudi names have no stream (the data vendor carries no Saudi exchange), so the timer below covers them every 4.75 minutes."
+                         : "Streaming off — prices update on the 4.75-minute timer and the refresh button only.")
                 }
 
                 Section {
