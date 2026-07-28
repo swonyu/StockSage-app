@@ -1,5 +1,8 @@
 import UniformTypeIdentifiers
 import SwiftUI
+#if os(iOS)
+import WidgetKit
+#endif
 import UserNotifications   // permission read for the price-alerts denied banner
 
 /// The Markets tab — now wired to the live `StockSage` subsystem: per-symbol
@@ -480,13 +483,16 @@ struct MarketsView: View {
             // thing"). The grip rides the leading edge, vertically centred so it sits under the
             // thumb; the drawer slides over the board rather than insetting it, so the board
             // keeps its full width when closed.
+            // Drawer first, grip SECOND: overlays stack in declaration order, so the grip must
+            // come last or the drawer's full-bleed layer sits on top of it and swallows the tap
+            // (verified on device 2026-07-28 — swipe opened the drawer, the grip did nothing).
+            .overlay(alignment: .leading) { phoneNavDrawer }
             .overlay(alignment: .leading) {
                 phoneNavHandle
                     .padding(.leading, 2)
                     .opacity(appeared ? 1 : 0)
                     .animation(DS.Motion.lux, value: appeared)
             }
-            .overlay(alignment: .leading) { phoneNavDrawer }
             // Edge swipe to open — the drawer's expected gesture. Bounded to a pull that starts
             // near the leading edge and is decisively horizontal, so it cannot fight the board's
             // vertical scroll or the existing section swipe attached to `content`.
@@ -514,6 +520,11 @@ struct MarketsView: View {
             // rather than defaulting to false (which would make the running monitor unstoppable).
             monitoring = StockSageMonitor.shared.isRunning
         }
+        // Home-screen widget feed (2026-07-28). Written HERE rather than in the store because
+        // every input — best opportunity, the account size heat needs, the paper book — is
+        // already computed on this view; recomputing them in the store would be a second source
+        // of truth for numbers the owner reads side by side.
+        .onChange(of: store.ideasUpdated) { _, _ in writeWidgetSnapshot() }
         .task {
             // Auto-pull a live Tadawul+NASDAQ snapshot on open — skipped under the QA
             // snapshot harness so captures stay deterministic and offline.
@@ -804,10 +815,22 @@ struct MarketsView: View {
                 HStack(spacing: 6) {
                     Text("Markets")
                         .font(.system(size: mvFont17, weight: .semibold)).foregroundStyle(.white)
+                    // The "Signals & Portfolio" eyebrow is macOS-only (2026-07-28). On a 402pt
+                    // phone the header already carries an icon, title, subtitle, two market
+                    // clocks and three buttons; the eyebrow had no room and word-wrapped inside
+                    // its own pill — rendering as "SIGNAL / S & / PORTF / OLIO". It is pure
+                    // decoration, so the phone drops it rather than shrinking real content.
+                    #if !os(iOS)
                     Eyebrow(text: "Signals & Portfolio")
+                    #endif
                 }
                 Text(headerSubtitle)
                     .font(.system(size: mvFont11)).foregroundStyle(.secondary)
+                    // Bound the wrap: this string grows to a full freshness sentence, and
+                    // unbounded it took three lines and shoved the clocks off the header.
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
                     .contentTransition(.opacity)
                     .animation(DS.Motion.smooth, value: headerSubtitle)
                 // Extension batch (2026-07-16): schedule-state clock for both markets — a
@@ -986,8 +1009,10 @@ struct MarketsView: View {
     private var phoneNavDrawer: some View {
         ZStack(alignment: .leading) {
             // Scrim. Only hit-testable while open, so it never eats board taps when closed.
+            // NOT .ignoresSafeArea(): that expanded the ZStack past its parent's leading edge
+            // and dragged the panel ~20pt off-screen, clipping the icons and the "Sections"
+            // heading (seen on device 2026-07-28).
             Color.black.opacity(navOpen ? 0.35 : 0)
-                .ignoresSafeArea()
                 .allowsHitTesting(navOpen)
                 .onTapGesture { withAnimation(DS.Motion.smooth) { navOpen = false } }
 
@@ -1040,6 +1065,7 @@ struct MarketsView: View {
             RoundedRectangle(cornerRadius: 2)
                 .fill(active ? DS.Palette.accent : .clear)
                 .frame(width: 3, height: 20)
+                .padding(.leading, DS.Space.xs)
             Image(systemName: sec.icon)
                 .font(.system(size: 15, weight: active ? .semibold : .regular))
                 .frame(width: 22, alignment: .center)
@@ -1061,16 +1087,21 @@ struct MarketsView: View {
     /// opens the drawer; it is the discoverable affordance for the edge swipe, since a
     /// swipe-only drawer is invisible to anyone who doesn't already know it's there.
     private var phoneNavHandle: some View {
-        Button { withAnimation(DS.Motion.smooth) { navOpen.toggle() } } label: {
-            Image(systemName: navOpen ? "chevron.left" : "chevron.right")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 56)
-                .glassEffect(.regular, in: .rect(cornerRadius: 13))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(navOpen ? "Close sections" : "Open sections")
-        .opacity(navOpen ? 0 : 1)
+        // Deliberately NOT a Button: as a Button in an overlay above the board's ScrollView the
+        // tap never reached the action (verified twice on device 2026-07-28 — the edge swipe
+        // opened the drawer, the grip did nothing, before AND after fixing overlay order).
+        // An explicit contentShape + onTapGesture hit-tests reliably here.
+        Image(systemName: "chevron.right")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(.secondary)
+            .frame(width: 30, height: 60)
+            .glassEffect(.regular, in: .rect(cornerRadius: 15))
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(DS.Motion.smooth) { navOpen = true } }
+            .opacity(navOpen ? 0 : 1)
+            .allowsHitTesting(!navOpen)
+            .accessibilityLabel("Open sections")
+            .accessibilityAddTraits(.isButton)
     }
     #endif
 
@@ -5758,6 +5789,42 @@ struct MarketsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// Publish the home-screen widget's snapshot after a scan (2026-07-28).
+    ///
+    /// iOS only: App Groups are the only channel to a widget's separate process, and the macOS
+    /// build has no such group registered — writing there would fail silently every scan.
+    ///
+    /// Every figure is taken from the SAME expression the on-screen card uses, never recomputed a
+    /// second way. A widget that disagrees with the app it came from is worse than no widget.
+    private func writeWidgetSnapshot() {
+        #if os(iOS)
+        let best = StockSageExpectedValue.bestOpportunity(
+            store.ideas, regime: store.regime, earnings: store.earnings,
+            liquidity: store.liquidity, seasonality: store.seasonality,
+            calibration: store.convictionCalibration)
+        // Heat needs an account size the owner may never have entered. nil when it is unknown —
+        // the widget then omits the line rather than printing a reassuring, false 0.0%.
+        let heatPct: Double? = parsedAccount.map { acct in
+            paperStore.open.reduce(0.0) { sum, t in
+                sum + (abs(t.entry - t.stop) * t.shares) / acct
+            } * 100
+        }
+        StockSageWidgetSnapshot(
+            asOf: Date(),
+            bestSymbol: best?.idea.symbol,
+            bestAction: best?.idea.advice.action.rawValue,
+            bestStrength: best.map { Self.ordinalStrengthLevel($0.idea.advice.conviction) },
+            openPositions: paperStore.open.count,
+            portfolioHeatPct: heatPct,
+            heatCapPct: 8,
+            forwardCloses: paperStore.closed.compactMap(\.realizedR).count,
+            forwardNeeded: 4,
+            isSampleData: store.isSampleData
+        ).save()
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
     }
 
     /// Recent 8-K filings — the disclosure clock (2026-07-28). Idea sheet only.
