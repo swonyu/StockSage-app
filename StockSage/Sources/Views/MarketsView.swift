@@ -169,6 +169,10 @@ struct MarketsView: View {
     /// iOS Settings sheet (owner directive 2026-07-27: gear next to refresh).
     @State private var showIOSSettings = false
     @State private var livePulse = false
+    /// Insider activity for the OPEN idea sheet only — fetched on demand (3 SEC hops per symbol),
+    /// never swept across the board.
+    @State private var insiderSummary: StockSageInsider.Summary?
+    @State private var insiderLoading = false
     /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
     /// than a refresh button.
     @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
@@ -3731,6 +3735,30 @@ struct MarketsView: View {
                     }
                 }
                 Text(stale ? "\(sym.market) · stale" : sym.market).font(.caption2).foregroundStyle(.secondary)
+                // Target/stop for this row come from the ADVISOR's plan (ideas board), never from
+                // StockSageSignalEngine — that engine maps |Δ%| to a recommendation and has no
+                // stop/target concept, so deriving a risk level from it would fabricate one.
+                // Each leg renders ONLY when the advisor resolved it: stopPrice/targetPrice are
+                // Optional precisely because a short history yields no ATR stop, and the honesty
+                // floor shows nothing rather than a guess. A symbol with no idea yet (board not
+                // scanned, or an Index — buildIdeas skips that class) renders exactly as before.
+                if let advice = idea?.advice, advice.stopPrice != nil || advice.targetPrice != nil {
+                    HStack(spacing: DS.Space.xs) {
+                        if let target = advice.targetPrice {
+                            Text("T \(adaptivePrice(target))")
+                                .font(.system(size: mvFont10, weight: .medium))
+                                .foregroundStyle(DS.Palette.successSoft)
+                                .accessibilityLabel("Target \(adaptivePrice(target))")
+                        }
+                        if let stop = advice.stopPrice {
+                            Text("S \(adaptivePrice(stop))")
+                                .font(.system(size: mvFont10, weight: .medium))
+                                .foregroundStyle(DS.Palette.dangerSoft)
+                                .accessibilityLabel("Stop \(adaptivePrice(stop))")
+                        }
+                    }
+                    .help("Advisor target and stop from the last ideas scan, fixed against the quote at that time — they drift as the market moves. A plan, not a prediction.")
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
@@ -4646,6 +4674,15 @@ struct MarketsView: View {
                     ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
                 } else {
                     ideaMetric("Price", adaptivePrice(idea.price))
+                        .task(id: idea.symbol) {
+                            // SEC Form 4 — public disclosure, fetched only for the sheet the owner
+                            // actually opened. US listings only; .SR returns nil and renders nothing.
+                            insiderSummary = nil
+                            guard !idea.symbol.contains(".") else { return }
+                            insiderLoading = true
+                            insiderSummary = await StockSageInsider.recentActivity(for: idea.symbol)
+                            insiderLoading = false
+                        }
                         // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
                         // live quote; on success the store relabels the idea and we re-point the
                         // sheet at the refreshed copy (same id — the sheet updates in place).
@@ -5540,6 +5577,51 @@ struct MarketsView: View {
                     style: StrokeStyle(lineWidth: 1, dash: assumed ? [3, 2] : [])
                 )
             )
+    }
+
+    /// Recent insider activity from SEC Form 4 (2026-07-28). Shown in the idea sheet only.
+    ///
+    /// Answers the owner's MNPI question the lawful way: officers must disclose their own trades
+    /// within two business days, and acting on that public disclosure is legal. The design point
+    /// is the transaction CODE — option exercises and tax withholding are excluded because the
+    /// insider chose nothing, and pretending otherwise would manufacture a signal out of payroll.
+    @ViewBuilder private func insiderRow() -> some View {
+        if insiderLoading {
+            Text("Checking SEC filings…").font(.system(size: mvFont9)).foregroundStyle(.secondary)
+        } else if let s = insiderSummary {
+            VStack(alignment: .leading, spacing: 3) {
+                if s.discretionary.isEmpty {
+                    // "Nothing filed" and "filings exist, none of them a decision" are different
+                    // facts and must read differently.
+                    Text(s.nonDiscretionaryCount > 0
+                         ? "Insiders: \(s.nonDiscretionaryCount) recent filing\(s.nonDiscretionaryCount == 1 ? "" : "s"), none an open-market trade (option exercises / tax withholding)."
+                         : "Insiders: no recent Form 4 filings.")
+                        .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                } else {
+                    let buys = s.discretionary.filter { $0.code == .openMarketPurchase }
+                    let sells = s.discretionary.filter { $0.code == .openMarketSale }
+                    HStack(spacing: 6) {
+                        Image(systemName: "person.text.rectangle")
+                            .font(.system(size: mvFont10)).foregroundStyle(DS.Palette.accent)
+                        Text("Insiders: \(buys.count) open-market buy\(buys.count == 1 ? "" : "s"), \(sells.count) sell\(sells.count == 1 ? "" : "s")")
+                            .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.white)
+                        if let net = s.netBuyValue, net != 0 {
+                            Text(net > 0 ? "net +\(StockSageLiquidity.humanDollars(net))"
+                                         : "net −\(StockSageLiquidity.humanDollars(abs(net)))")
+                                .font(.caption2)
+                                .foregroundStyle(net > 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                        }
+                    }
+                    if let first = s.discretionary.first {
+                        Text("\(first.insiderName)\(first.officerTitle.map { " · \($0)" } ?? "")")
+                            .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    }
+                }
+                Text(StockSageInsider.caveat)
+                    .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     /// Forward-test progress, on the MAIN board (2026-07-28).
@@ -7373,6 +7455,8 @@ struct MarketsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 sizingBrakeWaterfall(idea)
+                // SEC Form 4 insider activity — the lawful answer to "can we use MNPI".
+                insiderRow()
                 if let stop = a.stopPrice, let target = a.targetPrice,
                    let rr = StockSageRewardRisk.assess(entry: idea.price, stop: stop, target: target) {
                     let c = rr.quality == .strong ? DS.Palette.successSoft
