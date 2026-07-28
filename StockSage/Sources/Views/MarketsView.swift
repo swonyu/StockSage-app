@@ -6919,9 +6919,17 @@ struct MarketsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Strategy backtest").font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
                         .help(StockSageGlossary.strategyHelp)
-                    Text(store.strategyBacktest.map { "Tested \($0.symbolsTested)/\(StockSageStrategyBacktest.sampleSymbols.count) names, ~5 years — does the system hold up?" }
-                         ?? "The advisor's rules across the sample (~\(StockSageStrategyBacktest.sampleSymbols.count) names), ~5 years — does the system hold up?")
-                        .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    // Two different kinds of sentence share this slot, so they get different
+                    // treatment. WITH a result it reports what was actually tested ("Tested
+                    // 22/24 names") — a measurement, stays visible. WITHOUT one it is purely a
+                    // description of what the backtest would do, so it collapses like any other
+                    // teaching text.
+                    if let bt = store.strategyBacktest {
+                        Text("Tested \(bt.symbolsTested)/\(StockSageStrategyBacktest.sampleSymbols.count) names, ~5 years — does the system hold up?")
+                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        explainer("The advisor's rules across the sample (~\(StockSageStrategyBacktest.sampleSymbols.count) names), ~5 years — does the system hold up?")
+                    }
                 }
                 Spacer()
                 Button { Task { await store.refreshStrategyBacktest() } } label: {
