@@ -50,13 +50,24 @@ crashing runtime build — onboarding, Markets board, all cards. Screenshot-veri
 | med | PullToRefresh/iPadLayout/HapticFeedback dead code compiled in | FIXED — deleted; native `.refreshable` + `.sensoryFeedback` wired instead |
 | med | No iOS keyboard config on numeric fields (full QWERTY for prices) | FIXED — `decimalKeyboardOnIOS` on journal/kelly fields |
 | low | Alerts copy said "Get a Mac notification" on iPhone | FIXED — platform-neutral copy |
-| med | PortfolioWidget winRate ignores trade side (wrong for shorts) | OPEN — fix when the real widget target lands |
-| med | checkIdeaAlerts lacks the cooperative-cancellation guard its siblings have | OPEN |
-| med | Stale product reference named StockSage.app in pbxproj (cosmetic; build uses PRODUCT_NAME) | OPEN |
-| low | No `didReceive` handler — notification tap doesn't deep-link to the symbol | OPEN (feature) |
-| low | No scenePhase handling — monitor keeps polling in background; spurious offline banner on return | OPEN (queued) |
-| low | Touch targets < 44pt on journal row controls; hover-gated watchlist remove; 200pt fast-lane picker | OPEN (owner-adjacent visual changes) |
-| low | ITSAppUsesNonExemptEncryption unset; iOS rpath entry missing for frameworks; badge requested never set | OPEN (App Store prep batch) |
+| med | PortfolioWidget winRate ignores trade side (wrong for shorts) | FIXED — `realizedR` carries the side; missing exit contributes 0 (PortfolioWidget.swift:49) |
+| med | checkIdeaAlerts lacks the cooperative-cancellation guard its siblings have | FIXED — StockSageMonitor.swift:327 |
+| med | Stale product reference named StockSage.app in pbxproj (cosmetic; build uses PRODUCT_NAME) | FIXED — `PRODUCT_NAME = StockSageX` (rename, 3bf5151) |
+| low | No `didReceive` handler — notification tap doesn't deep-link to the symbol | FIXED — posts `.stockSageOpenSymbol` (PlatformShims.swift:63) |
+| low | No scenePhase handling — monitor keeps polling in background; spurious offline banner on return | FIXED — StockSageApp.swift:82 |
+| low | Touch targets < 44pt on journal row controls; hover-gated watchlist remove; 200pt fast-lane picker | FIXED — 532a565 |
+| low | ITSAppUsesNonExemptEncryption unset; iOS rpath entry missing for frameworks; badge requested never set | FIXED — key set both configs; `LD_RUNPATH_SEARCH_PATHS` present; `setBadgeCount` (StockSageMonitor.swift:40) |
 
 Refuted/settled during review: PortfolioWidget parked `@main` (deliberate), MenuBarExtra
 park (deliberate), the libswiftCore crash as an app bug (it's a beta runtime bug — dodged).
+
+## Status reconciliation — 2026-07-28
+
+Every row above is now FIXED; the table's OPEN column had gone stale against `main`
+(commits `532a565`, `3bf5151`, `9e67dd6`, `27ad964` landed after the review was written).
+Re-audited row by row against HEAD on 2026-07-28 — file:line evidence recorded inline above.
+The temporary beta scaffolding this doc says to remove **is already removed**: zero `bootlog(`
+calls remain and `--stocksage-minimal` has no matches in the tree.
+
+Remaining iOS work is therefore NOT in this table. Anything new needs a fresh review pass —
+do not treat this document as a queue.
