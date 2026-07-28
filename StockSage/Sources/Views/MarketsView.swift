@@ -4314,7 +4314,26 @@ struct MarketsView: View {
             summaryChip("↕", ideaSort.label.lowercased() + " sort")
             Spacer(minLength: 0)
         }
+        // iPhone: scroll the strip rather than crush it (2026-07-28). Seven chips cannot fit
+        // 402pt, and each label carries .lineLimit(1), so they truncated to nonsense — "47 bı",
+        // "130 ⁚", "2.0 a". These are FILTER controls: a chip whose label you cannot read is a
+        // control you cannot use. Scrolling keeps every chip tappable with its label intact.
+        // macOS has the width and keeps the plain row (Spacer left-aligns it), byte-unchanged.
+        #if os(iOS)
+        .fixedSize(horizontal: true, vertical: false)
+        .modifier(HScrollStrip())
+        #endif
     }
+
+    #if os(iOS)
+    /// Wraps a naturally-sized row in a horizontal scroller. Separate modifier so the strip's
+    /// own layout stays readable and macOS never pays for it.
+    private struct HScrollStrip: ViewModifier {
+        func body(content: Content) -> some View {
+            ScrollView(.horizontal, showsIndicators: false) { content }
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func summaryChip(_ value: String, _ label: String, _ valueColor: Color = .white,

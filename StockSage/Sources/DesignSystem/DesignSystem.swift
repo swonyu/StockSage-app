@@ -28,8 +28,27 @@ enum DS {
 
     // MARK: Semantic colors
     enum Palette {
-        static let accent        = Color(red: 0.98, green: 0.18, blue: 0.29)
-        static let accent2       = Color(red: 1.00, green: 0.33, blue: 0.55)
+        // BRAND = indigo, not red (colour overhaul 2026-07-28). Two reasons, both measured:
+        //
+        // 1. SEMANTIC COLLISION. This is a trading app: red already means loss and green means
+        //    gain, everywhere, non-negotiably. Using red as the BRAND colour put a red "Find
+        //    ideas" button beside a red −18.1%, and rendered neutral metrics like "Base size
+        //    20.0%" in alarm-red — a position size is not a warning. Moving the brand off red
+        //    leaves red and green to carry P&L meaning alone.
+        //
+        // 2. CONTRAST. White label on the old crimson fill measured 3.78:1 — under WCAG AA
+        //    4.5:1 for sub-18pt text, so every primary button ("Find ideas", "Gauge", "Run",
+        //    "Log trade") failed on its own label. This fill measures 4.96:1.
+        //
+        // `accent` is the FILL (white text sits on it); `accentText` is the lighter sibling for
+        // brand-coloured TEXT and icons on dark surfaces, which measures 4.56:1 on the card
+        // surface. Same split the palette already uses for success/successSoft — one swatch
+        // cannot both host white text and be legible as text on a dark card.
+        static let accent        = Color(red: 0.350, green: 0.360, blue: 0.950)
+        static let accent2       = Color(red: 0.506, green: 0.514, blue: 0.962)
+        /// Brand colour for TEXT/icons on dark surfaces (AA 4.56:1 on the card surface).
+        /// Use `accent` for fills and `accentText` when the brand colour IS the glyph.
+        static let accentText    = Color(red: 0.506, green: 0.514, blue: 0.962)
         // Canvas wash (macOS 27 overhaul, 2026-07-16): deep slate with a slight
         // violet-warm cast that flatters the crimson accent — replaces the flat
         // codeSurface grey. Going DARKER only raises text contrast, so the
