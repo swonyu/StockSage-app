@@ -135,6 +135,42 @@ struct MarketsView: View {
         #endif
     }()
 
+    /// Shared so the stacked (iPhone) and side-by-side (macOS) layouts can never drift apart.
+    static let holdAnchorHelp = "Anchor for each idea's estimated hold — the engine adjusts per setup (target distance ÷ typical daily move, clamped 0.4–3× this value). A shorter anchor biases the hold estimate down but the per-idea adjustment can override it."
+
+    #if os(iOS)
+    /// One full-width hold-anchor stepper. The label keeps its own line so it can never be
+    /// compressed into per-character wrapping the way the side-by-side pair was.
+    private func holdStepper(value: Binding<Double>, range: ClosedRange<Double>,
+                             label: String, unit: String) -> some View {
+        Stepper(value: value, in: range, step: 1) {
+            Text("\(label) \(Int(value.wrappedValue))\(unit)")
+                .font(.system(size: mvFont9)).foregroundStyle(.white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("\(label) hold anchor, days")
+    }
+    #endif
+
+    /// Market-group label as the iPhone shows it. Drops the universe-cohort suffix
+    /// ("US Consumer Discretionary (2000-expansion)" → "US Consumer Discretionary"): the tag
+    /// records which scan cohort a name entered from, which is bookkeeping, not a fact anyone
+    /// trades on — and on a 402pt screen it was consuming the half of the label that actually
+    /// identifies the sector, truncating it to "US Consumer D…". macOS keeps the full string,
+    /// and VoiceOver still reads it, so nothing is lost from the data — only from the pixels.
+    static func phoneMarketLabel(_ market: String) -> String {
+        #if os(iOS)
+        guard let open = market.lastIndex(of: "("), market.hasSuffix(")") else { return market }
+        let trimmed = market[..<open].trimmingCharacters(in: .whitespaces)
+        // Never return empty: a label that is ONLY a parenthetical keeps its original text.
+        return trimmed.isEmpty ? market : trimmed
+        #else
+        return market
+        #endif
+    }
+
     private enum IdeaSpace {
         static let chipH: CGFloat = 8    // tinted-chip horizontal inset (was 7 and 8)
         static let chipV: CGFloat = 3    // tinted-chip vertical inset (was 3 and 4)
@@ -4725,10 +4761,13 @@ struct MarketsView: View {
                     // beside the action chip, pushing the whole card taller than its own
                     // metrics. Two lines is the cap; the sector is orienting context, not the
                     // decision content (that's the chips and the metric row below).
-                    Text(idea.market).font(.caption2).foregroundStyle(.secondary)
+                    Text(Self.phoneMarketLabel(idea.market)).font(.caption2).foregroundStyle(.secondary)
                         .lineLimit(2)
                         .minimumScaleFactor(0.8)
                         .fixedSize(horizontal: false, vertical: true)
+                        // VoiceOver keeps the FULL group name including the cohort tag —
+                        // the phone drops it visually for space, not from the data.
+                        .accessibilityLabel(idea.market)
                 }
                 Spacer()
                 // Badge row order: risk warnings FIRST (earnings/floor), then
@@ -6656,6 +6695,20 @@ struct MarketsView: View {
                 }
                 Text(MoneyVelocityCopy.fastLane)
                     .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // iPhone stacks these (2026-07-28). Side by side, "Hold est:" plus two 132pt
+                // steppers plus spacing needs ~360pt inside a card that has ~354pt, so each
+                // Stepper's label was squeezed to roughly ONE CHARACTER and wrapped per letter:
+                // the row literally rendered "c/r/y/p/t/o/3/d" and "e/q/ui/ty/1/2/d" down the
+                // screen. Stacked, each control gets the full card width. macOS keeps the row.
+                #if os(iOS)
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text("Hold est:").font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    holdStepper(value: $cryptoHoldDays, range: 1...60, label: "crypto", unit: "d")
+                    holdStepper(value: $equityHoldDays, range: 1...180, label: "equity", unit: "d")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(Self.holdAnchorHelp)
+                #else
                 HStack(spacing: DS.Space.md) {
                     Text("Hold est:").font(.system(size: mvFont9)).foregroundStyle(.secondary)
                     Stepper(value: $cryptoHoldDays, in: 1...60, step: 1) {
@@ -6666,7 +6719,8 @@ struct MarketsView: View {
                     }.frame(maxWidth: 132)
                     Spacer(minLength: 0)
                 }
-                .help("Anchor for each idea's estimated hold — the engine adjusts per setup (target distance ÷ typical daily move, clamped 0.4–3× this value). A shorter anchor biases the hold estimate down but the per-idea adjustment can override it.")
+                .help(Self.holdAnchorHelp)
+                #endif
             }
             .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
             .background(DS.Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
