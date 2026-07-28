@@ -445,6 +445,23 @@ struct MarketsView: View {
                     // Context cards still render — just below the thing you came for.
                     #if os(iOS)
                     sectionContent
+                    // Hierarchy (owner 2026-07-28: "cards look samey — no hierarchy"). Every
+                    // card is the same grey box at the same weight, so nothing reads as more
+                    // important than anything else. Rather than restyle 58 inline card-chrome
+                    // sites — a large diff with a large regression surface — the board is
+                    // GROUPED: what you selected sits above this rule, market-wide context
+                    // below it. One divider does what eight restyles would, and it survives
+                    // any later change to the individual cards.
+                    HStack(spacing: DS.Space.sm) {
+                        Text("MARKET CONTEXT")
+                            .font(.system(size: mvFont9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityAddTraits(.isHeader)
+                        Rectangle().fill(DS.Palette.hairline).frame(height: 1)
+                    }
+                    .padding(.top, DS.Space.xs)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(DS.Motion.lux.delay(0.06), value: appeared)
                     #endif
                     erasedOnIOS(regimeCard)
                         .opacity(appeared ? 1 : 0)
