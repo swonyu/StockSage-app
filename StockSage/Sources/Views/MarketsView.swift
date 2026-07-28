@@ -659,6 +659,21 @@ struct MarketsView: View {
 
     // MARK: Market regime gauge
 
+    /// Regime sub-line — sizing bias once gauged, else what the gauge is for. Extracted
+    /// 2026-07-28 so the phone can render it at full width beneath the title/CTA row instead
+    /// of sharing ~180pt with the Gauge button (same fix as `ideasHeaderBlurb`).
+    @ViewBuilder private var regimeSubline: some View {
+        if let r = store.regime {
+            Text(String(format: "Suggested sizing: ×%.2f of normal", r.sizingBias))
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("Risk-on / risk-off gauge — biases how much to size.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     @ViewBuilder private var regimeCard: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack(spacing: 10) {
@@ -669,13 +684,10 @@ struct MarketsView: View {
                     Text(store.regime?.state.rawValue ?? "Market regime")
                         .font(.system(size: mvFont14, weight: .semibold)).foregroundStyle(.white)
                         .help(StockSageGlossary.regimeHelp)
-                    if let r = store.regime {
-                        Text(String(format: "Suggested sizing: ×%.2f of normal", r.sizingBias))
-                            .font(.caption2).foregroundStyle(.secondary)
-                    } else {
-                        Text("Risk-on / risk-off gauge — biases how much to size.")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
+                    // iPhone renders this below the row at full width (see after the HStack).
+                    #if !os(iOS)
+                    regimeSubline
+                    #endif
                 }
                 Spacer()
                 Button { Task { await store.refreshRegime() } } label: {
@@ -693,6 +705,10 @@ struct MarketsView: View {
                 .buttonStyle(LuxPressStyle()).disabled(store.isLoadingRegime)
                 .help("Gauge the market regime (S&P 500 trend, momentum/RSI, breadth, VIX)")
             }
+            // iPhone: sub-line at FULL card width, below the title/CTA row.
+            #if os(iOS)
+            regimeSubline
+            #endif
             if let r = store.regime {
                 convictionMeter((r.riskScore + 1) / 2, color: regimeColor(r.state))   // −1…+1 → 0…1
                     .accessibilityLabel("Risk gauge")
@@ -5106,12 +5122,21 @@ struct MarketsView: View {
                 Image(systemName: "bell.badge.fill").font(.system(size: mvFont16)).foregroundStyle(DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Signal alerts").font(DS.Typography.titleM).foregroundStyle(.white)
+                    // iPhone renders the description below the row at full width.
+                    #if !os(iOS)
                     Text("Flags when an idea turns bullish/bearish or its price crosses the advised stop or target — between refreshes.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    #endif
                 }
                 Spacer()
                 Toggle("", isOn: $store.alertsEnabled).labelsHidden().toggleStyle(.switch).tint(DS.Palette.accent)
             }
+            // iPhone: description at FULL card width — beside the switch it wrapped to three
+            // lines and collided with the toggle's touch target.
+            #if os(iOS)
+            Text("Flags when an idea turns bullish/bearish or its price crosses the advised stop or target — between refreshes.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            #endif
             if !store.alertsEnabled {
                 Text("Off — turn on, then refresh ideas to start detecting events. Events fire on a crossing, so they don't repeat every refresh.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -5947,8 +5972,11 @@ struct MarketsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Volume-confirmed moves")
                             .font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
+                        // iPhone renders the definition below the row at full width.
+                        #if !os(iOS)
                         Text("Unusual volume AND an unusual move on the same bar.")
                             .font(.system(size: mvFont11)).foregroundStyle(.secondary)
+                        #endif
                     }
                     Spacer(minLength: 0)
                     Text("unvalidated")
@@ -5958,6 +5986,13 @@ struct MarketsView: View {
                         .background(Capsule().strokeBorder(DS.Palette.warningSoft.opacity(0.55),
                                                            style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
                 }
+                // iPhone: definition at FULL card width — sharing the row with the
+                // "unvalidated" chip wrapped it onto two ragged lines.
+                #if os(iOS)
+                Text("Unusual volume AND an unusual move on the same bar.")
+                    .font(.system(size: mvFont11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
                 ForEach(hits, id: \.symbol) { c in
                     HStack(spacing: DS.Space.sm) {
                         Text(c.symbol)
