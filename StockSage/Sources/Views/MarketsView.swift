@@ -340,6 +340,9 @@ struct MarketsView: View {
                         .opacity(appeared ? 1 : 0)
                         .offset(y: appeared ? 0 : 8)
                         .animation(DS.Motion.lux.delay(0.06), value: appeared)
+                    erasedOnIOS(forwardProgressStrip)
+                        .opacity(appeared ? 1 : 0)
+                        .animation(DS.Motion.lux.delay(0.06), value: appeared)
                     erasedOnIOS(catalystCard)
                         .opacity(appeared ? 1 : 0)
                         .animation(DS.Motion.lux.delay(0.065), value: appeared)
@@ -3576,6 +3579,13 @@ struct MarketsView: View {
         let displayed: [StockSageSymbol] = watchlistOnly
             ? screenedBoardSymbols.filter { userSet.contains($0.symbol.uppercased()) }
             : screenedBoardSymbols
+        // Stop/target for the row come from the ADVISOR (ideas board), never from
+        // StockSageSignalEngine — that engine is a |Δ%| threshold map with no stop/target
+        // concept, so deriving one from it would fabricate a risk level. Built ONCE here as a
+        // dictionary: `ideas` spans the whole universe, and a per-row `.first(where:)` would
+        // make the list O(n²).
+        let ideaBySymbol = Dictionary(store.ideas.map { ($0.symbol.uppercased(), $0) },
+                                      uniquingKeysWith: { first, _ in first })
         return VStack(spacing: DS.Space.sm) {
             addSymbolBar
             if store.symbols.isEmpty {
@@ -3603,7 +3613,7 @@ struct MarketsView: View {
                     .menuStyle(.borderlessButton).fixedSize()
                     .accessibilityLabel("Sort watchlist")
                 }
-                ForEach(sort.apply(displayed)) { signalCard($0)
+                ForEach(sort.apply(displayed)) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()])
                     .transition(.opacity.combined(with: .move(edge: .leading)))
                 }
             }
@@ -3697,7 +3707,7 @@ struct MarketsView: View {
         if store.addSymbolError == nil { newWatchSymbol = "" }
     }
 
-    private func signalCard(_ sym: StockSageSymbol) -> some View {
+    private func signalCard(_ sym: StockSageSymbol, idea: StockSageIdea? = nil) -> some View {
         let signal = StockSageSignalEngine.generateSignal(for: sym)
         let change = sym.latest?.changePercent ?? 0
         // A 0.00% day is FLAT, not a green gain — match the ±0.05% neutral band heatColor/sparkColor
@@ -5530,6 +5540,52 @@ struct MarketsView: View {
                     style: StrokeStyle(lineWidth: 1, dash: assumed ? [3, 2] : [])
                 )
             )
+    }
+
+    /// Forward-test progress, on the MAIN board (2026-07-28).
+    ///
+    /// WHY IT IS HERE and not only in Portfolio: the owner's stated goal is fast money, and the
+    /// honest answer to that is knowing whether the engine works at all. That answer arrives when
+    /// the paper book has enough CLOSES for a first Deflated-Sharpe read — a number that was
+    /// buried three sections deep. Surfacing the count makes the one thing worth waiting for
+    /// visible, and makes it obvious that time alone does not move it: only resolved trades do.
+    ///
+    /// Disappears entirely once a real DSR read exists (the Portfolio panel then carries the
+    /// actual figure, which is richer than a progress bar).
+    @ViewBuilder private var forwardProgressStrip: some View {
+        let closedWithR = paperStore.closed.compactMap(\.realizedR).count
+        let needed = 4
+        if closedWithR < needed {
+            HStack(spacing: DS.Space.sm) {
+                Image(systemName: "flask.fill")
+                    .font(.system(size: mvFont12)).foregroundStyle(DS.Palette.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Forward test: \(closedWithR) of \(needed) closes toward a first edge reading")
+                        .font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white)
+                    // Progress is by RESOLVED TRADES, never elapsed time — the distinction the
+                    // whole experiment rests on.
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.10))
+                            Capsule().fill(DS.Palette.accent)
+                                .frame(width: geo.size.width * min(1, Double(closedWithR) / Double(needed)))
+                        }
+                    }
+                    .frame(height: 4)
+                    Text("\(paperStore.open.count) open · closes land when a scan's new bars cross a stop, target or time-stop. Performance decides, not time.")
+                        .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .fill(Color.white.opacity(0.03)))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+                .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Forward test progress: \(closedWithR) of \(needed) closes toward a first edge reading")
+        }
     }
 
     /// Volume-confirmed catalysts (external-report item 9, surfaced 2026-07-28). Renders ONLY
