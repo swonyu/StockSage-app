@@ -94,8 +94,8 @@ struct MarketsView: View {
     // mechanism is unchanged — every role scales with Dynamic Type via its token).
     // Ramp ≈ a major-second (1.125×) modular scale anchored at the 9pt caption:
     //   9.0 → 10.1 → 11.4 → 12.8 → 14.4 → … → 20.5, snapped to the token grid:
-    //   micro 8 · caption/metricLabel 9 · chipLabel 10 · body/button 11.5 ·
-    //   metricValue 12.5 (legacy exact-size token, kept) · sectionHeader 13 ·
+    //   micro 8 · caption/metricLabel 9 · chipLabel 10 · body/caveat 11.5 ·
+    //   metricValue 12.5 (legacy exact-size token, kept) · sectionHeader 15 ·
     //   cardTitle 15 · sheetTitle 20.
     // Deliberate wave-2 change: sectionHeader 12 → 13 (mvFont13) so the sheet's
     // section headers (Why / Evidence / Exit plan / Context) outrank the 12.5pt
@@ -104,12 +104,20 @@ struct MarketsView: View {
     // New call sites use roles; legacy mvFontN call sites migrate in a later wave.
     private var fontSheetTitle: CGFloat { mvFont20 }
     private var fontCardTitle: CGFloat { mvFont15 }
-    private var fontSectionHeader: CGFloat { mvFont13 }
+    // 13 → 15 (2026-07-28 design review): at 13 the section header was 1.04× the 12.5pt
+    // metric values it introduces — inside the JND, so "Why"/"Evidence"/"Exit plan"/
+    // "Context" read as body, not structure. 15 restores the 1.2× step the ladder claims.
+    private var fontSectionHeader: CGFloat { mvFont15 }
     private var fontMetricValue: CGFloat { mvFont12_5 }
     private var fontBody: CGFloat { mvFont11_5 }
+    /// Caveats, honesty labels and provenance. Deliberately ONE STEP ABOVE fontChipLabel:
+    /// these strings are the product's differentiator, and at 9-10pt they rendered smaller
+    /// than the descriptive copy they qualify. Never below 11.
+    private var fontCaveat: CGFloat { mvFont11_5 }
     private var fontChipLabel: CGFloat { mvFont10 }
     private var fontMetricLabel: CGFloat { mvFont9 }
-    private var fontCaption: CGFloat { mvFont9 }
+    // fontCaption / fontMicro removed (2026-07-28 design review): zero consumers since the
+    // wave-2 role migration.
 
     /// Ideas-surface spacing rhythm (UX wave 2): a 4/8pt grid. DS.Space stays app-wide
     /// (its sm=10 / md=14 are off-grid); these roles apply ONLY to the ideas card +
@@ -4581,25 +4589,35 @@ struct MarketsView: View {
     @ViewBuilder private var ideasHeaderBlurb: some View {
         // Definition of the scan's scope — teaching, so it collapses. The EV-calibration
         // caveat immediately below is a WARNING and stays permanently visible.
+        // 2026-07-28 design review deviation: the review asked to drop this line from
+        // `.caption` to fontBody so the caveat below would outrank it. It no longer
+        // renders as a standalone `.caption` Text — a later wave wrapped it in the
+        // shared `explainer()` helper (mvFont9, reused by 6 other definitional call
+        // sites in this file). Resizing explainer() itself would move unrelated
+        // teaching text outside this item's scope. Left as-is: the ordering goal
+        // already holds without a change (fontCaveat 11.5pt > explainer's mvFont9).
         explainer("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
         // assumed — right where they're read. F01/F02: keyed on the calibration METHOD,
         // not on non-nil (an identity calibration is an assumption, not a measurement).
+        // 2026-07-28 design review: resized mvFont10 → fontCaveat on all three mutually
+        // exclusive branches below — this is the load-bearing measured/assumed caveat,
+        // not a chip label, and must outrank the descriptive copy above it.
         if let cal = store.convictionCalibration {
             if cal.method == .identity {
                 Label("EV win-rates are assumed (identity floor) — conviction, capped at the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior when the sample is too thin to validate out-of-sample, used as win% until a fit beats it out-of-sample", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                    .font(.system(size: fontCaveat, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(cal.chipHelp)
             } else {
                 Label("EV win-rates \(cal.method == .platt ? "fitted" : "measured") from \(cal.sampleSize) realized trades (your journal, else the backtest)", systemImage: "checkmark.seal.fill")
-                    .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.successSoft)
+                    .font(.system(size: fontCaveat, weight: .semibold)).foregroundStyle(DS.Palette.successSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(cal.chipHelp)
             }
         } else {
             Label("EV win-rates are an assumed estimate — run the Strategy backtest to calibrate", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                .font(.system(size: fontCaveat, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
                 .help("Until a backtest runs, EV uses a cautious hand-set win-prob band (\(StockSageExpectedValue.assumedWinBandLabel)), not measured rates.")
         }
@@ -7922,8 +7940,13 @@ struct MarketsView: View {
                 // Always-visible disclaimer: meter % must not read as P(win).
                 // One disclaimer only — the trailing clause was removed from the value
                 // label above (G) to avoid saying "not a win probability" twice.
+                // 2026-07-28 design review: resized mvFont9 → fontCaveat — this is a
+                // load-bearing honesty line, not decoration; it must outrank the metric
+                // labels beside it, not undercut them.
                 Text("How many rules agree — NOT a win probability.")
-                    .font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    .font(.system(size: fontCaveat, weight: .medium))
+                    .foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 // ── 2. Risk-flag chips row ───────────────────────────────────────────
                 // riskFlags is hoisted for the chips row and the CTA bar (see comment above).
@@ -8782,7 +8805,10 @@ struct MarketsView: View {
                         }
                     }
                     // ── Caveat (always visible — stronger than hiding it below the fold) ──
-                    Text(a.caveat).font(.system(size: mvFont9)).foregroundStyle(.secondary)
+                    // 2026-07-28 design review: this is the last honesty line read before
+                    // placing a trade — resized mvFont9 → fontCaveat so it doesn't undercut
+                    // the copy around it.
+                    Text(a.caveat).font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
