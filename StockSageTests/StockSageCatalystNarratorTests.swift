@@ -69,14 +69,72 @@ struct StockSageCatalystNarratorTests {
         #expect(N.label.contains("not advice"))
     }
 
+    // MARK: label(for:model:)
+
+    @Test("label(for: .localServer, model:) names the server model and the non-advice caveat")
+    func labelForLocalServerNamesModel() {
+        let text = N.label(for: .localServer, model: "qwen3.8")
+        #expect(text.contains("qwen3.8"))
+        #expect(text.contains("not advice"))
+    }
+
+    @Test("label(for: .onDevice, model:) is byte-identical to the plain `label` constant")
+    func labelForOnDeviceMatchesPlainLabel() {
+        #expect(N.label(for: .onDevice, model: nil) == N.label)
+    }
+
+    // MARK: instructions
+
+    @Test("instructions cap the word count at 80 and require the ticker-only rule")
+    func instructionsCapWordsAndRequireTickerOnly() {
+        #expect(N.instructions.contains("80 words"))
+        #expect(N.instructions.contains("ticker symbol"))
+    }
+
+    // MARK: selectedBackend
+
+    @Test("selectedBackend defaults to .auto for nil or an unrecognized raw value")
+    func selectedBackendDefaultsToAuto() {
+        #expect(N.selectedBackend(nil) == .auto)
+        #expect(N.selectedBackend("bogus") == .auto)
+        #expect(N.selectedBackend("off") == .off)
+    }
+
+    // MARK: explainAvailable (n=8 rows)
+
+    @Test("explainAvailable truth table")
+    func explainAvailableTruthTable() {
+        typealias Row = (backend: StockSageLocalModelServer.Backend, onDeviceAvailable: Bool,
+                         reachable: Bool, hasModel: Bool, expected: Bool)
+        let rows: [Row] = [
+            (.off, true, true, true, false),
+            (.off, false, false, false, false),
+            (.onDeviceOnly, true, false, false, true),
+            (.onDeviceOnly, false, true, true, false),
+            (.localServerOnly, false, true, true, true),
+            (.localServerOnly, true, true, false, false),
+            (.auto, false, false, false, false),
+            (.auto, false, true, true, true),
+        ]
+        #expect(rows.count == 8)   // n=8 rows
+        for (i, row) in rows.enumerated() {
+            let onDevice: N.Availability = row.onDeviceAvailable ? .available : .unavailable("nope")
+            let probe = StockSageLocalModelServer.Probe(reachable: row.reachable, isOllama: true, models: [],
+                                                        hasModel: row.hasModel, detail: "x")
+            let got = N.explainAvailable(backend: row.backend, onDevice: onDevice, probe: probe)
+            #expect(got == row.expected, "row \(i): \(row.backend) onDevice=\(row.onDeviceAvailable) reachable=\(row.reachable) hasModel=\(row.hasModel)")
+        }
+    }
+
     // MARK: Result equality
 
     @Test("Result compares by case and payload")
     func resultEqualityByValue() {
-        #expect(N.Result.text("a") == .text("a"))
-        #expect(N.Result.text("a") != .text("b"))
+        #expect(N.Result.text("a", .onDevice) == .text("a", .onDevice))
+        #expect(N.Result.text("a", .onDevice) != .text("b", .onDevice))
+        #expect(N.Result.text("a", .onDevice) != .text("a", .localServer))
         #expect(N.Result.withheld("x") == .withheld("x"))
         #expect(N.Result.unavailable("y") == .unavailable("y"))
-        #expect(N.Result.text("a") != .withheld("a"))
+        #expect(N.Result.text("a", .onDevice) != .withheld("a"))
     }
 }

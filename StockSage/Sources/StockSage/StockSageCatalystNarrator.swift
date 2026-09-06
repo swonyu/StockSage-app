@@ -19,7 +19,19 @@ import FoundationModels
 // facts and WITHHOLDS the paragraph rather than ship an invented figure. Everything here is a
 // paraphrase layer — the engine's `why`/`watch` strings remain the primary, always-present
 // explanation; this is additive, never load-bearing.
+//
+// Owner request (2026-09-06, "okay"): this is now a ROUTER over TWO backends — the on-device
+// FoundationModels path above, and an optional LOCAL SERVER (Ollama / LM Studio, via
+// `StockSageLocalModelServer`) for a viewer who wants a bigger model than what ships on-device.
+// `Source` on `Result.text` says which one actually wrote a given paragraph, so the label under
+// it is never ambiguous about where the text came from.
 enum StockSageCatalystNarrator {
+
+    // MARK: Source (which backend actually wrote a given paragraph)
+
+    enum Source: String, Sendable, Equatable {
+        case onDevice, localServer
+    }
 
     // MARK: Availability
 
@@ -92,11 +104,14 @@ enum StockSageCatalystNarrator {
     }
 
     /// System instructions for the session — fixed, never per-idea (the facts carry everything
-    /// idea-specific), so this string is also what a test pins.
+    /// idea-specific), so this string is also what a test pins. Tightened 90→80 words and added
+    /// the ticker-only sentence (fix pass 2026-09-06): the owner's smoke test against qwen3.8
+    /// produced "Apple" from a bare "AAPL" fact and ran 95–106 words despite the 90-word ask.
     nonisolated static let instructions =
-        "You receive verified facts about one stock idea. Write at most 90 words of plain "
+        "You receive verified facts about one stock idea. Write at most 80 words of plain "
         + "English explaining why the catalyst matters for THIS idea and what to watch. Use "
-        + "ONLY the facts. Do not add or change any number, date, or name. Do not predict "
+        + "ONLY the facts. Do not add or change any number, date, or name. Refer to the "
+        + "company only by its ticker symbol; never name the company. Do not predict "
         + "direction. Do not recommend buying or selling. No headings, no bullets."
 
     /// The facts, one per line, plus the closing instruction — this (not `instructions`) is the
@@ -140,43 +155,174 @@ enum StockSageCatalystNarrator {
     // MARK: Result + explain
 
     enum Result: Equatable, Sendable {
-        case text(String)
+        case text(String, Source)
         case withheld(String)
         case unavailable(String)
     }
 
     /// Always present on a rendered paragraph — names what it is (a paraphrase, not the engine's
-    /// own rationale) and its limits, per the house honesty floor.
+    /// own rationale) and its limits, per the house honesty floor. This is the ON-DEVICE text;
+    /// `label(for:model:)` is the source-aware version the view actually renders.
     nonisolated static let label =
         "Model-written on-device from the facts above — a paraphrase, not analysis; it can "
         + "misstate; unvalidated; not advice."
+
+    /// Source-aware label — `.onDevice` reads exactly as `label` above (so that test keeps
+    /// passing byte-for-byte); `.localServer` names the actual server model, so a viewer never
+    /// mistakes a local-server paraphrase for the on-device one or vice versa.
+    nonisolated static func label(for source: Source, model: String?) -> String {
+        switch source {
+        case .onDevice:
+            return label
+        case .localServer:
+            return "Model-written by the local server model \(model ?? "?") from the facts above — "
+                + "a paraphrase, not analysis; it can misstate; unvalidated; not advice."
+        }
+    }
+
+    // MARK: Backend selection (router)
+
+    /// Maps the raw `UserDefaults` string (nil, or anything not a valid case) to `.auto` — the
+    /// safe default that tries a server if one looks reachable and otherwise falls back
+    /// on-device, so a fresh install or a typo'd defaults value never silently reads as `.off`.
+    nonisolated static func selectedBackend(_ raw: String?) -> StockSageLocalModelServer.Backend {
+        guard let raw, let backend = StockSageLocalModelServer.Backend(rawValue: raw) else { return .auto }
+        return backend
+    }
+
+    /// Pure truth table the view's "Explain" button gates on — no I/O, no UserDefaults reads,
+    /// just the three inputs a caller already has in hand.
+    nonisolated static func explainAvailable(backend: StockSageLocalModelServer.Backend,
+                                             onDevice: Availability,
+                                             probe: StockSageLocalModelServer.Probe?) -> Bool {
+        // `Availability`'s synthesized `Equatable` is MainActor-isolated under this module's
+        // default isolation (mirrors the `SparkSeries.Extreme` note in StockSageCatalystWatch) —
+        // pattern-match instead of `==` so this stays callable from a nonisolated context.
+        let onDeviceReady: Bool
+        if case .available = onDevice { onDeviceReady = true } else { onDeviceReady = false }
+        let serverReady = probe?.reachable == true && probe?.hasModel == true
+        switch backend {
+        case .off:             return false
+        case .onDeviceOnly:    return onDeviceReady
+        case .localServerOnly: return serverReady
+        case .auto:            return serverReady || onDeviceReady
+        }
+    }
+
+    /// Reads the current local-server settings from `UserDefaults` (falling back to the shared
+    /// defaults when unset) and probes it — `nil` when the settings don't even parse into a
+    /// `Config`. What the view's "Test connection" button and its auto-probe `.task` both call.
+    static func probeServer() async -> StockSageLocalModelServer.Probe? {
+        let url = UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey)
+            ?? StockSageLocalModelServer.defaultURL
+        let model = UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey)
+            ?? StockSageLocalModelServer.defaultModel
+        guard let config = StockSageLocalModelServer.config(url: url, model: model) else { return nil }
+        return await StockSageLocalModelServer.probe(config)
+    }
 
     /// Availability check → local session → respond → trim → number-fence. Never throws, never
     /// fabricates: an unavailable model or a request error both come back as `.unavailable`
     /// (never silently as `.text`), and a response that names an off-facts number comes back as
     /// `.withheld` rather than shown. The session is local to this call — no shared mutable state.
-    static func explain(_ brief: StockSageCatalystWatch.Brief) async -> Result {
+    private static func explainOnDevice(_ brief: StockSageCatalystWatch.Brief) async -> Result {
         #if canImport(FoundationModels)
         guard case .available = availability else {
             if case .unavailable(let reason) = availability { return .unavailable(reason) }
             return .unavailable("On-device model not available in this build.")
         }
-        let brieFacts = facts(for: brief)
+        let briefFacts = facts(for: brief)
         let session = LanguageModelSession(instructions: instructions)
         do {
             let response = try await session.respond(
-                to: prompt(facts: brieFacts),
+                to: prompt(facts: briefFacts),
                 options: GenerationOptions(temperature: 0.2, maximumResponseTokens: 200))
             let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if introducesForeignNumbers(text, facts: brieFacts) {
+            if introducesForeignNumbers(text, facts: briefFacts) {
                 return .withheld("Withheld: the model introduced a number that is not in the facts.")
             }
-            return .text(text)
+            return .text(text, .onDevice)
         } catch {
             return .unavailable(String(describing: error))
         }
         #else
         return .unavailable("On-device model not available in this build.")
         #endif
+    }
+
+    /// The local-server counterpart of `explainOnDevice(_:)`: same facts/prompt/number-fence
+    /// contract, over `StockSageLocalModelServer.complete(_:)` instead of a local session.
+    private static func explainViaServer(_ brief: StockSageCatalystWatch.Brief,
+                                         config: StockSageLocalModelServer.Config,
+                                         isOllama: Bool) async -> Result {
+        let briefFacts = facts(for: brief)
+        let result = await StockSageLocalModelServer.complete(
+            config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts))
+        switch result {
+        case .success(let text):
+            if introducesForeignNumbers(text, facts: briefFacts) {
+                return .withheld("Withheld: the model introduced a number that is not in the facts.")
+            }
+            return .text(text, .localServer)
+        case .failure(let error):
+            return .unavailable(humanServerError(error))
+        }
+    }
+
+    private nonisolated static func humanServerError(_ error: StockSageLocalModelServer.ServerError) -> String {
+        switch error {
+        case .invalidConfig:
+            return "The local server URL or model is not set correctly in the Explanation model settings."
+        case .unreachable(let detail):
+            return "Could not reach the local server: \(detail)"
+        case .modelMissing(let detail):
+            return "The local server does not have the requested model: \(detail)"
+        case .badResponse(let detail):
+            return "The local server returned an unexpected response: \(detail)"
+        }
+    }
+
+    /// Routes to a backend per the persisted setting (`UserDefaults.standard`, defaulting exactly
+    /// like `selectedBackend`/the server defaults do when unset): `.off` explains nothing;
+    /// `.onDeviceOnly`/`.localServerOnly` try exactly one backend; `.auto` probes the server
+    /// first and falls back on-device, surfacing BOTH reasons only when neither is available.
+    static func explain(_ brief: StockSageCatalystWatch.Brief) async -> Result {
+        let backend = selectedBackend(UserDefaults.standard.string(forKey: StockSageLocalModelServer.backendKey))
+        let urlSetting = UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey)
+            ?? StockSageLocalModelServer.defaultURL
+        let modelSetting = UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey)
+            ?? StockSageLocalModelServer.defaultModel
+
+        switch backend {
+        case .off:
+            return .unavailable("Explanations are turned off in the Explanation model settings.")
+
+        case .onDeviceOnly:
+            return await explainOnDevice(brief)
+
+        case .localServerOnly:
+            guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
+                return .unavailable(humanServerError(.invalidConfig))
+            }
+            let probe = await StockSageLocalModelServer.probe(config)
+            guard probe.reachable, probe.hasModel else {
+                return .unavailable("Local server unavailable: \(probe.detail)")
+            }
+            return await explainViaServer(brief, config: config, isOllama: probe.isOllama)
+
+        case .auto:
+            guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
+                return await explainOnDevice(brief)
+            }
+            let probe = await StockSageLocalModelServer.probe(config)
+            if probe.reachable, probe.hasModel {
+                return await explainViaServer(brief, config: config, isOllama: probe.isOllama)
+            }
+            let onDeviceResult = await explainOnDevice(brief)
+            if case .unavailable(let onDeviceReason) = onDeviceResult {
+                return .unavailable("Local server: \(probe.detail). On-device: \(onDeviceReason)")
+            }
+            return onDeviceResult
+        }
     }
 }

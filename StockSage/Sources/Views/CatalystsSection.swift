@@ -35,6 +35,52 @@ struct CatalystsSection: View {
     @State private var filingsLoading: Set<String> = []
     @State private var filingsFetched: Set<String> = []
 
+    // MARK: - Explanation model settings (owner request 2026-09-06)
+
+    @AppStorage("marketsCatalystsModelSettingsExpanded") private var modelSettingsExpanded = false
+    @AppStorage(StockSageLocalModelServer.backendKey) private var backendRaw: String = "auto"
+    @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL: String = StockSageLocalModelServer.defaultURL
+    @AppStorage(StockSageLocalModelServer.modelKey) private var serverModel: String = StockSageLocalModelServer.defaultModel
+    @State private var probe: StockSageLocalModelServer.Probe?
+    @State private var probing = false
+
+    private var backendBinding: Binding<StockSageLocalModelServer.Backend> {
+        Binding(get: { StockSageCatalystNarrator.selectedBackend(backendRaw) },
+               set: { backendRaw = $0.rawValue })
+    }
+
+    /// Color for the combined status line: green once a probe has actually confirmed the model
+    /// is present, amber otherwise (including "never probed yet") — never claims success it
+    /// hasn't measured.
+    private var probeStatusColor: Color {
+        guard let probe else { return DS.Palette.textSecondary }
+        return (probe.reachable && probe.hasModel) ? DS.Palette.successSoft : DS.Palette.warningSoft
+    }
+
+    /// The `.task(id:)` identity for the auto-probe below — re-probes only when a setting a
+    /// probe result actually depends on changes, never on an unrelated body rebuild.
+    private var probeTaskID: String { serverURL + "|" + serverModel + "|" + backendRaw }
+
+    private func testConnection() {
+        guard !probing else { return }
+        probing = true
+        Task {
+            probe = await StockSageCatalystNarrator.probeServer()
+            probing = false
+        }
+    }
+
+    /// Auto-probes when the selected backend can actually use a server (`.auto`/`.localServerOnly`)
+    /// — `.onDeviceOnly`/`.off` never need one, so this no-ops there rather than pinging a server
+    /// nobody asked for.
+    private func probeIfBackendNeedsServer() async {
+        let backend = StockSageCatalystNarrator.selectedBackend(backendRaw)
+        guard backend == .auto || backend == .localServerOnly else { return }
+        probing = true
+        probe = await StockSageCatalystNarrator.probeServer()
+        probing = false
+    }
+
     @ScaledMetric(relativeTo: .caption2) private var font9: CGFloat = 9
     @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
     @ScaledMetric(relativeTo: .caption2) private var font11_5: CGFloat = 11.5
@@ -72,6 +118,7 @@ struct CatalystsSection: View {
             }
         }
         .task(id: earningsTaskID) { await fetchEarningsForTopIdeas() }
+        .task(id: probeTaskID) { await probeIfBackendNeedsServer() }
     }
 
     // MARK: - Data
@@ -136,6 +183,7 @@ struct CatalystsSection: View {
                 Text(reason).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            explanationModelSettings(availability: availability)
             if ideas.isEmpty {
                 Text("No ideas yet — run a scan on the Ideas tab.")
                     .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
@@ -146,6 +194,50 @@ struct CatalystsSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+    }
+
+    /// [network-safety-warn-first]: a non-loopback server address means the idea's facts
+    /// (symbol/price/stop/target) leave this device over the network — the warning below fires
+    /// on that condition alone, independent of whether the backend is currently selected, so it's
+    /// visible the moment a viewer types a LAN address in, before ever pressing "Explain".
+    @ViewBuilder
+    private func explanationModelSettings(availability: StockSageCatalystNarrator.Availability) -> some View {
+        DisclosureGroup(isExpanded: $modelSettingsExpanded) {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Picker("Backend", selection: backendBinding) {
+                    ForEach(StockSageLocalModelServer.Backend.allCases, id: \.self) { backend in
+                        Text(backend.title).tag(backend)
+                    }
+                }
+                .pickerStyle(.menu)
+                TextField("Server URL", text: $serverURL)
+                    .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
+                TextField("Model", text: $serverModel)
+                    .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
+                Button(probing ? "Testing…" : "Test connection") { testConnection() }
+                    .buttonStyle(.plain).touchHitArea().disabled(probing)
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+                Text("On-device: \(onDeviceStatusLine(availability)) Local server: \(probe?.detail ?? "not tested yet.")")
+                    .font(.system(size: font11)).foregroundStyle(probeStatusColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel),
+                   !StockSageLocalModelServer.isLoopback(config.baseURL) {
+                    Text("Not loopback: the facts (symbol, price, stop, target) will leave this device "
+                        + "over your network. Prefer 127.0.0.1 or a Tailscale address. Plain-HTTP LAN "
+                        + "calls also need the local-networking allowance this build does not set.")
+                        .font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, DS.Space.xs)
+        } label: {
+            Text("Explanation model").font(.system(size: font11, weight: .medium)).foregroundStyle(DS.Palette.textSecondary)
+        }
+    }
+
+    private func onDeviceStatusLine(_ availability: StockSageCatalystNarrator.Availability) -> String {
+        if case .unavailable(let reason) = availability { return reason }
+        return "available."
     }
 
     // MARK: - Cards mode
@@ -263,8 +355,9 @@ struct CatalystsSection: View {
                 Button(expanded.contains(idea.symbol) ? "Hide filings" : "Filings") { toggleFilings(idea.symbol) }
                     .buttonStyle(.plain).touchHitArea()
             }
-            if availability == .available {
-                Button("Explain on-device") { explainOnDevice(brief) }
+            if StockSageCatalystNarrator.explainAvailable(
+                backend: StockSageCatalystNarrator.selectedBackend(backendRaw), onDevice: availability, probe: probe) {
+                Button("Explain") { explainOnDevice(brief) }
                     .buttonStyle(.plain).touchHitArea()
                     .disabled(narrating.contains(idea.symbol))
             }
@@ -301,11 +394,12 @@ struct CatalystsSection: View {
             ProgressView().controlSize(.small)
         } else if let result = narrations[symbol] {
             switch result {
-            case .text(let text):
+            case .text(let text, let source):
                 VStack(alignment: .leading, spacing: 3) {
                     Text(text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(StockSageCatalystNarrator.label).font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                    Text(StockSageCatalystNarrator.label(for: source, model: serverModel))
+                        .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             case .withheld(let msg), .unavailable(let msg):
