@@ -148,11 +148,20 @@ struct CatalystsSection: View {
                                            uniquingKeysWith: { first, _ in first })
         return ideas.map { idea in
             let sym = idea.symbol.uppercased()
+            // W1 (2026-09-06): the store's full chain record, when it has one — feeds the
+            // confirmed-suffix / projected-date / notApplicable additions below. A symbol the
+            // chain hasn't reached yet (nil) renders exactly as before W1.
+            let record = store.catalystChain[sym]
+            let isProjected = record?.status == .projected
             return StockSageCatalystWatch.brief(for: idea, inputs: .init(
                 earnings: earnings[sym], earningsDate: store.earningsDates[sym],
                 earningsCheckedAt: store.earningsCheckedAt[sym],
                 volumeMove: catalystsBySymbol[sym], regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
-                seasonality: store.seasonality[sym], now: now))
+                seasonality: store.seasonality[sym], now: now,
+                catalystConfirmed: record?.confirmed,
+                catalystNotApplicable: record?.status == .notApplicable,
+                catalystProjectedDate: isProjected ? record?.earningsDate : nil,
+                catalystProjectionBasis: isProjected ? record?.projectionBasis : nil))
         }
     }
 
@@ -608,6 +617,7 @@ struct CatalystsSection: View {
         case .regime:      return "gauge.with.needle"
         case .seasonality: return "calendar"
         case .none:        return "questionmark.circle"
+        case .projectedEarnings: return "calendar.badge.clock"
         }
     }
 

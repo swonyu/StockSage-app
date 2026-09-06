@@ -322,4 +322,100 @@ struct StockSageCatalystWatchTests {
         #expect(entries.allSatisfy { $0.bucket == .undated })
         #expect(entries.map(\.item.symbol) == ["HIGH", "MEDI", "LOWW"])     // high, medium, low
     }
+
+    // MARK: (j) W1 (2026-09-06) — status rendering: confirmed suffix, projected, notApplicable
+
+    @Test("dateKnown + confirmed:true appends '(confirmed)' to the existing earnings headline")
+    func confirmedTrueAppendsConfirmedSuffix() {
+        let idea = SageFix.idea("CONF", conviction: 0.6)
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), now: Self.now,
+                                                        catalystConfirmed: true))
+        #expect(brief.primary.kind == .earnings)
+        #expect(brief.primary.headline == "Earnings in ~2 days (Sep 6, 2025) (confirmed)")
+    }
+
+    @Test("dateKnown + confirmed:false appends '(estimated)'")
+    func confirmedFalseAppendsEstimatedSuffix() {
+        let idea = SageFix.idea("EST", conviction: 0.6)
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), now: Self.now,
+                                                        catalystConfirmed: false))
+        #expect(brief.primary.headline == "Earnings in ~2 days (Sep 6, 2025) (estimated)")
+    }
+
+    @Test("confirmed:nil (no source supplied a flag) appends nothing — byte-identical to pre-W1")
+    func confirmedNilAppendsNoSuffix() {
+        let idea = SageFix.idea("NOFLAG", conviction: 0.6)
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), now: Self.now))
+        #expect(brief.primary.headline == "Earnings in ~2 days (Sep 6, 2025)")
+    }
+
+    @Test("projected earnings: exact headline/why/source/kind, pinned verbatim")
+    func projectedEarningsExactCopy() {
+        let idea = SageFix.idea("PROJ", conviction: 0.5)
+        let projectedDate = days(45)
+        let basis = "median gap of last 3 reports = 91 d from 2026-07-30"
+        let brief = W.brief(for: idea, inputs: W.Inputs(now: Self.now,
+                                                        catalystProjectedDate: projectedDate,
+                                                        catalystProjectionBasis: basis))
+        #expect(brief.primary.kind == .projectedEarnings)
+        #expect(brief.primary.date == projectedDate)
+        #expect(brief.primary.headline
+                == "Earnings expected ~\(W.dateStr(projectedDate)) (projected from prior reports, not announced)")
+        #expect(brief.primary.why == [basis])
+        #expect(brief.primary.source == "projection: \(basis)")
+        #expect(brief.primary.watch == "Not an announced date — re-check after the next full refresh.")
+    }
+
+    @Test("precedence: projected sits below earnings-clear and above extreme")
+    func projectedPrecedenceBetweenClearEarningsAndExtreme() {
+        // No KNOWN earnings date (dateKnown and projected are mutually exclusive per the store's
+        // chain) but a recent-high extreme IS present — projected must still win as primary.
+        let idea = StockSageIdea(
+            symbol: "PPREC", market: "PPREC", price: 100,
+            advice: TradeAdvice(action: .buy, conviction: 0.5, regime: .bullTrend, rationale: [],
+                                stopPrice: nil, targetPrice: nil, suggestedWeight: 0.05, caveat: "x"),
+            spark: [], recentExtreme: .atHigh, recentExtremeSpan: 63)
+        let brief = W.brief(for: idea, inputs: W.Inputs(now: Self.now,
+                                                        catalystProjectedDate: days(45),
+                                                        catalystProjectionBasis: "median gap of last 3 reports = 91 d from 2026-07-30"))
+        #expect(brief.primary.kind == .projectedEarnings)
+        #expect(brief.secondary.count == 1)
+        #expect(brief.secondary.first?.kind == .extreme)
+    }
+
+    @Test("notApplicable: exact fallback headline/why/source, undated — only when nothing else applies")
+    func notApplicableExactCopy() {
+        let idea = SageFix.idea("IDX", conviction: 0.5)
+        let brief = W.brief(for: idea, inputs: W.Inputs(now: Self.now, catalystNotApplicable: true))
+        #expect(brief.primary.kind == .none)
+        #expect(brief.primary.date == nil)
+        #expect(brief.primary.headline == "No earnings: index/fund")
+        #expect(brief.primary.why == ["This symbol is an index or fund — it has no company earnings to report."])
+        #expect(brief.primary.source == "—")
+        #expect(brief.secondary.isEmpty)
+    }
+
+    @Test("notApplicable never suppresses another real catalyst — a volume move still wins primary")
+    func notApplicableDoesNotSuppressOtherCatalysts() {
+        let idea = SageFix.idea("IDXVOL", conviction: 0.5)
+        let brief = W.brief(for: idea, inputs: W.Inputs(volumeMove: volSignal(symbol: "IDXVOL"), now: Self.now,
+                                                        catalystNotApplicable: true))
+        #expect(brief.primary.kind == .volumeMove, "notApplicable only changes the NO-OTHER-CATALYST fallback")
+    }
+
+    @Test("a projected date buckets normally in the calendar, flagged isProjected — never checkedNoCatalyst")
+    func projectedDateBucketsNormallyAndIsFlagged() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let calNow = utc.startOfDay(for: Self.now)
+        let projectedDate = calNow.addingTimeInterval(3 * 86_400)   // ⇒ .thisWeek bucket
+        let brief = W.brief(for: SageFix.idea("PCAL", conviction: 0.5),
+                            inputs: W.Inputs(now: calNow, catalystProjectedDate: projectedDate,
+                                             catalystProjectionBasis: "median gap of last 3 reports = 91 d from 2026-07-30"))
+        let entries = W.calendar([brief], now: calNow, calendar: utc)
+        #expect(entries.count == 1)
+        #expect(entries[0].bucket == .thisWeek, "a projected date is a real event date — not the checkedNoCatalyst bucket")
+        #expect(entries[0].isProjected)
+        #expect(!entries[0].isNegativeRecord)
+    }
 }

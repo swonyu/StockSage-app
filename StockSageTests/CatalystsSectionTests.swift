@@ -10,7 +10,7 @@ import SwiftUI
 @Suite("CatalystsSection — pure view helpers")
 struct CatalystsSectionTests {
 
-    @Test("one icon per catalyst Kind — all six cases")
+    @Test("one icon per catalyst Kind — all seven cases")
     func iconPerKind() {
         #expect(CatalystsSection.iconName(for: .earnings) == "calendar.badge.exclamationmark")
         #expect(CatalystsSection.iconName(for: .volumeMove) == "bolt.horizontal.circle.fill")
@@ -18,6 +18,7 @@ struct CatalystsSectionTests {
         #expect(CatalystsSection.iconName(for: .regime) == "gauge.with.needle")
         #expect(CatalystsSection.iconName(for: .seasonality) == "calendar")
         #expect(CatalystsSection.iconName(for: .none) == "questionmark.circle")
+        #expect(CatalystsSection.iconName(for: .projectedEarnings) == "calendar.badge.clock")   // W1, 2026-09-06
     }
 
     @Test("action capsule fill matches the DS palette token per action")

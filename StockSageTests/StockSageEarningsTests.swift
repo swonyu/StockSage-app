@@ -228,6 +228,83 @@ struct StockSageEarningsTests {
         #expect(restored.checkedAt == earningsCheckedAt)
     }
 
+    // MARK: - W1 (2026-09-06): the date RANGE + isEarningsDateEstimate flag
+    //
+    // `parseEarningsCalendar` is a NEW, richer read of the exact same `calendarEvents` body
+    // `parseEarningsDate` already parses (untouched above — min-epoch behaviour preserved).
+
+    @Test func parsesRangeAndConfirmedFlag() {
+        // Hand-derived: two epochs, 400,000s apart; isEarningsDateEstimate explicitly false.
+        let start = 1_701_000_000.0, end = 1_701_400_000.0
+        let json = """
+        {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{"earningsDate":[
+          {"raw":\(start),"fmt":"start"},{"raw":\(end),"fmt":"end"}],"isEarningsDateEstimate":false}}}]}}
+        """
+        let info = StockSageEarnings.parseEarningsCalendar(Data(json.utf8))
+        #expect(info?.date == Date(timeIntervalSince1970: start))
+        #expect(info?.dateRangeEnd == Date(timeIntervalSince1970: end))
+        #expect(info?.isEstimate == false)
+    }
+
+    @Test func parsesEstimateTrueFlag() {
+        let raw = 1_701_000_000.0
+        let json = """
+        {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{"earningsDate":[
+          {"raw":\(raw)}],"isEarningsDateEstimate":true}}}]}}
+        """
+        let info = StockSageEarnings.parseEarningsCalendar(Data(json.utf8))
+        #expect(info?.date == Date(timeIntervalSince1970: raw))
+        #expect(info?.dateRangeEnd == nil, "a single-element earningsDate must not fabricate a range end")
+        #expect(info?.isEstimate == true)
+    }
+
+    @Test func missingEstimateFlagDefaultsToTrueTheSaferUnconfirmedReading() {
+        // Yahoo doesn't always populate isEarningsDateEstimate — absence must read as
+        // "unconfirmed", never silently as "confirmed" (a false negative is the safer failure).
+        let raw = 1_701_000_000.0
+        let json = """
+        {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{"earningsDate":[{"raw":\(raw)}]}}}]}}
+        """
+        let info = StockSageEarnings.parseEarningsCalendar(Data(json.utf8))
+        #expect(info?.isEstimate == true)
+    }
+
+    @Test func malformedCalendarBodyParsesToNil() {
+        #expect(StockSageEarnings.parseEarningsCalendar(Data("{}".utf8)) == nil)
+        #expect(StockSageEarnings.parseEarningsCalendar(Data("not json".utf8)) == nil)
+        let noDates = """
+        {"quoteSummary":{"result":[{"calendarEvents":{"earnings":{"earningsDate":[]}}}]}}
+        """
+        #expect(StockSageEarnings.parseEarningsCalendar(Data(noDates.utf8)) == nil)
+    }
+
+    // MARK: - W1: Yahoo `earningsHistory` (Tadawul's only candidate projection source)
+
+    @Test func parsesEarningsHistorySortedOldestFirst() {
+        let older = 1_700_000_000.0, newer = 1_701_000_000.0
+        let json = """
+        {"quoteSummary":{"result":[{"earningsHistory":{"history":[
+          {"quarter":{"raw":\(newer)}},{"quarter":{"raw":\(older)}}]}}]}}
+        """
+        let dates = StockSageEarnings.parseEarningsHistory(Data(json.utf8))
+        #expect(dates == [Date(timeIntervalSince1970: older), Date(timeIntervalSince1970: newer)])
+    }
+
+    @Test func earningsHistorySkipsMalformedRowsRatherThanFailingTheWhole() {
+        let good = 1_700_000_000.0
+        let json = """
+        {"quoteSummary":{"result":[{"earningsHistory":{"history":[
+          {"quarter":{"raw":\(good)}},{"quarter":{}},{"notQuarter":1},{}]}}]}}
+        """
+        let dates = StockSageEarnings.parseEarningsHistory(Data(json.utf8))
+        #expect(dates == [Date(timeIntervalSince1970: good)])
+    }
+
+    @Test func earningsHistoryMissingModuleParsesToEmpty() {
+        #expect(StockSageEarnings.parseEarningsHistory(Data("{}".utf8)) == [])
+        #expect(StockSageEarnings.parseEarningsHistory(Data("not json".utf8)) == [])
+    }
+
     @Test func aSymbolNotYetSweptHasNoCheckedAtEntry() {
         // MSFT was never asked (no Record for it at all) — applying a record set that doesn't
         // mention it must leave it with NO entry in either dict, never inferred as "checked, none".
