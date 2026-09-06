@@ -197,3 +197,47 @@ StockSageNewsService 12/12, StockSageCatalystNarratorTests 23/23; unfiltered sui
 tests in 177 suites, 0 failed (tools/runtests.sh, EXECUTED, 65.3s). No network hit in any test —
 all fixtures are hand-derived pure-parse inputs; `ToolPolicy.override` gating test uses the
 pre-existing `ToolPolicyTestLock` seam.
+
+## Pipelines 1+2 integrated — canonical gate green on both platforms at 3dd538f (2026-09-06 17:38 +03, pipeline-2 session cd9bd932)
+Cherry-picked `9b1f4fa..wt/coverage` (15 commits, oldest first) onto this branch: pipeline 1 (dc9a4c1 design brief,
+A1 bc21303, A3 3ca3e89, tracked-union aa309f4, B5 58d4a72, T4 544f68c, T5 9e3042b, T6 663e3f1, review fixes 777e9b5) and
+pipeline 2 (366ff56 follow-up scope, W1 f44155e catalyst chain, W3 f0cce3e 30 s seamless prices, d2feaf7 W2 dropped —
+owner does not want Tadawul live tracking, 75272e6 W4 retrieval-first Explain sources, bdb1284 review fixes). One
+conflict (HANDOFF.md, both sides appended at the same anchor) resolved by keeping both. Tree identical to wt/coverage
+bdb1284 except this file. The uncommitted `project.pbxproj` reorder was left untouched.
+
+Canonical gate (README command, session-local `-derivedDataPath`, HEAD 3dd538f before and after):
+- macOS `xcodebuild … -destination platform=macOS … test`: `Test run with 1639 tests in 183 suites passed after 56.326 seconds` — ** TEST SUCCEEDED ** (17:34:52–17:36:37 +03).
+- iOS `… -destination 'platform=iOS Simulator,id=3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA'` (iPhone 17 Pro (gate)): `Test run with 1639 tests in 183 suites passed after 55.678 seconds` — ** TEST SUCCEEDED ** (17:36:37–17:38:18 +03).
+- Baseline before this integration: 1,476/171 at 9b1f4fa. tools/runtests.sh on wt/coverage at bdb1284: 1,639/183, 0 failed.
+Logs: `<session scratchpad>/gate/{macos,ios}_test_3dd538f.log`.
+
+Pipeline 2 review: two Opus lenses (honesty/fail-closed: REVISE, 2 blockers/6 majors/3 minors/1 note; correctness/
+concurrency: REVISE, 1 blocker/3 majors/4 minors/2 notes) → fix pass bdb1284 applied 11 of 12 blocker/major items
+(two pairs were duplicates). Deliberate NON-fix, evidence-backed: EODHD calendar `report_date` vs `date` semantics
+(StockSageEODHDCalendar.swift:21) — a live probe returned HTTP 401 from BOTH `/api/calendar/earnings` and
+`/api/fundamentals/*` with this account's key, so neither reading could be verified; fields documented UNVERIFIED with
+the 401 evidence in a file-level comment, nothing guessed.
+
+Visual QA (W3): macOS `--section watchlist` t0/t1 (~35 s apart) + iOS gate-simulator t0 screenshots under the design
+session's scratchpad `visual_qa/`. They prove no crash/layout regression from PriceFlash / TimelineView /
+applyPolledQuotes, but the watchlist on this machine is EMPTY and the header sat on the "Last-good (cached)" branch
+(Yahoo 429-throttled all day), so the flash fade, numeric transition and "updated N s ago" counter were NOT pixel-
+exercised — covered by MarketsPriceFlashDirectionTests, MarketsUpdatedAgoLabelTests, MarketsPolledQuoteMergeTests,
+MarketsRefreshIntervalTests (14/14). Pixel check on real data still owed once a tracked symbol exists.
+
+Owner directives recorded today, applied going forward:
+- 15:06 +03 (answer "2"): after this gate, ff-merge this branch into `main` and push `main` to origin
+  (github.com/swonyu/StockSage-app) — done in the next commit's push; never Salman-bot.
+- 17:19 +03 verbatim "i dont use eodhd anymore": EODHD is no longer a data source. Today every EODHD call path fails
+  closed (401 → Yahoo / `.unchecked` / `[]`). Pipeline 4 (Massive migration, saleh-36 tab) must make Massive the ONLY
+  US provider at its M5 cutover — not keep EODHD as a live fallback; deleting the EODHD code is a separate owner call.
+  Note: `StockSageEODHD.embeddedKey` still holds a hard-coded key value in source — revoke it on the EODHD side and
+  strip it from source at the cutover.
+- Pipeline 5 (execution assist: `stocksage-coverage-5-execution-assist.js`) is queued in this session to launch only
+  after pipeline 4 has actually landed on wt/coverage (Massive files committed + closed journal + clean, quiet tree);
+  its post-steps are the same as above but with NO push.
+
+Still open from pipeline 2 (honesty-scoped, not defects): Yahoo `earningsHistory` for `.SR` names unverified (429s);
+EODHD tier now known to be unauthorized (see above); `notApplicable` is driven by `assetClass != "Equity"` only —
+no ETF classifier exists in the codebase and none was invented.
