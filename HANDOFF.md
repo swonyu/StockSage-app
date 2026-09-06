@@ -150,3 +150,12 @@ Uncommitted `StockSage.xcodeproj/project.pbxproj` reorder (104+/91−, no semant
 5. The background sweep session's work (`wt/ui`) is ALREADY on this branch (648c425, dd578ae, 0897fea —
    see the wt/ui section above); its worktree `~/StockSage-wt/ui` can be removed once it has run the
    iOS test leg and pushed.
+
+## Owner directive — 2026-09-06 10:05 +03 (coverage: catalysts on file + live tracking)
+Verbatim: "i want every stock to have a catalyst on file and every stock tracking should be live" then
+"i dont care if it would cost" then "do it all". Interpreted as: for every TRACKED symbol (watchlist ∪
+board ∪ portfolio ∪ open journal trades) (a) a persisted, dated catalyst record — ≥1 sourced catalyst or
+an explicit "none known as of <date>" (never invented); (b) live quotes whenever its market is open, per
+the app's own fail-closed definition of live. The cost side of the budget/cadence owner-gates is WAIVED;
+provider rate limits + the honesty floor still bind. Work branch: `wt/coverage` (worktree
+`~/StockSage-wt/coverage`, cut from this branch). Design brief + worker tasks follow in this file.
