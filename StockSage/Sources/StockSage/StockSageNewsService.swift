@@ -167,7 +167,7 @@ enum StockSageNewsService {
         return date
     }
 
-    private nonisolated static func safeLink(_ raw: Any?) -> URL? {
+    nonisolated static func safeLink(_ raw: Any?) -> URL? {
         guard let text = raw as? String, text.utf8.count <= 2_048,
               let url = URL(string: text), url.scheme?.lowercased() == "https",
               let host = url.host, !host.isEmpty, url.user == nil, url.password == nil else { return nil }
@@ -181,7 +181,7 @@ enum StockSageNewsService {
     }
 
     /// Whole-word cap: never turn a truncated price/identifier into a different numeric fact.
-    private nonisolated static func boundedText(_ text: String, limit: Int) -> String {
+    nonisolated static func boundedText(_ text: String, limit: Int) -> String {
         let words = text.split(whereSeparator: \.isWhitespace)
         var kept = ""
         for word in words {

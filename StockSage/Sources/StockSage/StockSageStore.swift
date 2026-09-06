@@ -326,6 +326,11 @@ final class StockSageStore: ObservableObject {
         seedSampleData()
         loadCachedQuotes()   // prefer real last-good prices over the sample seed when we have them
         loadCatalystRecords()   // A2: restore checkedAt/earningsDates so the TTL guard isn't blind on relaunch
+        let eventNow = Date()
+        for record in StockSageCompanyEventCache.load()?.entries ?? [] where record.fresh(at: eventNow) && StockSageMassive.covers(record.symbol) {
+            let old = companyEventChecks[record.symbol]?[record.feed]
+            if old == nil || old!.checkedAt < record.checkedAt { companyEventChecks[record.symbol, default: [:]][record.feed] = record }
+        }
         // Calibration runtime activation (Decision 2): restore the last persisted fit so the
         // effective calibration survives a relaunch instead of resetting to nil every session.
         // Decode-fail (no key, corrupt blob, schema mismatch) ⇒ both stay nil ⇒ the conservative
@@ -1876,6 +1881,60 @@ final class StockSageStore: ObservableObject {
     /// `refreshCatalyst(symbol:)`, persisted/restored alongside the legacy dicts (see
     /// `loadCatalystRecords`/`saveCatalystRecords` below).
     @Published private(set) var catalystChain: [String: StockSageCatalystRecordCache.Record] = [:]
+
+    /// Independent of earnings: empty success, unavailable and never/stale remain distinct.
+    @Published private(set) var companyEventChecks: [String: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation]] = [:]
+    @Published private(set) var companyEventCacheSaved = true
+    private var companyEventGeneration = UUID()
+
+    /// Native Markets task, keyed to tracked symbols/full refresh (never stream ticks). Daily
+    /// successful TTL,15min transient retry, per-feed24h entitlement gate. Four requests maximum
+    /// in flight, five serial feed passes; earnings never wait for this independent sweep.
+    func refreshCompanyEvents() async {
+        guard !Self.isRunningTests, ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        let generation = UUID()
+        companyEventGeneration = generation
+        let symbols = trackedSymbolsUnion.filter(StockSageMassive.covers)
+        let allowed = Set(symbols)
+        companyEventChecks = companyEventChecks.filter { allowed.contains($0.key) }
+        defer {
+            if companyEventGeneration == generation {
+                companyEventCacheSaved = StockSageCompanyEventCache(entries: companyEventChecks.values.flatMap { $0.values }).save()
+            }
+        }
+        for feed in StockSageMassiveEvents.Feed.allCases {
+            let now = Date()
+            let due = symbols.filter { companyEventChecks[$0]?[feed]?.fresh(at: now) != true }
+            guard !due.isEmpty else { continue }
+            let reachable = await StockSageMassiveEvents.probe(feed)
+            guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
+            if !reachable {
+                var updated = companyEventChecks
+                for symbol in due {
+                    updated[symbol, default: [:]][feed] = .init(symbol: symbol, feed: feed, checkedAt: now, outcome: .unavailable, event: nil)
+                }
+                companyEventChecks = updated
+                continue
+            }
+            for start in stride(from: 0, to: due.count, by: 4) {
+                guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
+                let chunk = Array(due[start..<min(start + 4, due.count)])
+                let records = await withTaskGroup(of: StockSageMassiveEvents.Observation.self, returning: [StockSageMassiveEvents.Observation].self) { group in
+                    for symbol in chunk { group.addTask { await StockSageMassiveEvents.fetch(feed, symbol: symbol) } }
+                    var results: [StockSageMassiveEvents.Observation] = []
+                    for await record in group { results.append(record) }
+                    return results
+                }
+                guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
+                var updated = companyEventChecks
+                for record in records { updated[record.symbol, default: [:]][feed] = record }
+                companyEventChecks = updated
+                if start + 4 < due.count { try? await Task.sleep(for: .milliseconds(750)) }
+            }
+            // Preserve completed feed progress across view cancellation/app relaunch.
+            companyEventCacheSaved = StockSageCompanyEventCache(entries: companyEventChecks.values.flatMap { $0.values }).save()
+        }
+    }
 
     /// How long a "checked, nothing found" record stays honest before `refreshEarnings` re-asks.
     /// A dated negative observation is only as good as its date — refreshed at most once a day so

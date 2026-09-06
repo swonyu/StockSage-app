@@ -65,7 +65,15 @@ pushes, actual trades, service purchases, or local model training.
     same3 explicit opt-in exclusions. See HANDOFF23:29 for exact bundles and compile correction.
   - [ ] Separate follow-up: actual broker-basis reconciliation for realized closing. Known
     non-unit factors cannot use the old raw-basis close editor; no silent journal rewrite.
-- [ ] M6 ratings, guidance, 8-K, dividends and Form 4, with dated provenance and entitlement failures.
+- [x] M6 ratings, guidance, 8-K, dividends and Form4 (code/tests; live/full UI pending).
+  - [x] Daily persisted per-feed answered/unavailable checks; four-wide bounded requests,
+   24h entitlement gates, UTC rollover and cancellation guards.
+  - [x] New precedence,7/14/30-day windows, source/caveat links, Recent calendar bucket,
+    paired guidance ranges (missing is unknown, not withdrawn), original target basis.
+  - [x]15 new tests; new3402-case exhaustive event grid plus retained157500-case legacy grid.
+    Focused92/92 before the final3 cases; final canonical macOS1729/1729 and iPhone1727/1727,
+    same3 opt-in exclusions. Exact bundles and compile correction in HANDOFF00:15.
+  - [x] Stale optional narration hidden when its input facts change; no model call/load.
 - [ ] P5 tickets, crossing alerts, separate paper automation/store, broker integration as below.
 - [ ] Proactive native Chat using the approved V3 design and existing transport.
 - [ ] Prioritized money/accounting corrections from FULL_REVIEW.

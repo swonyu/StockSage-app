@@ -30,6 +30,7 @@ struct CatalystsSection: View {
     @AppStorage("marketsCatalystsMode") private var mode: Mode = .cards
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
+    @State private var narrationFacts: [String: [String]] = [:]
     @State private var narrating: Set<String> = []
     /// The citable news/filing/insider sources fetched for the LAST "Explain" press on each
     /// symbol — kept so `narrationPanel` can render the numbered source list (and its count for
@@ -167,7 +168,10 @@ struct CatalystsSection: View {
                 catalystNotApplicable: record?.status == .notApplicable,
                 catalystProjectedDate: isProjected ? record?.earningsDate : nil,
                 catalystProjectionBasis: isProjected ? record?.projectionBasis : nil,
-                catalystSourcesAsked: record?.sourcesAsked ?? []))
+                catalystSourcesAsked: record?.sourcesAsked ?? [],
+                companyEvents: (store.companyEventChecks[sym] ?? [:]).values.compactMap {
+                    $0.outcome == .answered && $0.fresh(at: now) ? $0.event : nil
+                }))
         }
     }
 
@@ -211,6 +215,13 @@ struct CatalystsSection: View {
             // so it renders on first appearance of this tab — before the auto-probe below ever
             // fires and before any "Explain" press — regardless of whether the panel is expanded.
             if isNonLoopbackConfig { nonLoopbackWarning() }
+            Text("With external access enabled, daily company-event checks send tracked US symbols to api.massive.com for ratings, guidance, filings and dividends. These are observations, not trade signals. Missing events do not prove nothing occurred; Cards shows per-feed coverage.")
+                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !store.companyEventCacheSaved {
+                Text("Company-event cache could not be saved; checks may repeat after relaunch.")
+                    .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+            }
             // Privacy line (fix pass 2026-09-06, W4): "Explain" fetches CITABLE SOURCES itself —
             // separate from, and in addition to, whichever narrator backend answers the
             // paragraph. Those fetches are the app's own Massive/EODHD/SEC calls, so this is true
@@ -313,9 +324,13 @@ struct CatalystsSection: View {
             }
             Text("Source: \(primary.source)")
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+            if let url = primary.sourceURL {
+                Link("Read source record", destination: url).font(.system(size: font11)).touchHitArea()
+            }
+            companyFeedCoverage(idea.symbol)
             cardButtons(brief, availability: availability)
             if expanded.contains(idea.symbol) { filingsPanel(idea.symbol) }
-            narrationPanel(idea.symbol)
+            narrationPanel(brief)
         }
         .padding(DS.Space.lg)
         .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
@@ -387,8 +402,28 @@ struct CatalystsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 180, alignment: .leading)
             }
+            if let url = item.sourceURL {
+                Link("Read \(item.source)", destination: url).font(.system(size: font9)).touchHitArea()
+            }
         }
         .help(item.why.joined(separator: " "))
+    }
+
+    @ViewBuilder
+    private func companyFeedCoverage(_ symbol: String) -> some View {
+        if StockSageMassive.covers(symbol) {
+            let records = store.companyEventChecks[symbol.uppercased()] ?? [:]
+            let now = Date()
+            let checked = records.values.filter { $0.outcome == .answered && $0.fresh(at: now) }.count
+            DisclosureGroup("Company feeds: \(checked)/5 current checks") {
+                ForEach(StockSageMassiveEvents.Feed.allCases, id: \.rawValue) { feed in
+                    Text(StockSageMassiveEvents.statusLine(feed, observation: records[feed], now: now))
+                        .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+        }
     }
 
     @ViewBuilder
@@ -448,9 +483,13 @@ struct CatalystsSection: View {
     }
 
     @ViewBuilder
-    private func narrationPanel(_ symbol: String) -> some View {
+    private func narrationPanel(_ brief: StockSageCatalystWatch.Brief) -> some View {
+        let symbol = brief.idea.symbol
         if narrating.contains(symbol) {
             ProgressView().controlSize(.small)
+        } else if narrations[symbol] != nil, narrationFacts[symbol] != StockSageCatalystNarrator.facts(for: brief) {
+            Text("Facts changed since this explanation. Tap Explain to refresh it.")
+                .font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
         } else if let result = narrations[symbol] {
             let sources = narrationSources[symbol] ?? []
             switch result {
@@ -523,6 +562,7 @@ struct CatalystsSection: View {
         let symbol = brief.idea.symbol
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
+        narrationFacts[symbol] = StockSageCatalystNarrator.facts(for: brief)
         Task {
             let sources = await Self.citedSources(for: symbol)
             narrationSources[symbol] = sources
@@ -653,7 +693,7 @@ struct CatalystsSection: View {
         .contentShape(Rectangle())
         .onTapGesture { onSelect(entry.idea) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline)")
+        .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
     }
 
     // MARK: - Shared small pieces
@@ -696,6 +736,11 @@ struct CatalystsSection: View {
         case .seasonality: return "calendar"
         case .none:        return "questionmark.circle"
         case .projectedEarnings: return "calendar.badge.clock"
+        case .filing8K: return "doc.text.magnifyingglass"
+        case .ratingChange: return "person.text.rectangle"
+        case .guidanceChange: return "text.bubble"
+        case .exDividend: return "calendar.badge.plus"
+        case .insiderTrade: return "person.crop.circle.badge.clock"
         }
     }
 

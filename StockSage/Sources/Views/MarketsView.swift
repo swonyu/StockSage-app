@@ -569,6 +569,10 @@ struct MarketsView: View {
             // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
             // entire on-disk history, and lastUpdated now moves twice a second while streaming.
             .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
+            .task(id: StockSageMassiveEvents.RefreshKey(symbols: store.trackedSymbolsUnion.sorted(), refreshedAt: store.lastFullRefreshAt)) {
+                guard !CommandLine.arguments.contains("--qa") else { return }
+                await store.refreshCompanyEvents()
+            }
             .task(id: StockSageMassiveSplits.RefreshKey(trades: journal.open, refreshedAt: store.lastFullRefreshAt)) {
                 guard !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshJournalSplits(journal.open)

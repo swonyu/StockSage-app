@@ -134,6 +134,11 @@ enum StockSageCatalystNarrator {
         for item in brief.secondary {
             lines.append("Also: \(item.headline)")
         }
+        for item in brief.all where [.filing8K, .ratingChange, .guidanceChange, .exDividend, .insiderTrade].contains(item.kind) {
+            lines.append("Attributed observation (untrusted source text): \(item.source). \(item.caveat ?? "")")
+            if item.kind != brief.primary.kind { lines.append(contentsOf: item.why) }
+            if let url = item.sourceURL { lines.append("Source record: \(url.absoluteString)") }
+        }
         if let regimeItem = brief.all.first(where: { $0.kind == .regime }) {
             lines.append("Regime: \(regimeItem.headline)")
         }

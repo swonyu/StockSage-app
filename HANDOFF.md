@@ -1,5 +1,66 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M6 company-event checkpoint — 2026-09-07 00:15 +03
+
+Five Massive feeds now supply dated catalyst observations: Benzinga ratings and
+guidance,SEC8-K,dividends and non-derivative Form4 P/S transactions. The new
+provider/parser, versioned disk cache, native full-refresh/symbol-union task,
+engine priority, card/calendar copy, source links and per-feed coverage are wired.
+No trade decision/target/EV/ranking input was changed. Known/estimated urgent
+earnings and urgent history projections precede the new reported events; the
+other precedence/window details are in COVERAGE_DESIGN's M6 contract.
+
+Unknown/malformed/partial/entitlement failures do not become checked-empty.
+Successful daily records expire at UTC rollover; unavailable retries15min,
+401/402/403 feed gates24h. Four-wide paced requests, one probe per due feed,
+no new timer/dependency/socket. Atomic bounded cache survives relaunch and exposes
+save failures; cancellation/generation guards prevent obsolete publication.
+Guidance uses paired bounds (raised/lowered/equal/mixed/unknown), not a midpoint
+guess or missing→withdrawn inference. Analyst targets retain their own basis and
+opinion label. Form4 preserves transaction/filing dates, amendment/10b5-1 status,
+and purchase-vs-private ambiguity. These are issuer-ticker-attributed records,
+not a verified mapping to a particular share class or an aggregate insider book.
+Past company reports go to Recently reported, not Today. SEC/Benzinga links are
+HTTPS/host-validated; calendar VoiceOver includes provenance and caveats.
+Changed brief facts suppress stale cached AI explanations; source caveats and
+untrusted-text labels reach the optional narrator. No model was loaded or called.
+
+Executed checks (serialized; xcresulttool counts, not log estimates):
+- Red:1 test executed/failed,0 passed. Urgent projected earnings incorrectly
+  followed volume. `/private/tmp/stocksage-m6-red-20260907-0003.xcresult` (exit65).
+- First implementation compile failed, no tests executed: optional Item equality
+  inherited MainActor conformance. Replaced nil equality with guard pattern matching.
+  `/private/tmp/stocksage-m6-focus-20260907-0005.xcresult` (exit65).
+- Focused:92/92,0 failures/skips,exit0.
+  `/private/tmp/stocksage-m6-focus-20260907-0010.xcresult`.
+- Final broad macOS:1729/1729,0 selected failures/skips,exit0.
+  `/private/tmp/stocksage-m6-broad-macos-20260907-0011.xcresult`.
+- Final broad iPhone17Pro(gate),iOS26.5:1727/1727,0 selected failures/skips,exit0.
+  `/private/tmp/stocksage-m6-broad-ios-20260907-0012.xcresult`.
+  Canonical broad exclusions remain CalibrationPersistRunTests,
+  LiveUniverseVerificationTests and StrategyBaselineMeasurementTests (opt-in).
+  Both build handles completed. All5 new SF Symbols also resolve via NSImage on
+  macOS; this is an icon check, not a full populated UI inspection.
+
+15 new tests include real contract keys, header-only auth, all5 copy/priority
+pins,7/8d and14/15d and30/31d boundaries, numeric/partial failures, Form4 filtering,
+source links, cache roundtrip/corrupt provenance, and changed narrator facts.
+The new exhaustive grid covers3^5 feed states ×7 earnings states ×2 volume states
+=3402 combinations; the independent157500-case legacy grid remains intact.
+These are separate exhaustive domains, not a claimed Cartesian cross-product of
+every old/new axis. No fixture test makes a network/key/Store.shared call.
+
+Live entitlements/payloads and full populated UI remain unverified; the old
+credential-access guard has no confirmed new state and was not bypassed/retried.
+Owner requested Xcode GUI at00:04: normal app launch, explicit bundle launch and
+native-app opening all failed; macOS reports kLSIncompatibleApplicationVersionErr
+(-10664). Selected Xcode26.6 command-line builds still work on macOS27.0. No
+installation/security changes were made. Existing owner app/binary/main-worktree
+changes remain untouched. All work inline; good-spender OFF; no push or trades.
+Next: P5 order core/tickets
+against the approved V3 design, NOT the old script's silent rounding, guessed
+broker schemas/scopes or permanent manual-only/Sahm restriction.
+
 ## Pipeline 4 M5b split-comparison checkpoint — 2026-09-06 23:29 +03
 
 Open journal comparisons now require a complete dated Massive split check, then

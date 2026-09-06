@@ -511,3 +511,56 @@ https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/
 HANDOFF contains exact bundles, the initial red defects, the fixture compile
 correction, and conditional live/full-UI limitations. No authenticated request
 was made while the active credential guard continued denying the check.
+
+## M6 company-event feeds — 2026-09-07 implementation contract
+
+`StockSageMassiveEvents` uses the five verified endpoints in PIPELINE_TAKEOVER:
+ratings/guidance (owner-purchased Benzinga add-ons),8-K disclosures,dividends and
+Form4. These observations only change the Catalysts tab's attention order; they
+do not change advice, ranking, EV, targets, stops, positions or execution.
+
+Native Markets task identity is the sorted tracked-symbol union plus the full
+refresh clock, never trade/quote ticks. Each due feed gets one status-only probe
+before a four-wide,750ms-paced symbol sweep. Successful checks expire at the next
+UTC midnight or24h; transient unavailable observations retry after15min. Rejected
+401/402/403 feeds persist a24h gate in defaults; cancelled/policy-disabled work
+cannot publish. Up to5 probes +5N requests for N due US symbols on a full healthy
+pass, not one batched API call. Ordinary refreshes with fresh records add no calls.
+Cancellation saves completed progress; there is no promise that every feed is
+checked within one quote-refresh interval. No new timer, service or dependency.
+
+Each response must be complete, statusOK,≤100 rows and≤2MB. Pagination/malformed
+records remain unavailable, NOT checked-empty. Exactly one event per kind is
+selected: latest calendar date, or nearest upcoming ex-date, with deterministic
+same-day content tie-breaking (not a claim of intraday recency). A successful
+empty result explicitly means no qualifying record in the queried window.
+`company_events_v1.json` lives beside the existing earnings cache, with separate
+answered/unavailable outcomes, bounded16MB/10,000-record atomic persistence and
+freshness/provenance restored on launch. Save failure is visible in the header.
+This ceiling supports2,000 fully checked symbols; expand only with measured need.
+
+Precedence: urgent known/estimated earnings → urgent history-projected earnings
+→8-K≤7d →rating/PT change≤7d →guidance≤14d →volume →clear known/projected earnings
+→ex-dividend≤30d →Form4≤14d →extreme →regime →seasonality →none. Day windows are
+inclusive UTC calendar days, not invented event times. Past company reports get
+"Recently reported", not "Today"; legacy earnings bucketing remains unchanged.
+
+Guidance compares compatible original/previous min/max bounds and explicit
+method/currency. Equal bounds are unchanged, both rising/falling is raised/lowered,
+crossing bounds are mixed. Missing fields are unknown, never inferred withdrawal;
+free-text notes are not mined for that claim. EPS may be negative; revenue cannot.
+Analyst original and adjusted target pairs are never mixed; the displayed original
+target is explicitly an opinion, not StockSage's target. Form4 includes only known
+non-derivative P/S records, names transaction AND filing dates, preserves4/A and
+10b5-1 disclosures, and does not infer that a private purchase was open-market.
+8-K categories remain provider-classified; dividends do not imply cash receipt.
+
+Cards show per-feed check coverage and dated source records. Source links accept
+HTTPS only, no userinfo, normal443, and SEC/Benzinga hosts matching the feed.
+Calendar VoiceOver includes source/caveat. Optional model facts preserve these
+caveats and mark source text untrusted; an explanation is withheld from display
+when the current brief's facts differ from those it explained. Model output is
+still optional; all event selection and copy are deterministic.
+
+Verification is recorded in HANDOFF after executed gates, not inferred from this
+contract. Live entitlement/payload checks and full populated UI remain unverified.
