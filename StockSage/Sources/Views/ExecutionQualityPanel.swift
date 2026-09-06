@@ -30,12 +30,16 @@ enum ExecutionQualityMath {
 struct ExecutionQualityPanel: View {
     let trades: [TradeRecord]
 
+    @ScaledMetric(relativeTo: .caption2) private var font9: CGFloat = 9
+    @ScaledMetric(relativeTo: .caption2) private var font12_5: CGFloat = 12.5
+    @ScaledMetric(relativeTo: .caption2) private var font16: CGFloat = 16
+
     private var measured: MeasuredSlippage? { StockSageJournal.measuredSlippage(trades) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack(spacing: DS.Space.sm) {
-                Image(systemName: "target").font(.system(size: 16)).foregroundStyle(DS.Palette.accent)
+                Image(systemName: "target").font(.system(size: font16)).foregroundStyle(DS.Palette.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Execution quality").font(DS.Typography.titleM).foregroundStyle(.white)
                     Text("Your measured fills vs. the assumptions the engine costs your trades at.")
@@ -87,8 +91,8 @@ struct ExecutionQualityPanel: View {
 
     private func statCell(title: String, value: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(title).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).lineLimit(1)
-            Text(value).font(.system(size: 12.5, weight: .semibold, design: .rounded))
+            Text(title).font(.system(size: font9, weight: .semibold)).foregroundStyle(.secondary).lineLimit(1)
+            Text(value).font(.system(size: font12_5, weight: .semibold, design: .rounded))
                 .foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.75)
         }
         .accessibilityElement(children: .ignore)

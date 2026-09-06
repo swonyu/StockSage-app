@@ -10,6 +10,7 @@ import SwiftUI
 struct MarketSessionClockView: View {
     @State private var now = Date()
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -30,7 +31,7 @@ struct MarketSessionClockView: View {
         // name to zero width, so the Tadawul row rendered as a bare "Scheduled open 10:00
         // Riyadh (8m)" with no indication of WHICH market (caught on device 2026-07-28).
         // The whole line shrinks together instead.
-        .font(.system(size: 11))
+        .font(.system(size: font11))
         // One market = one line (2026-07-28). Unbounded, a long phase like "Scheduled open
         // 10:00 Riyadh (1h 4m)" wrapped inside the header's narrow column on iPhone, turning
         // two clocks into four ragged lines and shoving the header taller than the content

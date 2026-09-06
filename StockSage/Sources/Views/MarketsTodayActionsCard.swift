@@ -34,6 +34,9 @@ struct MarketsTodayActionsCard: View {
 
     @ScaledMetric(relativeTo: .caption2) private var font8: CGFloat = 8
     @ScaledMetric(relativeTo: .caption2) private var font9: CGFloat = 9
+    @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
+    @ScaledMetric(relativeTo: .caption2) private var font12: CGFloat = 12
+    @ScaledMetric(relativeTo: .caption2) private var font13: CGFloat = 13
 
     /// ALERT-FMT-1: thin alias onto the single shared formatter (`StockSageCurrency.adaptivePrice`,
     /// pure, tested there) — keeps call sites below unchanged in shape.
@@ -52,8 +55,8 @@ struct MarketsTodayActionsCard: View {
             let shownPlans = executableOnly ? plans.filter(isExecutableNow(_:)) : plans
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Image(systemName: "list.number").font(.system(size: 11)).foregroundStyle(DS.Palette.accent)
-                    Text("Today's plan — executable equities first").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                    Image(systemName: "list.number").font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+                    Text("Today's plan — executable equities first").font(.system(size: font11, weight: .bold)).foregroundStyle(.white)
                     Spacer()
                     Toggle("Executable now only", isOn: $executableOnly)
                         .toggleStyle(.switch)
@@ -61,9 +64,9 @@ struct MarketsTodayActionsCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Text("Top \(shownPlans.count) setups, sized and gated — equities before 24/7 crypto, gate-clear before blocked, then fastest; do #1 first, unless it's blocked.")
-                    .font(.system(size: 9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: font9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text("Within those buckets, faster NET EV/day (est. costs deducted; gross when net is unavailable) ranks first — unlike the Fast lane above, which ranks by growth rate (log-growth at ½-Kelly), so the two cards can order the same names differently.")
-                    .font(.system(size: 9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: font9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 // F8 (2026-07-09; referent fixed D1 2026-07-16): cross-reference the OTHER direction
                 // — this list's own #1 vs the highest-gross-EV crown pick (a different lens). This
                 // card renders on the Ideas tab, where that crown is the "Best opportunity" card
@@ -71,11 +74,11 @@ struct MarketsTodayActionsCard: View {
                 // Copy-only; renders nothing when either is nil or they agree.
                 if let globalBestSymbol, let first = shownPlans.first?.symbol, globalBestSymbol != first {
                     Text("The Best opportunity card leads with \(globalBestSymbol) instead — different lens (highest gross EV, not fastest net EV/day).")
-                        .font(.system(size: 9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: font9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if executableOnly {
                     Text("Executable now includes only rows that currently clear or caution on the pre-trade gate and are fundable (≥1 share) at your account size.")
-                        .font(.system(size: 8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: font8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
 
                 if shownPlans.isEmpty {
@@ -172,12 +175,12 @@ struct MarketsTodayActionsCard: View {
             }()
             VStack(alignment: .leading, spacing: 2) {
                 Text(headline)
-                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(color)
+                    .font(.system(size: font9, weight: .semibold)).foregroundStyle(color)
                 Text("#\(rank) \(plan.symbol): \(orderText)")
-                    .font(.system(size: 9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: font9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let timing {
                     Text("Timing note: \(timing)")
-                        .font(.system(size: 8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: font8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
@@ -204,15 +207,15 @@ struct MarketsTodayActionsCard: View {
             let color: Color = delta >= 0 ? DS.Palette.successSoft : DS.Palette.warningSoft
             VStack(alignment: .leading, spacing: 2) {
                 Text("Paper today: realized (net) vs planned (gross target)")
-                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(color)
+                    .font(.system(size: font9, weight: .semibold)).foregroundStyle(color)
                 Text(String(format: "%d close%@ today: planned %+.2fR gross vs realized %+.2fR net (Δ %+.2fR vs the full-target plan — mostly exit shortfall on stops/early exits, plus costs)",
                             measured, measured == 1 ? "" : "s", planned, realized, delta))
-                    .font(.system(size: 9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: font9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let fwd = paperStore.forwardStats {
                     Text(String(format: "Forward paper deflated Sharpe (DSR) %.0f%% (%d closed) — %@",
                                 fwd.deflated.dsr * 100, fwd.closed,
                                 fwd.passesForwardBar ? "passes bar" : "below bar"))
-                        .font(.system(size: 8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: font8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .help(StockSageDeflatedSharpe.caveat)
                     // Audit 2026-07-12 #2: forwardStats is CLOSED-ONLY, which is selection-biased —
                     // stops resolve before targets, so early closes over-represent losers (the exact
@@ -222,7 +225,7 @@ struct MarketsTodayActionsCard: View {
                     if openCount > 0 {
                         Text(String(format: "…on the %d closed of %d — stops resolve before targets, so this closed-only read OVER-STATES the loss (%d still open, unmarked here). See the Portfolio → Forward scoreboard for the full-book bound.",
                                     fwd.closed, paperStore.trades.count, openCount))
-                            .font(.system(size: 8)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: font8)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -295,7 +298,7 @@ struct MarketsTodayActionsCard: View {
     private func logFillButton(_ plan: TodayActionPlan, onLogFill: @escaping (String) -> Void) -> some View {
         Button { onLogFill(plan.symbol) } label: {
             VStack(spacing: 2) {
-                Image(systemName: "square.and.pencil").font(.system(size: 12))
+                Image(systemName: "square.and.pencil").font(.system(size: font12))
                 Text("Log").font(.system(size: font8, weight: .semibold))
             }
             .foregroundStyle(DS.Palette.accent)
@@ -316,15 +319,15 @@ struct MarketsTodayActionsCard: View {
         Button { onSelectSymbol(plan.symbol) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: DS.Space.sm) {
-                    Text("#\(rank)").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
+                    Text("#\(rank)").font(.system(size: font11, weight: .bold)).foregroundStyle(.secondary)
                         .frame(width: 16, alignment: .leading)
-                    Text(plan.symbol).font(.system(size: 13, weight: .semibold, design: .rounded))
+                    Text(plan.symbol).font(.system(size: font13, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white)
                         .strikethrough(blocked, color: DS.Palette.dangerSoft)
                     if plan.isCrypto {
                         Text("24/7").font(.system(size: font8)).foregroundStyle(DS.Palette.warningSoft)
                     }
-                    Text(String(format: "%+.3fR/day gross", plan.velocity)).font(.system(size: 11, design: .monospaced))
+                    Text(String(format: "%+.3fR/day gross", plan.velocity)).font(.system(size: font11, design: .monospaced))
                         .foregroundStyle(DS.Palette.successSoft)
                     // Same de-rank flags the main ideas/velocity boards already show — fastLane()
                     // demotes but does not EXCLUDE below-floor/low-conviction ideas, so a row here

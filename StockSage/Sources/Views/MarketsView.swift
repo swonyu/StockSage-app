@@ -1539,7 +1539,7 @@ struct MarketsView: View {
             }
             Button { store.removePriceAlert(a.id) } label: {
                 Image(systemName: "trash").font(.system(size: mvFont11)).foregroundStyle(.secondary)
-            }.buttonStyle(.plain).help("Remove alert")
+            }.buttonStyle(.plain).touchHitArea().help("Remove alert")
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         // Permission read for the denied banner above — re-checked on panel appear.
@@ -2005,7 +2005,7 @@ struct MarketsView: View {
                 Image(systemName: "trash").font(.system(size: mvFont12))
                     .foregroundStyle(hovered ? DS.Palette.danger.opacity(0.7) : Color.secondary)
             }
-            .buttonStyle(LuxPressStyle()).help("Remove holding").accessibilityLabel("Remove \(p.symbol)")
+            .buttonStyle(LuxPressStyle()).touchHitArea().help("Remove holding").accessibilityLabel("Remove \(p.symbol)")
         }
         .padding(.horizontal, DS.Space.sm).padding(.vertical, 10)
         .background(hovered ? DS.Palette.accent.opacity(0.06) : Color.clear)
@@ -3624,7 +3624,7 @@ struct MarketsView: View {
                 }
                 Button { pendingJournalDeleteID = trade.id } label: {
                     Image(systemName: "trash").font(.system(size: mvFont9)).foregroundStyle(.secondary)
-                }.buttonStyle(.plain)
+                }.buttonStyle(.plain).touchHitArea()
                 .accessibilityLabel("Delete \(trade.symbol) from journal")
             }
             if let slipLine {
@@ -4199,7 +4199,7 @@ struct MarketsView: View {
                 Button { withAnimation(DS.Motion.smooth) { store.removeSymbol(sym.symbol) } } label: {
                     Image(systemName: "trash").font(.system(size: mvFont12)).foregroundStyle(DS.Palette.danger)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).touchHitArea()
                 .help("Remove from watchlist")
                 .accessibilityLabel("Remove \(sym.symbol) from watchlist")
                 .transition(.opacity)
@@ -4397,7 +4397,7 @@ struct MarketsView: View {
                         if !ideaSearch.isEmpty {
                             Button { ideaSearch = "" } label: {
                                 Image(systemName: "xmark.circle.fill").font(.system(size: mvFont10)).foregroundStyle(.secondary)
-                            }.buttonStyle(.plain)
+                            }.buttonStyle(.plain).touchHitArea()
                                 .accessibilityLabel("Clear idea search").help("Clear search")
                         }
                     }
@@ -4655,7 +4655,7 @@ struct MarketsView: View {
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .background(.white.opacity(0.08), in: Capsule())
                     }
-                    .buttonStyle(LuxPressStyle())
+                    .buttonStyle(LuxPressStyle()).touchHitArea()
                     .help("Stop the in-progress ideas scan")
                     .accessibilityLabel("Cancel ideas analysis")
                 }
@@ -4758,7 +4758,7 @@ struct MarketsView: View {
                     Button { Task { await store.retryFailedIdeas() } } label: {
                         Text("Retry failed").font(.caption2.weight(.semibold)).foregroundStyle(DS.Palette.accent)
                     }
-                    .buttonStyle(.plain).disabled(store.isLoadingIdeas)
+                    .buttonStyle(.plain).touchHitArea().disabled(store.isLoadingIdeas)
                     .accessibilityLabel("Retry analyzing the \(miss.count) symbols not analyzed this scan")
                 }
             }
@@ -5049,7 +5049,7 @@ struct MarketsView: View {
                     Image(systemName: "bell.badge")
                         .font(.system(size: mvFont12, weight: .semibold)).foregroundStyle(.secondary)
                 }
-                .menuStyle(.borderlessButton).fixedSize()
+                .menuStyle(.borderlessButton).fixedSize().touchHitArea()
                 .help("Set a price alert for \(idea.symbol)")
                 .accessibilityLabel("Set a price alert for \(idea.symbol)")
                 }
@@ -5057,7 +5057,7 @@ struct MarketsView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: mvFont12, weight: .semibold)).foregroundStyle(.secondary)
                 }
-                .buttonStyle(LuxPressStyle()).disabled(store.isBacktesting)
+                .buttonStyle(LuxPressStyle()).touchHitArea().disabled(store.isBacktesting)
                 .help("Backtest \(idea.symbol) over 5 years")
                 .accessibilityLabel("Backtest \(idea.symbol)")
             }
@@ -5425,7 +5425,7 @@ struct MarketsView: View {
                 }
                 Button { store.clearAlerts() } label: {
                     Text("Clear").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
-                }.buttonStyle(.plain)
+                }.buttonStyle(.plain).touchHitArea()
             }
         }
         .padding(DS.Space.sm)
@@ -7849,7 +7849,7 @@ struct MarketsView: View {
                     Button { selectedIdea = nil } label: {
                         Image(systemName: "xmark.circle.fill").font(.system(size: mvFont18)).foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain).help("Close (Esc)").accessibilityLabel("Close")
+                    .buttonStyle(.plain).touchHitArea().help("Close (Esc)").accessibilityLabel("Close")
                     .keyboardShortcut(.cancelAction)
                 }
                 // Scroll target for the prev/next stepper (Step 5): the sheet stays
@@ -8913,7 +8913,7 @@ struct MarketsView: View {
             Button { stepSheet(-1, from: idea.id) } label: {
                 Image(systemName: "chevron.up").font(.system(size: mvFont12, weight: .semibold)).foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).touchHitArea()
             .disabled(SheetCandidateNavigation.neighborIndex(ids: ids, currentID: idea.id, delta: -1) == nil)
             .help("Previous idea (⌥⌘↑)")
             .accessibilityLabel("Previous idea")
@@ -8936,7 +8936,7 @@ struct MarketsView: View {
             Button { stepSheet(+1, from: idea.id) } label: {
                 Image(systemName: "chevron.down").font(.system(size: mvFont12, weight: .semibold)).foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).touchHitArea()
             .disabled(SheetCandidateNavigation.neighborIndex(ids: ids, currentID: idea.id, delta: +1) == nil)
             .help("Next idea (⌥⌘↓)")
             .accessibilityLabel("Next idea")
