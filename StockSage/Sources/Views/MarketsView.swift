@@ -2484,9 +2484,11 @@ struct MarketsView: View {
                 // full-book mark leans optimistic (open winners can reverse). Neither is an edge claim.
                 HStack(spacing: 1) {
                     scoreCell(title: "Closed only", value: sb.realizedN > 0 ? rTxt(sb.realizedAvgR) : "—",
-                              sub: "\(sb.realizedN) resolved", tint: sb.realizedAvgR < 0 ? DS.Palette.danger : .white)
+                              // Small-danger-TEXT-is-AA sweep (review 2026-07-28 #6): dangerSoft, not
+                              // danger — this tint renders as ~16pt bold TEXT (scoreCell's value line).
+                              sub: "\(sb.realizedN) resolved", tint: sb.realizedAvgR < 0 ? DS.Palette.dangerSoft : .white)
                     scoreCell(title: "Full book", value: rTxt(sb.fullAvgR),
-                              sub: "\(sb.fullN) marked", tint: sb.fullAvgR < 0 ? DS.Palette.danger : DS.Palette.successSoft)
+                              sub: "\(sb.fullN) marked", tint: sb.fullAvgR < 0 ? DS.Palette.dangerSoft : DS.Palette.successSoft)
                     scoreCell(title: "Resolved", value: String(format: "%.0f%%", sb.resolvedFrac * 100),
                               // Review fix 2026-07-17 (self-verified): openMarked counts only
                               // the open trades the scan could MARK (symbol had a latest
@@ -2982,7 +2984,8 @@ struct MarketsView: View {
                             Text("\(mo.trades) tr").font(.caption2).foregroundStyle(.secondary)
                             Spacer()
                             Text(String(format: "%+.2fR", mo.totalR)).font(.system(size: mvFont11, weight: .semibold))
-                                .foregroundStyle(mo.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                // dangerSoft, not danger — small-text AA sweep (review 2026-07-28 #6).
+                                .foregroundStyle(mo.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
                                 .lineLimit(1).minimumScaleFactor(0.7)
                                 .frame(minWidth: 60, alignment: .trailing)
                         }
@@ -3036,7 +3039,8 @@ struct MarketsView: View {
                                 .font(.caption2).foregroundStyle(rel.isReliable ? Color.secondary : DS.Palette.warningSoft)
                             Spacer()
                             Text(String(format: "%+.2fR", s.totalR)).font(.system(size: mvFont11, weight: .semibold))
-                                .foregroundStyle(s.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                // dangerSoft, not danger — small-text AA sweep (review 2026-07-28 #6).
+                                .foregroundStyle(s.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
                                 .lineLimit(1).minimumScaleFactor(0.7)
                                 .frame(minWidth: 60, alignment: .trailing)
                         }
@@ -3055,7 +3059,8 @@ struct MarketsView: View {
                                 .font(.caption2).foregroundStyle(rel.isReliable ? Color.secondary : DS.Palette.warningSoft)
                             Spacer()
                             Text(String(format: "%+.2fR", sec.totalR)).font(.system(size: mvFont11, weight: .semibold))
-                                .foregroundStyle(sec.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                // dangerSoft, not danger — small-text AA sweep (review 2026-07-28 #6).
+                                .foregroundStyle(sec.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
                                 .lineLimit(1).minimumScaleFactor(0.7)
                                 .frame(minWidth: 60, alignment: .trailing)
                         }
@@ -3538,7 +3543,8 @@ struct MarketsView: View {
                     // symbol's OWN quote currency — a bare "+150.00" on a 2222.SR row reads as
                     // dollars but is SAR. signedAmount keeps USD rows byte-identical.
                     Text(StockSageCurrency.signedAmount(pnl, symbol: trade.symbol)).font(.system(size: mvFont11, weight: .semibold))
-                        .foregroundStyle(pnl >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                        // dangerSoft, not danger — journal P&L small-text AA sweep (review 2026-07-28 #6).
+                        .foregroundStyle(pnl >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
                     Text(String(format: "%+.2fR", r)).font(.caption2).foregroundStyle(.secondary).frame(width: 48, alignment: .trailing)
                 } else {
                     Text("no live px").font(.caption2).foregroundStyle(.secondary)
@@ -3624,7 +3630,8 @@ struct MarketsView: View {
                     let rStr = trade.rMultiple(at: exit).map { String(format: " · %+.2fR", $0) } ?? ""
                     Text("Closing here: \(StockSageCurrency.signedAmount(pnl, symbol: trade.symbol))\(rStr)")
                         .font(.system(size: mvFont9, weight: .semibold))
-                        .foregroundStyle(pnl >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                        // dangerSoft, not danger — journal P&L small-text AA sweep (review 2026-07-28 #6).
+                        .foregroundStyle(pnl >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
                         .accessibilityLabel("Closing at \(adaptivePrice(exit)) realizes \(StockSageCurrency.signedAmount(pnl, symbol: trade.symbol))"
                             + (trade.rMultiple(at: exit).map { String(format: ", %+.2f R", $0) } ?? ""))
                     // Cycle-2 (2026-07-16): a .SR exit off the Tadawul tick grid would be rejected
@@ -3672,7 +3679,8 @@ struct MarketsView: View {
         let pnlColor: Color
         if let pnl = trade.realizedProfit {
             pnlText = StockSageCurrency.signedAmount(pnl, symbol: trade.symbol)
-            pnlColor = pnl >= 0 ? DS.Palette.successSoft : DS.Palette.danger
+            // dangerSoft, not danger — journal P&L small-text AA sweep (review 2026-07-28 #6).
+            pnlColor = pnl >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft
         } else {
             pnlText = "—"
             pnlColor = .secondary
@@ -3894,9 +3902,11 @@ struct MarketsView: View {
                     Spacer(minLength: 0)
                 }
                 HStack(spacing: 18) {
-                    ideaMetric("Max DD", String(format: "−%.1f%%", a.maxDrawdown), color: DS.Palette.danger)
+                    // dangerSoft, not danger — small-text AA sweep (review 2026-07-28 #6); matches
+                    // the backtest panel's own Max DD ideaMetric, which already used dangerSoft.
+                    ideaMetric("Max DD", String(format: "−%.1f%%", a.maxDrawdown), color: DS.Palette.dangerSoft)
                     ideaMetric("Calmar", a.calmar.map { String(format: "%.2f", $0) } ?? "n/a")
-                    ideaMetric("VaR 95%", String(format: "−%.1f%%", a.valueAtRisk95), color: DS.Palette.danger)
+                    ideaMetric("VaR 95%", String(format: "−%.1f%%", a.valueAtRisk95), color: DS.Palette.dangerSoft)
                     ideaMetric("Avg corr", String(format: "%.2f", a.avgCorrelation))
                     if let beta = store.portfolioBeta {
                         ideaMetric("β vs S&P", String(format: "%.2f", beta),
@@ -4351,23 +4361,23 @@ struct MarketsView: View {
         .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price"), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), signal \(signal?.recommendation.rawValue ?? "none")\(signal.flatMap { $0.recommendation != .hold ? ", strength \(Int($0.confidence * 100)) percent" : nil } ?? "")\(stale ? ", stale quote — market likely closed" : "")")
     }
 
+    // Review 2026-07-28 #6 (mirrors actionColor): sell/strongSell was `danger` (white-on-#FF453A,
+    // 3.41:1 at this badge's small text) — dangerSoft is the AA-passing pastel every other badge
+    // already used.
     private func recColor(_ r: StockSageRecommendation) -> Color {
         switch r {
         case .strongBuy, .buy:   return DS.Palette.successSoft
         case .hold:              return DS.Palette.warningSoft
-        case .sell, .strongSell: return DS.Palette.danger
+        case .sell, .strongSell: return DS.Palette.dangerSoft
         }
     }
 
-    /// Badge text colour for legibility. The buy/hold badges sit on LIGHT pastel
-    /// backgrounds (successSoft/warningSoft), where white text is only ~1.9:1 (the
-    /// QA textContrast scan flagged exactly this) — use a dark ink there; white
-    /// still reads on the darker red sell badge.
+    /// Badge text colour for legibility — every badge is now a light pastel fill
+    /// (successSoft/warningSoft/dangerSoft), so dark ink reads on all of them (correcting the
+    /// prior "white still reads on the darker red sell badge" claim, which measured 3.41:1, not
+    /// AA-passing).
     private func recTextColor(_ r: StockSageRecommendation) -> Color {
-        switch r {
-        case .sell, .strongSell: return .white
-        default:                 return Color(white: 0.06)   // darker ink → AA contrast on bright pastels
-        }
+        Color(white: 0.06)   // darker ink → AA contrast on bright pastels
     }
 
     // MARK: Briefing
@@ -9273,21 +9283,31 @@ struct MarketsView: View {
         .accessibilityValue("\(filled) of 5 signal blocks (rules-based, not a probability)")
     }
 
-    private func actionColor(_ a: TradeAdvice.Action) -> Color {
+    private func actionColor(_ a: TradeAdvice.Action) -> Color { Self.actionColorForTest(a) }
+
+    /// Dark ink on every light pastel badge (success/warning/dangerSoft); white only on the
+    /// 22%-white "Avoid" fill, which stays dark enough for white to read. Same legibility rule
+    /// as `recTextColor`. Static + `ForTest`-suffixed so `actionBadgesUseLightFillDarkInk`
+    /// (review 2026-07-28 #6) reaches it via `@testable import` without a live View instance —
+    /// mirrors the `BacktestVerdict.metricColor` seam.
+    private func actionTextColor(_ a: TradeAdvice.Action) -> Color { Self.actionTextColorForTest(a) }
+
+    // Review 2026-07-28 #6: Sell/Reduce was white-on-`danger` (#FF453A) — 3.41:1 at this badge's
+    // 11pt bold, below the AA 4.5:1 bar for small text. dangerSoft + the dark ink below measures
+    // 7.85:1, and now matches how the buy/hold badges already worked (light fill, dark ink).
+    static func actionColorForTest(_ a: TradeAdvice.Action) -> Color {
         switch a {
         case .strongBuy, .buy: return DS.Palette.successSoft
         case .hold:            return DS.Palette.warningSoft
         case .avoid:           return Color.white.opacity(0.22)
-        case .reduce, .sell:   return DS.Palette.danger
+        case .reduce, .sell:   return DS.Palette.dangerSoft
         }
     }
 
-    /// Dark ink on the light pastel badges (success/warning), white on the darker
-    /// red/grey ones — same legibility rule as `recTextColor`.
-    private func actionTextColor(_ a: TradeAdvice.Action) -> Color {
+    static func actionTextColorForTest(_ a: TradeAdvice.Action) -> Color {
         switch a {
-        case .reduce, .sell, .avoid: return .white
-        default:                     return Color(white: 0.06)   // darker ink → AA contrast on bright pastels
+        case .avoid: return .white                     // 22%-white fill stays dark → 8.6:1
+        default:     return Color(white: 0.06)         // dark ink on every pastel fill
         }
     }
 
