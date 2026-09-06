@@ -3,7 +3,23 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
-## Latest live result — 01:36 +03
+## Latest model result — 01:49 +03
+
+Owner approved4-bit conversion/server startup at01:41. Native Catalysts settings
+now select Local server only at127.0.0.1:8765 with the exact fine-tuned model ID
+`/Users/saleh/models/salehman-qwen38-27b-4bit`. Actual app `/api/tags` returned404
+(expected: this is MLX, not Ollama), `/v1/models` returned200 with the model, and
+`/v1/chat/completions` returned responses. SBLK's actual card facts+Massive news
+flow produced a cited paragraph that passed validation and rendered. PAA's first
+paragraph was withheld by the unchanged numeric guard. No all-model-quality
+claim. Details and stop/restart instructions: `LOCAL_QWEN_2026-09-07.md`.
+
+Massive news, ratings, guidance and8-K observations were visible in native
+Catalysts during this test. Treat that as consumer evidence, not proof of all
+pagination/empty/error/freshness/entitlement cases. Remaining per-route checks
+are still open. No key was extracted, and no credential guard was bypassed.
+
+## Latest live provider result — 01:36 +03
 
 Owner01:34 explicitly requested opening the new build and deleting the old one.
 The installed `/Applications/StockSageX.app` executable was from July28, not the

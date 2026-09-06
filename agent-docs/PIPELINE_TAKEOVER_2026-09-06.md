@@ -13,6 +13,12 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest01:50 +03: owner-approved Qwen conversion/server connection completed.
+See `LOCAL_QWEN_2026-09-07.md` and HANDOFF. A single loopback server is running
+under launchctl; native SBLK explanation passed end-to-end, PAA was withheld by
+the unchanged guard. Chat/proactive model briefing and secured iPhone access
+remain pending. Do not start a second server or load the original BF16 copy.
+
 Latest01:36 +03: owner explicitly authorized replacing the installed July build.
 Old app quit and moved to Trash (recoverable); new tested d7c84a0 macOS build is
 installed at `/Applications/StockSageX.app`, process20169. Native Settings → Test

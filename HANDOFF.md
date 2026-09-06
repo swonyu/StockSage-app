@@ -1,5 +1,34 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Qwen converted and connected — 2026-09-07 01:50 +03
+
+Owner01:41 approved the conversion/server startup that the previous note held
+for approval. DONE: separate4-bit copy15.13GB,15shards,1847tensors; original BF16
+untouched. Conversion exit0, measured4.76GB peak RSS, repeated saved-index checks
+passed, overwrite attempt rejected. Added `tools/convert_qwen_mlx.py`, reusing
+installed MLX loader/quantizer/writer, not installing/updating packages.
+
+Server is RUNNING under the session-local launchctl job
+`com.swonyu.stocksage.qwen-local` (PID23631), listener127.0.0.1:8765only. Native
+StockSage Catalysts settings now use Local server only and exact model ID
+`/Users/saleh/models/salehman-qwen38-27b-4bit`. Real model discovery passed,
+synthetic stale-quote generation passed, and a real SBLK card rendered a
+validated explanation citing Massive news. PAA's first response was withheld
+by the unchanged numeric guard; that is recorded, not hidden as a success.
+
+Full commands, limits, logs and stop/restart instructions:
+`agent-docs/LOCAL_QWEN_2026-09-07.md`. No public/iPhone exposure, no automated
+login/reboot startup, no trades, no cloud purchases. Do not start a second model
+server or blindly relaunch conversion. Use launchctl remove for this exact job
+when the owner requests unloading. Main worktree unchanged; installed app remains
+the tested d7c84a0 build, not modified by these tooling/docs changes.
+
+Remaining: per-route API acceptance; new Chat/proactive Qwen briefing; secured
+iPhone serving; M8/M4 money-safety fixes and P5. Cited narrator footer omits model
+name when sources>0 (header correctly shows selected local model)—follow up in
+the shared label helper. No Swift changed this slice, so no redundant full build;
+existing1740macOS/1738iOS gates still describe the installed app source.
+
 ## Owner-requested installed build replacement — 2026-09-07 01:36 +03
 
 Owner01:34: open the new build and delete the old one. The active installed app
