@@ -59,3 +59,43 @@ struct StockSageTrackedSymbolsTests {
         #expect(result.isEmpty)
     }
 }
+
+// MARK: - composeTrackedDefs (B1: trackedDefs(scope:) gains off-board holdings)
+//
+// `trackedDefs(scope:)` itself is `private` and `@MainActor`-bound (reads `userSymbols` plus the
+// live `StockSagePortfolio.shared`/`StockSageJournalStore.shared` singletons) — no test seam on
+// the instance method itself, same as `coreIsTheGroupsDerivedCuratedSubsetOfWorldwide` in
+// StockSageTests.swift documents for the pre-existing watchlist half of this composition. B1
+// pulls the actual rule out into `composeTrackedDefs`, a `nonisolated static` pure function that
+// takes every input as a parameter — `trackedDefs(scope: .full)` is exactly
+// `composeTrackedDefs(base: StockSageUniverse.worldwide, userSymbols:, offBoardHoldings:)`, so
+// pinning THIS is pinning that method's real behavior without touching the singleton.
+
+@MainActor
+struct StockSageComposeTrackedDefsTests {
+    @Test func journalOpenSymbolOutsideTheBaseUniverseAndWatchlistIsIncluded() {
+        // GME never made the curated universe or the watchlist — only an open journal trade
+        // references it (mirrors trackedSymbols' own journalOpenSymbolAbsentFromBoardIsIncluded).
+        let base = [StockSageSymbol(symbol: "AAPL", market: "NASDAQ")]
+        let defs = StockSageStore.composeTrackedDefs(base: base, userSymbols: [], offBoardHoldings: ["GME"])
+        #expect(defs.map(\.symbol) == ["AAPL", "GME"])
+    }
+
+    @Test func offBoardHoldingAlreadyInTheBaseUniverseIsNotDuplicated() {
+        let base = [StockSageSymbol(symbol: "AAPL", market: "NASDAQ")]
+        let defs = StockSageStore.composeTrackedDefs(base: base, userSymbols: [], offBoardHoldings: ["aapl"])
+        #expect(defs.map(\.symbol) == ["AAPL"])
+    }
+
+    @Test func offBoardHoldingAlreadyOnTheWatchlistIsNotDuplicated() {
+        let base = [StockSageSymbol(symbol: "AAPL", market: "NASDAQ")]
+        let defs = StockSageStore.composeTrackedDefs(base: base, userSymbols: ["GME"], offBoardHoldings: ["gme"])
+        #expect(defs.map(\.symbol) == ["AAPL", "GME"])
+    }
+
+    @Test func emptyOffBoardHoldingsChangesNothing() {
+        let base = [StockSageSymbol(symbol: "AAPL", market: "NASDAQ")]
+        let defs = StockSageStore.composeTrackedDefs(base: base, userSymbols: ["MSFT"], offBoardHoldings: [])
+        #expect(defs.map(\.symbol) == ["AAPL", "MSFT"])
+    }
+}

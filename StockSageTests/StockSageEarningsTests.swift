@@ -113,4 +113,102 @@ struct StockSageEarningsTests {
         #expect(penalty == 2000,
                 "Imminent fresh earnings must produce the -2000 rank penalty — got \(penalty)")
     }
+
+    // MARK: - A2: earningsCheckedAt TTL guard + the pure refreshEarnings core
+    //
+    // `refreshEarnings` itself is an instance method on the `@MainActor` singleton and hits the
+    // real network — like every other StockSageStore test in this file (and per
+    // StockSageNewListingReconcileTests.swift's documented rationale), these exercise the pure
+    // `nonisolated static` rule it's a thin shell over, never the singleton and never the network.
+
+    @Test func shouldRefreshEarningsIsTrueWhenNeverChecked() {
+        #expect(StockSageStore.shouldRefreshEarnings(checkedAt: nil, now: now))
+    }
+
+    // Genuine boundary straddle, hand-derived: checkedAt = now; +86_399s = 23h59m59s elapsed
+    // (still inside the TTL, guard stays closed); +86_400s = exactly 24h00m00s elapsed (TTL's own
+    // `>=` opens the guard at that instant, not one second later).
+    @Test func shouldRefreshEarningsTTLBoundaryStraddle() {
+        let checkedAt = now
+        let justUnder = checkedAt.addingTimeInterval(86_399)
+        let exactlyAt = checkedAt.addingTimeInterval(86_400)
+        #expect(!StockSageStore.shouldRefreshEarnings(checkedAt: checkedAt, now: justUnder),
+                "23h59m59s after checkedAt must still be within the TTL")
+        #expect(StockSageStore.shouldRefreshEarnings(checkedAt: checkedAt, now: exactlyAt),
+                "Exactly 24h00m00s after checkedAt must open the TTL guard")
+    }
+
+    @Test func earningsRefreshOutcomeStampsCheckedAtOnANilFetch() async {
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { nil }
+        #expect(outcome?.checkedAt == now)
+        #expect(outcome?.earningsDate == nil)
+    }
+
+    @Test func earningsRefreshOutcomeStampsCheckedAtOnADatedFetch() async {
+        let found = now.addingTimeInterval(10 * 86_400)
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { found }
+        #expect(outcome?.checkedAt == now)
+        #expect(outcome?.earningsDate == found)
+    }
+
+    @Test func earningsRefreshOutcomeIgnoresAStalePastDateButStillStampsCheckedAt() async {
+        // Honesty floor: the provider returned SOMETHING, but it's a report date more than a day
+        // in the past — the unchanged `> -86_400` fetch guard treats that as unusable, yet we DID
+        // ask, so checkedAt must still be stamped (never left nil, which would re-ask forever).
+        let stale = now.addingTimeInterval(-2 * 86_400)
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { stale }
+        #expect(outcome?.checkedAt == now)
+        #expect(outcome?.earningsDate == nil)
+    }
+
+    @Test func earningsRefreshOutcomeDoesNotReenterFetchInsideTheTTL() async {
+        let checkedAt = now
+        let stillFresh = checkedAt.addingTimeInterval(86_399)   // one second inside the 24h TTL
+        var fetchWasCalled = false
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: checkedAt, now: stillFresh) {
+            fetchWasCalled = true
+            return stillFresh.addingTimeInterval(86_400)
+        }
+        #expect(outcome == nil, "Inside the TTL, refreshEarnings must no-op, not re-stamp")
+        #expect(!fetchWasCalled, "The TTL guard must short-circuit BEFORE the fetch closure ever runs")
+    }
+
+    // MARK: - A2: catalystRecords / applyCatalystRecords disk round trip
+    //
+    // StockSageCatalystRecordCacheTests already pins the cache type's OWN round trip; this pins
+    // the store-level dict ↔ Record conversion on top of it, through an actual save()/load() at a
+    // temp URL (never the real Application Support location).
+
+    @Test func catalystRecordsRoundTripThroughTheDiskCache() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockSageEarningsCheckedAtTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("catalyst_records_v1.json")
+
+        // AAPL: asked, provider returned a real date. NVDA: asked, provider had nothing — the
+        // honest dated negative (present in checkedAt, absent from earningsDates).
+        let earningsDates = ["AAPL": now.addingTimeInterval(30 * 86_400)]
+        let earningsCheckedAt = ["AAPL": now, "NVDA": now]
+
+        let records = StockSageStore.catalystRecords(earningsDates: earningsDates, earningsCheckedAt: earningsCheckedAt)
+        StockSageCatalystRecordCache(entries: records, savedAt: now).save(to: url)
+
+        let loaded = StockSageCatalystRecordCache.load(from: url)
+        let restored = StockSageStore.applyCatalystRecords(loaded?.entries ?? [])
+        #expect(restored.dates == earningsDates)
+        #expect(restored.checkedAt == earningsCheckedAt)
+    }
+
+    @Test func aSymbolNotYetSweptHasNoCheckedAtEntry() {
+        // MSFT was never asked (no Record for it at all) — applying a record set that doesn't
+        // mention it must leave it with NO entry in either dict, never inferred as "checked, none".
+        let restored = StockSageStore.applyCatalystRecords([
+            .init(symbol: "AAPL", earningsDate: nil, checkedAt: now, source: "yahoo"),
+        ])
+        #expect(restored.checkedAt["MSFT"] == nil)
+        #expect(restored.dates["MSFT"] == nil)
+        #expect(restored.checkedAt["AAPL"] == now)
+        #expect(restored.dates["AAPL"] == nil)   // AAPL's own record is the honest negative too
+    }
 }
