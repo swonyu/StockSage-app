@@ -78,16 +78,20 @@ enum StockSageCatalystWatch {
     struct Inputs: Sendable {
         let earnings: EarningsProximity?
         let earningsDate: Date?
+        /// When the store last ASKED Yahoo calendarEvents for this symbol's earnings date and got
+        /// none back (nil = never asked). Feeds the honesty-floor-required dated "none known as of
+        /// <date>" record in `noneItem` — never invented, only ever the time we actually checked.
+        let earningsCheckedAt: Date?
         let volumeMove: StockSageCatalyst.Signal?
         let regime: MarketRegime?
         let regimeGaugedAt: Date?
         let seasonality: MonthlySeasonality?
         let now: Date
 
-        init(earnings: EarningsProximity? = nil, earningsDate: Date? = nil,
+        init(earnings: EarningsProximity? = nil, earningsDate: Date? = nil, earningsCheckedAt: Date? = nil,
              volumeMove: StockSageCatalyst.Signal? = nil, regime: MarketRegime? = nil,
              regimeGaugedAt: Date? = nil, seasonality: MonthlySeasonality? = nil, now: Date) {
-            self.earnings = earnings; self.earningsDate = earningsDate
+            self.earnings = earnings; self.earningsDate = earningsDate; self.earningsCheckedAt = earningsCheckedAt
             self.volumeMove = volumeMove; self.regime = regime
             self.regimeGaugedAt = regimeGaugedAt; self.seasonality = seasonality; self.now = now
         }
@@ -172,7 +176,7 @@ enum StockSageCatalystWatch {
         let candidates = [earningsSlot1, volumeSlot, earningsSlot3, extremeSlot, regimeSlot, seasonalitySlot]
             .compactMap { $0 }
         guard let primary = candidates.first else {
-            return Brief(idea: idea, primary: noneItem(idea: idea), secondary: [])
+            return Brief(idea: idea, primary: noneItem(idea: idea, checkedAt: inputs.earningsCheckedAt), secondary: [])
         }
         return Brief(idea: idea, primary: primary, secondary: Array(candidates.dropFirst()))
     }
@@ -280,11 +284,22 @@ enum StockSageCatalystWatch {
                    source: "1-year+ history", caveat: "Not a forecast.")
     }
 
-    private nonisolated static func noneItem(idea: StockSageIdea) -> Item {
-        Item(symbol: idea.symbol, kind: .none, headline: "No dated catalyst on file", date: nil,
-            why: ["Next earnings date not available for this name — not fetched yet, or the source declined.",
-                  "No volume-confirmed move on the latest cached bar."],
-            watch: "Re-check after the next full refresh.", weight: .low, source: "—", caveat: nil)
+    /// Two honest shapes, never a middle ground: `checkedAt == nil` means this symbol was never
+    /// asked yet, so the copy says exactly that; `checkedAt` present means Yahoo calendarEvents
+    /// WAS asked (at that instant) and returned nothing, so it becomes a real, DATED record
+    /// (`date: checkedAt`, never `Date()`) — a negative result, not an absence of information.
+    private nonisolated static func noneItem(idea: StockSageIdea, checkedAt: Date?) -> Item {
+        guard let checkedAt else {
+            return Item(symbol: idea.symbol, kind: .none, headline: "No dated catalyst on file", date: nil,
+                why: ["Next earnings date not available for this name — not fetched yet, or the source declined.",
+                      "No volume-confirmed move on the latest cached bar."],
+                watch: "Re-check after the next full refresh.", weight: .low, source: "—", caveat: nil)
+        }
+        return Item(symbol: idea.symbol, kind: .none,
+            headline: "No known catalyst as of \(Self.dateStr(checkedAt))", date: checkedAt,
+            why: ["Next earnings date requested from Yahoo calendarEvents — none returned"],
+            watch: "Re-check after the next full refresh.", weight: .low,
+            source: "Yahoo calendarEvents (no date returned)", caveat: nil)
     }
 
     // MARK: - Catalyst calendar
@@ -306,6 +321,9 @@ enum StockSageCatalystWatch {
         let bucket: Bucket
         let item: Item
         let idea: StockSageIdea
+        /// True only for a dated "none known as of <date>" record (`item.kind == .none`) — pure
+        /// data so the view can style it apart from a real catalyst without re-deriving `kind`.
+        let isNegativeRecord: Bool
         nonisolated var id: String { item.id }
     }
 
@@ -337,15 +355,18 @@ enum StockSageCatalystWatch {
         var dated: [(date: Date, entry: CalendarEntry)] = []
         var undated: [(weight: Weight, entry: CalendarEntry)] = []
         for brief in briefs {
+            // Not filtered by `kind` here: a dated "none known as of <date>" record (checkedAt
+            // set) is a real, dated entry and lands in its bucket exactly like any other; only an
+            // UNDATED `.none` (below) is excluded, since it says nothing was ever checked.
             for item in brief.all {
                 if let date = item.date {
                     let b = bucket(for: date, now: now, calendar: calendar)
-                    dated.append((date, CalendarEntry(bucket: b, item: item, idea: brief.idea)))
+                    dated.append((date, CalendarEntry(bucket: b, item: item, idea: brief.idea, isNegativeRecord: item.kind == .none)))
                 }
             }
             if brief.primary.date == nil, brief.primary.kind != .none {
                 undated.append((brief.primary.weight,
-                                CalendarEntry(bucket: .undated, item: brief.primary, idea: brief.idea)))
+                                CalendarEntry(bucket: .undated, item: brief.primary, idea: brief.idea, isNegativeRecord: false)))
             }
         }
         dated.sort { $0.date != $1.date ? $0.date < $1.date : $0.entry.item.symbol < $1.entry.item.symbol }
