@@ -171,3 +171,29 @@ provider rate limits + the honesty floor still bind. Work branch: `wt/coverage` 
    Ollama already runs as a launch agent and Auto falls back on-device). Files: the Ollama tag `qwen3.8:27b-mlx`
    (18 GB, A/B leftover, re-pullable) is deletable on owner go; the Hugging Face cache (15 GB) is IN USE by a
    running `mlx_lm.lora` training job (started 14:35 +03) — do not delete while it runs; revisit after.
+
+## W4 — local-model retrieval-first internet access (2026-09-06, worktree cov-w4, branch wt/cov-w4)
+Citable sources for the on-tap Catalyst "Explain" paragraph: EODHD news (`StockSageNewsService`,
+new), the last 8-K (`StockSageDisclosureService`, existing), and insider Form 4 activity
+(`StockSageInsider`, existing — now also gated by `ToolPolicy.isExternalAllowed`, closing the one
+feed in this subsystem that hit the network unconditionally). `StockSageCatalystNarrator.facts(for:sources:)`
+appends one numbered `[n] YYYY-MM-DD <source>: <title> — <snippet> (<link>)` line per source; the
+model may cite `[n]` and both the existing number fence AND the new `citationsValid(_:sourceCount:)`
+gate must pass before a response is shown as `.text` — otherwise `.withheld`. US/NASDAQ-only via
+`StockSageEODHD.covers`, matching the sibling SAHMK/Tadawul task being cancelled (12:57 +03 scope
+change) — nothing here touches Tadawul or `.SR` symbols.
+
+**EODHD news cost**: `/api/news` is billed 5 API calls per request PLUS 5 more per ticker named in
+the request — one call for one symbol therefore spends 10 calls against the 100k/day EODHD
+allowance, separate from and in addition to the existing quote path's per-symbol cost.
+
+**Privacy**: tapping "Explain" now also sends the symbol to eodhd.com (news) and sec.gov (8-K
+filings, insider Form 4 trades) directly from the device, in addition to whichever narrator
+backend (on-device Apple Intelligence or the local server) answers the paragraph. The Catalysts
+tab header states this unconditionally, alongside the existing non-loopback warning.
+
+Gate: `GATE repo=cov-w4 macos=OK ios=OK tests=OK`. Tests: filtered StockSageInsiderTests 10/10,
+StockSageNewsService 12/12, StockSageCatalystNarratorTests 23/23; unfiltered suite 1,551/1,551
+tests in 177 suites, 0 failed (tools/runtests.sh, EXECUTED, 65.3s). No network hit in any test —
+all fixtures are hand-derived pure-parse inputs; `ToolPolicy.override` gating test uses the
+pre-existing `ToolPolicyTestLock` seam.
