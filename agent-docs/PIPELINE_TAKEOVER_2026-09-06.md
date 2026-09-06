@@ -24,7 +24,16 @@ pushes, actual trades, service purchases, or local model training.
   - [x] Same-millisecond TRADE sequence through StreamState, Store/coalescing, scan and cache.
   - [x] Compact card presentation with shared visible/VoiceOver copy and component render.
   - [ ] Full populated UI verification and authenticated endpoint smoke.
-- [ ] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status.
+    - 21:32 credential-presence check was blocked by the credential-access guard.
+      No key was read, no authenticated request sent, no guard bypass attempted.
+      Keep live smoke pending; independent stages may proceed. Full-screen QA
+      must not overwrite the owner's running binary/state or open a second Stocks socket.
+- [x] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status (code/tests; live verification pending).
+  - [x] Verify docs and official SDK range/sort parameters; add request/parser/gate/chain fixtures.
+  - [x] Red build demonstrates the missing provider and chain/input interfaces (no tests executed).
+  - [x] Implement provider first in chain; preserve 24h rejection gate and answer provenance.
+  - [x] Preserve confirmed/projected distinction and actual provider in rendered catalyst copy.
+  - [x] Focused then serialized canonical macOS/iPhone gates; record and commit explicit paths.
 - [ ] M4 Massive news/insights with bounded, cited narration.
 - [ ] M5 truthful per-observation provider labels and paid-plan configuration.
 - [ ] M5b split-aware journal comparisons without rewriting the journal.
@@ -156,3 +165,17 @@ Final broad macOS1672/1672 and iPhone1671/1671 passed, same3 opt-in exclusions.
 The one additional Mac test renders the real component at320pt; the resulting
 image was inspected. Full populated app UI/VoiceOver and live provider smoke
 remain unverified. Exact result bundles and limitations are in HANDOFF21:29.
+
+21:46 M3 code/test checkpoint: StockSageMassiveEarnings is first in the existing
+per-symbol chain, followed by unchanged EODHD/Yahoo/history fallbacks. Strict
+complete-page parser (100 rows,400 days), UTC today-inclusive selection,
+date_status-only confirmation and conservative duplicate status resolution.
+Real empty answers and unavailable/malformed responses remain distinct. Status
+probe before the sweep;401/402/403 cache24h; header auth/no redirects. Daily
+answer TTL and4-wide pacing remain. The real catalyst view passes the observed
+source; no longer falsely labels Benzinga dates as Yahoo. Provider-projected
+means estimated calendar date, not the app's history-derived .projected status.
+Focused103/103, final broad1681/1681 macOS and1680/1680 iOS; same3 opt-in
+exclusions. All build handles completed. Exact evidence/errors/limits in HANDOFF.
+Credential hook blocked the earlier live check; do not bypass or infer account
+entitlement from that denial. Continue M4 independently; full live/UI QA pending.

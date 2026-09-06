@@ -375,3 +375,31 @@ Each of M2-M4 needs its own hand-derived fixture set (spec-fidelity: expected va
 sample JSON quoted above or an independent hand derivation, never from the code under test) and its
 own gate + `tools/runtests.sh` pass before M5 — this section is the design brief, not the
 implementation; M2-M5 are future steps, explicitly not built in this pipeline-4 step.
+
+### Implemented earnings path — 2026-09-06 21:46 +03 (supersedes proposal budget)
+
+The current takeover checklist uses the workflow's stage numbering: M3 is
+earnings. `StockSageMassiveEarnings` now queries one due US symbol at a time,
+reusing the existing per-symbol24h answer TTL and4-wide sweep. It does NOT use
+the earlier all-market180-day bulk proposal, so the estimate of one Benzinga
+call/day above is NOT an implemented budget. Current cost is one status-only
+probe per eligible sweep plus one request per due US symbol when access remains
+available. A complete answer TTL-gates that symbol for24h.401/402/403 suppress
+this provider globally for24h; transient failures remain unobserved and may be
+retried on a later sweep. No claim of an exact account-wide rate limit is made.
+
+Each query is bounded to100 rows over UTC today through+400days, date ascending.
+Partial or malformed payloads fall through rather than claiming completeness;
+no speculative pagination/all-market cache was added. This follows the later M3
+workflow's per-symbol contract and needs live measurements before optimization.
+Fields and parameters verified against:
+https://massive.com/docs/rest/partners/benzinga/earnings
+https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/benzinga.py
+
+Confirmation comes only from date_status (projected stays estimated); duplicate
+same-day conflicts cannot upgrade it. Actual EPS/importance are not evidence of
+date confirmation. The visible source comes from the chain record. Future time
+within a calendar day is not asserted; time is deliberately unused. No live
+entitlement claim: the credential guard blocked the agent's presence check and
+was not bypassed. Canonical macOS1681/iPhone1680 selected tests passed; HANDOFF
+records exact result bundles and remaining full UI/live checks.

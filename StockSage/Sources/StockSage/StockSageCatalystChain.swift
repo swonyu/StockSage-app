@@ -36,7 +36,7 @@ nonisolated enum StockSageCatalystChain {
         let anySourceAnswered: Bool
     }
 
-    /// Runs the 3-step chain for ONE equity symbol (the caller has already excluded
+    /// Runs the Massive/Benzinga → EODHD → Yahoo → history chain for ONE equity symbol (the caller has already excluded
     /// non-equities, which go straight to `.notApplicable` without calling this at all).
     /// `now` gates a stale date the SAME way `StockSageStore.earningsRefreshOutcome` always has:
     /// more than a day in the past is not a usable "next" catalyst, so the chain falls through to
@@ -46,6 +46,7 @@ nonisolated enum StockSageCatalystChain {
     /// projection's basis string never claims more than the source actually supports.
     static func resolve(
         now: Date,
+        massiveCalendar: () async -> Answer<StockSageMassiveEarnings.Row?> = { .unavailable },
         eodhdCalendar: () async -> Answer<StockSageEODHDCalendar.Row?>,
         yahooCalendar: () async -> Answer<StockSageEarnings.EarningsCalendarInfo?>,
         historyUnitLabel: String = "reports",
@@ -53,6 +54,18 @@ nonisolated enum StockSageCatalystChain {
     ) async -> Outcome {
         var sourcesAsked: [String] = []
         var anySourceAnswered = false
+
+        if case .answered(let row) = await massiveCalendar() {
+            anySourceAnswered = true
+            sourcesAsked.append(StockSageMassiveEarnings.source)
+            if let row, row.date.timeIntervalSince(now) > -86_400 {
+                // Provider-estimated dates remain explicitly unconfirmed calendar observations,
+                // not the app's separate median-gap history projection (.projected).
+                return Outcome(earningsDate: row.date, dateRangeEnd: nil, confirmed: row.confirmed,
+                               status: .dateKnown, source: StockSageMassiveEarnings.source,
+                               sourcesAsked: sourcesAsked, projectionBasis: nil, anySourceAnswered: true)
+            }
+        }
 
         // Each step appends to `sourcesAsked` ONLY after `.answered` — a provider that was never
         // actually reachable (not covered, key empty, 24h-unavailable window open, external

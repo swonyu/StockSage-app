@@ -163,6 +163,7 @@ struct CatalystsSection: View {
                 volumeMove: catalystsBySymbol[sym], regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
                 seasonality: store.seasonality[sym], now: now,
                 catalystConfirmed: record?.confirmed,
+                catalystSource: record?.source ?? "Source unavailable",
                 catalystNotApplicable: record?.status == .notApplicable,
                 catalystProjectedDate: isProjected ? record?.earningsDate : nil,
                 catalystProjectionBasis: isProjected ? record?.projectionBasis : nil,

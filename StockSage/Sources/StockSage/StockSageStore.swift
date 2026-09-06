@@ -1878,7 +1878,7 @@ final class StockSageStore: ObservableObject {
         return (now, usable)
     }
 
-    /// W1 (2026-09-06) full chain for ONE tracked symbol: EODHD calendar (if the plan tier
+    /// Full chain for ONE tracked symbol: Massive/Benzinga earnings first, then EODHD calendar (if the plan tier
     /// allows) → Yahoo `calendarEvents` (reading the range + estimate flag) → history-based
     /// projection (EODHD fundamentals `Earnings.History` for a US name, Yahoo `earningsHistory`
     /// for a Tadawul one) → `.unchecked`. Non-equities (index/forex/crypto, `^TASI.SR` included
@@ -1902,6 +1902,7 @@ final class StockSageStore: ObservableObject {
         let isUS = StockSageEODHD.covers(up)
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
+            massiveCalendar: { await StockSageMassiveEarnings.fetch(up, now: now) },
             eodhdCalendar: {
                 // `fetchCalendar` returns nil for EVERY unreachable case (not covered, empty
                 // key, 24h-unavailable window open, non-200, timeout) — exactly the shape
@@ -1966,10 +1967,15 @@ final class StockSageStore: ObservableObject {
     /// (never spends a request re-confirming a rejection we already know about).
     func refreshEarningsForTracked() async {
         defer { saveCatalystRecords() }
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        let all = trackedSymbolsUnion
+        if all.contains(where: StockSageMassive.covers) {
+            await StockSageMassiveEarnings.probeAvailability()
+        }
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
         if StockSageEODHDCalendar.isAvailable() {
             await StockSageEODHDCalendar.probeCalendarAvailability()
         }
-        let all = trackedSymbolsUnion
         let chunks = stride(from: 0, to: all.count, by: 4).map { Array(all[$0 ..< min($0 + 4, all.count)]) }
         for (index, chunk) in chunks.enumerated() {
             if Task.isCancelled { return }

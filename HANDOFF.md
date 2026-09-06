@@ -1,5 +1,59 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M3 earnings checkpoint — 2026-09-06 21:46 +03
+
+`StockSageMassiveEarnings` now precedes EODHD calendar → Yahoo → history projection
+in the existing per-symbol chain. It uses the documented `/benzinga/v1/earnings`
+with ticker, date.gte/date.lte, date.asc and a100-row cap over400 days. Dates use
+UTC calendar-day precision (including today until midnight), not an invented
+release time. Only date_status sets confirmation: confirmed=true, projected=false.
+A provider estimate is still a calendar observation with the existing estimated
+suffix; it is NOT the app's distinct history-derived .projected record.
+
+Malformed envelopes/rows/statuses/dates, mismatched symbols and partial pages are
+unavailable, not checked-empty. Empty valid responses remain answered(nil).
+Conflicting statuses on duplicate same-day rows cannot upgrade confirmation.
+One status-only probe precedes a US earnings sweep;401/402/403 from either that
+probe or a later query suppress this provider for24h, persisted locally. Other
+failures do not claim an entitlement rejection. Header-only auth, redirects
+disabled, external-access/cancellation gates checked before and after requests.
+Existing per-symbol24h answer TTL, fallback order and four-wide sweep remain.
+
+The catalyst card now receives the actual chain source instead of hardcoding
+Yahoo. Its general caveat also names the attributed calendar provider. Unknown
+provenance is explicit in the real view. No new model inference or order path.
+
+Verified references:
+- https://massive.com/docs/rest/partners/benzinga/earnings
+- https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/benzinga.py
+  (list_benzinga_earnings: date range modifiers and endpoint)
+
+Verification, serialized canonical xcodebuild tests:
+- Initial red build: missing provider/chain/input interfaces, exit65; NO tests
+  executed. `/private/tmp/stocksage-m3-red-20260906-2139.xcresult`.
+- First implementation build: three Swift Testing nested-try fixture errors,
+  exit65; NO tests executed. Fixed before all following passes.
+- Focused **103/103**, zero failures/skips:
+  `/private/tmp/stocksage-m3-focused-retry-20260906-2141.xcresult`.
+  One additional empty/stale-first-source fallback test added afterward.
+- Final broad macOS **1,681/1,681**, zero failures/skips among selected tests:
+  `/private/tmp/stocksage-m3-broad-macos-20260906-2144.xcresult`.
+- Final broad iPhone17Pro(gate), iOS26.5 **1,680/1,680**, zero failures/skips
+  among selected tests: `/private/tmp/stocksage-m3-broad-ios-20260906-2145.xcresult`.
+- Same three opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. Counts checked
+  with xcresulttool. Existing unrelated compiler warnings remain. All handles done.
+
+M2b live smoke remains pending: the credential-access hook blocked even a
+key-presence check at21:32. No key was read; no guard was bypassed. This is NOT
+evidence of a missing key or rejected Massive entitlement. No live probe was run.
+Full populated app/VoiceOver QA is also pending; the owner app/binary was not
+replaced or relaunched. No model job, real order, push or main project.pbxproj edit.
+Next independent stage: M4 news/insights and cited narration, then remaining
+M5/M5b/M6/P5/Chat/Derayah work and final integration. M3 is code/test-complete,
+not live-verified. Current request budget supersedes the earlier one-call/day
+proposal: see the implementation note in COVERAGE_DESIGN_2026-09-06.md.
+
 ## Pipeline 4 M2b compact-card checkpoint — 2026-09-06 21:29 +03
 
 US idea cards now show the existing coalesced bid/ask observation: prices, share

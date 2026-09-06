@@ -98,6 +98,7 @@ enum StockSageCatalystWatch {
         /// `isEarningsDateEstimate`, inverted) — nil when no source supplied one at all, in which
         /// case `earningsItem` appends no suffix (byte-identical to the pre-W1 headline).
         let catalystConfirmed: Bool?
+        let catalystSource: String
         /// Set ONLY when the store's chain landed on `.notApplicable` (an index/fund has no
         /// earnings to report) — changes ONLY the no-other-catalyst fallback text; every other
         /// slot (volume/extreme/regime/seasonality) is unaffected.
@@ -118,13 +119,14 @@ enum StockSageCatalystWatch {
         init(earnings: EarningsProximity? = nil, earningsDate: Date? = nil, earningsCheckedAt: Date? = nil,
              volumeMove: StockSageCatalyst.Signal? = nil, regime: MarketRegime? = nil,
              regimeGaugedAt: Date? = nil, seasonality: MonthlySeasonality? = nil, now: Date,
-             catalystConfirmed: Bool? = nil, catalystNotApplicable: Bool = false,
+             catalystConfirmed: Bool? = nil, catalystSource: String = "Yahoo calendarEvents", catalystNotApplicable: Bool = false,
              catalystProjectedDate: Date? = nil, catalystProjectionBasis: String? = nil,
              catalystSourcesAsked: [String] = []) {
             self.earnings = earnings; self.earningsDate = earningsDate; self.earningsCheckedAt = earningsCheckedAt
             self.volumeMove = volumeMove; self.regime = regime
             self.regimeGaugedAt = regimeGaugedAt; self.seasonality = seasonality; self.now = now
             self.catalystConfirmed = catalystConfirmed; self.catalystNotApplicable = catalystNotApplicable
+            self.catalystSource = catalystSource
             self.catalystProjectedDate = catalystProjectedDate; self.catalystProjectionBasis = catalystProjectionBasis
             self.catalystSourcesAsked = catalystSourcesAsked
         }
@@ -151,7 +153,7 @@ enum StockSageCatalystWatch {
     nonisolated static func dateStr(_ date: Date) -> String { date.formatted(dateFormatStyle) }
 
     nonisolated static let caveat =
-        "Rules-based: earnings dates from Yahoo, volume moves from cached history, the regime "
+        "Rules-based: earnings dates from the attributed calendar provider, volume moves from cached history, the regime "
         + "gauge and multi-year monthly seasonality. Describes what is scheduled or just happened "
         + "— never what happens next. Educational, not financial advice."
 
@@ -171,7 +173,7 @@ enum StockSageCatalystWatch {
                 ?? StockSageEarnings.proximity(now: inputs.now, earnings: date).daysUntil
             let severity = inputs.earnings?.severity ?? StockSageEarnings.severity(daysUntil: daysUntil)
             let item = earningsItem(idea: idea, date: date, daysUntil: daysUntil, severity: severity,
-                                    confirmed: inputs.catalystConfirmed)
+                                    confirmed: inputs.catalystConfirmed, source: inputs.catalystSource)
             switch severity {
             case .imminent, .soon: earningsSlot1 = item
             case .clear:           earningsSlot3 = item
@@ -239,7 +241,7 @@ enum StockSageCatalystWatch {
 
     private nonisolated static func earningsItem(idea: StockSageIdea, date: Date, daysUntil: Int,
                                                  severity: EarningsProximity.Severity,
-                                                 confirmed: Bool? = nil) -> Item {
+                                                 confirmed: Bool?, source: String) -> Item {
         let dateStr = Self.dateStr(date)
         // W1 (2026-09-06): nil (no source supplied a flag) appends NOTHING — byte-identical to
         // the pre-W1 headline, which every existing pinned test still checks.
@@ -279,7 +281,7 @@ enum StockSageCatalystWatch {
         case .clear:    weight = .low
         }
         return Item(symbol: idea.symbol, kind: .earnings, headline: headline, date: date, why: why,
-                   watch: watch, weight: weight, source: "Yahoo calendarEvents", caveat: nil)
+                   watch: watch, weight: weight, source: source, caveat: nil)
     }
 
     private nonisolated static func volumeMoveItem(idea: StockSageIdea, signal: StockSageCatalyst.Signal) -> Item {
