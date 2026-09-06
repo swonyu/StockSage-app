@@ -1944,21 +1944,60 @@ final class StockSageStore: ObservableObject {
     /// price, which is still stale. A self-inflicted 429 storm against the keyless endpoint, and
     /// very likely a cause of the staleness this heal was written to fix.
     ///
-    /// Two brakes: only heal a symbol whose market is actually TRADING (a weekend close is not a
-    /// fetch failure, it is the truth), and cap how many are retried per sweep.
+    /// Brakes, in order: (1) SCOPE — a `.core` monitor tick must only heal the rows it actually
+    /// attempted to fetch this cycle (`scopedTo`), never the ~700 rows a `.core` refresh never
+    /// touched (review 2026-07-28 Q1: this was the missing brake — the market-trading gate and
+    /// cap below shipped earlier, 5bfe6f9, but the sweep still ran over the WHOLE board regardless
+    /// of scope). (2) market actually TRADING (a weekend close is not a fetch failure, it is the
+    /// truth). (3) BACKOFF — even during trading hours a symbol whose last heal came back with the
+    /// same marketTime it already had gets no gain from re-asking; skip it until a newer stamp
+    /// lands. (4) cap how many are retried per sweep.
     private static let healBatchCap = 40
 
-    private func healStaleQuotes() async {
+    /// Per-symbol marketTime stamp recorded after a heal that did NOT advance the quote — re-asking
+    /// before that stamp changes is pure feed cost with zero possible gain. Cleared the moment a
+    /// newer marketTime lands (or the feed omits marketTime entirely, so a transient gap can still
+    /// retry next pass).
+    private var healBackoff: [String: Date] = [:]
+
+    /// Pure candidate selection for one heal pass — scope + staleness + backoff + cap, none of it
+    /// touching the network. Extracted so the review's four brakes are pinned by a direct test
+    /// (StockSageHealStaleQuotesTests) without spinning up a Store or a fetch.
+    nonisolated static func healCandidates(
+        symbols: [StockSageSymbol], scope: Set<String>, backoff: [String: Date], cap: Int,
+        asOf now: Date = Date()
+    ) -> [String] {
+        let candidates = symbols.filter { s in
+            let key = s.symbol.uppercased()
+            // Inlined via StockSageQuoteFreshness (explicitly `nonisolated`) rather than
+            // `s.isStale()`/`s.latest` — under this module's MainActor default isolation those
+            // instance members infer MainActor isolation, which a `nonisolated static` can't call.
+            let marketTime = s.quotes.last?.marketTime
+            guard scope.contains(key),
+                  StockSageQuoteFreshness.isStale(symbol: s.symbol, marketTime: marketTime, asOf: now)
+            else { return false }
+            guard let recorded = backoff[key] else { return true }
+            return recorded != marketTime
+        }
+        return Array(candidates.prefix(cap).map(\.symbol))
+    }
+
+    private func healStaleQuotes(scopedTo scope: Set<String>) async {
         let now = Date()
-        let staleSymbols = symbols
-            .filter { $0.isStale() && Self.marketIsTrading(symbol: $0.symbol, at: now) }
-            .map(\.symbol)
-            .prefix(Self.healBatchCap)
-            .map { $0 }
+        let tradingSymbols = symbols.filter { Self.marketIsTrading(symbol: $0.symbol, at: now) }
+        let staleSymbols = Self.healCandidates(
+            symbols: tradingSymbols, scope: scope, backoff: healBackoff, cap: Self.healBatchCap, asOf: now
+        )
         guard !staleSymbols.isEmpty else { return }
         let recovered = await StockSageQuoteService.fetchQuotes(for: staleSymbols)
         guard !recovered.isEmpty else { return }
-        for (sym, q) in recovered { mergeLiveQuote(q, symbol: sym) }
+        for (sym, q) in recovered {
+            let key = sym.uppercased()
+            let before = symbols.first { $0.symbol.uppercased() == key }?.latest?.marketTime
+            mergeLiveQuote(q, symbol: sym)
+            // No advance ⇒ the feed has nothing newer; don't re-ask until it does.
+            if let t = q.marketTime, t == before { healBackoff[key] = t } else { healBackoff[key] = nil }
+        }
     }
 
     /// Is this symbol's venue currently trading? A closed market's last print is the correct
@@ -2097,7 +2136,7 @@ final class StockSageStore: ObservableObject {
         // STALE SELF-HEAL (owner directive 2026-07-27: "fix all stale stocks"): any row still
         // MATERIALLY stale after this refresh (beyond the weekend-tolerant freshness window) is
         // exactly what a throttled/partial sweep left behind — retry those alone, once.
-        await healStaleQuotes()
+        await healStaleQuotes(scopedTo: scopedKeys)
         lastUpdated = Date()
         lastFullRefreshAt = Date()
         // Newest MARKET time across the priced quotes — the banner uses this (not fetch time) to
