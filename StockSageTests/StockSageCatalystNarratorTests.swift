@@ -69,18 +69,18 @@ struct StockSageCatalystNarratorTests {
         #expect(N.label.contains("not advice"))
     }
 
-    // MARK: label(for:model:)
+    // MARK: label(for:)
 
-    @Test("label(for: .localServer, model:) names the server model and the non-advice caveat")
+    @Test("label(for: .localServer(model:)) names the server model and the non-advice caveat")
     func labelForLocalServerNamesModel() {
-        let text = N.label(for: .localServer, model: "qwen3.8")
+        let text = N.label(for: .localServer(model: "qwen3.8"))
         #expect(text.contains("qwen3.8"))
         #expect(text.contains("not advice"))
     }
 
-    @Test("label(for: .onDevice, model:) is byte-identical to the plain `label` constant")
+    @Test("label(for: .onDevice) is byte-identical to the plain `label` constant")
     func labelForOnDeviceMatchesPlainLabel() {
-        #expect(N.label(for: .onDevice, model: nil) == N.label)
+        #expect(N.label(for: .onDevice) == N.label)
     }
 
     // MARK: instructions
@@ -100,7 +100,7 @@ struct StockSageCatalystNarratorTests {
         #expect(N.selectedBackend("off") == .off)
     }
 
-    // MARK: explainAvailable (n=8 rows)
+    // MARK: explainAvailable (n=10 rows)
 
     @Test("explainAvailable truth table")
     func explainAvailableTruthTable() {
@@ -115,8 +115,16 @@ struct StockSageCatalystNarratorTests {
             (.localServerOnly, true, true, false, false),
             (.auto, false, false, false, false),
             (.auto, false, true, true, true),
+            // Review major (fix pass 2026-09-06): the two rows above both have
+            // onDeviceAvailable=false, so they pin only the `serverReady` half of `.auto`'s
+            // `serverReady || onDeviceReady` — dropping the on-device fallback entirely
+            // (`serverReady` alone) would still pass every row above. These two pin the OR:
+            // the on-device fallback firing when the server is unreachable, and both being
+            // available at once.
+            (.auto, true, false, false, true),
+            (.auto, true, true, true, true),
         ]
-        #expect(rows.count == 8)   // n=8 rows
+        #expect(rows.count == 10)   // n=10 rows
         for (i, row) in rows.enumerated() {
             let onDevice: N.Availability = row.onDeviceAvailable ? .available : .unavailable("nope")
             let probe = StockSageLocalModelServer.Probe(reachable: row.reachable, isOllama: true, models: [],
@@ -132,7 +140,9 @@ struct StockSageCatalystNarratorTests {
     func resultEqualityByValue() {
         #expect(N.Result.text("a", .onDevice) == .text("a", .onDevice))
         #expect(N.Result.text("a", .onDevice) != .text("b", .onDevice))
-        #expect(N.Result.text("a", .onDevice) != .text("a", .localServer))
+        #expect(N.Result.text("a", .onDevice) != .text("a", .localServer(model: "qwen3.8")))
+        #expect(N.Result.text("a", .localServer(model: "qwen3.8")) == .text("a", .localServer(model: "qwen3.8")))
+        #expect(N.Result.text("a", .localServer(model: "qwen3.8")) != .text("a", .localServer(model: "llama3")))
         #expect(N.Result.withheld("x") == .withheld("x"))
         #expect(N.Result.unavailable("y") == .unavailable("y"))
         #expect(N.Result.text("a", .onDevice) != .withheld("a"))

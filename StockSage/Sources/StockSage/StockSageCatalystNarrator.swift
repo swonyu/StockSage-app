@@ -29,8 +29,15 @@ enum StockSageCatalystNarrator {
 
     // MARK: Source (which backend actually wrote a given paragraph)
 
-    enum Source: String, Sendable, Equatable {
-        case onDevice, localServer
+    /// `.localServer` carries the model name CAPTURED AT GENERATION TIME (from `config.model`
+    /// inside `explainViaServer`, fix pass 2026-09-06 review blocker) — never read back from the
+    /// live `serverModel` settings binding, which a viewer can edit at any time after a paragraph
+    /// was already generated. Carrying the name on the value itself (rather than a second,
+    /// separately-passed argument) makes it structurally impossible for the label to drift from
+    /// the model that actually wrote the text.
+    enum Source: Sendable, Equatable {
+        case onDevice
+        case localServer(model: String)
     }
 
     // MARK: Availability
@@ -168,14 +175,15 @@ enum StockSageCatalystNarrator {
         + "misstate; unvalidated; not advice."
 
     /// Source-aware label — `.onDevice` reads exactly as `label` above (so that test keeps
-    /// passing byte-for-byte); `.localServer` names the actual server model, so a viewer never
-    /// mistakes a local-server paraphrase for the on-device one or vice versa.
-    nonisolated static func label(for source: Source, model: String?) -> String {
+    /// passing byte-for-byte); `.localServer` names the model CARRIED ON `source` itself (the one
+    /// that actually wrote this text), never a live settings value, so editing the Model field
+    /// after generating a paragraph can never retroactively relabel it.
+    nonisolated static func label(for source: Source) -> String {
         switch source {
         case .onDevice:
             return label
-        case .localServer:
-            return "Model-written by the local server model \(model ?? "?") from the facts above — "
+        case .localServer(let model):
+            return "Model-written by the local server model \(model) from the facts above — "
                 + "a paraphrase, not analysis; it can misstate; unvalidated; not advice."
         }
     }
@@ -284,7 +292,7 @@ enum StockSageCatalystNarrator {
             if introducesForeignNumbers(text, facts: briefFacts) {
                 return .withheld("Withheld: the model introduced a number that is not in the facts.")
             }
-            return .text(text, .localServer)
+            return .text(text, .localServer(model: config.model))
         case .failure(let error):
             return .unavailable(humanServerError(error))
         }

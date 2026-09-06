@@ -61,6 +61,26 @@ struct CatalystsSection: View {
     /// probe result actually depends on changes, never on an unrelated body rebuild.
     private var probeTaskID: String { serverURL + "|" + serverModel + "|" + backendRaw }
 
+    /// [network-safety-warn-first], fix pass 2026-09-06 (review blocker): true whenever the
+    /// PERSISTED server settings parse to a non-loopback host, independent of which backend is
+    /// currently selected — so this goes true the moment a viewer types a LAN address into the
+    /// field, exactly like the header warning always intended, and stays true across app
+    /// restarts (it reads `@AppStorage`, not one-shot local state).
+    private var isNonLoopbackConfig: Bool {
+        guard let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel) else { return false }
+        return !StockSageLocalModelServer.isLoopback(config.baseURL)
+    }
+
+    /// True only when an "Explain" press (or the auto-probe) would ACTUALLY reach out to that
+    /// non-loopback host — `.onDeviceOnly` never touches `StockSageLocalModelServer` at all, so a
+    /// saved-but-unused LAN address must not scare a viewer who isn't using it. Both `.auto` and
+    /// `.localServerOnly` probe the server as part of `explain(_:)`, so both count here.
+    private var explainMayLeaveDevice: Bool {
+        guard isNonLoopbackConfig else { return false }
+        let backend = StockSageCatalystNarrator.selectedBackend(backendRaw)
+        return backend == .auto || backend == .localServerOnly
+    }
+
     private func testConnection() {
         guard !probing else { return }
         probing = true
@@ -190,6 +210,13 @@ struct CatalystsSection: View {
                 Text(reason).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // [network-safety-warn-first], fix pass 2026-09-06 (review blocker): this banner used
+            // to live ONLY inside `explanationModelSettings`'s `DisclosureGroup`, which defaults
+            // to collapsed — so it was invisible unless a viewer had already opened the settings
+            // panel. Hoisted here, into the header's always-visible (never collapsible) section,
+            // so it renders on first appearance of this tab — before the auto-probe below ever
+            // fires and before any "Explain" press — regardless of whether the panel is expanded.
+            if isNonLoopbackConfig { nonLoopbackWarning() }
             explanationModelSettings(availability: availability)
             if ideas.isEmpty {
                 Text("No ideas yet — run a scan on the Ideas tab.")
@@ -203,10 +230,6 @@ struct CatalystsSection: View {
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }
 
-    /// [network-safety-warn-first]: a non-loopback server address means the idea's facts
-    /// (symbol/price/stop/target) leave this device over the network — the warning below fires
-    /// on that condition alone, independent of whether the backend is currently selected, so it's
-    /// visible the moment a viewer types a LAN address in, before ever pressing "Explain".
     @ViewBuilder
     private func explanationModelSettings(availability: StockSageCatalystNarrator.Availability) -> some View {
         DisclosureGroup(isExpanded: $modelSettingsExpanded) {
@@ -227,19 +250,33 @@ struct CatalystsSection: View {
                 Text("On-device: \(onDeviceStatusLine(availability)) Local server: \(probe?.detail ?? "not tested yet.")")
                     .font(.system(size: font11)).foregroundStyle(probeStatusColor)
                     .fixedSize(horizontal: false, vertical: true)
-                if let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel),
-                   !StockSageLocalModelServer.isLoopback(config.baseURL) {
-                    Text("Not loopback: the facts (symbol, price, stop, target) will leave this device "
-                        + "over your network. Prefer 127.0.0.1 or a Tailscale address. Plain-HTTP LAN "
-                        + "calls also need the local-networking allowance this build does not set.")
-                        .font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // The full [network-safety-warn-first] warning now renders unconditionally in the
+                // always-visible header above (see `isNonLoopbackConfig` there) — not duplicated
+                // here so there is exactly one place this sentence can drift from the code that
+                // gates it.
             }
             .padding(.top, DS.Space.xs)
         } label: {
             Text("Explanation model").font(.system(size: font11, weight: .medium)).foregroundStyle(DS.Palette.textSecondary)
         }
+    }
+
+    /// [network-safety-warn-first]: the risk statement itself, in ONE place — rendered
+    /// unconditionally in the header (see `isNonLoopbackConfig` above it) and, in `compact` form,
+    /// inline on every card next to "Explain" (see `explainMayLeaveDevice`) so it is visible at
+    /// the point of the actual action regardless of scroll position, not only in a header that
+    /// can scroll off-screen. `compact` deliberately still names the concrete consequence ("leaves
+    /// this device") rather than a bare icon — a warning nobody reads because it was shortened to
+    /// meaninglessness is not a warning.
+    @ViewBuilder
+    private func nonLoopbackWarning(compact: Bool = false) -> some View {
+        Text(compact
+            ? "Not loopback — this will send the facts above over your network."
+            : "Not loopback: the facts (symbol, price, stop, target) will leave this device "
+                + "over your network. Prefer 127.0.0.1 or a Tailscale address. Plain-HTTP LAN "
+                + "calls also need the local-networking allowance this build does not set.")
+            .font(.system(size: compact ? font9 : font11)).foregroundStyle(DS.Palette.warningSoft)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func onDeviceStatusLine(_ availability: StockSageCatalystNarrator.Availability) -> String {
@@ -355,21 +392,33 @@ struct CatalystsSection: View {
     private func cardButtons(_ brief: StockSageCatalystWatch.Brief,
                              availability: StockSageCatalystNarrator.Availability) -> some View {
         let idea = brief.idea
-        HStack(spacing: DS.Space.md) {
-            Button("Details") { onSelect(idea) }
-                .buttonStyle(.plain).touchHitArea()
-            if StockSageEODHD.covers(idea.symbol) {
-                Button(expanded.contains(idea.symbol) ? "Hide filings" : "Filings") { toggleFilings(idea.symbol) }
+        let explainShown = StockSageCatalystNarrator.explainAvailable(
+            backend: StockSageCatalystNarrator.selectedBackend(backendRaw), onDevice: availability, probe: probe)
+        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+            HStack(spacing: DS.Space.md) {
+                Button("Details") { onSelect(idea) }
                     .buttonStyle(.plain).touchHitArea()
+                if StockSageEODHD.covers(idea.symbol) {
+                    Button(expanded.contains(idea.symbol) ? "Hide filings" : "Filings") { toggleFilings(idea.symbol) }
+                        .buttonStyle(.plain).touchHitArea()
+                }
+                if explainShown {
+                    Button("Explain") { explainOnDevice(brief) }
+                        .buttonStyle(.plain).touchHitArea()
+                        .disabled(narrating.contains(idea.symbol))
+                }
             }
-            if StockSageCatalystNarrator.explainAvailable(
-                backend: StockSageCatalystNarrator.selectedBackend(backendRaw), onDevice: availability, probe: probe) {
-                Button("Explain") { explainOnDevice(brief) }
-                    .buttonStyle(.plain).touchHitArea()
-                    .disabled(narrating.contains(idea.symbol))
+            .font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+            // [network-safety-warn-first], fix pass 2026-09-06 (review blocker): the header's
+            // warning scrolls off-screen together with the rest of the header on any card list
+            // long enough to scroll (up to ~450 briefs) — restated here, right next to the actual
+            // "Explain" button, so the risk is visible at the point of the action regardless of
+            // scroll position. `explainMayLeaveDevice` already excludes `.onDeviceOnly` (which
+            // never contacts the server), so this never appears next to a press that stays local.
+            if explainShown && explainMayLeaveDevice {
+                nonLoopbackWarning(compact: true)
             }
         }
-        .font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
     }
 
     @ViewBuilder
@@ -405,7 +454,7 @@ struct CatalystsSection: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(StockSageCatalystNarrator.label(for: source, model: serverModel))
+                    Text(StockSageCatalystNarrator.label(for: source))
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
                 }
