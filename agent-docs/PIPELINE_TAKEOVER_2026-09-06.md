@@ -26,6 +26,12 @@ pushes, actual trades, service purchases, or local model training.
   - [ ] Full populated UI verification and authenticated endpoint smoke.
     - 21:32 credential-presence check was blocked by the credential-access guard.
       No key was read, no authenticated request sent, no guard bypass attempted.
+      Retried the same explicit, presence-only access after the owner's22:03
+      request to unblock verification; PreToolUse again denied it as protected
+      by default patterns. Chat authorization has not changed the tool guard.
+      At22:09 owner removed the file-guard registration; read-only inspection
+      confirmed valid hooks.json with no such entry, but the active guard still
+      denied the same check. No assistant security edits or alternate key access.
       Keep live smoke pending; independent stages may proceed. Full-screen QA
       must not overwrite the owner's running binary/state or open a second Stocks socket.
 - [x] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status (code/tests; live verification pending).
@@ -34,7 +40,15 @@ pushes, actual trades, service purchases, or local model training.
   - [x] Implement provider first in chain; preserve 24h rejection gate and answer provenance.
   - [x] Preserve confirmed/projected distinction and actual provider in rendered catalyst copy.
   - [x] Focused then serialized canonical macOS/iPhone gates; record and commit explicit paths.
-- [ ] M4 Massive news/insights with bounded, cited narration.
+- [x] M4 Massive news/insights with bounded, cited narration (code/tests; live pending).
+  - [x] Massive-first one-page selection; EODHD fallback; ≤5 articles, ≤7days,
+    ticker-matched optional sentiment, real provider/publisher labels.
+  - [x] Shared future-date/link/text budgets; regression red proved three old defects.
+  - [x] Actual source mapping and UI excerpts/insight; same citation and UTC day,
+    number/citation algorithms unchanged, no trading/ranking linkage.
+  - [x] Focused56/56; final macOS1693/1693, iPhone1691/1691. Exact bundles and
+    compile-failed fixture attempt recorded in HANDOFF.320pt component render
+    inspected, not a claim of full populated UI/live-model verification.
 - [ ] M5 truthful per-observation provider labels and paid-plan configuration.
 - [ ] M5b split-aware journal comparisons without rewriting the journal.
 - [ ] M6 ratings, guidance, 8-K, dividends and Form 4, with dated provenance and entitlement failures.

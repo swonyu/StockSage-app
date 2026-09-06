@@ -1,5 +1,76 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M4 news checkpoint — 2026-09-06 22:27 +03
+
+Explain now requests Massive `/v2/reference/news` first, with the existing EODHD
+news path as fallback only when no usable primary items are available. One
+request per Explain, at most five articles within the preceding seven days,
+newest first; at most one EODHD fallback request. No new timer, subscription,
+pagination, dependency, model invocation trigger, or trading/ranking input.
+The documented feed updates hourly, not live. An empty selection is never a
+complete "no news" finding. Existing EODHD fallback budget:10 API credits/request.
+
+Article ticker membership is required. Sentiment/reasoning must match the requested
+ticker and a documented positive/negative/neutral label; missing/unknown/conflicting
+insights are omitted. Provider/publisher, title, bounded excerpt, date and safe
+link survive the actual NewsItem→CitedSource→prompt/UI path. Sentiment occupies
+a second line under the SAME citation number, labelled provider commentary in
+the UI. Both narrator backends retain the unchanged number/citation checks;
+these are NOT semantic truth or predictive-edge checks. External source prose
+is explicitly untrusted data, not instructions. No profitability claim.
+
+Shared news boundary rejects future dates, invalid limits/windows and unsafe
+links (non-HTTPS, userinfo, or URLs over2048 bytes). Titles/publishers/excerpts/
+reasoning have whole-word budgets, avoiding truncated numeric tokens. Results
+are deduplicated before limiting. Missing Massive status is allowed by its
+optional schema; present non-OK/wrong-type status or malformed envelopes fall
+through. HTTP200, external-access and cancellation checks surround requests;
+redirects are disabled and Massive auth stays in the header. No secrets logged.
+
+The source list now exposes publisher, excerpt and sentiment, even when narration
+is withheld/unavailable. Prompt and UI share a POSIX/Gregorian UTC date formatter.
+Native Link semantics remain; an explicit plain SwiftUI label fixed ImageRenderer's
+unsupported native-link placeholder. The final actual component render at320pt
+was inspected: `/private/tmp/stocksage-news-sources-320.png`. Synthetic component
+QA only, not full populated-app, live-model or VoiceOver interaction verification.
+
+Verified references:
+- https://massive.com/docs/rest/stocks/news
+- https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/reference.py
+  (`list_ticker_news`: published_utc range modifiers and endpoint)
+
+Verification (serialized xcodebuild; xcresulttool independently checked counts):
+- Regression red:15 executed,12 passed/3 failed, exit65. Future date, unsafe link,
+  unbounded snippet tests caught real existing defects.
+  `/private/tmp/stocksage-m4-red-20260906-2156.xcresult`.
+- First implementation build: nested Swift Testing #require macro in the render
+  fixture failed compilation; no tests executed. Corrected before all passes.
+  `/private/tmp/stocksage-m4-focused-20260906-2210.xcresult`.
+- Focused:56/56 passed both before and after render/URL-budget hardening.
+  `/private/tmp/stocksage-m4-focused-retry-20260906-2211.xcresult` and
+  `/private/tmp/stocksage-m4-render-20260906-2223.xcresult`.
+- Final macOS:1693/1693, zero selected failures/skips.
+  `/private/tmp/stocksage-m4-broad-macos-20260906-2225.xcresult`.
+- Final iPhone17Pro(gate), iOS26.5:1691/1691, zero selected failures/skips.
+  `/private/tmp/stocksage-m4-broad-ios-20260906-2227.xcresult`.
+  Same three canonical exclusions:CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests.
+
+Live verification was NOT run. Owner authorized a credential retry at22:03;
+PreToolUse denied the explicit presence-only check again. At22:09 the owner
+removed the file-guard entry: hooks.json remained valid, but the active tool
+guard still rejected access. The assistant changed no security configuration,
+read no key, and attempted no alternate access path. Reopening the task/file
+did not verify a guard reload. Do not infer key absence or entitlement failure.
+
+Owner's running app PID11897/binary and main worktree's unrelated pbxproj/review
+artifacts were preserved. No push, real trade, model load or new worker.
+Next concrete stage: M5 quote provenance. `MarketsView.sourceTagLabel` still
+hardcodes Yahoo and LiveQuote/StockSageQuote/StockSageIdea/history/cache do not
+carry provider metadata. Fix that through accepted observations, not by guessing
+from a configured key. Keep the approved Massive→Yahoo route; do not resurrect
+the old script's EODHD picker or claim the residual EODHD dependencies are gone.
+
 ## Pipeline 4 M3 earnings checkpoint — 2026-09-06 21:46 +03
 
 `StockSageMassiveEarnings` now precedes EODHD calendar → Yahoo → history projection

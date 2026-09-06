@@ -403,3 +403,29 @@ within a calendar day is not asserted; time is deliberately unused. No live
 entitlement claim: the credential guard blocked the agent's presence check and
 was not bypassed. Canonical macOS1681/iPhone1680 selected tests passed; HANDOFF
 records exact result bundles and remaining full UI/live checks.
+
+### M4 implementation and news budget correction —22:27 +03
+
+The earlier "future option" news section is now implemented through the existing
+on-tap Explain source flow. Massive `/v2/reference/news` uses ticker,
+published_utc.gte/lte, descending publication time and limit5. Its feed updates
+hourly; it is not labelled live. One request per Explain, not five requests per
+symbol. At most one existing EODHD news fallback request when no usable Massive
+items remain (existing budget10 EODHD API credits). No polling or pagination.
+Five articles and a seven-day window are a bounded selection, not completeness.
+
+Provider/publisher attribution and only the requested ticker's optional sentiment
+travel together through the numbered source into both model backends and the UI.
+The sentiment is source commentary, not an app trading signal; unchanged numeric
+and citation-index fences do not prove semantic truth. The viewer can inspect the
+actual bounded excerpts/reasoning and UTC dates even when narration is withheld.
+Shared parsers reject future articles and unsafe/oversized links, constrain all
+supplied text at whole-word boundaries, and omit conflicting/malformed insights.
+Missing or denied feeds remain unavailable, not an invented no-news observation.
+
+Contract verified from https://massive.com/docs/rest/stocks/news and the official
+https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/reference.py
+(`list_ticker_news`). Final selected gates:1693 macOS,1691 iPhone, all passing;
+HANDOFF contains exact bundles, the initial red defects, the fixture compile
+correction, and conditional live/full-UI limitations. No authenticated request
+was made while the active credential guard continued denying the check.

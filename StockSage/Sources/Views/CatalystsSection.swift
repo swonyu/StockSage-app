@@ -213,11 +213,11 @@ struct CatalystsSection: View {
             if isNonLoopbackConfig { nonLoopbackWarning() }
             // Privacy line (fix pass 2026-09-06, W4): "Explain" fetches CITABLE SOURCES itself —
             // separate from, and in addition to, whichever narrator backend answers the
-            // paragraph. Those fetches are the app's own EODHD/SEC calls, so this is true
+            // paragraph. Those fetches are the app's own Massive/EODHD/SEC calls, so this is true
             // regardless of the loopback/LAN warning above, which only covers the backend.
-            Text("Explain also sends the symbol to eodhd.com (news) and sec.gov (filings, insider "
-                + "trades) from this device, in addition to whichever narrator backend answers "
-                + "the paragraph.")
+            Text("When external access is enabled, Explain also sends the symbol to api.massive.com "
+                + "(news, updated hourly), eodhd.com if that news is unavailable, and sec.gov "
+                + "(filings, insider trades) from this device, in addition to the narrator backend.")
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             explanationModelSettings(availability: availability)
@@ -461,12 +461,12 @@ struct CatalystsSection: View {
                     Text(StockSageCatalystNarrator.label(for: source, sourceCount: sources.count))
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
-                    if !sources.isEmpty { sourceList(sources) }
                 }
             case .withheld(let msg), .unavailable(let msg):
                 Text(msg).font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if !sources.isEmpty { Self.sourceList(sources) }
         }
     }
 
@@ -475,22 +475,30 @@ struct CatalystsSection: View {
     /// always matches the 2nd row here. A source with no link renders its title/date only (never
     /// a dead tap target).
     @ViewBuilder
-    private func sourceList(_ sources: [StockSageCatalystNarrator.CitedSource]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+    static func sourceList(_ sources: [StockSageCatalystNarrator.CitedSource]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(sources.enumerated()), id: \.offset) { i, source in
-                let dateStr = source.date.formatted(date: .abbreviated, time: .omitted)
-                HStack(spacing: 4) {
-                    Text("[\(i + 1)]").foregroundStyle(DS.Palette.textSecondary)
-                    if let link = source.link {
-                        Link("\(source.title) · \(dateStr)", destination: link)
-                    } else {
-                        Text("\(source.title) · \(dateStr)").foregroundStyle(DS.Palette.textSecondary)
+                let dateStr = StockSageCatalystNarrator.sourceDay(source.date)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("[\(i + 1)]")
+                        if let link = source.link {
+                            Link(destination: link) {
+                                Text("\(source.title) · \(dateStr) UTC")
+                            }.buttonStyle(.plain)
+                        } else {
+                            Text("\(source.title) · \(dateStr) UTC")
+                        }
                     }
+                    Text(source.source)
+                    if !source.snippet.isEmpty { Text(source.snippet) }
+                    if let insight = source.insight { Text("Provider sentiment: \(insight)") }
                 }
-                .font(.system(size: font9))
                 .fixedSize(horizontal: false, vertical: true)
             }
+            Text(StockSageNewsService.caveat).fixedSize(horizontal: false, vertical: true)
         }
+        .font(.caption2).foregroundStyle(DS.Palette.textSecondary)
     }
 
     // MARK: - Cards mode: row actions
@@ -536,7 +544,7 @@ struct CatalystsSection: View {
         let (news, filings, insider) = await (newsTask, filingTask, insiderTask)
 
         var sources: [StockSageCatalystNarrator.CitedSource] = news.map {
-            .init(date: $0.date, source: "EODHD news", title: $0.title, snippet: $0.snippet, link: $0.link)
+            .init(news: $0)
         }
         if let filing = filings.first {
             let title = filing.itemDescriptions.isEmpty ? "8-K filed" : filing.itemDescriptions.joined(separator: ", ")
