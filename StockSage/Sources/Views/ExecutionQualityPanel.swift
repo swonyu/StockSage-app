@@ -50,29 +50,34 @@ struct ExecutionQualityPanel: View {
 
             if let m = measured, m.meetsFloor {
                 let worst = ExecutionQualityMath.worstLegBps(trades)
-                HStack(spacing: DS.Space.sm) {
-                    // dangerSoft, not danger, on all 3 statCells below — small-danger-TEXT-is-AA
-                    // sweep (review 2026-07-28 #6): statCell renders `tint` as ~12.5pt TEXT.
-                    statCell(title: "Median slippage", value: String(format: "%+.1f bps", m.medianBps),
-                             tint: m.medianBps <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
-                        .help("Median signed slippage per leg. Positive = you paid WORSE than planned (a buy filled higher, or a sell filled lower); negative = price improvement.")
-                    statCell(title: "Assumed (this book)", value: String(format: "%+.1f bps", m.assumedMedianBpsPerLeg),
-                             tint: .secondary)
-                        .help("The engine's flat per-leg cost assumption for the SAME legs (half the symbol's round-trip table) — apples-to-apples with the median at left.")
-                    statCell(title: "Legs measured", value: "\(m.legs)", tint: .white)
-                        .help("Entry + exit legs across closed trades with both a planned price and a fill logged. Floor: \(m.minLegs) legs before this panel trusts the median.")
-                    if let worst {
-                        statCell(title: "Worst leg", value: String(format: "%+.1f bps", worst),
-                                 tint: worst <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
-                            .help("The single costliest measured leg — one bad fill, not your typical execution.")
+                // UI#3 (review 2026-07-28): 5 stat cells (incl. a lineLimit(1) "Assumed (this
+                // book)" title) in one HStack — same overflow class as the idea-card metric row.
+                // ViewThatFits keeps the single-row form on macOS and folds the phone into two
+                // rows, nothing dropped.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: DS.Space.sm) { statCells(m, worst: worst) }
+                    VStack(alignment: .leading, spacing: DS.Space.xs) {
+                        HStack(spacing: DS.Space.sm) {
+                            statCell(title: "Median slippage", value: String(format: "%+.1f bps", m.medianBps),
+                                     tint: m.medianBps <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
+                                .help("Median signed slippage per leg. Positive = you paid WORSE than planned (a buy filled higher, or a sell filled lower); negative = price improvement.")
+                            statCell(title: "Assumed (this book)", value: String(format: "%+.1f bps", m.assumedMedianBpsPerLeg),
+                                     tint: .secondary)
+                                .help("The engine's flat per-leg cost assumption for the SAME legs (half the symbol's round-trip table) — apples-to-apples with the median at left.")
+                            statCell(title: "Legs measured", value: "\(m.legs)", tint: .white)
+                                .help("Entry + exit legs across closed trades with both a planned price and a fill logged. Floor: \(m.minLegs) legs before this panel trusts the median.")
+                        }
+                        HStack(spacing: DS.Space.sm) {
+                            if let worst {
+                                statCell(title: "Worst leg", value: String(format: "%+.1f bps", worst),
+                                         tint: worst <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
+                                    .help("The single costliest measured leg — one bad fill, not your typical execution.")
+                            }
+                            statCell(title: "Cost / trade", value: String(format: "%+.2fR", m.perTradeR),
+                                     tint: m.perTradeR <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
+                                .help(String(format: "Execution cost per trade in R (%.2fR total across %d R-measured legs) — subtract it from your expectancy to see the fills' real drag. Positive = cost. Same slippage as the bps at left, expressed in the journal's own R unit. An R-leg also needs a defined risk (entry ≠ stop), so this count can be lower than the bps legs at left.", m.totalR, m.rLegs))
+                        }
                     }
-                    // Cost in R (2026-07-17, owner "improve"): bps is abstract; R is the unit the rest
-                    // of the journal reasons in, so "execution shaved 0.15R off your average trade" is
-                    // the actionable discipline number. Reuses each leg's own price + risk-per-share.
-                    statCell(title: "Cost / trade", value: String(format: "%+.2fR", m.perTradeR),
-                             tint: m.perTradeR <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
-                        .help(String(format: "Execution cost per trade in R (%.2fR total across %d R-measured legs) — subtract it from your expectancy to see the fills' real drag. Positive = cost. Same slippage as the bps at left, expressed in the journal's own R unit. An R-leg also needs a defined risk (entry ≠ stop), so this count can be lower than the bps legs at left.", m.totalR, m.rLegs))
-                    Spacer(minLength: 0)
                 }
                 Text("Broker-choice execution dispersion is real and measured: 0.07%–0.46% round-trip across brokers for the identical order (Schwarz, Barber, Huang, Jorion & Odean, \u{201C}Retail Broker Execution Quality,\u{201D} Journal of Finance, 2025). Your number above is YOUR own fills — a record, not a forecast of future fills.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -89,6 +94,34 @@ struct ExecutionQualityPanel: View {
                 .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+    }
+
+    /// Verbatim content of the pre-UI#3 (review 2026-07-28) single-row stat-cell HStack —
+    /// the ViewThatFits fallback that keeps macOS byte-identical.
+    @ViewBuilder
+    private func statCells(_ m: MeasuredSlippage, worst: Double?) -> some View {
+        // dangerSoft, not danger, on all 3 statCells below — small-danger-TEXT-is-AA
+        // sweep (review 2026-07-28 #6): statCell renders `tint` as ~12.5pt TEXT.
+        statCell(title: "Median slippage", value: String(format: "%+.1f bps", m.medianBps),
+                 tint: m.medianBps <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
+            .help("Median signed slippage per leg. Positive = you paid WORSE than planned (a buy filled higher, or a sell filled lower); negative = price improvement.")
+        statCell(title: "Assumed (this book)", value: String(format: "%+.1f bps", m.assumedMedianBpsPerLeg),
+                 tint: .secondary)
+            .help("The engine's flat per-leg cost assumption for the SAME legs (half the symbol's round-trip table) — apples-to-apples with the median at left.")
+        statCell(title: "Legs measured", value: "\(m.legs)", tint: .white)
+            .help("Entry + exit legs across closed trades with both a planned price and a fill logged. Floor: \(m.minLegs) legs before this panel trusts the median.")
+        if let worst {
+            statCell(title: "Worst leg", value: String(format: "%+.1f bps", worst),
+                     tint: worst <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
+                .help("The single costliest measured leg — one bad fill, not your typical execution.")
+        }
+        // Cost in R (2026-07-17, owner "improve"): bps is abstract; R is the unit the rest
+        // of the journal reasons in, so "execution shaved 0.15R off your average trade" is
+        // the actionable discipline number. Reuses each leg's own price + risk-per-share.
+        statCell(title: "Cost / trade", value: String(format: "%+.2fR", m.perTradeR),
+                 tint: m.perTradeR <= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
+            .help(String(format: "Execution cost per trade in R (%.2fR total across %d R-measured legs) — subtract it from your expectancy to see the fills' real drag. Positive = cost. Same slippage as the bps at left, expressed in the journal's own R unit. An R-leg also needs a defined risk (entry ≠ stop), so this count can be lower than the bps legs at left.", m.totalR, m.rLegs))
+        Spacer(minLength: 0)
     }
 
     private func statCell(title: String, value: String, tint: Color) -> some View {

@@ -5224,135 +5224,17 @@ struct MarketsView: View {
                     .opacity(0.9)
                     .accessibilityHidden(true)
             }
-            HStack(spacing: IdeaSpace.chipGap) {
-                // When sorted by velocity, show the sort key first so the
-                // user can compare #3 vs #5 without opening the detail sheet.
-                if ideaSort == .velocity, let vel {
-                    ideaMetric("Vel.", String(format: "%+.3fR/d", vel), color: DS.Palette.successSoft)
-                        // T14 (rotation-3 triage): "net-adjusted growth rate (costs + variance
-                        // haircuts)" named the same ordering key the fastLane hover
-                        // (StockSageGlossary.explain(.fastLane)) already names precisely —
-                        // align on that naming instead of a second, divergent description.
-                        .help("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
+            // UI#3 (review 2026-07-28): this row's ideal width is ~478pt against ~321pt of
+            // phone card interior, and ideaMetric's sub-branch had no minimumScaleFactor — it
+            // HARD-truncated money figures ("Yahoo · 3…", "−5.1% aw…"). ViewThatFits keeps the
+            // 780pt mac column on the single-row form and folds the phone into two rows, risk
+            // first. Same metrics, same order within each group, nothing dropped.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: IdeaSpace.chipGap) { ideaMetricsRow(idea, atRisk: atRisk, vel: vel) }
+                VStack(alignment: .leading, spacing: IdeaSpace.stack) {
+                    HStack(spacing: IdeaSpace.chipGap) { ideaRiskMetrics(idea, atRisk: atRisk) }
+                    HStack(spacing: IdeaSpace.chipGap) { ideaPlanMetrics(idea, vel: vel) }
                 }
-                // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
-                // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
-                // it can never contradict it; live path ages THIS symbol's own priceAsOf.
-                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
-                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
-                } else {
-                    ideaMetric("Price", adaptivePrice(idea.price))
-                        .task(id: idea.symbol) {
-                            // SEC public disclosure, fetched only for the sheet the owner actually
-                            // opened. US listings only; .SR returns nil/[] and renders nothing.
-                            //
-                            // Form 4 (who traded) and 8-K (what was announced) are INDEPENDENT
-                            // SEC endpoints, so they run concurrently — one sheet open costs one
-                            // round-trip of latency, not two. Each lands as it finishes.
-                            insiderSummary = nil
-                            disclosures = []
-                            guard !idea.symbol.contains(".") else { return }
-                            insiderLoading = true
-                            disclosuresLoading = true
-                            async let form4 = StockSageInsider.recentActivity(for: idea.symbol)
-                            async let filings = StockSageDisclosureService.recentFilings(
-                                for: idea.symbol, forms: ["8-K"], limit: 5)
-                            insiderSummary = await form4
-                            insiderLoading = false
-                            disclosures = await filings
-                            disclosuresLoading = false
-                        }
-                        // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
-                        // live quote; on success the store relabels the idea and we re-point the
-                        // sheet at the refreshed copy (same id — the sheet updates in place).
-                        .task {
-                            if await store.refreshQuote(for: idea.symbol) != nil,
-                               let updated = store.ideas.first(where: { $0.id == idea.id }) {
-                                selectedIdea = updated
-                            }
-                        }
-                }
-                if let stop = a.stopPrice, idea.price > 0 {
-                    // Stop distance % in parentheses — glanceable risk without
-                    // opening the sheet. price > 0 guard matches rewardRisk()'s own pattern — a
-                    // malformed zero price must not render "(inf%)"/"(nan%)".
-                    // VO/edge lens 2026-07-09: sign from DIRECTION, not a hardcoded '−' — a
-                    // sell-family stop sits ABOVE entry (+x.x% away); the hardcoded minus claimed
-                    // the adverse move was downward for shorts.
-                    ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft,
-                               sub: String(format: "%+.1f%% away", (stop - idea.price) / idea.price * 100), subColor: DS.Palette.dangerSoft)
-                } else if let stop = a.stopPrice {
-                    ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft)
-                }
-                // B1 (OSS-borrow, FreqUI TradeDetail "At risk"): the $ LOST if the stop fills —
-                // same guard chain + same sizer call as bestOpportunityCard's "Size it now" line
-                // (line ~3563) so this can never diverge from the shipped sizer's math. nil on
-                // any unparseable/missing input ⇒ nothing new renders.
-                if let stop = a.stopPrice, let ps = atRisk, let acct = StockSageInput.positiveAmount(sizerAccount) {
-                    // Hoisted (iOS port): the nested-interpolation literal blew the type-checker
-                    // budget under the iOS overload set — same class as the calc-wave timeout.
-                    let riskAmt = approxAmount(ps.dollarsAtRisk, symbol: idea.symbol)
-                    let riskPct = String(format: "%.2f", (usdAmount(ps.dollarsAtRisk, symbol: idea.symbol) ?? ps.dollarsAtRisk) / acct * 100)
-                    let atRiskHelp = "Sizes the LOSS: a stop-out at \(adaptivePrice(stop)) costs ~\(riskAmt.dropFirst()) (\(riskPct)% of the account). Not a profit promise."
-                    ideaMetric("At risk", "\(riskAmt) · \(ps.shares) sh", color: DS.Palette.warningSoft)
-                        .help(atRiskHelp)
-                }
-                if let target = a.targetPrice {
-                    ideaMetric("Target", adaptivePrice(target), color: DS.Palette.successSoft)
-                }
-                if a.suggestedWeight > 0 {
-                    // "Base size" — the raw half-Kelly before regime/vol adjustments.
-                    ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
-                        .help(Self.sizeMetricHelp)
-                    // Vol-adj size when the brake materially cuts size (>15% cut).
-                    // Label is "Vol-adj" — NOT "Effective" or "Final"; the Deploy plan still layers
-                    // regime bias and correlation cuts on top, so this remains an intermediate step.
-                    // nil volRegime → show nothing (honesty floor: no fabricated multiplier).
-                    if let vr = idea.volRegime, vr.sizingMultiplier < 0.85 {
-                        ideaMetric("Vol-adj", String(format: "%.1f%%", a.suggestedWeight * vr.sizingMultiplier * 100), color: DS.Palette.warningSoft)
-                    }
-                }
-                let rr = rewardRisk(idea)
-                if rr > 0 {
-                    // Gross->net on the CARD (2026-07-28). The detail sheet already fuses these
-                    // (grossToNetText); the card showed gross alone, which is the number most
-                    // likely to be read and anchored on because it is the one seen first and
-                    // most often. Net is appended only when it genuinely resolves — a nil net
-                    // renders exactly as before, never a fabricated second figure.
-                    // Uses the SAME netRR convenience the sheet uses, so the card and the sheet
-                    // can never quote different net figures for one idea.
-                    if let stop = a.stopPrice, let target = a.targetPrice,
-                       let net = StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price,
-                                                        stop: stop, target: target,
-                                                        winProb: a.conviction),
-                       net > 0, net < rr {
-                        // "net" rides in the LABEL on iPhone (2026-07-28): as part of the value
-                        // the string outran its column and truncated to "2.0→1.4…", clipping the
-                        // net figure itself. A cut-off number is worse than a longer label —
-                        // the whole point of this metric is the gross→net drop.
-                        #if os(iOS)
-                        ideaMetric("R:R net", String(format: "%.1f→%.1f", rr, net))
-                        #else
-                        ideaMetric("R:R", String(format: "%.1f→%.1f net", rr, net))
-                        #endif
-                    } else {
-                        ideaMetric("R:R", String(format: "%.1f", rr))
-                    }
-                }
-                // Momentum dot on the main card, same logic as fastLaneRow.
-                // nil momentumQuality → show nothing (honesty floor preserved).
-                if let mq = idea.momentumQuality {
-                    let mqHot   = mq >= 2.0 / 3.0
-                    let mqMixed = mq >= 1.0 / 3.0
-                    let mqColor = mqHot ? DS.Palette.successSoft : mqMixed ? DS.Palette.warningSoft : DS.Palette.dangerSoft
-                    let mqLabel = mqHot ? "hot" : mqMixed ? "mixed" : "cold"
-                    HStack(spacing: 3) {
-                        Circle().fill(mqColor).frame(width: 5, height: 5)
-                        Text(mqLabel).font(.system(size: mvFont8)).foregroundStyle(mqColor)
-                    }
-                    .help("Momentum read: ER trend + MACD histogram + 21-day return — short histories may use fewer than 3 signals. A 1-day blip is not a 3-12d win. Descriptive, not predictive.")
-                }
-                Spacer(minLength: 0)
             }
             // Rationale first, regime token last — regime provides context
             // but action badge already carries the directional signal; the first rationale bullet
@@ -5518,6 +5400,285 @@ struct MarketsView: View {
             }
         }
         .help("Tap for full advice + backtest · right-click to copy the plan or set an alert")
+    }
+
+    /// Idea card metric row — the macOS single-row form, and the ViewThatFits fallback
+    /// when the phone port is wide enough for it. Verbatim content of the pre-UI#3
+    /// (review 2026-07-28) inline HStack — kept byte-identical to the phone-split
+    /// helpers below it so macOS at 780pt renders unchanged.
+    @ViewBuilder
+    private func ideaMetricsRow(_ idea: StockSageIdea, atRisk: PositionSize?, vel: Double?) -> some View {
+        let a = idea.advice
+                // When sorted by velocity, show the sort key first so the
+                // user can compare #3 vs #5 without opening the detail sheet.
+                if ideaSort == .velocity, let vel {
+                    ideaMetric("Vel.", String(format: "%+.3fR/d", vel), color: DS.Palette.successSoft)
+                        // T14 (rotation-3 triage): "net-adjusted growth rate (costs + variance
+                        // haircuts)" named the same ordering key the fastLane hover
+                        // (StockSageGlossary.explain(.fastLane)) already names precisely —
+                        // align on that naming instead of a second, divergent description.
+                        .help("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
+                }
+                // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
+                // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
+                // it can never contradict it; live path ages THIS symbol's own priceAsOf.
+                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
+                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
+                } else {
+                    ideaMetric("Price", adaptivePrice(idea.price))
+                        .task(id: idea.symbol) {
+                            // SEC public disclosure, fetched only for the sheet the owner actually
+                            // opened. US listings only; .SR returns nil/[] and renders nothing.
+                            //
+                            // Form 4 (who traded) and 8-K (what was announced) are INDEPENDENT
+                            // SEC endpoints, so they run concurrently — one sheet open costs one
+                            // round-trip of latency, not two. Each lands as it finishes.
+                            insiderSummary = nil
+                            disclosures = []
+                            guard !idea.symbol.contains(".") else { return }
+                            insiderLoading = true
+                            disclosuresLoading = true
+                            async let form4 = StockSageInsider.recentActivity(for: idea.symbol)
+                            async let filings = StockSageDisclosureService.recentFilings(
+                                for: idea.symbol, forms: ["8-K"], limit: 5)
+                            insiderSummary = await form4
+                            insiderLoading = false
+                            disclosures = await filings
+                            disclosuresLoading = false
+                        }
+                        // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
+                        // live quote; on success the store relabels the idea and we re-point the
+                        // sheet at the refreshed copy (same id — the sheet updates in place).
+                        .task {
+                            if await store.refreshQuote(for: idea.symbol) != nil,
+                               let updated = store.ideas.first(where: { $0.id == idea.id }) {
+                                selectedIdea = updated
+                            }
+                        }
+                }
+                if let stop = a.stopPrice, idea.price > 0 {
+                    // Stop distance % in parentheses — glanceable risk without
+                    // opening the sheet. price > 0 guard matches rewardRisk()'s own pattern — a
+                    // malformed zero price must not render "(inf%)"/"(nan%)".
+                    // VO/edge lens 2026-07-09: sign from DIRECTION, not a hardcoded '−' — a
+                    // sell-family stop sits ABOVE entry (+x.x% away); the hardcoded minus claimed
+                    // the adverse move was downward for shorts.
+                    ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft,
+                               sub: String(format: "%+.1f%% away", (stop - idea.price) / idea.price * 100), subColor: DS.Palette.dangerSoft)
+                } else if let stop = a.stopPrice {
+                    ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft)
+                }
+                // B1 (OSS-borrow, FreqUI TradeDetail "At risk"): the $ LOST if the stop fills —
+                // same guard chain + same sizer call as bestOpportunityCard's "Size it now" line
+                // (line ~3563) so this can never diverge from the shipped sizer's math. nil on
+                // any unparseable/missing input ⇒ nothing new renders.
+                if let stop = a.stopPrice, let ps = atRisk, let acct = StockSageInput.positiveAmount(sizerAccount) {
+                    // Hoisted (iOS port): the nested-interpolation literal blew the type-checker
+                    // budget under the iOS overload set — same class as the calc-wave timeout.
+                    let riskAmt = approxAmount(ps.dollarsAtRisk, symbol: idea.symbol)
+                    let riskPct = String(format: "%.2f", (usdAmount(ps.dollarsAtRisk, symbol: idea.symbol) ?? ps.dollarsAtRisk) / acct * 100)
+                    let atRiskHelp = "Sizes the LOSS: a stop-out at \(adaptivePrice(stop)) costs ~\(riskAmt.dropFirst()) (\(riskPct)% of the account). Not a profit promise."
+                    ideaMetric("At risk", "\(riskAmt) · \(ps.shares) sh", color: DS.Palette.warningSoft)
+                        .help(atRiskHelp)
+                }
+                if let target = a.targetPrice {
+                    ideaMetric("Target", adaptivePrice(target), color: DS.Palette.successSoft)
+                }
+                if a.suggestedWeight > 0 {
+                    // "Base size" — the raw half-Kelly before regime/vol adjustments.
+                    ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
+                        .help(Self.sizeMetricHelp)
+                    // Vol-adj size when the brake materially cuts size (>15% cut).
+                    // Label is "Vol-adj" — NOT "Effective" or "Final"; the Deploy plan still layers
+                    // regime bias and correlation cuts on top, so this remains an intermediate step.
+                    // nil volRegime → show nothing (honesty floor: no fabricated multiplier).
+                    if let vr = idea.volRegime, vr.sizingMultiplier < 0.85 {
+                        ideaMetric("Vol-adj", String(format: "%.1f%%", a.suggestedWeight * vr.sizingMultiplier * 100), color: DS.Palette.warningSoft)
+                    }
+                }
+                let rr = rewardRisk(idea)
+                if rr > 0 {
+                    // Gross->net on the CARD (2026-07-28). The detail sheet already fuses these
+                    // (grossToNetText); the card showed gross alone, which is the number most
+                    // likely to be read and anchored on because it is the one seen first and
+                    // most often. Net is appended only when it genuinely resolves — a nil net
+                    // renders exactly as before, never a fabricated second figure.
+                    // Uses the SAME netRR convenience the sheet uses, so the card and the sheet
+                    // can never quote different net figures for one idea.
+                    if let stop = a.stopPrice, let target = a.targetPrice,
+                       let net = StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price,
+                                                        stop: stop, target: target,
+                                                        winProb: a.conviction),
+                       net > 0, net < rr {
+                        // "net" rides in the LABEL on iPhone (2026-07-28): as part of the value
+                        // the string outran its column and truncated to "2.0→1.4…", clipping the
+                        // net figure itself. A cut-off number is worse than a longer label —
+                        // the whole point of this metric is the gross→net drop.
+                        #if os(iOS)
+                        ideaMetric("R:R net", String(format: "%.1f→%.1f", rr, net))
+                        #else
+                        ideaMetric("R:R", String(format: "%.1f→%.1f net", rr, net))
+                        #endif
+                    } else {
+                        ideaMetric("R:R", String(format: "%.1f", rr))
+                    }
+                }
+                // Momentum dot on the main card, same logic as fastLaneRow.
+                // nil momentumQuality → show nothing (honesty floor preserved).
+                if let mq = idea.momentumQuality {
+                    let mqHot   = mq >= 2.0 / 3.0
+                    let mqMixed = mq >= 1.0 / 3.0
+                    let mqColor = mqHot ? DS.Palette.successSoft : mqMixed ? DS.Palette.warningSoft : DS.Palette.dangerSoft
+                    let mqLabel = mqHot ? "hot" : mqMixed ? "mixed" : "cold"
+                    HStack(spacing: 3) {
+                        Circle().fill(mqColor).frame(width: 5, height: 5)
+                        Text(mqLabel).font(.system(size: mvFont8)).foregroundStyle(mqColor)
+                    }
+                    .help("Momentum read: ER trend + MACD histogram + 21-day return — short histories may use fewer than 3 signals. A 1-day blip is not a 3-12d win. Descriptive, not predictive.")
+                }
+                Spacer(minLength: 0)
+    }
+
+    /// UI#3 phone-split: risk-first row — Stop, At risk, momentum dot. Verbatim subset
+    /// of `ideaMetricsRow` above, same conditionals, same relative order.
+    @ViewBuilder
+    private func ideaRiskMetrics(_ idea: StockSageIdea, atRisk: PositionSize?) -> some View {
+        let a = idea.advice
+                if let stop = a.stopPrice, idea.price > 0 {
+                    // Stop distance % in parentheses — glanceable risk without
+                    // opening the sheet. price > 0 guard matches rewardRisk()'s own pattern — a
+                    // malformed zero price must not render "(inf%)"/"(nan%)".
+                    // VO/edge lens 2026-07-09: sign from DIRECTION, not a hardcoded '−' — a
+                    // sell-family stop sits ABOVE entry (+x.x% away); the hardcoded minus claimed
+                    // the adverse move was downward for shorts.
+                    ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft,
+                               sub: String(format: "%+.1f%% away", (stop - idea.price) / idea.price * 100), subColor: DS.Palette.dangerSoft)
+                } else if let stop = a.stopPrice {
+                    ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft)
+                }
+                // B1 (OSS-borrow, FreqUI TradeDetail "At risk"): the $ LOST if the stop fills —
+                // same guard chain + same sizer call as bestOpportunityCard's "Size it now" line
+                // (line ~3563) so this can never diverge from the shipped sizer's math. nil on
+                // any unparseable/missing input ⇒ nothing new renders.
+                if let stop = a.stopPrice, let ps = atRisk, let acct = StockSageInput.positiveAmount(sizerAccount) {
+                    // Hoisted (iOS port): the nested-interpolation literal blew the type-checker
+                    // budget under the iOS overload set — same class as the calc-wave timeout.
+                    let riskAmt = approxAmount(ps.dollarsAtRisk, symbol: idea.symbol)
+                    let riskPct = String(format: "%.2f", (usdAmount(ps.dollarsAtRisk, symbol: idea.symbol) ?? ps.dollarsAtRisk) / acct * 100)
+                    let atRiskHelp = "Sizes the LOSS: a stop-out at \(adaptivePrice(stop)) costs ~\(riskAmt.dropFirst()) (\(riskPct)% of the account). Not a profit promise."
+                    ideaMetric("At risk", "\(riskAmt) · \(ps.shares) sh", color: DS.Palette.warningSoft)
+                        .help(atRiskHelp)
+                }
+                // Momentum dot on the main card, same logic as fastLaneRow.
+                // nil momentumQuality → show nothing (honesty floor preserved).
+                if let mq = idea.momentumQuality {
+                    let mqHot   = mq >= 2.0 / 3.0
+                    let mqMixed = mq >= 1.0 / 3.0
+                    let mqColor = mqHot ? DS.Palette.successSoft : mqMixed ? DS.Palette.warningSoft : DS.Palette.dangerSoft
+                    let mqLabel = mqHot ? "hot" : mqMixed ? "mixed" : "cold"
+                    HStack(spacing: 3) {
+                        Circle().fill(mqColor).frame(width: 5, height: 5)
+                        Text(mqLabel).font(.system(size: mvFont8)).foregroundStyle(mqColor)
+                    }
+                    .help("Momentum read: ER trend + MACD histogram + 21-day return — short histories may use fewer than 3 signals. A 1-day blip is not a 3-12d win. Descriptive, not predictive.")
+                }
+    }
+
+    /// UI#3 phone-split: plan row — Vel. (kept first, per the "show the sort key
+    /// first" comment on the metric itself), Price, Target, Base size, Vol-adj, R:R.
+    /// Verbatim subset of `ideaMetricsRow` above, same conditionals, same relative order.
+    @ViewBuilder
+    private func ideaPlanMetrics(_ idea: StockSageIdea, vel: Double?) -> some View {
+        let a = idea.advice
+                // When sorted by velocity, show the sort key first so the
+                // user can compare #3 vs #5 without opening the detail sheet.
+                if ideaSort == .velocity, let vel {
+                    ideaMetric("Vel.", String(format: "%+.3fR/d", vel), color: DS.Palette.successSoft)
+                        // T14 (rotation-3 triage): "net-adjusted growth rate (costs + variance
+                        // haircuts)" named the same ordering key the fastLane hover
+                        // (StockSageGlossary.explain(.fastLane)) already names precisely —
+                        // align on that naming instead of a second, divergent description.
+                        .help("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
+                }
+                // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
+                // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
+                // it can never contradict it; live path ages THIS symbol's own priceAsOf.
+                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
+                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
+                } else {
+                    ideaMetric("Price", adaptivePrice(idea.price))
+                        .task(id: idea.symbol) {
+                            // SEC public disclosure, fetched only for the sheet the owner actually
+                            // opened. US listings only; .SR returns nil/[] and renders nothing.
+                            //
+                            // Form 4 (who traded) and 8-K (what was announced) are INDEPENDENT
+                            // SEC endpoints, so they run concurrently — one sheet open costs one
+                            // round-trip of latency, not two. Each lands as it finishes.
+                            insiderSummary = nil
+                            disclosures = []
+                            guard !idea.symbol.contains(".") else { return }
+                            insiderLoading = true
+                            disclosuresLoading = true
+                            async let form4 = StockSageInsider.recentActivity(for: idea.symbol)
+                            async let filings = StockSageDisclosureService.recentFilings(
+                                for: idea.symbol, forms: ["8-K"], limit: 5)
+                            insiderSummary = await form4
+                            insiderLoading = false
+                            disclosures = await filings
+                            disclosuresLoading = false
+                        }
+                        // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
+                        // live quote; on success the store relabels the idea and we re-point the
+                        // sheet at the refreshed copy (same id — the sheet updates in place).
+                        .task {
+                            if await store.refreshQuote(for: idea.symbol) != nil,
+                               let updated = store.ideas.first(where: { $0.id == idea.id }) {
+                                selectedIdea = updated
+                            }
+                        }
+                }
+                if let target = a.targetPrice {
+                    ideaMetric("Target", adaptivePrice(target), color: DS.Palette.successSoft)
+                }
+                if a.suggestedWeight > 0 {
+                    // "Base size" — the raw half-Kelly before regime/vol adjustments.
+                    ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
+                        .help(Self.sizeMetricHelp)
+                    // Vol-adj size when the brake materially cuts size (>15% cut).
+                    // Label is "Vol-adj" — NOT "Effective" or "Final"; the Deploy plan still layers
+                    // regime bias and correlation cuts on top, so this remains an intermediate step.
+                    // nil volRegime → show nothing (honesty floor: no fabricated multiplier).
+                    if let vr = idea.volRegime, vr.sizingMultiplier < 0.85 {
+                        ideaMetric("Vol-adj", String(format: "%.1f%%", a.suggestedWeight * vr.sizingMultiplier * 100), color: DS.Palette.warningSoft)
+                    }
+                }
+                let rr = rewardRisk(idea)
+                if rr > 0 {
+                    // Gross->net on the CARD (2026-07-28). The detail sheet already fuses these
+                    // (grossToNetText); the card showed gross alone, which is the number most
+                    // likely to be read and anchored on because it is the one seen first and
+                    // most often. Net is appended only when it genuinely resolves — a nil net
+                    // renders exactly as before, never a fabricated second figure.
+                    // Uses the SAME netRR convenience the sheet uses, so the card and the sheet
+                    // can never quote different net figures for one idea.
+                    if let stop = a.stopPrice, let target = a.targetPrice,
+                       let net = StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price,
+                                                        stop: stop, target: target,
+                                                        winProb: a.conviction),
+                       net > 0, net < rr {
+                        // "net" rides in the LABEL on iPhone (2026-07-28): as part of the value
+                        // the string outran its column and truncated to "2.0→1.4…", clipping the
+                        // net figure itself. A cut-off number is worse than a longer label —
+                        // the whole point of this metric is the gross→net drop.
+                        #if os(iOS)
+                        ideaMetric("R:R net", String(format: "%.1f→%.1f", rr, net))
+                        #else
+                        ideaMetric("R:R", String(format: "%.1f→%.1f net", rr, net))
+                        #endif
+                    } else {
+                        ideaMetric("R:R", String(format: "%.1f", rr))
+                    }
+                }
     }
 
     /// Copy the full honest trade plan for an idea to the clipboard.
@@ -6022,39 +6183,74 @@ struct MarketsView: View {
     }
 
     @ViewBuilder private func deployPositionRow(_ p: AllocatedPosition, planAccount: Double) -> some View {
-        HStack(spacing: 12) {
-            Text(p.symbol).font(.system(size: mvFont13, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                .frame(width: 64, alignment: .leading)
-            ideaMetric("Risk", String(format: "%.2f%%", p.riskFraction * 100))
-            ideaMetric("Shares", "\(p.shares)")
-            // F2 (audit 2026-07-12): at-risk / notional are in the symbol's OWN currency — label them
-            // as such (approxAmount → "≈200 SAR" not "$200"), same fix as the idea-card "At risk".
-            ideaMetric("At risk", StockSageCurrency.approxAmount(p.dollarsAtRisk, symbol: p.symbol), color: DS.Palette.warningSoft)
-            ideaMetric("Notional", StockSageCurrency.approxAmount(p.notional, symbol: p.symbol))
-            // "Est. EV" (2026-07-09, harvested Copilot HELD finding #2): same
-            // estimate class as the best-opp card's "Est. EV" — an unlabeled "EV"
-            // here read as a firmer number than the identical figure one card up.
-            ideaMetric("Est. EV", String(format: "%+.2fR (gross)", p.evR), color: DS.Palette.successSoft)
-                .help(StockSageGlossary.explain(.ev))
-            // Hierarchy lens HIGH (2026-07-09): the smaller per-card plan warns at
-            // >100%-of-account, but THIS plan — the portfolio-level one — showed a
-            // $15,978 notional on a $10,000 account with no flag.
-            // F2 (audit 2026-07-12): compare the notional to the account in the SAME currency (USD) —
-            // a native SAR/pence notional vs a USD account either falsely trips (pence ~100×) or misses.
-            // When the symbol's FX rate is untracked, fall back to the raw compare (prior behavior).
-            // F3 review fix (2026-07-16): via `usdAmount` (resolver-backed) — the portfolio-only dict
-            // lacked SAR on an empty book, so an FX-sized .SR plan position compared raw SAR vs USD
-            // and false-fired this chip (worse post-F3: native counts rose ~3.75×).
-            let notionalUSD = usdAmount(p.notional, symbol: p.symbol) ?? p.notional
-            if notionalUSD > planAccount {
-                Text("⚠︎ exceeds account")
-                    .font(.system(size: mvFont9, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
-                    .lineLimit(1).fixedSize()
-                    .help("This position's notional is larger than the whole account — placing it needs margin or a partial fill. The risk% column still describes only the loss at the stop, not the capital required.")
+        // UI#3 (review 2026-07-28): same overflow class as the idea-card metric row —
+        // 6 metrics in one HStack blow the phone-width budget. ViewThatFits keeps the
+        // single-row form on macOS and folds the phone into two rows (identity+counts,
+        // then the money figures), nothing dropped.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { deployPositionMetrics(p, planAccount: planAccount) }
+            VStack(alignment: .leading, spacing: IdeaSpace.stack) {
+                HStack(spacing: 12) {
+                    Text(p.symbol).font(.system(size: mvFont13, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                        .frame(width: 64, alignment: .leading)
+                    ideaMetric("Risk", String(format: "%.2f%%", p.riskFraction * 100))
+                    ideaMetric("Shares", "\(p.shares)")
+                }
+                HStack(spacing: 12) {
+                    // F2 (audit 2026-07-12): at-risk / notional are in the symbol's OWN currency —
+                    // label them as such (approxAmount → "≈200 SAR" not "$200"), same fix as the
+                    // idea-card "At risk".
+                    ideaMetric("At risk", StockSageCurrency.approxAmount(p.dollarsAtRisk, symbol: p.symbol), color: DS.Palette.warningSoft)
+                    ideaMetric("Notional", StockSageCurrency.approxAmount(p.notional, symbol: p.symbol))
+                    ideaMetric("Est. EV", String(format: "%+.2fR (gross)", p.evR), color: DS.Palette.successSoft)
+                        .help(StockSageGlossary.explain(.ev))
+                    let notionalUSD = usdAmount(p.notional, symbol: p.symbol) ?? p.notional
+                    if notionalUSD > planAccount {
+                        Text("⚠︎ exceeds account")
+                            .font(.system(size: mvFont9, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                            .lineLimit(1).fixedSize()
+                            .help("This position's notional is larger than the whole account — placing it needs margin or a partial fill. The risk% column still describes only the loss at the stop, not the capital required.")
+                    }
+                }
             }
-            Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// Verbatim content of the pre-UI#3 single-row `deployPositionRow` — the ViewThatFits
+    /// fallback that keeps macOS byte-identical.
+    @ViewBuilder
+    private func deployPositionMetrics(_ p: AllocatedPosition, planAccount: Double) -> some View {
+        Text(p.symbol).font(.system(size: mvFont13, weight: .bold, design: .rounded)).foregroundStyle(.white)
+            .frame(width: 64, alignment: .leading)
+        ideaMetric("Risk", String(format: "%.2f%%", p.riskFraction * 100))
+        ideaMetric("Shares", "\(p.shares)")
+        // F2 (audit 2026-07-12): at-risk / notional are in the symbol's OWN currency — label them
+        // as such (approxAmount → "≈200 SAR" not "$200"), same fix as the idea-card "At risk".
+        ideaMetric("At risk", StockSageCurrency.approxAmount(p.dollarsAtRisk, symbol: p.symbol), color: DS.Palette.warningSoft)
+        ideaMetric("Notional", StockSageCurrency.approxAmount(p.notional, symbol: p.symbol))
+        // "Est. EV" (2026-07-09, harvested Copilot HELD finding #2): same
+        // estimate class as the best-opp card's "Est. EV" — an unlabeled "EV"
+        // here read as a firmer number than the identical figure one card up.
+        ideaMetric("Est. EV", String(format: "%+.2fR (gross)", p.evR), color: DS.Palette.successSoft)
+            .help(StockSageGlossary.explain(.ev))
+        // Hierarchy lens HIGH (2026-07-09): the smaller per-card plan warns at
+        // >100%-of-account, but THIS plan — the portfolio-level one — showed a
+        // $15,978 notional on a $10,000 account with no flag.
+        // F2 (audit 2026-07-12): compare the notional to the account in the SAME currency (USD) —
+        // a native SAR/pence notional vs a USD account either falsely trips (pence ~100×) or misses.
+        // When the symbol's FX rate is untracked, fall back to the raw compare (prior behavior).
+        // F3 review fix (2026-07-16): via `usdAmount` (resolver-backed) — the portfolio-only dict
+        // lacked SAR on an empty book, so an FX-sized .SR plan position compared raw SAR vs USD
+        // and false-fired this chip (worse post-F3: native counts rose ~3.75×).
+        let notionalUSD = usdAmount(p.notional, symbol: p.symbol) ?? p.notional
+        if notionalUSD > planAccount {
+            Text("⚠︎ exceeds account")
+                .font(.system(size: mvFont9, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                .lineLimit(1).fixedSize()
+                .help("This position's notional is larger than the whole account — placing it needs margin or a partial fill. The risk% column still describes only the loss at the stop, not the capital required.")
+        }
+        Spacer(minLength: 0)
     }
 
     private static let sizeMetricHelp = "Size uses the calibrated win-prob when a journal or backtest calibration is fitted (the same win-rate shown in the EV chip), or the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior otherwise. The ‘Deploy capital’ plan is the PORTFOLIO-level size — act on it when allocating the whole book (it layers regime sizing bias → vol-targeting shrink → per-symbol vol-regime brake → correlation de-weighting → heat cap); this per-card Size answers the SINGLE-trade question at your flat risk %."
@@ -7146,23 +7342,28 @@ struct MarketsView: View {
                 Text(e).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
             }
             if let s = store.strategyBacktest {
-                HStack(spacing: DS.Space.sm) {
-                    ideaMetric("Trades", "\(s.totalTrades)")
-                    // Break-even for the fixed 2:1 exit is 1/(1+2) ≈ 33%, not 50% — coloring danger
-                    // below 50% would flag every profitable 35-49% win-rate system as a loser.
-                    // AUDIT_FINDINGS_2 #1: significance gates the COLOR (the verdict), not just
-                    // the caption — an insignificant sample renders these NEUTRAL.
-                    ideaMetric("Win", String(format: "%.0f%%", s.blendedWinRate * 100),
-                               color: BacktestVerdict.metricColor(positive: s.blendedWinRate >= 1.0 / 3, significant: s.isSignificant))
-                    ideaMetric("Avg R", String(format: "%+.2f", s.avgR),
-                               color: BacktestVerdict.metricColor(positive: s.avgR >= 0, significant: s.isSignificant))
-                    ideaMetric("Total R", String(format: "%+.0f", s.totalR),
-                               color: BacktestVerdict.metricColor(positive: s.totalR >= 0, significant: s.isSignificant))
-                    ideaMetric("Worst-name DD", String(format: "−%.0fR", s.worstDrawdownR), color: DS.Palette.dangerSoft)
-                    ideaMetric("Pooled DD (eq-wt)", String(format: "−%.0fR", s.pooledDrawdownR), color: DS.Palette.dangerSoft)
-                        .help("Equal-weight pooled proxy: all trades across all names, sorted chronologically, cumulative-R worst peak-to-trough. Ignores position sizing and concurrency — not a true sized-portfolio drawdown. Typically larger than worst single-name DD because losses across symbols stack in time.")
-                    ideaMetric("Profit.", "\(s.symbolsProfitable)/\(s.symbolsWithTrades)")
-                    Spacer(minLength: 0)
+                // UI#3 (review 2026-07-28): 7 metrics in one HStack, same overflow class as the
+                // idea-card row. ViewThatFits keeps the single-row form on macOS and folds the
+                // phone into two rows, nothing dropped.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: DS.Space.sm) { strategyBacktestMetrics(s) }
+                    VStack(alignment: .leading, spacing: DS.Space.xs) {
+                        HStack(spacing: DS.Space.sm) {
+                            ideaMetric("Trades", "\(s.totalTrades)")
+                            ideaMetric("Win", String(format: "%.0f%%", s.blendedWinRate * 100),
+                                       color: BacktestVerdict.metricColor(positive: s.blendedWinRate >= 1.0 / 3, significant: s.isSignificant))
+                            ideaMetric("Avg R", String(format: "%+.2f", s.avgR),
+                                       color: BacktestVerdict.metricColor(positive: s.avgR >= 0, significant: s.isSignificant))
+                            ideaMetric("Total R", String(format: "%+.0f", s.totalR),
+                                       color: BacktestVerdict.metricColor(positive: s.totalR >= 0, significant: s.isSignificant))
+                        }
+                        HStack(spacing: DS.Space.sm) {
+                            ideaMetric("Worst-name DD", String(format: "−%.0fR", s.worstDrawdownR), color: DS.Palette.dangerSoft)
+                            ideaMetric("Pooled DD (eq-wt)", String(format: "−%.0fR", s.pooledDrawdownR), color: DS.Palette.dangerSoft)
+                                .help("Equal-weight pooled proxy: all trades across all names, sorted chronologically, cumulative-R worst peak-to-trough. Ignores position sizing and concurrency — not a true sized-portfolio drawdown. Typically larger than worst single-name DD because losses across symbols stack in time.")
+                            ideaMetric("Profit.", "\(s.symbolsProfitable)/\(s.symbolsWithTrades)")
+                        }
+                    }
                 }
                 if !s.isSignificant && s.totalTrades > 0 {
                     Text("⚠︎ \(s.totalTrades) trades — still a small sample; treat as illustrative.")
@@ -7260,6 +7461,28 @@ struct MarketsView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+    }
+
+    /// Verbatim content of the pre-UI#3 (review 2026-07-28) single-row strategy-backtest
+    /// metric HStack — the ViewThatFits fallback that keeps macOS byte-identical.
+    @ViewBuilder
+    private func strategyBacktestMetrics(_ s: StrategyBacktest) -> some View {
+        ideaMetric("Trades", "\(s.totalTrades)")
+        // Break-even for the fixed 2:1 exit is 1/(1+2) ≈ 33%, not 50% — coloring danger
+        // below 50% would flag every profitable 35-49% win-rate system as a loser.
+        // AUDIT_FINDINGS_2 #1: significance gates the COLOR (the verdict), not just
+        // the caption — an insignificant sample renders these NEUTRAL.
+        ideaMetric("Win", String(format: "%.0f%%", s.blendedWinRate * 100),
+                   color: BacktestVerdict.metricColor(positive: s.blendedWinRate >= 1.0 / 3, significant: s.isSignificant))
+        ideaMetric("Avg R", String(format: "%+.2f", s.avgR),
+                   color: BacktestVerdict.metricColor(positive: s.avgR >= 0, significant: s.isSignificant))
+        ideaMetric("Total R", String(format: "%+.0f", s.totalR),
+                   color: BacktestVerdict.metricColor(positive: s.totalR >= 0, significant: s.isSignificant))
+        ideaMetric("Worst-name DD", String(format: "−%.0fR", s.worstDrawdownR), color: DS.Palette.dangerSoft)
+        ideaMetric("Pooled DD (eq-wt)", String(format: "−%.0fR", s.pooledDrawdownR), color: DS.Palette.dangerSoft)
+            .help("Equal-weight pooled proxy: all trades across all names, sorted chronologically, cumulative-R worst peak-to-trough. Ignores position sizing and concurrency — not a true sized-portfolio drawdown. Typically larger than worst single-name DD because losses across symbols stack in time.")
+        ideaMetric("Profit.", "\(s.symbolsProfitable)/\(s.symbolsWithTrades)")
+        Spacer(minLength: 0)
     }
 
     // Backtest result panel — appears when a symbol has been (or is being) tested.
@@ -7953,6 +8176,41 @@ struct MarketsView: View {
         return plan
     }
 
+    /// Verbatim content of the pre-UI#3 (review 2026-07-28) single-row sheet "Plan numerics"
+    /// HStack — the ViewThatFits fallback that keeps macOS byte-identical.
+    @ViewBuilder
+    private func planNumericsMetrics(_ idea: StockSageIdea, a: TradeAdvice) -> some View {
+        ideaMetric("Price", adaptivePrice(idea.price))
+        if let s = a.stopPrice {
+            // Signed distance-to-invalidation, same convention as the board card/best-opportunity
+            // card: raw (stop/price − 1)×100, negative for longs, positive for shorts, no abs().
+            if idea.price > 0 {
+                let stopDistPct = (s / idea.price - 1) * 100
+                ideaMetric("Stop", "\(adaptivePrice(s)) (\(String(format: "%+.1f%%", stopDistPct)) to stop)", color: DS.Palette.dangerSoft)
+            } else {
+                ideaMetric("Stop", adaptivePrice(s), color: DS.Palette.dangerSoft)
+            }
+        }
+        if let t = a.targetPrice { ideaMetric("Target", adaptivePrice(t), color: DS.Palette.successSoft) }
+        // "Base size" = raw half-Kelly before regime/vol/correlation adjustments.
+        if a.suggestedWeight > 0 {
+            ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
+                .help(Self.sizeMetricHelp)
+        }
+        // F2 dedup (critique fleet #1): "Regime size" / "Vol-adj" metrics dropped from
+        // this row — the sizingBrakeWaterfall directly below renders the SAME two figures
+        // (from the identical StockSageRegime.adjustedWeight / idea.volRegime calls) as
+        // soon as ≥2 stages resolve, and is strictly more informative (labeled chain,
+        // not two disconnected numbers). Nil-gating equivalence verified: the row's Regime
+        // gate (a.suggestedWeight>0, store.regime) is identical to the waterfall's; the
+        // row's Vol-adj gate additionally requires sizingMultiplier<0.85 (waterfall has no
+        // such threshold) — a STRICT SUBSET, so whenever the row's Vol-adj would have
+        // rendered, the waterfall's Vol-adj stage already resolves too. Dropping the row
+        // loses nothing. Regime-size caveat text below now free-floats but still applies
+        // whenever the waterfall's Regime stage is showing.
+        Spacer(minLength: 0)
+    }
+
     private func ideaDetailSheet(_ idea: StockSageIdea) -> some View {
         let a = idea.advice
         let snapshot = StockSageDecisionSnapshotBuilder.build(
@@ -8175,36 +8433,32 @@ struct MarketsView: View {
                 // Regime size / Vol-adj DROPPED from this row (see comment below the Base-size
                 // metric) — they duplicate the sizingBrakeWaterfall rendered directly under this
                 // HStack. Spacing 14 kept for the remaining 4 metrics with 6-figure crypto prices.
-                HStack(spacing: 14) {
-                    ideaMetric("Price", adaptivePrice(idea.price))
-                    if let s = a.stopPrice {
-                        // Signed distance-to-invalidation, same convention as the board card/best-opportunity
-                        // card: raw (stop/price − 1)×100, negative for longs, positive for shorts, no abs().
-                        if idea.price > 0 {
-                            let stopDistPct = (s / idea.price - 1) * 100
-                            ideaMetric("Stop", "\(adaptivePrice(s)) (\(String(format: "%+.1f%%", stopDistPct)) to stop)", color: DS.Palette.dangerSoft)
-                        } else {
-                            ideaMetric("Stop", adaptivePrice(s), color: DS.Palette.dangerSoft)
+                // UI#3 (review 2026-07-28): the Stop string alone ("135.20 (−5.1% to stop)") needs
+                // ~130pt — ViewThatFits keeps the single-row form on macOS and folds the phone into
+                // two rows, nothing dropped.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) { planNumericsMetrics(idea, a: a) }
+                    VStack(alignment: .leading, spacing: IdeaSpace.stack) {
+                        HStack(spacing: 14) {
+                            ideaMetric("Price", adaptivePrice(idea.price))
+                            if let s = a.stopPrice {
+                                if idea.price > 0 {
+                                    let stopDistPct = (s / idea.price - 1) * 100
+                                    ideaMetric("Stop", "\(adaptivePrice(s)) (\(String(format: "%+.1f%%", stopDistPct)) to stop)", color: DS.Palette.dangerSoft)
+                                } else {
+                                    ideaMetric("Stop", adaptivePrice(s), color: DS.Palette.dangerSoft)
+                                }
+                            }
+                        }
+                        HStack(spacing: 14) {
+                            if let t = a.targetPrice { ideaMetric("Target", adaptivePrice(t), color: DS.Palette.successSoft) }
+                            // "Base size" = raw half-Kelly before regime/vol/correlation adjustments.
+                            if a.suggestedWeight > 0 {
+                                ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
+                                    .help(Self.sizeMetricHelp)
+                            }
                         }
                     }
-                    if let t = a.targetPrice { ideaMetric("Target", adaptivePrice(t), color: DS.Palette.successSoft) }
-                    // "Base size" = raw half-Kelly before regime/vol/correlation adjustments.
-                    if a.suggestedWeight > 0 {
-                        ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
-                            .help(Self.sizeMetricHelp)
-                    }
-                    // F2 dedup (critique fleet #1): "Regime size" / "Vol-adj" metrics dropped from
-                    // this row — the sizingBrakeWaterfall directly below renders the SAME two figures
-                    // (from the identical StockSageRegime.adjustedWeight / idea.volRegime calls) as
-                    // soon as ≥2 stages resolve, and is strictly more informative (labeled chain,
-                    // not two disconnected numbers). Nil-gating equivalence verified: the row's Regime
-                    // gate (a.suggestedWeight>0, store.regime) is identical to the waterfall's; the
-                    // row's Vol-adj gate additionally requires sizingMultiplier<0.85 (waterfall has no
-                    // such threshold) — a STRICT SUBSET, so whenever the row's Vol-adj would have
-                    // rendered, the waterfall's Vol-adj stage already resolves too. Dropping the row
-                    // loses nothing. Regime-size caveat text below now free-floats but still applies
-                    // whenever the waterfall's Regime stage is showing.
-                    Spacer(minLength: 0)
                 }
                 // Regime-size caveat directly under the plan-numerics metrics row — it explains the
                 // Regime size metric there (relocated from the top of the Exit plan section).
@@ -9170,9 +9424,11 @@ struct MarketsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             if let sub {
+                // UI#3 (review 2026-07-28): this branch hard-truncated ("Yahoo · 3…") with no
+                // scale floor — give it the same escape hatch as the sibling branch below.
                 Text(value).font(.system(size: mvFont14, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white).lineLimit(1)
-                Text(sub).font(.system(size: mvFont8)).foregroundStyle(subColor).lineLimit(1)
+                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.75)
+                Text(sub).font(.system(size: mvFont8)).foregroundStyle(subColor).lineLimit(1).minimumScaleFactor(0.8)
             } else {
                 Text(value).font(.system(size: mvFont12_5, weight: .semibold, design: .rounded))
                     .foregroundStyle(color)
