@@ -17,6 +17,12 @@ import Foundation
 // `.auto` philosophy. It IS network, though, so every fetch is gated by
 // `ToolPolicy.isExternalAllowed` (Web Access on AND Offline Mode off) — exactly
 // the same gate the web/media tools honor.
+//
+// **Source order (pipeline-4 M1, 2026-09-06):** when a Massive key is set
+// (`StockSageMassive.isConfigured`), every US name goes to Massive's batched snapshot
+// first — ONE request per 250 tickers instead of one per symbol — then anything still
+// missing (and every non-US name) walks the per-symbol EODHD → Yahoo chain below.
+// Without a key the router is byte-for-byte the pre-M1 behaviour.
 enum StockSageQuoteService {
 
     /// A single live observation: the current market price and the prior session's
@@ -61,11 +67,19 @@ enum StockSageQuoteService {
         guard ToolPolicy.isExternalAllowed else { return [:] }
         guard !symbols.isEmpty else { return [:] }
 
-        var out: [String: LiveQuote] = [:]
+        // M1 routing: Massive snapshot for every covered symbol FIRST (chunked, one request per
+        // chunk), then the per-symbol chain for the rest plus any symbol the snapshot did not
+        // return — a failed/absent chunk falls through, it never drops a symbol. `partition`
+        // sends everything per-symbol when no key is present.
+        let route = StockSageMassive.partition(symbols, keyPresent: StockSageMassive.isConfigured)
+        var out: [String: LiveQuote] = await StockSageMassive.fetchSnapshots(for: route.snapshot)
+        let remaining = route.perSymbol + route.snapshot.filter { out[$0.uppercased()] == nil }
+        guard !remaining.isEmpty else { return out }
+
         // Process in fixed-size chunks; each chunk is a TaskGroup that resolves
         // before the next starts — caps concurrency without a semaphore.
-        let chunks = stride(from: 0, to: symbols.count, by: max(1, concurrency)).map {
-            Array(symbols[$0 ..< min($0 + concurrency, symbols.count)])
+        let chunks = stride(from: 0, to: remaining.count, by: max(1, concurrency)).map {
+            Array(remaining[$0 ..< min($0 + concurrency, remaining.count)])
         }
         for chunk in chunks {
             let results: [LiveQuote] = await withTaskGroup(of: LiveQuote?.self) { group in
@@ -83,6 +97,8 @@ enum StockSageQuoteService {
 
     // MARK: One symbol
 
+    /// Per-symbol chain (EODHD → Yahoo). Reached only for symbols the Massive snapshot path in
+    /// `fetchQuotes` did not serve — non-US names, no Massive key, or a snapshot chunk that failed.
     private static func fetchOne(_ symbol: String) async -> LiveQuote? {
         // HYBRID SOURCE (owner-provided EODHD key, 2026-07-28): US names go to the AUTHENTICATED
         // feed first — Yahoo's keyless endpoint is the throttling that leaves symbols showing

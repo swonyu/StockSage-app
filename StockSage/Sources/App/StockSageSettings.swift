@@ -58,6 +58,12 @@ struct StockSageSettingsView: View {
             }
 
             Section {
+                StockSageMassiveKeyField()
+            } header: {
+                Text("Data sources")
+            }
+
+            Section {
                 Text("Free · no accounts · data stays on this Mac.")
                     .font(.system(size: 11))
                     .foregroundStyle(DS.Palette.textSecondary)
