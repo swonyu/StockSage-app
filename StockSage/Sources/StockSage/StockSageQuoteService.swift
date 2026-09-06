@@ -35,6 +35,8 @@ enum StockSageQuoteService {
         /// The quote's own MARKET timestamp (Yahoo `regularMarketTime`), not our fetch time — so the
         /// UI can tell "live" from a days-old weekend/holiday close. nil when the feed omits it.
         let marketTime: Date?
+        /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
+        let massiveTradeSequence: Int64?
         /// True when Yahoo returned no real previousClose (a brand-new listing) and `previousClose`
         /// was set to `price` as a flat placeholder. WITHOUT this flag that placeholder reads as a
         /// genuine 0%-move "hold" signal — it's actually "unevaluated," not "no move." Set precisely
@@ -42,10 +44,11 @@ enum StockSageQuoteService {
         /// legitimately have previousClose == price on a truly flat session).
         let isNewListing: Bool
         init(symbol: String, price: Double, previousClose: Double, marketTime: Date? = nil,
-             isNewListing: Bool = false) {
+             isNewListing: Bool = false, massiveTradeSequence: Int64? = nil) {
             self.symbol = symbol; self.price = price
             self.previousClose = previousClose; self.marketTime = marketTime
             self.isNewListing = isNewListing
+            self.massiveTradeSequence = massiveTradeSequence
         }
     }
 

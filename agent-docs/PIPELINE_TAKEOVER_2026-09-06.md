@@ -21,8 +21,8 @@ pushes, actual trades, service purchases, or local model training.
     24-hour exchange reference, MIC-based Nasdaq filtering and explicit partial/error states.
   - [x] Thread measured spreads through ALL current cost/ranking/gate/export consumers,
     retaining conservative floors/slippage/fees; preserve historical backtest assumptions.
-  - [ ] Compact card presentation, same-millisecond TRADE sequence through Store, populated
-    UI verification and authenticated endpoint smoke. Quote sequences are already ordered.
+  - [x] Same-millisecond TRADE sequence through StreamState, Store/coalescing, scan and cache.
+  - [ ] Compact card presentation, populated UI verification and authenticated endpoint smoke.
 - [ ] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status.
 - [ ] M4 Massive news/insights with bounded, cited narration.
 - [ ] M5 truthful per-observation provider labels and paid-plan configuration.
@@ -128,9 +128,19 @@ Budget: at most6 tape pages per opening, plus one reference request per24hours
 while the process lives. Quotes add Q traffic to the SAME Stocks connection;
 message volume depends on the market, not a guaranteed exact doubling.
 
-M2b continuation note: the current price comparator deliberately rejects equal
-timestamps. Add provider/channel-scoped sequence ordering for distinct ticks in
-the same millisecond when implementing tick/quote metadata; never let an unknown
-sequence or a different provider replace an equal-time observation arbitrarily.
+21:13 trade-ordering checkpoint: equal timestamps now accept only a strictly
+larger exact Int64 Massive T sequence for the same symbol. Unknown/invalid
+sequences and other providers still cannot break ties; Q-channel ordering stays
+independent. The optional sequence survives Store buffering, scan publication,
+board/idea replacement and disk cache rebuild. A genuinely later unsequenced
+poll clears the old sequence; advice/analysis time are untouched. Checking every
+existing observation separately also prevents a corrupt future timestamp from
+masking another valid clock and permitting a rollback. Mismatched quote/key
+symbols are rejected at merge and full-refresh ingress.
+Two regressions were demonstrated red before implementation. Focused42/42,
+canonical macOS1670/1670 and iPhone1670/1670 passed; same3 explicit opt-in exclusions.
+Exact bundles, the corrected test compilation error and remaining limits are in
+HANDOFF's21:13 entry. No actual provider smoke or populated new-branch visual QA.
+
 Keep the one-second live-badge expiration timer and change-only publication:
 publishing a timestamp on every trade bypassed the Store's 500 ms coalescing.

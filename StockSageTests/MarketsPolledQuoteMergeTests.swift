@@ -50,8 +50,21 @@ struct MarketsPolledQuoteMergeTests {
                   uniquingKeysWith: { a, _ in a })
     }
 
-    private func quote(price: Double, previousClose: Double, marketTime: Date?) -> StockSageQuoteService.LiveQuote {
-        .init(symbol: "x", price: price, previousClose: previousClose, marketTime: marketTime)
+    private func quote(symbol: String = "AAPL", price: Double, previousClose: Double, marketTime: Date?) -> StockSageQuoteService.LiveQuote {
+        .init(symbol: symbol, price: price, previousClose: previousClose, marketTime: marketTime)
+    }
+
+    @Test func invalidFutureIdeaCannotHideAValidNewerBoardPrice() {
+        let at = Self.oldAsOf
+        let symbols = fixtureSymbols()
+        let ideas = [fixtureIdeas()[0].withLivePrice(200, asOf: at.addingTimeInterval(100_000))]
+        let result = StockSageStore.mergedPolledQuotes(
+            symbols: symbols, ideas: ideas, symbolIndex: fixtureIndex(symbols),
+            quotes: ["AAPL": .init(symbol: "AAPL", price: 90, previousClose: 100,
+                                    marketTime: at.addingTimeInterval(-1))], now: at)
+        #expect(result.symbols == symbols)
+        #expect(result.ideas == ideas)
+        #expect(result.acceptedKeys.isEmpty)
     }
 
     @Test func pollMergeUpdatesOnlyThePolledRowsAndLeavesArrayShapeUntouched() {
@@ -62,8 +75,8 @@ struct MarketsPolledQuoteMergeTests {
 
         let quotes: [String: StockSageQuoteService.LiveQuote] = [
             "AAPL": quote(price: 155.25, previousClose: 150, marketTime: freshStamp),
-            "MSFT": quote(price: 305, previousClose: 300, marketTime: nil),   // feed omitted the timestamp
-            "TSLA": quote(price: 0, previousClose: 250, marketTime: freshStamp),   // price == 0: excluded
+            "MSFT": quote(symbol: "MSFT", price: 305, previousClose: 300, marketTime: nil),   // feed omitted the timestamp
+            "TSLA": quote(symbol: "TSLA", price: 0, previousClose: 250, marketTime: freshStamp),   // price == 0: excluded
             // GOOG: no quote at all.
         ]
 
@@ -186,5 +199,57 @@ struct MarketsPolledQuoteMergeTests {
         #expect(result.symbols == symbols)
         #expect(result.acceptedKeys.isEmpty)
         #expect(StockSageStore.acceptsQuote(at, after: at.addingTimeInterval(100_000), now: at))
+    }
+
+    @Test func sequenceSurvivesParserStateMergeAndScanWithoutMovingAdvice() throws {
+        let now = Self.oldAsOf.addingTimeInterval(1)
+        let events = StockSageLiveStream.events(in: #"[{"ev":"status","status":"auth_success"},{"ev":"T","sym":"AAPL","p":151,"t":1700000001000,"q":9007199254740992},{"ev":"T","sym":"AAPL","p":152,"t":1700000001000,"q":9007199254740993},{"ev":"T","sym":"AAPL","p":149,"t":1700000001000,"q":9007199254740992}]"#)
+        var state = StockSageLiveStream.StreamState()
+        var symbols = fixtureSymbols(), ideas = fixtureIdeas()
+        let originals = ideas
+        for event in events {
+            guard let tick = state.consume(event, requested: ["AAPL"], now: now) else { continue }
+            let result = StockSageStore.mergedPolledQuotes(symbols: symbols, ideas: ideas,
+                symbolIndex: fixtureIndex(symbols), quotes: [tick.symbol: .init(symbol: tick.symbol,
+                    price: tick.price, previousClose: 150, marketTime: tick.timestamp,
+                    massiveTradeSequence: tick.sequence)], now: now)
+            symbols = result.symbols; ideas = result.ideas
+        }
+        #expect(symbols[0].latest?.price == 152)
+        #expect(ideas[0].price == 152)
+        #expect(ideas[0].massiveTradeSequence == 9_007_199_254_740_993)
+        #expect(symbols[0].latest?.massiveTradeSequence == ideas[0].massiveTradeSequence)
+        #expect(ideas[0].advice == originals[0].advice)
+        let scan = StockSageStore.ideasWithLatestPrices(originals, symbols: symbols, previous: ideas, now: now)
+        #expect(scan == ideas)
+
+        // A newer off-board idea at the SAME time wins over the board in scan publication.
+        let newer = ideas[0].withLivePrice(153, asOf: now, massiveTradeSequence: 9_007_199_254_740_994)
+        let rescan = StockSageStore.ideasWithLatestPrices(ideas, symbols: symbols, previous: [newer], now: now)
+        #expect(rescan[0] == newer)
+        #expect(newer.withLivePrice(154, asOf: now.addingTimeInterval(1)).massiveTradeSequence == nil)
+    }
+
+    @Test func pollsCannotBorrowTradeSequenceOrUseTheWrongSymbol() {
+        let now = Self.oldAsOf.addingTimeInterval(1)
+        let symbols = [StockSageSymbol(symbol: "AAPL", market: "NASDAQ", quotes: [
+            StockSageQuote(price: 151, previousPrice: 150, marketTime: now, massiveTradeSequence: 10)])]
+        let ideas = [fixtureIdeas()[0].withLivePrice(151, asOf: now, massiveTradeSequence: 10)]
+        for q in [quote(price: 90, previousClose: 150, marketTime: now),
+                  quote(symbol: "MSFT", price: 90, previousClose: 150, marketTime: now.addingTimeInterval(1)),
+                  StockSageQuoteService.LiveQuote(symbol: "AAPL", price: 90, previousClose: 150,
+                      marketTime: now, massiveTradeSequence: 9)] {
+            let result = StockSageStore.mergedPolledQuotes(symbols: symbols, ideas: ideas,
+                symbolIndex: ["AAPL": 0], quotes: ["AAPL": q], now: now)
+            #expect(result.symbols == symbols)
+            #expect(result.ideas == ideas)
+            #expect(result.acceptedKeys.isEmpty)
+        }
+        let newerPoll = StockSageStore.mergedPolledQuotes(symbols: symbols, ideas: ideas,
+            symbolIndex: ["AAPL": 0], quotes: ["AAPL": quote(price: 155, previousClose: 150,
+                marketTime: now.addingTimeInterval(1))], now: now)
+        #expect(newerPoll.ideas[0].price == 155)
+        #expect(newerPoll.ideas[0].massiveTradeSequence == nil)
+        #expect(newerPoll.symbols[0].latest?.massiveTradeSequence == nil)
     }
 }

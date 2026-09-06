@@ -6,6 +6,41 @@ import Foundation
 struct StockSageLiveStreamTests {
     typealias L = StockSageLiveStream
 
+    @Test("distinct same-millisecond trades retain exact sequence ordering")
+    func sameMillisecondTradesAreNotDropped() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let events = L.events(in: #"[{"ev":"status","status":"auth_success"},{"ev":"T","sym":"AAPL","p":100,"t":1700000000000,"q":9007199254740992},{"ev":"T","sym":"AAPL","p":101,"t":1700000000000,"q":9007199254740993},{"ev":"T","sym":"AAPL","p":99,"t":1700000000000,"q":9007199254740992}]"#)
+        var state = L.StreamState()
+        let trades = events.compactMap { state.consume($0, requested: ["AAPL"], now: now) }
+        #expect(trades.map(\.price) == [100, 101])
+    }
+
+    @Test("unknown trade sequences never break ties and quote sequences stay independent")
+    func sequenceScopeAndMissingMetadata() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for value in ["null", "true", "-1", "1.5", "9223372036854775808", #""bad""#] {
+            let events = L.events(in: "{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":100,\"t\":1700000000000,\"q\":\(value)}")
+            guard case .trade(let tick) = try #require(events.first) else { Issue.record("missing trade"); continue }
+            #expect(tick.sequence == nil)
+            #expect(!StockSageStore.acceptsLiveTick(now, after: now,
+                massiveTradeSequence: tick.sequence, afterMassiveTradeSequence: 0, now: now))
+        }
+        let rejected: [(Int64?, Int64?)] = [(nil, 1), (2, nil), (-1, 0), (1, -1), (1, 1), (0, 1)]
+        for (incoming, old) in rejected {
+            #expect(!StockSageStore.acceptsLiveTick(now, after: now,
+                massiveTradeSequence: incoming, afterMassiveTradeSequence: old, now: now))
+        }
+        #expect(StockSageStore.acceptsLiveTick(now, after: now,
+            massiveTradeSequence: 2, afterMassiveTradeSequence: 1, now: now))
+        #expect(StockSageStore.acceptsLiveTick(now.addingTimeInterval(86_400), after: now,
+            massiveTradeSequence: 0, afterMassiveTradeSequence: 9_000, now: now.addingTimeInterval(86_400)))
+        var state = L.StreamState()
+        let events = L.events(in: #"[{"ev":"status","status":"auth_success"},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"t":1700000000000,"q":999},{"ev":"T","sym":"AAPL","p":100,"t":1700000000000,"q":1},{"ev":"T","sym":"MSFT","p":200,"t":1700000000000,"q":0}]"#)
+        let trades = events.compactMap { state.consume($0, requested: ["AAPL", "MSFT"], now: now) }
+        #expect(trades.map(\.symbol) == ["AAPL", "MSFT"])
+        #expect(state.latestQuotes["AAPL"]?.sequence == 999)
+    }
+
     @Test("Massive trade frames require ev:T and preserve millisecond SIP timestamps")
     func parsesMassiveTradeFrame() throws {
         #expect(L.events(in: #"[{"ev":"T","sym":"msft","p":114.125,"t":1536036818784}]"#) == [

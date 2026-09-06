@@ -7,6 +7,25 @@ import Foundation
 @MainActor
 struct StockSageQuoteCacheTests {
 
+    @Test func tradeSequenceSurvivesDiskRebuildAndLegacyFilesStayUnknown() throws {
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let seq: Int64 = 9_007_199_254_740_993
+        let row = StockSageSymbol(symbol: "AAPL", market: "NASDAQ", quotes: [
+            StockSageQuote(price: 151, previousPrice: 150, marketTime: t, massiveTradeSequence: seq)])
+        let cache = StockSageQuoteCache.from(symbols: [row], savedAt: t)
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("sequence.json")
+        cache.save(to: url)
+        let restored = try #require(StockSageQuoteCache.load(from: url)).symbols(marketFor: { _ in "NASDAQ" })
+        #expect(restored[0].latest?.massiveTradeSequence == seq)
+        #expect(restored[0].latest?.marketTime == t)
+        #expect(StockSageQuoteCache.from(symbols: restored, savedAt: t) == cache)
+        let legacy = #"{"entries":[{"symbol":"AAPL","price":151,"previousClose":150,"time":0,"marketTime":0,"isNewListing":false}],"savedAt":0}"#
+        let decoded = try JSONDecoder().decode(StockSageQuoteCache.self, from: Data(legacy.utf8))
+        #expect(decoded.symbols(marketFor: { _ in "NASDAQ" })[0].latest?.massiveTradeSequence == nil)
+    }
+
     @Test func roundTripsAndRebuildsSymbolsLosslessly() {
         let t = Date(timeIntervalSince1970: 1_700_000_000)
         let cache = StockSageQuoteCache(entries: [

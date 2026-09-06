@@ -27,17 +27,21 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
     /// The quote's own MARKET timestamp from the feed (nil when the feed omitted it). Distinct from
     /// `time` so staleness only judges a REAL market time — a nil one means "can't judge", never stale.
     let marketTime: Date?
+    /// Only Massive T-channel sequence for this symbol; never a quote-channel/provider ID.
+    let massiveTradeSequence: Int64?
 
     // `nonisolated` (W3): plain value-struct construction, no MainActor state touched — mirrors
     // `StockSageIdea`'s own `nonisolated init`/`withLivePrice` precedent just above in
     // StockSageStore.swift, needed so a `nonisolated static` pure merge helper
     // (StockSageStore.mergedPolledQuotes) can build fresh quotes without hopping actors.
-    nonisolated init(id: UUID = UUID(), price: Double, previousPrice: Double, time: Date = Date(), marketTime: Date? = nil) {
+    nonisolated init(id: UUID = UUID(), price: Double, previousPrice: Double, time: Date = Date(),
+                     marketTime: Date? = nil, massiveTradeSequence: Int64? = nil) {
         self.id = id
         self.price = price
         self.previousPrice = previousPrice
         self.time = time
         self.marketTime = marketTime
+        self.massiveTradeSequence = massiveTradeSequence
     }
 
     /// Percent change vs the previous price. Guards divide-by-zero (a brand-new

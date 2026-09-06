@@ -1,5 +1,50 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M2b trade-ordering checkpoint — 2026-09-06 21:13 +03
+
+Same-millisecond trades now retain Massive's exact64-bit `q` through the parser,
+authenticated StreamState,500ms Store buffer, board/idea merge, scan publication
+and quote-cache round trip. Only a strictly larger known T-channel sequence for
+the same symbol can break a timestamp tie. Quotes keep their independent Q
+sequence. Later timestamps win even when sequence resets; unsequenced later
+polls clear old metadata, and legacy caches decode to unknown. No sequence is
+invented from a timestamp, price, provider arrival order or another channel.
+Stop/target, advice and analysis time remain unchanged by live-price replacement.
+
+The shared ingress also fixes a second regression: taking max(boardTime,ideaTime)
+let a corrupt future value mask a valid clock, allowing an older price to replace
+both. Each existing observation is now checked independently before accepting a
+tick/merge. Quote symbols must match their dictionary keys. Existing undated and
+future-time fail-closed rules remain; unknown equal-time provenance stays blocked.
+Protocol: https://massive.com/docs/websocket/stocks/trades (`t` milliseconds;
+`q` increasing, per-ticker, gaps permitted). This is last-trade ordering, not a
+new trade-condition/execution-eligibility policy.
+
+Verification, serialized canonical xcodebuild tests:
+- Red: both new regression tests failed against the old code, exit65,
+  `/private/tmp/stocksage-sequence-red-20260906-2104.xcresult`.
+- The first expanded attempt failed compilation on a test tuple inferred as
+  Int rather than Int64 and executed no tests; explicit fixture typing fixed it.
+- Focused **42/42**, zero failures/skips:
+  `/private/tmp/stocksage-sequence-focused-retry-20260906-2107.xcresult`.
+- Broad macOS **1,670/1,670**, zero failures/skips among selected tests:
+  `/private/tmp/stocksage-sequence-broad-macos-20260906-2109.xcresult`.
+- Broad iPhone17Pro(gate), iOS26.5 **1,670/1,670**, zero failures/skips among
+  selected tests: `/private/tmp/stocksage-sequence-broad-ios-20260906-2110.xcresult`.
+- Same explicit opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. Counts were
+  independently read with xcresulttool; no live provider success is implied.
+  Existing compiler warnings in allocation/EV and Massive timestamp fixtures remain.
+
+All build handles completed. No live smoke, new-branch populated visual QA,
+actual order, model job, push or change to the owner's running app binary.
+M2b still needs compact cards and visual/authenticated smoke, followed by M3–M6,
+P5, approved Chat/Derayah work and integration. Main project.pbxproj stays untouched.
+The owner's ORCL question was answered from their existing running app: no idea
+or directory match, with action=All and Any signal strength. This was observation
+of the OLD app, not new-branch QA. The baked universe membership restriction in
+StockSageQuoteService excludes ORCL; no universe policy was changed or scan run.
+
 ## Pipeline 4 M2b measured-cost checkpoint — 2026-09-06 20:43 +03
 
 Current EV/ranking, allocator cost gates, decision snapshots, Today plan and

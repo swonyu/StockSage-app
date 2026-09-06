@@ -58,6 +58,8 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
     /// never flagged stale off missing data (HONESTY_FLOOR: unknown renders nothing). Purely a
     /// freshness LABEL — does not change the cache-reuse policy or any stop/target/RR format.
     let priceAsOf: Date?
+    /// Massive trade sequence attached to priceAsOf, never to the independent NBBO clock.
+    let massiveTradeSequence: Int64?
     /// Ephemeral authenticated cost input, never persisted as historical market evidence.
     private(set) var nbbo: StockSageNBBO? = nil
 
@@ -71,24 +73,26 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
                      spark: [Double], dailyMove: Double? = nil, realizedVol: Double? = nil,
                      volRegime: VolRegime? = nil, generatedAt: Date? = nil,
                      momentumQuality: Double? = nil, recentExtreme: SparkSeries.Extreme? = nil,
-                     recentExtremeSpan: Int? = nil, priceAsOf: Date? = nil) {
+                     recentExtremeSpan: Int? = nil, priceAsOf: Date? = nil, massiveTradeSequence: Int64? = nil) {
         self.symbol = symbol; self.market = market; self.price = price
         self.advice = advice; self.spark = spark; self.dailyMove = dailyMove
         self.realizedVol = realizedVol; self.volRegime = volRegime; self.generatedAt = generatedAt
         self.momentumQuality = momentumQuality; self.recentExtreme = recentExtreme
         self.recentExtremeSpan = recentExtremeSpan; self.priceAsOf = priceAsOf
+        self.massiveTradeSequence = massiveTradeSequence
     }
 
     /// Same idea with a FRESHER market price/timestamp (stale self-heal, 2026-07-27). The
     /// advice (stop/target/EV, computed at scan time) is deliberately untouched — those are
     /// fixed LEVELS; `price`/`priceAsOf` are "where the market is now", which is exactly what
     /// the live board and the monitor's crossing checks already treat them as.
-    nonisolated func withLivePrice(_ newPrice: Double, asOf: Date?) -> StockSageIdea {
+    nonisolated func withLivePrice(_ newPrice: Double, asOf: Date?, massiveTradeSequence: Int64? = nil) -> StockSageIdea {
         StockSageIdea(symbol: symbol, market: market, price: newPrice, advice: advice,
                       spark: spark, dailyMove: dailyMove, realizedVol: realizedVol,
                       volRegime: volRegime, generatedAt: generatedAt,
                       momentumQuality: momentumQuality, recentExtreme: recentExtreme,
-                      recentExtremeSpan: recentExtremeSpan, priceAsOf: asOf).withNBBO(nbbo)
+                      recentExtremeSpan: recentExtremeSpan, priceAsOf: asOf,
+                      massiveTradeSequence: massiveTradeSequence).withNBBO(nbbo)
     }
 }
 
@@ -563,7 +567,8 @@ final class StockSageStore: ObservableObject {
         let added = StockSageSymbol(symbol: symbol, market: Self.userMarketLabel, quotes: [
             StockSageQuote(price: q.previousClose, previousPrice: q.previousClose, time: Date(timeIntervalSinceNow: -86_400)),
             // Carry the feed's market timestamp (review Q6) — without it the new row is fail-closed STALE.
-            StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
+            StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
+                           massiveTradeSequence: q.massiveTradeSequence),
         ])
         symbols = symbols.filter { $0.symbol.uppercased() != symbol } + [added]
         rebuildSymbolIndex()
@@ -2099,7 +2104,7 @@ final class StockSageStore: ObservableObject {
     /// Updates existing board rows or off-board ideas; never invents a board row.
     /// Pending streamed ticks, keyed by symbol — only the NEWEST price per symbol matters, so
     /// this is a dictionary rather than a queue.
-    private var pendingTicks: [String: (price: Double, at: Date?)] = [:]
+    private var pendingTicks: [String: (price: Double, at: Date, sequence: Int64?)] = [:]
     private var tickFlushTask: Task<Void, Never>?
     /// Coalescing window. A liquid name can print many trades per second; applying each one
     /// individually would republish the whole board that many times and re-evaluate an
@@ -2108,20 +2113,27 @@ final class StockSageStore: ObservableObject {
     private static let tickFlushInterval = Duration.milliseconds(500)
 
     /// Allow small device/SIP clock skew, never an unbounded future freshness stamp.
-    nonisolated static func acceptsLiveTick(_ incoming: Date?, after current: Date?, now: Date = Date()) -> Bool {
+    nonisolated static func acceptsLiveTick(_ incoming: Date?, after current: Date?,
+        massiveTradeSequence: Int64? = nil, afterMassiveTradeSequence: Int64? = nil, now: Date = Date()) -> Bool {
         guard incoming != nil else { return false }
-        return acceptsQuote(incoming, after: current, now: now)
+        return acceptsQuote(incoming, after: current, massiveTradeSequence: massiveTradeSequence,
+                            afterMassiveTradeSequence: afterMassiveTradeSequence, now: now)
     }
 
     /// Shared by streams, polls, targeted fetches and full-refresh commits. Unknown timestamps
     /// may seed an unknown row, but cannot erase a known price's ordering/freshness evidence.
-    nonisolated static func acceptsQuote(_ incoming: Date?, after current: Date?, now: Date = Date()) -> Bool {
+    nonisolated static func acceptsQuote(_ incoming: Date?, after current: Date?,
+        massiveTradeSequence: Int64? = nil, afterMassiveTradeSequence: Int64? = nil, now: Date = Date()) -> Bool {
         guard let incoming else { return current == nil }
         guard incoming.timeIntervalSince1970.isFinite,
               incoming.timeIntervalSince1970 > 0, incoming <= now.addingTimeInterval(60) else { return false }
         guard let current, current.timeIntervalSince1970.isFinite,
               current.timeIntervalSince1970 > 0, current <= now.addingTimeInterval(60) else { return true }
-        return incoming > current
+        if incoming != current { return incoming > current }
+        // Only compare the SAME symbol's Massive T sequence. Unknown/provider/quote ties
+        // remain rejected; later dates win regardless of sequence (including daily resets).
+        guard let sequence = massiveTradeSequence, let old = afterMassiveTradeSequence else { return false }
+        return sequence >= 0 && old >= 0 && sequence > old
     }
 
     /// A scan computes advice against history while quotes continue arriving. Publish its NEW
@@ -2129,17 +2141,18 @@ final class StockSageStore: ObservableObject {
     nonisolated static func ideasWithLatestPrices(
         _ fresh: [StockSageIdea], symbols: [StockSageSymbol], previous: [StockSageIdea], now: Date = Date()
     ) -> [StockSageIdea] {
-        var latest: [String: (price: Double, at: Date)] = [:]
+        var latest: [String: (price: Double, at: Date, sequence: Int64?)] = [:]
         for symbol in symbols {
             guard let quote = symbol.quotes.last, quote.price > 0, quote.price.isFinite,
                   let at = quote.marketTime, acceptsLiveTick(at, after: nil, now: now) else { continue }
-            latest[symbol.symbol.uppercased()] = (quote.price, at)
+            latest[symbol.symbol.uppercased()] = (quote.price, at, quote.massiveTradeSequence)
         }
         for idea in previous {
             let key = idea.symbol.uppercased()
             guard idea.price > 0, idea.price.isFinite, let at = idea.priceAsOf,
-                  acceptsLiveTick(at, after: latest[key]?.at, now: now) else { continue }
-            latest[key] = (idea.price, at)
+                  acceptsLiveTick(at, after: latest[key]?.at, massiveTradeSequence: idea.massiveTradeSequence,
+                                  afterMassiveTradeSequence: latest[key]?.sequence, now: now) else { continue }
+            latest[key] = (idea.price, at, idea.massiveTradeSequence)
         }
         let books = Dictionary(previous.compactMap { idea in idea.nbbo.map { (idea.symbol.uppercased(), $0) } },
                                uniquingKeysWith: { first, _ in first })
@@ -2147,8 +2160,9 @@ final class StockSageStore: ObservableObject {
             let book = books[original.symbol.uppercased()] ?? original.nbbo
             let idea = original.withNBBO(book?.isFresh(at: now) == true ? book : nil)
             guard let quote = latest[idea.symbol.uppercased()],
-                  acceptsLiveTick(quote.at, after: idea.priceAsOf, now: now) else { return idea }
-            return idea.withLivePrice(quote.price, asOf: quote.at)
+                  acceptsLiveTick(quote.at, after: idea.priceAsOf, massiveTradeSequence: quote.sequence,
+                                  afterMassiveTradeSequence: idea.massiveTradeSequence, now: now) else { return idea }
+            return idea.withLivePrice(quote.price, asOf: quote.at, massiveTradeSequence: quote.sequence)
         }
     }
 
@@ -2168,19 +2182,24 @@ final class StockSageStore: ObservableObject {
     }
 
     /// Accept one streamed trade tick. Buffered, not applied immediately — see `flushPendingTicks`.
-    func applyLiveTick(symbol: String, price: Double, at when: Date?) {
+    func applyLiveTick(symbol: String, price: Double, at when: Date?, massiveTradeSequence: Int64? = nil) {
         // A missing feed timestamp is not a live observation. Keeping it out at the shared
         // ingress avoids the old `?? Date()` lie in the batched merge below.
         guard price > 0, price.isFinite, Self.acceptsLiveTick(when, after: nil), let when else { return }
         let key = symbol.uppercased()
-        let rowTime = symbolIndex[key].flatMap { symbols[$0].latest?.marketTime }
+        let row = symbolIndex[key].flatMap { symbols[$0].latest }
         let idea = ideas.first(where: { $0.symbol.uppercased() == key })
         guard symbolIndex[key] != nil || idea != nil else { return }
         // Never let an out-of-order packet rewind a displayed quote. The check belongs here,
         // after every provider's parser but before the coalescing buffer, so it fixes all callers.
-        if !Self.acceptsLiveTick(when, after: [rowTime, idea?.priceAsOf].compactMap { $0 }.max()) { return }
-        if !Self.acceptsLiveTick(when, after: pendingTicks[key]?.at) { return }
-        pendingTicks[key] = (price, when)
+        // Check each observation: max(time) lets one corrupt future date hide a valid clock.
+        if !Self.acceptsLiveTick(when, after: row?.marketTime, massiveTradeSequence: massiveTradeSequence,
+                                afterMassiveTradeSequence: row?.massiveTradeSequence) { return }
+        if !Self.acceptsLiveTick(when, after: idea?.priceAsOf, massiveTradeSequence: massiveTradeSequence,
+                                afterMassiveTradeSequence: idea?.massiveTradeSequence) { return }
+        if !Self.acceptsLiveTick(when, after: pendingTicks[key]?.at, massiveTradeSequence: massiveTradeSequence,
+                                afterMassiveTradeSequence: pendingTicks[key]?.sequence) { return }
+        pendingTicks[key] = (price, when, massiveTradeSequence)
         guard tickFlushTask == nil else { return }
         tickFlushTask = Task { [weak self] in
             try? await Task.sleep(for: Self.tickFlushInterval)
@@ -2201,7 +2220,8 @@ final class StockSageStore: ObservableObject {
             let row = symbolIndex[key].map { symbols[$0] }
             let prev = row?.latest?.previousPrice ?? tick.price
             quotes[key] = .init(symbol: key, price: tick.price, previousClose: prev,
-                                marketTime: tick.at, isNewListing: newListings.contains(key))
+                                marketTime: tick.at, isNewListing: newListings.contains(key),
+                                massiveTradeSequence: tick.sequence)
         }
         applyPolledQuotes(quotes)
     }
@@ -2524,21 +2544,26 @@ final class StockSageStore: ObservableObject {
         for (key, q) in quotes {
             guard q.price > 0, q.price.isFinite, q.previousClose.isFinite else { continue }
             let upper = key.uppercased()
+            guard q.symbol.uppercased() == upper else { continue }
             let i = symbolIndex[upper].flatMap { index in
                 symbols.indices.contains(index) && symbols[index].symbol.uppercased() == upper ? index : nil
             }
             let j = ideaIndex[upper]
             guard i != nil || j != nil else { continue }
-            let current = [i.flatMap { symbols[$0].quotes.last?.marketTime }, j.flatMap { ideas[$0].priceAsOf }]
-                .compactMap { $0 }.max()
-            guard acceptsQuote(q.marketTime, after: current, now: now) else { continue }
+            let row = i.flatMap { symbols[$0].quotes.last }
+            let idea = j.map { ideas[$0] }
+            guard acceptsQuote(q.marketTime, after: row?.marketTime, massiveTradeSequence: q.massiveTradeSequence,
+                               afterMassiveTradeSequence: row?.massiveTradeSequence, now: now),
+                  acceptsQuote(q.marketTime, after: idea?.priceAsOf, massiveTradeSequence: q.massiveTradeSequence,
+                               afterMassiveTradeSequence: idea?.massiveTradeSequence, now: now) else { continue }
             if let i { symbols[i].quotes = [
                 StockSageQuote(price: q.previousClose, previousPrice: q.previousClose,
                                time: now.addingTimeInterval(-86_400)),
-                StockSageQuote(price: q.price, previousPrice: q.previousClose, time: now, marketTime: q.marketTime),
+                StockSageQuote(price: q.price, previousPrice: q.previousClose, time: now, marketTime: q.marketTime,
+                               massiveTradeSequence: q.massiveTradeSequence),
             ] }
             if let j {
-                ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime)
+                ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime, massiveTradeSequence: q.massiveTradeSequence)
             }
             acceptedKeys.insert(upper)
             if let mt = q.marketTime, newestMarketTime == nil || mt > newestMarketTime! { newestMarketTime = mt }
@@ -2594,15 +2619,19 @@ final class StockSageStore: ObservableObject {
         // live quote; drop any the feed couldn't price.
         let live: [StockSageSymbol] = universe.compactMap { sym in
             let key = sym.symbol.uppercased()
-            guard let q = quotes[key], q.price > 0, q.price.isFinite, q.previousClose.isFinite else { return nil }
+            guard let q = quotes[key], q.symbol.uppercased() == key,
+                  q.price > 0, q.price.isFinite, q.previousClose.isFinite else { return nil }
             let existing = symbolIndex[key].map { symbols[$0] }
-            guard Self.acceptsQuote(q.marketTime, after: existing?.latest?.marketTime) else { return existing }
+            guard Self.acceptsQuote(q.marketTime, after: existing?.latest?.marketTime,
+                massiveTradeSequence: q.massiveTradeSequence,
+                afterMassiveTradeSequence: existing?.latest?.massiveTradeSequence) else { return existing }
             return StockSageSymbol(id: existing?.id ?? UUID(), symbol: sym.symbol, market: sym.market, quotes: [
                 StockSageQuote(price: q.previousClose, previousPrice: q.previousClose,
                                time: Date(timeIntervalSinceNow: -86_400)),
                 // Carry the real MARKET time separately so per-row staleness can flag a days-old
                 // weekend/holiday close; `time` stays the observation time. nil marketTime ⇒ not judged.
-                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
+                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
+                               massiveTradeSequence: q.massiveTradeSequence),
             ])
         }
         guard !live.isEmpty else {
@@ -2671,8 +2700,10 @@ final class StockSageStore: ObservableObject {
         // (present in quotes with isNewListing==false); anything absent from quotes.keys — whether
         // throttled-in-scope or genuinely out-of-scope — carries its flag forward untouched.
         let acceptedQuotes = quotes.filter { key, q in
-            let current = symbolIndex[key].flatMap { symbols[$0].latest?.marketTime }
-            return q.price > 0 && q.price.isFinite && q.previousClose.isFinite && Self.acceptsQuote(q.marketTime, after: current)
+            let current = symbolIndex[key].flatMap { symbols[$0].latest }
+            return q.symbol.uppercased() == key && q.price > 0 && q.price.isFinite && q.previousClose.isFinite
+                && Self.acceptsQuote(q.marketTime, after: current?.marketTime,
+                    massiveTradeSequence: q.massiveTradeSequence, afterMassiveTradeSequence: current?.massiveTradeSequence)
         }
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: acceptedQuotes)
         replaceAll(committed, isSample: false)

@@ -35,6 +35,7 @@ final class StockSageLiveStream: ObservableObject {
         let symbol: String
         let price: Double
         let timestamp: Date
+        var sequence: Int64? = nil
     }
 
     nonisolated enum Event: Sendable, Equatable {
@@ -60,7 +61,7 @@ final class StockSageLiveStream: ObservableObject {
             switch row["ev"] as? String {
             case "T":
                 guard let price = number(row["p"]), price > 0 else { return nil }
-                return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp))
+                return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp, sequence: integer(row["q"])))
             case "Q":
                 guard let bid = number(row["bp"]), bid >= 0, let ask = number(row["ap"]), ask >= 0,
                       let bidSize = number(row["bs"]), bidSize >= 0,
@@ -82,7 +83,7 @@ final class StockSageLiveStream: ObservableObject {
     /// The runtime and deterministic tests use the same protocol state, without a live socket.
     nonisolated struct StreamState {
         private(set) var isAuthorized = false
-        private var latestTrades: [String: Date] = [:]
+        private var latestTrades: [String: Tick] = [:]
         private(set) var latestQuotes: [String: StockSageNBBO] = [:]
 
         mutating func consume(_ event: Event, requested: Set<String>, now: Date) -> Tick? {
@@ -99,9 +100,11 @@ final class StockSageLiveStream: ObservableObject {
                 latestQuotes[quote.symbol] = quote
             case .trade(let tick):
                 guard isAuthorized, requested.contains(tick.symbol), tick.price.isFinite, tick.price > 0,
-                      StockSageStore.acceptsLiveTick(tick.timestamp, after: latestTrades[tick.symbol], now: now)
+                      StockSageStore.acceptsLiveTick(tick.timestamp, after: latestTrades[tick.symbol]?.timestamp,
+                          massiveTradeSequence: tick.sequence,
+                          afterMassiveTradeSequence: latestTrades[tick.symbol]?.sequence, now: now)
                 else { return nil }
-                latestTrades[tick.symbol] = tick.timestamp
+                latestTrades[tick.symbol] = tick
                 return tick
             }
             return nil
@@ -109,11 +112,11 @@ final class StockSageLiveStream: ObservableObject {
 
         func coveredSymbols(at now: Date) -> Set<String> {
             guard isAuthorized else { return [] }
-            return Set(latestTrades.filter { now.timeIntervalSince($0.value) <= silenceTimeout }.keys)
+            return Set(latestTrades.filter { now.timeIntervalSince($0.value.timestamp) <= silenceTimeout }.keys)
         }
 
         func hasRecentTrades(at now: Date) -> Bool {
-            isAuthorized && latestTrades.values.contains { now.timeIntervalSince($0) <= silenceTimeout }
+            isAuthorized && latestTrades.values.contains { now.timeIntervalSince($0.timestamp) <= silenceTimeout }
         }
     }
 
@@ -223,8 +226,9 @@ final class StockSageLiveStream: ObservableObject {
         }
     }
 
-    fileprivate func tickReceived(symbol: String, price: Double, at when: Date?) {
-        StockSageStore.shared.applyLiveTick(symbol: symbol, price: price, at: when)
+    fileprivate func tickReceived(_ tick: Tick) {
+        StockSageStore.shared.applyLiveTick(symbol: tick.symbol, price: tick.price, at: tick.timestamp,
+                                            massiveTradeSequence: tick.sequence)
     }
 }
 
@@ -362,7 +366,7 @@ private final class StockSageLiveStreamConnection {
                         let wasAuthorized = self.state.isAuthorized
                         if let tick = self.state.consume(event, requested: self.symbols, now: Date()) {
                             self.reconnectAttempt = 0
-                            self.owner?.tickReceived(symbol: tick.symbol, price: tick.price, at: tick.timestamp)
+                            self.owner?.tickReceived(tick)
                         }
                         if case .quote = event { self.owner?.quotesChanged() }
                         if !wasAuthorized, self.state.isAuthorized { self.sendSubscription() }
