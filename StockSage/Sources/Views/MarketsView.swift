@@ -38,6 +38,11 @@ struct MarketsView: View {
     // Default to money-velocity (EV per day) — the "fastest money" objective: a quick small edge
     // compounds faster than a slow large one. (Existing users keep whatever they last picked.)
     @AppStorage("marketsIdeaSort") private var ideaSort: IdeaSort = .velocity
+    /// UI#15 (2026-07-28 review): whether the ideas-header Tier-2 "How this board is built"
+    /// disclosure (universe subtitle, scan-duration note, TOM tilt, engine caveat) is expanded.
+    /// Persisted per the review's spec so a user who opens it once doesn't have to re-open it
+    /// every launch; defaults collapsed since none of these lines are actionable warnings.
+    @AppStorage("marketsIdeasNotesExpanded") private var ideasNotesExpanded = false
     /// Hide ideas below this conviction (0 = show all).
     @AppStorage("marketsIdeaMinConv") private var ideaMinConv = 0.0
     /// UTC day (epoch-days, StockSageScanChunking.utcDayKey) of the last automatic
@@ -896,6 +901,21 @@ struct MarketsView: View {
     static func firstScanProgressCaption(isLoadingIdeas: Bool, ideasUpdated: Date?, progress: (current: Int, total: Int)?) -> String? {
         guard isLoadingIdeas, ideasUpdated == nil, let p = progress, p.total > 0 else { return nil }
         return "First scan in progress — \(p.current) of \(p.total) names analyzed; best-so-far, order may change."
+    }
+
+    /// UI#15 (2026-07-28 review, "ideasHeader: two tiers of notes"): count of Tier-2 "how this
+    /// board is built" lines actually rendered under the current conditions, backing the
+    /// DisclosureGroup label so it never claims a note count that doesn't match what's inside.
+    /// The universe-description subtitle and `StockSageAdvisor.caveat` always render (2); the
+    /// scan-duration note and the TOM tilt line render only under their own guard, mirrored here
+    /// exactly from `ideasHeader`'s body. Pure/testable.
+    static func ideasTier2NoteCount(isLoadingIdeas: Bool, progress: (current: Int, total: Int)?,
+                                     universeCount: Int, isEVSort: Bool, turnOfMonthEnabled: Bool,
+                                     hasSeasonality: Bool) -> Int {
+        var n = 2
+        if isLoadingIdeas, let p = progress, p.total >= universeCount { n += 1 }
+        if isEVSort && turnOfMonthEnabled && hasSeasonality { n += 1 }
+        return n
     }
 
     /// L1 (2026-07-09, DISPLAY-ONLY): maps the Deploy-capital plan's positions + the live idea
@@ -4598,20 +4618,17 @@ struct MarketsView: View {
         StockSageIdeaProjection.rewardRisk(idea)
     }
 
-    /// Ideas-card blurb + the EV-calibration honesty caveat. Extracted 2026-07-28 so the phone
-    /// can render it at full width beneath the title row instead of inside it — the caveat is a
-    /// primary honesty surface and must stay legible, never compressed into a narrow column.
+    /// The EV-calibration honesty caveat. Extracted 2026-07-28 so the phone can render it at
+    /// full width beneath the title row instead of inside it — the caveat is a primary honesty
+    /// surface and must stay legible, never compressed into a narrow column.
+    ///
+    /// UI#15 (2026-07-28 review, "two tiers of notes"): this block used to open with the
+    /// universe-description subtitle (via `explainer()`); that subtitle is standing context,
+    /// not a warning, so it moved into `ideasHeader`'s Tier-2 "How this board is built"
+    /// DisclosureGroup alongside the scan-duration note, the TOM tilt line and
+    /// `StockSageAdvisor.caveat`. What remains here is Tier-1: it qualifies every EV number on
+    /// the board and must never be collapsible.
     @ViewBuilder private var ideasHeaderBlurb: some View {
-        // Definition of the scan's scope — teaching, so it collapses. The EV-calibration
-        // caveat immediately below is a WARNING and stays permanently visible.
-        // 2026-07-28 design review deviation: the review asked to drop this line from
-        // `.caption` to fontBody so the caveat below would outrank it. It no longer
-        // renders as a standalone `.caption` Text — a later wave wrapped it in the
-        // shared `explainer()` helper (mvFont9, reused by 6 other definitional call
-        // sites in this file). Resizing explainer() itself would move unrelated
-        // teaching text outside this item's scope. Left as-is: the ordering goal
-        // already holds without a change (fontCaveat 11.5pt > explainer's mvFont9).
-        explainer("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
         // assumed — right where they're read. F01/F02: keyed on the calibration METHOD,
         // not on non-nil (an identity calibration is an assumption, not a measurement).
@@ -4729,18 +4746,44 @@ struct MarketsView: View {
                                      ? (store.ideasProgress.map { "\($0.current) of \($0.total)" } ?? "")
                                      : "")
             }
-            // POST2420-COPY item 4: the "takes several minutes" expectation above previously
-            // lived ONLY in a hover .help — invisible unless the user happens to hover the
-            // button. Surface it as a small factual line near the progress counter for the
-            // whole duration of a FULL scan (never a retry — a retry's `ideasProgress.total`
-            // is `ideasMissing.count`, always well under the full universe size). Interpolates
-            // the live universe count, never a literal, so it can't drift from
-            // StockSageUniverse.worldwide as the universe grows.
-            if store.isLoadingIdeas, let p = store.ideasProgress, p.total >= StockSageUniverse.worldwide.count {
-                Text("Scanning the \(StockSageUniverse.worldwide.count)-name universe — first scan of the day takes several minutes; results stream in as they complete.")
-                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // UI#15 (2026-07-28 review, "two tiers of notes"): the universe subtitle, the
+            // scan-duration note, the TOM tilt line and the engine caveat are all standing
+            // context — honest, but not urgent — so they're grouped into one collapsible
+            // Tier-2 row instead of standing as 4 of the 9 equal-weight lines this header used
+            // to stack. Every string below is unchanged from before this wave, just regrouped;
+            // the label's count always matches what's actually inside (`ideasTier2NoteCount`).
+            DisclosureGroup(isExpanded: $ideasNotesExpanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Rules-based what / when / how-much across the \(StockSageUniverse.worldwide.count)-name analyzed universe (\(Self.worldwideEquityCount) equities), on 1-year history.")
+                    // POST2420-COPY item 4: interpolates the live universe count, never a
+                    // literal, so it can't drift from StockSageUniverse.worldwide as the
+                    // universe grows. Guarded to a FULL scan only (never a retry — a retry's
+                    // `ideasProgress.total` is `ideasMissing.count`, always well under the full
+                    // universe size).
+                    if store.isLoadingIdeas, let p = store.ideasProgress, p.total >= StockSageUniverse.worldwide.count {
+                        Text("Scanning the \(StockSageUniverse.worldwide.count)-name universe — first scan of the day takes several minutes; results stream in as they complete.")
+                    }
+                    // TOM disclosure (activation 2026-07-09): the seasonal month tilt is a rank
+                    // INPUT the user can't otherwise see — an invisible ranking factor violates
+                    // the honesty floor. Shown only when the EV sort is active (2026-07-09
+                    // review fix: the tilt lives in rankByEV only — claiming it under
+                    // velocity/conviction/R:R sorts would be the inverse honesty error,
+                    // disclosing an input that is NOT in effect) AND the flag is on AND at
+                    // least one name has seasonality data (the tilt can actually move ranks).
+                    if ideaSort == .ev && StockSageAdvisor.turnOfMonthEnabled && !store.seasonality.isEmpty {
+                        Text("Ranking includes a small seasonal month tilt (each name’s calendar-month history, capped ±0.03 rank units) — a weak, backward-looking tendency, not a forecast.")
+                    }
+                    Text(StockSageAdvisor.caveat)
+                }
+                .font(.system(size: fontChipLabel)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } label: {
+                Text("How this board is built (\(Self.ideasTier2NoteCount(isLoadingIdeas: store.isLoadingIdeas, progress: store.ideasProgress, universeCount: StockSageUniverse.worldwide.count, isEVSort: ideaSort == .ev, turnOfMonthEnabled: StockSageAdvisor.turnOfMonthEnabled, hasSeasonality: !store.seasonality.isEmpty)) notes)")
+                    .font(.system(size: fontChipLabel, weight: .semibold)).foregroundStyle(.secondary)
             }
-            // iPhone: blurb + calibration caveat at FULL card width, below the title/CTA row.
+            .tint(DS.Palette.textSecondary)
+            // iPhone: calibration caveat at FULL card width, below the title/CTA row. Tier-1 —
+            // stays outside the disclosure above (see ideasHeaderBlurb doc comment).
             #if os(iOS)
             ideasHeaderBlurb
             #endif
@@ -4750,6 +4793,8 @@ struct MarketsView: View {
                 // which only advances when the WHOLE scan commits, so mid-scan it can still
                 // read stale from the PRIOR scan while a fresh one streams in. Factual
                 // in-progress form instead of the "re-scan for current ideas" call-to-action.
+                // UI#15: Tier-1 — freshness is fail-closed (honesty floor) and must never be
+                // foldable, so this line is untouched by the Tier-2 regrouping above.
                 Text(store.isLoadingIdeas
                      ? "Last full analysis \(when.formatted(.relative(presentation: .named))) — re-scan in progress, results streaming in · ranked by \(ideaSort.label.lowercased())"
                      : (store.ideasIsStale
@@ -4757,16 +4802,6 @@ struct MarketsView: View {
                         : "Analyzed \(Self.timeFormatter.string(from: when)) · ranked by \(ideaSort.label.lowercased())"))
                     .font(.caption2).foregroundStyle(store.isLoadingIdeas ? .secondary : (store.ideasIsStale ? DS.Palette.warningSoft : .secondary))
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            // TOM disclosure (activation 2026-07-09): the seasonal month tilt is a rank INPUT the
-            // user can't otherwise see — an invisible ranking factor violates the honesty floor.
-            // Shown only when the EV sort is active (2026-07-09 review fix: the tilt lives in
-            // rankByEV only — claiming it under velocity/conviction/R:R sorts would be the
-            // inverse honesty error, disclosing an input that is NOT in effect) AND the flag is
-            // on AND at least one name has seasonality data (the tilt can actually move ranks).
-            if ideaSort == .ev && StockSageAdvisor.turnOfMonthEnabled && !store.seasonality.isEmpty {
-                Text("Ranking includes a small seasonal month tilt (each name’s calendar-month history, capped ±0.03 rank units) — a weak, backward-looking tendency, not a forecast.")
-                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if store.scanThrottled {
                 // POST2420-COPY item 2: "paused" was false — a throttle trip permanently ends
@@ -4777,14 +4812,23 @@ struct MarketsView: View {
                 // below (attached to ideasHeader's outer VStack) posts an announcement the
                 // instant scanThrottled flips true, so a VoiceOver user doesn't have to be
                 // focused here already to learn the scan stopped.
-                Text("Scan stopped early — feed throttling; results for the names already scanned are shown. Use “Retry failed” below or re-run Find ideas.")
-                    .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                // UI#15 (2026-07-28 review): Tier-1 — degrades the board you're about to act
+                // on. Promoted caption2 → fontCaveat with a leading warning triangle so it
+                // doesn't read as equal-weight with the Tier-2 standing notes above.
+                Label("Scan stopped early — feed throttling; results for the names already scanned are shown. Use “Retry failed” below or re-run Find ideas.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Scan stopped early — feed throttling. Results for the names already scanned are shown. Use Retry failed below or re-run Find ideas.")
             }
             if !store.ideasMissing.isEmpty {
                 let miss = store.ideasMissing
+                // UI#15 (2026-07-28 review): Tier-1 — same fontCaveat + warning-triangle
+                // treatment as the throttle/error lines. The icon is decorative (the text
+                // already carries the meaning for VoiceOver), so it's hidden from accessibility.
                 HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft)
+                        .accessibilityHidden(true)
                     // POST2420-COPY item 3: `missingAfterScan` (the source of `ideasMissing`) can't
                     // currently distinguish "fetched but failed" from "never attempted" — after a
                     // throttle trip most of the universe's misses are the latter (the scan
@@ -4792,7 +4836,7 @@ struct MarketsView: View {
                     // that didn't happen. "not analyzed this scan" is honest for both cases without
                     // adding attempted-set bookkeeping.
                     Text("⚠︎ \(store.ideas.count) priced · \(miss.count) not analyzed this scan (\(miss.prefix(3).joined(separator: ", "))\(miss.count > 3 ? "…" : "")) — ranking covers only what loaded.")
-                        .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     Button { Task { await store.retryFailedIdeas() } } label: {
                         Text("Retry failed").font(.caption2.weight(.semibold)).foregroundStyle(DS.Palette.accent)
@@ -4802,10 +4846,11 @@ struct MarketsView: View {
                 }
             }
             if let err = store.ideasError {
-                Text(err).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
+                // UI#15 (2026-07-28 review): Tier-1 — same fontCaveat + warning-triangle
+                // treatment as the other always-visible caveats above.
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft)
             }
-            Text(StockSageAdvisor.caveat)
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
