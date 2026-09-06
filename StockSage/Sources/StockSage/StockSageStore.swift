@@ -243,6 +243,7 @@ final class StockSageStore: ObservableObject {
         priceAlerts = Self.loadPriceAlerts()
         seedSampleData()
         loadCachedQuotes()   // prefer real last-good prices over the sample seed when we have them
+        loadCatalystRecords()   // A2: restore checkedAt/earningsDates so the TTL guard isn't blind on relaunch
         // Calibration runtime activation (Decision 2): restore the last persisted fit so the
         // effective calibration survives a relaunch instead of resetting to nil every session.
         // Decode-fail (no key, corrupt blob, schema mismatch) ⇒ both stay nil ⇒ the conservative
@@ -411,16 +412,52 @@ final class StockSageStore: ObservableObject {
         for (sym, q) in quotes where q.price > 0 { infraFX[sym.uppercased()] = q.price }
     }
 
-    /// Every tracked instrument definition: the curated universe + the user's
-    /// added tickers (deduped). Drives both the live feed and the ideas analysis,
-    /// so user picks survive refreshes and get analyzed too.
-    private func trackedDefs(scope: TrackedScope = .full) -> [StockSageSymbol] {
-        var defs = scope == .full ? StockSageUniverse.worldwide : StockSageUniverse.core
-        let known = Set(defs.map { $0.symbol.uppercased() })
+    /// Off-board holdings: portfolio positions ∪ open journal trades, regardless of whether
+    /// they're on the board or the watchlist (B1, 2026-09-06). `trackedDefs` needs these to build
+    /// each a priceable SymbolDef; `refresh()`'s post-await "is this user-market row still
+    /// tracked?" guard needs the SAME set, or a portfolio-only holding's freshly-fetched row would
+    /// be stripped as "no longer tracked" in the very refresh that priced it. Reuses the pure
+    /// `trackedSymbols` union (TRACKED, 2026-09-06) with board/watchlist left empty — this is
+    /// only the two off-board inputs.
+    private var offBoardHoldingSymbols: [String] {
+        Self.trackedSymbols(board: [], watchlist: [],
+                            portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
+                            journalOpen: StockSageJournalStore.shared.open.map(\.symbol))
+    }
+
+    /// Pure rule `trackedDefs(scope:)` is a thin shell over: curated universe (`base`) ∪
+    /// `userSymbols` (watchlist) ∪ `offBoardHoldings` (portfolio/journal-open holdings outside
+    /// the universe and watchlist), each unknown symbol getting a `userMarketLabel` SymbolDef the
+    /// same way an unknown user-typed ticker always has. Pulled out as a `static func` so it's
+    /// directly testable without the private, instance-bound `trackedDefs(scope:)` itself (see
+    /// StockSageTests.swift's `coreIsTheGroupsDerivedCuratedSubsetOfWorldwide` comment for why
+    /// that method has no test seam of its own — this is the same fix applied to the OTHER half
+    /// of its composition). Stays MainActor-isolated (like the rest of the class, and like
+    /// `StockSageSymbol`'s own initializer) rather than `nonisolated` — but is still a pure
+    /// function of its three inputs (no `self`, no singleton reads), so a `@MainActor` test can
+    /// pin it directly without touching `StockSageStore.shared`.
+    static func composeTrackedDefs(
+        base: [StockSageSymbol], userSymbols: [String], offBoardHoldings: [String]
+    ) -> [StockSageSymbol] {
+        var defs = base
+        var known = Set(defs.map { $0.symbol.uppercased() })
         for s in userSymbols where !known.contains(s.uppercased()) {
             defs.append(StockSageSymbol(symbol: s, market: Self.userMarketLabel))
+            known.insert(s.uppercased())
+        }
+        for s in offBoardHoldings where !known.contains(s.uppercased()) {
+            defs.append(StockSageSymbol(symbol: s, market: Self.userMarketLabel))
+            known.insert(s.uppercased())
         }
         return defs
+    }
+
+    /// Every tracked instrument definition: the curated universe + the user's added tickers +
+    /// off-board portfolio/journal-open holdings (B1, deduped). Drives both the live feed and the
+    /// ideas analysis, so user picks AND off-board holdings survive refreshes and get priced.
+    private func trackedDefs(scope: TrackedScope = .full) -> [StockSageSymbol] {
+        let base = scope == .full ? StockSageUniverse.worldwide : StockSageUniverse.core
+        return Self.composeTrackedDefs(base: base, userSymbols: userSymbols, offBoardHoldings: offBoardHoldingSymbols)
     }
 
     /// Pure validation/normalization for a user-typed ticker. Returns the
@@ -690,9 +727,9 @@ final class StockSageStore: ObservableObject {
         // existing open paper trades to the fresh histories (net-of-cost). Separate store, never conflated
         // with the real journal; does NOT feed win-rate calibration (F01/F02). Best-effort, synchronous.
         updatePaperTrades(ideas: finalRanked, histories: accumulatedHistories)
-        // Populate earnings for the top names (non-blocking) so the imminent-earnings demotion +
-        // warnings fire on the boards, not only on detail-expand. Cached-once → cheap after first load.
-        Task { await refreshEarningsForTopIdeas() }
+        // Populate earnings for EVERY tracked symbol (non-blocking), not just the board's top
+        // names (A4, 2026-09-06) — TTL-cached per symbol, so this is cheap after the first sweep.
+        Task { await refreshEarningsForTracked() }
         // Same for seasonality — the TOM rank tilt must not depend on which sheets were opened.
         Task { await refreshSeasonalityForTopIdeas() }
         ideasUpdated = Date()
@@ -1694,6 +1731,21 @@ final class StockSageStore: ObservableObject {
     // to be fetched.
     @Published private(set) var earningsDates: [String: Date] = [:]
 
+    /// When we last ASKED the provider about a symbol — stamped on EVERY `refreshEarnings`
+    /// outcome, whether it found a date or not (A2, 2026-09-06). This is what turns a negative
+    /// result into an honest DATED "none known as of <checkedAt>" record instead of a claim that
+    /// silently ages forever (OWNER DIRECTIVE 2026-09-06: "every stock to have a catalyst on
+    /// file"). A symbol with no entry here was never checked this cache's lifetime and must keep
+    /// rendering as unchecked — never conflated with "checked, none". Loaded from
+    /// `StockSageCatalystRecordCache` at launch (see `loadCatalystRecords`) so a relaunch doesn't
+    /// forget every checkedAt and re-ask everything immediately.
+    @Published private(set) var earningsCheckedAt: [String: Date] = [:]
+
+    /// How long a "checked, nothing found" record stays honest before `refreshEarnings` re-asks.
+    /// A dated negative observation is only as good as its date — refreshed at most once a day so
+    /// it can't quietly go stale across a session (or a cache) that outlives one day.
+    nonisolated static let earningsCheckTTL: TimeInterval = 24 * 3600
+
     /// Pure derivation: raw earnings dates → proximity, evaluated at `now`. A free function (not
     /// baked into a cached dict) so it's directly testable with an injected `now` — the SAME
     /// cached raw date must yield a DIFFERENT severity as real time passes, unlike the frozen
@@ -1717,28 +1769,114 @@ final class StockSageStore: ObservableObject {
     /// `earningsDates` on every access; never cached as a stale derived value.
     var earnings: [String: EarningsProximity] { Self.deriveEarningsProximity(earningsDates) }
 
-    func refreshEarnings(symbol: String) async {
-        let up = symbol.uppercased()
-        guard earningsDates[up] == nil else { return }
-        guard let date = await StockSageEarnings.fetchNextEarnings(for: symbol),
-              date.timeIntervalSinceNow > -86_400 else { return }   // ignore a stale past date
-        earningsDates[up] = date
+    /// Pure TTL gate `refreshEarnings` checks BEFORE ever awaiting the network: re-ask only when
+    /// the symbol was never checked (`checkedAt == nil`) or the last check is at/older than
+    /// `earningsCheckTTL`. `nonisolated static` with an explicit `now` (not a bare `Date()`) so
+    /// the exact 24h boundary is directly testable without racing the wall clock.
+    nonisolated static func shouldRefreshEarnings(checkedAt: Date?, now: Date = Date()) -> Bool {
+        guard let checkedAt else { return true }
+        return now.timeIntervalSince(checkedAt) >= earningsCheckTTL
     }
 
-    /// Feed earnings for the TOP-ranked ideas (bounded) so the imminent-earnings DEMOTION + warnings
-    /// fire on the BOARDS / best-bet / allocation — not only after a detail expand. Each symbol is
-    /// cached once (refreshEarnings no-ops when present), so this only fetches the new top names.
-    func refreshEarningsForTopIdeas(limit: Int = 15) async {
-        // Run up to 4 earnings fetches in parallel (each has an 8s timeout); sequential
-        // was correct for correctness but serialised 15 fetches = up to 15×8s worst-case.
-        let top = Array(ideas.prefix(limit))
-        let chunks = stride(from: 0, to: top.count, by: 4).map { Array(top[$0 ..< min($0 + 4, top.count)]) }
+    /// Pure core of `refreshEarnings`, `self`-free and directly unit-testable with a stub `fetch`
+    /// (no singleton, no network): TTL-gates first, and only when the gate passes does it await
+    /// the injected fetch — so a caller can assert "still fresh → fetch never even runs" without
+    /// mocking a real request. Returns nil for "TTL says still fresh, nothing to stamp"; otherwise
+    /// `(now, nil)` for an honest negative (fetch found nothing, or found only a stale past date —
+    /// the SAME `> -86_400` guard `refreshEarnings` always had, value unchanged) or `(now, date)`
+    /// for a usable future date. `checkedAt` is stamped on BOTH the nil and the dated outcome —
+    /// asking and getting nothing back is still an observation worth dating.
+    nonisolated static func earningsRefreshOutcome(
+        checkedAt: Date?, now: Date = Date(), fetch: () async -> Date?
+    ) async -> (checkedAt: Date, earningsDate: Date?)? {
+        guard shouldRefreshEarnings(checkedAt: checkedAt, now: now) else { return nil }
+        let fetched = await fetch()
+        let usable = fetched.flatMap { $0.timeIntervalSince(now) > -86_400 ? $0 : nil }   // ignore a stale past date
+        return (now, usable)
+    }
+
+    func refreshEarnings(symbol: String) async {
+        let up = symbol.uppercased()
+        guard let outcome = await Self.earningsRefreshOutcome(
+            checkedAt: earningsCheckedAt[up],
+            fetch: { await StockSageEarnings.fetchNextEarnings(for: symbol) }
+        ) else { return }
+        earningsCheckedAt[up] = outcome.checkedAt
+        if let date = outcome.earningsDate { earningsDates[up] = date }
+    }
+
+    /// Feed earnings for EVERY tracked symbol — board ∪ watchlist ∪ portfolio ∪ open journal
+    /// trades (A4, 2026-09-06; replaces the old top-15-ideas-only sweep) — so the "every stock to
+    /// have a catalyst on file" owner directive (2026-09-06: cost gates waived, provider rate
+    /// limits still bind) covers the FULL tracked set, not just the top-ranked board names.
+    /// TTL-gated per symbol via `refreshEarnings`'s own guard, so a re-sweep after the board is
+    /// already fully checked is cheap — only never-checked or >24h-stale names actually hit the
+    /// network. 4-parallel chunking unchanged from the old top-15 sweep; each chunk boundary now
+    /// checks `Task.isCancelled` so a superseded scan's sweep (e.g. `refreshIdeas` firing again
+    /// before this one finished) doesn't keep grinding through hundreds of names after the caller
+    /// moved on — whatever chunks DID complete are saved via the `defer` either way. Symbols this
+    /// sweep hasn't reached yet are simply absent from `earningsCheckedAt` — UNCHECKED, never
+    /// fabricated as "none known" (honesty floor).
+    func refreshEarningsForTracked() async {
+        defer { saveCatalystRecords() }
+        let all = trackedSymbolsUnion
+        let chunks = stride(from: 0, to: all.count, by: 4).map { Array(all[$0 ..< min($0 + 4, all.count)]) }
         for chunk in chunks {
+            if Task.isCancelled { return }
             await withTaskGroup(of: Void.self) { group in
-                for idea in chunk { group.addTask { await self.refreshEarnings(symbol: idea.symbol) } }
+                for symbol in chunk { group.addTask { await self.refreshEarnings(symbol: symbol) } }
                 for await _ in group { }
             }
         }
+    }
+
+    // MARK: - Catalyst-record disk cache (A1 cache type, A2 store wiring)
+    //
+    // `earningsDates`/`earningsCheckedAt` are in-memory only by default (like `ideas`, per the
+    // comment on `seedQAIdeas`) — without persistence, every relaunch forgets every checkedAt and
+    // the TTL guard re-asks the whole tracked set from scratch. These two pure conversions (no
+    // store/network access, directly testable) are the ONLY place that shapes a Record; the
+    // instance methods below are thin I/O shells over them.
+
+    /// Pure: per-symbol earnings state → disk-cache Records, one per symbol we've EVER checked
+    /// (has a `checkedAt`). A symbol with no `checkedAt` entry was never asked and gets no
+    /// Record — never fabricated (mirrors the cache type's own doc).
+    nonisolated static func catalystRecords(
+        earningsDates: [String: Date], earningsCheckedAt: [String: Date]
+    ) -> [StockSageCatalystRecordCache.Record] {
+        earningsCheckedAt.map { symbol, checkedAt in
+            .init(symbol: symbol, earningsDate: earningsDates[symbol], checkedAt: checkedAt, source: "yahoo")
+        }
+    }
+
+    /// Pure inverse: rebuild the two per-symbol dicts from loaded cache records.
+    nonisolated static func applyCatalystRecords(
+        _ records: [StockSageCatalystRecordCache.Record]
+    ) -> (dates: [String: Date], checkedAt: [String: Date]) {
+        var dates: [String: Date] = [:]
+        var checkedAt: [String: Date] = [:]
+        for r in records {
+            checkedAt[r.symbol] = r.checkedAt
+            if let d = r.earningsDate { dates[r.symbol] = d }
+        }
+        return (dates, checkedAt)
+    }
+
+    /// Restore the disk catalyst-record cache into `earningsDates`/`earningsCheckedAt` — called
+    /// from `init` beside `loadCachedQuotes()` so a relaunch keeps every prior checkedAt (the TTL
+    /// guard would otherwise see `nil` for everything and re-ask the whole tracked set at once).
+    private func loadCatalystRecords() {
+        guard let cache = StockSageCatalystRecordCache.load() else { return }
+        let restored = Self.applyCatalystRecords(cache.entries)
+        earningsDates = restored.dates
+        earningsCheckedAt = restored.checkedAt
+    }
+
+    /// Persist the current earnings state to disk — called at the end of every
+    /// `refreshEarningsForTracked` sweep (its `defer`), never mid-sweep.
+    private func saveCatalystRecords() {
+        let records = Self.catalystRecords(earningsDates: earningsDates, earningsCheckedAt: earningsCheckedAt)
+        StockSageCatalystRecordCache(entries: records, savedAt: Date()).save()
     }
 
     // Monthly seasonality — calendar-month return tendency over a long history.
@@ -1748,8 +1886,11 @@ final class StockSageStore: ObservableObject {
     /// (`seasonalityRankBonus`, activated 2026-07-09) applies uniformly at the top of the board
     /// instead of only to symbols whose detail sheet happened to be opened — a navigation-
     /// dependent BONUS input is a fairness hazard the demote-only earnings/liquidity partials
-    /// don't have (they err safe; a view-history-gated boost doesn't). Mirrors
-    /// `refreshEarningsForTopIdeas`: 4-parallel chunks, cached-once per symbol.
+    /// don't have (they err safe; a view-history-gated boost doesn't). Mirrors the old
+    /// top-15-ideas earnings sweep's chunking shape (now `refreshEarningsForTracked`, which swept
+    /// wider to the full tracked set in A4, 2026-09-06) — 4-parallel chunks, cached-once per symbol.
+    /// This one deliberately stays top-15-only (seasonality only feeds a board-rank TILT, not a
+    /// coverage obligation).
     func refreshSeasonalityForTopIdeas(limit: Int = 15) async {
         guard StockSageAdvisor.turnOfMonthEnabled else { return }
         // 2026-07-09 review fix: prefetch in the order the tilt actually AFFECTS — the untilted
@@ -2143,7 +2284,10 @@ final class StockSageStore: ObservableObject {
         // still fetched + priced that ticker, so it sits in `live` and would otherwise revert the
         // removal on screen AND re-persist it to the cache (surviving relaunch). Drop any user-market
         // row whose symbol is no longer tracked. Curated rows are untouched (removeSymbol no-ops there).
-        let tracked = Set(userSymbols.map { $0.uppercased() })
+        // B1: "tracked" here must also cover off-board portfolio/journal-open holdings — trackedDefs
+        // now hands them a userMarketLabel row too, so without offBoardHoldingSymbols here this guard
+        // would immediately strip a portfolio-only holding's row the very refresh that priced it.
+        let tracked = Set(userSymbols.map { $0.uppercased() }).union(offBoardHoldingSymbols)
         let liveFiltered = live.filter {
             $0.market != Self.userMarketLabel || tracked.contains($0.symbol.uppercased())
         }
