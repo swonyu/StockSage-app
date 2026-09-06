@@ -222,6 +222,54 @@ struct Eyebrow: View {
     }
 }
 
+// MARK: - PriceFlash
+/// W3 (owner: "live prices … seamless and look cool"): a 600ms fade of a translucent
+/// success/danger tint BEHIND a price (or price-derived) Text when the value it tracks moves.
+/// Direction is computed PURELY from old vs new (`direction(from:to:)`, pure/testable — a
+/// straddle at equal price flashes nothing, since "the price didn't move" and "we don't know"
+/// must not read as a fabricated up/down). No-op under Reduce Motion (a11y: no unrequested
+/// motion). Apply via `.priceFlash(_:)` with the RAW numeric price driving the Text beside it —
+/// the SAME value that Text's own `.animation(DS.Motion.smooth, value:)` already keys on.
+struct PriceFlash: ViewModifier {
+    enum Direction: Equatable { case up, down }
+
+    /// `nonisolated static` and side-effect-free — testable with no view, no `@State`, no clock
+    /// (MarketsPriceFlashDirectionTests). nil at the exact straddle (equal price, or either side
+    /// missing): a poll re-confirming the same price is a real, common outcome and must not be
+    /// dressed up as a move.
+    nonisolated static func direction(from old: Double?, to new: Double?) -> Direction? {
+        guard let old, let new, new != old else { return nil }
+        return new > old ? .up : .down
+    }
+
+    let price: Double?
+    @State private var flashDirection: Direction?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let tint: Color = flashDirection == .up ? DS.Palette.successSoft : DS.Palette.dangerSoft
+        content
+            .background(
+                tint.opacity(flashDirection != nil ? 0.18 : 0)
+                    .animation(.easeOut(duration: 0.6), value: flashDirection)
+            )
+            .onChange(of: price) { old, new in
+                guard !reduceMotion, let dir = Self.direction(from: old, to: new) else { return }
+                flashDirection = dir
+                Task {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    // Only clear OUR OWN flash — a second flash that landed during the sleep
+                    // (rapid consecutive ticks) must not be cut short by the earlier task's timer.
+                    if flashDirection == dir { flashDirection = nil }
+                }
+            }
+    }
+}
+
+extension View {
+    func priceFlash(_ price: Double?) -> some View { modifier(PriceFlash(price: price)) }
+}
+
 // MARK: - Elevation helper
 extension View {
     func dsShadow(_ e: (color: Color, radius: CGFloat, y: CGFloat)) -> some View {

@@ -28,7 +28,11 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
     /// `time` so staleness only judges a REAL market time — a nil one means "can't judge", never stale.
     let marketTime: Date?
 
-    init(id: UUID = UUID(), price: Double, previousPrice: Double, time: Date = Date(), marketTime: Date? = nil) {
+    // `nonisolated` (W3): plain value-struct construction, no MainActor state touched — mirrors
+    // `StockSageIdea`'s own `nonisolated init`/`withLivePrice` precedent just above in
+    // StockSageStore.swift, needed so a `nonisolated static` pure merge helper
+    // (StockSageStore.mergedPolledQuotes) can build fresh quotes without hopping actors.
+    nonisolated init(id: UUID = UUID(), price: Double, previousPrice: Double, time: Date = Date(), marketTime: Date? = nil) {
         self.id = id
         self.price = price
         self.previousPrice = previousPrice
@@ -55,7 +59,8 @@ struct StockSageSymbol: Sendable, Equatable, Identifiable {
     let market: String
     var quotes: [StockSageQuote]
 
-    init(id: UUID = UUID(), symbol: String, market: String, quotes: [StockSageQuote] = []) {
+    // `nonisolated` (W3) — same reason as StockSageQuote's init just above.
+    nonisolated init(id: UUID = UUID(), symbol: String, market: String, quotes: [StockSageQuote] = []) {
         self.id = id
         self.symbol = symbol
         self.market = market
