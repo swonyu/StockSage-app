@@ -3,14 +3,13 @@
 Written early under the good-spender `⚠ APPROACHING LIMIT` directive (projection only — this
 session is the sole spend in the 7-day window; the EWMA is a read-burst artefact).
 
-## Environment blocker (needs the owner, not Claude)
-Xcode 26.6 (17F113) is installed but its licence is NOT accepted. `/usr/bin/git`, `xcodebuild`,
-`xcrun` all refuse with "You have not agreed to the Xcode license agreements". Fix (owner, needs
-password):
+## Environment blocker — RESOLVED 09:44 +03 (licence accepted; `xcodebuild`, `/usr/bin/git`, Homebrew work again)
+Until 09:44 +03 Xcode 26.6 (17F113) had an unaccepted licence, so `/usr/bin/git`, `xcodebuild`, `xcrun`
+and `brew` all refused with "You have not agreed to the Xcode license agreements". Everything below
+about "tests NOT run" refers to commits made before that. The iOS 26.5 simulator platform (~8 GB)
+was still downloading at 09:49 +03 (owner-approved) — the iOS `xcodebuild test` leg is pending it.
 
-    sudo xcodebuild -license accept
-
-Workarounds in use this session (read-only-safe, no licence bypass of the build system):
+Workarounds used while it was blocked (kept — they are fast gates in their own right):
 - git: call `/Applications/Xcode.app/Contents/Developer/usr/bin/git` directly.
 - compile gate: `swiftc -typecheck` on `StockSage/Sources/**` for BOTH platforms — script at the
   session scratchpad `tc_stocksage.sh macos|ios` (flags mirror the pbxproj: Swift 6, MainActor
@@ -74,6 +73,29 @@ Also this session: `tools/gate.sh` (95b54e2) committed as the licence-blocked co
 `qwen3.8` (27B) installed on this Mac for the new Catalysts tab's optional local explanation backend
 (see the Catalysts section once it lands).
 
+## wt/ui — 2026-09-06 09:20 +03 (worktree /Users/saleh/StockSage-wt/ui, branch wt/ui, base e619739) — restored 09:58, dropped by mistake at 09:50
+Two commits, `tools/gate.sh all` green after each (macos=OK ios=OK tests=OK; tests type-checked, NOT
+executed — licence). good-spender was turned ON for good mid-run (user directive, saved to memory).
+
+| Commit | What |
+|---|---|
+| 648c425 (wt/ui 4cfa3f9) | fixup(UI#6): the 9 realized-stats + risk-analytics ideaMetric sites → dangerSoft via a new static seam `MarketsView.signedMetricColor(positive:positiveColor:)`, pinned by `SignedMetricColorTests` (BacktestVerdictColorTests.swift) |
+| dd578ae (wt/ui 1d2637c) | fixup(UI#6): the remaining 17 small-text raw-danger sites (+2 mixed-helper consumers: `hc` heat text, healthColor verdict text) across MarketsView + MarketsRiskAllocationSection; 25 icon/fill/stroke/background sites keep raw danger. Sonnet diff review: APPROVE, 1 minor (watchlist arrow icon inherits dangerSoft with its text) |
+
+Owner call, NOT changed: white text on a raw-danger FILL — STOP TRADING banner (~3316), "Confirm close"
+button (~3631), "DO NOT TRADE" chips (~5877 and ~6998 → BestOpportunityActionCard:9881). Same 3.41:1
+class UI#6 fixed on the sell badge, but these are stop/destructive surfaces where the red fill is the
+convention — decide badge treatment (pastel fill + dark ink) vs keep.
+RESOLVED 2026-09-06 09:35 +03 — owner approved; landed as 0897fea (badgeInk + gateChipColor seams, test-pinned, gate green).
+
+Landed on review-followups-2026-09-06 as 648c425 + dd578ae (cherry-picked clean, gate re-run there —
+see merge_gate.log). Licence accepted 2026-09-06 09:44 +03; canonical gate run at 09:47 +03: macOS build OK, macOS
+test OK — 1,426 tests in 166 suites passed (Swift Testing, 14.2 s; first EXECUTED run since Jul 29).
+iOS leg BLOCKED at first: Xcode 26.6 needs the iOS 26.5 simulator platform (the 27.0 beta runtime is
+not an eligible destination); owner approved `xcodebuild -downloadPlatform iOS` (~8 GB) at 09:49 +03.
+Next: iOS leg result (see merge_gate.log), then push. Spend (good-spender estimate): run closed at $28.27 vs $3.00 est (9.42x OVER — ~30 Fable-tier
+classifier agents ran inside an ultracode workflow before it was stopped on the good-spender directive).
+
 ## Catalysts tab — NEW (owner request 2026-09-06, workflows wf_3c5d578a-629 + wf_41e9e30c-825; 10 commits cba3f92..d382cc0)
 "A new tab that shows, for the same ideas as the Ideas tab, the key catalyst to watch and explains why" —
 BOTH per-idea cards AND a date-ordered calendar; the why is engine rationale always, plus an OPTIONAL
@@ -115,6 +137,6 @@ Intelligence device), live Yahoo/SEC/Ollama network paths beyond the read-only O
    (allocator memo, `StockSageStore` + `MarketsView` capitalAllocationCard), UI#3's remaining rows if any.
 4. Decide on the MLX server as default (needs a launch agent; ~1–2 s faster per tap) and on deleting the 34 GB
    of A/B model files.
-5. The background session you started ("Sweep remaining raw danger small-text in MarketsView") works in
-   `~/StockSage-wt/ui` on branch `wt/ui` off e619739 — review its branch separately; UI#6 already swept the
-   listed sites, so expect overlap.
+5. The background sweep session's work (`wt/ui`) is ALREADY on this branch (648c425, dd578ae, 0897fea —
+   see the wt/ui section above); its worktree `~/StockSage-wt/ui` can be removed once it has run the
+   iOS test leg and pushed.
