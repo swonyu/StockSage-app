@@ -37,6 +37,41 @@ Workarounds in use this session (read-only-safe, no licence bypass of the build 
 Every commit: swiftc -typecheck clean on BOTH platforms; tests NOT run (licence). Skipped on purpose:
 the #7 stepper relocation to the bottom bar (structural), Q8 (must follow Q4), and every owner-decision item.
 
+## Batch 2 — 2026-09-06 08:30 +03 (workflow wf_02b04e3a-62a: 16 items, 7 isolated worktrees, 29 agents, 76 min)
+All 16 items landed and were cherry-picked onto this branch in dependency order (cache → store → stream →
+eodhd → fixture → ui2 → ui), `tools/gate.sh all` green after EVERY group (emit-module macOS + iOS +
+test-target type-check). Tests still NOT executed (licence). Each group had an adversarial two-lens review;
+every blocker/major was fixed in a `fixup(...)` commit except one the fix pass correctly rejected (the
+reviewer flagged Q8 landing before Q4 inside the ui worktree — the merge order lands Q4 first).
+
+| Item | Commit(s) | Note |
+|---|---|---|
+| Q4 marketTime in quote cache Entry | d131554 | review: clean |
+| Q1 heal sweep scoped + capped + backoff | 2be3bd2, a73444f | keeps existing `healBatchCap`/`marketIsTrading` gate (superset); pure `healCandidates` pinned by 6 tests |
+| Q9 mirror sweep prices onto ideas | 988da1f, 3bf5994 | fixup: `mergeLiveQuote` no longer fabricates `asOf: Date()` — nil stays unknown |
+| P3 O(1) `symbolIndex` | 91d32c3 | also rebuilt in addSymbol/removeSymbol (review omitted them) |
+| Q5 stream auth classifier + watchdog | 084b16f, 98690dc | fixup: MarketsView now OBSERVES the stream so the LIVE dot redraws |
+| Q10 EODHD parser parity | 22ab017, 1f49ccb | fixup: `parseRealTime([String: Any])` overload so the isFinite guard is testable |
+| P2 fixture real spark + clique alloc | 299f009, 45f50bc, 9c79c8f, 80a109c | fixup: per-idea varied spark (a shared spark made a degenerate all-1.0 clique) |
+| UI#5 fontCaveat / section header 15 | d25ad97 | 3 calibration labels re-pointed (review said 2) |
+| UI#13 iOS watchlist remove + reason | 864129a | |
+| UI#15 ideasHeader two tiers | b613ec0 | analysis-timestamp line left untouched (one ternary, always visible) |
+| UI#16 minWidth fields + wrap | 4140e3a, 37ffd0d | fixup: 4 other widened-field rows also wrapped |
+| UI#6 dangerSoft badges + text sweep | 02a95c3 | static `actionColorForTest` seams + guard test |
+| UI#3 ViewThatFits metric rows | c591a18 | 5 rows split (idea card exact per review; 4 others minimal) |
+| UI#4 `.explain()` shim | 93c6ede | ~13 honesty-bearing `.help` sites converted; sheet stop line not found by text |
+| Q8 banner fail-closed | 774522d | shared `MarketsView.freshnessStale(asOf:now:)` |
+
+Minor review findings left OPEN on purpose (small, do after tests can run): Q5 ping has no pong deadline and
+`armWatchdog()` re-allocates per frame; Q1 evaluates `marketIsTrading` for every row before the scope filter;
+Q1 backoff `before` lookup is a linear scan (could use `symbolIndex`); the same O(n) `currentPrice` scan
+still exists in MarketsRiskAllocationSection (unwired file) and `fxRateAge`; `capTruncates` passes the cap
+as a literal 40.
+
+Also this session: `tools/gate.sh` (95b54e2) committed as the licence-blocked compile gate; Ollama 0.33.3 +
+`qwen3.8` (27B) installed on this Mac for the new Catalysts tab's optional local explanation backend
+(see the Catalysts section once it lands).
+
 ## Next actions
 1. Owner accepts the Xcode licence → run the canonical test gate from README on BOTH platforms:
    `xcodebuild -scheme StockSage -destination 'platform=macOS' … test` and the iOS 27.0 simulator.
