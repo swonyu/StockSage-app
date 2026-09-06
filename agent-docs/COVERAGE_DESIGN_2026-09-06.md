@@ -312,7 +312,7 @@ above.
   `isAllowedUniverseSymbol` and stay that way; this migration doesn't touch them, doesn't revive
   them, and doesn't need to map them.
 
-### Per-hour budget after migration
+### Original proposed budget — superseded by implemented-budget notes below
 
 Pre-migration (pipeline-3 doc, "Budget AFTER" above): EODHD REST 4×872 = 3,488/h (0 during US
 close) + Yahoo chart 60×29 = 1,740/h during Tadawul's 5h window (8,700/day) + quoteSummary
@@ -422,6 +422,50 @@ actual bounded excerpts/reasoning and UTC dates even when narration is withheld.
 Shared parsers reject future articles and unsafe/oversized links, constrain all
 supplied text at whole-word boundaries, and omit conflicting/malformed insights.
 Missing or denied feeds remain unavailable, not an invented no-news observation.
+
+### M5 actual routing/provenance and implemented budget —2026-09-06
+
+The takeover M5 is source attribution/configuration, not the differently numbered
+old cutover proposal. Massive→Yahoo routing is already active. No EODHD quote
+picker is restored; EODHD calendar/news fallbacks still exist. The shared macOS/iOS
+settings field describes the actual routing and warns that the connection test
+only probes snapshots, not every purchased add-on. No new purchases or credential
+storage/access changes. No live account entitlement has been verified.
+
+Price-source metadata is attached by the parser/stream that supplied that price:
+Massive SIP, Massive daily bars, Yahoo, Yahoo bars, or the dormant EODHD parser.
+Samples are explicit. Metadata travels with price/time/sequence through accepted
+updates, scan publication and both caches; missing old-cache metadata is unknown,
+never inferred from key presence. It does not certify freshness or execution venue.
+The header/banner date one accepted observation, not the entire tracked universe.
+
+These are code-derived request budgets, NOT measured account usage. Work time,
+closed sessions, caches, failures, missed stream coverage and owner activity change
+the actual rate. The earlier flat60/h, one872-ticker request, oneearnings/day and
+fixed1,740/h Saudi figures do not describe this implementation:
+
+| Path | Implemented bound / cadence |
+| --- | --- |
+| Quotes for a requested set | With a key: ceil(covered US /250) snapshot calls, then one Yahoo chart lookup for each unsupported or missing ticker.872 US names need4 chunks, not1. Yahoo permits up to3 HTTP attempts on429/503; Massive snapshots have no retry loop. |
+| Stream gap | Only trading symbols without recent authenticated trade coverage; rotating cap20, foreground sleep30s (60s thermal), shared25s sweep-start floor with monitor. At most one snapshot chunk per gap sweep, plus≤20 Yahoo lookups if all fall back. Ideal foreground rate≤120 sweeps/hour; the shared floor bounds combined callers to≤144 starts/hour (steady-state), not a promise of refreshing every name every30s. |
+| Full board | Foreground sleep900s (1800s thermal), plus explicit launch/manual refreshes. An unchanged901-name curated set is872 US +29 Saudi/index:4 snapshots +29 Yahoo lookups per successful full sweep, before failures/healing/FX/user holdings. Four such sweeps/hour means16 snapshots +116 Yahoo lookups, NOT the whole app's total. |
+| Monitor | Separate180s sleep (360s thermal), plus cycle work. Core/watchlist/holdings requests and armed price-alert lookups remain; they are not eliminated by WebSockets. Stream-gap calls share the25s floor, but normal core refreshes do not. |
+| Heal / infrastructure | Full/core refresh may retry≤40 stale, open-venue candidates, with existing no-advance backoff; SAR conversion is another single-symbol Yahoo request per refresh. Both are additional to the table's base sweep counts. |
+| History / scans | One request per missing eligible US daily history to Massive; unsupported/failed histories fall back to one Yahoo lookup (up to3 attempts). Cache/chunk reuse remains. Non-daily intervals use Yahoo. This is not a single batched history request. |
+| Stream / references | One Stocks socket, authenticated T+Q subscription; event traffic has no fixed hourly count. Quote-condition reference once per stream start, exchange reference cached24h in process. No second Stocks socket added. |
+| Earnings / news / tape | Use the implemented M3/M4 and takeover M2b budgets: per-due-symbol earnings with24h answer TTL, on-tap≤5 news articles, on-tap≤3×100 pages per tape channel. No new M5 network calls. |
+
+The20-name gap cap is retained to protect the existing Yahoo fallback. In a
+complete872-name US stream outage, a single rotating gap pass needs44 sweeps:
+about22min at ideal30s cadence, plus work time (full/core sweeps may update names
+sooner). This is a known freshness ceiling, not "all names live every30s".
+Changing that cap requires a separately tested fallback/load policy, not merely
+an assumption that a paid Massive plan removes Yahoo's throttling.
+
+Source anchors: StockSageMassive.maxTickersPerRequest/fetchSnapshots,
+StockSageQuoteService.fetchQuotes/get/fetchHistory,
+StockSageStore.refreshStreamGap/healStaleQuotes/refreshInfraFX,
+MarketsView.refreshIntervals and StockSageMonitor.start/runCycle.
 
 Contract verified from https://massive.com/docs/rest/stocks/news and the official
 https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/reference.py

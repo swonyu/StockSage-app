@@ -30,6 +30,7 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         let lows: [Double]
         let closes: [Double]
         let volumes: [Double]
+        var priceSource: StockSagePriceSource? = nil
     }
 
     var schemaVersion: Int
@@ -54,7 +55,8 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
             return Entry(symbol: h.symbol,
                          dates: Array(h.dates.suffix(k)),  opens:  Array(h.opens.suffix(k)),
                          highs: Array(h.highs.suffix(k)),  lows:   Array(h.lows.suffix(k)),
-                         closes: Array(h.closes.suffix(k)), volumes: Array(h.volumes.suffix(k)))
+                         closes: Array(h.closes.suffix(k)), volumes: Array(h.volumes.suffix(k)),
+                         priceSource: h.priceSource)
         }.sorted { $0.symbol < $1.symbol }
         return StockSageHistoryCache(schemaVersion: currentSchemaVersion, entries: entries, savedAt: savedAt)
     }
@@ -65,7 +67,7 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         for e in entries {
             out[e.symbol.uppercased()] = StockSagePriceHistory(
                 symbol: e.symbol, dates: e.dates, opens: e.opens, highs: e.highs,
-                lows: e.lows, closes: e.closes, volumes: e.volumes)
+                lows: e.lows, closes: e.closes, volumes: e.volumes, priceSource: e.priceSource)
         }
         return out
     }

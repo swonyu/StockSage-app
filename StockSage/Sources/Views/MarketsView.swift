@@ -799,16 +799,12 @@ struct MarketsView: View {
         // Tadawul+NASDAQ restriction — the universe carries no 24/7 asset any more, so nil now only
         // means "the feed gave us no timestamps at all".
         let asOf = store.closeableQuoteAsOf ?? store.quoteAsOf
-        let stale = Self.freshnessStale(asOf: asOf, now: Date())
+        let now = Date()
+        let stale = Self.freshnessStale(asOf: asOf, now: now)
+            || asOf.map { !$0.timeIntervalSince1970.isFinite || $0 > now } == true
         let tint = stale ? DS.Palette.warningSoft : DS.Palette.successSoft
-        let text: String
-        if stale, let asOf {
-            text = "Prices are the last close as of \(asOf.formatted(date: .abbreviated, time: .shortened)) — markets may be closed; NOT live. Educational, not financial advice."
-        } else if stale {
-            text = "Price age unknown — the feed returned no market timestamps. Refresh for live. Educational, not financial advice."
-        } else {
-            text = "Live Tadawul + NASDAQ quotes across \(StockSageUniverse.marketCount) market groups (\(StockSageUniverse.worldwide.count) names). Prices may be delayed ~15 min — educational, not financial advice."
-        }
+        let text = Self.quoteBannerText(asOf: asOf,
+            source: StockSageStore.quoteSourceLabel(store.symbols, asOf: asOf), now: now)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: DS.Space.sm) {
                 Circle().fill(tint).frame(width: 7, height: 7)
@@ -833,6 +829,17 @@ struct MarketsView: View {
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous)
             .stroke(LinearGradient(colors: [tint.opacity(0.45), tint.opacity(0.10)],
                                    startPoint: .top, endPoint: .bottom), lineWidth: 1))
+    }
+
+    /// Dates ONE accepted observation, not every row on a partially refreshed board.
+    static func quoteBannerText(asOf: Date?, source: String, now: Date) -> String {
+        guard let asOf else { return "Price age unknown · \(source) — no market timestamp. Educational, not financial advice." }
+        guard asOf.timeIntervalSince1970.isFinite, now.timeIntervalSince1970.isFinite, asOf <= now else {
+            return "Price timestamp unverified · \(source). Educational, not financial advice."
+        }
+        let state = Self.freshnessStale(asOf: asOf, now: now) ? "Last observed quote (not live)" : "Latest dated quote"
+        return "\(state) · \(source) · \(asOf.formatted(date: .abbreviated, time: .shortened)). "
+            + "Other symbols may be older or unavailable. Yahoo fallback may be delayed. Educational, not financial advice."
     }
 
     // MARK: Market regime gauge
@@ -1140,26 +1147,24 @@ struct MarketsView: View {
     }
     #endif
 
-    /// Live status line: once a real feed lands, show the freshness + market count;
-    /// otherwise the educational tagline.
-    /// W3 (owner: "live prices … seamless … update automatically every 30 seconds"): the LIVE
-    /// case's "updated …" fragment counts up instead of showing a frozen clock-face time, so a
-    /// glance tells you the feed is genuinely still moving. `now` is threaded in (never an
-    /// internal `Date()`) so the SAME instant drives both the staleness check and the counter —
-    /// they can't disagree — and so this is directly testable. The "Last close …"/"Price age
-    /// unknown" (stale) and cached/sample branches below are UNTOUCHED — only the live line ticks.
+    /// Dates the same accepted observation as the banner, with its actual source.
+    /// The refresh counter is separate from market age; neither certifies a live price.
     private func headerSubtitle(now: Date) -> String {
         if !store.isSampleData, let when = store.lastUpdated {
             // Reuse the same FAIL-CLOSED staleness logic as liveBanner (review item Q8, 2026-07-28)
             // so the header and banner never contradict, and an unknown asOf never reads as live.
             let asOf = store.closeableQuoteAsOf ?? store.quoteAsOf
+            let source = StockSageStore.quoteSourceLabel(store.symbols, asOf: asOf)
+            if let asOf, !asOf.timeIntervalSince1970.isFinite || !now.timeIntervalSince1970.isFinite || asOf > now {
+                return "Price timestamp unverified · \(source)"
+            }
             let stale = Self.freshnessStale(asOf: asOf, now: now)
             if stale, let asOf {
-                return "Last close · \(StockSageUniverse.marketCount) market groups · as of \(asOf.formatted(date: .abbreviated, time: .shortened))"
+                return "Last quote · \(source) · as of \(asOf.formatted(date: .abbreviated, time: .shortened))"
             } else if stale {
                 return "Price age unknown · \(StockSageUniverse.marketCount) market groups · refresh for live"
             }
-            return "Live · \(StockSageUniverse.marketCount) market groups · \(Self.updatedAgoLabel(since: when, now: now))"
+            return "Quotes · \(source) · \(StockSageUniverse.marketCount) market groups · \(Self.updatedAgoLabel(since: when, now: now))"
         }
         if store.loadedFromCache, let saved = store.cacheSavedAt {
             // Use a date-aware format so a Friday cache opened Monday isn't shown as just "16:42".
@@ -4297,6 +4302,8 @@ struct MarketsView: View {
         // Per-row freshness: a stale (weekend/holiday or stale-feed) quote is dimmed + clock-flagged so
         // its Buy/Sell + strength% isn't acted on as a live signal — matching the heatmap's treatment.
         let stale = sym.isStale()
+        let source = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
+            priceAsOf: sym.latest?.marketTime, now: Date(), priceSource: sym.latest?.priceSource)
         return HStack(spacing: DS.Space.sm) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: DS.Space.xs) {
@@ -4306,6 +4313,10 @@ struct MarketsView: View {
                     }
                 }
                 Text(stale ? "\(sym.market) · stale" : sym.market).font(.caption2).foregroundStyle(.secondary)
+                if let source {
+                    Text(source).font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 // Target/stop for this row come from the ADVISOR's plan (ideas board), never from
                 // StockSageSignalEngine — that engine maps |Δ%| to a recommendation and has no
                 // stop/target concept, so deriving a risk level from it would fabricate one.
@@ -4444,7 +4455,7 @@ struct MarketsView: View {
         // Tabs-audit 2026-07-09 a11y parity: speak the visible "strength N%" qualifier (its
         // absence made a marginal 55% Buy and a 90% Buy sound identical) and the new-listing
         // honesty state, mirroring the visibility conditions exactly.
-        .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price"), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), signal \(signal?.recommendation.rawValue ?? "none")\(signal.flatMap { $0.recommendation != .hold ? ", strength \(Int($0.confidence * 100)) percent" : nil } ?? "")\(stale ? ", stale quote — market likely closed" : "")")
+        .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price")\(source.map { ", \($0)" } ?? ""), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), signal \(signal?.recommendation.rawValue ?? "none")\(signal.flatMap { $0.recommendation != .hold ? ", strength \(Int($0.confidence * 100)) percent" : nil } ?? "")\(stale ? ", stale quote — market likely closed" : "")")
     }
 
     // Review 2026-07-28 #6 (mirrors actionColor): sell/strongSell was `danger` (white-on-#FF453A,
@@ -5428,7 +5439,7 @@ struct MarketsView: View {
             // ("Yahoo · 31m" / "cached · 3h" / "sample") is pixels-only — this .combine element's
             // explicit label replaces every child label, so VoiceOver never heard it. Reuses the
             // SAME call the render site makes (~3746) so it can never desync from the pixels.
-            if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
+            if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date(), priceSource: idea.priceSource) {
                 label += " (\(src))"
             }
             if let stop = a.stopPrice, idea.price > 0 {
@@ -5521,7 +5532,7 @@ struct MarketsView: View {
                 // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
                 // it can never contradict it; live path ages THIS symbol's own priceAsOf.
-                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
+                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date(), priceSource: idea.priceSource) {
                     ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary, flash: idea.price)
                 } else {
                     ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
@@ -5699,7 +5710,7 @@ struct MarketsView: View {
                 // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
                 // it can never contradict it; live path ages THIS symbol's own priceAsOf.
-                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
+                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date(), priceSource: idea.priceSource) {
                     ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary, flash: idea.price)
                 } else {
                     ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
@@ -9626,26 +9637,23 @@ struct MarketsView: View {
         return priceAsOf
     }
 
-    /// DISPLAY-ONLY per-idea provenance tag ("Yahoo · 12m" / "cached · 3h" / "sample") — the
-    /// card already tells you the price STATE (live/stale/cached badges above); this adds the
-    /// SOURCE, reusing the SAME three truths the top banner keys on (`isSampleData`,
-    /// `loadedFromCache`) so a row can never contradict the banner. Sample and cache are
-    /// GLOBAL board states — checked first, exactly mirroring `sampleBanner`/`cachedBanner`'s own
-    /// precedence — so every row on a sample/cached board reads the same as the banner. Only the
-    /// live path is per-idea: `priceAsOf` ages this ONE symbol's own last bar. Age uses the same
-    /// m/h/d thresholds as `cachedBannerText`. nil `priceAsOf` on a live board → nil (HONESTY_FLOOR:
-    /// unknown renders nothing, never a fabricated "0m").
-    static func sourceTagLabel(isSampleData: Bool, loadedFromCache: Bool, priceAsOf: Date?, now: Date) -> String? {
-        if isSampleData { return "sample" }
-        if loadedFromCache { return "cached" }
-        guard let priceAsOf else { return nil }
+    /// Price and source are one accepted observation. Old caches/fixtures have no origin:
+    /// keep that unknown, never infer Yahoo or Massive from configuration. Cache/sample
+    /// remain explicit; a known provider does not imply a fresh or real-time price.
+    static func sourceTagLabel(isSampleData: Bool, loadedFromCache: Bool, priceAsOf: Date?, now: Date,
+                               priceSource: StockSagePriceSource? = nil) -> String? {
+        if isSampleData || priceSource == .sample { return "sample" }
+        if loadedFromCache { return priceSource.map { "cached · \($0.label)" } ?? "cached" }
+        guard let priceAsOf else { return priceSource.map { "\($0.label) · time unknown" } }
+        let source = priceSource?.label ?? "source unknown"
         let secs = now.timeIntervalSince(priceAsOf)
+        guard secs.isFinite, secs >= 0, secs < Double(Int.max) else { return "\(source) · time unverified" }
         let age: String
         if secs < 60 { age = "just now" }
         else if secs < 3600 { age = "\(Int(secs / 60))m" }
         else if secs < 86_400 { age = "\(Int(secs / 3600))h" }
         else { age = "\(Int(secs / 86_400))d" }
-        return "Yahoo · \(age)"
+        return "\(source) · \(age)"
     }
 
     private func signalBlocks(_ value: Double, color: Color) -> some View {

@@ -1,5 +1,65 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M5 source-provenance checkpoint — 2026-09-06 23:03 +03
+
+Prices now carry their actual parser/stream origin: Massive SIP, Massive daily
+bars, Yahoo, Yahoo bars, dormant EODHD, or explicit sample. Optional metadata
+survives accepted board/idea updates, off-board price retention, stream buffering,
+history slicing and both cache round-trips. Older cache entries decode with
+unknown origin; no owner cache/journal was migrated or rewritten by this work.
+A newer unknown-source observation clears the old source, while stale/equal-time
+unsequenced quotes cannot relabel an accepted price. Ordering rules, analysis
+timestamps, stop/target levels and monetary calculations are unchanged.
+
+Card price captions, signal rows and their explicit VoiceOver labels use actual
+source plus market age. Global sample/cache precedence remains; cached known
+sources stay visible. Future/nonfinite market times never read "just now".
+The header/banner identify the SAME closeable-first observation (mixed providers
+on an equal-time tie), not all901 names as live. Old intraday prices are called
+last observed quotes, not incorrectly asserted to be the session close.
+
+Shared macOS/iOS settings explain automatic Massive→Yahoo routing, delayed
+fallback, local key storage/authenticated transmission, and the snapshot-only
+scope of Test connection. No provider picker, credential-access workaround,
+new networking/timer/dependency, purchase, risk-setting or model change.
+EODHD quote retirement stays intact; residual news/calendar dependencies remain.
+
+Code-derived budgets are corrected in COVERAGE_DESIGN:250-ticker snapshot chunks,
+20-symbol rotating gap cap,30/60s foreground sleep with25s shared start floor,
+900/1800s full sweeps plus separate monitor/manual/heal/FX/history traffic. The
+old flat60calls/hour and one872-ticker request are not actual implementation.
+An all872-name stream outage takes44 gap sweeps (~22min at ideal30s cadence plus
+work time), not every name every30s. No rate/entitlement claim from live usage.
+
+Verification (serialized builds; xcresulttool independently checks executed tests):
+- Regression red:8 executed,6 passed/2 failed, exit65. Old formatter called an
+  unknown-source observation Yahoo and a future observation "just now".
+  `/private/tmp/stocksage-m5-red-20260906-2242.xcresult`.
+- Focused implementation:75/75, zero failures/skips, exit0.
+  `/private/tmp/stocksage-m5-focused-20260906-2255.xcresult`.
+- Broad macOS:1702/1702, zero selected failures/skips, exit0.
+  `/private/tmp/stocksage-m5-broad-macos-20260906-2258.xcresult`.
+- Broad iPhone17Pro(gate), iOS26.5:1700/1700, zero selected failures/skips,
+  exit0. Both platform build handles completed; no compiler remains.
+  `/private/tmp/stocksage-m5-broad-ios-20260906-2300.xcresult`.
+  Same three canonical opt-in exclusions:CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests.
+
+The seven new pure tests cover provider parsing, accepted/rejected merge metadata,
+scan retention, old/new quote/history cache reconstruction, real buildIdeas
+publication and age/header text. They do not instantiate Store.shared or access
+credentials, disk caches or network. Existing age tests now explicitly supply
+Yahoo; expected minute/hour/day arithmetic is unchanged.
+
+Live endpoint smoke and full populated-screen/VoiceOver interaction QA remain
+unverified (see M4 credential-guard record). Owner app PID11897 and main worktree's
+unrelated project.pbxproj/AGENTS/review files are preserved. The original-task
+15-minute heartbeat is confirmed ACTIVE; no new tasks, push or actual trades.
+Next:M5b split-basis guard. Both urgentActs and journalOpenRow call the shared
+StockSageJournal.openActions; row P&L/R also compares against raw logged levels.
+Use verified corporate-action evidence, not a price-jump heuristic; never rewrite
+the owner's journal. Existing caution text is not a substitute for the guard.
+
 ## Pipeline 4 M4 news checkpoint — 2026-09-06 22:27 +03
 
 Explain now requests Massive `/v2/reference/news` first, with the existing EODHD

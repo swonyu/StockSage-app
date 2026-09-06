@@ -251,7 +251,8 @@ final class StockSageMonitor {
                                time: Date(timeIntervalSinceNow: -86_400)),
                 // Carry the real MARKET time (was omitted here) so this synthetic symbol's own
                 // `isStale()` can flag a days-old weekend/holiday close, same as the board path.
-                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
+                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
+                               massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource),
             ])
             // Collect the fresh price for the idea stop/target check below regardless of
             // whether THIS ticker's momentum signal is currently strong.

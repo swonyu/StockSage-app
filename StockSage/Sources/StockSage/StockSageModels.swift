@@ -16,6 +16,23 @@ import Foundation
 // These are the minimal shapes the signal engine, briefing service, and monitor
 // actually read. When Chat A's live Yahoo feed lands, it just produces these.
 
+/// Observation origin, not a configured preference or proof of freshness. Nil in older
+/// caches means unknown; only a provider parser/stream (or explicit sample seed) sets it.
+nonisolated enum StockSagePriceSource: String, Codable, Sendable {
+    case massiveSIP, massiveDaily, yahoo, yahooBars, eodhd, sample
+
+    var label: String {
+        switch self {
+        case .massiveSIP: "Massive SIP"
+        case .massiveDaily: "Massive daily bars"
+        case .yahoo: "Yahoo"
+        case .yahooBars: "Yahoo bars"
+        case .eodhd: "EODHD"
+        case .sample: "sample"
+        }
+    }
+}
+
 /// One price observation for a symbol.
 struct StockSageQuote: Sendable, Equatable, Identifiable {
     let id: UUID
@@ -29,19 +46,22 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
     let marketTime: Date?
     /// Only Massive T-channel sequence for this symbol; never a quote-channel/provider ID.
     let massiveTradeSequence: Int64?
+    let priceSource: StockSagePriceSource?
 
     // `nonisolated` (W3): plain value-struct construction, no MainActor state touched — mirrors
     // `StockSageIdea`'s own `nonisolated init`/`withLivePrice` precedent just above in
     // StockSageStore.swift, needed so a `nonisolated static` pure merge helper
     // (StockSageStore.mergedPolledQuotes) can build fresh quotes without hopping actors.
     nonisolated init(id: UUID = UUID(), price: Double, previousPrice: Double, time: Date = Date(),
-                     marketTime: Date? = nil, massiveTradeSequence: Int64? = nil) {
+                     marketTime: Date? = nil, massiveTradeSequence: Int64? = nil,
+                     priceSource: StockSagePriceSource? = nil) {
         self.id = id
         self.price = price
         self.previousPrice = previousPrice
         self.time = time
         self.marketTime = marketTime
         self.massiveTradeSequence = massiveTradeSequence
+        self.priceSource = priceSource
     }
 
     /// Percent change vs the previous price. Guards divide-by-zero (a brand-new

@@ -28,9 +28,11 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         let marketTime: Date?
         /// Optional for backward-compatible decode; preserves equal-time ordering on relaunch.
         let massiveTradeSequence: Int64?
+        let priceSource: StockSagePriceSource?
 
         init(symbol: String, price: Double, previousClose: Double, time: Date,
-             isNewListing: Bool = false, marketTime: Date? = nil, massiveTradeSequence: Int64? = nil) {
+             isNewListing: Bool = false, marketTime: Date? = nil, massiveTradeSequence: Int64? = nil,
+             priceSource: StockSagePriceSource? = nil) {
             self.symbol = symbol
             self.price = price
             self.previousClose = previousClose
@@ -38,6 +40,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
             self.isNewListing = isNewListing
             self.marketTime = marketTime
             self.massiveTradeSequence = massiveTradeSequence
+            self.priceSource = priceSource
         }
     }
     var entries: [Entry]
@@ -52,7 +55,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
             guard let q = s.latest else { return nil }
             return Entry(symbol: s.symbol, price: q.price, previousClose: q.previousPrice, time: q.time,
                         isNewListing: newListings.contains(s.symbol.uppercased()), marketTime: q.marketTime,
-                        massiveTradeSequence: q.massiveTradeSequence)
+                        massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource)
         }
         return StockSageQuoteCache(entries: entries, savedAt: savedAt)
     }
@@ -65,7 +68,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
             StockSageSymbol(symbol: e.symbol, market: marketFor(e.symbol), quotes: [
                 StockSageQuote(price: e.previousClose, previousPrice: e.previousClose, time: e.time.addingTimeInterval(-86_400)),
                 StockSageQuote(price: e.price, previousPrice: e.previousClose, time: e.time, marketTime: e.marketTime,
-                               massiveTradeSequence: e.massiveTradeSequence),
+                               massiveTradeSequence: e.massiveTradeSequence, priceSource: e.priceSource),
             ])
         }
     }

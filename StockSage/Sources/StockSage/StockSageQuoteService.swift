@@ -37,6 +37,7 @@ enum StockSageQuoteService {
         let marketTime: Date?
         /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
         let massiveTradeSequence: Int64?
+        let priceSource: StockSagePriceSource?
         /// True when Yahoo returned no real previousClose (a brand-new listing) and `previousClose`
         /// was set to `price` as a flat placeholder. WITHOUT this flag that placeholder reads as a
         /// genuine 0%-move "hold" signal — it's actually "unevaluated," not "no move." Set precisely
@@ -44,11 +45,13 @@ enum StockSageQuoteService {
         /// legitimately have previousClose == price on a truly flat session).
         let isNewListing: Bool
         init(symbol: String, price: Double, previousClose: Double, marketTime: Date? = nil,
-             isNewListing: Bool = false, massiveTradeSequence: Int64? = nil) {
+             isNewListing: Bool = false, massiveTradeSequence: Int64? = nil,
+             priceSource: StockSagePriceSource? = nil) {
             self.symbol = symbol; self.price = price
             self.previousClose = previousClose; self.marketTime = marketTime
             self.isNewListing = isNewListing
             self.massiveTradeSequence = massiveTradeSequence
+            self.priceSource = priceSource
         }
     }
 
@@ -121,7 +124,8 @@ enum StockSageQuoteService {
         // marketTime through — dropping it silently disabled ALL downstream staleness/banner
         // honesty (quoteAsOf, per-row isStale) since fetchQuotes is built on fetchOne.
         return LiveQuote(symbol: symbol, price: parsed.price, previousClose: parsed.previousClose,
-                         marketTime: parsed.marketTime, isNewListing: parsed.isNewListing)
+                         marketTime: parsed.marketTime, isNewListing: parsed.isNewListing,
+                         priceSource: parsed.priceSource)
     }
 
     /// GET a request, returning the 200 body. On a 429/503 (Yahoo's keyless endpoint
@@ -173,7 +177,7 @@ enum StockSageQuoteService {
         // The quote's market time (Unix seconds) — lets the UI distinguish live from a stale close.
         let marketTime = number(meta["regularMarketTime"]).map { Date(timeIntervalSince1970: $0) }
         return LiveQuote(symbol: symbol, price: price, previousClose: previousClose, marketTime: marketTime,
-                         isNewListing: realPreviousClose == nil)
+                         isNewListing: realPreviousClose == nil, priceSource: .yahoo)
     }
 
     // MARK: Candle history (for indicators / the advisor)
@@ -269,7 +273,8 @@ enum StockSageQuoteService {
             v.append(i < volumes.count ? (number(volumes[i]) ?? 0) : 0)
         }
         guard c.count >= 2 else { return nil }
-        return StockSagePriceHistory(symbol: symbol, dates: dt, opens: o, highs: h, lows: l, closes: c, volumes: v)
+        return StockSagePriceHistory(symbol: symbol, dates: dt, opens: o, highs: h, lows: l, closes: c, volumes: v,
+                                    priceSource: .yahooBars)
     }
 
     /// Coax a JSON numeric (Double / Int / NSNumber / numeric String) into a
@@ -296,7 +301,7 @@ enum StockSageQuoteService {
 // A daily OHLC candle history for one symbol (newest LAST) — the input the
 // indicators + advisor consume. Parallel arrays (kept equal-length by the parser)
 // make windows cheap to slice. Sendable so it crosses the fetch → main-actor hop.
-struct StockSagePriceHistory: Sendable, Equatable {
+nonisolated struct StockSagePriceHistory: Sendable, Equatable {
     let symbol: String
     let dates: [Date]
     let opens: [Double]
@@ -304,6 +309,7 @@ struct StockSagePriceHistory: Sendable, Equatable {
     let lows: [Double]
     let closes: [Double]
     let volumes: [Double]
+    var priceSource: StockSagePriceSource? = nil
 
     nonisolated var count: Int { closes.count }
     nonisolated var latestClose: Double? { closes.last }

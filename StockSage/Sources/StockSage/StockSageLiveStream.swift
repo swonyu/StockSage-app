@@ -235,7 +235,7 @@ final class StockSageLiveStream: ObservableObject {
 
     fileprivate func tickReceived(_ tick: Tick) {
         StockSageStore.shared.applyLiveTick(symbol: tick.symbol, price: tick.price, at: tick.timestamp,
-                                            massiveTradeSequence: tick.sequence)
+                                            massiveTradeSequence: tick.sequence, priceSource: .massiveSIP)
     }
 }
 

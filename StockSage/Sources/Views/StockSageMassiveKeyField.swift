@@ -25,7 +25,7 @@ struct StockSageMassiveKeyField: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        Text("With a key, US names are quoted from Massive in one request per \(StockSageMassive.maxTickersPerRequest) tickers; anything Massive misses uses Yahoo's typically delayed keyless quote. Saudi names use Yahoo. The key stays on this device.")
+        Text("Automatic routing: Massive first for US quotes and daily history when configured; missing or unsupported results use Yahoo, which may be delayed. Saudi quotes use Yahoo. Quote labels show the provider that actually answered, not this setting. The key is stored locally and sent with authenticated Massive requests. Test connection checks snapshot access, not every paid add-on.")
             .font(.system(size: 11))
             .foregroundStyle(DS.Palette.textSecondary)
     }

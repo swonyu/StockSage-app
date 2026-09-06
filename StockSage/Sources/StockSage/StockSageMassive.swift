@@ -164,7 +164,7 @@ enum StockSageMassive {
         return StockSageQuoteService.LiveQuote(symbol: requestedSymbol, price: price,
                                                previousClose: realPreviousClose ?? price,
                                                marketTime: marketTime,
-                                               isNewListing: realPreviousClose == nil)
+                                               isNewListing: realPreviousClose == nil, priceSource: .massiveSIP)
     }
 
     nonisolated static func finite(_ any: Any?) -> Double? {
@@ -278,7 +278,8 @@ enum StockSageMassive {
         return StockSagePriceHistory(symbol: symbol,
                                      dates: sorted.map(\.date), opens: sorted.map(\.open),
                                      highs: sorted.map(\.high), lows: sorted.map(\.low),
-                                     closes: sorted.map(\.close), volumes: sorted.map(\.volume))
+                                     closes: sorted.map(\.close), volumes: sorted.map(\.volume),
+                                     priceSource: .massiveDaily)
     }
 
     /// Massive first for supported US daily requests; nil leaves the existing Yahoo fallback

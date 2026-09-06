@@ -422,7 +422,8 @@ enum StockSageBacktester {
         StockSagePriceHistory(symbol: h.symbol,
                               dates: Array(h.dates[lo..<hi]), opens: Array(h.opens[lo..<hi]),
                               highs: Array(h.highs[lo..<hi]), lows: Array(h.lows[lo..<hi]),
-                              closes: Array(h.closes[lo..<hi]), volumes: Array(h.volumes[lo..<hi]))
+                              closes: Array(h.closes[lo..<hi]), volumes: Array(h.volumes[lo..<hi]),
+                              priceSource: h.priceSource)
     }
 
     /// Aggregate the simulated trades into honest metrics. `internal` (not private) so the

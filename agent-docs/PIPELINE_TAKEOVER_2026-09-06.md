@@ -49,7 +49,14 @@ pushes, actual trades, service purchases, or local model training.
   - [x] Focused56/56; final macOS1693/1693, iPhone1691/1691. Exact bundles and
     compile-failed fixture attempt recorded in HANDOFF.320pt component render
     inspected, not a claim of full populated UI/live-model verification.
-- [ ] M5 truthful per-observation provider labels and paid-plan configuration.
+- [x] M5 truthful per-observation provider labels and paid-plan configuration (code/tests; populated UI/live pending).
+  - [x] Actual source through parsers/stream, accepted quote/idea merges, history and caches;
+    old metadata stays unknown, rejected prices cannot change origin.
+  - [x] Visible/VoiceOver labels and dated source-aware banner/header; no whole-board live claim.
+  - [x] Shared settings explain existing Massive→Yahoo routing and snapshot-only probe;
+    implemented request budgets/rotating-gap freshness ceiling documented, no new calls.
+  - [x] Red8 executed/2failed; focused75/75; final macOS1702/1702 and iPhone1700/1700,
+    same3 explicit opt-in exclusions. Exact bundles/remaining limits in HANDOFF23:03.
 - [ ] M5b split-aware journal comparisons without rewriting the journal.
 - [ ] M6 ratings, guidance, 8-K, dividends and Form 4, with dated provenance and entitlement failures.
 - [ ] P5 tickets, crossing alerts, separate paper automation/store, broker integration as below.
