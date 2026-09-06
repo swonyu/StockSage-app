@@ -61,4 +61,32 @@ struct CatalystsSectionTests {
         #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: false) == 1.0)
         #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: true) < CatalystsSection.calendarRowOpacity(isNegativeRecord: false))
     }
+
+    // MARK: Major fix 2026-09-06 — the empty state must not be fooled by negative records alone
+
+    private static let now = Date(timeIntervalSince1970: 1_757_000_000)
+
+    @Test("a calendar of ONLY dated 'none known' negative records reports no dated catalysts")
+    func hasDatedCatalystsIsFalseForOnlyNegativeRecords() {
+        let checked = StockSageCatalystWatch.brief(for: SageFix.idea("CHKD", conviction: 0.5),
+            inputs: StockSageCatalystWatch.Inputs(earningsCheckedAt: Self.now, now: Self.now))
+        let entries = StockSageCatalystWatch.calendar([checked], now: Self.now)
+        #expect(!entries.isEmpty)                                     // the record IS on the calendar...
+        #expect(!CatalystsSection.hasDatedCatalysts(entries))         // ...but it's not a REAL dated catalyst
+    }
+
+    @Test("a real earnings date makes hasDatedCatalysts true even alongside a negative record")
+    func hasDatedCatalystsIsTrueWithARealCatalystPresent() {
+        let checked = StockSageCatalystWatch.brief(for: SageFix.idea("CHKD", conviction: 0.5),
+            inputs: StockSageCatalystWatch.Inputs(earningsCheckedAt: Self.now, now: Self.now))
+        let real = StockSageCatalystWatch.brief(for: SageFix.idea("EARN", conviction: 0.5),
+            inputs: StockSageCatalystWatch.Inputs(earningsDate: Self.now.addingTimeInterval(2 * 86_400), now: Self.now))
+        let entries = StockSageCatalystWatch.calendar([checked, real], now: Self.now)
+        #expect(CatalystsSection.hasDatedCatalysts(entries))
+    }
+
+    @Test("an empty calendar reports no dated catalysts")
+    func hasDatedCatalystsIsFalseWhenEmpty() {
+        #expect(!CatalystsSection.hasDatedCatalysts([]))
+    }
 }

@@ -139,6 +139,47 @@ struct StockSageQuoteCacheTests {
         #expect(StockSageQuoteCache.merging(previous: nil, new: new) == new)
     }
 
+    // MARK: - Q11 retention must not resurrect a REMOVED symbol (major fix 2026-09-06)
+    //
+    // Before this fix, `merging(previous:new:)` carried forward EVERY previous entry absent from
+    // the new sweep, including a symbol `removeSymbol` had just dropped from `userSymbols` (which
+    // never touches the disk cache) — so a removed watchlist ticker reappeared on the board at
+    // next launch. `StockSageStore.retainedCacheEntries` is the pre-filter that fixes this: only
+    // entries whose symbol is still in the tracked set survive to be merged forward at all.
+
+    @Test func retainedCacheEntriesDropsAnUntrackedSymbol() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let previous = [
+            StockSageQuoteCache.Entry(symbol: "AAPL", price: 100, previousClose: 99, time: t0),
+            StockSageQuoteCache.Entry(symbol: "REMOVED", price: 50, previousClose: 49, time: t0),
+        ]
+        let retained = StockSageStore.retainedCacheEntries(previous: previous, tracked: ["AAPL"])
+        #expect(retained.map(\.symbol) == ["AAPL"])       // n=1: REMOVED dropped, never on disk again
+    }
+
+    @Test func retainedCacheEntriesMatchIsCaseInsensitive() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let previous = [StockSageQuoteCache.Entry(symbol: "aapl", price: 100, previousClose: 99, time: t0)]
+        let retained = StockSageStore.retainedCacheEntries(previous: previous, tracked: ["AAPL"])
+        #expect(retained.count == 1)
+    }
+
+    @Test func retainedCacheEntriesKeepsEverythingWhenAllStillTracked() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let previous = [
+            StockSageQuoteCache.Entry(symbol: "AAPL", price: 100, previousClose: 99, time: t0),
+            StockSageQuoteCache.Entry(symbol: "MSFT", price: 200, previousClose: 199, time: t0),
+        ]
+        let retained = StockSageStore.retainedCacheEntries(previous: previous, tracked: ["AAPL", "MSFT"])
+        #expect(Set(retained.map(\.symbol)) == ["AAPL", "MSFT"])
+    }
+
+    @Test func retainedCacheEntriesEmptyTrackedSetDropsEverything() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let previous = [StockSageQuoteCache.Entry(symbol: "AAPL", price: 100, previousClose: 99, time: t0)]
+        #expect(StockSageStore.retainedCacheEntries(previous: previous, tracked: []).isEmpty)
+    }
+
     private func tempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("StockSageQuoteCacheTests-\(UUID().uuidString)", isDirectory: true)

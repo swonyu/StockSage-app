@@ -170,6 +170,12 @@ final class StockSageStore: ObservableObject {
     @Published private(set) var ideasProgress: (current: Int, total: Int)?
     /// In-flight ideas-refresh task, retained so the UI can cancel it (backlog #12).
     private var ideasRefreshTask: Task<Void, Never>?
+    /// In-flight earnings sweep, retained so a NEW scan's sweep cancels its PREDECESSOR (major
+    /// fix 2026-09-06) — without this, two `refreshIdeas` calls in quick succession leave two
+    /// ~900-symbol `refreshEarningsForTracked` sweeps interleaved on the MainActor (the method's
+    /// own `Task.isCancelled` check inside can never fire on an unstructured, un-cancelled Task),
+    /// up to doubling the ~900/24h Yahoo quoteSummary call budget.
+    private var earningsSweepTask: Task<Void, Never>?
     @Published private(set) var ideasUpdated: Date?
     @Published private(set) var ideasError: String?
     /// What changed vs the last FULL scan (symbol → .new/.actionChanged) — WRITTEN ONLY by
@@ -227,11 +233,18 @@ final class StockSageStore: ObservableObject {
         return result
     }
 
-    /// Instance convenience: feeds `trackedSymbols` from this store's board (`ideas`) and
-    /// watchlist (`userSymbols`), plus the shared portfolio and journal singletons.
+    /// Instance convenience: feeds `trackedSymbols` from this store's board and watchlist
+    /// (`userSymbols`), plus the shared portfolio and journal singletons. Board input is
+    /// `symbols` (the board ROWS, populated from the on-disk cache at `init` — see
+    /// `loadCachedQuotes`) `+ ideas` (major fix 2026-09-06: `ideas` alone is EMPTY until a full
+    /// scan completes minutes later and excludes any symbol whose history fetch failed, so
+    /// before the first scan — or for any name the scan couldn't analyze — this union used to
+    /// omit hundreds of board names entirely: neither streamed, nor stream-gap-polled, nor
+    /// earnings-swept). `symbols.map(\.symbol) + ideas.map(\.symbol)` may briefly repeat a symbol
+    /// across the two arrays; `trackedSymbols` already dedupes.
     var trackedSymbolsUnion: [String] {
         Self.trackedSymbols(
-            board: ideas.map(\.symbol),
+            board: symbols.map(\.symbol) + ideas.map(\.symbol),
             watchlist: userSymbols,
             portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
             journalOpen: StockSageJournalStore.shared.open.map(\.symbol)
@@ -374,6 +387,16 @@ final class StockSageStore: ObservableObject {
         }
     }
 
+    /// Pure: which disk-cache entries survive Q11 retention — only symbols still in `tracked`
+    /// (major fix 2026-09-06). A symbol `removeSymbol` dropped must not be carried forward, or
+    /// it is resurrected on the board at next launch (`loadCachedQuotes` below has no
+    /// tracked-set filter of its own — it trusts every entry the cache hands it).
+    nonisolated static func retainedCacheEntries(
+        previous: [StockSageQuoteCache.Entry], tracked: Set<String>
+    ) -> [StockSageQuoteCache.Entry] {
+        previous.filter { tracked.contains($0.symbol.uppercased()) }
+    }
+
     /// Seed the board from the disk cache (last successful quotes) so launch shows real
     /// last-good numbers instantly + works offline, instead of fabricated sample data.
     private func loadCachedQuotes() {
@@ -407,11 +430,15 @@ final class StockSageStore: ObservableObject {
 
     /// Pure diff: which of `tracked` still needs a poll because the live stream doesn't carry it
     /// AND its market is actually open right now. `subscribed` is
-    /// `StockSageLiveStream.shared.subscribed` — the union of what was ACTUALLY sent to a
-    /// `subscribe` frame, not merely requested — so a symbol the stream is still trying to
-    /// connect for still counts as a gap. `isTrading` is injected (rather than calling
-    /// `marketIsTrading` inline) so this stays a pure function of its three inputs, directly
-    /// unit-testable without touching the wall clock or `StockSageLiveStream.shared`.
+    /// `StockSageLiveStream.shared.subscribed` — the union of symbols on a connection that is
+    /// actually AUTHORIZED and streaming right now (major fix 2026-09-06: `subscribed` used to
+    /// be assigned from the merely-REQUESTED union the instant `start()` ran, before any socket
+    /// even opened — so a symbol whose connection never authorized, or dropped and is backing
+    /// off, read as "covered" and got no gap-poll at all; see `StockSageLiveStream.subscribed`'s
+    /// own doc) — so a symbol the stream is still trying to connect for correctly still counts as
+    /// a gap. `isTrading` is injected (rather than calling `marketIsTrading` inline) so this
+    /// stays a pure function of its three inputs, directly unit-testable without touching the
+    /// wall clock or `StockSageLiveStream.shared`.
     nonisolated static func streamGapCandidates(
         tracked: [String], subscribed: Set<String>, isTrading: (String) -> Bool
     ) -> [String] {
@@ -763,7 +790,8 @@ final class StockSageStore: ObservableObject {
         updatePaperTrades(ideas: finalRanked, histories: accumulatedHistories)
         // Populate earnings for EVERY tracked symbol (non-blocking), not just the board's top
         // names (A4, 2026-09-06) — TTL-cached per symbol, so this is cheap after the first sweep.
-        Task { await refreshEarningsForTracked() }
+        earningsSweepTask?.cancel()
+        earningsSweepTask = Task { [weak self] in await self?.refreshEarningsForTracked() }
         // Same for seasonality — the TOM rank tilt must not depend on which sheets were opened.
         Task { await refreshSeasonalityForTopIdeas() }
         ideasUpdated = Date()
@@ -1815,16 +1843,19 @@ final class StockSageStore: ObservableObject {
     /// Pure core of `refreshEarnings`, `self`-free and directly unit-testable with a stub `fetch`
     /// (no singleton, no network): TTL-gates first, and only when the gate passes does it await
     /// the injected fetch — so a caller can assert "still fresh → fetch never even runs" without
-    /// mocking a real request. Returns nil for "TTL says still fresh, nothing to stamp"; otherwise
-    /// `(now, nil)` for an honest negative (fetch found nothing, or found only a stale past date —
-    /// the SAME `> -86_400` guard `refreshEarnings` always had, value unchanged) or `(now, date)`
-    /// for a usable future date. `checkedAt` is stamped on BOTH the nil and the dated outcome —
-    /// asking and getting nothing back is still an observation worth dating.
+    /// mocking a real request. Returns nil for "TTL says still fresh, nothing to stamp" OR for
+    /// "asked but got no real answer" (`.unavailable` — external access off, non-equity, timeout,
+    /// non-200, parse failure; blocker fix 2026-09-06: `fetchNextEarnings` used to return `nil`
+    /// identically for that AND for "asked, 200, no date", so a FAILED request was stamped as a
+    /// dated "none known" observation — see StockSageEarningsTests). Only `.answered` stamps
+    /// `checkedAt`: `(now, nil)` for an honest negative (200 with no date, or only a stale past
+    /// date — the SAME `> -86_400` guard `refreshEarnings` always had, value unchanged) or
+    /// `(now, date)` for a usable future date.
     nonisolated static func earningsRefreshOutcome(
-        checkedAt: Date?, now: Date = Date(), fetch: () async -> Date?
+        checkedAt: Date?, now: Date = Date(), fetch: () async -> StockSageEarnings.EarningsFetch
     ) async -> (checkedAt: Date, earningsDate: Date?)? {
         guard shouldRefreshEarnings(checkedAt: checkedAt, now: now) else { return nil }
-        let fetched = await fetch()
+        guard case .answered(let fetched) = await fetch() else { return nil }   // never answered ⇒ stamp NOTHING
         let usable = fetched.flatMap { $0.timeIntervalSince(now) > -86_400 ? $0 : nil }   // ignore a stale past date
         return (now, usable)
     }
@@ -1833,10 +1864,16 @@ final class StockSageStore: ObservableObject {
         let up = symbol.uppercased()
         guard let outcome = await Self.earningsRefreshOutcome(
             checkedAt: earningsCheckedAt[up],
-            fetch: { await StockSageEarnings.fetchNextEarnings(for: symbol) }
+            fetch: { await StockSageEarnings.fetchNextEarningsOutcome(for: symbol) }
         ) else { return }
         earningsCheckedAt[up] = outcome.checkedAt
-        if let date = outcome.earningsDate { earningsDates[up] = date }
+        // Unconditional (major fix 2026-09-06): a PRIOR date must be CLEARED when the latest
+        // check finds nothing, not left standing under a freshly-stamped checkedAt — that used
+        // to fabricate "Yahoo confirmed this catalyst just now" when Yahoo actually returned
+        // nothing (e.g. the company moved its report date and the old one dropped off).
+        // `nil` on a Dictionary subscript removes the key, falling back to the dated "none known"
+        // record, which is what was actually observed.
+        earningsDates[up] = outcome.earningsDate
     }
 
     /// Feed earnings for EVERY tracked symbol — board ∪ watchlist ∪ portfolio ∪ open journal
@@ -2246,10 +2283,36 @@ final class StockSageStore: ObservableObject {
     /// `StockSageMonitor` every cycle REGARDLESS of watchlist-only mode, because that mode skips
     /// `refresh(scope: .core)` entirely — without this, watchlist-only + a Tadawul board name
     /// leaves that name polled by nothing at all (N2).
+    /// Max symbols one `refreshStreamGap` sweep may poll (blocker fix 2026-09-06). `subscribed`
+    /// is empty whenever the live stream is off (`stocksage.liveStream` toggle, MarketsView.swift)
+    /// OR simply never started yet (Markets tab not shown while the monitor is already looping) —
+    /// without a cap, `streamGapCandidates` then returns EVERY tracked trading symbol (872
+    /// streamable US names during a US session), and the 60s foreground timer alone would poll
+    /// all 872 every minute (~52k calls/h) on top of every other sweep, well past what a keyless
+    /// feed already 429s on.
+    nonisolated static let streamGapMaxPerSweep = 60
+
+    /// Pure rotation: take at most `limit` symbols from `all` starting at `cursor`, wrapping
+    /// around — so a candidate set bigger than the cap is still covered across SUCCESSIVE
+    /// sweeps instead of the same head being re-polled forever while the tail starves. Returns
+    /// the picked slice and the next cursor. Directly testable without a real candidate list.
+    nonisolated static func rotatedSweepSlice(all: [String], cursor: Int, limit: Int) -> (picked: [String], nextCursor: Int) {
+        guard !all.isEmpty, limit > 0 else { return ([], 0) }
+        let n = min(all.count, limit)
+        let start = ((cursor % all.count) + all.count) % all.count   // defensive: never negative
+        let picked = (0..<n).map { all[(start + $0) % all.count] }
+        return (picked, (start + n) % all.count)
+    }
+
+    /// Rotating cursor for `refreshStreamGap`'s cap — instance state so successive sweeps advance.
+    private var streamGapCursor = 0
+
     func refreshStreamGap() async {
         guard ToolPolicy.webToolsDisabledReason() == nil else { return }
-        let candidates = trackedDefs(scope: .streamGap).map(\.symbol)
-        guard !candidates.isEmpty else { return }
+        let all = trackedDefs(scope: .streamGap).map(\.symbol)
+        guard !all.isEmpty else { return }
+        let (candidates, nextCursor) = Self.rotatedSweepSlice(all: all, cursor: streamGapCursor, limit: Self.streamGapMaxPerSweep)
+        streamGapCursor = nextCursor
         let quotes = await StockSageQuoteService.fetchQuotes(for: candidates)
         mergeLiveQuotes(quotes)
     }
@@ -2418,7 +2481,18 @@ final class StockSageStore: ObservableObject {
         // price/marketTime; on-screen (`committed`/`symbols`) is unaffected — this only protects
         // what's persisted for the next launch.
         let freshCache = StockSageQuoteCache.from(symbols: committed, savedAt: lastUpdated ?? Date(), newListings: newListings)
-        StockSageQuoteCache.merging(previous: StockSageQuoteCache.load(), new: freshCache).save()
+        // Q11's retention merge (StockSageQuoteCache.merging) carries forward every on-disk
+        // entry `freshCache` doesn't have — including a symbol `removeSymbol` just dropped from
+        // `userSymbols`/`symbols` above, which never touches the disk cache (major fix
+        // 2026-09-06). Pre-filter `previous` to symbols STILL tracked (any scope — curated
+        // universe ∪ watchlist ∪ off-board holdings) so a removed ticker actually leaves the
+        // disk cache instead of reappearing on the board (via `loadCachedQuotes`, which rebuilds
+        // `symbols` from every cache entry with no tracked-set filter of its own) on next launch.
+        let stillTracked = Set(trackedDefs().map { $0.symbol.uppercased() })
+        let retainedPrevious = StockSageQuoteCache.load().map {
+            StockSageQuoteCache(entries: Self.retainedCacheEntries(previous: $0.entries, tracked: stillTracked), savedAt: $0.savedAt)
+        }
+        StockSageQuoteCache.merging(previous: retainedPrevious, new: freshCache).save()
     }
 
     func fetchAllSymbols() -> [StockSageSymbol] {

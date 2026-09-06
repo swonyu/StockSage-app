@@ -492,7 +492,7 @@ struct CatalystsSection: View {
     @ViewBuilder
     private func calendarBody(briefs: [StockSageCatalystWatch.Brief], now: Date) -> some View {
         let entries = StockSageCatalystWatch.calendar(briefs, now: now)
-        if !entries.contains(where: { $0.item.date != nil }) {
+        if !Self.hasDatedCatalysts(entries) {
             // A5 (2026-09-06): no longer promises "top 30" — `refreshEarningsForTracked` (T4)
             // sweeps every TRACKED symbol daily, not just the top-ranked board names, so a
             // dated calendar row can appear for anything tracked, not only the board's leaders.
@@ -624,6 +624,17 @@ struct CatalystsSection: View {
         case .avoid:            return Color.white.opacity(0.22)
         case .reduce, .sell:    return Color(red: 1.0,  green: 0.50, blue: 0.50) // DS.Palette.dangerSoft
         }
+    }
+
+    /// Whether the calendar has at least one REAL dated catalyst — major fix 2026-09-06. A dated
+    /// "none known as of <date>" negative record (`isNegativeRecord`) also carries a non-nil
+    /// `item.date` (checkedAt, not an event), so the old `entries.contains { $0.item.date != nil
+    /// }` check was satisfied by the very first symbol checked-and-empty: the honest "No dated
+    /// catalysts yet" empty state disappeared the moment ONE tracked symbol had been swept, even
+    /// though zero real catalysts existed — the screen then looked populated while every visible
+    /// row was a negative record.
+    nonisolated static func hasDatedCatalysts(_ entries: [StockSageCatalystWatch.CalendarEntry]) -> Bool {
+        entries.contains { $0.item.date != nil && !$0.isNegativeRecord }
     }
 
     /// A5: the calendar row's "No known catalyst" tag, sourced ONLY from the engine's

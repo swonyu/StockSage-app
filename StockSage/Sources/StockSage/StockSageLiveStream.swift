@@ -27,9 +27,28 @@ final class StockSageLiveStream: ObservableObject {
     @Published private(set) var isStreaming = false
     /// When the last tick of any symbol on any connection arrived. nil until the first one.
     @Published private(set) var lastTickAt: Date?
-    /// Symbols currently subscribed across every open connection (uppercased, US only) — the
-    /// union of what was ACTUALLY handed to a `subscribe` frame, not merely requested.
-    private(set) var subscribed: Set<String> = []
+    /// Symbols currently subscribed across every open connection (uppercased, US only) — ONLY
+    /// those on a connection that is actually AUTHORIZED and streaming right now (blocker fix
+    /// 2026-09-06). Before this it was a STORED value assigned from the merely-REQUESTED union
+    /// the instant `start()` ran — before `connections.forEach { $0.open() }` even executed, let
+    /// alone before any handshake returned — so a symbol whose socket never authorized (missing
+    /// API key, non-200 handshake, every chunk dropped) still read as "covered": `isStreaming`
+    /// correctly went false, but `subscribed` kept claiming every requested symbol, so
+    /// `StockSageStore.streamGapCandidates` returned `[]` and those names were polled by NOTHING
+    /// except the far-slower `.full` sweep. Computed (not stored) so it can never go stale
+    /// relative to each connection's own `isStreaming`. Pulled through the pure
+    /// `subscribedSymbols(from:)` below so the "only authorized chunks count" rule is
+    /// unit-testable without opening a real socket.
+    var subscribed: Set<String> {
+        Self.subscribedSymbols(from: connections.map { (symbols: $0.symbols, isStreaming: $0.isStreaming) })
+    }
+
+    /// Pure: union of `symbols` for every entry whose `isStreaming` is true. Tuple-typed (not
+    /// `StockSageLiveStreamConnection`, which is `private` to this file and MainActor-bound) so
+    /// it can be pinned directly with plain fixtures.
+    nonisolated static func subscribedSymbols(from connections: [(symbols: Set<String>, isStreaming: Bool)]) -> Set<String> {
+        connections.filter(\.isStreaming).reduce(into: Set<String>()) { $0.formUnion($1.symbols) }
+    }
 
     /// EODHD's per-connection ceiling. Source (fetched 2026-09-06):
     /// https://eodhd.com/financial-apis/new-real-time-data-api-websockets — "Symbol Limits &
@@ -137,7 +156,8 @@ final class StockSageLiveStream: ObservableObject {
         guard Set(chunks) != Set(connections.map(\.symbols)) else { return }  // already exactly this
         connections.forEach { $0.close() }
         connections = chunks.map { StockSageLiveStreamConnection(symbols: $0, owner: self) }
-        subscribed = chunks.reduce(into: Set<String>()) { $0.formUnion($1) }
+        // `subscribed` is now DERIVED from each connection's own `isStreaming` (see its doc) —
+        // no assignment needed here; it reads correctly (empty) until a chunk actually authorizes.
         connections.forEach { $0.open() }
     }
 
@@ -146,7 +166,7 @@ final class StockSageLiveStream: ObservableObject {
         connections.forEach { $0.close() }
         connections = []
         isStreaming = false
-        subscribed = []
+        // `subscribed` is derived from `connections`, which is now empty — no assignment needed.
     }
 
     /// Called by a connection whenever its own `isStreaming` changes. Overall status is the union

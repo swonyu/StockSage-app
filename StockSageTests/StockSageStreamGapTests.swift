@@ -102,4 +102,62 @@ struct StockSageStreamGapTests {
                                                    isTrading: { S.marketIsTrading(symbol: $0, at: atClose) })
         #expect(atCloseResult.isEmpty)
     }
+
+    // MARK: rotatedSweepSlice — blocker fix 2026-09-06: refreshStreamGap must cap+rotate rather
+    // than fan out to every candidate every sweep (unbounded ⇒ ~70k calls/h when `subscribed` is
+    // empty — liveStream toggled off, or the Markets tab never yet shown).
+
+    @Test("vendor-cited cap for the stream-gap sweep is 60")
+    func streamGapCapIsSixty() {
+        #expect(StockSageStore.streamGapMaxPerSweep == 60)
+    }
+
+    @Test("a candidate set under the cap is returned whole, cursor wraps to 0")
+    func rotatedSliceUnderCapReturnsAllAndWrapsCursor() {
+        let all = (1...10).map { "S\($0)" }
+        let (picked, next) = StockSageStore.rotatedSweepSlice(all: all, cursor: 0, limit: 60)
+        #expect(picked == all)
+        #expect(next == 0)   // n == count exactly: (0 + 10) % 10 == 0
+    }
+
+    @Test("a candidate set over the cap is capped at the limit starting from the cursor")
+    func rotatedSliceOverCapRespectsCursorAndLimit() {
+        let all = (1...100).map { "S\($0)" }   // S1...S100
+        let (picked, next) = StockSageStore.rotatedSweepSlice(all: all, cursor: 40, limit: 60)
+        #expect(picked.count == 60)
+        #expect(picked.first == "S41")          // 0-indexed cursor 40 -> element 41
+        #expect(picked.last == "S100")          // 40+60=100 -> wraps: last 60 of 100 starting at 40 is S41...S100
+        #expect(next == 0)                      // (40 + 60) % 100 == 0
+    }
+
+    @Test("rotation wraps around the end of the list, covering the tail before the head repeats")
+    func rotatedSliceWrapsAroundTheEnd() {
+        let all = (1...100).map { "S\($0)" }
+        let (picked, next) = StockSageStore.rotatedSweepSlice(all: all, cursor: 80, limit: 60)
+        #expect(picked.count == 60)
+        #expect(picked.first == "S81")
+        #expect(picked.last == "S40")            // wraps: S81...S100 (20) then S1...S40 (40)
+        #expect(Set(picked).isSubset(of: Set(all)))
+        #expect(next == 40)                      // (80 + 60) % 100 == 40
+    }
+
+    @Test("successive sweeps over a set larger than the cap eventually cover every symbol")
+    func rotationCoversEveryTrackedSymbolAcrossSweeps() {
+        let all = (1...130).map { "S\($0)" }     // > 2× the cap
+        var cursor = 0
+        var covered = Set<String>()
+        for _ in 0..<3 {   // ceil(130/60) == 3 sweeps needed
+            let (picked, next) = StockSageStore.rotatedSweepSlice(all: all, cursor: cursor, limit: 60)
+            covered.formUnion(picked)
+            cursor = next
+        }
+        #expect(covered == Set(all))
+    }
+
+    @Test("empty candidate list yields an empty slice and cursor 0")
+    func rotatedSliceEmptyInputIsEmpty() {
+        let (picked, next) = StockSageStore.rotatedSweepSlice(all: [], cursor: 5, limit: 60)
+        #expect(picked.isEmpty)
+        #expect(next == 0)
+    }
 }
