@@ -32,10 +32,17 @@ enum StockSageCorrelationCluster {
         for seed in 0..<n {
             var members = [seed]
             while true {
+                var inMembers = [Bool](repeating: false, count: n)
+                for m0 in members { inMembers[m0] = true }
                 var pick = -1
                 var pickMin = threshold
-                for c in 0..<n where !members.contains(c) {
-                    let minToMembers = members.map { m.matrix[$0][c] }.min() ?? -1
+                // Review fix 2026-07-28 (P2-clique): no per-candidate array alloc — `members.map
+                // { m.matrix[$0][c] }.min()` allocated an array per candidate per growth step,
+                // and production ideas carry real sparks so this path is hot. Same picks, same
+                // tie-break (first candidate wins ties: `>`, not `>=`).
+                for c in 0..<n where !inMembers[c] {
+                    var minToMembers = Double.greatestFiniteMagnitude
+                    for m0 in members { minToMembers = Swift.min(minToMembers, m.matrix[m0][c]) }
                     if minToMembers >= threshold, pick == -1 || minToMembers > pickMin {
                         pick = c
                         pickMin = minToMembers

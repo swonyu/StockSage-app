@@ -57,6 +57,23 @@ struct StockSageCorrelationClusterTests {
         let m = CorrelationMatrix(symbols: ["A", "B"], matrix: [[1.0, 0.9], [0.9, 1.0]])
         #expect(CC.largest(m) == nil)
     }
+
+    // Review fix 2026-07-28 (P2-clique): pins the per-candidate-allocation removal. AAA-BBB and
+    // AAA-CCC tie at 0.80 when growing from seed AAA — first candidate found (BBB, lower index)
+    // wins the tie (`>`, not `>=`), then CCC joins next round (min(0.80, 0.75) = 0.75 ≥ 0.70).
+    // DDD stays isolated (0.10 to everyone). Same tie occurs symmetrically from every seed, so
+    // the exact member set is deterministic regardless of which name seeds the search.
+    @Test func tieBetweenCandidatesResolvesDeterministically() {
+        let m = CorrelationMatrix(symbols: ["AAA", "BBB", "CCC", "DDD"], matrix: [
+            [1.0, 0.80, 0.80, 0.10],
+            [0.80, 1.0, 0.75, 0.10],
+            [0.80, 0.75, 1.0, 0.10],
+            [0.10, 0.10, 0.10, 1.0],
+        ])
+        let c = CC.largest(m)!
+        #expect(c.symbols == ["AAA", "BBB", "CCC"])
+        #expect(abs(c.minPairwise - 0.75) < 1e-9)
+    }
 }
 
 // MARK: - Effective bets (Kish/design-effect concentration diagnostic, L1 2026-07-09)
