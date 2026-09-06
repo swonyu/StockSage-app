@@ -124,6 +124,7 @@ Owner call, NOT changed: white text on a raw-danger FILL — STOP TRADING banner
 button (~3631), "DO NOT TRADE" chips (~5877 and ~6998 → BestOpportunityActionCard:9881). Same 3.41:1
 class UI#6 fixed on the sell badge, but these are stop/destructive surfaces where the red fill is the
 convention — decide badge treatment (pastel fill + dark ink) vs keep.
+RESOLVED 2026-09-06 09:35 +03 — owner approved; landed as 0897fea (badgeInk + gateChipColor seams, test-pinned, gate green).
 
 Landed on review-followups-2026-09-06 as 648c425 + dd578ae (cherry-picked clean, gate re-run there —
 see merge_gate.log). Next: canonical xcodebuild test gate on both platforms once the licence is
