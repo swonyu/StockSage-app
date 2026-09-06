@@ -110,7 +110,6 @@ struct MarketsView: View {
     private var fontChipLabel: CGFloat { mvFont10 }
     private var fontMetricLabel: CGFloat { mvFont9 }
     private var fontCaption: CGFloat { mvFont9 }
-    private var fontMicro: CGFloat { mvFont8 }
 
     /// Ideas-surface spacing rhythm (UX wave 2): a 4/8pt grid. DS.Space stays app-wide
     /// (its sm=10 / md=14 are off-grid); these roles apply ONLY to the ideas card +
@@ -245,6 +244,10 @@ struct MarketsView: View {
     @State private var watchlistAddError: String? = nil
     /// Tapped idea → per-symbol detail sheet (full advice + larger sparkline + backtest).
     @State private var selectedIdea: StockSageIdea?
+    #if os(iOS)
+    /// iPhone detail-sheet detent — medium first so the board stays visible while stepping prev/next.
+    @State private var detailDetent: PresentationDetent = .medium
+    #endif
     @State private var ideasCopied = false
     /// Feedback state for the sheet's pinned-bar "Copy plan" button — mirrors the ideasCopied
     /// pattern (2s revert). Reset on sheet dismiss via .onChange(of: selectedIdea).
@@ -658,7 +661,19 @@ struct MarketsView: View {
                 }
             }
         }
-        .sheet(item: $selectedIdea) { ideaDetailSheet($0) }
+        .sheet(item: $selectedIdea) { idea in
+            ideaDetailSheet(idea)
+                #if os(iOS)
+                // Medium first: the top ~40% is symbol/action/signal/gate/sizer — the decision content.
+                // The board stays visible while stepping prev/next (what the stepper exists for);
+                // large is one drag away. The pinned CTA bar is a safeAreaInset, so the gate verdict
+                // never falls below the detent.
+                .presentationDetents([.medium, .large], selection: $detailDetent)
+                .presentationDragIndicator(.visible)
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                .presentationContentInteraction(.scrolls)
+                #endif
+        }
         // Reset plan-copy feedback when the sheet closes (selectedIdea → nil) OR steps to a
         // DIFFERENT idea via the prev/next chevrons — "Copied" must never describe the
         // previous idea's plan while a new symbol is on screen (honesty floor).
@@ -1023,7 +1038,13 @@ struct MarketsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Settings")
-        .sheet(isPresented: $showIOSSettings) { StockSageIOSSettingsSheet() }
+        .sheet(isPresented: $showIOSSettings) {
+            StockSageIOSSettingsSheet()
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                #endif
+        }
     }
     #endif
 
@@ -1066,14 +1087,17 @@ struct MarketsView: View {
         if liveStreamEnabled, StockSageLiveStream.shared.isStreaming {
             HStack(spacing: 4) {
                 Circle().fill(DS.Palette.successSoft).frame(width: 6, height: 6)
-                    .opacity(livePulse ? 1 : 0.25)
-                    .animation(.easeInOut(duration: 1).repeatForever(autoreverses: true), value: livePulse)
+                    // Reduce Motion: solid dot. An indefinite pulse in the PINNED header is on-screen
+                    // all session — the textbook case. Colour + the "LIVE" word still carry the state.
+                    .opacity(reduceMotion ? 1 : (livePulse ? 1 : 0.25))
+                    .animation(reduceMotion ? nil : Animation.easeInOut(duration: 1).repeatForever(autoreverses: true),
+                               value: livePulse)
                 Text("LIVE").font(.system(size: mvFont9, weight: .bold))
                     .foregroundStyle(DS.Palette.successSoft)
             }
             .accessibilityLabel("Live streaming prices")
             .help("Streaming trades in real time for US names. Saudi names refresh on the timer — no stream exists for that exchange.")
-            .onAppear { livePulse = true }
+            .onAppear { if !reduceMotion { livePulse = true } }
         }
     }
 
@@ -1082,8 +1106,9 @@ struct MarketsView: View {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: mvFont12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
-                .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
-                .animation(store.isRefreshing
+                // Reduce Motion: no spin — .disabled(store.isRefreshing) below already shows the state.
+                .rotationEffect(.degrees(store.isRefreshing && !reduceMotion ? 360 : 0))
+                .animation(store.isRefreshing && !reduceMotion
                            ? .linear(duration: 0.9).repeatForever(autoreverses: false)
                            : .default, value: store.isRefreshing)
                 .frame(width: 30, height: 30)
@@ -4059,7 +4084,13 @@ struct MarketsView: View {
         // Clear the watchlist error when the browse sheet opens or closes so errors from one
         // surface never bleed into the other (fixes direction (b): browse-sheet fail → watchlist).
         .onChange(of: showBrowseMarkets) { watchlistAddError = nil }
-        .sheet(isPresented: $showBrowseMarkets) { BrowseMarketsView(store: store) }
+        .sheet(isPresented: $showBrowseMarkets) {
+            BrowseMarketsView(store: store)
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                #endif
+        }
     }
 
     private func addWatchSymbol() async {
@@ -5713,7 +5744,9 @@ struct MarketsView: View {
                         Text("Deploy capital — allocation plan").font(.system(size: mvFont12, weight: .bold)).foregroundStyle(.white)
                         Spacer()
                         calibrationChip   // the per-line EV that drove these sizes — measured or assumed?
-                        ideaMetric("Open heat", String(format: "%.1f%%", plan.totalHeat * 100), color: heatColor)
+                        // "Planned", not "Open": the journal's "Open heat" is REALIZED live risk; this is the
+                        // plan's would-be heat against the allocator cap (review 2026-07-28 #2).
+                        ideaMetric("Planned heat", String(format: "%.1f%% of %.0f%% cap", plan.totalHeat * 100, plan.maxHeat * 100), color: heatColor)
                         if plan.scaleApplied < 1 {
                             ideaMetric("Cap scale", String(format: "%.0f%%", plan.scaleApplied * 100), color: DS.Palette.warningSoft)
                         }
