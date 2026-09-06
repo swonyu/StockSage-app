@@ -84,10 +84,25 @@ struct StockSageEODHDTests {
         #expect(q.isNewListing)
     }
 
-    @Test("a non-finite close (numeric overflow to Infinity) is rejected, never treated as a price")
+    @Test("a non-finite close (Double.infinity / .nan) is rejected, never treated as a price (Q10 fixup, 2026-09-06)")
     func nonFiniteCloseRejected() {
-        // 1e400 is lexically valid JSON but overflows Double to +Infinity — a corrupt payload must
-        // never be read as a price. Parity with the Yahoo parser's `number()` isFinite rejection.
+        // Genuine non-finite values, injected directly against the decoded-payload overload — NOT
+        // JSON text. A JSON literal like "close":1e400 overflows Double, but JSONSerialization then
+        // fails the WHOLE document (returns nil) before num() ever runs, so a JSON-level test would
+        // pass identically whether or not num()'s isFinite guard exists. Verified empirically against
+        // this project's own toolchain (review fixup finding, 2026-09-06) — see
+        // StockSageEODHD.parseRealTime(_:requestedSymbol:) for the [String: Any] overload this uses.
+        let inf: [String: Any] = ["code": "X.US", "timestamp": 1785184080, "close": Double.infinity, "previousClose": 10]
+        #expect(E.parseRealTime(inf, requestedSymbol: "X") == nil)
+        let nan: [String: Any] = ["code": "X.US", "timestamp": 1785184080, "close": Double.nan, "previousClose": 10]
+        #expect(E.parseRealTime(nan, requestedSymbol: "X") == nil)
+    }
+
+    @Test("a JSON payload that overflows Double anywhere fails to parse at all, wholesale (documents the boundary above)")
+    func jsonNumericOverflowFailsWholeDocument() {
+        // 1e400 is lexically valid JSON but overflows Double to +Infinity, which Foundation's
+        // JSONSerialization rejects for the ENTIRE object, not just that field. This is why the
+        // isFinite guard above must be tested with a direct Double, not a JSON literal.
         let j = #"{"code":"X.US","timestamp":1785184080,"close":1e400,"previousClose":10}"#.data(using: .utf8)!
         #expect(E.parseRealTime(j, requestedSymbol: "X") == nil)
     }

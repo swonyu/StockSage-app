@@ -51,6 +51,16 @@ enum StockSageEODHD {
     /// "NA" placeholder EODHD emits for an exchange outside the subscription — never a guess.
     static func parseRealTime(_ data: Data, requestedSymbol: String) -> StockSageQuoteService.LiveQuote? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return parseRealTime(obj, requestedSymbol: requestedSymbol)
+    }
+
+    /// Same parse, taking the already-decoded payload directly. Split out from the `Data` overload
+    /// above so tests can hand `num()` a genuine `Double.infinity`/`.nan` — valid JSON text can
+    /// never encode either (JSONSerialization fails the WHOLE document on numeric overflow, e.g.
+    /// "close":1e400, so a JSON-literal test never reaches this guard). Review fixup, 2026-09-06:
+    /// the prior `1e400`-in-JSON test for the isFinite guard was dead coverage for exactly that
+    /// reason — see StockSageEODHDTests.nonFiniteCloseRejected.
+    static func parseRealTime(_ obj: [String: Any], requestedSymbol: String) -> StockSageQuoteService.LiveQuote? {
         // Every numeric field arrives as a number OR the string "NA".
         func num(_ key: String) -> Double? {
             let v: Double?
