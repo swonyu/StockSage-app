@@ -25,6 +25,10 @@ xcodebuild -scheme StockSage -destination 'platform=macOS' -configuration Debug 
 xcodebuild -scheme StockSage -destination 'platform=macOS' -configuration Debug CODE_SIGNING_ALLOWED=NO test
 ```
 
+Fallback while `xcodebuild` is unavailable (e.g. an unaccepted Xcode licence after an update):
+`tools/gate.sh` emits the app module for macOS and iOS with the project's Swift 6 flags and
+type-checks the whole test target. It proves the code compiles; it does NOT run the tests.
+
 Requires full Xcode (macOS 26.5 deploy target, Swift 6, MainActor default isolation). New `.swift` files under `StockSage/Sources/` auto-compile (synchronized file groups — no `project.pbxproj` edits). Live quote/history fetches need network access.
 
 ## Provenance
