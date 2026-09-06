@@ -81,11 +81,74 @@ pushes, actual trades, service purchases, or local model training.
     shares and blocks new-trade gates across snapshot/today/detail/copy. Allocator
     excludes and names affected candidates before assigning heat; retained marginal
     and optimizer helpers use the same conversion. No 1:1 fallback; minor units retained.
-  - [ ] M9 remaining prerequisite: keep rate and market timestamp together in infraFX;
-    reject stale/undated/future/sample observations for NEW sizing, distinguish them
-    from labelled historical portfolio valuation. Current positive finite rates are
-    NOT yet proof of freshness. Then M8 quantity/minimum-fee gate parity and P5 tickets.
+  - [x] M9 dated-FX prerequisite: infraFX retains the accepted rate's market timestamp
+    and source. NEW sizing rejects stale/undated/future/sample observations; portfolio
+    valuation can use an explicitly labelled old/unknown rate. Final macOS1738/1738
+    and iPhone1736/1736; exact evidence in HANDOFF01:01. Next M8 minimum-fee gate
+    parity and P5 tickets, not a claim of broker-executable FX validation.
 - [ ] Canonical macOS + iPhone 17 Pro (gate) tests, populated UI checks, integration and HANDOFF.
+
+### M9 timestamp implementation (verified, 2026-09-07)
+
+Inline execution in the existing clean wt/coverage worktree. Baseline fd0ff0d:
+1733 macOS /1731 iPhone tests. No new worker/dependency/network request.
+
+- [x] Add regression in StockSageTests/StockSageCurrencyTests.swift: a fresh
+  inverse quote must supply BOTH its rate and clock despite an older direct quote.
+  Feed the selected rate into PositionSizer and verify USD100 risk /EUR10 /2 =5sh.
+- [x] Add StockSageCurrency.fxRateToUSD(currency:observations:forSizing:now:),
+  returning (rate:Double, marketTime:Date?, isFresh:Bool)?. Observations are ordered
+  (StockSageQuote?, inverse:Bool) pairs. Require positive finite price/conversion;
+  reject sample and invalid/future clocks. Prefer a known-source dated observation
+  within the existing72h planning ceiling, then the newest market time; source
+  order only breaks ties. Only forSizing:false may return an old
+  or undated fallback, with isFresh:false. This is NOT a broker executable FX quote.
+- [x] StockSageStore.infraFX stores StockSageQuote instead of Double. Add pure
+  mergedInfraFX(_:incoming:now:) using acceptsQuote ordering plus exact allowed-key,
+  symbol, finite-price, sample and future guards. refreshInfraFX publishes only
+  after cancellation/policy checks. Keep last good values on failure without
+  changing their dates. Add latestQuote(_:) as the shared O(1) price/clock accessor.
+- [x] Store.fxConversionToUSD(_:forSizing:now:) composes tracked direct/inverse,
+  then infra direct/inverse observations. MarketsView delegates its ordinary and
+  sizing rate maps to this same resolver, deletes the detached fxRateAge lookup,
+  and warns in the portfolio summary when the selected valuation has isFresh:false.
+  Keep native minor units. Rate-map and missing-currency keys now use the same
+  quote-leg accessor as portfolioTotals (not the FX pair's exposure leg).
+- [x] Test72h boundary, old/unknown/future/sample/source/NaN, inverse overflow,
+  last-good ingress on old/equal/undated/invalid responses and empty failure.
+  Run focused StockSageCurrencyTests + StockSagePositionSizerTests; then canonical
+  macOS and iPhone gates with the same3 opt-in exclusions documented in HANDOFF.
+- [x] Review every resolver caller, update HANDOFF with actual xcresulttool counts,
+  stage explicit implementation/test/doc paths, commit locally with no push.
+
+Caller audit: every shipped new-size/plan/allocator/detail/export currency map
+uses sizingFXRates and its forSizing:true resolver. Ordinary portfolio valuation
+may retain an old/unknown rate with the summary warning. The retained duplicate
+MarketsRiskAllocationSection has only a preview call, not a shipped caller; it
+was not changed or newly wired. Separate legacy journal-heat/valuation panels
+still need per-panel incomplete/stale-valuation disclosure before they can be
+treated as authoritative account risk. No broker funding authority is inferred
+from these client-side planning rates.
+
+### All-API acceptance requirement (owner, 2026-09-07 00:59 +03)
+
+Every active StockSage integration must work end-to-end. Do not use a passing
+snapshot probe, mocks, a retired provider path, or an HTTP200 alone as proof of
+all APIs. Inventory each reachable route, test its real response/entitlement,
+parse and provenance, freshness/pagination, failure handling and app consumer.
+Track VERIFIED, FAILING or BLOCKED with dated evidence, never a silent pass.
+This also includes the planned Derayah account/order integration; no invented
+contract, credential bypass or real development-time trade is authorized.
+
+Initial inventory (not yet exhaustive or live-verified): Massive snapshots,
+adjusted history, T/Q WebSocket delivery, REST trades/quotes, exchange and quote
+condition references, earnings, news, splits, dividends, ratings, guidance,
+8-K and Form4; reachable Yahoo/EODHD/SEC fallbacks and local-model discovery/chat.
+Next trace all14 URLSession/request-containing source files and their callers,
+including Insider and Disclosure, before closing the inventory. Broker
+portfolio/balance/BUY/SELL/CANCEL/MODIFY remain separate sandbox acceptance items.
+Live key access is still the previously documented guard blocker; API-wide
+verification must not be represented as complete while it remains blocked.
 
 ## Corrections to historical workflow scripts
 

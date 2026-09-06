@@ -131,7 +131,12 @@ final class StockSageStore: ObservableObject {
     /// (MarketsView.currentPrice), which was O(n) with two String allocations per element and
     /// was called once per ForEach row.
     func latestPrice(_ symbol: String) -> Double? {
-        symbolIndex[symbol.uppercased()].flatMap { symbols[$0].latest?.price }
+        latestQuote(symbol)?.price
+    }
+
+    /// The matching price/clock/source observation, without a second linear lookup.
+    func latestQuote(_ symbol: String) -> StockSageQuote? {
+        symbolIndex[symbol.uppercased()].flatMap { symbols[$0].latest }
     }
 
     @Published private(set) var journalSplits: [String: StockSageMassiveSplits.Snapshot] = [:]
@@ -178,10 +183,20 @@ final class StockSageStore: ObservableObject {
     /// OWNER DIRECTIVE (2026-07-16, Tadawul+NASDAQ restriction): FX pairs left the universe, but
     /// the SAR→USD rate still powers every .SR honesty correction (holdingValue, pctOfAccountUSD,
     /// USD portfolio totals). Fetched as INFRA — direct-by-symbol like the regime's ^VIX — never
-    /// a feed row or idea. Keyed by uppercased symbol ("USDSAR=X" → last price). Kept on failure
-    /// (a stale rate beats the raw-native fallback); empty until the first refresh completes
-    /// (callers already handle the no-rate case honestly: exclusion + raw-value fallback).
-    @Published private(set) var infraFX: [String: Double] = [:]
+    /// a feed row or idea. Preserve its market time/source, including on failed refreshes.
+    /// Old/undated rates may support labelled valuation, never new risk sizing.
+    @Published private(set) var infraFX: [String: StockSageQuote] = [:]
+
+    func fxConversionToUSD(_ currency: String, forSizing: Bool = false, now: Date = Date())
+    -> (rate: Double, marketTime: Date?, isFresh: Bool)? {
+        let ccy = currency.uppercased()
+        if ccy == "USD" { return (1, nil, true) }
+        let direct = "\(ccy)USD=X", inverse = "USD\(ccy)=X"
+        return StockSageCurrency.fxRateToUSD(currency: ccy, observations: [
+            (latestQuote(direct), false), (latestQuote(inverse), true),
+            (infraFX[direct], false), (infraFX[inverse], true)
+        ], forSizing: forSizing, now: now)
+    }
     /// Distinguishes the built-in demo data from a real feed, so the UI/tool can
     /// say "sample data" honestly rather than implying live quotes.
     @Published private(set) var isSampleData = true
@@ -524,7 +539,29 @@ final class StockSageStore: ObservableObject {
     /// Best-effort infra FX refresh (1 request; failure keeps the last known rate).
     private func refreshInfraFX() async {
         let quotes = await StockSageQuoteService.fetchQuotes(for: Self.infraFXSymbols)
-        for (sym, q) in quotes where q.price > 0 { infraFX[sym.uppercased()] = q.price }
+        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
+        let merged = Self.mergedInfraFX(infraFX, incoming: quotes, now: Date())
+        if merged != infraFX { infraFX = merged }
+    }
+
+    /// Same monotonic clock contract as board quotes. No fetch-time refresh of an old rate.
+    nonisolated static func mergedInfraFX(_ previous: [String: StockSageQuote],
+        incoming: [String: StockSageQuoteService.LiveQuote], now: Date
+    ) -> [String: StockSageQuote] {
+        guard now.timeIntervalSince1970.isFinite, now.timeIntervalSince1970 > 0 else { return previous }
+        var merged = previous
+        for (symbol, q) in incoming.sorted(by: { $0.key < $1.key }) {
+            let key = symbol.uppercased()
+            guard infraFXSymbols.contains(key), q.symbol.uppercased() == key,
+                  q.price > 0, q.price.isFinite, q.priceSource != .sample,
+                  q.marketTime.map({ $0 <= now }) ?? true else { continue }
+            // A corrupt future current clock cannot prevent recovery to a real past quote.
+            let current = merged[key]?.marketTime.flatMap { $0 <= now ? $0 : nil }
+            guard acceptsQuote(q.marketTime, after: current, now: now) else { continue }
+            merged[key] = StockSageQuote(price: q.price, previousPrice: q.previousClose,
+                                         time: now, marketTime: q.marketTime, priceSource: q.priceSource)
+        }
+        return merged
     }
 
     /// Off-board holdings: portfolio positions ∪ open journal trades, regardless of whether

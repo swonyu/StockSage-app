@@ -17,7 +17,7 @@ struct PositionSize: Sendable, Equatable {
 }
 
 enum StockSagePositionSizer {
-    nonisolated static let unavailableFXMessage = "FX rate unavailable or invalid — cannot size this trade from a USD account. Refresh FX before preparing an order."
+    nonisolated static let unavailableFXMessage = "FX rate unavailable or invalid — missing, stale, or unverified. Cannot size this trade from a USD account; refresh FX before preparing an order."
 
     /// Size so a stop-out loses ≈ `riskFraction` of `account`. nil for invalid
     /// inputs (non-positive) or entry == stop (undefined risk → not infinite size).

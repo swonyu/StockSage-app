@@ -1,5 +1,65 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## P5 prerequisite / M9 dated-FX checkpoint — 2026-09-07 01:01 +03
+
+Completed the second M9 boundary on top of fd0ff0d. infraFX now retains an
+existing StockSageQuote (price, marketTime, source), not a bare Double. A shared
+resolver returns the selected rate WITH that observation's clock; known-source
+rates within the existing72h app-planning ceiling take precedence, then newest
+market time, then stable candidate order. Fetch time never establishes freshness.
+USD remains identity1; sample, invalid/future timestamps, non-finite/non-positive
+prices and unusable inverse conversions cannot become usable valuation rates.
+New sizing additionally rejects old/undated/unknown-source observations.
+
+The pure infra merge enforces the allowed symbol, matching payload symbol,
+positive finite price and monotonic market clock. Empty/failed/rejected updates
+preserve the last accepted observation without renewing its age. Undated first
+responses remain unverified; valid incoming clocks can recover a corrupt future
+stored date. Publishing checks cancellation and network policy after the await.
+No extra request, timer, persistence format or dependency was introduced.
+
+Every shipped size/plan/snapshot/allocator/detail/export caller still enters via
+sizingFXRates, now requesting only eligible dated FX. Ordinary portfolio totals
+can retain old/unknown rates with an explicit summary warning, and their rate-map
+and missing-currency keys now use the same quote-leg currency as portfolioTotals.
+The detached rate-age lookup is removed; a fresh inverse clock can no longer
+validate an older direct price. Regression: USD100 risk /EUR10 stop distance
+/EURUSD2 yields5 shares, selecting both the inverse rate and its actual clock.
+
+Actual results (serialized xcodebuild; xcresulttool counts):
+- Initial missing-interface RED compile failure,exit65,zero tests:
+  `/private/tmp/stocksage-m9-dated-fx-red-20260907-0046.xcresult`.
+- First implementation compile failed on a mixed numeric test array inferred as
+  `[Any]`,exit65,zero tests. Fixed by typing it `[TimeInterval]`:
+  `/private/tmp/stocksage-m9-dated-fx-focused-20260907-0050.xcresult`.
+- Focused Currency+PositionSizer:40/40,zero failures/skips,exit0:
+  `/private/tmp/stocksage-m9-dated-fx-focused-20260907-0051.xcresult`.
+- FINAL macOS:1738/1738,zero selected failures/skips,exit0:
+  `/private/tmp/stocksage-m9-dated-fx-broad-macos-20260907-0058.xcresult`.
+- FINAL iPhone17Pro(gate),iOS26.5:1736/1736,zero selected failures/skips,exit0:
+  `/private/tmp/stocksage-m9-dated-fx-broad-ios-20260907-0059.xcresult`.
+  Same explicit opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. Five new test
+  functions, all build handles finished. Existing unused optimizer `lo` warning
+  remains unrelated. Bundle suffixes are identifiers; xcresult records run times.
+
+Scope limits:72h is a planning tolerance, NOT a verified broker FX quote. Legacy
+journal-heat/valuation panels still need per-panel incomplete/stale disclosure
+before becoming account-risk authority. MarketsRiskAllocationSection is preview-
+only; its duplicate resolver was not changed or newly wired. No live provider,
+populated new-build UI, model or broker-execution verification is claimed.
+
+Owner00:59 added an explicit ALL-API acceptance requirement. The takeover plan
+now tracks this independently of unit gates: real authenticated responses,
+correct parsing/provenance and app behavior for every active route. Inventory
+is in progress; existing credential-guard and missing Derayah-contract blockers
+remain. No key access retry/bypass, local model load or real order was attempted.
+
+Next: complete reachable API inventory and safe live checks, then M8 one coherent
+quantity/minimum-fee-aware cost result for gate/EV/export before P5 tickets.
+All work inline on wt/coverage; owner app/main worktree/credentials untouched.
+No push.15-minute original-task heartbeat read back ACTIVE; good-spender OFF.
+
 ## P5 prerequisite / M9 missing-FX sizing checkpoint — 2026-09-07 00:37 +03
 
 The shared sizer now represents USD explicitly as1 and missing/invalid foreign FX

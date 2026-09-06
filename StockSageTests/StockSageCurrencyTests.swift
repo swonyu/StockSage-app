@@ -7,6 +7,122 @@ import Foundation
 struct StockSageCurrencyTests {
     typealias CC = StockSageCurrency
 
+    @Test func fxSelectionKeepsTheAcceptedRateAndClockTogether() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = StockSageQuote(price: 1, previousPrice: 1, time: now,
+                                 marketTime: now.addingTimeInterval(-73 * 3600), priceSource: .yahoo)
+        let fresh = StockSageQuote(price: 0.5, previousPrice: 0.5, time: now.addingTimeInterval(-500),
+                                   marketTime: now.addingTimeInterval(-30), priceSource: .yahoo)
+        let observations: [(StockSageQuote?, Bool)] = [(old, false), (fresh, true)]
+        for forSizing in [true, false] {
+            let selected = CC.fxRateToUSD(currency: "EUR", observations: observations, forSizing: forSizing, now: now)
+            #expect(selected?.rate == 2)
+            #expect(selected?.marketTime == fresh.marketTime)
+            #expect(selected?.isFresh == true)
+            let rates = selected.map { ["EUR": $0.rate] } ?? [:]
+            #expect(StockSagePositionSizer.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 90,
+                                                symbol: "SAP.DE", fxRatesToUSD: rates)?.shares == 5)
+        }
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(old, false)], forSizing: true, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(old, false)], forSizing: false, now: now)?.isFresh == false)
+    }
+
+    @Test func fxPlanningWindowUsesMarketTimeNotFetchTime() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ages: [TimeInterval] = [0, 72 * 3600, 72 * 3600 + 1]
+        for age in ages {
+            let q = StockSageQuote(price: 2, previousPrice: 2, time: now,
+                                   marketTime: now.addingTimeInterval(-age), priceSource: .yahoo)
+            let result = CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: true, now: now)
+            #expect((result?.rate != nil) == (age <= 72 * 3600))
+        }
+        for time in [Date?.none, now.addingTimeInterval(-80 * 3600)] {
+            let q = StockSageQuote(price: 2, previousPrice: 2, time: now, marketTime: time, priceSource: .yahoo)
+            let sized = CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: true, now: now)
+            let valuation = CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: false, now: now)
+            #expect(sized?.rate == nil)
+            #expect(valuation?.rate == 2)
+            #expect(valuation?.marketTime == time)
+            #expect(valuation?.isFresh == false)
+        }
+        let unknownSource = StockSageQuote(price: 2, previousPrice: 2, marketTime: now)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(unknownSource, false)], forSizing: true, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(unknownSource, false)], forSizing: false, now: now)?.isFresh == false)
+    }
+
+    @Test func fxRejectsSampleFutureAndUnusableValuesEvenForValuation() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let invalid = [
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: now, priceSource: .sample),
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: now.addingTimeInterval(1), priceSource: .yahoo),
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: Date(timeIntervalSince1970: .nan), priceSource: .yahoo),
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: Date(timeIntervalSince1970: 0), priceSource: .yahoo)
+        ] + [0, -1, Double.nan, .infinity].map {
+            StockSageQuote(price: $0, previousPrice: 2, marketTime: now, priceSource: .yahoo)
+        }
+        for q in invalid {
+            for sizing in [true, false] {
+                #expect(CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: sizing, now: now)?.rate == nil)
+            }
+        }
+        let tiny = StockSageQuote(price: .leastNonzeroMagnitude, previousPrice: 1, marketTime: now, priceSource: .yahoo)
+        #expect(CC.fxRateToUSD(currency: "SAR", observations: [(tiny, true)], forSizing: false, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "USD", observations: [], forSizing: true, now: now)?.rate == 1)
+    }
+
+    @Test func fxChoosesNewestEligibleObservationThenStableSourceOrder() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = StockSageQuote(price: 1.5, previousPrice: 1.5,
+                                   marketTime: now.addingTimeInterval(-30), priceSource: .yahoo)
+        let newer = StockSageQuote(price: 2, previousPrice: 2, marketTime: now, priceSource: .yahoo)
+        let tie = StockSageQuote(price: 3, previousPrice: 3, marketTime: now, priceSource: .yahoo)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(older, false), (newer, false)], forSizing: true, now: now)?.rate == 2)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(newer, false), (tie, false)], forSizing: true, now: now)?.rate == 2)
+        // Expiry cannot silently fall back to either formerly eligible observation.
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(newer, false), (older, false)], forSizing: true,
+                                now: now.addingTimeInterval(72 * 3600 + 1))?.rate == nil)
+    }
+
+    @Test func infraFXRetainsLastGoodClockThroughFailedAndRejectedRefreshes() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let key = "USDSAR=X"
+        let initial = StockSageQuoteService.LiveQuote(symbol: key, price: 3.75, previousClose: 3.75,
+                                                      marketTime: now.addingTimeInterval(-10), priceSource: .yahoo)
+        let stored = StockSageStore.mergedInfraFX([:], incoming: [key: initial], now: now)
+        #expect(stored[key]?.price == 3.75)
+        #expect(stored[key]?.marketTime == initial.marketTime)
+        #expect(stored[key]?.priceSource == .yahoo)
+        #expect(StockSageStore.mergedInfraFX(stored, incoming: [:], now: now.addingTimeInterval(500)) == stored)
+        for stamp in [Date?.none, initial.marketTime, now.addingTimeInterval(-100), now.addingTimeInterval(1)] {
+            let rejected = StockSageQuoteService.LiveQuote(symbol: key, price: 99, previousClose: 99,
+                                                           marketTime: stamp, priceSource: .yahoo)
+            #expect(StockSageStore.mergedInfraFX(stored, incoming: [key: rejected], now: now) == stored)
+        }
+        let mismatch = StockSageQuoteService.LiveQuote(symbol: "EURUSD=X", price: 99, previousClose: 99,
+                                                       marketTime: now, priceSource: .yahoo)
+        #expect(StockSageStore.mergedInfraFX(stored, incoming: [key: mismatch], now: now) == stored)
+        #expect(StockSageStore.mergedInfraFX(stored, incoming: [mismatch.symbol: mismatch], now: now) == stored)
+        for source in [StockSagePriceSource.sample, .yahoo] {
+            let bad = StockSageQuoteService.LiveQuote(symbol: key, price: source == .sample ? 99 : .infinity,
+                                                      previousClose: 99, marketTime: now, priceSource: source)
+            #expect(StockSageStore.mergedInfraFX(stored, incoming: [key: bad], now: now) == stored)
+        }
+        let newer = StockSageQuoteService.LiveQuote(symbol: key, price: 3.8, previousClose: 3.75,
+                                                    marketTime: now, priceSource: .yahoo)
+        let updated = StockSageStore.mergedInfraFX(stored, incoming: [key: newer], now: now)
+        #expect(updated[key]?.price == 3.8)
+        #expect(updated[key]?.marketTime == now)
+        let rate = CC.fxRateToUSD(currency: "SAR", observations: [(updated[key], true)], forSizing: true, now: now)
+        #expect(abs((rate?.rate ?? 0) - 1 / 3.8) < 1e-12)
+        let corrupt = StockSageQuote(price: 99, previousPrice: 99, marketTime: now.addingTimeInterval(1), priceSource: .yahoo)
+        #expect(StockSageStore.mergedInfraFX([key: corrupt], incoming: [key: newer], now: now)[key]?.price == 3.8)
+        let undated = StockSageQuoteService.LiveQuote(symbol: key, price: 3.75, previousClose: 3.75, priceSource: .yahoo)
+        let seed = StockSageStore.mergedInfraFX([:], incoming: [key: undated], now: now)
+        #expect(seed[key]?.marketTime == nil)
+        #expect(CC.fxRateToUSD(currency: "SAR", observations: [(seed[key], true)], forSizing: true, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "SAR", observations: [(seed[key], true)], forSizing: false, now: now)?.isFresh == false)
+    }
+
     private func exp(_ b: CurrencyBreakdown, _ ccy: String) -> CurrencyExposure? {
         b.exposures.first { $0.currency == ccy }
     }

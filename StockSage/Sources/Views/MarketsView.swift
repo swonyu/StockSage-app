@@ -1799,34 +1799,17 @@ struct MarketsView: View {
         StockSageCurrency.approxAmount(v, symbol: symbol)
     }
 
-    /// THE one CCY→USD rate resolver (post-restriction review, 2026-07-16): tracked quote first
-    /// (direct CCYUSD=X, else inverse 1/USDCCY=X), then `store.infraFX` the same two ways.
-    /// FX pairs left the tracked universe with the Tadawul+NASDAQ restriction, so the tracked
-    /// lookups now normally miss and infraFX (the engine's direct fetch, currently USDSAR=X)
-    /// carries the .SR conversions. nil = genuinely no rate → callers exclude, never sum 1:1.
-    /// EVERY FX-resolution site routes through here — the adversarial review found the heat
-    /// gauge and the currency-exposure card each had a private COPY of this logic that missed
-    /// the infraFX fallback (the heat copy silently DROPPED open .SR trades → under-reported
-    /// risk, the dangerous direction). One resolver = the drift is structurally impossible.
-    private func fxRateToUSD(_ ccy: String) -> Double? {
-        if ccy == "USD" { return 1 }
-        let candidates: [(Double?, Bool)] = [
-            (currentPrice("\(ccy)USD=X"), false), (currentPrice("USD\(ccy)=X"), true),
-            (store.infraFX["\(ccy)USD=X".uppercased()], false), (store.infraFX["USD\(ccy)=X".uppercased()], true)
-        ]
-        for (price, inverse) in candidates {
-            guard let price, price > 0, price.isFinite else { continue }
-            let rate = inverse ? 1 / price : price
-            if rate > 0, rate.isFinite { return rate }
-        }
-        return nil
+    /// Same dated resolver for valuations and sizing. Only labelled valuation permits an
+    /// old/undated fallback; new sizing must pass forSizing:true. Missing FX is never 1:1.
+    private func fxRateToUSD(_ ccy: String, forSizing: Bool = false) -> Double? {
+        store.fxConversionToUSD(ccy, forSizing: forSizing)?.rate
     }
 
     /// CCY→USD rates for every currency held (via `fxRateToUSD`; USD = 1). Currencies with no
     /// rate keep the honest degradation (excluded from USD totals via `untrackedFXCurrencies`).
     private var fxRatesToUSD: [String: Double] {
         var rates: [String: Double] = ["USD": 1]
-        for ccy in Set(portfolio.positions.map { StockSageCurrency.currencyForSymbol($0.symbol) }) where ccy != "USD" {
+        for ccy in Set(portfolio.positions.map { conversionCurrencyForSymbol($0.symbol) }) where ccy != "USD" {
             if let r = fxRateToUSD(ccy) { rates[ccy] = r }
         }
         return rates
@@ -1835,35 +1818,15 @@ struct MarketsView: View {
     /// Currencies in the book with NO tracked FX rate — EXCLUDED from the USD total (never summed 1:1).
     private var untrackedFXCurrencies: [String] {
         let rates = fxRatesToUSD
-        return Set(portfolio.positions.map { StockSageCurrency.currencyForSymbol($0.symbol) })
+        return Set(portfolio.positions.map { conversionCurrencyForSymbol($0.symbol) })
             .filter { rates[$0] == nil }.sorted()
     }
 
-    /// FX trades ~24x5, so a rate quote older than this (a long holiday weekend) is stale — the USD
-    /// conversion it produces may be off. We still convert (dropping the holding distorts net worth
-    /// MORE than a slightly-old rate), but the summary flags it. Only-real-data: stale is not "live".
-    private static let maxFXAgeSeconds: TimeInterval = 72 * 3600
-
-    /// Age of the freshest FX quote (CCYUSD=X or USDCCY=X) backing a currency; nil if none is tracked
-    /// OR none carries a real market timestamp (can't judge → not stale, never a false alarm). Uses the
-    /// quote's MARKET time, not its fetch time (`.time` defaults to now, which would read ~0 age and make
-    /// the stale-FX warning permanently dead — the same trap fixed in the live-quote path).
-    private func fxRateAge(_ ccy: String, asOf now: Date) -> TimeInterval? {
-        let times = ["\(ccy)USD=X", "USD\(ccy)=X"].compactMap { sym in
-            store.symbols.first { $0.symbol.uppercased() == sym.uppercased() }?.latest?.marketTime
-        }
-        guard let freshest = times.max() else { return nil }
-        return Swift.max(0, now.timeIntervalSince(freshest))
-    }
-
-    /// Held currencies whose FX rate EXISTS but is STALE (older than maxFXAge): the USD total still
-    /// converts them, but at an old rate — surfaced so the headline value is not silently overstated.
-    private var staleFXCurrencies: [String] {
+    /// Warn about the SAME rate used in valuation, including the infra quote and unknown clocks.
+    private var unverifiedFXCurrencies: [String] {
         let now = Date()
-        let rates = fxRatesToUSD
-        return Set(portfolio.positions.map { StockSageCurrency.currencyForSymbol($0.symbol) })
-            .filter { $0 != "USD" && rates[$0] != nil }
-            .filter { (fxRateAge($0, asOf: now) ?? 0) > Self.maxFXAgeSeconds }
+        return Set(portfolio.positions.map { conversionCurrencyForSymbol($0.symbol) })
+            .filter { $0 != "USD" && store.fxConversionToUSD($0, now: now)?.isFresh == false }
             .sorted()
     }
 
@@ -1927,12 +1890,12 @@ struct MarketsView: View {
 
     /// F3 wave-A (2026-07-16): ccy→USD rate map for the PURE plan/snapshot builders (TodayPlan,
     /// DecisionSnapshot, the unfundable-row qualifier) — resolver-backed like `sizedPosition`,
-    /// so .SR resolves via infraFX even with no .SR position held. Only tracked rates enter
+    /// so .SR resolves via infraFX even with no .SR position held. Only fresh, dated rates enter
     /// the map; the builders withhold size and block the gate when a foreign rate is missing.
     private func sizingFXRates(for symbols: [String]) -> [String: Double] {
         var rates: [String: Double] = [:]
         for ccy in Set(symbols.map { conversionCurrencyForSymbol($0) }) where ccy != "USD" {
-            if let r = fxRateToUSD(ccy) { rates[ccy] = r }
+            if let r = fxRateToUSD(ccy, forSizing: true) { rates[ccy] = r }
         }
         return rates
     }
@@ -1940,7 +1903,7 @@ struct MarketsView: View {
     /// Portfolio cost & value in USD. Each holding's value AND cost go through holdingValue (so the
     /// .L-pence ÷100 is applied to BOTH — the P&L unit matches) then × its CCY→USD rate, so we never
     /// sum GBP + USD at 1:1. Holdings whose currency has no tracked rate are EXCLUDED (see
-    /// untrackedFXCurrencies), not counted at par. (Cost uses today's FX, so P&L blends asset + FX.)
+    /// untrackedFXCurrencies), not counted at par. (Cost uses the selected FX rate; P&L blends asset + FX.)
     ///
     /// FX-pair positions (…=X): price×shares is already denominated in the pair's QUOTE currency
     /// (e.g. EURUSD=X price is in USD), so we convert by the quote leg, not the exposure leg that
@@ -2043,12 +2006,12 @@ struct MarketsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !untrackedFXCurrencies.isEmpty {
-                Text("Excludes \(untrackedFXCurrencies.joined(separator: ", ")) holdings — no FX rate to convert to USD (track \(untrackedFXCurrencies.first ?? "")USD=X). P&L uses today's FX, so it blends asset + currency moves.")
+                Text("Excludes \(untrackedFXCurrencies.joined(separator: ", ")) holdings — no usable FX rate to convert to USD. Refresh market data and verify the FX feed. P&L at the selected rate blends asset and currency moves.")
                     .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if !staleFXCurrencies.isEmpty {
-                Text("FX rate for \(staleFXCurrencies.joined(separator: ", ")) is over \(Int(Self.maxFXAgeSeconds / 3600))h old — those holdings convert to USD at a stale rate, so the total may be off.")
+            if !unverifiedFXCurrencies.isEmpty {
+                Text("FX valuation for \(unverifiedFXCurrencies.joined(separator: ", ")) uses an old or unverified rate (over \(Int(StockSageCurrency.maxSizingFXAge / 3600))h old, or market time/source unknown). The total may be off; this rate cannot size a new trade.")
                     .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
