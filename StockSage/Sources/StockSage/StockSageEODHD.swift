@@ -53,16 +53,25 @@ enum StockSageEODHD {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         // Every numeric field arrives as a number OR the string "NA".
         func num(_ key: String) -> Double? {
-            if let d = obj[key] as? Double { return d }
-            if let i = obj[key] as? Int { return Double(i) }
-            return nil                      // "NA" (String) lands here → treated as absent
+            let v: Double?
+            if let d = obj[key] as? Double { v = d }
+            else if let i = obj[key] as? Int { v = Double(i) }
+            else { v = nil }                 // "NA" (String) lands here → treated as absent
+            // Reject NaN / ±Inf exactly like the Yahoo parser's `number()` does.
+            guard let value = v, value.isFinite else { return nil }
+            return value
         }
         guard let close = num("close"), close > 0 else { return nil }
-        let prev = num("previousClose") ?? close
+        // L3-08 parity with parseChart: a non-positive previousClose is exactly as unusable as a
+        // missing one — route it through the SAME fallback and FLAG it, never fabricate a flat
+        // 0.00%. Hardcoding isNewListing:false also let reconcileNewListings CLEAR a correct flag
+        // a prior Yahoo fetch had set, since EODHD is tried first for every US name.
+        let realPreviousClose = num("previousClose").flatMap { $0 > 0 ? $0 : nil }
         let marketTime = num("timestamp").map { Date(timeIntervalSince1970: $0) }
         return StockSageQuoteService.LiveQuote(symbol: requestedSymbol, price: close,
-                                               previousClose: prev, marketTime: marketTime,
-                                               isNewListing: false)
+                                               previousClose: realPreviousClose ?? close,
+                                               marketTime: marketTime,
+                                               isNewListing: realPreviousClose == nil)
     }
 
     /// Fetch one US symbol. nil on any failure so the caller can fall back to Yahoo.

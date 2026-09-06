@@ -68,11 +68,28 @@ struct StockSageEODHDTests {
         #expect(E.parseRealTime(zero, requestedSymbol: "X") == nil)
     }
 
-    @Test("a missing previousClose falls back to the close rather than inventing a move")
+    @Test("a missing previousClose falls back to the close and flags isNewListing (Q10, 2026-07-28)")
     func missingPreviousCloseIsFlat() throws {
         let j = #"{"code":"X.US","timestamp":1785184080,"close":50.0,"previousClose":"NA"}"#.data(using: .utf8)!
         let q = try #require(E.parseRealTime(j, requestedSymbol: "X"))
         #expect(q.previousClose == q.price)     // flat, not a fabricated percentage
+        #expect(q.isNewListing)                 // must be flagged, never hardcoded false (Q10)
+    }
+
+    @Test("a zero previousClose is exactly as unusable as a missing one (L3-08 parity, Q10)")
+    func zeroPreviousCloseIsFlaggedNotFabricated() throws {
+        let j = #"{"code":"X.US","timestamp":1785184080,"close":50.0,"previousClose":0}"#.data(using: .utf8)!
+        let q = try #require(E.parseRealTime(j, requestedSymbol: "X"))
+        #expect(q.previousClose == q.price)     // routed through the same missing-previousClose fallback
+        #expect(q.isNewListing)
+    }
+
+    @Test("a non-finite close (numeric overflow to Infinity) is rejected, never treated as a price")
+    func nonFiniteCloseRejected() {
+        // 1e400 is lexically valid JSON but overflows Double to +Infinity — a corrupt payload must
+        // never be read as a price. Parity with the Yahoo parser's `number()` isFinite rejection.
+        let j = #"{"code":"X.US","timestamp":1785184080,"close":1e400,"previousClose":10}"#.data(using: .utf8)!
+        #expect(E.parseRealTime(j, requestedSymbol: "X") == nil)
     }
 
     @Test("a Settings override replaces the embedded key")
