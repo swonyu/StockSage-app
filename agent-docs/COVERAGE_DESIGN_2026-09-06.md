@@ -423,6 +423,44 @@ Shared parsers reject future articles and unsafe/oversized links, constrain all
 supplied text at whole-word boundaries, and omit conflicting/malformed insights.
 Missing or denied feeds remain unavailable, not an invented no-news observation.
 
+### M5b split-basis comparison contract —2026-09-06
+
+Use the current [Massive splits endpoint](https://massive.com/docs/rest/stocks/corporate-actions/splits),
+`GET /stocks/v1/splits`, not the deprecated `/v3/reference/splits`. The official
+[Python SDK](https://github.com/massive-com/client-python/blob/master/massive/rest/reference.py)
+confirms `execution_date.gte/lte` and `sort=execution_date.asc`. Multiply each
+event's `split_to / split_from`, never its cumulative historical adjustment factor.
+Execution-day trading, including premarket, already uses adjusted units; compare
+New York calendar dates and apply only splits strictly after the entry's day.
+
+Fetch only open, covered US journal symbols, serially, over earliest entry through
+today. In-memory complete answers expire at New York day rollover or24h, whichever
+comes first; opening an earlier trade expands the range. Native view-task
+cancellation plus a generation guard rejects obsolete publication. No new timer,
+disk cache, dependency or persisted trade mutation. Completed failures retry no
+faster than60s;401/402/403 suppress this endpoint for24h in the current process.
+One complete page of at most100 events per symbol: any pagination, malformed
+ratio/date/identity, ambiguous same-day duplicate, failure or unsupported symbol
+leaves the basis unverified, not a fabricated no-split answer. Relaunch may fetch
+again; this is a process cache, not a cross-launch request cap.
+
+Rebase a disposable TradeRecord copy for BOTH urgent/open-actions and row P&L/R.
+Prices and shares move together; original serialized journal, recorded fill legs
+and realized calibration are untouched. Quotes must be real, finite, dated after
+entry, not future or materially stale under the shared quote-age rule, and not
+predate an executed split. Unknown basis withholds P&L/level verdict. A known
+factor appears in the row and its explicit VoiceOver label. Per-position action
+IDs distinguish two entries in the same symbol. Crossing a stop is not a fill.
+
+Closing is deliberately NOT corporate-action accounting: do not prefill a quote
+unless its verified factor is1. A known non-unit factor disables the original-
+basis close editor's confirmation and preview; explicit broker reconciliation is
+a required follow-up. With unknown basis, existing manually entered closes remain
+possible with a warning that prices must be in original logged units; no feed
+price is prefilled. Never silently rebase recorded fills or infer an action from
+a price jump. Cash-in-lieu, spinoffs, mergers and non-US actions remain outside this
+split-only check. Test evidence and live/UI limitations are recorded in HANDOFF.
+
 ### M5 actual routing/provenance and implemented budget —2026-09-06
 
 The takeover M5 is source attribution/configuration, not the differently numbered

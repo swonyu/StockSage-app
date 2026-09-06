@@ -122,9 +122,9 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     /// R-multiple are unchanged; only the quote basis moves to match a retro-adjusted price
     /// series. entry/stop/target/shares are private(set) so this is the ONLY mutation path
     /// after opening (a trade's terms are otherwise immutable).
-    /// ponytail: plannedEntry/entryFill stay `let` and unrebased — only PAPER trades are ever
-    /// rebased (StockSagePaperTrader.markToMarket) and paper trades never carry planned/fill
-    /// legs; revisit if the real journal ever marks through markToMarket.
+    /// ponytail: plannedEntry/entryFill stay `let` and unrebased. Paper positions persist the
+    /// rebase; real-journal comparisons rebase a disposable copy only and never use its fill
+    /// analytics. Actual journal reconciliation needs a separate, explicit accounting path.
     nonisolated mutating func rebase(dividingBy ratio: Double) {
         guard ratio > 0, ratio.isFinite else { return }
         entry /= ratio
@@ -282,7 +282,8 @@ struct OpenAction: Sendable, Equatable, Identifiable {
     let kind: Kind
     let detail: String
     let rNow: Double?      // current R-multiple at the mark (nil if entry == stop)
-    var id: String { symbol }
+    let tradeID: UUID
+    var id: String { tradeID.uuidString }
     /// Stop/target hit → the owner must act now.
     nonisolated var isUrgent: Bool { kind == .stopHit || kind == .targetHit }
 }
@@ -830,33 +831,35 @@ enum StockSageJournal {
     /// (stop/target hit) sorts first, then by |R|. Closed trades and unpriced symbols are skipped.
     nonisolated static func openActions(_ trades: [TradeRecord], mark: (String) -> Double?) -> [OpenAction] {
         let acts = trades.compactMap { t -> OpenAction? in
-            guard t.isOpen, let px = mark(t.symbol) else { return nil }
+            guard t.isOpen, let px = mark(t.symbol), px > 0, px.isFinite,
+                  t.entry > 0, t.entry.isFinite, t.stop > 0, t.stop.isFinite,
+                  t.shares > 0, t.shares.isFinite, t.target.map({ $0 > 0 && $0.isFinite }) ?? true else { return nil }
             let isLong = t.side == .long
-            let rNow = t.rMultiple(at: px)
+            let rNow = t.rMultiple(at: px).flatMap { $0.isFinite ? $0 : nil }
             // Stop hit — long: at/below the stop; short: at/above.
             if isLong ? px <= t.stop : px >= t.stop {
                 return OpenAction(symbol: t.symbol, kind: .stopHit,
-                                  detail: String(format: "%.2f at/through your %.2f stop — risk is realized; exit or re-confirm the thesis.", px, t.stop),
-                                  rNow: rNow)
+                                  detail: String(format: "%.2f at/through your %.2f stop — crossed level, not a confirmed fill; verify the position.", px, t.stop),
+                                  rNow: rNow, tradeID: t.id)
             }
             // Target hit — long: at/above the target; short: at/below.
             if let tgt = t.target, (isLong ? px >= tgt : px <= tgt) {
                 return OpenAction(symbol: t.symbol, kind: .targetHit,
                                   detail: String(format: "%.2f reached your %.2f target — take profit or trail the stop.", px, tgt),
-                                  rNow: rNow)
+                                  rNow: rNow, tradeID: t.id)
             }
             // Within the last 25% before the stop (−0.75R … −1R).
             if let r = rNow, r > -1, r <= -0.75 {
                 return OpenAction(symbol: t.symbol, kind: .nearStop,
                                   detail: String(format: "%.2f is near your stop (now %+.2fR) — be ready to act.", px, r),
-                                  rNow: r)
+                                  rNow: r, tradeID: t.id)
             }
             if let r = rNow, r > 0 {
                 return OpenAction(symbol: t.symbol, kind: .inProfit,
                                   detail: String(format: "up %+.2fR — consider trailing the stop to lock it in.", r),
-                                  rNow: r)
+                                  rNow: r, tradeID: t.id)
             }
-            return OpenAction(symbol: t.symbol, kind: .holding, detail: "holding — no level crossed.", rNow: rNow)
+            return OpenAction(symbol: t.symbol, kind: .holding, detail: "holding — no level crossed.", rNow: rNow, tradeID: t.id)
         }
         return acts.sorted { a, b in
             if a.isUrgent != b.isUrgent { return a.isUrgent }

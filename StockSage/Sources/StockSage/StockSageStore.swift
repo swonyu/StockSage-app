@@ -133,6 +133,45 @@ final class StockSageStore: ObservableObject {
     func latestPrice(_ symbol: String) -> Double? {
         symbolIndex[symbol.uppercased()].flatMap { symbols[$0].latest?.price }
     }
+
+    @Published private(set) var journalSplits: [String: StockSageMassiveSplits.Snapshot] = [:]
+    private var journalSplitGeneration = UUID()
+    private var journalSplitAttempts: [String: (since: Date, at: Date)] = [:]
+
+    /// One serial sweep for open positions only. The view's native task cancellation plus
+    /// generation guard prevents an obsolete sweep publishing after an edit/removal.
+    func refreshJournalSplits(_ trades: [TradeRecord]) async {
+        let generation = UUID()
+        journalSplitGeneration = generation
+        let now = Date()
+        let requests = Dictionary(trades.filter { $0.isOpen && StockSageMassive.covers($0.symbol) }
+            .map { ($0.symbol.uppercased(), $0.openedAt) }, uniquingKeysWith: min)
+        let retained = journalSplits.filter { requests[$0.key] != nil }
+        if retained != journalSplits { journalSplits = retained }
+        journalSplitAttempts = journalSplitAttempts.filter { requests[$0.key] != nil }
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        for symbol in requests.keys.sorted() {
+            guard generation == journalSplitGeneration, !Task.isCancelled, let since = requests[symbol] else { return }
+            if journalSplits[symbol]?.covers(since: since, now: now) == true { continue }
+            // Failure is NOT a no-split answer. Bound transient retries without blocking an
+            // earlier newly logged position whose wider date range has not been requested.
+            if let attempt = journalSplitAttempts[symbol], attempt.since <= since,
+               now.timeIntervalSince(attempt.at) >= 0, now.timeIntervalSince(attempt.at) < 60 { continue }
+            let snapshot = await StockSageMassiveSplits.fetch(symbol: symbol, since: since, now: now)
+            guard generation == journalSplitGeneration, !Task.isCancelled else { return }
+            if let snapshot { journalSplits[symbol] = snapshot }
+            else { journalSplitAttempts[symbol] = (since, Date()) }
+        }
+    }
+
+    /// Uses the SAME board observation as latestPrice, never an unrelated cached bar clock.
+    func journalBasis(_ trade: TradeRecord, now: Date = Date()) -> StockSageMassiveSplits.Basis {
+        guard !isSampleData, let index = symbolIndex[trade.symbol.uppercased()],
+              let quote = symbols[index].latest, quote.priceSource != .sample,
+              quote.price > 0, quote.price.isFinite else { return .unavailable("no real priced observation") }
+        return StockSageMassiveSplits.comparison(trade, snapshot: journalSplits[trade.symbol.uppercased()],
+                                                markAsOf: quote.marketTime, now: now)
+    }
     /// O(1) board-membership check — replaces the per-row linear `contains` scan next to
     /// `priceAlertRow`.
     func isOnBoard(_ symbol: String) -> Bool { symbolIndex[symbol.uppercased()] != nil }

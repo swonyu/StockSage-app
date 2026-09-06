@@ -6,6 +6,20 @@ import Foundation
 
 struct StockSageJournalTests {
 
+    @Test func invalidMarksCannotProduceAnOpenAction() {
+        let trade = t(.long, entry: 100, stop: 90, shares: 10)
+        for px in [Double.nan, .infinity, -.infinity, 0, -1] {
+            #expect(StockSageJournal.openActions([trade], mark: { _ in px }).isEmpty)
+        }
+    }
+
+    @Test func crossedStopIsNotARealizedFill() {
+        let trade = t(.long, entry: 100, stop: 90, shares: 10)
+        let action = StockSageJournal.openActions([trade], mark: { _ in 89 }).first
+        #expect(action?.kind == .stopHit)
+        #expect(action?.detail.contains("risk is realized") == false)
+    }
+
     private func t(_ side: TradeRecord.Side, entry: Double, stop: Double, shares: Double,
                    exit: Double? = nil) -> TradeRecord {
         tSym("X", side, entry: entry, stop: stop, shares: shares, exit: exit)

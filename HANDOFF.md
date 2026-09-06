@@ -1,5 +1,66 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M5b split-comparison checkpoint — 2026-09-06 23:29 +03
+
+Open journal comparisons now require a complete dated Massive split check, then
+rebase a disposable copy's entry/stop/target/shares together. Both urgent actions
+and row P&L/R use that copy; original serialized journal, recorded fills, realized
+accounting and calibration are unchanged. The source and multiplier appear in
+the row and its explicit VoiceOver label. Two positions in one symbol now have
+distinct action IDs. Invalid prices/terms cannot produce actions, nonfinite R
+is withheld, and a crossed stop no longer falsely claims a realized loss.
+
+Current `/stocks/v1/splits` API and execution-day semantics were checked against
+Massive docs and its official Python SDK. New York execution-day entries are
+already post-split, including premarket; only strictly later events apply.
+Old/undated/future/pre-entry prices or marks predating an executed split withhold
+comparisons. Shared equity freshness tolerance remains48h. Failure, partial or
+ambiguous results remain unverified, not a negative corporate-action observation.
+Ratio overflow, invalid dates, symbol mismatch and conflicting duplicates fail closed.
+
+Only open covered US symbols are fetched, serially; native task cancellation and
+generation guards reject obsolete sweeps. In-memory daily answers cover the
+earliest open entry through today and expire at NY rollover or24h. No new timer,
+dependency or owner-disk writes. Transient retry floor60s;401/402/403 gate24h.
+One complete page/100-event ceiling; pagination withholds rather than truncates.
+Full contract/budget and source links: COVERAGE_DESIGN's M5b section.
+
+Closing limitation is explicit: never prefill a feed price unless verified
+factor=1. A known non-unit split disables confirmation and preview in the old
+close editor, pending explicit broker-basis reconciliation. Unknown-basis manual
+closing remains available with an original-units warning and no quote prefill.
+This is NOT split-aware realized accounting, cash-in-lieu handling, or support
+for mergers/spinoffs/non-US corporate actions. Do not silently rewrite entries.
+
+Verification (serialized builds; counts independently read with xcresulttool):
+- Red:54 executed,52 passed/2 failed, exit65; invalid marks produced actions and
+  the stop text claimed realization. `/private/tmp/stocksage-m5b-red-20260906-2315.xcresult`.
+- First implementation build exit65 before tests: refresh-key Equatable inherited
+  TradeRecord's main-actor isolation but was declared nonisolated. Removed that
+  unnecessary isolation override; no changes to TradeRecord's conformance.
+  `/private/tmp/stocksage-m5b-focus-20260906-2323.xcresult`.
+- Focused:64/64, zero failures/skips, exit0.
+  `/private/tmp/stocksage-m5b-focus-20260906-2325.xcresult`.
+- Broad macOS:1714/1714, zero selected failures/skips, exit0.
+  `/private/tmp/stocksage-m5b-broad-macos-20260906-2325.xcresult`.
+- Broad iPhone17Pro(gate), iOS26.5:1712/1712, zero selected failures/skips,
+  exit0. `/private/tmp/stocksage-m5b-broad-ios-20260906-2326.xcresult`.
+  Same three explicit opt-in exclusions:CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests.
+
+Hand-derived checks cover4:1,1:10, shorts, unchanged no-split math, multiple events,
+NY same-day/premarket/UTC straddles, stale/missing marks, daily cache boundaries,
+malformed/paginated data, overflow, header authentication, closing prefill gates
+and byte-identical original record encoding. No network/key/Store.shared access
+in these tests. Both platform handles completed; only docs changed afterward.
+
+Live provider smoke and populated-screen/VoiceOver QA are still unverified; the
+credential guard has no confirmed new state, so it was not retried/bypassed.
+Owner app PID11897 and main worktree's unrelated files remain intact. No push,
+orders, model load or new workers. Good-spender OFF per owner23:12 request.
+Next M6: five endpoint contracts checked during the iPhone build; important
+field-name/withdrawal corrections are in PIPELINE_TAKEOVER. No M6 code yet.
+
 ## Pipeline 4 M5 source-provenance checkpoint — 2026-09-06 23:03 +03
 
 Prices now carry their actual parser/stream origin: Massive SIP, Massive daily

@@ -57,7 +57,14 @@ pushes, actual trades, service purchases, or local model training.
     implemented request budgets/rotating-gap freshness ceiling documented, no new calls.
   - [x] Red8 executed/2failed; focused75/75; final macOS1702/1702 and iPhone1700/1700,
     same3 explicit opt-in exclusions. Exact bundles/remaining limits in HANDOFF23:03.
-- [ ] M5b split-aware journal comparisons without rewriting the journal.
+- [x] M5b split-aware journal comparisons without rewriting the journal (code/tests; live/UI pending).
+  - [x] Verified current split API, New York execution-day semantics and complete-result guard.
+  - [x] Copy-only rebase across BOTH action callers and row P&L/R; factor/source in visible/a11y copy.
+  - [x] No-split retains math; unknown/stale/ambiguous basis withholds comparison and quote prefill.
+  - [x] Red54/2failed; focused64/64; canonical macOS1714/1714 and iPhone1712/1712,
+    same3 explicit opt-in exclusions. See HANDOFF23:29 for exact bundles and compile correction.
+  - [ ] Separate follow-up: actual broker-basis reconciliation for realized closing. Known
+    non-unit factors cannot use the old raw-basis close editor; no silent journal rewrite.
 - [ ] M6 ratings, guidance, 8-K, dividends and Form 4, with dated provenance and entitlement failures.
 - [ ] P5 tickets, crossing alerts, separate paper automation/store, broker integration as below.
 - [ ] Proactive native Chat using the approved V3 design and existing transport.
@@ -94,6 +101,27 @@ mock/read-only flows complete execution. Keep paper trades out of the real journ
 and calibration. No development test may place a real order.
 
 ## Verified protocol references (2026-09-06)
+
+M6 documentation preflight (while M5b gates ran; NOT implemented or live-tested):
+
+| Feed | Verified endpoint / contract correction |
+| --- | --- |
+| [Ratings](https://massive.com/docs/rest/partners/benzinga/analyst-ratings) | `/benzinga/v1/ratings`; `ticker`, `date`, `sort=date.desc`; original and adjusted price targets are separate pairs. Never mix their bases. |
+| [Guidance](https://massive.com/docs/rest/partners/benzinga/corporate-guidance) | `/benzinga/v1/guidance`; min/max EPS and revenue plus `previous_*`, fiscal period/year and method. `release_type` distinguishes official/preliminary, NOT withdrawal. |
+| [8-K](https://massive.com/docs/rest/stocks/filings/8-k-disclosures?assetClass=stocks&license=personal&name=stocks_advanced) | `/stocks/filings/8-K/vX/disclosures`; plural `tickers` filter/array, dated source URL and supporting text. One filing may contain multiple tagged disclosures. |
+| [Dividends](https://massive.com/docs/rest/stocks/corporate-actions/dividends) | `/stocks/v1/dividends`; use the current endpoint, ex-date filters, amount and explicit currency. Do not synthesize entitlement or cash already received. |
+| [Form4](https://massive.com/docs/rest/stocks/filings/form-4) | `/stocks/filings/vX/form-4`; plural `tickers`, `transaction_shares` and `transaction_price_per_share` (not the script's shorthand `shares`/`price`); separate transaction/filing dates and amendments. |
+
+The published guidance schema contains no structured withdrawal flag. Missing
+ranges cannot prove withdrawal; keep unknown/partial distinct, classify changes
+only from compatible numeric ranges, and do not parse free-text notes as facts.
+Provider target opinions do not become StockSage targets or an established edge.
+Ratings/guidance are owner-purchased; do not ask to buy them again. Preserve
+runtime entitlement rejection handling. Form4/8-K endpoints are early-access
+contracts; do not treat their current availability as permanent. Next: finish
+reading engine/cache/view callers, implement dated source records and precedence,
+test boundaries and persist per-feed checked/unavailable states without erasing
+the distinction between an empty answer and a failed request.
 
 - https://massive.com/docs/websocket/quickstart — auth, one Stocks connection, event batches.
 - https://massive.com/docs/websocket/stocks/trades — `ev:T`, `sym`, `p`, `t` milliseconds, `q`, `x`.

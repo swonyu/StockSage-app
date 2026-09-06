@@ -569,6 +569,10 @@ struct MarketsView: View {
             // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
             // entire on-disk history, and lastUpdated now moves twice a second while streaming.
             .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
+            .task(id: StockSageMassiveSplits.RefreshKey(trades: journal.open, refreshedAt: store.lastFullRefreshAt)) {
+                guard !CommandLine.arguments.contains("--qa") else { return }
+                await store.refreshJournalSplits(journal.open)
+            }
             // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). B4: subscribes
             // every TRACKED US name (board ∪ watchlist ∪ portfolio ∪ open journal trades) to
             // Massive's trade socket, not just the board, so an off-board US ticker streams too;
@@ -3247,7 +3251,8 @@ struct MarketsView: View {
                     Text("Open").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.secondary)
                     // Live "act now": OPEN trades that have crossed their stop or target need action
                     // while the owner is away — the only surface that acts on a position in real time.
-                    let urgentActs = StockSageJournal.openActions(journal.open, mark: { currentPrice($0) })
+                    let urgentActs = StockSageJournal.openActions(journal.open.compactMap { store.journalBasis($0).trade },
+                                                                  mark: { currentPrice($0) })
                         .filter(\.isUrgent)
                     ForEach(urgentActs) { act in
                         Text("⚠︎ \(act.symbol) — \(act.kind.rawValue): \(act.detail)")
@@ -3256,14 +3261,8 @@ struct MarketsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel("\(act.symbol) \(act.kind.rawValue). \(act.detail)")
                     }
-                    // Split-basis ceiling (2026-07-26, from the paper-book CLBK incident): these
-                    // marks compare the feed's (retro-ADJUSTED) price to the levels logged at
-                    // entry — after a split/corporate action they are different bases, and a
-                    // false "Stop hit" here is an instruction to dump a healthy position. The
-                    // paper marker auto-rebases off its own bar history; this live path has no
-                    // history in hand, so the honest floor is a caveat at the point of action.
                     if !urgentActs.isEmpty {
-                        Text("A crossed level is a trigger, not a fill — and after a stock split the feed's adjusted price no longer matches your logged levels. Verify the symbol before acting; re-log the position on its new basis after any corporate action.")
+                        Text("A crossed level is a trigger, not a fill. These comparisons use a complete dated split check; recorded entries and realized accounting remain unchanged. Verify your broker's position before acting.")
                             .font(.caption2).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -3607,17 +3606,22 @@ struct MarketsView: View {
 
     private func journalOpenRow(_ trade: TradeRecord) -> some View {
         let mark = currentPrice(trade.symbol)
-        let pnl = mark.map { trade.profit(at: $0) }
-        let r = mark.flatMap { trade.rMultiple(at: $0) }
+        let basis = store.journalBasis(trade)
+        let comparison = basis.trade
+        let pnl = mark.flatMap { px in comparison.map { $0.profit(at: px) } }.flatMap { $0.isFinite ? $0 : nil }
+        let r = mark.flatMap { px in comparison.flatMap { $0.rMultiple(at: px) } }.flatMap { $0.isFinite ? $0 : nil }
+        let needsCloseReconciliation = basis.needsCloseReconciliation
         // The FULL live verdict for this position (not just the urgent banner) so every open trade
         // shows its next step: hold / near-stop / in-profit / stop-or-target hit.
-        let act = StockSageJournal.openActions([trade], mark: { currentPrice($0) }).first
+        let act = StockSageJournal.openActions(comparison.map { [$0] } ?? [], mark: { currentPrice($0) }).first
         // Build the spoken label as a plain String OUTSIDE the ViewBuilder — the multi-clause `+`
         // concatenation was tipping journalOpenRow over the SwiftUI type-checker complexity budget.
         var a11y = "\(trade.side.rawValue) \(trade.symbol), entry \(adaptivePrice(trade.entry))"
-        a11y += pnl.map { ", unrealized \(StockSageCurrency.signedAmount($0, symbol: trade.symbol))" } ?? ", no live price"
+        a11y += pnl.map { ", unrealized \(StockSageCurrency.signedAmount($0, symbol: trade.symbol))" } ?? ", P&L unavailable"
         if let r { a11y += String(format: ", %+.2f R", r) }
         if let act { a11y += ", \(act.kind.rawValue): \(act.detail)" }
+        if let note = basis.note { a11y += ", \(note)" }
+        if needsCloseReconciliation { a11y += ", Closing requires position reconciliation" }
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: DS.Space.sm) {
                 Text(trade.symbol).font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white).frame(width: 64, alignment: .leading).lineLimit(1)
@@ -3634,16 +3638,21 @@ struct MarketsView: View {
                         .foregroundStyle(pnl >= 0 ? DS.Palette.successSoft : DS.Palette.dangerSoft)
                     Text(String(format: "%+.2fR", r)).font(.caption2).foregroundStyle(.secondary).frame(width: 48, alignment: .trailing)
                 } else {
-                    Text("no live px").font(.caption2).foregroundStyle(.secondary)
+                    Text(comparison == nil ? "basis unverified" : "no live px").font(.caption2).foregroundStyle(.secondary)
                 }
                 Button {
-                    closeExitText = mark.map { adaptivePrice($0) } ?? ""
+                    // Never prefill post-split feed units into the original-basis close editor.
+                    closeExitText = basis.allowsMarkPrefill ? mark.map { adaptivePrice($0) } ?? "" : ""
                     closePlannedExitText = ""; closeExitFillText = ""
                     withAnimation(.easeOut(duration: 0.12)) { closingTradeID = (closingTradeID == trade.id) ? nil : trade.id }
                 } label: {
                     Text(closingTradeID == trade.id ? "Cancel" : "Close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
                 .accessibilityLabel(closingTradeID == trade.id ? "Cancel closing \(trade.symbol)" : "Close \(trade.symbol) position")
+            }
+            if let note = basis.note {
+                Text(note).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let note = trade.note, !note.isEmpty {
                 Text(note).font(.system(size: mvFont9)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -3688,6 +3697,13 @@ struct MarketsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if closingTradeID == trade.id {
+                if needsCloseReconciliation {
+                    Text("This split-adjusted comparison does not update realized accounting. Closing is withheld until the position is reconciled in its recorded units; the journal has not been changed.")
+                        .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                } else if comparison == nil {
+                    Text("Split basis is unverified. Manually entered close prices must use the original logged share units; verify them with your broker. No feed price is prefilled.")
+                        .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: DS.Space.sm) {
                     journalField("Exit px", text: $closeExitText, width: 80, numeric: true)
                     journalField("Plan px (opt)", text: $closePlannedExitText, width: 100)
@@ -3695,7 +3711,7 @@ struct MarketsView: View {
                     journalField("Fill px (opt)", text: $closeExitFillText, width: 100)
                         .help("Your actual exit fill price. Measures your real execution cost vs. the plan — never changes P&L.")
                     Button {
-                        guard let exit = StockSageInput.positiveAmount(closeExitText) else { return }
+                        guard !needsCloseReconciliation, let exit = StockSageInput.positiveAmount(closeExitText) else { return }
                         journal.close(trade.id, exitPrice: exit,
                                      plannedExit: StockSageInput.positiveAmount(closePlannedExitText),
                                      exitFill: StockSageInput.positiveAmount(closeExitFillText))
@@ -3704,7 +3720,7 @@ struct MarketsView: View {
                     } label: {
                         Text("Confirm close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(Self.badgeInk)
                             .padding(.horizontal, 10).padding(.vertical, 5).background(DS.Palette.dangerSoft, in: Capsule())
-                    }.buttonStyle(LuxPressStyle()).disabled(!closeIsValid)
+                    }.buttonStyle(LuxPressStyle()).disabled(!closeIsValid || needsCloseReconciliation)
                     Spacer(minLength: 0)
                 }
                 // First-real-trade review cycle-1 (2026-07-16): closing was blind — the owner typed
@@ -3712,7 +3728,7 @@ struct MarketsView: View {
                 // exit: currency-correct P&L (signedAmount — a .SR exit reads SAR, not "$") + the
                 // R-multiple, colored by sign. Pure display over the tested trade.profit/rMultiple;
                 // nil (no note) until the exit parses, so it never shows a fabricated number.
-                if let exit = StockSageInput.positiveAmount(closeExitText) {
+                if !needsCloseReconciliation, let exit = StockSageInput.positiveAmount(closeExitText) {
                     let pnl = trade.profit(at: exit)
                     let rStr = trade.rMultiple(at: exit).map { String(format: " · %+.2fR", $0) } ?? ""
                     Text("Closing here: \(StockSageCurrency.signedAmount(pnl, symbol: trade.symbol))\(rStr)")
