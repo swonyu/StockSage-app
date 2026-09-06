@@ -159,3 +159,15 @@ an explicit "none known as of <date>" (never invented); (b) live quotes whenever
 the app's own fail-closed definition of live. The cost side of the budget/cadence owner-gates is WAIVED;
 provider rate limits + the honesty floor still bind. Work branch: `wt/coverage` (worktree
 `~/StockSage-wt/coverage`, cut from this branch). Design brief + worker tasks follow in this file.
+
+## Owner next-actions — dispositions (2026-09-06 14:55 +03, wt/ui session)
+1. DONE — `main` fast-forwarded to 76f14b5 (review-followups-2026-09-06 at that time) and pushed:
+   origin/main e6b645f → 76f14b5 (66 commits). Later coverage work lands via the pipeline-2 tab's integration.
+2. DONE — walked the Mac app: Ideas (896 priced, BPYPM top) → Catalysts Cards (September tendency / 63-day-high
+   items) → Calendar ("No dated catalysts yet" — honest: Yahoo 429-throttled this Mac all day) → Explain with
+   Backend=Auto (routed to Ollama qwen3.8: fenced paragraph, labelled "local server model qwen3.8") → Explain with
+   Backend=On-device only (Apple Intelligence: fenced paragraph, labelled "on-device"). Both stayed inside the facts.
+3. DECIDED — MLX server does NOT become the default (1–2 s/tap is not worth a hand-run server + launch agent;
+   Ollama already runs as a launch agent and Auto falls back on-device). Files: the Ollama tag `qwen3.8:27b-mlx`
+   (18 GB, A/B leftover, re-pullable) is deletable on owner go; the Hugging Face cache (15 GB) is IN USE by a
+   running `mlx_lm.lora` training job (started 14:35 +03) — do not delete while it runs; revisit after.
