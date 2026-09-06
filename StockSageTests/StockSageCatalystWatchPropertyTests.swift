@@ -275,6 +275,11 @@ struct StockSageCatalystWatchPropertyTests {
                     } else {
                         #expect(item.source == "—" && item.date == nil)
                     }
+                case .projectedEarnings:
+                    // This sweep's `Case`/`inputs()` doesn't drive the W1 projected-date axis
+                    // (`catalystProjectedDate`/`catalystProjectionBasis` stay nil for every case
+                    // here) — StockSageCatalystWatchTests pins `.projectedEarnings` copy verbatim.
+                    Issue.record("unreachable: this sweep never sets catalystProjectedDate")
                 }
             }
         }

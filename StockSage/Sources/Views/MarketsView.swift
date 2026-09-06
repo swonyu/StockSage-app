@@ -9365,7 +9365,11 @@ struct MarketsView: View {
             // rest of the OLD symbol's fetches run to completion behind the new sheet.
             await store.refreshPrecheck(symbol: idea.symbol)
             guard !Task.isCancelled else { return }
-            await store.refreshEarnings(symbol: idea.symbol)
+            // W1 (2026-09-06): the full EODHD→Yahoo→projection chain, not the old Yahoo-only
+            // `refreshEarnings` — opening a detail sheet should get the SAME richer answer
+            // (confirmed flag / projected date / notApplicable) the tracked sweep now produces,
+            // not a reverted single-source one.
+            await store.refreshCatalyst(symbol: idea.symbol)
             guard !Task.isCancelled else { return }
             await store.refreshSeasonality(symbol: idea.symbol)
             guard !Task.isCancelled else { return }

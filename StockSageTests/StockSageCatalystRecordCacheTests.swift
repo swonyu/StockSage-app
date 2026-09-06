@@ -82,4 +82,64 @@ struct StockSageCatalystRecordCacheTests {
         let url = dir.appendingPathComponent("does-not-exist.json")
         #expect(StockSageCatalystRecordCache.load(from: url) == nil)
     }
+
+    // MARK: - W1 (2026-09-06): the new fields, defaulted via a hand-written `init(from:)`
+    //
+    // Verified empirically (see StockSageCatalystRecordCache.swift's doc comment) that Swift's
+    // SYNTHESIZED Decodable does NOT fall back to a property's default value for a missing key —
+    // it throws. These tests pin the hand-written decode init that actually delivers that
+    // contract, both directions: a pipeline-1 record still decodes, and the full W1 shape
+    // round-trips byte-for-byte through disk.
+
+    @Test func pipelineOneRecordMissingEveryW1FieldStillDecodesWithDefaults() throws {
+        // Exactly pipeline-1's shape: symbol/earningsDate/checkedAt/source only — NONE of
+        // status/confirmed/dateRangeEnd/sourcesAsked/projectionBasis are present.
+        let json = #"{"symbol":"AAPL","earningsDate":null,"checkedAt":0,"source":"yahoo"}"#
+        let record = try JSONDecoder().decode(StockSageCatalystRecordCache.Record.self, from: Data(json.utf8))
+        #expect(record.symbol == "AAPL")
+        #expect(record.earningsDate == nil)
+        #expect(record.source == "yahoo")
+        #expect(record.status == .unchecked)      // defaulted
+        #expect(record.confirmed == nil)           // defaulted
+        #expect(record.dateRangeEnd == nil)        // defaulted
+        #expect(record.sourcesAsked == [])         // defaulted
+        #expect(record.projectionBasis == nil)     // defaulted
+    }
+
+    @Test func fullW1ShapeRoundTripsThroughDiskByteForByte() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("catalyst_records_v1.json")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let end = t.addingTimeInterval(2 * 86_400)
+
+        let projected = StockSageCatalystRecordCache.Record(
+            symbol: "TSLA", earningsDate: t.addingTimeInterval(90 * 86_400), checkedAt: t, source: "projection",
+            status: .projected, confirmed: nil, dateRangeEnd: t.addingTimeInterval(97 * 86_400),
+            sourcesAsked: ["eodhd calendar", "yahoo calendarEvents", "earnings history"],
+            projectionBasis: "median gap of last 3 reports = 91 d from 2026-07-30")
+        let dateKnown = StockSageCatalystRecordCache.Record(
+            symbol: "AAPL", earningsDate: t.addingTimeInterval(10 * 86_400), checkedAt: t, source: "yahoo calendarEvents",
+            status: .dateKnown, confirmed: false, dateRangeEnd: end, sourcesAsked: ["eodhd calendar", "yahoo calendarEvents"])
+        let notApplicable = StockSageCatalystRecordCache.Record(
+            symbol: "^TASI.SR", earningsDate: nil, checkedAt: t, source: "—", status: .notApplicable)
+
+        let cache = StockSageCatalystRecordCache(entries: [projected, dateKnown, notApplicable], savedAt: t)
+        cache.save(to: url)
+        let loaded = StockSageCatalystRecordCache.load(from: url)
+        #expect(loaded == cache)
+
+        let back = loaded?.entries.first { $0.symbol == "TSLA" }
+        #expect(back?.status == .projected)
+        #expect(back?.dateRangeEnd == t.addingTimeInterval(97 * 86_400))
+        #expect(back?.sourcesAsked == ["eodhd calendar", "yahoo calendarEvents", "earnings history"])
+        #expect(back?.projectionBasis == "median gap of last 3 reports = 91 d from 2026-07-30")
+    }
+
+    @Test func statusDefaultsToUncheckedWhenNotSpecified() {
+        let r = StockSageCatalystRecordCache.Record(symbol: "X", earningsDate: nil,
+                                                     checkedAt: Date(timeIntervalSince1970: 0), source: "—")
+        #expect(r.status == .unchecked)
+        #expect(r.sourcesAsked == [])
+    }
 }

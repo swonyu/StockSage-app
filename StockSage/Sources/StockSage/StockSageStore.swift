@@ -1803,6 +1803,16 @@ final class StockSageStore: ObservableObject {
     /// forget every checkedAt and re-ask everything immediately.
     @Published private(set) var earningsCheckedAt: [String: Date] = [:]
 
+    /// W1 (2026-09-06): the FULL per-symbol chain result — status (dateKnown/projected/
+    /// notApplicable/unchecked), the provider's confirmed flag, a date-range end, every source
+    /// asked, and (for a projection) its basis. Superset of `earningsDates`/`earningsCheckedAt`
+    /// above, which stay a derived, backward-compatible view over ONLY the `.dateKnown` subset —
+    /// the existing earnings-proximity/rank-penalty machinery is built and tested against a REAL
+    /// known date, so a `.projected` or `.notApplicable` entry must never reach it. Populated by
+    /// `refreshCatalyst(symbol:)`, persisted/restored alongside the legacy dicts (see
+    /// `loadCatalystRecords`/`saveCatalystRecords` below).
+    @Published private(set) var catalystChain: [String: StockSageCatalystRecordCache.Record] = [:]
+
     /// How long a "checked, nothing found" record stays honest before `refreshEarnings` re-asks.
     /// A dated negative observation is only as good as its date — refreshed at most once a day so
     /// it can't quietly go stale across a session (or a cache) that outlives one day.
@@ -1860,42 +1870,86 @@ final class StockSageStore: ObservableObject {
         return (now, usable)
     }
 
-    func refreshEarnings(symbol: String) async {
+    /// W1 (2026-09-06) full chain for ONE tracked symbol: EODHD calendar (if the plan tier
+    /// allows) → Yahoo `calendarEvents` (reading the range + estimate flag) → history-based
+    /// projection (EODHD fundamentals `Earnings.History` for a US name, Yahoo `earningsHistory`
+    /// for a Tadawul one) → `.unchecked`. Non-equities (index/forex/crypto, `^TASI.SR` included
+    /// via its `^` prefix) never reach the chain at all — `.notApplicable` is a pure
+    /// classification, assigned once and left alone (no network, no TTL: it can't go stale).
+    /// TTL-gated 24h off `catalystChain[symbol]?.checkedAt`, same constant and same "never
+    /// checked ⇒ due now" rule as the legacy `shouldRefreshEarnings` this replaces in the sweep.
+    func refreshCatalyst(symbol: String) async {
         let up = symbol.uppercased()
-        guard let outcome = await Self.earningsRefreshOutcome(
-            checkedAt: earningsCheckedAt[up],
-            fetch: { await StockSageEarnings.fetchNextEarningsOutcome(for: symbol) }
-        ) else { return }
-        earningsCheckedAt[up] = outcome.checkedAt
-        // Unconditional (major fix 2026-09-06): a PRIOR date must be CLEARED when the latest
-        // check finds nothing, not left standing under a freshly-stamped checkedAt — that used
-        // to fabricate "Yahoo confirmed this catalyst just now" when Yahoo actually returned
-        // nothing (e.g. the company moved its report date and the old one dropped off).
-        // `nil` on a Dictionary subscript removes the key, falling back to the dated "none known"
-        // record, which is what was actually observed.
-        earningsDates[up] = outcome.earningsDate
+        guard StockSageAllocation.assetClass(up) == "Equity" else {
+            if catalystChain[up]?.status != .notApplicable {
+                catalystChain[up] = .init(symbol: up, earningsDate: nil, checkedAt: Date(),
+                                          source: "—", status: .notApplicable)
+            }
+            return
+        }
+        guard Self.shouldRefreshEarnings(checkedAt: catalystChain[up]?.checkedAt) else { return }
+        guard ToolPolicy.isExternalAllowed else { return }   // never stamp on a request never made
+
+        let now = Date()
+        let isUS = StockSageEODHD.covers(up)
+        let outcome = await StockSageCatalystChain.resolve(
+            now: now,
+            eodhdCalendar: {
+                guard let rows = await StockSageEODHDCalendar.fetchCalendar(up) else { return nil }
+                return StockSageEODHDCalendar.nextRow(rows, now: now)
+            },
+            yahooCalendar: {
+                guard case .answered(let info) = await StockSageEarnings.fetchEarningsCalendarOutcome(for: up)
+                else { return nil }
+                return info
+            },
+            history: {
+                isUS ? await StockSageEODHDCalendar.fetchEarningsHistory(up)
+                     : await StockSageEarnings.fetchEarningsHistory(for: up)
+                // TODO(SAHMK): Tadawul has no EODHD coverage and Yahoo's `earningsHistory` module
+                // is unverified live for `.SR` (429-rate-limited today — see
+                // research_tadawul_realtime_2026-09-06.md). If it comes back empty, this symbol
+                // lands on `.unchecked` with `sourcesAsked` recording the attempt — the next real
+                // fix is a SAHMK Pro key (owner-provisioned), not a code change here.
+            }
+        )
+        catalystChain[up] = .init(symbol: up, earningsDate: outcome.earningsDate, checkedAt: now,
+                                  source: outcome.source, status: outcome.status,
+                                  confirmed: outcome.confirmed, dateRangeEnd: outcome.dateRangeEnd,
+                                  sourcesAsked: outcome.sourcesAsked, projectionBasis: outcome.projectionBasis)
+        // Keep the legacy dicts in sync for the existing earnings-proximity/rank-penalty
+        // machinery — ONLY a genuinely KNOWN date feeds them; a `.projected` guess must never be
+        // mistaken for an announced report (that machinery demotes rank on an announced one).
+        earningsCheckedAt[up] = now
+        earningsDates[up] = (outcome.status == .dateKnown) ? outcome.earningsDate : nil
     }
 
     /// Feed earnings for EVERY tracked symbol — board ∪ watchlist ∪ portfolio ∪ open journal
     /// trades (A4, 2026-09-06; replaces the old top-15-ideas-only sweep) — so the "every stock to
     /// have a catalyst on file" owner directive (2026-09-06: cost gates waived, provider rate
     /// limits still bind) covers the FULL tracked set, not just the top-ranked board names.
-    /// TTL-gated per symbol via `refreshEarnings`'s own guard, so a re-sweep after the board is
-    /// already fully checked is cheap — only never-checked or >24h-stale names actually hit the
-    /// network. 4-parallel chunking unchanged from the old top-15 sweep; each chunk boundary now
-    /// checks `Task.isCancelled` so a superseded scan's sweep (e.g. `refreshIdeas` firing again
-    /// before this one finished) doesn't keep grinding through hundreds of names after the caller
-    /// moved on — whatever chunks DID complete are saved via the `defer` either way. Symbols this
-    /// sweep hasn't reached yet are simply absent from `earningsCheckedAt` — UNCHECKED, never
-    /// fabricated as "none known" (honesty floor).
+    /// TTL-gated per symbol via `refreshCatalyst`'s own guard (W1, 2026-09-06 — was
+    /// `refreshEarnings`, now superseded by the EODHD→Yahoo→projection chain), so a re-sweep
+    /// after the board is already fully checked is cheap — only never-checked or >24h-stale names
+    /// actually hit the network. 4-parallel chunking unchanged from the old top-15 sweep; each
+    /// chunk boundary checks `Task.isCancelled` so a superseded scan's sweep (e.g. `refreshIdeas`
+    /// firing again before this one finished) doesn't keep grinding through hundreds of names
+    /// after the caller moved on — whatever chunks DID complete are saved via the `defer` either
+    /// way. Symbols this sweep hasn't reached yet are simply absent from `earningsCheckedAt` —
+    /// UNCHECKED, never fabricated as "none known" (honesty floor). One EODHD calendar
+    /// availability probe per sweep, skipped entirely while the 24h unavailable window is open
+    /// (never spends a request re-confirming a rejection we already know about).
     func refreshEarningsForTracked() async {
         defer { saveCatalystRecords() }
+        if StockSageEODHDCalendar.isAvailable() {
+            await StockSageEODHDCalendar.probeCalendarAvailability()
+        }
         let all = trackedSymbolsUnion
         let chunks = stride(from: 0, to: all.count, by: 4).map { Array(all[$0 ..< min($0 + 4, all.count)]) }
         for chunk in chunks {
             if Task.isCancelled { return }
             await withTaskGroup(of: Void.self) { group in
-                for symbol in chunk { group.addTask { await self.refreshEarnings(symbol: symbol) } }
+                for symbol in chunk { group.addTask { await self.refreshCatalyst(symbol: symbol) } }
                 for await _ in group { }
             }
         }
@@ -1941,13 +1995,23 @@ final class StockSageStore: ObservableObject {
         let restored = Self.applyCatalystRecords(cache.entries)
         earningsDates = restored.dates
         earningsCheckedAt = restored.checkedAt
+        // W1 (2026-09-06): restore the FULL chain state too (status/confirmed/dateRangeEnd/
+        // sourcesAsked/projectionBasis) so a relaunch keeps `.notApplicable`/`.projected`
+        // classifications, not just the legacy known-date subset above.
+        catalystChain = Dictionary(cache.entries.map { ($0.symbol, $0) }, uniquingKeysWith: { _, last in last })
     }
 
-    /// Persist the current earnings state to disk — called at the end of every
-    /// `refreshEarningsForTracked` sweep (its `defer`), never mid-sweep.
+    /// Persist the current catalyst state to disk — called at the end of every
+    /// `refreshEarningsForTracked` sweep (its `defer`), never mid-sweep. `catalystChain` (W1) is
+    /// the authoritative superset once `refreshCatalyst` has run; a symbol somehow present only in
+    /// the legacy dicts (e.g. the AAPL sample-data seed, which writes `earningsDates` directly and
+    /// never touches `catalystChain`) is still covered via the old pure conversion, merged in
+    /// without overwriting a genuine chain record for the same symbol.
     private func saveCatalystRecords() {
-        let records = Self.catalystRecords(earningsDates: earningsDates, earningsCheckedAt: earningsCheckedAt)
-        StockSageCatalystRecordCache(entries: records, savedAt: Date()).save()
+        let legacy = Self.catalystRecords(earningsDates: earningsDates, earningsCheckedAt: earningsCheckedAt)
+        var bySymbol = Dictionary(legacy.map { ($0.symbol, $0) }, uniquingKeysWith: { _, last in last })
+        for (symbol, record) in catalystChain { bySymbol[symbol] = record }
+        StockSageCatalystRecordCache(entries: Array(bySymbol.values), savedAt: Date()).save()
     }
 
     // Monthly seasonality — calendar-month return tendency over a long history.
