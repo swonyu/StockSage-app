@@ -16,13 +16,17 @@ struct StockSagePerfProbeTests {
 
     /// ~2,400 synthetic ideas: conviction/stop/target/class (via symbol pattern) vary
     /// across the set via a deterministic loop (no RNG — reproducible byte-for-byte).
-    /// `spark` defaults to `[]` (every idea gets the SAME spark array, matching the shape
-    /// SageFix.idea's own default takes) — pass a non-empty one ONLY for probes that feed
-    /// `StockSageCapitalAllocator.allocate` (see review 2026-07-28 P2-fixture): with the
-    /// default empty spark, `dailyReturns([])` is `[]` and `correlationAdjustedWeights`'
-    /// `minLen >= 2` guard short-circuits, silently skipping the correlation stage — exactly
-    /// the gap that made the whole-render probe undercount before this fix.
-    private func syntheticIdeas(count: Int = 2_400, spark: [Double] = []) -> [StockSageIdea] {
+    /// `spark` is a PER-IDEA generator (keyed off the idea's own loop index `i`), defaulting
+    /// to `{ _ in [] }` (matching the shape SageFix.idea's own default takes) — pass a
+    /// non-empty generator ONLY for probes that feed `StockSageCapitalAllocator.allocate`
+    /// (see review 2026-07-28 P2-fixture): with the default empty spark, `dailyReturns([])`
+    /// is `[]` and `correlationAdjustedWeights`'s `minLen >= 2` guard short-circuits, silently
+    /// skipping the correlation stage — exactly the gap that made the whole-render probe
+    /// undercount before that fix. Fixup 2026-09-06 (adversarial review, P2-fixture blocker):
+    /// the generator MUST vary per idea, not return one shared array — see
+    /// `allocatorProbeSpark`'s doc below for why a single constant spark degenerates the
+    /// clique search into its own worst case.
+    private func syntheticIdeas(count: Int = 2_400, spark: (Int) -> [Double] = { _ in [] }) -> [StockSageIdea] {
         let actions: [TradeAdvice.Action] = [.strongBuy, .buy, .hold, .reduce, .sell]
         let regimes: [TradeAdvice.Regime] = [.bullTrend, .bearTrend, .range]
         // Symbol suffix rotates through equity/Saudi/crypto-shaped tickers so the set
@@ -37,14 +41,70 @@ struct StockSagePerfProbeTests {
             let suffix = suffixes[i % suffixes.count]
             return SageFix.idea("SYM\(i)\(suffix)", conviction: conviction, action: action,
                                 regime: regime, rr: 1.5 + Double(i % 5) * 0.5,
-                                price: price, riskDistance: riskDistance, spark: spark)
+                                price: price, riskDistance: riskDistance, spark: spark(i))
         }
     }
 
-    /// Non-degenerate 32-bar spark (review 2026-07-28 P2-fixture "Verify" snippet): real
-    /// enough that `dailyReturns` and the allocator's correlation stage actually run,
-    /// closed-form so it stays hand-derivable / RNG-free like every other SageFix series.
-    private let allocatorProbeSpark = (0..<32).map { 100 + Double($0 % 7) }
+    /// Non-degenerate, PER-IDEA-VARYING 32-bar spark generator (review 2026-07-28 P2-fixture
+    /// "Verify" snippet; fixup 2026-09-06, adversarial-review blocker): real enough that
+    /// `dailyReturns` and the allocator's correlation stage actually run, closed-form so it
+    /// stays hand-derivable / RNG-free like every other SageFix series.
+    ///
+    /// MUST vary per idea. The original P2-fixture fix used ONE shared array
+    /// (`(0..<32).map { 100 + Double($0 % 7) }`) for all 2,400 ideas — every idea then has an
+    /// IDENTICAL return series, so every pairwise correlation is EXACTLY 1.0 and
+    /// `StockSageCorrelationCluster.largest`'s greedy clique search hits its own O(n) growth ×
+    /// O(n) candidate-scan × O(n) seed worst case. An adversarial review measured a standalone
+    /// driver reproducing this exact fixture at 231.54s CPU for a SINGLE `allocate(...)` call
+    /// (out of the 497 ideas here that actually clear the buy-family/EV/cost-gate filter —
+    /// verified below by reading `CapitalAllocation.fundableCandidateCount` back from a
+    /// standalone driver linking the real engine sources), against this test's own
+    /// `< 20_000` ms bound for a loop of THREE calls.
+    ///
+    /// A single phase-shifted modulus is NOT enough headroom: `(0..<32).map { 100 + Double(($0
+    /// + i) % 31) }` (mod 31 — the largest modulus that still guarantees at least one sawtooth
+    /// wrap inside a 32-sample window, verified via the same Python port to keep max cross-phase
+    /// correlation ≈ −0.03, safely below the 0.70 clique threshold) shrinks the worst clique from
+    /// all 497 down to 17 — but a standalone Swift driver (same engine sources, `-D DEBUG`, no
+    /// `-O`, matching how Swift Testing actually runs this suite) measured the real ×3
+    /// `allocate(...)` loop at 19.15s and a full ×3 `oneWholeRenderPass` loop (this test's ACTUAL
+    /// per-iteration body) at 14.95s on separate runs — both far too close to the 20s bound to
+    /// trust, and inconsistent with each other by ~4s purely from machine-load noise. Not safe.
+    ///
+    /// The fix instead concatenates TWO independently-phased, independently-moduloed sawtooths
+    /// across the 32-bar window (first 16 bars: mod 13, phase shifted by `i`; last 16 bars: mod
+    /// 17, phase shifted by `7·i`) — two ideas produce an identical spark only when BOTH phases
+    /// coincide (period 13·17=221 in `i`, vs mod 31's period-31), and even a match on only ONE
+    /// half is verified (Python port of the exact `largest` algorithm, run directly on the real
+    /// n=497 fixture) to leave every cross-idea correlation below 0.70: worst clique shrinks to
+    /// 7 members, and the exact candidate-scan count drops to 1,590,088 versus mod 31's
+    /// 32,988,432 (≈20.7× cheaper again) and the original bug's several-hundred-idea full clique
+    /// (~10¹⁰–10¹¹ scans, per the review). A standalone `-D DEBUG` driver running the real
+    /// `oneWholeRenderPass` ×3 loop against this exact spark measured (n=3 runs, under
+    /// concurrent build load on the same machine — a noisy, not idle, upper bound) 4.90s–6.00s
+    /// total (≈1.63s–2.00s per pass) — 3.3×–4.1× headroom under the 20s bound, not the
+    /// hair's-width margin mod 31 left (19.15s and 14.95s on two runs of the SAME fixture,
+    /// i.e. already within ~1s–5s of the limit with zero room for a slower CI box).
+    private func allocatorProbeSpark(for i: Int) -> [Double] {
+        let firstHalf = (0..<16).map { 100 + Double(($0 + i) % 13) }
+        let secondHalf = (0..<16).map { 100 + Double(($0 + 7 * i) % 17) }
+        return firstHalf + secondHalf
+    }
+
+    /// Fixup 2026-09-06 (adversarial review, P2-fixture blocker): a fast tripwire for the
+    /// anti-degenerate property `allocatorProbeSpark`'s doc above depends on — a REGRESSION back
+    /// to one shared array for every idea would only show up as `wholeRenderEquivalentAt2400Scale*`
+    /// hanging for minutes before failing their `< 20_000` ms bound. This pins "varies per idea"
+    /// directly, so the SAME regression fails in milliseconds instead of minutes.
+    @Test func allocatorProbeSparkVariesPerIdea() {
+        let s0 = allocatorProbeSpark(for: 0)
+        let s1 = allocatorProbeSpark(for: 1)
+        let s7 = allocatorProbeSpark(for: 7)
+        #expect(s0.count == 32)
+        #expect(s0 != s1, "spark must vary by idea index — a shared constant array reintroduces the correlation-clique blowup this fixup exists to prevent")
+        #expect(s0 != s7)
+        #expect(s1 != s7)
+    }
 
     @Test func rankByVelocityAt2400ScaleIsWithinSanityBound() {
         let ideas = syntheticIdeas()
