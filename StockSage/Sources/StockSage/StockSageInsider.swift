@@ -53,6 +53,10 @@ enum StockSageInsider {
         let shares: Double
         /// nil when the filing omits a price (common for grants and some exercises).
         let pricePerShare: Double?
+        /// `<transactionDate><value>YYYY-MM-DD</value></transactionDate>` — nil when the filing
+        /// omits it. Added so a discretionary transaction can be offered to the catalyst narrator
+        /// as a DATED citable source; never fabricated when absent (honesty floor).
+        let date: Date?
         nonisolated var dollarValue: Double? { pricePerShare.map { $0 * shares } }
     }
 
@@ -108,6 +112,9 @@ enum StockSageInsider {
         let ad = all("<transactionAcquiredDisposedCode>\\s*<value>(.*?)</value>")
         let shares = all("<transactionShares>\\s*<value>(.*?)</value>")
         let prices = all("<transactionPricePerShare>\\s*<value>(.*?)</value>")
+        let dates = all("<transactionDate>\\s*<value>(.*?)</value>")
+        let day = ISO8601DateFormatter()
+        day.formatOptions = [.withFullDate]
 
         var discretionary: [Transaction] = []
         var excluded = 0
@@ -115,13 +122,15 @@ enum StockSageInsider {
             let code = Code(rawCode: rawCode)
             guard code.isDiscretionary else { excluded += 1; continue }
             guard i < shares.count, let qty = Double(shares[i]), qty > 0 else { continue }
-            // Price arrays can be SHORTER than the code array (priceless rows are omitted), so a
-            // positional read past the end must yield nil rather than another row's price.
+            // Price/date arrays can be SHORTER than the code array (rows that omit them are
+            // absent, not misaligned), so a positional read past the end must yield nil rather
+            // than another row's value.
             let price = i < prices.count ? Double(prices[i]) : nil
+            let date = i < dates.count ? day.date(from: dates[i]) : nil
             let acquired = i < ad.count ? ad[i].uppercased() == "A" : (code == .openMarketPurchase)
             discretionary.append(Transaction(symbol: symbol.uppercased(), insiderName: name,
                                              officerTitle: title, code: code, acquired: acquired,
-                                             shares: qty, pricePerShare: price))
+                                             shares: qty, pricePerShare: price, date: date))
         }
         return Summary(symbol: symbol.uppercased(), discretionary: discretionary,
                        nonDiscretionaryCount: excluded)
@@ -165,9 +174,14 @@ enum StockSageInsider {
         return map[key]
     }
 
-    /// Recent open-market insider activity for one US symbol. nil when the symbol is not SEC-
-    /// listed or the filings cannot be read — never an empty summary standing in for "unknown".
+    /// Recent open-market insider activity for one US symbol. nil when external access is off
+    /// (gated by `ToolPolicy.isExternalAllowed` — fix pass 2026-09-06: this feed hit the network
+    /// unconditionally before, the only one of the app's SEC feeds that did), the symbol is not
+    /// SEC-listed, or the filings cannot be read — never an empty summary standing in for
+    /// "unknown". The gate is the FIRST line, before any `await`/network call — a pure,
+    /// synchronous seam a test can exercise without ever reaching the network.
     nonisolated static func recentActivity(for symbol: String) async -> Summary? {
+        guard ToolPolicy.isExternalAllowed else { return nil }
         guard let cik = await cik(for: symbol),
               let subsURL = URL(string: "https://data.sec.gov/submissions/CIK\(cik).json"),
               let data = await get(subsURL),

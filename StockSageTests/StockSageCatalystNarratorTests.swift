@@ -134,6 +134,99 @@ struct StockSageCatalystNarratorTests {
         }
     }
 
+    // MARK: facts(for:sources:) — the number-fence extension (W4)
+
+    /// Hand-derived: a source dated 2026-09-01 (UTC) named "EODHD news" citing a title with a
+    /// number in it. `facts(for:sources:)` must append EXACTLY one numbered line in the pinned
+    /// "[n] YYYY-MM-DD <source>: <title> — <snippet> (<link>)" format, and that line's own numeric
+    /// tokens ("1", "2026", "09", "01" from the date plus any in the title) become part of the
+    /// fence — so a paragraph that reuses ONLY those numbers passes, and one that adds a number
+    /// found nowhere in the facts is still caught.
+    private func oneSource(date: Date = Date(timeIntervalSince1970: 1_788_220_800),   // 2026-09-01T00:00:00Z
+                           title: String = "Guidance raised") -> N.CitedSource {
+        N.CitedSource(date: date, source: "EODHD news", title: title,
+                      snippet: "Company raised guidance.", link: URL(string: "https://eodhd.com/x"))
+    }
+
+    @Test("facts(for:sources:) appends one pinned numbered line per source, in order")
+    func factsAppendsNumberedSourceLines() {
+        let facts = N.facts(for: brief(symbol: "SRC"), sources: [oneSource(), oneSource(title: "Second item")])
+        #expect(facts.contains("[1] 2026-09-01 EODHD news: Guidance raised — Company raised guidance. (https://eodhd.com/x)"))
+        #expect(facts.contains("[2] 2026-09-01 EODHD news: Second item — Company raised guidance. (https://eodhd.com/x)"))
+    }
+
+    @Test("facts(for:sources:) with no sources is byte-identical to facts(for:)")
+    func factsWithEmptySourcesUnchanged() {
+        #expect(N.facts(for: brief(symbol: "NOSRC")) == N.facts(for: brief(symbol: "NOSRC"), sources: []))
+    }
+
+    @Test("a number reused from a numbered source line passes the fence; a foreign number is withheld")
+    func fenceExtensionAcceptsSourceNumbersRejectsForeign() {
+        let facts = N.facts(for: brief(symbol: "FENCE"), sources: [oneSource()])
+        // "2026" and "09" and "01" all appear in the source's own date line "[1] 2026-09-01 ...".
+        #expect(!N.introducesForeignNumbers("As of 2026 the report cites source [1].", facts: facts))
+        // "2027" appears nowhere in the brief's facts OR the source line — must be caught.
+        #expect(N.introducesForeignNumbers("The company will report again in 2027.", facts: facts))
+    }
+
+    @Test("sourceLine renders 'no link' when a source carries none")
+    func sourceLineNoLink() {
+        let s = N.CitedSource(date: Date(timeIntervalSince1970: 0), source: "SEC Form 4",
+                              title: "Doe John bought 100 shares", snippet: "", link: nil)
+        let line = N.sourceLine(number: 3, source: s)
+        #expect(line == "[3] 1970-01-01 SEC Form 4: Doe John bought 100 shares (no link)")
+    }
+
+    // MARK: citationsValid — the citation parser (W4)
+
+    @Test("a citation in range is valid")
+    func citationsValidInRange() {
+        #expect(N.citationsValid("See [1] and [2] for detail.", sourceCount: 2))
+    }
+
+    @Test("a citation exactly at n == sourceCount is valid; n == sourceCount + 1 is not (straddle)")
+    func citationsValidBoundaryStraddle() {
+        #expect(N.citationsValid("Per [3].", sourceCount: 3))          // n == count: valid
+        #expect(!N.citationsValid("Per [4].", sourceCount: 3))         // n == count + 1: invalid
+    }
+
+    @Test("a malformed bracket like [1a] is ignored, not treated as a citation at all")
+    func citationsValidIgnoresMalformed() {
+        // No well-formed "[n]" in the text at all, so nothing to invalidate — vacuously true even
+        // though "1" alone would be out of a zero-source range.
+        #expect(N.citationsValid("Filed under [1a] for reference.", sourceCount: 0))
+        #expect(N.citationsValid("See [1a].", sourceCount: 1))
+    }
+
+    @Test("zero sources means no citation can ever be valid")
+    func citationsValidZeroSources() {
+        #expect(N.citationsValid("No citation here.", sourceCount: 0))
+        #expect(!N.citationsValid("See [1].", sourceCount: 0))
+    }
+
+    // MARK: label(for:sourceCount:)
+
+    @Test("label(for:sourceCount:) names the count when N > 0")
+    func labelForSourceCountPositive() {
+        let text = N.label(for: .onDevice, sourceCount: 3)
+        #expect(text == "Model-written from the facts + 3 sources (listed) — a paraphrase, not analysis, unvalidated, not advice.")
+    }
+
+    @Test("label(for:sourceCount: 0) falls back to label(for:) unchanged")
+    func labelForSourceCountZeroFallsBack() {
+        #expect(N.label(for: .onDevice, sourceCount: 0) == N.label(for: .onDevice))
+        #expect(N.label(for: .localServer(model: "qwen3.8"), sourceCount: 0) == N.label(for: .localServer(model: "qwen3.8")))
+    }
+
+    // MARK: instructions gain the citation rule
+
+    @Test("instructions now tell the model how to cite a numbered source")
+    func instructionsGainCitationRule() {
+        #expect(N.instructions.contains("[n]"))
+        #expect(N.instructions.contains("80 words"))          // unchanged prior requirement
+        #expect(N.instructions.contains("ticker symbol"))     // unchanged prior requirement
+    }
+
     // MARK: Result equality
 
     @Test("Result compares by case and payload")
