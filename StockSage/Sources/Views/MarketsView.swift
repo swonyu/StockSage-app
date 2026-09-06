@@ -217,6 +217,12 @@ struct MarketsView: View {
     @ObservedObject private var portfolio = StockSagePortfolio.shared
     @ObservedObject private var journal = StockSageJournalStore.shared
     @ObservedObject private var paperStore = StockSagePaperTradeStore.shared
+    // Fixup (2026-09-06, Q5 reviewer finding): the LIVE dot below must observe the stream
+    // object directly. Reading `StockSageLiveStream.shared.isStreaming` inline registers no
+    // SwiftUI dependency (it's a singleton read, not a wrapped property), so the watchdog's
+    // isStreaming=false on a silent/half-open socket never redraws this view — the dot stays
+    // lit until an unrelated re-render. Without this, Q5's "clears within ~45s" is not real.
+    @ObservedObject private var live = StockSageLiveStream.shared
     @State private var briefing = ""
     @State private var briefingGeneratedAt: Date? = nil
     /// Fingerprint of the symbol list the briefing was generated against — display is
@@ -1084,7 +1090,7 @@ struct MarketsView: View {
     /// can never claim "live" over a dropped connection (the honesty floor applies to indicators
     /// exactly as it applies to prices).
     @ViewBuilder private var liveStreamIndicator: some View {
-        if liveStreamEnabled, StockSageLiveStream.shared.isStreaming {
+        if liveStreamEnabled, live.isStreaming {
             HStack(spacing: 4) {
                 Circle().fill(DS.Palette.successSoft).frame(width: 6, height: 6)
                     // Reduce Motion: solid dot. An indefinite pulse in the PINNED header is on-screen
