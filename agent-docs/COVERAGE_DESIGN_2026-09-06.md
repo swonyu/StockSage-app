@@ -96,3 +96,62 @@ First run wf_5ecce5fc-973 (10:15 +03): all 11 agents refused — account monthly
 window resets 10:30 +03. Nothing was written to any worktree by that run.
 
 Correction 10:21 +03: that run DID create four clean worktrees (cov-a1/a3/stream/tracked, 0 commits, 0 edits); removed before the retry.
+
+## Follow-up scope (2026-09-06 10:5x)
+
+Three research passes (Sonnet) fed this step; each is condensed at
+`research_earnings_sources_2026-09-06.md`, `research_tadawul_realtime_2026-09-06.md`,
+`research_local_model_internet_2026-09-06.md` (scratchpad, not in-repo — copy pasted below where a
+decision depends on it, so this doc stays the durable record).
+
+**Earnings sources (condensed).** Yahoo `calendarEvents` gives a 2-element `earningsDate` RANGE plus
+`isEarningsDateEstimate`, which the app parser (StockSageEarnings.swift:71-83, pre-W1) discarded —
+min-epoch only, flag ignored. EODHD's `/api/calendar/earnings` is plan-gated (probe status only, never
+assume the tier); it has NO Tadawul coverage at any tier (matches StockSageEODHD.swift's own measured
+gap) but DOES expose `Earnings.History` off the fundamentals endpoint (10 calls/request, owner-waived)
+— a genuine PROJECTION source for US names with ≥3 past reports. Alpha Vantage / FMP / Nasdaq.com were
+surveyed and rejected for this step (low daily caps, Tadawul absent/unverified, or docs 403'd).
+Recommended chain, adopted below: EODHD calendar (if the tier allows) → Yahoo (read the flag) →
+projection from history; Tadawul has no EODHD or AV/FMP path at all, so it falls to Yahoo
+`earningsHistory` (unverified live — see below) or `.unchecked`.
+
+**Tadawul real-time (condensed).** Yahoo's own docs (help.yahoo.com/kb/SLN2310.html) say `.SAU`/Tadawul
+quotes carry a HARD 15-minute delay via ICE Data Services — never "live" for `.SR ` regardless of poll
+cadence; this doc's own §B budget numbers are unaffected (they're about REST call volume, not
+staleness) but the "live" label logic must never claim otherwise for `.SR`. No measured vendor (EODHD,
+Twelve Data, Polygon, AV, FMP, Finnhub) carries real Tadawul depth; the one Tadawul-licensed real-time
+option surveyed is SAHMK (Pro tier $499/mo, WS + REST, `is_delayed` per tick) — an owner-gated
+provisioning decision (account + key), not something this step can wire blind. Until that key exists,
+Tadawul earnings projection has no data source beyond Yahoo's own `earningsHistory` module.
+
+**Local-model internet access (condensed, not this step's scope).** A retrieval-first design
+(Option A: a narrow `StockSageNewsService` hitting EODHD `/api/news`, numbered sources, citation
+validation) was scoped for a LATER step — giving the on-device model real news/internet grounding.
+Explicitly NOT built here; W1 below is catalyst-DATE coverage only. Flagged so the next session doesn't
+re-research it from scratch.
+
+**W1 decisions (this step).**
+- Record model gets `status` (dateKnown/projected/notApplicable/unchecked), `confirmed`,
+  `dateRangeEnd`, `sourcesAsked`, `projectionBasis` — all DEFAULTED via a hand-written
+  `init(from:)` (verified empirically: Swift's synthesized `Decodable` does NOT fall back to a
+  property's default value for a missing key — a hand-written decode init was required to make a
+  pipeline-1 record on disk, missing every W1 field, still decode). No file-version bump: the
+  shape is additive-with-defaults, not breaking.
+- Chain per tracked EQUITY (assetClass == "Equity"; everything else ⇒ `notApplicable`, no network):
+  EODHD calendar (skipped for 24h after a 401/402/403 probe result) → Yahoo calendarEvents (now
+  reading `isEarningsDateEstimate` + the range) → projection (US: EODHD fundamentals
+  `Earnings.History`, ≥3 past dates, median gap of the last ≤8 gaps; Tadawul: Yahoo
+  `earningsHistory` module, same math, UNVERIFIED live this session — Yahoo's keyless endpoint was
+  429-rate-limited on this Mac's IP all day (see research file) so a live Tadawul probe could not be
+  confirmed; the parser is written defensively against Yahoo's documented shape and falls through
+  to `.unchecked` + a SAHMK TODO if the module is empty/absent, never a guess) → `.unchecked` with
+  `sourcesAsked` recording what was actually tried.
+- EODHD's calendar carries no explicit confirmation flag (unlike Yahoo's `isEarningsDateEstimate`);
+  `actual` is populated only once a report has already happened, so a NEXT-earnings (future) row
+  from this endpoint is always `confirmed: false` — documented in `StockSageEODHDCalendar.swift`,
+  not guessed.
+- Engine precedence: `.projectedEarnings` sits between `.earnings` (clear) and `.extreme` — a
+  projected date is more actionable than "price at a recent high/low" but less than an actually
+  scheduled report. `notApplicable` only changes the NO-OTHER-CATALYST fallback text (an index/fund
+  can still show a volume-move/regime/seasonality catalyst); `unchecked` reuses the existing dated/
+  undated "none known" copy unchanged.
