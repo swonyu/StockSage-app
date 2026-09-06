@@ -2133,6 +2133,17 @@ final class StockSageStore: ObservableObject {
         // throttled-in-scope or genuinely out-of-scope — carries its flag forward untouched.
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: quotes)
         replaceAll(committed, isSample: false)
+        // Mirror this sweep's live prices onto the matching ideas — same invariant applyLiveTick
+        // and mergeLiveQuote already hold ("the card and the row can never disagree", review
+        // 2026-07-28 Q9). Without this, refresh() left every idea card on its scan-time daily-bar
+        // close while the board row beside it showed the live quote. `withLivePrice` deliberately
+        // leaves stop/target/EV untouched — those are fixed LEVELS (StockSageIdea.withLivePrice).
+        // `asOf: q.marketTime` — NOT `?? Date()` — so a timestamp-less quote leaves `priceAsOf`
+        // nil, which `cardIsStale` correctly treats as "can't judge" (fail-closed unknown).
+        for (j, idea) in ideas.enumerated() {
+            guard let q = quotes[idea.symbol.uppercased()], q.price > 0 else { continue }
+            ideas[j] = idea.withLivePrice(q.price, asOf: q.marketTime)
+        }
         // STALE SELF-HEAL (owner directive 2026-07-27: "fix all stale stocks"): any row still
         // MATERIALLY stale after this refresh (beyond the weekend-tolerant freshness window) is
         // exactly what a throttled/partial sweep left behind — retry those alone, once.
