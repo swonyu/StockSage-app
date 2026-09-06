@@ -3301,19 +3301,19 @@ struct MarketsView: View {
         case .halted:
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Image(systemName: "hand.raised.fill").font(.system(size: mvFont13, weight: .bold)).foregroundStyle(.white)
-                    Text("STOP TRADING").font(.system(size: mvFont12, weight: .heavy)).foregroundStyle(.white)
+                    Image(systemName: "hand.raised.fill").font(.system(size: mvFont13, weight: .bold)).foregroundStyle(Self.badgeInk)
+                    Text("STOP TRADING").font(.system(size: mvFont12, weight: .heavy)).foregroundStyle(Self.badgeInk)
                     Spacer()
                 }
                 if let reason = state.haltReason {
                     Text(reason).font(.system(size: mvFont11, weight: .semibold))
-                        .foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(Self.badgeInk).fixedSize(horizontal: false, vertical: true)
                 }
                 Text(state.caveat).font(.system(size: mvFont9))
-                    .foregroundStyle(.white.opacity(0.82)).fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(Self.badgeInk.opacity(0.82)).fixedSize(horizontal: false, vertical: true)
             }
             .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
-            .background(DS.Palette.danger.opacity(0.85), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
+            .background(DS.Palette.dangerSoft, in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).stroke(DS.Palette.danger, lineWidth: 1.5))
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Stop trading. \(state.haltReason ?? ""). \(state.caveat)")
@@ -3627,8 +3627,8 @@ struct MarketsView: View {
                         closingTradeID = nil
                         closePlannedExitText = ""; closeExitFillText = ""
                     } label: {
-                        Text("Confirm close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 10).padding(.vertical, 5).background(DS.Palette.danger, in: Capsule())
+                        Text("Confirm close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(Self.badgeInk)
+                            .padding(.horizontal, 10).padding(.vertical, 5).background(DS.Palette.dangerSoft, in: Capsule())
                     }.buttonStyle(LuxPressStyle()).disabled(!closeIsValid)
                     Spacer(minLength: 0)
                 }
@@ -5872,10 +5872,9 @@ struct MarketsView: View {
                         if let g = cardGate {
                             Text(g.decision == .blocked ? "DO NOT TRADE" : g.decision.rawValue.uppercased())
                                 .font(.system(size: mvFont9, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Self.badgeInk)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(g.decision == .blocked ? DS.Palette.danger
-                                            : (g.decision == .caution ? DS.Palette.warningSoft.opacity(0.85) : DS.Palette.successSoft.opacity(0.85)),
+                                .background(Self.gateChipColor(g.decision),
                                             in: Capsule())
                                 .lineLimit(1).fixedSize()
                         }
@@ -6995,8 +6994,7 @@ struct MarketsView: View {
                 evText: String(format: "Est. EV %+.2fR (gross)", ev.evR)
                     + (ctaNetEV.map { String(format: " · ≈%+.2fR net est.", $0) } ?? ""),
                 gateLabel: ctaGate.map { $0.decision == .blocked ? "DO NOT TRADE" : $0.decision.rawValue.uppercased() },
-                gateColor: ctaGate.map { $0.decision == .blocked ? DS.Palette.danger
-                         : ($0.decision == .caution ? DS.Palette.warningSoft.opacity(0.85) : DS.Palette.successSoft.opacity(0.85)) } ?? .clear,
+                gateColor: ctaGate.map { Self.gateChipColor($0.decision) } ?? .clear,
                 // wave-2 #4: append the first-scan "best-so-far, order may change" caption (sibling
                 // bestOpportunityCard already shows it) so this global crown discloses it's provisional.
                 caveatText: MoneyVelocityCopy.bestOpportunity + tomTiltDisclosureSuffix + crownDivergenceSuffix
@@ -9597,6 +9595,20 @@ struct MarketsView: View {
         }
     }
 
+    /// Dark ink for every pastel danger/warning/success fill (the action/rec badges, the gate chips,
+    /// the STOP TRADING banner, the Confirm-close button). Review 2026-07-28 #6: white on `danger`
+    /// measures 3.41:1 at these 9–12pt sizes, and white on the pastel caution/proceed fills ~1.8:1;
+    /// this ink measures 7.85:1 on dangerSoft. Same value `actionTextColorForTest` returns.
+    static let badgeInk = Color(white: 0.06)
+
+    /// Fill for the "DO NOT TRADE / PROCEED WITH CAUTION / …" gate chips on the best-opportunity
+    /// card and the CTA card (one seam for both — they carried the same ternary twice). dangerSoft,
+    /// not danger, for the same AA reason as `actionColorForTest`; pair with `badgeInk`.
+    static func gateChipColor(_ d: TradeGateVerdict.Decision) -> Color {
+        d == .blocked ? DS.Palette.dangerSoft
+            : (d == .caution ? DS.Palette.warningSoft.opacity(0.85) : DS.Palette.successSoft.opacity(0.85))
+    }
+
     /// Sparkline tint by net direction over the shown window.
     private func sparkColor(_ spark: [Double]) -> Color {
         guard let first = spark.first, let last = spark.last, first != 0 else { return DS.Palette.accent }
@@ -9876,7 +9888,7 @@ struct BestOpportunityActionCard: View {
                             .background(actionColor, in: Capsule())
                         if let gateLabel {
                             Text(gateLabel).font(.system(size: mvFont9, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(MarketsView.badgeInk)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
                                 .background(gateColor, in: Capsule())
                                 .lineLimit(1).fixedSize()

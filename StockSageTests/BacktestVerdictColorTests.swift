@@ -42,6 +42,16 @@ struct ActionBadgeColorTests {
         // .avoid is the one deliberate exception: white text stays on its 22%-white fill.
         #expect(MarketsView.actionTextColorForTest(.avoid) == .white)
     }
+
+    // Follow-up 2026-09-06 (owner-approved): the gate chips, the STOP TRADING banner and the
+    // Confirm-close button carried the same white-on-`danger` defect (and the caution/proceed chips
+    // white-on-pastel, ~1.8:1). They now share one fill seam and one ink constant.
+    @Test func gateChipsAndDangerSurfacesUsePastelFillDarkInk() {
+        #expect(MarketsView.gateChipColor(.blocked) == DS.Palette.dangerSoft)
+        #expect(MarketsView.gateChipColor(.blocked) != DS.Palette.danger)
+        #expect(MarketsView.badgeInk == Color(white: 0.06))
+        #expect(MarketsView.badgeInk == MarketsView.actionTextColorForTest(.sell))
+    }
 }
 
 // MARK: - Signed ideaMetric ink (review 2026-07-28 #6 follow-up, 2026-09-06)
