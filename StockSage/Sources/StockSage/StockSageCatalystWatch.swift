@@ -115,8 +115,8 @@ enum StockSageCatalystWatch {
 
     nonisolated static let caveat =
         "Rules-based: earnings dates from Yahoo, volume moves from cached history, the regime "
-        + "gauge and 1-year seasonality. Describes what is scheduled or just happened — never "
-        + "what happens next. Educational, not financial advice."
+        + "gauge and multi-year monthly seasonality. Describes what is scheduled or just happened "
+        + "— never what happens next. Educational, not financial advice."
 
     // MARK: brief(for:inputs:)
 

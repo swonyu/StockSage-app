@@ -123,13 +123,20 @@ struct CatalystsSection: View {
 
     // MARK: - Data
 
+    /// `store.earnings` is a COMPUTED property (re-derives the whole proximity dictionary from
+    /// `earningsDates` on every read) and `store.catalysts` was scanned linearly per idea — both
+    /// were paid once PER IDEA here (review minor (c), fix pass 2026-09-06). Hoisted to once per
+    /// body: `earnings` is read once, and `catalysts` is indexed into a dictionary once, so up to
+    /// ~450 ideas each do an O(1) lookup instead of an O(n) rescan / a full re-derive.
     private func buildBriefs(now: Date) -> [StockSageCatalystWatch.Brief] {
-        ideas.map { idea in
+        let earnings = store.earnings
+        let catalystsBySymbol = Dictionary(store.catalysts.map { ($0.symbol.uppercased(), $0) },
+                                           uniquingKeysWith: { first, _ in first })
+        return ideas.map { idea in
             let sym = idea.symbol.uppercased()
-            let volumeMove = store.catalysts.first { $0.symbol.caseInsensitiveCompare(idea.symbol) == .orderedSame }
             return StockSageCatalystWatch.brief(for: idea, inputs: .init(
-                earnings: store.earnings[sym], earningsDate: store.earningsDates[sym],
-                volumeMove: volumeMove, regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
+                earnings: earnings[sym], earningsDate: store.earningsDates[sym],
+                volumeMove: catalystsBySymbol[sym], regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
                 seasonality: store.seasonality[sym], now: now))
         }
     }

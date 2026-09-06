@@ -243,11 +243,32 @@ enum StockSageCatalystNarrator {
             }
             return .text(text, .onDevice)
         } catch {
-            return .unavailable(String(describing: error))
+            #if DEBUG
+            print("StockSageCatalystNarrator: on-device explain failed: \(error)")
+            #endif
+            return .unavailable(humanOnDeviceError(error))
         }
         #else
         return .unavailable("On-device model not available in this build.")
         #endif
+    }
+
+    /// Maps a raw FoundationModels error to a short human sentence (fix pass 2026-09-06, review
+    /// minor (b)): the previous code surfaced `String(describing: error)` — a `GenerationError`
+    /// dump — straight to the viewer. The raw description is still available, but only in the
+    /// `#if DEBUG` print at the call site above, never in what a viewer reads.
+    private nonisolated static func humanOnDeviceError(_ error: Error) -> String {
+        #if canImport(FoundationModels)
+        if let generationError = error as? LanguageModelSession.GenerationError {
+            switch generationError {
+            case .guardrailViolation, .refusal:
+                return "The on-device model declined this request (content guardrail)."
+            default:
+                return "The on-device model failed — try again."
+            }
+        }
+        #endif
+        return "The on-device model failed — try again."
     }
 
     /// The local-server counterpart of `explainOnDevice(_:)`: same facts/prompt/number-fence

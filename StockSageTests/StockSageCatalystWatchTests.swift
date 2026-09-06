@@ -198,4 +198,60 @@ struct StockSageCatalystWatchTests {
         #expect(brief.primary.headline.hasSuffix("(Sep 6, 2025)"))
         #expect(brief.primary.watch.contains("Sep 6, 2025"))
     }
+
+    // MARK: (g) extreme slot — review minor (d), fix pass 2026-09-06.
+
+    @Test("recentExtreme .atHigh yields kind .extreme with 'At the N-day high'")
+    func extremeSlotAtHighYieldsHeadline() {
+        // Built directly (not SageFix.idea, which doesn't forward recentExtreme/Span) with no
+        // earnings/volume/regime/seasonality input, so the extreme slot is what wins as primary.
+        let idea = StockSageIdea(
+            symbol: "EXT", market: "EXT", price: 100,
+            advice: TradeAdvice(action: .buy, conviction: 0.5, regime: .bullTrend, rationale: [],
+                                stopPrice: nil, targetPrice: nil, suggestedWeight: 0.05, caveat: "x"),
+            spark: [], recentExtreme: .atHigh, recentExtremeSpan: 63)
+        let brief = W.brief(for: idea, inputs: W.Inputs(now: Self.now))
+        #expect(brief.primary.kind == .extreme)
+        #expect(brief.primary.headline == "At the 63-day high")
+    }
+
+    // MARK: (h) seasonality gate — review minor (d).
+
+    @Test("seasonality requires isReliable AND |avgReturn| >= 0.01; a thin sample yields none")
+    func seasonalityGateRequiresReliableAndNontrivial() {
+        let month = StockSageSeasonality.currentMonth(asOf: Self.now)
+        func seasonality(samples: Int, avgReturn: Double) -> MonthlySeasonality {
+            var stats = (1...12).map { MonthlySeasonality.MonthStat(month: $0, avgReturn: 0, samples: 0) }
+            stats[month - 1] = MonthlySeasonality.MonthStat(month: month, avgReturn: avgReturn, samples: samples)
+            return MonthlySeasonality(months: stats, years: Double(samples))
+        }
+
+        // n=5 samples (>= 3, reliable) and |+2.0%| >= 1.0% ⇒ seasonality IS the primary item.
+        let strongBrief = W.brief(for: SageFix.idea("SEAS1", conviction: 0.5),
+                                  inputs: W.Inputs(seasonality: seasonality(samples: 5, avgReturn: 0.02), now: Self.now))
+        #expect(strongBrief.primary.kind == .seasonality)
+
+        // n=2 samples (< 3, NOT reliable) even with a large |+5.0%| return ⇒ no seasonality item.
+        let thinBrief = W.brief(for: SageFix.idea("SEAS2", conviction: 0.5),
+                                inputs: W.Inputs(seasonality: seasonality(samples: 2, avgReturn: 0.05), now: Self.now))
+        #expect(thinBrief.primary.kind == .none)
+    }
+
+    // MARK: (i) undated calendar tail — weight-descending order — review minor (d).
+
+    @Test("the undated calendar tail sorts weight-descending: high, medium, low")
+    func undatedCalendarTailSortsByWeightDescending() {
+        let briefs = [
+            W.brief(for: SageFix.idea("LOWW", conviction: 0.5),
+                   inputs: W.Inputs(volumeMove: volSignal(symbol: "LOWW", tier: .notable), now: Self.now)),
+            W.brief(for: SageFix.idea("HIGH", conviction: 0.5),
+                   inputs: W.Inputs(volumeMove: volSignal(symbol: "HIGH", tier: .major), now: Self.now)),
+            W.brief(for: SageFix.idea("MEDI", conviction: 0.5),
+                   inputs: W.Inputs(volumeMove: volSignal(symbol: "MEDI", tier: .significant), now: Self.now)),
+        ]
+        let entries = W.calendar(briefs, now: Self.now)
+        #expect(entries.count == 3)                                        // n=3 undated primaries
+        #expect(entries.allSatisfy { $0.bucket == .undated })
+        #expect(entries.map(\.item.symbol) == ["HIGH", "MEDI", "LOWW"])     // high, medium, low
+    }
 }
