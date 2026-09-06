@@ -1,0 +1,1 @@
+W2 (SAHMK real-time Tadawul) DROPPED 2026-09-06 13:37 +03: owner said "i dont want tadawul live tracking idc". Saudi names stay on the delayed Yahoo feed via the 30 s stream-gap poll. Nothing from this branch is to be integrated except this note.
