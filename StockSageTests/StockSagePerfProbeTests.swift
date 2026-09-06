@@ -16,7 +16,13 @@ struct StockSagePerfProbeTests {
 
     /// ~2,400 synthetic ideas: conviction/stop/target/class (via symbol pattern) vary
     /// across the set via a deterministic loop (no RNG — reproducible byte-for-byte).
-    private func syntheticIdeas(count: Int = 2_400) -> [StockSageIdea] {
+    /// `spark` defaults to `[]` (every idea gets the SAME spark array, matching the shape
+    /// SageFix.idea's own default takes) — pass a non-empty one ONLY for probes that feed
+    /// `StockSageCapitalAllocator.allocate` (see review 2026-07-28 P2-fixture): with the
+    /// default empty spark, `dailyReturns([])` is `[]` and `correlationAdjustedWeights`'
+    /// `minLen >= 2` guard short-circuits, silently skipping the correlation stage — exactly
+    /// the gap that made the whole-render probe undercount before this fix.
+    private func syntheticIdeas(count: Int = 2_400, spark: [Double] = []) -> [StockSageIdea] {
         let actions: [TradeAdvice.Action] = [.strongBuy, .buy, .hold, .reduce, .sell]
         let regimes: [TradeAdvice.Regime] = [.bullTrend, .bearTrend, .range]
         // Symbol suffix rotates through equity/Saudi/crypto-shaped tickers so the set
@@ -31,9 +37,14 @@ struct StockSagePerfProbeTests {
             let suffix = suffixes[i % suffixes.count]
             return SageFix.idea("SYM\(i)\(suffix)", conviction: conviction, action: action,
                                 regime: regime, rr: 1.5 + Double(i % 5) * 0.5,
-                                price: price, riskDistance: riskDistance)
+                                price: price, riskDistance: riskDistance, spark: spark)
         }
     }
+
+    /// Non-degenerate 32-bar spark (review 2026-07-28 P2-fixture "Verify" snippet): real
+    /// enough that `dailyReturns` and the allocator's correlation stage actually run,
+    /// closed-form so it stays hand-derivable / RNG-free like every other SageFix series.
+    private let allocatorProbeSpark = (0..<32).map { 100 + Double($0 % 7) }
 
     @Test func rankByVelocityAt2400ScaleIsWithinSanityBound() {
         let ideas = syntheticIdeas()
@@ -278,7 +289,10 @@ struct StockSagePerfProbeTests {
     }
 
     @Test func wholeRenderEquivalentAt2400ScaleColdStart() {
-        let ideas = syntheticIdeas()
+        // Real spark (not the default []) so capitalAllocationCard's `allocate(...)` call
+        // exercises its correlation stage instead of silently skipping it — see
+        // `allocatorProbeSpark`'s doc and review 2026-07-28 P2-fixture.
+        let ideas = syntheticIdeas(spark: allocatorProbeSpark)
         #expect(ideas.count == 2_400)
         let clock = ContinuousClock()
         // Cold-start defaults: empty trades, nil calibration — mirrors journal.trades == []
@@ -303,7 +317,8 @@ struct StockSagePerfProbeTests {
     }
 
     @Test func wholeRenderEquivalentAt2400ScaleWithEarningsAndLiquidity() {
-        let ideas = syntheticIdeas()
+        // Real spark — see wholeRenderEquivalentAt2400ScaleColdStart above.
+        let ideas = syntheticIdeas(spark: allocatorProbeSpark)
         #expect(ideas.count == 2_400)
         let earnings = auxEarnings(for: ideas)
         let liquidity = auxLiquidity(for: ideas)

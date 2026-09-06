@@ -104,6 +104,13 @@ enum SageFix {
     // In both cases |(target−price)/(price−stop)| == rr exactly.
     // Pass `rr: nil` for a no-defined-risk idea (stop/target nil).
     //
+    // `spark` defaults to `[]` (review 2026-07-28 P2-fixture): every EXISTING caller that
+    // doesn't pass it keeps the prior byte-identical behaviour (empty spark ⇒ dailyMove nil,
+    // dailyReturns([]) ⇒ [] ⇒ correlationAdjustedWeights' `minLen >= 2` guard short-circuits).
+    // Callers measuring StockSageCapitalAllocator.allocate's correlation stage should pass a
+    // real spark, else that stage is silently skipped and the measurement is not the
+    // production cost (see StockSagePerfProbeTests' whole-render probes).
+    //
     // NOTE on `market` field: this helper sets `market: symbol` (matching the convention
     // in StockSageAlertsTests). StockSageExpectedValueTests uses `market: "M"` in its
     // own private helper, but asset-class dispatch (velocity / fast-lane) reads
@@ -116,7 +123,8 @@ enum SageFix {
                      regime: TradeAdvice.Regime = .bullTrend,
                      rr: Double? = 2.0,
                      price: Double = 100.0,
-                     riskDistance: Double = 10.0) -> StockSageIdea {
+                     riskDistance: Double = 10.0,
+                     spark: [Double] = []) -> StockSageIdea {
         let stop: Double?
         let target: Double?
         if let rr {
@@ -139,6 +147,6 @@ enum SageFix {
             advice: TradeAdvice(action: action, conviction: conviction, regime: regime,
                                 rationale: [], stopPrice: stop, targetPrice: target,
                                 suggestedWeight: 0.05, caveat: "x"),
-            spark: [])
+            spark: spark)
     }
 }
