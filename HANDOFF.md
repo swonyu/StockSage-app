@@ -15,8 +15,10 @@ Workarounds in use this session (read-only-safe, no licence bypass of the build 
 - compile gate: `swiftc -typecheck` on `StockSage/Sources/**` for BOTH platforms — script at the
   session scratchpad `tc_stocksage.sh macos|ios` (flags mirror the pbxproj: Swift 6, MainActor
   default isolation, MemberImportVisibility, 26.5 targets). Baseline at 02ab1a0: clean on both,
-  ~40 s each. **Tests cannot run until the licence is accepted** — nothing in this session is
-  test-verified, only type-checked. Say so in every commit message.
+  ~40 s each. Superseded the same day by `tools/gate.sh` (emit-module, both platforms + test-target
+  type-check) and **`tools/runtests.sh`, which EXECUTES the whole Swift Testing suite without xcodebuild**
+  (swiftc-built testable dylib + Testing.framework runner, throwaway HOME). `xcodebuild … test` itself
+  still needs the licence; commits before 09:30 +03 say "tests NOT run" because the runner did not exist yet.
 
 ## Repo state at handoff
 - `main` = 02ab1a0, **16 commits ahead of origin/main, unpushed** (all iPhone UI work, Jul 28–29).
@@ -72,64 +74,47 @@ Also this session: `tools/gate.sh` (95b54e2) committed as the licence-blocked co
 `qwen3.8` (27B) installed on this Mac for the new Catalysts tab's optional local explanation backend
 (see the Catalysts section once it lands).
 
+## Catalysts tab — NEW (owner request 2026-09-06, workflows wf_3c5d578a-629 + wf_41e9e30c-825; 10 commits cba3f92..d382cc0)
+"A new tab that shows, for the same ideas as the Ideas tab, the key catalyst to watch and explains why" —
+BOTH per-idea cards AND a date-ordered calendar; the why is engine rationale always, plus an OPTIONAL
+model-written paragraph on tap (owner chose "both" / "both").
+
+| Piece | File | Notes |
+|---|---|---|
+| Engine | `StockSage/Sources/StockSage/StockSageCatalystWatch.swift` | pure; precedence earnings(imminent/soon) → volume move → earnings(clear) → range extreme → risk-off regime (long ideas only) → reliable seasonality → none; every string lives here; UTC-fixed dates; past earnings (>24h) never shown |
+| Narrator | `StockSageCatalystNarrator.swift` | routes over Apple FoundationModels (on-device) and the local server; facts list → ≤80 words, ticker-only, no new numbers; foreign-number guard withholds output; every paragraph labelled with its SOURCE + model |
+| Local server client | `StockSageLocalModelServer.swift` | Ollama native `/api/chat` (think:false, num_ctx 4096) or OpenAI-compatible `/v1/chat/completions`; probe; backends auto / on-device only / local server only / off; loopback default; non-loopback WARNS FIRST (banner + per-card) |
+| View | `StockSage/Sources/Views/CatalystsSection.swift` | header (mode picker, regime line, always-visible caveat, sample-data label, "Explanation model" settings), lazy cards, calendar buckets Today/Tomorrow/This week/Later/No date on file; earnings fetched for ≤30 shown ideas, ≤4 parallel; 8-K filings on tap (US) |
+| Wiring | `MarketsView.swift` (d49a903) | `MarketSection.catalysts` between Ideas and All, icon calendar.badge.clock, `CatalystsSection(ideas: displayedIdeas, store: store) { selectedIdea = $0 }` — same projected board, same order |
+| Tests | `StockSageCatalystWatchTests` (12), `…NarratorTests` (13), `…LocalModelServerTests` (9), `CatalystsSectionTests` (3), `…PropertyTests` (11, 52,500-combination oracle sweep) | all EXECUTED green via `tools/runtests.sh` |
+
+Reviews: tab review found 2 blockers (past earnings shown as imminent; calendar dropped the RVOL "unvalidated"
+caveat) + 2 majors (UTC vs local day; eager cards) — fixed f098044. Backend review found 2 blockers (LAN warning not
+visible at the Explain action; label named the CURRENT model setting, not the generating one) + 1 major (auto
+fallback untested) — fixed 39ec0d0/3410c82.
+
+Local model on this Mac (owner "okay"): Ollama 0.33.3 standalone under `~/.local/opt/ollama`, LaunchAgent
+`com.ollama.serve` on 127.0.0.1:11434 (keep-alive 24h), model `qwen3.8` (27B Q4_K_M, MTP speculative decoding on).
+Measured: quiet Mac 15–53 tok/s ≈ 3–10 s per paragraph; with Swift compilers running 7–11 tok/s. MLX 4-bit + MTP
+drafter via mlx-vlm was ~1.3× faster steady-state (3.7–6.3 s) — NOT made the default; venv at `~/.local/venvs/mlx`,
+34 GB of A/B artefacts (Ollama tag `qwen3.8:27b-mlx`, HF cache) left on disk for the owner to delete or keep.
+
+## EXECUTED test results (tools/runtests.sh, macOS arm64, 2026-09-06 09:40 +03)
+`✔ Test run with 1474 tests in 170 suites passed after 29.967 seconds` on d382cc0's tree (n=1,474 executed, 0 failed).
+Earlier the same runner passed 1,446/1,446 on d49a903 (batch 2 + tab wiring) and 33/33 on the catalyst suites.
+Not executed: SwiftUI rendering (no simulator/app run), the Apple on-device model path (needs an Apple
+Intelligence device), live Yahoo/SEC/Ollama network paths beyond the read-only Ollama probes.
+
 ## Next actions
-1. Owner accepts the Xcode licence → run the canonical test gate from README on BOTH platforms:
-   `xcodebuild -scheme StockSage -destination 'platform=macOS' … test` and the iOS 27.0 simulator.
-2. Merge the work branch only after tests are green; then push `main` (16 + N commits).
-3. Remaining review items after the audit — see the audit table in the session summary / below.
-
-## Audit result (Sonnet worker, static inspection at 02ab1a0, 2026-09-06 ~05:58 +03) — n = 35 review findings
-DONE 7 (N1, N2, N3, N4, N5, Q2, P1 — notification budget, watchlist pref gate, tick coalescing landed
-in 293e1d4 / 5bfe6f9 / 67db574) · PARTIAL 3 (Q1 heal-sweep capped+gated but not scoped to the cycle's
-fetch set; UI#1 iOS nav-lift landed, analysis-pile disclosure did not; UI#12 generic prose collapse
-landed) · OPEN 25. This session then closed UI#2's rename (d21cec5) and UI#8/#10/#17c.
-
-OPEN, ranked by the review's severity then by size of the prescribed fix (file → one-line fix):
-1. Q1 (CRITICAL, partial) `StockSageStore.healStaleQuotes` — pass the cycle's scoped keys instead of scanning the whole board.
-2. Q5 (HIGH) `StockSageLiveStream` — `isStreaming` flips true on ANY success frame incl. auth/status; add an auth classifier + silence watchdog.
-3. Q4 (HIGH) `StockSageQuoteCache.Entry` — add optional `marketTime` (Codable-compatible); every cache-restored row is fail-closed STALE today.
-4. UI#6 (HIGH) `MarketsView` ~4224, ~9080 — sell/action badges still `DS.Palette.danger` + white ink → `dangerSoft` + dark ink.
-5. Q3 / N1-conc (HIGH) `StockSageStore.refresh` — `isRefreshing` released before heal/commit → `defer`. (landed ba82689)
-6. Q6 (MED) `StockSageStore.addSymbol` — pass `marketTime: q.marketTime`. (landed ba82689)
-7. Q7 (MED) `StockSageStore.refresh` — max-merge `quoteAsOf`, never assign. (landed ba82689)
-8. Q8 (MED) `MarketsView` ~720, ~1035 — banner `?? false` → fail-closed; land AFTER Q4 or it shouts on every launch.
-9. Q9 (MED) — mirror refreshed prices onto ideas after `replaceAll`.
-10. Q10 (MED) `StockSageEODHD` — `isFinite` guard, guarded `prev`, honest `isNewListing` (parity with the Yahoo parser).
-11. Q11 (MED) — cache retention after a throttled sweep — OWNER DECISION (review "needs your decision" #5).
-12. C1 (MED) `StockSageCapitalAllocator` — `fundableCandidateCount` read post-truncation; caveat WORDING is an owner decision (#3).
-13. P3 (MED) — store-side symbol index for `currentPrice` O(n) scans.
-14. M1 (MED) `StockSagePaperTrader` — no prune; retention = owner decision.
-15. P2 + fixture (HIGH) `StockSageTestFixtures.swift:142` `spark: []` masks the allocator's correlation cost — fix the fixture FIRST, then memoize.
-16. UI#4 (HIGH) — `.explain()` shim; ~138 `.help` tooltips are invisible on iPhone.
-17. UI#5 (HIGH) — `fontCaveat` token / section header 13→15.
-18. UI#3 (HIGH) — `ViewThatFits` on the idea metric rows.
-19. UI#13 (MED) — watchlist trash is hover-gated → unreachable on iOS.
-20. UI#15 (MED) — tier the 9 flat caveat lines.
-21. UI#16 (LOW-MED) — 3 `.frame(width:)` → `minWidth`.
-22. C2 (LOW) `StockSageRebalance.swift:57` — sort has no tiebreak. (landed ba82689)
-23. UI#11 (MED-HIGH) — iPad `NavigationSplitView` or the 780→900 width bump — owner decision (#1).
-24. UI#1 residual — collapse the 7 analysis cards above the ranked list — the crown choice is an owner decision (#3 in Part 3).
-25. F1 / dead engines (`AllocationOptimizer`, `PBO`, `RelativeStrength`, 0 callers) — roadmap question, owner decision (#4).
-
-## wt/ui — 2026-09-06 09:20 +03 (worktree /Users/saleh/StockSage-wt/ui, branch wt/ui, base e619739)
-Two commits, `tools/gate.sh all` green after each (macos=OK ios=OK tests=OK; tests type-checked, NOT
-executed — licence). good-spender was turned ON for good mid-run (user directive, saved to memory).
-
-| Commit | What |
-|---|---|
-| 648c425 (wt/ui 4cfa3f9) | fixup(UI#6): the 9 realized-stats + risk-analytics ideaMetric sites → dangerSoft via a new static seam `MarketsView.signedMetricColor(positive:positiveColor:)`, pinned by `SignedMetricColorTests` (BacktestVerdictColorTests.swift) |
-| dd578ae (wt/ui 1d2637c) | fixup(UI#6): the remaining 17 small-text raw-danger sites (+2 mixed-helper consumers: `hc` heat text, healthColor verdict text) across MarketsView + MarketsRiskAllocationSection; 25 icon/fill/stroke/background sites keep raw danger. Sonnet diff review: APPROVE, 1 minor (watchlist arrow icon inherits dangerSoft with its text) |
-
-Owner call, NOT changed: white text on a raw-danger FILL — STOP TRADING banner (~3316), "Confirm close"
-button (~3631), "DO NOT TRADE" chips (~5877 and ~6998 → BestOpportunityActionCard:9881). Same 3.41:1
-class UI#6 fixed on the sell badge, but these are stop/destructive surfaces where the red fill is the
-convention — decide badge treatment (pastel fill + dark ink) vs keep.
-RESOLVED 2026-09-06 09:35 +03 — owner approved; landed as 0897fea (badgeInk + gateChipColor seams, test-pinned, gate green).
-
-Landed on review-followups-2026-09-06 as 648c425 + dd578ae (cherry-picked clean, gate re-run there —
-see merge_gate.log). Licence accepted 2026-09-06 09:44 +03; canonical gate run at 09:47 +03: macOS build OK, macOS
-test OK — 1,426 tests in 166 suites passed (Swift Testing, 14.2 s; first EXECUTED run since Jul 29).
-iOS leg BLOCKED at first: Xcode 26.6 needs the iOS 26.5 simulator platform (the 27.0 beta runtime is
-not an eligible destination); owner approved `xcodebuild -downloadPlatform iOS` (~8 GB) at 09:49 +03.
-Next: iOS leg result (see merge_gate.log), then push. Spend (good-spender estimate): run closed at $28.27 vs $3.00 est (9.42x OVER — ~30 Fable-tier
-classifier agents ran inside an ultracode workflow before it was stopped on the good-spender directive).
+1. Owner: `sudo xcodebuild -license accept`, then the canonical `xcodebuild … test` on macOS AND the iOS 27
+   simulator (the runner covers macOS only; iOS is emit-module-checked). Open the app: Ideas → Catalysts tab,
+   both modes; tap Explain with Apple Intelligence on; set Backend = Local server with Ollama running.
+2. Merge `review-followups-2026-09-06` → `main` when green; push `main` (was 16 ahead before this branch).
+3. Backlog: the minor review findings listed under Batch 2 above; remaining OPEN review items are the
+   owner-decision ones (Q11, C1 wording, M1 retention, UI#11 iPad, UI#1 crown, F1 dead engines) + P2-memo
+   (allocator memo, `StockSageStore` + `MarketsView` capitalAllocationCard), UI#3's remaining rows if any.
+4. Decide on the MLX server as default (needs a launch agent; ~1–2 s faster per tap) and on deleting the 34 GB
+   of A/B model files.
+5. The background session you started ("Sweep remaining raw danger small-text in MarketsView") works in
+   `~/StockSage-wt/ui` on branch `wt/ui` off e619739 — review its branch separately; UI#6 already swept the
+   listed sites, so expect overlap.
