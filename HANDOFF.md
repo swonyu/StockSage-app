@@ -110,3 +110,22 @@ OPEN, ranked by the review's severity then by size of the prescribed fix (file �
 23. UI#11 (MED-HIGH) — iPad `NavigationSplitView` or the 780→900 width bump — owner decision (#1).
 24. UI#1 residual — collapse the 7 analysis cards above the ranked list — the crown choice is an owner decision (#3 in Part 3).
 25. F1 / dead engines (`AllocationOptimizer`, `PBO`, `RelativeStrength`, 0 callers) — roadmap question, owner decision (#4).
+
+## wt/ui — 2026-09-06 09:20 +03 (worktree /Users/saleh/StockSage-wt/ui, branch wt/ui, base e619739)
+Two commits, `tools/gate.sh all` green after each (macos=OK ios=OK tests=OK; tests type-checked, NOT
+executed — licence). good-spender was turned ON for good mid-run (user directive, saved to memory).
+
+| Commit | What |
+|---|---|
+| 648c425 (wt/ui 4cfa3f9) | fixup(UI#6): the 9 realized-stats + risk-analytics ideaMetric sites → dangerSoft via a new static seam `MarketsView.signedMetricColor(positive:positiveColor:)`, pinned by `SignedMetricColorTests` (BacktestVerdictColorTests.swift) |
+| dd578ae (wt/ui 1d2637c) | fixup(UI#6): the remaining 17 small-text raw-danger sites (+2 mixed-helper consumers: `hc` heat text, healthColor verdict text) across MarketsView + MarketsRiskAllocationSection; 25 icon/fill/stroke/background sites keep raw danger. Sonnet diff review: APPROVE, 1 minor (watchlist arrow icon inherits dangerSoft with its text) |
+
+Owner call, NOT changed: white text on a raw-danger FILL — STOP TRADING banner (~3316), "Confirm close"
+button (~3631), "DO NOT TRADE" chips (~5877 and ~6998 → BestOpportunityActionCard:9881). Same 3.41:1
+class UI#6 fixed on the sell badge, but these are stop/destructive surfaces where the red fill is the
+convention — decide badge treatment (pastel fill + dark ink) vs keep.
+
+Landed on review-followups-2026-09-06 as 648c425 + dd578ae (cherry-picked clean, gate re-run there —
+see merge_gate.log). Next: canonical xcodebuild test gate on both platforms once the licence is
+accepted. Spend (good-spender estimate): run closed at $28.27 vs $3.00 est (9.42x OVER — ~30 Fable-tier
+classifier agents ran inside an ultracode workflow before it was stopped on the good-spender directive).
