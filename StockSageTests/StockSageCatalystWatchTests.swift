@@ -68,11 +68,72 @@ struct StockSageCatalystWatchTests {
         let idea = SageFix.idea("NADA", conviction: 0.5)
         let brief = W.brief(for: idea, inputs: W.Inputs(now: Self.now))
         #expect(brief.primary.kind == .none)
+        #expect(brief.primary.headline == "No dated catalyst on file")     // pinned verbatim (never-checked shape)
+        #expect(brief.primary.date == nil)
         #expect(brief.primary.why == [
             "Next earnings date not available for this name — not fetched yet, or the source declined.",
             "No volume-confirmed move on the latest cached bar.",
         ])                                                        // n=2 bullets, pinned verbatim
+        #expect(brief.primary.source == "—")
         #expect(brief.secondary.isEmpty)
+    }
+
+    // MARK: (a3) dated "none known" record — the store ASKED Yahoo calendarEvents and got
+    // nothing back, so the honesty floor requires a real, DATED negative record (`date:
+    // checkedAt`, never `Date()`) instead of the "not checked yet" wording above.
+
+    @Test("none WITH earningsCheckedAt: dated negative record, exact headline/why/source, pinned verbatim")
+    func noneWithCheckedAtIsADatedNegativeRecord() {
+        let idea = SageFix.idea("ASKED", conviction: 0.5)
+        let checkedAt = Self.now
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsCheckedAt: checkedAt, now: Self.now))
+        #expect(brief.primary.kind == .none)
+        #expect(brief.primary.headline == "No known catalyst as of \(W.dateStr(checkedAt))")   // pinned verbatim
+        #expect(brief.primary.date == checkedAt)                    // the time we ASKED — never a fabricated date
+        #expect(brief.primary.why == [
+            "Next earnings date requested from Yahoo calendarEvents — none returned",
+        ])                                                          // n=1 bullet, pinned verbatim
+        #expect(brief.primary.source == "Yahoo calendarEvents (no date returned)")
+        #expect(brief.primary.watch == "Re-check after the next full refresh.")   // watch unchanged in spirit
+        #expect(brief.secondary.isEmpty)
+    }
+
+    @Test("a dated 'none known' record appears in the calendar; an undated (never-checked) one never does")
+    func noneRecordCalendarPresenceHingesOnCheckedAt() {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let calNow = utc.startOfDay(for: Self.now)
+
+        let uncheckedBrief = W.brief(for: SageFix.idea("UNCHK", conviction: 0.5), inputs: W.Inputs(now: calNow))
+        let checkedBrief = W.brief(for: SageFix.idea("CHKD", conviction: 0.5),
+                                   inputs: W.Inputs(earningsCheckedAt: calNow, now: calNow))   // checked today
+        #expect(uncheckedBrief.primary.kind == .none && checkedBrief.primary.kind == .none)
+
+        let entries = W.calendar([uncheckedBrief, checkedBrief], now: calNow, calendar: utc)
+        #expect(entries.count == 1)                                       // n=1: only the dated (checked) one
+        #expect(entries[0].idea.symbol == "CHKD")
+        #expect(entries[0].bucket == .today)
+        #expect(entries[0].isNegativeRecord)                              // distinct in the pure data from a real catalyst
+        #expect(!entries.contains { $0.idea.symbol == "UNCHK" })          // never checked ⇒ never on the calendar
+    }
+
+    @Test("checkedAt straddling the thisWeek/later boundary (day 7 vs day 8) buckets correctly")
+    func noneRecordBoundaryStraddle() {
+        // Genuine straddle of `bucket(for:)`'s `case 2...7` / `default` boundary: day 7 is the
+        // LAST day still `.thisWeek`, day 8 is the FIRST day that falls to `.later`.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let calNow = utc.startOfDay(for: Self.now)
+
+        func checkedBrief(_ symbol: String, dayOffset: Double) -> W.Brief {
+            W.brief(for: SageFix.idea(symbol, conviction: 0.5),
+                   inputs: W.Inputs(earningsCheckedAt: calNow.addingTimeInterval(dayOffset * 86_400), now: calNow))
+        }
+        let atSeven = checkedBrief("WK7", dayOffset: 7)     // still `.thisWeek`
+        let atEight = checkedBrief("D8", dayOffset: 8)      // first day that is `.later`
+        let entries = W.calendar([atSeven, atEight], now: calNow, calendar: utc)
+        #expect(entries.map(\.idea.symbol) == ["WK7", "D8"])              // sorted by date
+        #expect(entries.map(\.bucket) == [.thisWeek, .later])
     }
 
     // MARK: (a2) a past earnings date is not resurrected as an imminent catalyst — fix pass

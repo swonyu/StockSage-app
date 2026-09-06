@@ -7,8 +7,9 @@ import Foundation
 // The 9 pinned cases in StockSageCatalystWatchTests check hand-picked scenarios. This file checks
 // EVERY combination of the inputs that drive `brief(for:inputs:)` against an independent oracle of
 // the documented precedence, plus the honesty-floor and copy invariants, so a future edit that
-// breaks one path in one corner of the grid cannot slip through. 52,500 briefs (7×5×5×5×5×6×2) run in
-// a few seconds per sweep — the engine is pure and allocation-light.
+// breaks one path in one corner of the grid cannot slip through. 157,500 briefs
+// (7×5×5×5×5×6×2×3 — the ×3 is the `earningsCheckedAt` axis added for the dated "none known"
+// record) run in a few seconds per sweep — the engine is pure and allocation-light.
 
 @Suite("Catalyst watch — exhaustive precedence + honesty sweep")
 struct StockSageCatalystWatchPropertyTests {
@@ -26,19 +27,26 @@ struct StockSageCatalystWatchPropertyTests {
     enum ExtremeCase: CaseIterable { case nilExtreme, neither, atHigh63, atLowNoSpan, atHighMomentum }
     enum RegimeCase: CaseIterable { case none, bull, ranging, bear, crisis }
     enum SeasonCase: CaseIterable { case none, reliableStrong, reliableWeak, thinSample, reliableNegative }
+    /// `earningsCheckedAt` axis (A3): never asked / asked in the past / asked right now — only
+    /// changes output when every other slot is empty (the `.none` primary), so it is orthogonal
+    /// to `expectedKinds` but drives the dated-vs-undated shape of the `.none` item itself.
+    enum CheckedAtCase: CaseIterable { case never, past, now }
     static let actions: [TradeAdvice.Action] = [.strongBuy, .buy, .hold, .avoid, .reduce, .sell]
     static let rrs: [Double?] = [2.0, nil]
 
     struct Case {
         let earnings: EarningsCase; let volume: VolumeCase; let extreme: ExtremeCase
         let regime: RegimeCase; let season: SeasonCase; let action: TradeAdvice.Action; let rr: Double?
+        var checkedAt: CheckedAtCase = .never
     }
 
     static var allCases: [Case] {
         var out: [Case] = []
         for e in EarningsCase.allCases { for v in VolumeCase.allCases { for x in ExtremeCase.allCases {
             for r in RegimeCase.allCases { for s in SeasonCase.allCases { for a in actions { for rr in rrs {
-                out.append(Case(earnings: e, volume: v, extreme: x, regime: r, season: s, action: a, rr: rr))
+                for chk in CheckedAtCase.allCases {
+                    out.append(Case(earnings: e, volume: v, extreme: x, regime: r, season: s, action: a, rr: rr, checkedAt: chk))
+                }
             } } } } } } }
         return out
     }
@@ -115,9 +123,18 @@ struct StockSageCatalystWatchPropertyTests {
         }
     }
 
+    private func checkedAt(_ c: CheckedAtCase) -> Date? {
+        switch c {
+        case .never: return nil
+        case .past:  return days(-2)
+        case .now:   return Self.now
+        }
+    }
+
     private func inputs(_ c: Case) -> W.Inputs {
         let (prox, date) = earningsInputs(c.earnings)
-        return W.Inputs(earnings: prox, earningsDate: date, volumeMove: volume(c.volume), regime: regime(c.regime),
+        return W.Inputs(earnings: prox, earningsDate: date, earningsCheckedAt: checkedAt(c.checkedAt),
+                        volumeMove: volume(c.volume), regime: regime(c.regime),
                         regimeGaugedAt: days(-0.1), seasonality: season(c.season), now: Self.now)
     }
 
@@ -153,10 +170,10 @@ struct StockSageCatalystWatchPropertyTests {
 
     // MARK: Tests
 
-    @Test("every input combination yields exactly the documented precedence (n=52,500 briefs)")
+    @Test("every input combination yields exactly the documented precedence (n=157,500 briefs)")
     func precedenceMatchesOracleAcrossTheWholeGrid() {
         let cases = Self.allCases
-        #expect(cases.count == 52_500)
+        #expect(cases.count == 157_500)
         var mismatches: [String] = []
         for c in cases {
             let b = W.brief(for: idea(c), inputs: inputs(c))
@@ -169,30 +186,40 @@ struct StockSageCatalystWatchPropertyTests {
         #expect(mismatches.isEmpty, "first mismatches: \(mismatches)")
     }
 
-    @Test("structural invariants hold for every brief: unique kinds/ids, none ⇒ no secondaries, dates only on earnings")
+    @Test("structural invariants hold for every brief: unique kinds/ids, none ⇒ no secondaries, dates only on earnings or a dated 'none known' record")
     func structuralInvariants() {
         var checked = 0
         for c in Self.allCases {
             let b = W.brief(for: idea(c), inputs: inputs(c))
+            let chk = checkedAt(c.checkedAt)
             checked += 1
             #expect(b.all.count == b.secondary.count + 1)
             #expect(Set(b.all.map(\.kind)).count == b.all.count, "duplicate kind in \(c)")
             #expect(Set(b.all.map(\.id)).count == b.all.count, "duplicate id in \(c)")
             if b.primary.kind == .none {
                 #expect(b.secondary.isEmpty)
-                #expect(b.primary.why == ["Next earnings date not available for this name — not fetched yet, or the source declined.",
-                                          "No volume-confirmed move on the latest cached bar."])
+                if let chk {
+                    #expect(b.primary.why == ["Next earnings date requested from Yahoo calendarEvents — none returned"])
+                    #expect(b.primary.date == chk)
+                    #expect(b.primary.source == "Yahoo calendarEvents (no date returned)")
+                } else {
+                    #expect(b.primary.why == ["Next earnings date not available for this name — not fetched yet, or the source declined.",
+                                              "No volume-confirmed move on the latest cached bar."])
+                    #expect(b.primary.date == nil)
+                    #expect(b.primary.source == "—")
+                }
             }
             for item in b.all {
                 #expect(item.symbol == "SWEEP")
-                #expect((item.date != nil) == (item.kind == .earnings), "date on a non-earnings item in \(c)")
+                let expectDate = item.kind == .earnings || (item.kind == .none && chk != nil)
+                #expect((item.date != nil) == expectDate, "date on an unexpected item in \(c)")
                 #expect(!item.headline.isEmpty && !item.watch.isEmpty && !item.why.isEmpty && !item.source.isEmpty)
                 #expect(item.why.count <= 3)
             }
             // A report that already happened (>24h ago) must never surface anywhere.
             if c.earnings == .past3d { #expect(!b.all.contains { $0.kind == .earnings }, "past earnings resurrected in \(c)") }
         }
-        #expect(checked == 52_500)
+        #expect(checked == 157_500)
     }
 
     @Test("no item in the whole grid contains forecast language (honesty floor)")
@@ -242,7 +269,12 @@ struct StockSageCatalystWatchPropertyTests {
                     #expect(item.weight == .low && item.caveat == "Not a forecast." && item.source == "1-year+ history")
                     #expect(item.headline.contains("(n=") && item.headline.contains("tendency"))
                 case .none:
-                    #expect(item.weight == .low && item.caveat == nil && item.source == "—")
+                    #expect(item.weight == .low && item.caveat == nil)
+                    if let chk = ins.earningsCheckedAt {
+                        #expect(item.source == "Yahoo calendarEvents (no date returned)" && item.date == chk)
+                    } else {
+                        #expect(item.source == "—" && item.date == nil)
+                    }
                 }
             }
         }
