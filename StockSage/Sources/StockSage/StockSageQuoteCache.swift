@@ -20,13 +20,21 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         /// 0%-move "hold". A cache file written before this field existed simply won't decode
         /// (same fallback as no cache today — `load()` returns nil) rather than guess the flag.
         let isNewListing: Bool
+        /// The quote's own MARKET timestamp when it was cached. Optional, so a cache file written
+        /// before this field existed still decodes (synthesized `decodeIfPresent`) — unlike
+        /// `isNewListing` above, which is non-optional and hard-fails an old file. WITHOUT this,
+        /// every restored row hit the fail-closed `nil marketTime ⇒ STALE` rule (owner-signed
+        /// 2026-07-27) and the whole board badged stale on launch even when the cache was seconds old.
+        let marketTime: Date?
 
-        init(symbol: String, price: Double, previousClose: Double, time: Date, isNewListing: Bool = false) {
+        init(symbol: String, price: Double, previousClose: Double, time: Date,
+             isNewListing: Bool = false, marketTime: Date? = nil) {
             self.symbol = symbol
             self.price = price
             self.previousClose = previousClose
             self.time = time
             self.isNewListing = isNewListing
+            self.marketTime = marketTime
         }
     }
     var entries: [Entry]
@@ -40,7 +48,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         let entries = symbols.compactMap { s -> Entry? in
             guard let q = s.latest else { return nil }
             return Entry(symbol: s.symbol, price: q.price, previousClose: q.previousPrice, time: q.time,
-                        isNewListing: newListings.contains(s.symbol.uppercased()))
+                        isNewListing: newListings.contains(s.symbol.uppercased()), marketTime: q.marketTime)
         }
         return StockSageQuoteCache(entries: entries, savedAt: savedAt)
     }
@@ -52,7 +60,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         entries.map { e in
             StockSageSymbol(symbol: e.symbol, market: marketFor(e.symbol), quotes: [
                 StockSageQuote(price: e.previousClose, previousPrice: e.previousClose, time: e.time.addingTimeInterval(-86_400)),
-                StockSageQuote(price: e.price, previousPrice: e.previousClose, time: e.time),
+                StockSageQuote(price: e.price, previousPrice: e.previousClose, time: e.time, marketTime: e.marketTime),
             ])
         }
     }

@@ -31,6 +31,41 @@ struct StockSageQuoteCacheTests {
         #expect(rebuilt.entries.count == 2)
         #expect(rebuilt.entries.first { $0.symbol == "AAPL" }?.price == 110)
         #expect(rebuilt.entries.first { $0.symbol == "AAPL" }?.previousClose == 100)
+        #expect(rebuilt.entries.first { $0.symbol == "AAPL" }?.marketTime == nil)   // no marketTime supplied in the source cache
+    }
+
+    // Q4 (2026-07-28 review): Entry had no marketTime, so a cache-restored row hit the
+    // fail-closed `nil marketTime ⇒ STALE` rule (StockSageModels.swift) even when the cache
+    // was written seconds ago. marketTime must round-trip through Codable AND survive the
+    // symbols(marketFor:) → from(symbols:) rebuild, landing on the LATEST quote only.
+    @Test func roundTripPreservesMarketTimeAndUnstalesFreshCache() {
+        let mt = Date(timeIntervalSince1970: 1_700_000_000)
+        let c = StockSageQuoteCache(entries: [
+            .init(symbol: "AAPL", price: 110, previousClose: 100, time: mt, marketTime: mt)
+        ], savedAt: mt)
+
+        // Codable round-trip preserves marketTime.
+        let data = try! JSONEncoder().encode(c)
+        let back = try! JSONDecoder().decode(StockSageQuoteCache.self, from: data)
+        #expect(back == c)
+        #expect(back.entries.first?.marketTime == mt)
+
+        // Rebuild threads marketTime onto the LATEST quote only, and a 1h-old cache reads fresh.
+        let row = c.symbols(marketFor: { _ in "M" })[0]
+        #expect(row.latest?.marketTime == mt)
+        #expect(row.isStale(asOf: mt.addingTimeInterval(3600)) == false)
+
+        // from(symbols:) round-trips marketTime back into the Entry.
+        let rebuilt = StockSageQuoteCache.from(symbols: [row], savedAt: mt)
+        #expect(rebuilt.entries.first?.marketTime == mt)
+
+        // Legacy file with no marketTime key still decodes, and stays fail-closed stale.
+        let legacy = #"{"entries":[{"symbol":"A","price":1,"previousClose":1,"time":0,"isNewListing":false}],"savedAt":0}"#
+        let legacyCache = try? JSONDecoder().decode(StockSageQuoteCache.self, from: Data(legacy.utf8))
+        #expect(legacyCache != nil)
+        #expect(legacyCache?.entries.first?.marketTime == nil)
+        let legacyRow = legacyCache!.symbols(marketFor: { _ in "M" })[0]
+        #expect(legacyRow.isStale(asOf: Date(timeIntervalSince1970: 0)) == true)
     }
 
     // Finding 4: `isNewListing` used to be dropped entirely on the way to disk (Entry had no
