@@ -749,14 +749,23 @@ struct MarketsView: View {
         // materially old (markets closed / feed stale), drop the green "Live" + "~15 min" claim and
         // say plainly it's a last close as of that time. >1h tolerates the normal ~15-min delay.
         // Judge "live" by the CLOSEABLE (non-24/7) board's freshness — an always-on crypto quote must
-        // not mask a days-old weekend equity close. Fall back to the global asOf only when there are no
-        // closeable assets (an all-crypto board, which genuinely is live).
+        // not mask a days-old weekend equity close.
+        // FAIL-CLOSED, matching StockSageQuoteFreshness (owner-signed 2026-07-27) and review item Q8
+        // (2026-07-28): an unknown `asOf` means we cannot VERIFY freshness, so it must never render as
+        // "Live". The old `?? false` (all-crypto boards are always live) died with the 2026-07-16
+        // Tadawul+NASDAQ restriction — the universe carries no 24/7 asset any more, so nil now only
+        // means "the feed gave us no timestamps at all".
         let asOf = store.closeableQuoteAsOf ?? store.quoteAsOf
-        let stale = asOf.map { Date().timeIntervalSince($0) > 3600 } ?? false
+        let stale = Self.freshnessStale(asOf: asOf, now: Date())
         let tint = stale ? DS.Palette.warningSoft : DS.Palette.successSoft
-        let text = (stale && asOf != nil)
-            ? "Prices are the last close as of \(asOf!.formatted(date: .abbreviated, time: .shortened)) — markets may be closed; NOT live. Educational, not financial advice."
-            : "Live Tadawul + NASDAQ quotes across \(StockSageUniverse.marketCount) market groups (\(StockSageUniverse.worldwide.count) names). Prices may be delayed ~15 min — educational, not financial advice."
+        let text: String
+        if stale, let asOf {
+            text = "Prices are the last close as of \(asOf.formatted(date: .abbreviated, time: .shortened)) — markets may be closed; NOT live. Educational, not financial advice."
+        } else if stale {
+            text = "Price age unknown — the feed returned no market timestamps. Refresh for live. Educational, not financial advice."
+        } else {
+            text = "Live Tadawul + NASDAQ quotes across \(StockSageUniverse.marketCount) market groups (\(StockSageUniverse.worldwide.count) names). Prices may be delayed ~15 min — educational, not financial advice."
+        }
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: DS.Space.sm) {
                 Circle().fill(tint).frame(width: 7, height: 7)
@@ -1086,11 +1095,14 @@ struct MarketsView: View {
     /// otherwise the educational tagline.
     private var headerSubtitle: String {
         if !store.isSampleData, let when = store.lastUpdated {
-            // Reuse the same staleness logic as liveBanner so the header and banner never contradict.
+            // Reuse the same FAIL-CLOSED staleness logic as liveBanner (review item Q8, 2026-07-28)
+            // so the header and banner never contradict, and an unknown asOf never reads as live.
             let asOf = store.closeableQuoteAsOf ?? store.quoteAsOf
-            let stale = asOf.map { Date().timeIntervalSince($0) > 3600 } ?? false
+            let stale = Self.freshnessStale(asOf: asOf, now: Date())
             if stale, let asOf {
                 return "Last close · \(StockSageUniverse.marketCount) market groups · as of \(asOf.formatted(date: .abbreviated, time: .shortened))"
+            } else if stale {
+                return "Price age unknown · \(StockSageUniverse.marketCount) market groups · refresh for live"
             }
             return "Live · \(StockSageUniverse.marketCount) market groups · updated \(Self.timeFormatter.string(from: when))"
         }
@@ -9489,6 +9501,15 @@ struct MarketsView: View {
             return StockSageScanChunking.utcDayKey(priceAsOf) != StockSageScanChunking.utcDayKey(now)
         }()
         return analysisStale || priceStale
+    }
+
+    /// FAIL-CLOSED freshness predicate shared by `liveBanner` and `headerSubtitle` (review item
+    /// Q8, 2026-07-28): an unknown `asOf` can never be judged live, so nil maps to `true` (stale),
+    /// not `false`. The prior `?? false` justified itself as "an all-crypto board is always live" —
+    /// dead since the 2026-07-16 Tadawul+NASDAQ restriction removed crypto from the universe
+    /// entirely, so nil now only means "the feed returned no market timestamps at all".
+    static func freshnessStale(asOf: Date?, now: Date) -> Bool {
+        asOf.map { now.timeIntervalSince($0) > 3600 } ?? true
     }
 
     /// Round-H: the PRICE-only half of `cardIsStale` — same utcDayKey mismatch the detail
