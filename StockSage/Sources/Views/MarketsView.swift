@@ -4164,6 +4164,13 @@ struct MarketsView: View {
                     }
                     .help("Advisor target and stop from the last ideas scan, fixed against the quote at that time — they drift as the market moves. A plan, not a prediction.")
                 }
+                // Review 2026-07-28 #13: the reason was .help-only, i.e. invisible on iPhone.
+                // It's the only thing that makes the Buy/Sell badge interpretable, so it
+                // belongs in the pixels, not a hover/long-press tooltip.
+                if let reason = signal?.reason, !reason.isEmpty {
+                    Text(reason).font(.system(size: fontCaveat)).foregroundStyle(.secondary)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
@@ -4208,8 +4215,16 @@ struct MarketsView: View {
                 }
                 .frame(width: 96, alignment: .trailing)
             }
-            // Hover quick-remove — only for user-added rows (curated rows aren't removable).
-            if sym.market == "★ My watchlist", hovered {
+            // Quick-remove — only for user-added rows (curated rows aren't removable).
+            // Hover-gated on macOS (quiet rows until pointed at); ALWAYS shown on iOS, where
+            // .onHover never fires (review 2026-07-28 #13) — the button previously did not
+            // exist on touch at all, leaving only the undiscoverable long-press below.
+            #if os(iOS)
+            let showRemove = sym.market == "★ My watchlist"
+            #else
+            let showRemove = sym.market == "★ My watchlist" && hovered
+            #endif
+            if showRemove {
                 Button { withAnimation(DS.Motion.smooth) { store.removeSymbol(sym.symbol) } } label: {
                     Image(systemName: "trash").font(.system(size: mvFont12)).foregroundStyle(DS.Palette.danger)
                 }
