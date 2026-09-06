@@ -1,5 +1,38 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Company-feed failure diagnostics — 2026-09-07 02:31 +03
+
+Native GILD coverage showed four successful checks and an unavailable Form4
+check; other symbols showed five. The specific cause is NOT established. The
+shared request/parser previously discarded every failure, so this change retains
+only a fixed typed category or HTTP status through Observation, disk Codable,
+preflight sweep and the existing per-feed status line. No raw body, URL, header,
+or localized error is retained. Valid-empty remains answered; pagination and
+oversize responses remain unavailable with their existing limits, not partial
+success. No new endpoint, retry, cap, timeout, credential access or UI screen.
+
+New regression exercises13 failure cases, cache roundtrip, secret-like sentinel
+exclusion, valid-empty and legacy records without the optional reason. The red
+attempt failed to compile against the missing interface (zero tests ran), not a
+runtime reproduction of GILD's failure. Focused16/16 passed; broad macOS1741/1741
+and iPhone17Pro(gate)1739/1739 passed, exit0, no selected failures/skips. Same
+three opt-in exclusions: CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Exact bundles:
+- `/private/tmp/stocksage-api-reasons-red-20260907-0211.xcresult`
+- `/private/tmp/stocksage-api-reasons-green-20260907-0218.xcresult`
+- `/private/tmp/stocksage-api-reasons-macos-20260907-0223.xcresult`
+- `/private/tmp/stocksage-api-reasons-ios-20260907-0230.xcresult`
+
+Installed app still d4967a0; this diagnostics update is not installed yet. Main
+worktree untouched. No pushes, actual trades or duplicate model/Stocks servers.
+Owner02:19 requested Qwen set primary Buy/Strong Buy badges. Planned primary
+AI assessment with model/data provenance, rules comparison, explicit missing/
+invalid state, and unchanged deterministic risk/execution checks; not implemented
+in this diagnostics commit. ORCL's live app cache already records confirmed
+September10 earnings from Massive/Benzinga. Oracle's September2 official IR
+announcement independently confirms September10,2026 after US market close.
+No calendar/cache edit was needed; the date alone does not imply a positive return.
+
 ## Cited narrator provenance fixed — 2026-09-07 02:05 +03
 
 Live SBLK/Qwen output reproduced a footer bug: any positive evidence count

@@ -13,6 +13,14 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest02:31 +03: per-company feed failures now preserve safe typed diagnostics
+through request/parser, cache and existing UI. Focused16; macOS1741/iPhone1739
+all passed. Not installed yet; GILD Form4's actual cause still unverified.
+No provider caps/retries/credentials changed. Owner requested primary Qwen
+Buy/Strong Buy assessment; plan is separate from deterministic risk/execution
+and not implemented in this commit. ORCL's app cache and official Oracle IR
+both confirm September10 earnings; no manual cache edit needed. See HANDOFF.
+
 Latest02:05 +03: cited explanation footers retain the generating backend/model.
 Regression red then23/23 green; canonical1740macOS/1738iPhone passed. Installed
 the tested update, preserving the previous bundle in Trash and all user data.

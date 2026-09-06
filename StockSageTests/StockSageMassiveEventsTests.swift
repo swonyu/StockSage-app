@@ -172,6 +172,37 @@ struct StockSageMassiveEventsTests {
         #expect(!late.fresh(at: now.addingTimeInterval(86_400)))
     }
 
+    @Test func failuresKeepSafeReasonsThroughTheRealResponseCacheAndUISeam() throws {
+        let sentinel = "FIXTURE_SECRET_DO_NOT_RENDER"
+        let cases: [(Result<Data, E.Failure>, E.Failure)] = [
+            (.failure(.http(401)), .http(401)), (.failure(.http(403)), .http(403)),
+            (.failure(.http(429)), .http(429)), (.failure(.http(503)), .http(503)),
+            (.failure(.transport), .transport), (.failure(.timedOut), .timedOut), (.failure(.cooldown), .cooldown),
+            (.failure(.externalAccessDisabled), .externalAccessDisabled),
+            (.failure(.cancelled), .cancelled), (.failure(.requestUnavailable), .requestUnavailable),
+            (.success(Data("{\"error\":\"\(sentinel)\"}".utf8)), .invalidPayload),
+            (.success(body("", tail: ",\"next_url\":\"https://api.massive.com/next?apiKey=\(sentinel)\"")), .incompleteResponse),
+            (.success(Data(repeating: 0, count: 2_000_001)), .responseTooLarge)]
+        for (response, reason) in cases {
+            let record = E.observation(response, feed: .insider, symbol: "AAPL", now: now)
+            #expect(record.outcome == .unavailable && record.event == nil && record.failure == reason)
+            let encoded = try JSONEncoder().encode(record)
+            let restored = try JSONDecoder().decode(E.Observation.self, from: encoded)
+            #expect(restored == record)
+            let copy = E.statusLine(.insider, observation: restored, now: now)
+            #expect(copy.contains(reason.message) && copy.contains("not an empty result"))
+            #expect(!copy.contains(sentinel) && !String(decoding: encoded, as: UTF8.self).contains(sentinel))
+        }
+        let empty = E.observation(.success(body("")), feed: .insider, symbol: "AAPL", now: now)
+        #expect(empty.outcome == .answered && empty.failure == nil && empty.event == nil)
+        let legacy = E.Observation(symbol: "AAPL", feed: .insider, checkedAt: now, outcome: .unavailable, event: nil)
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        json.removeValue(forKey: "failure")
+        let decoded = try JSONDecoder().decode(E.Observation.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded.failure == nil && decoded.outcome == .unavailable)
+        #expect(E.statusLine(.insider, observation: decoded, now: now).contains("reason not recorded"))
+    }
+
     @Test func linksStayOnTheirAttributedPublisherAndChangedFactsInvalidateNarration() {
         #expect(E.sourceLink("https://www.sec.gov/Archives/example.htm", feed: .insider) != nil)
         #expect(E.sourceLink("https://www.benzinga.com/news/example", feed: .ratings) != nil)

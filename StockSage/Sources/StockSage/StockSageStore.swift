@@ -1943,12 +1943,13 @@ final class StockSageStore: ObservableObject {
             let now = Date()
             let due = symbols.filter { companyEventChecks[$0]?[feed]?.fresh(at: now) != true }
             guard !due.isEmpty else { continue }
-            let reachable = await StockSageMassiveEvents.probe(feed)
+            let failure = await StockSageMassiveEvents.probe(feed)
             guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
-            if !reachable {
+            if let failure {
                 var updated = companyEventChecks
                 for symbol in due {
-                    updated[symbol, default: [:]][feed] = .init(symbol: symbol, feed: feed, checkedAt: now, outcome: .unavailable, event: nil)
+                    updated[symbol, default: [:]][feed] = .init(symbol: symbol, feed: feed, checkedAt: now,
+                                                              outcome: .unavailable, event: nil, failure: failure)
                 }
                 companyEventChecks = updated
                 continue

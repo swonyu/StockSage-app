@@ -3,6 +3,28 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## Company-feed diagnostics and ORCL — 02:31 +03
+
+Native company-feed disclosures showed GILD4/5 (Form4 unavailable), with five
+successful checks on other symbols. Ratings, dividends,8-K and news records
+were rendered. These are consumer observations, not full route acceptance;
+GILD's precise failure is still unknown, not assumed to be an entitlement issue.
+Added fixed failure categories/HTTP status through the real shared response,
+cache and UI path. Future due checks can identify HTTP/transport/timeout,
+cooldown/policy/configuration, validation, pagination and size-limit failures.
+Old cache records explicitly say their reason was not recorded. No new requests,
+retries, cap changes or credential extraction. Focused16/16; macOS1741/1741 and
+iPhone1739/1739 passed. Exact evidence/limits in HANDOFF02:31. Not installed yet.
+
+Read-only ORCL app cache: priceSource massiveSIP; history source massiveDaily,
+251 bars through September4; catalyst_records_v1.json records dateKnown,
+confirmed=true, source Massive/Benzinga earnings, earningsDate September10.
+Oracle's official September2 announcement independently confirms earnings after
+US close September10,2026:
+https://investor.oracle.com/investor-news/news-details/2026/Oracle-Sets-the-Date-for-its-First-Quarter-Fiscal-Year-2027-Earnings-Announcement/default.aspx
+This confirms the scheduled date, not a beat, price direction or profitable trade.
+No data cache was edited. Qwen badge assessment is requested but not implemented.
+
 ## Latest model result — 01:49 +03
 
 Owner approved4-bit conversion/server startup at01:41. Native Catalysts settings

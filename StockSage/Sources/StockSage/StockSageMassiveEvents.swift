@@ -78,6 +78,7 @@ enum StockSageMassiveEvents {
         let checkedAt: Date
         let outcome: Outcome
         let event: Event?
+        var failure: Failure? = nil
         var key: String { symbol + "|" + feed.rawValue }
 
         func fresh(at now: Date) -> Bool {
@@ -97,12 +98,35 @@ enum StockSageMassiveEvents {
         guard let observation else { return "\(feed.source): not checked." }
         guard observation.fresh(at: now) else { return "\(feed.source): stale check; current coverage unknown." }
         let date = StockSageCatalystWatch.dateStr(observation.checkedAt)
-        guard observation.outcome == .answered else { return "\(feed.source): unavailable at \(date), not an empty result." }
+        guard observation.outcome == .answered else {
+            return "\(feed.source): unavailable at \(date), not an empty result. "
+                + (observation.failure?.message ?? "Failure reason not recorded; await the next due check.")
+        }
         return "\(feed.source): checked \(date); " + (observation.event == nil
             ? "no qualifying event in the queried \(feed.days)-day window."
             : "one selected event; open the dated record for context.")
     }
-    private nonisolated enum Failure: Error { case invalidPayload }
+    /// Only fixed categories and HTTP status codes may reach the UI/cache. Never retain raw
+    /// response bodies, request URLs, headers, or localized errors (which may contain secrets).
+    nonisolated enum Failure: Error, Codable, Sendable, Equatable {
+        case http(Int), transport, timedOut, cooldown, externalAccessDisabled, cancelled, requestUnavailable
+        case invalidPayload, incompleteResponse, responseTooLarge
+
+        var message: String {
+            switch self {
+            case .http(let code): "HTTP \(code); provider request did not succeed."
+            case .transport: "Network request failed or no HTTP response was received."
+            case .timedOut: "Network request timed out."
+            case .cooldown: "Provider access cooldown active; no new request sent."
+            case .externalAccessDisabled: "External access is disabled; no request sent."
+            case .cancelled: "Request cancelled."
+            case .requestUnavailable: "Request not made: missing configuration or unsupported input."
+            case .invalidPayload: "Response failed data validation."
+            case .incompleteResponse: "Response exceeds the one-page/100-row coverage limit; more data is required."
+            case .responseTooLarge: "Response exceeds the 2 MB validation limit."
+            }
+        }
+    }
     private nonisolated static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
@@ -159,12 +183,14 @@ enum StockSageMassiveEvents {
     /// not checked-empty. Add pagination only when this explicit coverage ceiling is measured.
     /// Select one observation per kind (latest, except the earliest upcoming ex-date).
     nonisolated static func parse(_ data: Data, feed: Feed, symbol: String, now: Date) throws -> Event? {
-        guard StockSageMassive.covers(symbol), now.timeIntervalSince1970.isFinite, data.count <= 2_000_000,
+        guard data.count <= 2_000_000 else { throw Failure.responseTooLarge }
+        guard StockSageMassive.covers(symbol), now.timeIntervalSince1970.isFinite,
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              root["status"] as? String == "OK", let rows = root["results"] as? [Any], rows.count <= 100 else {
+              root["status"] as? String == "OK", let rows = root["results"] as? [Any] else {
             throw Failure.invalidPayload
         }
-        if let next = root["next_url"], !(next is NSNull), (next as? String) != "" { throw Failure.invalidPayload }
+        guard rows.count <= 100 else { throw Failure.incompleteResponse }
+        if let next = root["next_url"], !(next is NSNull), (next as? String) != "" { throw Failure.incompleteResponse }
         var events: [Event] = []
         for value in rows {
             guard let row = value as? [String: Any] else { throw Failure.invalidPayload }
@@ -298,32 +324,44 @@ enum StockSageMassiveEvents {
     private static func available(_ feed: Feed, now: Date) -> Bool {
         StockSageMassiveEarnings.isAvailable(unavailableUntil: UserDefaults.standard.object(forKey: gateKey(feed)) as? Date, now: now)
     }
-    /// One status-only probe per due feed BEFORE the four-wide sweep, never a key/status log.
-    static func probe(_ feed: Feed) async -> Bool {
-        let now = Date()
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled, available(feed, now: now),
-              let req = request(feed, symbol: "AAPL", now: now, key: StockSageMassive.apiKey, limit: 1) else { return false }
-        return await get(req, feed: feed)?.1 == 200
+    /// One status-only probe per due feed BEFORE the four-wide sweep; nil means HTTP200,
+    /// not validated data. Preserve the same safe reason on every skipped symbol.
+    static func probe(_ feed: Feed) async -> Failure? {
+        if case .failure(let failure) = await get(feed, symbol: "AAPL", now: Date(), limit: 1) { return failure }
+        return nil
     }
     static func fetch(_ feed: Feed, symbol: String, now: Date = Date()) async -> Observation {
-        var event: Event?
-        var outcome = Observation.Outcome.unavailable
-        if ToolPolicy.isExternalAllowed, !Task.isCancelled, available(feed, now: now),
-           let req = request(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey),
-           let (data, status) = await get(req, feed: feed), status == 200 {
-            do { event = try parse(data, feed: feed, symbol: symbol, now: now); outcome = .answered }
-            catch { /* Malformed/partial stays unavailable, never checked-empty. */ }
-        }
-        return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: outcome, event: event)
+        observation(await get(feed, symbol: symbol, now: now), feed: feed, symbol: symbol, now: now)
     }
-    private static func get(_ request: URLRequest, feed: Feed) async -> (Data, Int)? {
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              let (data, response) = try? await session.data(for: request),
-              !Task.isCancelled, ToolPolicy.isExternalAllowed, let response = response as? HTTPURLResponse else { return nil }
-        if let until = StockSageMassiveEarnings.availabilityOutcome(statusCode: response.statusCode, now: Date()) {
-            UserDefaults.standard.set(until, forKey: gateKey(feed))
+    nonisolated static func observation(_ response: Result<Data, Failure>, feed: Feed, symbol: String, now: Date) -> Observation {
+        do {
+            let event = try parse(response.get(), feed: feed, symbol: symbol, now: now)
+            return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: .answered, event: event)
+        } catch {
+            return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: .unavailable,
+                               event: nil, failure: error as? Failure ?? .invalidPayload)
         }
-        return (data, response.statusCode)
+    }
+    private static func get(_ feed: Feed, symbol: String, now: Date, limit: Int = 100) async -> Result<Data, Failure> {
+        guard ToolPolicy.isExternalAllowed else { return .failure(.externalAccessDisabled) }
+        guard !Task.isCancelled else { return .failure(.cancelled) }
+        guard available(feed, now: now) else { return .failure(.cooldown) }
+        guard let request = request(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey, limit: limit) else {
+            return .failure(.requestUnavailable)
+        }
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard !Task.isCancelled else { return .failure(.cancelled) }
+            guard ToolPolicy.isExternalAllowed else { return .failure(.externalAccessDisabled) }
+            guard let response = response as? HTTPURLResponse else { return .failure(.transport) }
+            if let until = StockSageMassiveEarnings.availabilityOutcome(statusCode: response.statusCode, now: Date()) {
+                UserDefaults.standard.set(until, forKey: gateKey(feed))
+            }
+            return response.statusCode == 200 ? .success(data) : .failure(.http(response.statusCode))
+        } catch {
+            if Task.isCancelled { return .failure(.cancelled) }
+            return .failure((error as? URLError)?.code == .timedOut ? .timedOut : .transport)
+        }
     }
     private final class NoRedirect: NSObject, URLSessionTaskDelegate {
         nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
