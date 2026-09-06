@@ -65,6 +65,25 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         }
     }
 
+    // MARK: Retention merge (Q11) — a throttled/partial sweep must not erase last-good prices
+
+    /// Merge a freshly-written cache OVER the previous on-disk one so a partial/throttled sweep
+    /// (e.g. the monitor's `.core` cycle, or a stream-gap top-up) can never ERASE a symbol's
+    /// last-good disk entry merely because the feed missed it THIS cycle. Per symbol: `new`
+    /// wins wherever it has an entry; any symbol present ONLY in `previous` carries its entry
+    /// forward UNCHANGED — same price, same old `marketTime` — so freshness
+    /// (`StockSageQuoteFreshness`) still honestly reads it as stale/cached, never silently
+    /// re-stamped fresh. On-screen behavior is untouched by this — the board still only shows
+    /// what `committed` (the caller's in-memory result) contains; this only protects what
+    /// SURVIVES ON DISK for the next launch. Pure — no disk I/O — so it's unit-testable without
+    /// touching Application Support.
+    nonisolated static func merging(previous: StockSageQuoteCache?, new: StockSageQuoteCache) -> StockSageQuoteCache {
+        guard let previous else { return new }
+        let newKeys = Set(new.entries.map { $0.symbol.uppercased() })
+        let carried = previous.entries.filter { !newKeys.contains($0.symbol.uppercased()) }
+        return StockSageQuoteCache(entries: new.entries + carried, savedAt: new.savedAt)
+    }
+
     // MARK: Thin file I/O (Application Support)
 
     nonisolated static func diskURL() -> URL? {
@@ -75,13 +94,16 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         return dir.appendingPathComponent("stocksage_quote_cache.json")
     }
 
-    nonisolated static func load() -> StockSageQuoteCache? {
-        guard let url = diskURL(), let data = try? Data(contentsOf: url) else { return nil }
+    /// `url` overrides the real Application Support location — used by tests to round-trip
+    /// through a temp directory instead of touching the real disk cache (mirrors
+    /// StockSageCatalystRecordCache's seam).
+    nonisolated static func load(from url: URL? = nil) -> StockSageQuoteCache? {
+        guard let url = url ?? diskURL(), let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(StockSageQuoteCache.self, from: data)
     }
 
-    nonisolated func save() {
-        guard let url = Self.diskURL(), let data = try? JSONEncoder().encode(self) else { return }
+    nonisolated func save(to url: URL? = nil) {
+        guard let url = url ?? Self.diskURL(), let data = try? JSONEncoder().encode(self) else { return }
         try? data.write(to: url, options: .atomic)
     }
 }

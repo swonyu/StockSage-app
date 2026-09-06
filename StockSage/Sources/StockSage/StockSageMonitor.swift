@@ -118,6 +118,13 @@ final class StockSageMonitor {
                     guard !Task.isCancelled else { break }
                     await self?.runCycle()
                 }
+                // N2 (owner: "every tracked stock live"): the stream-gap top-up runs EVERY cycle,
+                // in BOTH branches above — watchlist-only mode skips `refresh(scope: .core)`
+                // entirely, which was the only poll a Tadawul board name (unstreamable — EODHD's
+                // stream is US-only) had between refreshes; without this line, turning on
+                // watchlist-only silently stopped tracking every Tadawul name.
+                guard !Task.isCancelled else { break }
+                await StockSageStore.shared.refreshStreamGap()
                 // Throttle under pressure — back off to 2× the interval when the machine is
                 // stressed. STANDALONE DEVIATION (extraction @ fc8f383): the parent folded
                 // memory pressure + thermal state via its MemoryManager (part of the LLM stack,

@@ -97,4 +97,81 @@ struct StockSageQuoteCacheTests {
         #expect(rebuilt.entries.first { $0.symbol == "NEWCO" }?.isNewListing == true)
         #expect(rebuilt.entries.first { $0.symbol == "AAPL" }?.isNewListing == false)
     }
+
+    // MARK: - Q11: retention merge — a throttled/partial sweep must not erase last-good prices
+
+    // A pure merge: no disk involved, just the per-symbol union/replace rule itself.
+    @Test func mergingReplacesReturnedSymbolsAndKeepsMissedOnesAtTheirOldEntry() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let t1 = t0.addingTimeInterval(3600)   // one hour later — the second sweep
+        let previous = StockSageQuoteCache(entries: [
+            .init(symbol: "AAPL", price: 100, previousClose: 99, time: t0, marketTime: t0),
+            .init(symbol: "2222.SR", price: 30, previousClose: 29, time: t0, marketTime: t0),
+        ], savedAt: t0)
+        // Second sweep is a throttled/partial one: only AAPL came back this time — 2222.SR was
+        // MISSED (e.g. a `.core` cycle that didn't reach it, or the feed simply dropped it).
+        let secondSweep = StockSageQuoteCache(entries: [
+            .init(symbol: "AAPL", price: 105, previousClose: 99, time: t1, marketTime: t1),
+        ], savedAt: t1)
+
+        let merged = StockSageQuoteCache.merging(previous: previous, new: secondSweep)
+
+        // The symbol the feed actually returned this sweep is REPLACED with the new entry.
+        let aapl = merged.entries.first { $0.symbol == "AAPL" }
+        #expect(aapl?.price == 105)
+        #expect(aapl?.marketTime == t1)
+
+        // The MISSED symbol keeps its PREVIOUS entry verbatim — same price, same old marketTime —
+        // so freshness (StockSageQuoteFreshness) still honestly reads it as stale/cached, never
+        // silently re-stamped fresh by inheriting the new sweep's savedAt.
+        let sr = merged.entries.first { $0.symbol == "2222.SR" }
+        #expect(sr?.price == 30)
+        #expect(sr?.marketTime == t0)
+        #expect(merged.entries.count == 2)
+        #expect(merged.savedAt == t1)   // savedAt reflects when THIS sweep ran, not any one entry
+    }
+
+    @Test func mergingWithNoPreviousCacheReturnsTheNewCacheUnchanged() {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let new = StockSageQuoteCache(entries: [
+            .init(symbol: "AAPL", price: 105, previousClose: 99, time: t0),
+        ], savedAt: t0)
+        #expect(StockSageQuoteCache.merging(previous: nil, new: new) == new)
+    }
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockSageQuoteCacheTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    // The full round trip: save a first sweep, merge a throttled second sweep OVER it via the
+    // load(from:)/save(to:) temp-directory seam, reload, and confirm the merge survived the
+    // actual disk write — never touching real Application Support.
+    @Test func roundTripsTheRetentionMergeThroughDiskAtATempLocation() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("stocksage_quote_cache.json")
+
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let t1 = t0.addingTimeInterval(3600)
+        let firstSweep = StockSageQuoteCache(entries: [
+            .init(symbol: "AAPL", price: 100, previousClose: 99, time: t0, marketTime: t0),
+            .init(symbol: "2222.SR", price: 30, previousClose: 29, time: t0, marketTime: t0),
+        ], savedAt: t0)
+        firstSweep.save(to: url)
+
+        let secondSweep = StockSageQuoteCache(entries: [
+            .init(symbol: "AAPL", price: 105, previousClose: 99, time: t1, marketTime: t1),
+        ], savedAt: t1)
+        let merged = StockSageQuoteCache.merging(previous: StockSageQuoteCache.load(from: url), new: secondSweep)
+        merged.save(to: url)
+
+        let reloaded = StockSageQuoteCache.load(from: url)
+        #expect(reloaded?.entries.count == 2)
+        #expect(reloaded?.entries.first { $0.symbol == "AAPL" }?.price == 105)
+        #expect(reloaded?.entries.first { $0.symbol == "2222.SR" }?.price == 30)
+        #expect(reloaded?.entries.first { $0.symbol == "2222.SR" }?.marketTime == t0)
+    }
 }

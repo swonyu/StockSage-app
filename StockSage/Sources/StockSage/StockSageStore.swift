@@ -397,7 +397,27 @@ final class StockSageStore: ObservableObject {
     /// `.core` is the curated ~210-name `groups`-derived set — used ONLY by the monitor's
     /// unattended background auto-cycle (review round-2 finding 1) so a ~45s unpaced loop can't
     /// pull the whole universe every cycle (feed-cooldown risk). See `StockSageMonitor.start`'s loop.
-    enum TrackedScope { case full, core }
+    /// `.streamGap` (B2, owner: "every tracked stock live") is neither a base-universe slice nor
+    /// `.full`/`.core`'s composition — it resolves to `streamGapCandidates`: every TRACKED symbol
+    /// (`trackedSymbolsUnion`) minus what `StockSageLiveStream` already streams, filtered down to
+    /// symbols whose market is trading right now. It exists because the live WebSocket stream is
+    /// US-only (StockSageLiveStream's own doc) — Tadawul names (and anything else unsubscribed)
+    /// have no other live path once `.core`'s poll is skipped (watchlist-only mode, N2).
+    enum TrackedScope { case full, core, streamGap }
+
+    /// Pure diff: which of `tracked` still needs a poll because the live stream doesn't carry it
+    /// AND its market is actually open right now. `subscribed` is
+    /// `StockSageLiveStream.shared.subscribed` — the union of what was ACTUALLY sent to a
+    /// `subscribe` frame, not merely requested — so a symbol the stream is still trying to
+    /// connect for still counts as a gap. `isTrading` is injected (rather than calling
+    /// `marketIsTrading` inline) so this stays a pure function of its three inputs, directly
+    /// unit-testable without touching the wall clock or `StockSageLiveStream.shared`.
+    nonisolated static func streamGapCandidates(
+        tracked: [String], subscribed: Set<String>, isTrading: (String) -> Bool
+    ) -> [String] {
+        let subscribedUpper = Set(subscribed.map { $0.uppercased() })
+        return tracked.filter { !subscribedUpper.contains($0.uppercased()) && isTrading($0) }
+    }
 
     /// The FX pairs the engine needs for currency conversions of KEPT-universe names
     /// (post-restriction: `.SR` ⇒ SAR is the only non-USD currency). Fetched by
@@ -455,7 +475,21 @@ final class StockSageStore: ObservableObject {
     /// Every tracked instrument definition: the curated universe + the user's added tickers +
     /// off-board portfolio/journal-open holdings (B1, deduped). Drives both the live feed and the
     /// ideas analysis, so user picks AND off-board holdings survive refreshes and get priced.
+    /// `.streamGap` (B2) is a different shape entirely — not a base-universe composition, just
+    /// the tracked-minus-streamed diff — so it's branched separately rather than folded into
+    /// `composeTrackedDefs`. Market labels for the synthesized rows come from the CURRENT board
+    /// (a symbol already on screen keeps its known label); an as-yet-unseen tracked symbol falls
+    /// back to `userMarketLabel`, the same convention `composeTrackedDefs` uses for one.
     private func trackedDefs(scope: TrackedScope = .full) -> [StockSageSymbol] {
+        guard scope != .streamGap else {
+            let candidates = Self.streamGapCandidates(
+                tracked: trackedSymbolsUnion,
+                subscribed: StockSageLiveStream.shared.subscribed,
+                isTrading: { Self.marketIsTrading(symbol: $0) }
+            )
+            let knownLabels = Dictionary(symbols.map { ($0.symbol.uppercased(), $0.market) }, uniquingKeysWith: { a, _ in a })
+            return candidates.map { StockSageSymbol(symbol: $0, market: knownLabels[$0.uppercased()] ?? Self.userMarketLabel) }
+        }
         let base = scope == .full ? StockSageUniverse.worldwide : StockSageUniverse.core
         return Self.composeTrackedDefs(base: base, userSymbols: userSymbols, offBoardHoldings: offBoardHoldingSymbols)
     }
@@ -2203,6 +2237,23 @@ final class StockSageStore: ObservableObject {
         return phase == .open || phase == .preMarket || phase == .afterHours
     }
 
+    /// B2/N2 (owner: "every tracked stock live"): poll every tracked symbol the live stream
+    /// doesn't cover (Tadawul, or anything else the stream hasn't subscribed) while its market is
+    /// open, and merge whatever comes back into the board. Deliberately calls `mergeLiveQuotes`
+    /// — NOT `refresh()` — so this stays a light per-cycle top-up: no coverage-guard bail, no
+    /// disk-cache write, no `lastFullRefreshAt` stamp (that would wrongly re-trigger the
+    /// catalyst rescan every cycle for a sweep touching a handful of rows). Called by
+    /// `StockSageMonitor` every cycle REGARDLESS of watchlist-only mode, because that mode skips
+    /// `refresh(scope: .core)` entirely — without this, watchlist-only + a Tadawul board name
+    /// leaves that name polled by nothing at all (N2).
+    func refreshStreamGap() async {
+        guard ToolPolicy.webToolsDisabledReason() == nil else { return }
+        let candidates = trackedDefs(scope: .streamGap).map(\.symbol)
+        guard !candidates.isEmpty else { return }
+        let quotes = await StockSageQuoteService.fetchQuotes(for: candidates)
+        mergeLiveQuotes(quotes)
+    }
+
     /// Fetch ONE symbol's quote now (idea detail opens call this) and merge it into the board
     /// row and the matching idea's price/priceAsOf. Returns the quote, nil on feed miss.
     @discardableResult
@@ -2359,7 +2410,15 @@ final class StockSageStore: ObservableObject {
         // cycle) — caching only `live` dropped them, so a tracked ticker vanished from the offline /
         // last-good board on next launch.
         loadedFromCache = false
-        StockSageQuoteCache.from(symbols: committed, savedAt: lastUpdated ?? Date(), newListings: newListings).save()
+        // Q11: a scoped/throttled sweep's `committed` legitimately omits an in-scope CURATED
+        // symbol the feed missed this cycle (no preservation lane covers that case — only
+        // user-market and out-of-scope rows are preserved above) — writing `committed` straight
+        // to disk would ERASE that symbol's last-good cache entry every time the feed hiccups on
+        // it. Merge over whatever is already on disk so a missed symbol keeps its last-good
+        // price/marketTime; on-screen (`committed`/`symbols`) is unaffected — this only protects
+        // what's persisted for the next launch.
+        let freshCache = StockSageQuoteCache.from(symbols: committed, savedAt: lastUpdated ?? Date(), newListings: newListings)
+        StockSageQuoteCache.merging(previous: StockSageQuoteCache.load(), new: freshCache).save()
     }
 
     func fetchAllSymbols() -> [StockSageSymbol] {
