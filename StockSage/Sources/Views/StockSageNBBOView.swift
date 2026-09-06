@@ -34,6 +34,10 @@ struct StockSageNBBOView: View {
                         } else if let spread = quote.spreadBps(at: context.date) {
                             Text(String(format: "Live quote · spread %.2f bps", spread))
                                 .font(.caption).foregroundStyle(.secondary)
+                            Text(quote.costConditionVerified
+                                 ? StockSageNetEdge.costsDisplayLabel(forSymbol: symbol, advDollar: nil, nbbo: quote, now: context.date)
+                                 : "Quote condition/indicators not verified for costs — default estimate retained.")
+                                .font(.caption).foregroundStyle(.secondary)
                         } else {
                             Text(quote.isFresh(at: context.date)
                                  ? "One-sided, locked or crossed quote — spread unavailable."
@@ -46,7 +50,7 @@ struct StockSageNBBOView: View {
                         Text("No authenticated bid/ask received. Enable live prices with your Massive key; last trade is shown separately.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Consolidated US quote, not a Nasdaq-only book or guaranteed fill. Ranking and tickets still use estimated costs.")
+                    Text("Consolidated US quote, not a Nasdaq-only book or guaranteed fill. Eligible fresh spreads can raise estimated costs; the spread floor and estimated slippage/fees remain.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .fixedSize(horizontal: false, vertical: true)

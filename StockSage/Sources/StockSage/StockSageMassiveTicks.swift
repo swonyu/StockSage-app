@@ -162,6 +162,33 @@ enum StockSageMassiveTicks {
         return values
     }
 
+    /// Only a complete, unambiguous reference can qualify a cost observation.
+    /// https://massive.com/docs/rest/stocks/market-operations/condition-codes
+    nonisolated static func parseRegularQuoteConditions(_ data: Data) throws -> Set<Int64> {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["status"] as? String == "OK", root["next_url"] == nil,
+              let rows = root["results"] as? [[String: Any]], rows.count <= 1_000 else { throw Failure.invalidPayload }
+        var seen: Set<Int64> = []
+        var regular: Set<Int64> = []
+        for row in rows {
+            guard let id = StockSageMassive.int64(row["id"]), id >= 0,
+                  seen.insert(id).inserted else { throw Failure.invalidPayload }
+            guard row["asset_class"] as? String == "stocks",
+                  (row["data_types"] as? [String])?.contains("quote") == true,
+                  row["type"] as? String == "quote_condition", row["legacy"] == nil || row["legacy"] as? Bool == false,
+                  row["exchange"] == nil,
+                  (row["sip_mapping"] as? [String: String])?["UTP"] == "R" else { continue }
+            regular.insert(id)
+        }
+        return regular
+    }
+
+    static func regularQuoteConditions() async throws -> Set<Int64> {
+        guard let url = URL(string: StockSageMassive.host + "/v3/reference/conditions?asset_class=stocks&data_type=quote&limit=1000"),
+              let request = authorized(url, key: StockSageMassive.apiKey) else { throw Failure.unavailable }
+        return try parseRegularQuoteConditions(await data(for: request))
+    }
+
     static func fetch(symbol: String, from: Date, to: Date) async -> Tape {
         var tape = Tape()
         let key = StockSageMassive.apiKey

@@ -6,7 +6,8 @@ import Foundation
 // and commission. On a wide 4:1 setup the costs barely register; on a thin, high-turnover
 // flip they can eat the entire edge. This nets them out: round-trip cost shrinks the reward
 // AND widens the risk, so the NET R:R is what you actually trade. Pure + deterministic.
-// Honest: the cost inputs are ESTIMATES — your real spread/slippage will differ.
+// Eligible fresh SIP spreads can raise the spread estimate; floors, slippage and fees
+// remain assumptions. Even a measured spread is not a guaranteed execution price.
 
 struct NetEdge: Sendable, Equatable {
     let grossRR: Double
@@ -98,7 +99,19 @@ enum StockSageNetEdge {
         return CostAssumption(spreadBps: 8, slippageBps: 5, assetClass: "US large-cap")                             // 13bps
     }
 
-    /// Net reward:risk for a symbol using its asset-class default round-trip costs — ONE source of
+    /// Current cost inputs. A verified fresh US book can only INCREASE the spread floor;
+    /// two half-spread crossings equal this full spread. Other legs remain estimates.
+    /// Symbol-only historical backtests deliberately keep using defaultCosts (no lookahead).
+    nonisolated static func costs(forSymbol symbol: String, nbbo: StockSageNBBO?, now: Date = Date()) -> CostAssumption {
+        let base = defaultCosts(forSymbol: symbol)
+        guard StockSageMassive.covers(symbol), let nbbo, nbbo.symbol.uppercased() == symbol.uppercased(),
+              nbbo.costConditionVerified, let spread = nbbo.spreadBps(at: now) else { return base }
+        return CostAssumption(spreadBps: max(base.spreadBps, spread), slippageBps: base.slippageBps,
+                              assetClass: base.assetClass, takerFeeBps: base.takerFeeBps,
+                              perOrderMinimum: base.perOrderMinimum)
+    }
+
+    /// Net reward:risk for a symbol using its current round-trip costs — ONE source of
     /// truth so the on-screen trade gate and the copied broker plan can't disagree on go/no-go. nil
     /// when the gross setup is degenerate (then callers fall back to gross). netRR is independent of
     /// winProb, so callers needing only the ratio can omit it. `annualFinancingRate`/`holdDays`
@@ -107,13 +120,21 @@ enum StockSageNetEdge {
     /// can't disagree with the ranking-driving `netEVR`/`netVelocity` figures for the same idea.
     nonisolated static func netRR(symbol: String, entry: Double, stop: Double, target: Double,
                                   annualFinancingRate: Double = 0, holdDays: Double = 0,
-                                  winProb: Double? = nil) -> Double? {
-        let c = defaultCosts(forSymbol: symbol)
+                                  winProb: Double? = nil, nbbo: StockSageNBBO? = nil,
+                                  now: Date = Date()) -> Double? {
+        let c = costs(forSymbol: symbol, nbbo: nbbo, now: now)
         return evaluate(entry: entry, stop: stop, target: target,
                         spreadBps: c.spreadBps, slippageBps: c.slippageBps,
                         takerFeeBps: c.takerFeeBps,
                         annualFinancingRate: annualFinancingRate, holdDays: holdDays,
                         winProb: winProb)?.netRR
+    }
+
+    nonisolated static func netRR(for idea: StockSageIdea, now: Date = Date()) -> Double? {
+        guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return nil }
+        let (rate, days) = StockSageExpectedValue.financingCostInputs(for: idea)
+        return netRR(symbol: idea.symbol, entry: idea.price, stop: stop, target: target,
+                     annualFinancingRate: rate, holdDays: days, nbbo: idea.nbbo, now: now)
     }
 
     /// Conservative retail-honest annualized borrow/margin-cost ESTIMATE for a general-collateral
@@ -264,15 +285,17 @@ extension StockSageNetEdge {
         }
     }
 
-    /// DISPLAY-ONLY label for the round-trip cost line: a single point ("~13bps est. US
-    /// large-cap") everywhere EXCEPT crypto, where a flat point is dishonest (BTC and a thin alt
-    /// share one 70bps default) — crypto gets the tier-aware LOW–HIGH band this file already
-    /// computes ("~160–440bps est. crypto"). Does not change `defaultCosts`, `roundTripBps`, or
-    /// any value feeding the gate/ranking math — those still read `defaultCosts(forSymbol:)`
-    /// untouched. Pure; nil `advDollar` still yields a band (honesty floor: unknown liquidity
-    /// tiers to `.mid`, per `cryptoTier`, never to "no band").
-    nonisolated static func costsDisplayLabel(forSymbol symbol: String, advDollar: Double?) -> String {
-        let costs = defaultCosts(forSymbol: symbol)
+    /// Label the SAME current cost selection as ranking/gates. A verified live spread
+    /// identifies its measured leg separately from the retained floor and other estimates.
+    /// Crypto retains its existing display-only band and separate optimism disclosure.
+    nonisolated static func costsDisplayLabel(forSymbol symbol: String, advDollar: Double?,
+                                             nbbo: StockSageNBBO? = nil, now: Date = Date()) -> String {
+        let costs = costs(forSymbol: symbol, nbbo: nbbo, now: now)
+        if StockSageMassive.covers(symbol), let nbbo, nbbo.symbol.uppercased() == symbol.uppercased(),
+           nbbo.costConditionVerified, let spread = nbbo.spreadBps(at: now) {
+            return String(format: "~%.2fbps est. total; Massive SIP spread %.2fbps (%.2fbps floor); slippage/fees estimated",
+                          costs.roundTripBps, spread, defaultCosts(forSymbol: symbol).spreadBps)
+        }
         guard costs.assetClass == "crypto" else {
             return "~\(Int(costs.roundTripBps))bps est. \(costs.assetClass)"
         }

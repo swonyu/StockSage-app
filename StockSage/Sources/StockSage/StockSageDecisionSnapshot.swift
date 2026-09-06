@@ -190,12 +190,7 @@ enum StockSageDecisionSnapshotBuilder {
         let netEVR = StockSageExpectedValue.netEVR(for: idea, calibration: calibration)
         let netVelocity = StockSageExpectedValue.netVelocity(for: idea, holds: holds, calibration: calibration)
 
-        let netRR: Double? = {
-            guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return nil }
-            let (rate, days) = StockSageExpectedValue.financingCostInputs(for: idea)
-            return StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price, stop: stop, target: target,
-                                          annualFinancingRate: rate, holdDays: days)
-        }()
+        let netRR = StockSageNetEdge.netRR(for: idea)
 
         let rrForGate: Double? = {
             if let netRR { return netRR }
@@ -292,7 +287,7 @@ enum StockSageDecisionSnapshotBuilder {
         orderNotional: Double? = nil
     ) -> Bool {
         guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return true }
-        let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+        let costs = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
         let (rate, days) = StockSageExpectedValue.financingCostInputs(for: idea)
         guard let ne = StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
                                                  spreadBps: costs.spreadBps,

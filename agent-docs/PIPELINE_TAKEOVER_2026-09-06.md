@@ -19,7 +19,7 @@ pushes, actual trades, service purchases, or local model training.
     500 ms quote publication; detail bid/ask panel with five-second spread freshness.
   - [x] On-demand trades/quotes tape (seven-day window, three pages ×100 per channel),
     24-hour exchange reference, MIC-based Nasdaq filtering and explicit partial/error states.
-  - [ ] Thread measured spreads through ALL current cost/ranking/gate/export consumers,
+  - [x] Thread measured spreads through ALL current cost/ranking/gate/export consumers,
     retaining conservative floors/slippage/fees; preserve historical backtest assumptions.
   - [ ] Compact card presentation, same-millisecond TRADE sequence through Store, populated
     UI verification and authenticated endpoint smoke. Quote sequences are already ordered.
@@ -101,16 +101,24 @@ and calibration. No development test may place a real order.
   Broad iOS: **1,660/1,660**, zero failures/skips among selected tests, same three
   explicit exclusions; `/private/tmp/stocksage-m2b-broad-ios-20260906-2016.xcresult`.
 
-M2b data/UI checkpoint intentionally does NOT claim measured costs are integrated:
-the detail panel explicitly says ranking/tickets still use estimated costs. The
-next change must cover `StockSageExpectedValue`, `StockSageCapitalAllocator`,
-`StockSageDecisionSnapshot`, `StockSageTodayPlan` and every `MarketsView` net-RR,
-ledger and copy-plan caller together. Do not change symbol-only historical
-backtests to today's spread (lookahead). Keep the full-spread round-trip convention,
-the existing US8bps spread floor, and other cost legs. Preserve live quote identity
-and expiry across Store scans/price updates; clear cost inputs on auth/policy loss.
-Before treating quotes as cost evidence, check condition/indicator eligibility;
-the current panel is observational, never an execution guarantee.
+20:43 measured-cost checkpoint supersedes the earlier data/UI-only limitation.
+`StockSageExpectedValue`, `StockSageCapitalAllocator`, `StockSageDecisionSnapshot`,
+`StockSageTodayPlan` and all `MarketsView` net-RR/ledger/copy callers now use the
+same idea NBBO selector. Floors/other legs and historical defaults remain intact.
+Cost inputs survive scans/price updates, expire at5s, and clear on auth/policy loss.
+Detail/copy re-resolve the selected idea from the store. Shared netRR(for:) also
+fixes cards' previous omission of short financing. Focused macOS50/50; canonical
+broad macOS1664/1664 and iPhone1664/1664, same three explicit opt-in exclusions.
+Bundles and exact limitations are in HANDOFF's20:43 entry.
+
+Condition eligibility: `/v3/reference/conditions?asset_class=stocks&data_type=quote&limit=1000`,
+one request per stream start, header auth/no redirects. Accept only a complete,
+unambiguous mapping for non-legacy stock quote condition with UTP R (UQDF§7.5.2.2);
+unknown conditions or ANY indicators fall back to default costs. This narrow
+policy is intentional; verify indicator semantics and live payloads before
+expanding it. Reference validity24h, no automatic retry until restart. It is a
+cost-observation filter, not a halt detector or permission to execute an order.
+The live provider smoke and populated visual checks have NOT been done.
 
 Tape security: header auth only; next pages require HTTPS api.massive.com, the
 same exact endpoint/symbol, normal443 port, no userinfo/fragment/API-key query;

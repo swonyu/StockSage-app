@@ -5600,10 +5600,7 @@ struct MarketsView: View {
                     // renders exactly as before, never a fabricated second figure.
                     // Uses the SAME netRR convenience the sheet uses, so the card and the sheet
                     // can never quote different net figures for one idea.
-                    if let stop = a.stopPrice, let target = a.targetPrice,
-                       let net = StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price,
-                                                        stop: stop, target: target,
-                                                        winProb: a.conviction),
+                    if let net = StockSageNetEdge.netRR(for: idea),
                        net > 0, net < rr {
                         // "net" rides in the LABEL on iPhone (2026-07-28): as part of the value
                         // the string outran its column and truncated to "2.0→1.4…", clipping the
@@ -5756,10 +5753,7 @@ struct MarketsView: View {
                     // renders exactly as before, never a fabricated second figure.
                     // Uses the SAME netRR convenience the sheet uses, so the card and the sheet
                     // can never quote different net figures for one idea.
-                    if let stop = a.stopPrice, let target = a.targetPrice,
-                       let net = StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price,
-                                                        stop: stop, target: target,
-                                                        winProb: a.conviction),
+                    if let net = StockSageNetEdge.netRR(for: idea),
                        net > 0, net < rr {
                         // "net" rides in the LABEL on iPhone (2026-07-28): as part of the value
                         // the string outran its column and truncated to "2.0→1.4…", clipping the
@@ -8050,12 +8044,7 @@ struct MarketsView: View {
     // the card's former hand-rolled one-liner that omitted all of those.
     private func tradeGateInputs(for idea: StockSageIdea) -> (hasStop: Bool, rewardToRisk: Double?, resolvedNetRR: Double?, daysToEarnings: Int?) {
         let a = idea.advice
-        let resolvedNetRR: Double? = {
-            guard let stop = a.stopPrice, let target = a.targetPrice else { return nil }
-            let (finRate, finDays) = StockSageExpectedValue.financingCostInputs(for: idea)
-            return StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price, stop: stop, target: target,
-                                          annualFinancingRate: finRate, holdDays: finDays)
-        }()
+        let resolvedNetRR = StockSageNetEdge.netRR(for: idea)
         let rewardToRisk: Double? = {
             guard let stop = a.stopPrice, let target = a.targetPrice else { return nil }
             let risk = abs(idea.price - stop)
@@ -8082,7 +8071,10 @@ struct MarketsView: View {
         )
     }
 
-    private func fullPlanText(for idea: StockSageIdea) -> String {
+    private func fullPlanText(for selected: StockSageIdea) -> String {
+        // A sheet/context menu holds a value snapshot. Re-resolve before copying so
+        // disconnects, newer quotes and quote withdrawals cannot leave stale cost inputs.
+        let idea = store.ideas.first { $0.id == selected.id } ?? selected.withNBBO(nil)
         let a = idea.advice
         let gateInputs = tradeGateInputs(for: idea)
         let copyGate: TradeGateVerdict? = {
@@ -8143,7 +8135,7 @@ struct MarketsView: View {
         // Sell/reduce never gets a gate line (screen gates buy-family only).
         let (finRate, finDays) = StockSageExpectedValue.financingCostInputs(for: idea)
         if let stop = a.stopPrice, let target = a.targetPrice {
-            let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+            let costs = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
             if let ne = StockSageNetEdge.evaluate(
                 entry: idea.price, stop: stop, target: target,
                 spreadBps: costs.spreadBps, slippageBps: costs.slippageBps, takerFeeBps: costs.takerFeeBps,
@@ -8159,7 +8151,7 @@ struct MarketsView: View {
                 // authoritative than the UI it came from — a gross-optimism-as-net breach. Non-crypto
                 // is byte-identical to the old "~Nbps est. <class>" wording (costsDisplayLabel matches).
                 let costLabel = StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol,
-                                                                   advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume)
+                                                                   advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume, nbbo: idea.nbbo)
                 let optimismNote = StockSageNetEdge.costsOptimismSentence(forSymbol: idea.symbol,
                                                                           advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume)
                 plan += String(format: "\nNet R:R (after %@ costs%@): %.1f:1 (gross %.1f:1)",
@@ -8304,7 +8296,8 @@ struct MarketsView: View {
         Spacer(minLength: 0)
     }
 
-    private func ideaDetailSheet(_ idea: StockSageIdea) -> some View {
+    private func ideaDetailSheet(_ selected: StockSageIdea) -> some View {
+        let idea = store.ideas.first { $0.id == selected.id } ?? selected.withNBBO(nil)
         let a = idea.advice
         let snapshot = StockSageDecisionSnapshotBuilder.build(
             idea: idea,
@@ -8662,7 +8655,7 @@ struct MarketsView: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 if let stop = a.stopPrice, let target = a.targetPrice {
-                    let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+                    let costs = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
                     // Same financing inputs netEVR/netVelocity/netCostFloorFlag already use — this
                     // line and the "why" it drives can never show a different net figure than what's
                     // actually driving the idea's rank elsewhere on the board (2026-07-02).
@@ -8675,11 +8668,9 @@ struct MarketsView: View {
                         let c = ne.costErodesEdge ? DS.Palette.warningSoft : DS.Palette.textSecondary
                         // F27 (factored): same logic as fullPlanText, now via the shared helper.
                         let financingNote = StockSageExpectedValue.financingNoteSuffix(rate: finRate, days: finDays)
-                        // DISPLAY-only: crypto shows the engine's tier-aware LOW–HIGH band instead
-                        // of the flat 70bps point (a thin alt is honestly 160–440bps); every other
-                        // asset class is byte-identical to before. Does not touch `ne`/`costs`
-                        // (still `defaultCosts`) — only this label text.
-                        let costLabel = StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume)
+                        // The label uses the same NBBO as the net figure. Crypto retains its
+                        // existing display-only tier band and separate optimism disclosure.
+                        let costLabel = StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume, nbbo: idea.nbbo)
                         // Audit 2026-07-12 #1: when the crypto band's low > the flat cost `evaluate`
                         // actually priced (thin tier), disclose that the net below is optimistic vs
                         // the band the header states — the net figure stays at the ranking cost.
@@ -8728,7 +8719,7 @@ struct MarketsView: View {
                     // the R:R fusion line above (line ~4983) — can't disagree with it. nil ⇒
                     // nothing new renders (no fabricated ledger).
                     if let stop = a.stopPrice, let target = a.targetPrice {
-                        let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+                        let costs = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
                         let (finRate, finDays) = StockSageExpectedValue.financingCostInputs(for: idea)
                         if let ne = StockSageNetEdge.evaluate(
                             entry: idea.price, stop: stop, target: target,
@@ -8739,7 +8730,7 @@ struct MarketsView: View {
                             let financingNote = StockSageExpectedValue.financingNoteSuffix(rate: finRate, days: finDays)
                             // DISPLAY-only band for crypto — see costsDisplayLabel above; same
                             // reasoning, same non-crypto byte-identical fallback.
-                            let costLabel = StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume)
+                            let costLabel = StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: store.liquidity[idea.symbol.uppercased()]?.avgDollarVolume, nbbo: idea.nbbo)
                             let deductionLabel = "Round-trip costs (\(costLabel))\(financingNote)"
                             let netColor = netR < 0 ? DS.Palette.dangerSoft : DS.Palette.successSoft
                             // F3 dedup: Gross-expectancy row label carries the "(~N% est. win ×

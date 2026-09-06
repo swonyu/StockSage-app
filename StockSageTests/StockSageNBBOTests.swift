@@ -86,4 +86,94 @@ struct StockSageNBBOTests {
         #expect(state.latestQuotes.count == 1)
         #expect(state.coveredSymbols(at: now) == ["AAPL"])
     }
+
+    @Test("quote conditions resolve from a complete reference; unknown/flagged metadata fails closed")
+    func conditionQualification() throws {
+        // Deliberately invented provider IDs: eligibility comes from the SIP mapping, not 0/1.
+        let reference = Data(#"{"status":"OK","results":[{"id":801,"asset_class":"stocks","data_types":["quote"],"type":"quote_condition","sip_mapping":{"UTP":"R"}},{"id":802,"asset_class":"stocks","data_types":["quote"],"type":"quote_condition","sip_mapping":{"UTP":"N"}},{"id":803,"asset_class":"stocks","data_types":["quote"],"type":"quote_condition","legacy":true,"sip_mapping":{"UTP":"R"}}]}"#.utf8)
+        let regular = try StockSageMassiveTicks.parseRegularQuoteConditions(reference)
+        #expect(regular == [801])
+        for metadata in [#""c":801"#, #""c":801,"i":[]"#, #""c":802"#, #""c":801,"i":[604]"#,
+                         #""c":801,"i":[true]"#, #""c":801,"i":null"#, #""c":true"#, #""q":2"#] {
+            let json = #"{"ev":"Q","sym":"AAPL","bp":100,"ap":101,"bs":100,"as":100,"t":1700000000000,"# + metadata + "}"
+            guard case .quote(let q) = try #require(L.events(in: json).first) else { Issue.record("No quote"); continue }
+            let qualified = q.qualifyingCosts(regularConditions: regular)
+            #expect(qualified.costConditionVerified == (metadata == #""c":801"# || metadata == #""c":801,"i":[]"#))
+            #expect(!q.qualifyingCosts(regularConditions: []).costConditionVerified)
+        }
+        for invalid in [#"{"status":"OK","results":[],"next_url":"https://example.test"}"#,
+                        #"{"status":"OK","results":[{"id":1},{"id":1}]}"#,
+                        #"{"status":"OK","results":[{"id":true}]}"#,
+                        #"{"status":"ERROR","results":[]}"#] {
+            #expect(throws: (any Error).self) { try StockSageMassiveTicks.parseRegularQuoteConditions(Data(invalid.utf8)) }
+        }
+    }
+
+    func costQuote(ask: Double = 101, at: Date? = nil) -> StockSageNBBO {
+        var q = StockSageNBBO(symbol: "AAPL", bid: 100, ask: ask, bidSize: 100, askSize: 100,
+                              bidExchange: 4, askExchange: 7, timestamp: at ?? now, sequence: 1)
+        q.condition = 801
+        return q.qualifyingCosts(regularConditions: [801])
+    }
+
+    @Test("current cost selector retains floor and every other leg, and never alters historical defaults")
+    func costFloorAndExpiry() throws {
+        typealias E = StockSageNetEdge
+        let baseline = E.defaultCosts(forSymbol: "AAPL")
+        #expect(E.costs(forSymbol: "AAPL", nbbo: costQuote(ask: 100.02), now: now) == baseline)
+        let wide = costQuote()
+        let selected = E.costs(forSymbol: "AAPL", nbbo: wide, now: now)
+        #expect(abs(selected.spreadBps - (1 / 100.5 * 10_000)) < 1e-9)
+        #expect(selected.slippageBps == baseline.slippageBps && selected.takerFeeBps == baseline.takerFeeBps)
+        #expect(selected.perOrderMinimum == baseline.perOrderMinimum)
+        #expect(E.defaultCosts(forSymbol: "AAPL") == baseline)
+        #expect(E.costs(forSymbol: "AAPL", nbbo: wide, now: now.addingTimeInterval(5)).spreadBps == selected.spreadBps)
+        #expect(E.costs(forSymbol: "AAPL", nbbo: wide, now: now.addingTimeInterval(5.001)) == baseline)
+        #expect(E.costs(forSymbol: "AAPL", nbbo: wide, now: now.addingTimeInterval(-0.001)) == baseline)
+        for q in [quote(), costQuote(ask: 0), costQuote(ask: 99), costQuote(ask: 100)] {
+            #expect(E.costs(forSymbol: "AAPL", nbbo: q, now: now) == baseline)
+        }
+        for symbol in ["MSFT", "2222.SR", "BTC-USD", "EURUSD=X"] {
+            #expect(E.costs(forSymbol: symbol, nbbo: wide, now: now) == E.defaultCosts(forSymbol: symbol))
+        }
+        #expect(E.costsDisplayLabel(forSymbol: "AAPL", advDollar: nil, nbbo: wide, now: now).contains("Massive SIP spread"))
+        #expect(E.costsDisplayLabel(forSymbol: "AAPL", advDollar: nil, nbbo: wide, now: now.addingTimeInterval(6))
+                == E.costsDisplayLabel(forSymbol: "AAPL", advDollar: nil))
+    }
+
+    @Test("store propagation preserves analysis, handles withdrawal/expiry and retains the book through scan/price updates")
+    func storeCostInputs() {
+        let original = SageFix.idea("AAPL", conviction: 0.8, action: .buy, rr: 2, price: 100, riskDistance: 10)
+        let book = costQuote()
+        let updated = StockSageStore.ideasWithNBBO([original], quotes: ["AAPL": book], now: now)[0]
+        #expect(updated.nbbo == book)
+        #expect(updated.advice == original.advice && updated.priceAsOf == original.priceAsOf)
+        #expect(updated.generatedAt == original.generatedAt && updated.price == original.price)
+        #expect(updated.withLivePrice(102, asOf: now).nbbo == book)
+        #expect(StockSageStore.ideasWithLatestPrices([original], symbols: [], previous: [updated], now: now)[0].nbbo == book)
+        #expect(StockSageStore.ideasWithNBBO([updated], quotes: [:], now: now)[0] == original)
+        #expect(StockSageStore.ideasWithNBBO([updated], quotes: ["AAPL": book], now: now.addingTimeInterval(6))[0] == original)
+        #expect(StockSageStore.ideasWithNBBO([updated], quotes: ["AAPL": costQuote(ask: 0)], now: now)[0] == original)
+        #expect(StockSageStore.ideasWithNBBO([updated], quotes: ["AAPL": quote()], now: now)[0] == original)
+        #expect(original.withNBBO(quote(symbol: "MSFT")).nbbo == nil)
+    }
+
+    @Test("EV, snapshot, allocator and copied plan respond to the same wide spread")
+    func costConsumerParity() throws {
+        let base = SageFix.idea("AAPL", conviction: 0.85, action: .strongBuy, rr: 2, price: 100, riskDistance: 1)
+        let idea = base.withNBBO(costQuote(ask: 104, at: Date()))
+        let net = try #require(StockSageNetEdge.netRR(for: idea))
+        let snap = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 10_000, riskFraction: 0.01)
+        #expect(net < 0 && snap.netRR == net)
+        #expect(snap.netEVR == StockSageExpectedValue.netEVR(for: idea))
+        #expect(snap.netEVR! < StockSageExpectedValue.netEVR(for: base)!)
+        #expect(!StockSageCapitalAllocator.allocate(ideas: [base], account: 10_000).positions.isEmpty)
+        #expect(StockSageCapitalAllocator.allocate(ideas: [idea], account: 10_000).positions.isEmpty)
+        #expect(snap.gate?.decision == .blocked)
+        let copy = StockSageTodayPlan.build(idea: idea, ev: nil, account: 10_000, riskFraction: 0.01)
+        #expect(copy.contains("BLOCKED") && copy.contains("No order plan exported"))
+        let safe = SageFix.idea("AAPL", conviction: 0.85, action: .strongBuy, rr: 2, price: 100, riskDistance: 10)
+            .withNBBO(costQuote(at: Date()))
+        #expect(StockSageTodayPlan.build(idea: safe, ev: nil, account: 10_000, riskFraction: 0.01).contains("Massive SIP spread"))
+    }
 }

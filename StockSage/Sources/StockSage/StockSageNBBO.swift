@@ -13,6 +13,10 @@ nonisolated struct StockSageNBBO: Sendable, Equatable {
     let askExchange: Int64?
     let timestamp: Date
     let sequence: Int64?
+    var condition: Int64? = nil
+    /// nil means malformed metadata, [] means no indicators supplied.
+    var indicators: [Int64]? = []
+    private(set) var costConditionVerified = false
 
     static let usableAge: TimeInterval = 5
 
@@ -34,6 +38,15 @@ nonisolated struct StockSageNBBO: Sendable, Equatable {
         let midpoint = bid / 2 + ask / 2
         let bps = ((ask - bid) / midpoint) * 10_000
         return bps.isFinite ? bps : nil
+    }
+
+    /// Provider IDs are resolved from /v3/reference/conditions, never guessed. UTP R
+    /// means regular two-sided NBBO (UQDF specification §7.5.2.2). Other conditions
+    /// and any indicators remain observational until their semantics are verified.
+    func qualifyingCosts(regularConditions: Set<Int64>) -> Self {
+        var copy = self
+        copy.costConditionVerified = condition.map(regularConditions.contains) == true && indicators == []
+        return copy
     }
 
     /// Only compare q within this Massive quote channel and symbol. A different day

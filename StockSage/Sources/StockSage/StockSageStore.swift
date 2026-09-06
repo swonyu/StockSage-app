@@ -58,6 +58,14 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
     /// never flagged stale off missing data (HONESTY_FLOOR: unknown renders nothing). Purely a
     /// freshness LABEL — does not change the cache-reuse policy or any stop/target/RR format.
     let priceAsOf: Date?
+    /// Ephemeral authenticated cost input, never persisted as historical market evidence.
+    private(set) var nbbo: StockSageNBBO? = nil
+
+    nonisolated func withNBBO(_ quote: StockSageNBBO?) -> Self {
+        var copy = self
+        copy.nbbo = quote?.symbol.uppercased() == symbol.uppercased() ? quote : nil
+        return copy
+    }
 
     nonisolated init(symbol: String, market: String, price: Double, advice: TradeAdvice,
                      spark: [Double], dailyMove: Double? = nil, realizedVol: Double? = nil,
@@ -80,7 +88,7 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
                       spark: spark, dailyMove: dailyMove, realizedVol: realizedVol,
                       volRegime: volRegime, generatedAt: generatedAt,
                       momentumQuality: momentumQuality, recentExtreme: recentExtreme,
-                      recentExtremeSpan: recentExtremeSpan, priceAsOf: asOf)
+                      recentExtremeSpan: recentExtremeSpan, priceAsOf: asOf).withNBBO(nbbo)
     }
 }
 
@@ -2133,11 +2141,30 @@ final class StockSageStore: ObservableObject {
                   acceptsLiveTick(at, after: latest[key]?.at, now: now) else { continue }
             latest[key] = (idea.price, at)
         }
-        return fresh.map { idea in
+        let books = Dictionary(previous.compactMap { idea in idea.nbbo.map { (idea.symbol.uppercased(), $0) } },
+                               uniquingKeysWith: { first, _ in first })
+        return fresh.map { original in
+            let book = books[original.symbol.uppercased()] ?? original.nbbo
+            let idea = original.withNBBO(book?.isFresh(at: now) == true ? book : nil)
             guard let quote = latest[idea.symbol.uppercased()],
                   acceptsLiveTick(quote.at, after: idea.priceAsOf, now: now) else { return idea }
             return idea.withLivePrice(quote.price, asOf: quote.at)
         }
+    }
+
+    /// Only the authenticated, coalesced stream calls this. Withdrawals/auth loss replace
+    /// the entire input set; the one-second timer expires quiet books without per-card polling.
+    nonisolated static func ideasWithNBBO(_ ideas: [StockSageIdea], quotes: [String: StockSageNBBO],
+                                          now: Date = Date()) -> [StockSageIdea] {
+        ideas.map { idea in
+            let quote = quotes[idea.symbol.uppercased()]
+            return idea.withNBBO(quote?.costConditionVerified == true && quote?.spreadBps(at: now) != nil ? quote : nil)
+        }
+    }
+
+    func applyLiveNBBO(_ quotes: [String: StockSageNBBO], now: Date = Date()) {
+        let updated = Self.ideasWithNBBO(ideas, quotes: quotes, now: now)
+        if updated != ideas { ideas = updated }
     }
 
     /// Accept one streamed trade tick. Buffered, not applied immediately — see `flushPendingTicks`.

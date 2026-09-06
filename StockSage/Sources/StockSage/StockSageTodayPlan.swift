@@ -44,10 +44,7 @@ enum StockSageTodayPlan {
         // Capture resolvedNetRR BEFORE the ?? gross collapse so rrIsNet can be set accurately:
         // pass true ONLY when netRR actually resolved (non-nil), never for the ?? gross fallback
         // which must stay labeled gross to avoid mislabeling a gross value as "Net reward:risk".
-        let resolvedNetRR: Double? = {
-            guard let s = a.stopPrice, let t = a.targetPrice else { return nil }
-            return StockSageNetEdge.netRR(symbol: idea.symbol, entry: entry, stop: s, target: t)
-        }()
+        let resolvedNetRR = StockSageNetEdge.netRR(for: idea)
         let rr: Double? = {
             guard let s = a.stopPrice, let t = a.targetPrice else { return nil }
             let risk = abs(entry - s)
@@ -55,8 +52,7 @@ enum StockSageTodayPlan {
             let gross = abs(t - entry) / risk
             // Gate on NET reward:risk (after asset-class round-trip costs) — same source of truth as
             // the on-screen gate, so the copied plan can't disagree. Falls back to gross.
-            // (No financing threading here: `idea` reaching `build` always came from
-            // `bestOpportunity`, which is buy-family only — financing would always be 0.)
+            // The shared idea helper includes short financing; buy-family has none.
             return resolvedNetRR ?? gross
         }()
         // F04-parity (2nd-read hunt, 2026-07-08): was `rf > 0 ? rf : 0.01` — a blank risk % silently
@@ -93,6 +89,9 @@ enum StockSageTodayPlan {
         }
 
         var lines = ["Today's plan — estimates, not advice. Size with a stop; risk control > signal."]
+        if let nbbo = idea.nbbo, nbbo.costConditionVerified, nbbo.spreadBps(at: Date()) != nil {
+            lines.append("Costs: " + StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: nil, nbbo: nbbo))
+        }
         // The copied plan is the one artifact pasted into a broker — it MUST carry the
         // SAMPLE-data warning the on-screen banner shows, so a seed price isn't acted on as real.
         if isSample {

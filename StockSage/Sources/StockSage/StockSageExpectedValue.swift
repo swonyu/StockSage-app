@@ -267,7 +267,7 @@ enum StockSageExpectedValue {
     private nonisolated static func clearsCostAfterFrictions(_ idea: StockSageIdea,
                                                              calibration: StockSageConvictionCalibration? = nil) -> Bool {
         guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return true }
-        let c = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+        let c = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
         let (rate, days) = financingCostInputs(for: idea)
         guard let ne = StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
                                                  spreadBps: c.spreadBps, slippageBps: c.slippageBps,
@@ -298,7 +298,7 @@ enum StockSageExpectedValue {
     nonisolated static let minNetEVPerDayFloor = 0.005
 
     /// [AUDIT] NET-of-cost expected R for an idea: round-trip frictions (spread+slippage+taker,
-    /// from StockSageNetEdge.defaultCosts) subtracted from the reward AND added to the risk via
+    /// from StockSageNetEdge.costs, with qualified NBBO when available) subtracted from the reward AND added to the risk via
     /// StockSageNetEdge.evaluate(...).netExpectancyR — the EXISTING net edge model, not a new one.
     /// Win prob is the SAME conviction-mapped (calibrated) estimate the gross EV uses, so net and
     /// gross are computed on one probability. nil when there's no defined R (no stop/target) OR the
@@ -306,7 +306,7 @@ enum StockSageExpectedValue {
     nonisolated static func netEVR(for idea: StockSageIdea,
                                    calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return nil }
-        let c = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+        let c = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
         let p = winProbEstimate(conviction: idea.advice.conviction, calibration: calibration)
         let (rate, days) = financingCostInputs(for: idea)
         return StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,

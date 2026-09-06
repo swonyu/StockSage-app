@@ -83,7 +83,7 @@ enum StockSageCapitalAllocator {
             // clearsCostAfterFrictions, but the allocator — which emits the ACTUAL shares — did not,
             // so a thin high-cost crypto flip the boards hid could still be funded. (Sizing still uses
             // gross Kelly here; net-payoff sizing is a separate change to keep the verified test math.)
-            let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+            let costs = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
             guard let ne = StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
                                                      spreadBps: costs.spreadBps, slippageBps: costs.slippageBps,
                                                      takerFeeBps: costs.takerFeeBps, winProb: ev.winProbEstimate),

@@ -1,5 +1,50 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M2b measured-cost checkpoint — 2026-09-06 20:43 +03
+
+Current EV/ranking, allocator cost gates, decision snapshots, Today plan and
+Markets card/detail/copy/ledger paths now select costs from the SAME idea NBBO.
+Qualified fresh US spreads can only raise the existing8bps spread floor. The
+full quoted width represents both half-spread crossings; slippage, fees and
+per-order minimums are unchanged estimates. Historical backtests, paper candle
+simulation and journal slippage benchmarks still use their original defaults.
+The shared idea net-RR helper also includes short financing on cards, matching
+the detail/ranking path that already included it.
+
+Eligibility is deliberately narrow: one bounded, header-authenticated reference
+request per stream start resolves Massive condition IDs from UTP `R` (regular
+two-sided NBBO), with no guessed numeric ID. Only non-legacy, non-exchange-specific
+stock quote conditions qualify, and only when no indicators are supplied.
+Unknown/flagged/malformed metadata, incomplete/duplicate reference records,
+reference failure, expired reference, stale/future/locked/crossed/one-sided quotes
+all retain default costs. Indicator-bearing quotes remain visible, not cost
+evidence, until their semantics are verified. This is NOT trading-halt detection
+or execution authorization. Reference retry is on restart, not a polling loop.
+
+The authenticated book propagates at500ms, with a shared one-second expiration
+invalidation; money helpers check exact age (5s inclusive). Withdrawals, auth loss
+and stop clear cost inputs. Scan and trade-price replacement preserve fresh NBBO
+without changing the analysis time. Detail/copy actions re-resolve the store,
+so a selected sheet's older value cannot retain a withdrawn cost quote.
+
+References:
+- https://massive.com/docs/rest/stocks/market-operations/condition-codes
+- https://massive.com/docs/websocket/stocks/quotes
+- https://www.utpplan.com/DOC/uqdfspecification.pdf (section7.5.2.2)
+
+Verification:50/50 focused macOS tests, then canonical broad tests **1,664/1,664
+passed on EACH platform**, zero failures/skips among selected tests. Explicit
+exclusions remain CalibrationPersistRunTests, LiveUniverseVerificationTests and
+StrategyBaselineMeasurementTests (opt-in network/measurement). Result bundles:
+- `/private/tmp/stocksage-m2b-cost-macos-20260906-2040.xcresult` (focused)
+- `/private/tmp/stocksage-m2b-cost-broad-macos-20260906-2038.xcresult`
+- `/private/tmp/stocksage-m2b-cost-broad-ios-20260906-2040.xcresult`
+
+All run handles completed; no compiler remains. Existing warnings in allocation
+optimizer/EV tests remain. No live provider smoke, populated visual QA, real order,
+model load/conversion or push. **M2b overall remains incomplete:** compact cards,
+same-time trade sequence through Store, visual QA and authenticated smoke remain.
+
 ## Pipeline 4 M2b data/UI checkpoint — 2026-09-06 20:18 +03
 
 The existing Massive connection now subscribes to `Q.` alongside `T.`. Quote

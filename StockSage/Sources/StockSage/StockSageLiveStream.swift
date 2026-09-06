@@ -27,6 +27,9 @@ final class StockSageLiveStream: ObservableObject {
     private var connections: [StockSageLiveStreamConnection] = []
     private var freshnessTimer: Task<Void, Never>?
     private var quoteFlush: Task<Void, Never>?
+    private var conditionTask: Task<Void, Never>?
+    private var regularConditions: Set<Int64> = []
+    private var conditionsAsOf: Date?
 
     nonisolated struct Tick: Sendable, Equatable {
         let symbol: String
@@ -62,9 +65,15 @@ final class StockSageLiveStream: ObservableObject {
                 guard let bid = number(row["bp"]), bid >= 0, let ask = number(row["ap"]), ask >= 0,
                       let bidSize = number(row["bs"]), bidSize >= 0,
                       let askSize = number(row["as"]), askSize >= 0 else { return nil }
-                return .quote(.init(symbol: symbol, bid: bid, ask: ask, bidSize: bidSize, askSize: askSize,
+                var quote = StockSageNBBO(symbol: symbol, bid: bid, ask: ask, bidSize: bidSize, askSize: askSize,
                                     bidExchange: integer(row["bx"]), askExchange: integer(row["ax"]),
-                                    timestamp: timestamp, sequence: integer(row["q"])))
+                                    timestamp: timestamp, sequence: integer(row["q"]))
+                quote.condition = integer(row["c"])
+                if let raw = row["i"] {
+                    let values = (raw as? [Any])?.compactMap(integer)
+                    quote.indicators = values?.count == (raw as? [Any])?.count ? values : nil
+                }
+                return .quote(quote)
             default: return nil
             }
         }
@@ -145,19 +154,36 @@ final class StockSageLiveStream: ObservableObject {
         connections = [connection]
         connectionStatusChanged()
         connection.open()
+        conditionTask?.cancel()
+        regularConditions = []
+        conditionsAsOf = nil
+        conditionTask = Task { [weak self] in
+            // ponytail: one bounded reference request per start; on failure or after24h,
+            // retain default costs until restart. Add retries only with verified rate limits.
+            let regular = (try? await StockSageMassiveTicks.regularQuoteConditions()) ?? []
+            guard !Task.isCancelled, let self, ToolPolicy.isExternalAllowed else { return }
+            self.regularConditions = regular
+            self.conditionsAsOf = Date()
+            self.quotesChanged()
+        }
         freshnessTimer?.cancel()
-        // ponytail: one-second badge expiry resolution; polling uses the exact per-symbol clock.
+        // ponytail: one-second UI/rank invalidation; money helpers check exact quote age.
         freshnessTimer = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
                 guard ToolPolicy.isExternalAllowed else { self.stop(); return }
                 self.connectionStatusChanged()
+                StockSageStore.shared.applyLiveNBBO(self.quotes)
             }
         }
     }
 
     func stop() {
+        conditionTask?.cancel()
+        conditionTask = nil
+        regularConditions = []
+        conditionsAsOf = nil
         freshnessTimer?.cancel()
         freshnessTimer = nil
         quoteFlush?.cancel()
@@ -166,13 +192,17 @@ final class StockSageLiveStream: ObservableObject {
         connections = []
         isStreaming = false
         quotes = [:]
+        StockSageStore.shared.applyLiveNBBO([:])
     }
 
     fileprivate func connectionStatusChanged() {
         let streaming = connections.contains { $0.state.hasRecentTrades(at: Date()) }
         // @Published emits even for equal assignments: don't redraw Markets for every trade.
         if isStreaming != streaming { isStreaming = streaming }
-        if !connections.contains(where: { $0.state.isAuthorized }), !quotes.isEmpty { quotes = [:] }
+        if !connections.contains(where: { $0.state.isAuthorized }), !quotes.isEmpty {
+            quotes = [:]
+            StockSageStore.shared.applyLiveNBBO([:])
+        }
     }
 
     fileprivate func quotesChanged() {
@@ -182,10 +212,14 @@ final class StockSageLiveStream: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             self.quoteFlush = nil
             guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+            let now = Date()
+            let regular = self.conditionsAsOf.map { (0..<86_400).contains(now.timeIntervalSince($0)) } == true
+                ? self.regularConditions : []
             let latest = self.connections.reduce(into: [String: StockSageNBBO]()) {
                 if $1.state.isAuthorized { $0.merge($1.state.latestQuotes) { _, new in new } }
-            }
+            }.mapValues { $0.qualifyingCosts(regularConditions: regular) }
             if self.quotes != latest { self.quotes = latest }
+            StockSageStore.shared.applyLiveNBBO(latest, now: now)
         }
     }
 
