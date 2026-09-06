@@ -1,5 +1,38 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M2 — 2026-09-06 20:00 +03, Codex single-session takeover
+
+Owner stopped the separate pipeline task; its uncommitted M2 changes were
+preserved and completed on `wt/coverage`. Massive replaces the active EODHD
+stream/quote route; Yahoo remains the fallback. The stream consumes every event
+in a batch, preserves authorization across informational statuses, handles send
+failures, and cancels stale connection callbacks/retries. Auth alone does not
+prove delivery: per-symbol coverage expires 45 seconds after the last accepted
+trade. Status publication changes only on transitions, with a one-second expiry
+timer; Store price writes retain their 500 ms coalescing.
+
+All quote ingress paths now share ordering/validation: full refresh, targeted,
+monitor/gap polls, stream flushes and scan publication cannot rewind a dated
+price. Undated seeds remain unknown, corrupt future cache values can recover,
+off-board ideas update without creating board rows, and row UUIDs survive polls.
+
+Canonical `xcodebuild test`, separate result bundles, parallel testing disabled:
+
+- macOS arm64: **1,649 passed, 0 failed**, bundle
+  `/private/tmp/stocksage-m2-broad-macos-20260906-1956.xcresult`.
+- iPhone 17 Pro (gate), iOS 26.5: **1,649 passed, 0 failed**, bundle
+  `/private/tmp/stocksage-m2-broad-ios-20260906-1957.xcresult`.
+- Both explicitly exclude `CalibrationPersistRunTests`,
+  `LiveUniverseVerificationTests`, `StrategyBaselineMeasurementTests` (opt-in
+  network/measurement jobs). Zero skips among selected tests; excluded suites
+  are not claimed tested. Counts independently read with `xcresulttool`.
+- One earlier expanded-test attempt failed compilation on a fixture typo and
+  executed no tests; corrected before the focused and broad successful runs.
+
+Not yet verified: live endpoint smoke, per-observation provenance UI, NBBO/tape,
+same-millisecond sequence ordering, remaining M3–M6, pipeline 5, final integration.
+Continue via `agent-docs/PIPELINE_TAKEOVER_2026-09-06.md`. No push or real order.
+
 Written early under the good-spender `⚠ APPROACHING LIMIT` directive (projection only — this
 session is the sole spend in the 7-day window; the EWMA is a read-burst artefact).
 

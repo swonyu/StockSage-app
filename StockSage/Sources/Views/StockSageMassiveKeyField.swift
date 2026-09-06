@@ -25,7 +25,7 @@ struct StockSageMassiveKeyField: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        Text("With a key, US names are quoted from Massive in one request per \(StockSageMassive.maxTickersPerRequest) tickers; EODHD, then Yahoo, cover anything Massive misses. Saudi names stay on Yahoo (15-min delayed). The key stays on this device.")
+        Text("With a key, US names are quoted from Massive in one request per \(StockSageMassive.maxTickersPerRequest) tickers; anything Massive misses uses Yahoo's typically delayed keyless quote. Saudi names use Yahoo. The key stays on this device.")
             .font(.system(size: 11))
             .foregroundStyle(DS.Palette.textSecondary)
     }

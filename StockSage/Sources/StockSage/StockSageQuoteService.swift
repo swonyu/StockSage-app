@@ -21,8 +21,8 @@ import Foundation
 // **Source order (pipeline-4 M1, 2026-09-06):** when a Massive key is set
 // (`StockSageMassive.isConfigured`), every US name goes to Massive's batched snapshot
 // first — ONE request per 250 tickers instead of one per symbol — then anything still
-// missing (and every non-US name) walks the per-symbol EODHD → Yahoo chain below.
-// Without a key the router is byte-for-byte the pre-M1 behaviour.
+// missing (and every non-US name) walks the explicit keyless Yahoo fallback below. Without a key,
+// all symbols use Yahoo, whose typically delayed quotes are labelled as such in the UI.
 enum StockSageQuoteService {
 
     /// A single live observation: the current market price and the prior session's
@@ -97,16 +97,9 @@ enum StockSageQuoteService {
 
     // MARK: One symbol
 
-    /// Per-symbol chain (EODHD → Yahoo). Reached only for symbols the Massive snapshot path in
+    /// Keyless Yahoo fallback. Reached only for symbols the Massive snapshot path in
     /// `fetchQuotes` did not serve — non-US names, no Massive key, or a snapshot chunk that failed.
     private static func fetchOne(_ symbol: String) async -> LiveQuote? {
-        // HYBRID SOURCE (owner-provided EODHD key, 2026-07-28): US names go to the AUTHENTICATED
-        // feed first — Yahoo's keyless endpoint is the throttling that leaves symbols showing
-        // days-old prices during a 901-name scan. Tadawul (.SR) is NOT offered by EODHD at any
-        // tier (measured: no Saudi exchange in their list), so it stays on Yahoo below, and any
-        // EODHD miss falls through to Yahoo too — the board never loses a source.
-        if let viaEODHD = await StockSageEODHD.fetchOne(symbol) { return viaEODHD }
-
         // `^` (index marker) and other reserved chars must be percent-encoded.
         // Use .urlHostAllowed (stricter than .urlPathAllowed) so a symbol containing
         // '/' (e.g. a hypothetical BRK/B) doesn't silently rewrite the request path

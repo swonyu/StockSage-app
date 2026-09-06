@@ -571,9 +571,8 @@ struct MarketsView: View {
             .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
             // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). B4: subscribes
             // every TRACKED US name (board ∪ watchlist ∪ portfolio ∪ open journal trades) to
-            // EODHD's trade socket, not just the board, so an off-board US ticker streams too;
-            // prices then move on their own. Saudi names have no stream (EODHD carries no Saudi
-            // exchange) and keep polling.
+            // Massive's trade socket, not just the board, so an off-board US ticker streams too;
+            // prices then move on their own. Unsupported symbols keep their delayed Yahoo poll.
             .task(id: streamSubscriptionKey) {
                 guard liveStreamEnabled else { StockSageLiveStream.shared.stop(); return }
                 StockSageLiveStream.shared.start(symbols: store.trackedSymbolsUnion)

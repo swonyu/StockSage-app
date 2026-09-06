@@ -5,8 +5,8 @@ import Foundation
 /// VENDOR: Massive (massive.com, formerly Polygon.io — renamed 2025-10-30; `api.polygon.io` and
 /// `api.massive.com` are both valid during the transition). Plan Advanced: SIP consolidated tape,
 /// unlimited REST, real-time snapshot recency. M1 is REST ONLY — the WebSocket (M3) and Benzinga
-/// earnings (M4) are later steps, and EODHD stays wired as the per-symbol fallback until M5 flips
-/// the default (agent-docs/COVERAGE_DESIGN_2026-09-06.md, "Pipeline 4").
+/// earnings (M4) are later steps. Missing or unsupported quotes fall back to Yahoo's keyless,
+/// typically delayed feed; EODHD is not part of the active quote route.
 ///
 /// ENDPOINT — fetched 2026-09-06 from
 /// https://massive.com/docs/rest/stocks/snapshots/full-market-snapshot (+ `.md` mirror):
@@ -43,7 +43,8 @@ import Foundation
 /// HONESTY FLOOR: `marketTime` is the SIP trade timestamp — the existing `freshnessStale` /
 /// `StockSageQuoteFreshness` rules decide "Live" vs stale from it (nil ⇒ stale stays). A payload
 /// without `lastTrade` (a plan without trades) yields NO quote — never a price lifted from `day.c` —
-/// and the symbol falls through to EODHD, then Yahoo, so nothing is silently dropped.
+/// and the symbol falls through to Yahoo's explicitly delayed keyless route, so nothing is
+/// silently dropped.
 @MainActor
 enum StockSageMassive {
 
@@ -66,14 +67,17 @@ enum StockSageMassive {
     }
 
     /// Whether the Massive path is available at all. With no key the router sends every symbol down
-    /// the existing per-symbol EODHD → Yahoo chain unchanged.
+    /// the explicit per-symbol Yahoo fallback unchanged.
     nonisolated static var isConfigured: Bool { !apiKey.isEmpty }
 
-    /// Same US-equities whitelist as `StockSageEODHD.covers` (bare alphabetic ticker; `.SR`/FX/crypto/
-    /// index markers excluded) — the 872 `nasdaqListed` names match Massive's symbology 1:1 (design doc
-    /// "Symbol mapping": zero dotted class-share tickers in the allowlist), and Tadawul is not a Massive
-    /// market. One rule, one owner: this is a pure delegate, not a second copy that could drift.
-    nonisolated static func covers(_ symbol: String) -> Bool { StockSageEODHD.covers(symbol) }
+    /// US-equities whitelist: bare alphabetic tickers only; `.SR`, FX, crypto and index markers
+    /// are excluded. The curated Nasdaq names match Massive's symbology 1:1; Tadawul is not a
+    /// Massive market.
+    nonisolated static func covers(_ symbol: String) -> Bool {
+        let ticker = symbol.uppercased()
+        return !ticker.isEmpty && !ticker.contains(".") && !ticker.contains("=") &&
+            !ticker.contains("-") && !ticker.hasPrefix("^") && ticker.allSatisfy(\.isLetter)
+    }
 
     /// Tickers per snapshot request. The v2 full-market-snapshot page states NO cap on `tickers`; the
     /// vendor's sibling unified snapshot (https://massive.com/docs/rest/stocks/snapshots/unified-snapshot.md)
@@ -128,7 +132,7 @@ enum StockSageMassive {
 
     /// Parse one full-market-snapshot payload. Keyed by UPPERCASED ticker; only tickers in
     /// `requestedSymbols` are emitted (the vendor's spelling is replaced by the one WE asked for, as the
-    /// EODHD parser does), so an unrequested extra row can never land on the board. Malformed / missing
+    /// Yahoo parser does), so an unrequested extra row can never land on the board. Malformed / missing
     /// `tickers` ⇒ `[:]`.
     static func parseSnapshot(_ data: Data, requestedSymbols: [String])
         -> [String: StockSageQuoteService.LiveQuote] {
@@ -148,7 +152,7 @@ enum StockSageMassive {
 
     /// One `tickers[]` row → LiveQuote. price ← `lastTrade.p` (> 0, finite; absent ⇒ nil — never `day.c`),
     /// marketTime ← `lastTrade.t` (ns), previousClose ← `prevDay.c`; a missing/non-positive `prevDay.c`
-    /// takes the SAME flat-placeholder + `isNewListing` route as the EODHD/Yahoo parsers (L3-08 parity),
+    /// takes the SAME flat-placeholder + `isNewListing` route as the Yahoo parser (L3-08 parity),
     /// never a fabricated 0.00 %.
     static func parseTicker(_ row: [String: Any], requestedSymbol: String)
         -> StockSageQuoteService.LiveQuote? {
@@ -181,7 +185,7 @@ enum StockSageMassive {
 
     /// Batched fetch: one request per chunk of `maxTickersPerRequest`. A chunk that fails (non-200,
     /// transport error, unparseable) contributes nothing, so its symbols are absent from the result and
-    /// the caller's per-symbol EODHD → Yahoo chain picks them up — nothing is dropped silently.
+    /// the caller's per-symbol Yahoo fallback picks them up — nothing is dropped silently.
     static func fetchSnapshots(for symbols: [String]) async -> [String: StockSageQuoteService.LiveQuote] {
         guard ToolPolicy.isExternalAllowed, !symbols.isEmpty else { return [:] }
         let key = apiKey
