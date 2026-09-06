@@ -461,6 +461,31 @@ struct StockSageStoreTests {
         #expect(store.symbol(named: "live")?.symbol == "LIVE")   // case-insensitive lookup
     }
 
+    // P3 (2026-07-28 review): symbolIndex is rebuilt by replaceAll, so latestPrice/isOnBoard
+    // must agree with the O(n) linear scan they replace for every symbol on the board, and
+    // isOnBoard must be false for a symbol that was never added.
+    @Test func latestPriceAndIsOnBoardMatchLinearScanAfterReplaceAll() {
+        let store = StockSageStore.shared
+        let original = store.fetchAllSymbols()
+        defer { store.replaceAll(original, isSample: true) }   // restore for other tests
+
+        let fixture = [
+            StockSageSymbol(symbol: "AAA", market: "NASDAQ", quotes: [StockSageQuote(price: 10, previousPrice: 9)]),
+            StockSageSymbol(symbol: "bbb", market: "NASDAQ", quotes: [StockSageQuote(price: 20, previousPrice: 19)]),
+            StockSageSymbol(symbol: "CCC.SR", market: "TASI", quotes: [StockSageQuote(price: 30, previousPrice: 29)]),
+        ]
+        store.replaceAll(fixture, isSample: false)
+
+        for s in fixture {
+            let linearScan = store.symbols.first { $0.symbol.uppercased() == s.symbol.uppercased() }?.latest?.price
+            #expect(store.latestPrice(s.symbol) == linearScan)
+        }
+        // Case-insensitive lookup on a mixed-case stored symbol.
+        #expect(store.latestPrice("bbb") == 20)
+        #expect(store.isOnBoard("AAA"))
+        #expect(!store.isOnBoard("ZZZ-NOT-TRACKED"))
+    }
+
     // Finding 1: earnings proximity used to cache the DERIVED daysUntil/severity at fetch time
     // and never recompute it, so a symbol read "8 days out" stayed frozen at that value forever
     // in a long session. The fix caches only the raw Date and derives proximity fresh on every

@@ -101,6 +101,24 @@ final class StockSageStore: ObservableObject {
     static let shared = StockSageStore()
 
     @Published private(set) var symbols: [StockSageSymbol] = []
+    /// P3 (2026-07-28 review): uppercased-symbol → index into `symbols`. Rebuilt only by the
+    /// shape-changing writers (loadCachedQuotes / addSymbol / removeSymbol / replaceAll /
+    /// seedSampleData); the in-place per-row replacements (flushPendingTicks, mergeLiveQuote,
+    /// mergeLiveQuotes) preserve order and count, so the index survives them untouched.
+    private(set) var symbolIndex: [String: Int] = [:]
+    private func rebuildSymbolIndex() {
+        symbolIndex = Dictionary(symbols.enumerated().map { ($0.element.symbol.uppercased(), $0.offset) },
+                                 uniquingKeysWith: { a, _ in a })
+    }
+    /// O(1) board price lookup — replaces the per-row `store.symbols.first { … }` scan
+    /// (MarketsView.currentPrice), which was O(n) with two String allocations per element and
+    /// was called once per ForEach row.
+    func latestPrice(_ symbol: String) -> Double? {
+        symbolIndex[symbol.uppercased()].flatMap { symbols[$0].latest?.price }
+    }
+    /// O(1) board-membership check — replaces the per-row linear `contains` scan next to
+    /// `priceAlertRow`.
+    func isOnBoard(_ symbol: String) -> Bool { symbolIndex[symbol.uppercased()] != nil }
     /// OWNER DIRECTIVE (2026-07-16, Tadawul+NASDAQ restriction): FX pairs left the universe, but
     /// the SAR→USD rate still powers every .SR honesty correction (holdingValue, pctOfAccountUSD,
     /// USD portfolio totals). Fetched as INFRA — direct-by-symbol like the regime's ^VIX — never
@@ -335,6 +353,7 @@ final class StockSageStore: ObservableObject {
         let labels = Dictionary(trackedDefs().map { ($0.symbol.uppercased(), $0.market) },
                                 uniquingKeysWith: { a, _ in a })
         symbols = cache.symbols(marketFor: { labels[$0.uppercased()] ?? Self.userMarketLabel })
+        rebuildSymbolIndex()
         isSampleData = false
         loadedFromCache = true
         cacheSavedAt = cache.savedAt
@@ -419,6 +438,7 @@ final class StockSageStore: ObservableObject {
             StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
         ])
         symbols = symbols.filter { $0.symbol.uppercased() != symbol } + [added]
+        rebuildSymbolIndex()
         // Thread the new-listing flag through here too (L3-03, 2026-07-07 audit) — same reconcile
         // rule mergeLiveQuotes uses, never set without the feed itself saying isNewListing==true.
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: [symbol: q])
@@ -431,6 +451,7 @@ final class StockSageStore: ObservableObject {
         userSymbols.removeAll { $0.uppercased() == up }
         UserDefaults.standard.set(userSymbols, forKey: Self.userSymbolsKey)
         symbols = symbols.filter { $0.symbol.uppercased() != up }
+        rebuildSymbolIndex()
     }
 
     /// Analyze the worldwide universe on real 1-year candle history and rank the
@@ -2176,6 +2197,7 @@ final class StockSageStore: ObservableObject {
     /// Marks the store as no-longer-sample.
     func replaceAll(_ newSymbols: [StockSageSymbol], isSample: Bool = false) {
         symbols = newSymbols
+        rebuildSymbolIndex()
         isSampleData = isSample
     }
 
@@ -2194,6 +2216,7 @@ final class StockSageStore: ObservableObject {
             Self.sample("NVDA",    "NASDAQ", previous: 118.0, current: 126.5), // +7.2% → strong buy
             Self.sample("7010.SR", "TASI", previous: 41.0,  current: 42.3),    // +3.2% → buy
         ]
+        rebuildSymbolIndex()
         isSampleData = true
     }
 

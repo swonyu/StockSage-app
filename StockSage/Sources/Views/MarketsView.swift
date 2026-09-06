@@ -1503,7 +1503,7 @@ struct MarketsView: View {
         // board (store.symbols), so a nil there for an OFF-BOARD symbol is not evidence the alert can't
         // fire; asserting "no quote / cannot fire" would make a user delete a working alert. Only warn
         // for a symbol that IS on the board yet has no price (genuinely unquotable this session).
-        let onBoard = store.symbols.contains { $0.symbol.uppercased() == a.symbol.uppercased() }
+        let onBoard = store.isOnBoard(a.symbol)
         let noQuote = !store.isSampleData && !store.loadedFromCache && onBoard && currentPrice(a.symbol) == nil
         return HStack(spacing: 10) {
             Text(a.symbol).font(.system(size: mvFont13, weight: .bold, design: .rounded)).foregroundStyle(.white)
@@ -1643,7 +1643,7 @@ struct MarketsView: View {
     // MARK: Portfolio
 
     private func currentPrice(_ symbol: String) -> Double? {
-        store.symbols.first { $0.symbol.uppercased() == symbol.uppercased() }?.latest?.price
+        store.latestPrice(symbol)
     }
 
     /// THE one true holding value: per-share price × shares, with the symbol's quote unit applied.
