@@ -48,9 +48,14 @@ enum StockSageTradeGate {
                                      maxRiskFraction: Double = 0.02,
                                      maxCorrelation: Double? = nil,
                                      daysToEarnings: Int? = nil,
-                                     rrIsNet: Bool = false) -> TradeGateVerdict {
+                                     rrIsNet: Bool = false,
+                                     sizingFXAvailable: Bool = true) -> TradeGateVerdict {
         var checks: [TradeGateCheck] = []
         let rrPrefix = rrIsNet ? "Net reward:risk (after est. costs)" : "Reward:risk"
+
+        if !sizingFXAvailable {
+            checks.append(TradeGateCheck(level: .fail, label: StockSagePositionSizer.unavailableFXMessage))
+        }
 
         // 1. A defined stop — without it, risk is undefined and sizing is meaningless.
         checks.append(hasStop

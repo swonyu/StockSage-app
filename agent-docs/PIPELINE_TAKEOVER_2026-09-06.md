@@ -77,6 +77,14 @@ pushes, actual trades, service purchases, or local model training.
 - [ ] P5 tickets, crossing alerts, separate paper automation/store, broker integration as below.
 - [ ] Proactive native Chat using the approved V3 design and existing transport.
 - [ ] Prioritized money/accounting corrections from FULL_REVIEW.
+  - [x] M9 first boundary: USD is explicitly1; missing/invalid foreign FX withholds
+    shares and blocks new-trade gates across snapshot/today/detail/copy. Allocator
+    excludes and names affected candidates before assigning heat; retained marginal
+    and optimizer helpers use the same conversion. No 1:1 fallback; minor units retained.
+  - [ ] M9 remaining prerequisite: keep rate and market timestamp together in infraFX;
+    reject stale/undated/future/sample observations for NEW sizing, distinguish them
+    from labelled historical portfolio valuation. Current positive finite rates are
+    NOT yet proof of freshness. Then M8 quantity/minimum-fee gate parity and P5 tickets.
 - [ ] Canonical macOS + iPhone 17 Pro (gate) tests, populated UI checks, integration and HANDOFF.
 
 ## Corrections to historical workflow scripts

@@ -25,8 +25,7 @@ enum StockSageTodayPlan {
     /// board card's `Self.cardIsStale`/detail sheet's `utcDayKey` staleness check so the ONE
     /// artifact that gets pasted into a broker can't present a stale close as a live quote.
     // F3 wave-A (2026-07-16): `fxRatesToUSD` (ccy→USD) makes the share count FX-correct for
-    // non-USD names (.SR was under-sized ~3.75× vs the stated risk%); empty map (the default)
-    // keeps every existing caller byte-identical — never guess a rate.
+    // non-USD names. Missing foreign FX blocks a sized order plan, never guesses 1:1.
     nonisolated static func build(idea: StockSageIdea, ev: ExpectedValue?,
                                   account: Double?, riskFraction: Double?,
                                   daysToEarnings: Int? = nil, isSample: Bool = false,
@@ -61,7 +60,9 @@ enum StockSageTodayPlan {
         let gate: TradeGateVerdict? = {
             guard rf > 0 else { return nil }
             return StockSageTradeGate.evaluate(hasStop: a.stopPrice != nil, rewardToRisk: rr, riskFraction: rf,
-                                               daysToEarnings: daysToEarnings, rrIsNet: resolvedNetRR != nil)
+                                               daysToEarnings: daysToEarnings, rrIsNet: resolvedNetRR != nil,
+                                               sizingFXAvailable: StockSagePositionSizer.rawQuoteUnitToUSD(
+                                                   symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) != nil)
         }()
 
         // EXPORT-W4-1 parity (blocked-fixture QA, 2026-07-09): the detail sheet's copy
@@ -330,6 +331,8 @@ enum StockSageTodayPlan {
             // surfaces must agree on the exact same honest phrasing.
             if let gate = p.gate {
                 line += " | \(gate.decision.rawValue)" + (gate.decision == .blocked ? " — DO NOT TRADE" : "")
+                let failures = gate.checks.filter { $0.level == .fail }.map(\.label)
+                if !failures.isEmpty { line += " | FAIL: " + failures.joined(separator: "; ") }
             } else {
                 line += " | Pre-trade gate: not evaluated — enter risk % to see the verdict."
             }

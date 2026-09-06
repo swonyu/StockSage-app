@@ -8,6 +8,35 @@ struct StockSagePositionSizerTests {
 
     typealias PS = StockSagePositionSizer
 
+    @Test func missingFXCannotBecomeAnExecutableUSDSizedPlan() {
+        // USD 100 risk / (EUR 10 per share × 2 USD/EUR) = 5 shares.
+        // Without that rate the answer is unknown, not the old 10-share fallback.
+        let idea = SageFix.idea("SAP.DE", conviction: 0.9, action: .strongBuy,
+                                rr: 4, price: 100, riskDistance: 10)
+        #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 90,
+                        symbol: idea.symbol, fxRatesToUSD: [:]) == nil)
+        #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 90,
+                        symbol: idea.symbol, fxRatesToUSD: ["EUR": 2])?.shares == 5)
+        let snapshot = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 10_000,
+                                                              riskFraction: 0.01)
+        #expect(snapshot.positionSize == nil)
+        #expect(snapshot.gate?.decision == .blocked)
+        let copy = StockSageTodayPlan.build(idea: idea, ev: snapshot.ev,
+                                            account: 10_000, riskFraction: 0.01)
+        #expect(copy.contains("FX"))
+        #expect(!copy.contains("Entry ~"))
+        let ranked = StockSageTodayPlan.rankedActions([idea], account: 10_000, riskFraction: 0.01)
+        #expect(ranked.count == 1)
+        #expect(ranked.first?.shares == nil)
+        #expect(ranked.first?.gate?.decision == .blocked)
+        #expect(StockSageTodayPlan.copyAllText(ranked).contains("FX rate unavailable or invalid"))
+        #expect(StockSageCapitalAllocator.allocate(ideas: [idea], account: 10_000).positions.isEmpty)
+        #expect(StockSageCapitalAllocator.suggestAdd(idea: idea, openTrades: [], holdings: [],
+                    candidateReturns: [], account: 10_000)?.approved == false)
+        #expect(StockSageExpectedValue.weeklyDollarsIncludesUnfundableRow(
+            lane: [idea], account: 10_000, riskFraction: 0.01))
+    }
+
     @Test func sizeRejectsNonFiniteInputsInsteadOfCrashing() {
         // "inf"/"infinity" in a field parses to +Infinity, passes `> 0`, and would trap at
         // Int(.infinity) — a hard crash that persists via UserDefaults. Now returns nil.
@@ -15,6 +44,7 @@ struct StockSagePositionSizerTests {
         #expect(PS.size(account: 10_000, riskFraction: .infinity, entry: 100, stop: 90) == nil)
         #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: .infinity, stop: 90) == nil)
         #expect(PS.size(account: .nan, riskFraction: 0.01, entry: 100, stop: 90) == nil)
+        #expect(PS.size(account: 1e308, riskFraction: 1, entry: 1e308, stop: 9e307) == nil)
         // Boundary: raw == 2^63 (Double(Int.max) rounds UP to 2^63, so the old `<= Double(Int.max)`
         // guard passed and Int(2^63) still trapped). Int(exactly:) returns nil → no trap.
         #expect(PS.size(account: 9_223_372_036_854_775_808.0, riskFraction: 1, entry: 2, stop: 1) == nil)
@@ -163,8 +193,7 @@ struct StockSagePositionSizerTests {
     }
 
     @Test func fxOverloadRejectsUnusableRatesInsteadOfGuessing() {
-        // A zero/negative/non-finite rate must nil out — callers fall back to the plain
-        // sizer for untracked FX; the overload never invents a conversion.
+        // A zero/negative/non-finite rate must nil out, never use same-currency sizing.
         #expect(PS.size(accountUSD: 10_000, riskFraction: 0.01, entry: 29, stop: 28.5, rawUnitToUSD: 0) == nil)
         #expect(PS.size(accountUSD: 10_000, riskFraction: 0.01, entry: 29, stop: 28.5, rawUnitToUSD: -1) == nil)
         #expect(PS.size(accountUSD: 10_000, riskFraction: 0.01, entry: 29, stop: 28.5, rawUnitToUSD: .infinity) == nil)
@@ -180,16 +209,33 @@ struct StockSagePositionSizerTests {
         #expect(abs(ps.dollarsAtRisk - 375) < 1e-9)
     }
 
-    @Test func mapOverloadFallsBackToThePlainSizerForUSDEmptyMapAndUntrackedCurrencies() {
+    @Test func mapOverloadUsesIdentityOnlyForActualUSDQuotes() {
         let plain = PS.size(account: 10_000, riskFraction: 0.01, entry: 29.00, stop: 28.50)!
         // USD symbol: map ignored.
         #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: 29.00, stop: 28.50,
                         symbol: "AAPL", fxRatesToUSD: ["SAR": 1.0 / 3.75]) == plain)
-        // Empty map: prior behavior, never guess.
+        // Missing SAR is unknown, not an implicit 1:1 conversion.
         #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: 29.00, stop: 28.50,
-                        symbol: "2222.SR", fxRatesToUSD: [:]) == plain)
-        // Untracked currency (map lacks SAR): prior behavior.
+                        symbol: "2222.SR", fxRatesToUSD: [:]) == nil)
         #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: 29.00, stop: 28.50,
-                        symbol: "2222.SR", fxRatesToUSD: ["JPY": 0.0065]) == plain)
+                        symbol: "2222.SR", fxRatesToUSD: ["JPY": 0.0065]) == nil)
+        #expect(PS.rawQuoteUnitToUSD(symbol: "AAPL", fxRatesToUSD: ["USD": .nan]) == 1)
+        #expect(PS.rawQuoteUnitToUSD(symbol: "EURUSD=X", fxRatesToUSD: [:]) == 1)
+        #expect(PS.rawQuoteUnitToUSD(symbol: "USDJPY=X", fxRatesToUSD: [:]) == nil)
+        #expect(PS.rawQuoteUnitToUSD(symbol: "UNKNOWN.ZZ", fxRatesToUSD: [:]) == nil)
+    }
+
+    @Test func mapOverloadRejectsInvalidRatesAndPreservesMinorUnits() {
+        for rate in [0, -1, Double.nan, Double.infinity, -Double.infinity] {
+            #expect(PS.rawQuoteUnitToUSD(symbol: "SAP.DE", fxRatesToUSD: ["EUR": rate]) == nil)
+            #expect(PS.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 90,
+                            symbol: "SAP.DE", fxRatesToUSD: ["EUR": rate]) == nil)
+        }
+        #expect(PS.rawQuoteUnitToUSD(symbol: "VOD.L", fxRatesToUSD: ["GBP": .leastNonzeroMagnitude]) == nil)
+        let pence = PS.size(account: 10_000, riskFraction: 0.01, entry: 500, stop: 460,
+                            symbol: "VOD.L", fxRatesToUSD: ["GBP": 1.25])
+        #expect(pence?.shares == 200)
+        #expect(pence?.dollarsAtRisk == 8_000)
+        #expect(pence?.pctOfAccount == 12.5)
     }
 }

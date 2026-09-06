@@ -13,6 +13,15 @@ import Foundation
 struct StockSageAllocationOptimizerTests {
     typealias Opt = StockSageAllocationOptimizer
 
+    @Test func foreignCandidateNeedsFXBeforeOptimizationAndWholeShareSizing() {
+        let foreign = idea("SAP.DE", conviction: 0.5, entry: 100, stop: 90, target: 130, closes: lowVolCloses)
+        #expect(Opt.optimizeSharpeDeCorrelated(ideas: [foreign], account: 10_000) == nil)
+        let sized = Opt.optimizeSharpeDeCorrelated(ideas: [foreign], account: 10_000,
+                                                   heatCap: 0.05, fxRatesToUSD: ["EUR": 2])
+        #expect(sized?.positions.first?.shares == 25) // USD 500 / (EUR 10 × 2 USD/EUR)
+        #expect(sized?.positions.first?.dollarsAtRisk == 250)
+    }
+
     private func idea(_ symbol: String, conviction: Double, entry: Double, stop: Double, target: Double,
                       closes: [Double]) -> StockSageIdea {
         StockSageIdea(symbol: symbol, market: "M", price: entry,

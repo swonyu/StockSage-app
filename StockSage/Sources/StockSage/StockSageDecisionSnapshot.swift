@@ -182,7 +182,7 @@ enum StockSageDecisionSnapshotBuilder {
         regime: MarketRegime? = nil,
         maxRiskFraction: Double = 0.02,
         // F3 wave-A (2026-07-16): ccy→USD map for an FX-correct share count in the journaled
-        // snapshot (.SR was under-sized ~3.75×); empty default = byte-identical.
+        // snapshot. Missing foreign FX withholds size and blocks the new-trade gate.
         fxRatesToUSD: [String: Double] = [:]
     ) -> StockSageDecisionSnapshot {
         let ev = StockSageExpectedValue.ev(for: idea, calibration: calibration)
@@ -219,7 +219,9 @@ enum StockSageDecisionSnapshotBuilder {
                 maxRiskFraction: maxRiskFraction,
                 maxCorrelation: nil,
                 daysToEarnings: earnings[idea.symbol.uppercased()]?.daysUntil,
-                rrIsNet: netRR != nil
+                rrIsNet: netRR != nil,
+                sizingFXAvailable: StockSagePositionSizer.rawQuoteUnitToUSD(
+                    symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) != nil
             )
         }()
 

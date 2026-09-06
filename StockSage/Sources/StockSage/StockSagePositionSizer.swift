@@ -10,15 +10,18 @@ import Foundation
 
 struct PositionSize: Sendable, Equatable {
     let shares: Int            // whole shares (rounded DOWN — never over-risk)
-    let dollarsAtRisk: Double  // actual $ lost on a stop-out (floored shares × risk/share)
-    let notional: Double       // shares × entry
+    let dollarsAtRisk: Double  // RAW quote units lost at the stop (not necessarily USD)
+    let notional: Double       // shares × entry, in RAW quote units
     let pctOfAccount: Double    // notional ÷ account, %
     let riskPerShare: Double
 }
 
 enum StockSagePositionSizer {
+    nonisolated static let unavailableFXMessage = "FX rate unavailable or invalid — cannot size this trade from a USD account. Refresh FX before preparing an order."
+
     /// Size so a stop-out loses ≈ `riskFraction` of `account`. nil for invalid
     /// inputs (non-positive) or entry == stop (undefined risk → not infinite size).
+    /// All money inputs must already use the SAME currency and quote unit.
     nonisolated static func size(account: Double, riskFraction: Double,
                                  entry: Double, stop: Double) -> PositionSize? {
         // .isFinite matters: a field of "inf"/"infinity" parses to +Infinity, which passes `> 0`
@@ -33,11 +36,14 @@ enum StockSagePositionSizer {
         let raw = (riskBudget / riskPerShare).rounded(.down)
         guard raw.isFinite, raw >= 0, let shares = Int(exactly: raw) else { return nil }
         let notional = Double(shares) * entry
+        let atRisk = Double(shares) * riskPerShare
+        let pct = notional / account * 100
+        guard notional.isFinite, atRisk.isFinite, pct.isFinite else { return nil }
         return PositionSize(
             shares: shares,
-            dollarsAtRisk: Double(shares) * riskPerShare,
+            dollarsAtRisk: atRisk,
             notional: notional,
-            pctOfAccount: notional / account * 100,
+            pctOfAccount: pct,
             riskPerShare: riskPerShare)
     }
 
@@ -52,8 +58,8 @@ enum StockSagePositionSizer {
     /// becomes native÷native — now AGREEING with the view's FX-corrected `pctOfAccountUSD`.
     ///
     /// `rawUnitToUSD` = USD value of ONE raw quote unit (e.g. ~0.2667 for a SAR quote;
-    /// 0.01 × GBPUSD for a pence quote). Pass 1 → byte-identical to `size()`. Callers with
-    /// no tracked FX rate must call the plain `size()` (prior behavior), never guess a rate.
+    /// 0.01 × GBPUSD for a pence quote). A value of 1 must be real, never a missing-rate default.
+    /// Missing foreign FX means no size; the plain overload requires same-currency inputs.
     nonisolated static func size(accountUSD: Double, riskFraction: Double,
                                  entry: Double, stop: Double,
                                  rawUnitToUSD: Double) -> PositionSize? {
@@ -66,26 +72,25 @@ enum StockSagePositionSizer {
     /// DecisionSnapshot, ExpectedValue's unfundable-row qualifier) that can't reach the view's
     /// FX resolver. Resolves the symbol's quote currency and per-raw-unit USD value here — ONE
     /// place — from a caller-supplied ccy→USD rate map (the view's `fxRatesToUSD` idiom).
-    /// USD symbols, an empty map, or an untracked currency → the plain `size()` byte-identical
-    /// (same never-guess-a-rate rule as the view helper).
+    /// USD symbols need no rate; missing/invalid foreign FX returns nil, never a 1:1 guess.
+    /// The caller must supply rates eligible for its use (including freshness for new risk).
     nonisolated static func size(account: Double, riskFraction: Double,
                                  entry: Double, stop: Double,
                                  symbol: String, fxRatesToUSD: [String: Double]) -> PositionSize? {
-        if let rawUnit = rawQuoteUnitToUSD(symbol: symbol, fxRatesToUSD: fxRatesToUSD) {
-            return size(accountUSD: account, riskFraction: riskFraction, entry: entry, stop: stop,
-                        rawUnitToUSD: rawUnit)
-        }
-        return size(account: account, riskFraction: riskFraction, entry: entry, stop: stop)
+        guard let rawUnit = rawQuoteUnitToUSD(symbol: symbol, fxRatesToUSD: fxRatesToUSD) else { return nil }
+        return size(accountUSD: account, riskFraction: riskFraction, entry: entry, stop: stop,
+                    rawUnitToUSD: rawUnit)
     }
 
     /// F3 wave-B (2026-07-16): USD value of ONE raw quote unit for `symbol` given a ccy→USD
     /// rate map — the single resolution the map overload and the allocator's USD-normalized
-    /// heat ledger both use. nil when the symbol quotes in USD or its currency isn't in the
-    /// map (callers take the plain path / treat the ledger entry as already-USD — never guess).
+    /// heat ledger both use. USD is explicitly 1; nil is missing/invalid FOREIGN FX.
     nonisolated static func rawQuoteUnitToUSD(symbol: String, fxRatesToUSD: [String: Double]) -> Double? {
         let ccy = StockSageCurrency.conversionCurrencyForSymbol(symbol)
-        guard ccy != "USD", let rate = fxRatesToUSD[ccy] else { return nil }
-        return StockSageCurrency.majorUnitValue(symbol: symbol, rawValue: 1) * rate
+        if ccy == "USD" { return 1 }
+        guard let rate = fxRatesToUSD[ccy], rate > 0, rate.isFinite else { return nil }
+        let rawUnit = StockSageCurrency.majorUnitValue(symbol: symbol, rawValue: 1) * rate
+        return rawUnit > 0 && rawUnit.isFinite ? rawUnit : nil
     }
 
     /// One-line "size it now" summary — shares, at-risk amount, % of account — with the

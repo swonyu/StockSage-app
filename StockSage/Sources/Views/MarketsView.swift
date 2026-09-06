@@ -1810,10 +1810,15 @@ struct MarketsView: View {
     /// risk, the dangerous direction). One resolver = the drift is structurally impossible.
     private func fxRateToUSD(_ ccy: String) -> Double? {
         if ccy == "USD" { return 1 }
-        if let r = currentPrice("\(ccy)USD=X"), r > 0 { return r }
-        if let inv = currentPrice("USD\(ccy)=X"), inv > 0 { return 1 / inv }
-        if let r = store.infraFX["\(ccy)USD=X".uppercased()], r > 0 { return r }
-        if let inv = store.infraFX["USD\(ccy)=X".uppercased()], inv > 0 { return 1 / inv }
+        let candidates: [(Double?, Bool)] = [
+            (currentPrice("\(ccy)USD=X"), false), (currentPrice("USD\(ccy)=X"), true),
+            (store.infraFX["\(ccy)USD=X".uppercased()], false), (store.infraFX["USD\(ccy)=X".uppercased()], true)
+        ]
+        for (price, inverse) in candidates {
+            guard let price, price > 0, price.isFinite else { continue }
+            let rate = inverse ? 1 / price : price
+            if rate > 0, rate.isFinite { return rate }
+        }
         return nil
     }
 
@@ -1912,24 +1917,18 @@ struct MarketsView: View {
     /// divided by a native-currency risk/share under-sized .SR ~3.75× vs the stated risk%
     /// (the 07-12/07-13 audits fixed only labels). When the symbol's quote currency has a
     /// tracked FX rate, the account is converted into RAW quote units (pence-aware via
-    /// majorUnitValue) so a 1%/trade plan genuinely risks 1%; USD symbols and untracked-FX
-    /// currencies keep the prior behavior byte-identical (never guess a rate).
+    /// majorUnitValue) so a 1%/trade plan genuinely risks 1%. Missing foreign FX must
+    /// use the shared nil result, not a second view-only 1:1 fallback.
     private func sizedPosition(account: Double, riskFraction: Double, symbol: String,
                                entry: Double, stop: Double) -> PositionSize? {
-        let ccy = conversionCurrencyForSymbol(symbol)
-        if ccy != "USD", let rate = fxRateToUSD(ccy) {
-            let rawUnitToUSD = StockSageCurrency.majorUnitValue(symbol: symbol, rawValue: 1) * rate
-            return StockSagePositionSizer.size(accountUSD: account, riskFraction: riskFraction,
-                                               entry: entry, stop: stop, rawUnitToUSD: rawUnitToUSD)
-        }
-        return StockSagePositionSizer.size(account: account, riskFraction: riskFraction,
-                                           entry: entry, stop: stop)
+        StockSagePositionSizer.size(account: account, riskFraction: riskFraction, entry: entry, stop: stop,
+                                    symbol: symbol, fxRatesToUSD: sizingFXRates(for: [symbol]))
     }
 
     /// F3 wave-A (2026-07-16): ccy→USD rate map for the PURE plan/snapshot builders (TodayPlan,
     /// DecisionSnapshot, the unfundable-row qualifier) — resolver-backed like `sizedPosition`,
     /// so .SR resolves via infraFX even with no .SR position held. Only tracked rates enter
-    /// the map; the builders treat a missing entry as "never guess" (prior behavior).
+    /// the map; the builders withhold size and block the gate when a foreign rate is missing.
     private func sizingFXRates(for symbols: [String]) -> [String: Double] {
         var rates: [String: Double] = [:]
         for ccy in Set(symbols.map { conversionCurrencyForSymbol($0) }) where ccy != "USD" {
@@ -6154,6 +6153,11 @@ struct MarketsView: View {
             let plan = StockSageCapitalAllocator.allocate(ideas: store.ideas, account: acct, calibration: store.convictionCalibration, regime: store.regime,
                                                           fxRatesToUSD: sizingFXRates(for: store.ideas.map(\.symbol)),
                                                           strategy: strategy)
+            if !plan.unpricedSymbols.isEmpty {
+                Text("Allocation incomplete — no valid FX rate for: \(plan.unpricedSymbols.joined(separator: ", ")). These symbols were not sized; refresh FX before preparing orders.")
+                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // F5 (2026-07-09): allocate() silently drops every position that floors to 0 shares —
             // this card used to just vanish when ALL of them did, indistinguishable from "nothing
             // qualified". Name the reason instead when there WERE fundable candidates.
@@ -6240,6 +6244,7 @@ struct MarketsView: View {
                                 }
                                 + (eb.map { [Self.effectiveBetsCaption($0)] } ?? [])
                                 + [plan.caveat]
+                                + (plan.unpricedSymbols.isEmpty ? [] : ["⚠ No valid FX rate — not sized: " + plan.unpricedSymbols.joined(separator: ", ")])
                                 + (Self.regimeWarningNeeded(regime: store.regime, isStale: store.regimeIsStale)
                                    ? ["⚠︎ Regime not gauged — this plan applies no risk-off/on brake; tap Gauge for a plan sized to the tape."]
                                    : [])
@@ -6872,7 +6877,7 @@ struct MarketsView: View {
                         // only adds an honest qualifier when it dollarizes a setup that floors to
                         // 0 shares at this account size (F1/F3's silent-unfundable-#1 finding).
                         if StockSageExpectedValue.weeklyDollarsIncludesUnfundableRow(lane: velocityLane, account: acct, riskFraction: rp / 100, fxRatesToUSD: sizingFXRates(for: velocityLane.map(\.symbol))) {
-                            Text("⚠︎ At least one of the top setups summed above is below the 1-share minimum at this account size — the $/week figure overstates what you can actually place. See 'Size it now' on each idea.")
+                            Text("⚠︎ At least one top setup cannot be sized (including missing FX) or is below the 1-share minimum — the $/week figure is not a placeable plan. See 'Size it now' on each idea.")
                                 .font(.system(size: mvFont8)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -6958,7 +6963,7 @@ struct MarketsView: View {
                     // F4 a11y parity with the visible unfundable-row warning above.
                     if let acct = StockSageInput.positiveAmount(sizerAccount), let rp = StockSageInput.percent(sizerRiskPct),
                        StockSageExpectedValue.weeklyDollarsIncludesUnfundableRow(lane: velocityLane, account: acct, riskFraction: rp / 100, fxRatesToUSD: sizingFXRates(for: velocityLane.map(\.symbol))) {
-                        t += ". Warning: at least one of the top setups summed is below the 1-share minimum at this account size; the dollar-per-week figure overstates what you can actually place."
+                        t += ". Warning: at least one top setup cannot be sized (including missing FX) or is below the 1-share minimum; the dollar-per-week figure is not a placeable plan."
                     }
                     return t
                 }())
@@ -7902,20 +7907,14 @@ struct MarketsView: View {
                     }
                 }
                 if let acct = parsedAccount, let rf = parsedRiskFraction,
-                   let ps = sizedPosition(account: acct, riskFraction: rf, symbol: idea.symbol, entry: entry, stop: stop) {
+                   let ps = sizedPosition(account: acct, riskFraction: rf, symbol: idea.symbol, entry: entry, stop: stop),
+                   let usdFactor = StockSagePositionSizer.rawQuoteUnitToUSD(symbol: idea.symbol,
+                                                                           fxRatesToUSD: sizingFXRates(for: [idea.symbol])) {
                     // F4 (audit 2026-07-12): ps.notional/dollarsAtRisk/pctOfAccount and `entry` are in the
                     // SYMBOL's own currency, but `acct` is USD. A native-vs-USD compare inflates ~100× for a
                     // pence stock → false leverage/liquidation warnings on an unleveraged cash position, and
                     // over-/under-states the "% of account". Convert the native amounts to USD (pence-normalized
-                    // × FX rate) before every account comparison; untracked FX → factor 1 (prior behavior).
-                    let usdFactor: Double = {
-                        // F3 follow-up (2026-07-16): resolver-backed (was the portfolio-only dict,
-                        // which lacked SAR whenever no .SR position was held → factor fell to 1).
-                        guard let rate = fxRateToUSD(conversionCurrencyForSymbol(idea.symbol)) else { return 1 }
-                        // majorUnitValue handles the pence ÷100; divide by the raw amount to get a pure scale.
-                        let normalized = StockSageCurrency.majorUnitValue(symbol: idea.symbol, rawValue: 1)
-                        return normalized * rate
-                    }()
+                    // × FX rate) before every account comparison; unknown FX renders no size.
                     let notionalUSD = ps.notional * usdFactor
                     let atRiskUSD = ps.dollarsAtRisk * usdFactor
                     let pctOfAccountUSD = notionalUSD / acct * 100
@@ -7967,7 +7966,7 @@ struct MarketsView: View {
                     // F4 (audit 2026-07-12): the loss is computed from native-currency entry/stop/shares, so
                     // the loss-vs-equity ratio needs the account in the SAME (native) currency — else a pence
                     // stock's loss vs a USD account falsely reads "MORE than you have / owe the broker". Pass
-                    // acct converted to the symbol's currency (÷ usdFactor); untracked FX → usdFactor 1 (no-op).
+                    // acct converted to the symbol's currency (÷ the validated usdFactor).
                     let gapSide: TradeSide = isShortIdea ? .short : .long
                     let acctNative = acct / usdFactor
                     if let gap = StockSageGapRisk.scenario(side: gapSide, entry: entry, stop: stop,
@@ -7987,6 +7986,9 @@ struct MarketsView: View {
                             .help(ladder.isEmpty ? StockSageGapRisk.caveat : StockSageGapRisk.caveat + "\n\n" + ladder)
                             .accessibilityLabel("Gap risk warning. " + gap.verdict)
                     }
+                } else if StockSagePositionSizer.rawQuoteUnitToUSD(symbol: idea.symbol, fxRatesToUSD: sizingFXRates(for: [idea.symbol])) == nil {
+                    Text(StockSagePositionSizer.unavailableFXMessage)
+                        .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("Enter a valid account size and risk %.").font(.system(size: mvFont9)).foregroundStyle(.secondary)
                 }
@@ -8102,7 +8104,9 @@ struct MarketsView: View {
             rewardToRisk: inputs.rewardToRisk,
             riskFraction: rf,
             daysToEarnings: inputs.daysToEarnings,
-            rrIsNet: inputs.resolvedNetRR != nil
+            rrIsNet: inputs.resolvedNetRR != nil,
+            sizingFXAvailable: StockSagePositionSizer.rawQuoteUnitToUSD(
+                symbol: idea.symbol, fxRatesToUSD: sizingFXRates(for: [idea.symbol])) != nil
         )
     }
 
@@ -8162,7 +8166,9 @@ struct MarketsView: View {
         // used to happen for a typed "10,000" (Double() choking on the comma), reading as "no
         // size available" with no hint why. Say so explicitly when there's a stop to size against.
         if a.stopPrice != nil, size == nil {
-            plan += "\nSize: enter account size to size this trade."
+            let unavailableFX = StockSagePositionSizer.rawQuoteUnitToUSD(symbol: idea.symbol,
+                                                                       fxRatesToUSD: sizingFXRates(for: [idea.symbol])) == nil
+            plan += "\nSize: " + (unavailableFX ? StockSagePositionSizer.unavailableFXMessage : "enter a valid account size and risk % to size this trade.")
         }
         // F15: Net R:R line only when stop+target both exist (need both prices for the ratio).
         // Gate is emitted for buy-family ONLY — same condition as the on-screen gate chip.

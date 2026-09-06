@@ -1271,20 +1271,20 @@ enum StockSageExpectedValue {
     /// now" line already calls — no new sizing math, no rank change, and the header's own dollar
     /// figure is untouched by this: it only gates whether a qualifier renders beside it.
     /// false (never flags) when account/riskFraction is unusable, or a lane idea has no stop to
-    /// size against — only-real-data, matches this file's "unknown ⇒ no penalty" convention.
+    /// size against. A missing/invalid FX rate also prevents a sized order and must be flagged.
     nonisolated static func weeklyDollarsIncludesUnfundableRow(lane: [StockSageIdea], account: Double,
                                                                riskFraction: Double, maxConcurrent: Int = 3,
                                                                fxRatesToUSD: [String: Double] = [:]) -> Bool {
         // F3 wave-A (2026-07-16): fxRatesToUSD (ccy→USD) sizes non-USD rows FX-correctly —
         // the currency-mixed count over-flagged .SR rows as unfundable (~3.75× fewer shares).
-        // Empty map (the default) = prior behavior byte-identical.
+        // Missing foreign FX is not a USD-denominated quote.
         guard account > 0, riskFraction > 0, account.isFinite, riskFraction.isFinite else { return false }
         for idea in lane.prefix(Swift.max(0, maxConcurrent)) {
-            guard let stop = idea.advice.stopPrice,
-                  let ps = StockSagePositionSizer.size(account: account, riskFraction: riskFraction,
+            guard let stop = idea.advice.stopPrice else { continue }
+            guard let ps = StockSagePositionSizer.size(account: account, riskFraction: riskFraction,
                                                        entry: idea.price, stop: stop,
                                                        symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD)
-            else { continue }
+            else { return true }
             if ps.shares == 0 { return true }
         }
         return false

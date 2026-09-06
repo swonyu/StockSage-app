@@ -203,7 +203,7 @@ struct StockSageTodayPlanTests {
     // risk/share 8 SAR; $10,000 × 1% = $100 budget; SAR→USD = 1/3.75 ⇒ 37,500 SAR account,
     // 375 SAR budget → floor(375/8) = 46 shares, at-risk 368 SAR (≈$98 = the stated ~1%).
     // The currency-mixed path gave floor(100/8) = 12 shares (≈$25.6 = 0.26%). Without the map
-    // (default [:]) the plan must stay byte-identical to the prior behavior — never guess.
+    // (default [:]) a plan must now be blocked rather than reproduce the currency-mixed count.
     @Test func fxMapMakesTheSRShareCountMatchTheStatedRiskFraction() {
         let i = idea("2222.SR", conviction: 0.9, stop: 92, target: 132)   // 4:1 gross — the clearing ratio the BTC fixture pins
         let withFX = StockSageTodayPlan.build(idea: i, ev: StockSageExpectedValue.ev(for: i),
@@ -213,6 +213,8 @@ struct StockSageTodayPlanTests {
         #expect(withFX.contains("368 SAR"))               // native at-risk via approxAmount
         let withoutFX = StockSageTodayPlan.build(idea: i, ev: StockSageExpectedValue.ev(for: i),
                                                  account: 10_000, riskFraction: 0.01)
-        #expect(withoutFX.contains("12 shares"))          // prior behavior preserved by default
+        #expect(!withoutFX.contains("12 shares"))
+        #expect(withoutFX.contains("FX rate unavailable or invalid"))
+        #expect(withoutFX.contains("No order plan exported"))
     }
 }

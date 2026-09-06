@@ -1,5 +1,65 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## P5 prerequisite / M9 missing-FX sizing checkpoint — 2026-09-07 00:37 +03
+
+The shared sizer now represents USD explicitly as1 and missing/invalid foreign FX
+as nil. Native stop-risk/notional units and pence conversion are retained. Finite
+inputs that overflow derived notional/risk/account-percent no longer return an
+unrenderable size. The view's duplicated plain-size fallback is removed, and its
+direct/inverse FX resolver rejects non-finite/underflowed/overflowed conversions.
+
+Snapshot, single Today plan and detail gate block missing FX. Ranked plans inherit
+the block; Copy all now includes the failed-check reason, matching the rendered
+and VoiceOver row. Detail sizing/copy and weekly-dollar qualifiers explain why
+no size exists rather than pretending only account input or one-share flooring
+is at fault. No return forecast or research edge was changed.
+
+The allocator excludes missing-FX candidates BEFORE weighting/correlation/heat
+allocation, reports sorted unpricedSymbols, and carries those omissions into the
+visible and copied plan. It does not mislabel them as below the one-share minimum.
+Retained (currently unwired) suggestAdd and optimizer helpers now use the same
+currency-aware sizer. suggestAdd's existing symbol-less openTrades inputs must be
+USD-normalized by callers; returned candidate amounts remain raw-native.
+
+Regression evidence: the synthetic USD10,000 /1% /EUR100 entry /EUR90 stop case
+returned10 shares without FX, although the supplied EURUSD2 fixture correctly
+returns5. The shared-path regression additionally checks snapshot, single and
+ranked exports, allocation, marginal sizing and the weekly-dollar warning.
+Old tests explicitly pinning missing-SAR=USD were corrected to the reviewed
+contract, not deleted. USD identity, actual SAR, pence, unknown suffix, FX quote
+legs, invalid rates, minor-unit underflow and derived overflow remain covered.
+
+Executed results (xcresulttool counts; serialized, no live provider requests):
+- First narrow method selector executed ZERO tests despite exit0; discarded as
+  evidence. `/private/tmp/stocksage-m9-fx-red-20260907-0024.xcresult`.
+- Red full sizer suite:17 executed,16 passed/1 failed,exit65. The failing witness
+  is the ten-share missing-FX fallback.
+  `/private/tmp/stocksage-m9-fx-red-20260907-0026.xcresult`.
+- Focused8 suites:212/212,0 failures/skips,exit0.
+  `/private/tmp/stocksage-m9-fx-focused-20260907-0031.xcresult`.
+- First broad macOS:1733/1733,exit0, before final Copy-all reason parity.
+  `/private/tmp/stocksage-m9-fx-broad-macos-20260907-0031.xcresult`.
+- FINAL broad macOS:1733/1733,0 selected failures/skips,exit0.
+  `/private/tmp/stocksage-m9-fx-broad-macos-20260907-0034.xcresult`.
+- FINAL iPhone17Pro(gate),iOS26.5:1731/1731,0 selected failures/skips,exit0.
+  `/private/tmp/stocksage-m9-fx-broad-ios-20260907-0035.xcresult`.
+  Same3 explicit opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests and StrategyBaselineMeasurementTests.
+  All build handles finished; no compiler remains.4 new test functions overall.
+
+M9 is NOT fully closed: infraFX still strips market timestamps, and the view's
+age resolver is detached from the selected rate. Next fix keeps price/time paired
+and withholds stale/undated/future/sample rates for NEW sizing; historical
+portfolio valuation needs an explicit old/unknown-rate label instead. Numeric
+validity is not freshness. Existing symbol-to-currency heuristics are not a
+verified broker instrument contract. M8 sized-minimum-fee parity, P5 tickets,
+actual Derayah integration and populated UI/provider smoke remain pending.
+
+Work stayed inline on wt/coverage; owner app/main-worktree/credentials/model were
+not touched, no new persistent services/workers/real trades, no push. The15-minute
+original-task heartbeat was read back ACTIVE. Good-spender remains OFF. Xcode's
+GUI rejection is recorded in the prior checkpoint; its command-line gates work.
+
 ## Pipeline 4 M6 company-event checkpoint — 2026-09-07 00:15 +03
 
 Five Massive feeds now supply dated catalyst observations: Benzinga ratings and
