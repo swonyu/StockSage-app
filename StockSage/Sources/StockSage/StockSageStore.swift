@@ -211,6 +211,33 @@ final class StockSageStore: ObservableObject {
     @Published private(set) var priceAlerts: [PriceAlert] = []
     private static let priceAlertsKey = "stocksage_price_alerts"
 
+    /// Single home for "what symbols are tracked" (board ∪ watchlist ∪ portfolio ∪ open
+    /// journal trades). Pure — no store/network access — so callers (and tests) can build the
+    /// union from any inputs. Uppercased + deduplicated; stable order is board order first,
+    /// then the other three lists in first-seen order.
+    nonisolated static func trackedSymbols(board: [String], watchlist: [String], portfolio: [String], journalOpen: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for symbol in board + watchlist + portfolio + journalOpen {
+            let upper = symbol.uppercased()
+            if seen.insert(upper).inserted {
+                result.append(upper)
+            }
+        }
+        return result
+    }
+
+    /// Instance convenience: feeds `trackedSymbols` from this store's board (`ideas`) and
+    /// watchlist (`userSymbols`), plus the shared portfolio and journal singletons.
+    var trackedSymbolsUnion: [String] {
+        Self.trackedSymbols(
+            board: ideas.map(\.symbol),
+            watchlist: userSymbols,
+            portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
+            journalOpen: StockSageJournalStore.shared.open.map(\.symbol)
+        )
+    }
+
     private init() {
         userSymbols = (UserDefaults.standard.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
         priceAlerts = Self.loadPriceAlerts()
