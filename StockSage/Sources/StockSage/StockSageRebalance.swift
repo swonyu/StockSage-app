@@ -54,7 +54,11 @@ enum StockSageRebalance {
                 trades.append(RebalanceTrade(symbol: s, currentWeight: cw, targetWeight: tw, deltaValue: drift * total))
             }
         }
-        trades.sort { abs($0.deltaValue) > abs($1.deltaValue) }   // biggest moves first
+        // Biggest moves first; symbol breaks ties so the plan is a total order (review C2 —
+        // sort is not stable, an equal-magnitude pair could swap between runs).
+        trades.sort {
+            abs($0.deltaValue) != abs($1.deltaValue) ? abs($0.deltaValue) > abs($1.deltaValue) : $0.symbol < $1.symbol
+        }
         return RebalancePlan(trades: trades, totalValue: total)
     }
 

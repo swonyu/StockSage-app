@@ -415,7 +415,8 @@ final class StockSageStore: ObservableObject {
         // Show it on the board now, without disturbing the sample/live flag.
         let added = StockSageSymbol(symbol: symbol, market: Self.userMarketLabel, quotes: [
             StockSageQuote(price: q.previousClose, previousPrice: q.previousClose, time: Date(timeIntervalSinceNow: -86_400)),
-            StockSageQuote(price: q.price, previousPrice: q.previousClose),
+            // Carry the feed's market timestamp (review Q6) — without it the new row is fail-closed STALE.
+            StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
         ])
         symbols = symbols.filter { $0.symbol.uppercased() != symbol } + [added]
         // Thread the new-listing flag through here too (L3-03, 2026-07-07 audit) — same reconcile
@@ -2009,11 +2010,13 @@ final class StockSageStore: ObservableObject {
         }
 
         isRefreshing = true
+        // Held for the WHOLE cycle (review 2026-07-28 Q3): releasing it before the merge/heal/
+        // commit below let a second refresh() interleave with this one's writes.
+        defer { isRefreshing = false }
         feedError = nil
         let universe = trackedDefs(scope: scope)
         let quotes = await StockSageQuoteService.fetchQuotes(for: universe.map(\.symbol))
         await refreshInfraFX()   // SAR rate for .SR conversions (infra — FX left the universe 2026-07-16)
-        isRefreshing = false
 
         // Merge each curated symbol (keeps the friendly market label) with its
         // live quote; drop any the feed couldn't price.
@@ -2099,7 +2102,11 @@ final class StockSageStore: ObservableObject {
         lastFullRefreshAt = Date()
         // Newest MARKET time across the priced quotes — the banner uses this (not fetch time) to
         // tell live from a stale close. nil when the feed omitted timestamps for all of them.
-        quoteAsOf = quotes.values.compactMap(\.marketTime).max()
+        // Max-merge (review Q7): a scoped/partial sweep carrying older stamps must not roll the
+        // as-of backwards, and a sweep with no stamps must not blank it.
+        if let newest = quotes.values.compactMap(\.marketTime).max() {
+            quoteAsOf = max(quoteAsOf ?? .distantPast, newest)
+        }
         // Persist EXACTLY what is on screen (incl. preserved user-added tickers the feed missed this
         // cycle) — caching only `live` dropped them, so a tracked ticker vanished from the offline /
         // last-good board on next launch.
