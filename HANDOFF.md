@@ -132,6 +132,11 @@ Earlier the same runner passed 1,446/1,446 on d49a903 (batch 2 + tab wiring) and
 Not executed: SwiftUI rendering (no simulator/app run), the Apple on-device model path (needs an Apple
 Intelligence device), live Yahoo/SEC/Ollama network paths beyond the read-only Ollama probes.
 
+Canonical gate on BOTH platforms at HEAD 5b3f2a4 (2026-09-06 10:01 +03, wt/ui session): macOS test
+1,476/1,476 in 171 suites; iOS test 1,476/1,476 in 171 suites on an iPhone 17 Pro simulator (iOS 26.5
+23F77, platform downloaded 09:49–09:54 +03, 8.52 GB). HEAD unchanged during the run. Not pushed.
+Uncommitted `StockSage.xcodeproj/project.pbxproj` reorder (104+/91−, no semantic change) left for its owner.
+
 ## Next actions
 1. Owner: `sudo xcodebuild -license accept`, then the canonical `xcodebuild … test` on macOS AND the iOS 27
    simulator (the runner covers macOS only; iOS is emit-module-checked). Open the app: Ideas → Catalysts tab,
