@@ -121,7 +121,12 @@ Measured: quiet Mac 15–53 tok/s ≈ 3–10 s per paragraph; with Swift compile
 drafter via mlx-vlm was ~1.3× faster steady-state (3.7–6.3 s) — NOT made the default; venv at `~/.local/venvs/mlx`,
 34 GB of A/B artefacts (Ollama tag `qwen3.8:27b-mlx`, HF cache) left on disk for the owner to delete or keep.
 
-## EXECUTED test results (tools/runtests.sh, macOS arm64, 2026-09-06 09:40 +03)
+## EXECUTED test results
+**Canonical `xcodebuild -scheme StockSage -destination 'platform=macOS' … test` on the tab branch (rebased onto
+5c547f1), 2026-09-06 09:53 +03: `✔ Test run with 1476 tests in 171 suites passed after 26.920 seconds` — ** TEST
+SUCCEEDED ** (n=1,476 executed, 0 failed).** iOS leg: pending the 26.5 simulator platform download (other session).
+
+tools/runtests.sh (macOS arm64, 09:40 +03), before the licence was accepted:
 `✔ Test run with 1474 tests in 170 suites passed after 29.967 seconds` on d382cc0's tree (n=1,474 executed, 0 failed).
 Earlier the same runner passed 1,446/1,446 on d49a903 (batch 2 + tab wiring) and 33/33 on the catalyst suites.
 Not executed: SwiftUI rendering (no simulator/app run), the Apple on-device model path (needs an Apple
