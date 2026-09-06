@@ -218,7 +218,7 @@ struct MarketsRiskAllocationSection: View {
                                 ForEach(plan.trades) { t in
                                     Text("\(t.action) \(String(format: "$%.0f", abs(t.deltaValue))) of \(t.symbol)  (\(String(format: "%.0f%%→%.0f%%", t.currentWeight * 100, t.targetWeight * 100)))")
                                         .font(.system(size: mvFont9, design: .monospaced))
-                                        .foregroundStyle(t.deltaValue > 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                        .foregroundStyle(MarketsView.signedMetricColor(positive: t.deltaValue > 0))
                                 }
                             }
                         }
@@ -254,7 +254,7 @@ struct MarketsRiskAllocationSection: View {
                 .contentTransition(.numericText())
             Text((up ? "+" : "") + String(format: "%.0f%%", displayDelta * 100))
                 .font(.system(size: mvFont11, weight: .bold))
-                .foregroundStyle(up ? DS.Palette.successSoft : DS.Palette.danger)
+                .foregroundStyle(MarketsView.signedMetricColor(positive: up))
                 .frame(width: 46, alignment: .trailing)
         }
         .padding(.horizontal, DS.Space.md).padding(.vertical, 7)
@@ -421,7 +421,7 @@ struct MarketsRiskAllocationSection: View {
                 if let cluster = StockSageCorrelationCluster.largest(c) {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "link").font(.system(size: 11)).foregroundStyle(DS.Palette.danger)
-                        Text(cluster.note).font(.caption2).foregroundStyle(DS.Palette.danger)
+                        Text(cluster.note).font(.caption2).foregroundStyle(DS.Palette.dangerSoft)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }

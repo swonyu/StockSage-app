@@ -427,7 +427,7 @@ struct MarketsView: View {
             if let idea = store.ideas.first(where: { $0.symbol.uppercased() == sym.uppercased() }) {
                 ideaDetailSheet(idea)
             } else {
-                Text("QA: no such idea — \(sym)").foregroundStyle(.red)
+                Text("QA: no such idea — \(sym)").foregroundStyle(DS.Palette.dangerSoft)
             }
         } else {
             normalBody
@@ -1953,7 +1953,7 @@ struct MarketsView: View {
                         Text((up ? "+" : "") + String(format: "$%.2f", pl)
                              + (t.cost > 0 ? String(format: " (%+.1f%%)", plPct) : " (—%)"))
                             .font(.system(size: mvFont15, weight: .semibold))
-                            .foregroundStyle(up ? DS.Palette.successSoft : DS.Palette.danger)
+                            .foregroundStyle(Self.signedMetricColor(positive: up))
                             .contentTransition(.numericText())
                             .animation(DS.Motion.smooth, value: pl)
                     }
@@ -2064,7 +2064,7 @@ struct MarketsView: View {
                     .animation(DS.Motion.smooth, value: value)
                 if price != nil {
                     Text((up ? "+" : "") + adaptivePrice(pl))
-                        .font(.caption).foregroundStyle(up ? DS.Palette.successSoft : DS.Palette.danger)
+                        .font(.caption).foregroundStyle(Self.signedMetricColor(positive: up))
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: pl)
                 }
@@ -2251,7 +2251,7 @@ struct MarketsView: View {
                             ForEach(plan.trades) { t in
                                 Text("\(t.action) \(String(format: "$%.0f", abs(t.deltaValue))) of \(t.symbol)  (\(String(format: "%.0f%%→%.0f%%", t.currentWeight * 100, t.targetWeight * 100)))")
                                     .font(.system(size: mvFont9, design: .monospaced))
-                                    .foregroundStyle(t.deltaValue > 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                    .foregroundStyle(Self.signedMetricColor(positive: t.deltaValue > 0))
                             }
                         }
                     }
@@ -2441,7 +2441,7 @@ struct MarketsView: View {
                 if let cluster = StockSageCorrelationCluster.largest(c) {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "link").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.danger)
-                        Text(cluster.note).font(.caption2).foregroundStyle(DS.Palette.danger)
+                        Text(cluster.note).font(.caption2).foregroundStyle(DS.Palette.dangerSoft)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -2769,7 +2769,7 @@ struct MarketsView: View {
             if let health = journal.systemHealth {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: healthIcon(health.verdict)).font(.system(size: mvFont11)).foregroundStyle(healthColor(health.verdict))
-                    Text(health.verdict.rawValue).font(.system(size: mvFont11, weight: .bold)).foregroundStyle(healthColor(health.verdict))
+                    Text(health.verdict.rawValue).font(.system(size: mvFont11, weight: .bold)).foregroundStyle(Self.signedMetricColor(positive: health.verdict != .negative, positiveColor: healthColor(health.verdict)))
                     Text(health.reason).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -2852,7 +2852,7 @@ struct MarketsView: View {
                             Text(String(format: "Recent %+.2fR vs early %+.2fR — %@.", trend.recentR, trend.earlyR, trend.direction.rawValue))
                                 .font(.caption2)
                                 .foregroundStyle(trend.direction == .improving ? DS.Palette.successSoft
-                                                 : (trend.direction == .fading ? DS.Palette.danger : .secondary))
+                                                 : (trend.direction == .fading ? DS.Palette.dangerSoft : .secondary))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -2926,7 +2926,7 @@ struct MarketsView: View {
                              ? String(format: "Wiped out at %.0f%%/trade — the account hit ruin on this or an earlier trade.", comp.fraction * 100)
                              : String(format: "Compounded to ×%.2f at %.0f%%/trade", comp.finalMultiple, comp.fraction * 100))
                             .font(.system(size: mvFont11, weight: .semibold))
-                            .foregroundStyle(up ? DS.Palette.successSoft : DS.Palette.danger)
+                            .foregroundStyle(Self.signedMetricColor(positive: up))
                         Sparkline(values: comp.multiples)
                             .stroke(up ? DS.Palette.successSoft : DS.Palette.danger,
                                     style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
@@ -3023,7 +3023,7 @@ struct MarketsView: View {
                             Text(yr.profitSymbol.map { StockSageCurrency.signedAmount(yr.realizedDollars, symbol: $0) } ?? "mixed")
                                 .font(.system(size: mvFont11, weight: .semibold))
                                 .foregroundStyle(yr.profitSymbol == nil ? DS.Palette.warningSoft
-                                     : (yr.realizedDollars >= 0 ? DS.Palette.successSoft : DS.Palette.danger))
+                                     : Self.signedMetricColor(positive: yr.realizedDollars >= 0))
                                 .help(yr.profitSymbol == nil ? "This year's trades span multiple currencies — a single total can't be summed honestly." : "")
                             // width (NOT minWidth), unlike the month/side/sector R columns below: this
                             // is the only journal row where another figure (realizedDollars, just
@@ -3161,7 +3161,7 @@ struct MarketsView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "flame.fill").font(.system(size: mvFont11)).foregroundStyle(hc)
                                 Text("Portfolio heat — \(heat.verdict)")
-                                    .font(.system(size: mvFont9, weight: .medium)).foregroundStyle(hc)
+                                    .font(.system(size: mvFont9, weight: .medium)).foregroundStyle(Self.signedMetricColor(positive: heat.level != .hot, positiveColor: hc))   // 9pt text: hot → dangerSoft (AA); the flame icon keeps raw danger
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Text(heat.caveat).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -3177,7 +3177,7 @@ struct MarketsView: View {
                     ForEach(urgentActs) { act in
                         Text("⚠︎ \(act.symbol) — \(act.kind.rawValue): \(act.detail)")
                             .font(.system(size: mvFont9, weight: .semibold))
-                            .foregroundStyle(act.kind == .stopHit ? DS.Palette.danger : DS.Palette.successSoft)
+                            .foregroundStyle(Self.signedMetricColor(positive: act.kind != .stopHit))
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel("\(act.symbol) \(act.kind.rawValue). \(act.detail)")
                     }
@@ -3547,7 +3547,7 @@ struct MarketsView: View {
             HStack(spacing: DS.Space.sm) {
                 Text(trade.symbol).font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white).frame(width: 64, alignment: .leading).lineLimit(1)
                 Text(trade.side.rawValue).font(.system(size: mvFont9, weight: .semibold))
-                    .foregroundStyle(trade.side == .long ? DS.Palette.successSoft : DS.Palette.danger)
+                    .foregroundStyle(Self.signedMetricColor(positive: trade.side == .long))
                 Text("@ \(adaptivePrice(trade.entry))").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 if let pnl, let r {
@@ -3675,7 +3675,7 @@ struct MarketsView: View {
     /// target-hit/in-profit, muted holding.
     private func openActionColor(_ kind: OpenAction.Kind) -> Color {
         switch kind {
-        case .stopHit:              return DS.Palette.danger
+        case .stopHit:              return DS.Palette.dangerSoft
         case .nearStop:             return DS.Palette.warningSoft
         case .targetHit, .inProfit: return DS.Palette.successSoft
         case .holding:              return .secondary
@@ -4287,7 +4287,7 @@ struct MarketsView: View {
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: change)
                 }
-                .foregroundStyle(isNew ? Color.secondary : (flat ? Color.secondary : (up ? DS.Palette.successSoft : DS.Palette.danger)))
+                .foregroundStyle(isNew ? Color.secondary : (flat ? Color.secondary : Self.signedMetricColor(positive: up)))
             }
             if let signal {
                 VStack(alignment: .trailing, spacing: 3) {
@@ -6443,7 +6443,7 @@ struct MarketsView: View {
                             Text(net > 0 ? "net +\(StockSageLiquidity.humanDollars(net))"
                                          : "net −\(StockSageLiquidity.humanDollars(abs(net)))")
                                 .font(.caption2)
-                                .foregroundStyle(net > 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                .foregroundStyle(Self.signedMetricColor(positive: net > 0))
                         }
                     }
                     if let first = s.discretionary.first {
@@ -6625,7 +6625,7 @@ struct MarketsView: View {
                             .font(.caption2).foregroundStyle(.secondary)
                         Text(String(format: "%+.1f%%", c.priceChangePct))
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(c.priceChangePct >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                            .foregroundStyle(Self.signedMetricColor(positive: c.priceChangePct >= 0))
                         if c.likelyMechanicalFlow {
                             Text("index flow?")
                                 .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
@@ -9452,7 +9452,7 @@ struct MarketsView: View {
         .accessibilityLabel(sub != nil ? "\(label) \(value) \(sub!)" : "\(label) \(value)")
     }
 
-    /// Ink for a signed ideaMetric value (journal realized stats, risk analytics): `positiveColor`
+    /// Ink for signed small TEXT across the Markets surfaces (ideaMetric values, P&L, R, side/verdict labels): `positiveColor`
     /// when `positive`, else dangerSoft — never raw `danger`, which measures 3.7–4.3:1 on these
     /// surfaces, under AA 4.5:1 for ideaMetric's ~12.5pt value text (review 2026-07-28 #6; the
     /// two rows UI#6 left out). Static so `SignedMetricColorTests` reaches it via
