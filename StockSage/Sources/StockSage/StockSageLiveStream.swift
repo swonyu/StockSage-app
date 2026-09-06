@@ -14,6 +14,8 @@ final class StockSageLiveStream: ObservableObject {
     @Published private(set) var isStreaming = false
     /// Coalesced separately from trade prices. A quote must never advance trade freshness.
     @Published private(set) var quotes: [String: StockSageNBBO] = [:]
+    /// Shared reference for compact cards; never fetch once per symbol/card.
+    @Published private(set) var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
 
     /// Auth success is not subscription proof. Unseen or quiet symbols stay in the gap poll.
     var subscribed: Set<String> {
@@ -160,6 +162,7 @@ final class StockSageLiveStream: ObservableObject {
         conditionTask?.cancel()
         regularConditions = []
         conditionsAsOf = nil
+        exchanges = [:]
         conditionTask = Task { [weak self] in
             // ponytail: one bounded reference request per start; on failure or after24h,
             // retain default costs until restart. Add retries only with verified rate limits.
@@ -168,6 +171,9 @@ final class StockSageLiveStream: ObservableObject {
             self.regularConditions = regular
             self.conditionsAsOf = Date()
             self.quotesChanged()
+            let exchanges = (try? await StockSageMassiveTicks.exchanges()) ?? [:]
+            guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
+            if self.exchanges != exchanges { self.exchanges = exchanges }
         }
         freshnessTimer?.cancel()
         // ponytail: one-second UI/rank invalidation; money helpers check exact quote age.
@@ -195,6 +201,7 @@ final class StockSageLiveStream: ObservableObject {
         connections = []
         isStreaming = false
         quotes = [:]
+        exchanges = [:]
         StockSageStore.shared.applyLiveNBBO([:])
     }
 

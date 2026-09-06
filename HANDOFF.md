@@ -1,5 +1,47 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M2b compact-card checkpoint — 2026-09-06 21:29 +03
+
+US idea cards now show the existing coalesced bid/ask observation: prices, share
+sizes, Massive SIP attribution, absolute SIP time, bid/ask venues and observed
+spread. The SAME copy is included in the card's overriding VoiceOver label.
+Unknown venue IDs remain explicitly unknown until the shared exchange reference
+resolves; reference loading reuses the stream's existing startup task and the
+24-hour reference cache. No per-card request, socket or timer was added.
+
+The strip deliberately says "last observed, not a fill quote", not "Live". It
+does not claim a displayed historical spread is cost-eligible. Existing money
+callers still use spreadBps(at:), with five-second freshness and condition
+qualification unchanged. One-sided, locked/crossed, zero-size and invalid-number
+books do not display a computed spread; a missing book says costs are estimated.
+Tadawul cards are unchanged.
+
+Verification (serialized xcodebuild, independently read xcresulttool summaries):
+- Focused macOS: **11/11**, zero failures/skips, before the venue-label addition:
+  `/private/tmp/stocksage-nbbo-compact-focused-20260906-2120.xcresult`.
+- Final broad macOS: **1,672/1,672**, zero failures/skips among selected tests:
+  `/private/tmp/stocksage-nbbo-compact-broad-macos-20260906-2124.xcresult`.
+- Final broad iPhone17Pro(gate), iOS26.5: **1,671/1,671**, zero failures/skips
+  among selected tests:
+  `/private/tmp/stocksage-nbbo-compact-broad-ios-20260906-2127.xcresult`.
+- Same explicit opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. The extra Mac
+  test renders the actual compact component at320pt via ImageRenderer. Inspected
+  `/private/tmp/stocksage-nbbo-compact-320.png`: all four lines visible. This is
+  component-only QA with synthetic data, NOT full populated app/VoiceOver QA.
+
+All build handles completed. git diff --check is clean. No live authenticated
+smoke, real order, model job, push or change to the owner's running app binary.
+M2b's remaining verification is populated UI and authenticated provider smoke;
+then M3–M6, P5, approved Chat/Derayah work and final integration. Main
+project.pbxproj and its unrelated work remain untouched.
+
+Owner asked why the goal looks stalled at21:27. The product goal record is still
+marked blocked from earlier, but the separate overnight heartbeat was verified
+ACTIVE/every15minutes in this task. That stale goal status does not describe this
+implementation checkpoint. Available goal tools cannot resume/reset that status;
+do not falsely mark the whole objective complete to remove the badge.
+
 ## Pipeline 4 M2b trade-ordering checkpoint — 2026-09-06 21:13 +03
 
 Same-millisecond trades now retain Massive's exact64-bit `q` through the parser,

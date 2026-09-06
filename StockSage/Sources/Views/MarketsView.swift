@@ -5055,6 +5055,8 @@ struct MarketsView: View {
             regime: store.regime,
             fxRatesToUSD: sizingFXRates(for: [idea.symbol]))
         let cardVM = snapshot.cardViewModel
+        let quoteText = StockSageMassive.covers(idea.symbol)
+            ? StockSageNBBO.compactText(live.quotes[idea.symbol.uppercased()], exchanges: live.exchanges) : nil
         let earningsBadge = cardVM.earningsWarningBadge
         let hasFloorWarning = cardVM.hasFloorWarning
         // Legible reason for the earnings-aware rank: a chip when earnings are imminent/approaching.
@@ -5331,6 +5333,7 @@ struct MarketsView: View {
                     HStack(spacing: IdeaSpace.chipGap) { ideaPlanMetrics(idea, vel: vel) }
                 }
             }
+            if let quoteText { StockSageNBBOCompactView(text: quoteText) }
             // Rationale first, regime token last — regime provides context
             // but action badge already carries the directional signal; the first rationale bullet
             // is the most actionable skip/open signal and deserves the first fixation.
@@ -5420,6 +5423,7 @@ struct MarketsView: View {
                 label += String(format: ", velocity %+.3fR per day", vel)
             }
             label += ", price \(adaptivePrice(idea.price))"
+            if let quoteText { label += ", " + quoteText }
             // S4 (settle triage 2026-07-10, A11Y-01 contract): round-J's per-idea source tag
             // ("Yahoo · 31m" / "cached · 3h" / "sample") is pixels-only — this .combine element's
             // explicit label replaces every child label, so VoiceOver never heard it. Reuses the

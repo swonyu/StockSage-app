@@ -1,5 +1,15 @@
 import SwiftUI
 
+/// Value-only card strip: no socket, requests, timers or separate observation subscription.
+struct StockSageNBBOCompactView: View {
+    let text: String
+    var body: some View {
+        Text(text).font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// Observes only the existing coalesced stream, not a second socket or REST polling loop.
 struct StockSageNBBOView: View {
     let symbol: String

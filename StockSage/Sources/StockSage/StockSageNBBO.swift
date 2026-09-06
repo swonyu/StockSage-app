@@ -34,10 +34,37 @@ nonisolated struct StockSageNBBO: Sendable, Equatable {
     /// Full quoted spread at midpoint. Two half-spread crossings make one full
     /// round-trip spread; this is not slippage, market depth, or a fill guarantee.
     func spreadBps(at now: Date) -> Double? {
-        guard hasTwoSides, ask > bid, isFresh(at: now) else { return nil }
+        isFresh(at: now) ? quotedSpreadBps : nil
+    }
+
+    /// Historical observation only. Cost callers MUST use spreadBps(at:) for freshness.
+    var quotedSpreadBps: Double? {
+        guard hasTwoSides, ask > bid else { return nil }
         let midpoint = bid / 2 + ask / 2
         let bps = ((ask - bid) / midpoint) * 10_000
         return bps.isFinite ? bps : nil
+    }
+
+    /// One reading for pixels AND the card's overriding VoiceOver label. No relative
+    /// freshness claim: this dated observation remains true without per-card timers.
+    static func compactText(_ quote: Self?, exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]) -> String {
+        guard let quote else { return "NBBO · Massive SIP: bid/ask unavailable; costs estimated." }
+        func venue(_ id: Int64?) -> String {
+            guard let id, id >= 0 else { return "unknown venue" }
+            return exchanges[id]?.label ?? "unknown #\(id)"
+        }
+        func side(_ name: String, price: Double, size: Double) -> String {
+            guard price.isFinite, price > 0, size.isFinite, size > 0 else { return "\(name) unavailable" }
+            let priceText = price.formatted(.currency(code: "USD").precision(.fractionLength(2...4)))
+            return "\(name) \(priceText) × \(size.formatted()) sh"
+        }
+        let prices = side("Bid", price: quote.bid, size: quote.bidSize) + " · "
+            + side("Ask", price: quote.ask, size: quote.askSize)
+        let spread = quote.quotedSpreadBps.map { String(format: "Observed spread %.2f bps", $0) }
+            ?? "Spread unavailable (one-sided, locked or crossed)"
+        let stamp = quote.timestamp.formatted(date: .abbreviated, time: .standard)
+        let venues = "Bid \(venue(quote.bidExchange)) · ask \(venue(quote.askExchange))"
+        return "\(prices)\nNBBO · Massive SIP · \(stamp)\n\(venues)\n\(spread) · last observed, not a fill quote."
     }
 
     /// Provider IDs are resolved from /v3/reference/conditions, never guessed. UTP R

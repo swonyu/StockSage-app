@@ -22,7 +22,8 @@ pushes, actual trades, service purchases, or local model training.
   - [x] Thread measured spreads through ALL current cost/ranking/gate/export consumers,
     retaining conservative floors/slippage/fees; preserve historical backtest assumptions.
   - [x] Same-millisecond TRADE sequence through StreamState, Store/coalescing, scan and cache.
-  - [ ] Compact card presentation, populated UI verification and authenticated endpoint smoke.
+  - [x] Compact card presentation with shared visible/VoiceOver copy and component render.
+  - [ ] Full populated UI verification and authenticated endpoint smoke.
 - [ ] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status.
 - [ ] M4 Massive news/insights with bounded, cited narration.
 - [ ] M5 truthful per-observation provider labels and paid-plan configuration.
@@ -144,3 +145,14 @@ HANDOFF's21:13 entry. No actual provider smoke or populated new-branch visual QA
 
 Keep the one-second live-badge expiration timer and change-only publication:
 publishing a timestamp on every trade bypassed the Store's 500 ms coalescing.
+
+21:29 compact-card checkpoint: US cards reuse the coalesced Q book and a shared
+exchange reference. Bid/ask prices/share sizes, venues, SIP timestamp and observed
+spread are identically represented in pixels and the explicit VoiceOver label.
+Unknown IDs stay unknown. Static "last observed, not a fill quote" copy avoids
+per-card timers and false freshness; historical observed spread never replaces
+the existing fresh/qualified money input. Nil/invalid books remain explicit.
+Final broad macOS1672/1672 and iPhone1671/1671 passed, same3 opt-in exclusions.
+The one additional Mac test renders the real component at320pt; the resulting
+image was inspected. Full populated app UI/VoiceOver and live provider smoke
+remain unverified. Exact result bundles and limitations are in HANDOFF21:29.

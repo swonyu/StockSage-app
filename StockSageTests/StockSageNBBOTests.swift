@@ -1,5 +1,9 @@
 import Testing
 import Foundation
+import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 @testable import StockSage
 
 @Suite("Massive NBBO boundaries")
@@ -12,6 +16,50 @@ struct StockSageNBBOTests {
         .init(symbol: symbol, bid: bid, ask: ask, bidSize: size, askSize: size,
               bidExchange: 4, askExchange: 7, timestamp: now.addingTimeInterval(offset), sequence: sequence)
     }
+
+    @Test("compact quote copy is dated, observational and keeps invalid sides explicit")
+    func compactCopy() throws {
+        let q = quote()
+        let text = StockSageNBBO.compactText(q)
+        #expect(text.contains("Bid") && text.contains("Ask") && text.contains("100"))
+        #expect(text.contains("NBBO · Massive SIP"))
+        #expect(text.contains(q.timestamp.formatted(date: .abbreviated, time: .standard)))
+        #expect(text.contains("Observed spread 2.00 bps"))
+        #expect(text.contains("last observed, not a fill quote"))
+        #expect(!text.contains("Live") && !text.contains("guaranteed"))
+        #expect(text.contains("Bid unknown #4 · ask unknown #7"))
+        let venues: [Int64: StockSageMassiveTicks.Exchange] = [
+            4: .init(id: 4, mic: "TEST", acronym: "TEST-BID"),
+            7: .init(id: 7, mic: "TEST-ASK", acronym: nil)]
+        let attributed = StockSageNBBO.compactText(q, exchanges: venues)
+        #expect(attributed.contains("Bid TEST-BID · ask TEST-ASK"))
+        // A historical spread remains a valid observation, never a fresh cost input.
+        #expect(q.quotedSpreadBps != nil && q.spreadBps(at: now.addingTimeInterval(6)) == nil)
+        #expect(StockSageNBBO.compactText(nil).contains("bid/ask unavailable; costs estimated"))
+        #expect(StockSageNBBO.compactText(quote(bid: 0)).contains("Bid unavailable"))
+        #expect(StockSageNBBO.compactText(quote(ask: .nan)).contains("Ask unavailable"))
+        for q in [quote(bid: 101), quote(bid: 100, ask: 100), quote(size: 0)] {
+            #expect(StockSageNBBO.compactText(q).contains("Spread unavailable"))
+            #expect(q.quotedSpreadBps == nil)
+        }
+    }
+
+    #if os(macOS)
+    @MainActor @Test("render the actual compact component at phone width without app state or network")
+    func renderCompactQuoteAtPhoneWidth() throws {
+        let text = StockSageNBBO.compactText(quote())
+        let view = StockSageNBBOCompactView(text: text).padding(12)
+            .frame(width: 320).background(Color.black).environment(\.colorScheme, .dark)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        let image = try #require(renderer.nsImage)
+        let tiff = try #require(image.tiffRepresentation)
+        let bitmap = try #require(NSBitmapImageRep(data: tiff))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: URL(fileURLWithPath: "/private/tmp/stocksage-nbbo-compact-320.png"), options: .atomic)
+        #expect(image.size.width == 320 && image.size.height > 20)
+    }
+    #endif
 
     @Test("documented Q fields retain share sizes and exact sequence integers")
     func fixture() throws {
