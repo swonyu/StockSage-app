@@ -169,7 +169,7 @@ enum StockSageCatalystNarrator {
 
     /// Always present on a rendered paragraph — names what it is (a paraphrase, not the engine's
     /// own rationale) and its limits, per the house honesty floor. This is the ON-DEVICE text;
-    /// `label(for:model:)` is the source-aware version the view actually renders.
+    /// `label(for:)` is the source-aware version the view actually renders.
     nonisolated static let label =
         "Model-written on-device from the facts above — a paraphrase, not analysis; it can "
         + "misstate; unvalidated; not advice."
