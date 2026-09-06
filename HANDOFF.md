@@ -25,14 +25,17 @@ Workarounds in use this session (read-only-safe, no licence bypass of the build 
 - Backlog source of truth: `agent-docs/REVIEW_2026-07-28_claude.md` (Part 6 staged plan; Part 3
   UI list). `agent-docs/IOS_REVIEW_2026-07-27.md` is fully FIXED — not a queue.
 
-## In flight
-1. Sonnet audit agent: classifying every Part 6 / Part 3 finding as DONE/OPEN at HEAD with
-   file:line evidence — result lands in the session; if lost, re-run the audit (prompt = the
-   finding list in Part 6 Stages 1–3 + Part 3 #1–#16).
-2. Zero-risk UI items being applied on the work branch: #10 Reduce-Motion gate on the LIVE pulse
-   + refresh spinner, #17c delete dead `fontMicro`, #2 "Open heat"→"Planned heat" rename on the
-   Deploy card (honesty-critical), #8 `presentationDetents` on the three sheets (iOS), #7
-   `.touchHitArea()` sweep.
+## Done this session (branch `review-followups-2026-09-06`, 3 commits, tree clean, NOT merged, NOT pushed)
+- d21cec5 — review #2 "Open heat"→"Planned heat X% of Y% cap" (honesty-critical), #8 iPhone sheet
+  detents + grabber (detail sheet .medium/.large, Settings + Browse .large), #10 Reduce-Motion gates on
+  the LIVE pulse and refresh spinner, #17c dead `fontMicro` removed.
+- 0aac115 — review #7 `.touchHitArea()` on 13 icon/text-only controls (hit shape only, no layout
+  change); #9 21 hardcoded font literals → @ScaledMetric tokens in MarketsTodayActionsCard,
+  ExecutionQualityPanel, MarketSessionClockView (byte-identical at default Dynamic Type).
+- ba82689 — Q3 `defer { isRefreshing = false }` for the whole refresh cycle; Q6 `addSymbol` passes
+  `marketTime`; Q7 `quoteAsOf` max-merge; C2 rebalance sort symbol tiebreak.
+Every commit: swiftc -typecheck clean on BOTH platforms; tests NOT run (licence). Skipped on purpose:
+the #7 stepper relocation to the bottom bar (structural), Q8 (must follow Q4), and every owner-decision item.
 
 ## Next actions
 1. Owner accepts the Xcode licence → run the canonical test gate from README on BOTH platforms:
@@ -51,9 +54,9 @@ OPEN, ranked by the review's severity then by size of the prescribed fix (file �
 2. Q5 (HIGH) `StockSageLiveStream` — `isStreaming` flips true on ANY success frame incl. auth/status; add an auth classifier + silence watchdog.
 3. Q4 (HIGH) `StockSageQuoteCache.Entry` — add optional `marketTime` (Codable-compatible); every cache-restored row is fail-closed STALE today.
 4. UI#6 (HIGH) `MarketsView` ~4224, ~9080 — sell/action badges still `DS.Palette.danger` + white ink → `dangerSoft` + dark ink.
-5. Q3 / N1-conc (HIGH) `StockSageStore.refresh` — `isRefreshing` released before heal/commit → `defer`. (queued this session)
-6. Q6 (MED) `StockSageStore.addSymbol` — pass `marketTime: q.marketTime`. (queued this session)
-7. Q7 (MED) `StockSageStore.refresh` — max-merge `quoteAsOf`, never assign. (queued this session)
+5. Q3 / N1-conc (HIGH) `StockSageStore.refresh` — `isRefreshing` released before heal/commit → `defer`. (landed ba82689)
+6. Q6 (MED) `StockSageStore.addSymbol` — pass `marketTime: q.marketTime`. (landed ba82689)
+7. Q7 (MED) `StockSageStore.refresh` — max-merge `quoteAsOf`, never assign. (landed ba82689)
 8. Q8 (MED) `MarketsView` ~720, ~1035 — banner `?? false` → fail-closed; land AFTER Q4 or it shouts on every launch.
 9. Q9 (MED) — mirror refreshed prices onto ideas after `replaceAll`.
 10. Q10 (MED) `StockSageEODHD` — `isFinite` guard, guarded `prev`, honest `isNewListing` (parity with the Yahoo parser).
@@ -68,7 +71,7 @@ OPEN, ranked by the review's severity then by size of the prescribed fix (file �
 19. UI#13 (MED) — watchlist trash is hover-gated → unreachable on iOS.
 20. UI#15 (MED) — tier the 9 flat caveat lines.
 21. UI#16 (LOW-MED) — 3 `.frame(width:)` → `minWidth`.
-22. C2 (LOW) `StockSageRebalance.swift:57` — sort has no tiebreak. (queued this session)
+22. C2 (LOW) `StockSageRebalance.swift:57` — sort has no tiebreak. (landed ba82689)
 23. UI#11 (MED-HIGH) — iPad `NavigationSplitView` or the 780→900 width bump — owner decision (#1).
 24. UI#1 residual — collapse the 7 analysis cards above the ranked list — the crown choice is an owner decision (#3 in Part 3).
 25. F1 / dead engines (`AllocationOptimizer`, `PBO`, `RelativeStrength`, 0 callers) — roadmap question, owner decision (#4).
