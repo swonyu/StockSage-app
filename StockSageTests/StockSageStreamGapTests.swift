@@ -107,9 +107,38 @@ struct StockSageStreamGapTests {
     // than fan out to every candidate every sweep (unbounded ⇒ ~70k calls/h when `subscribed` is
     // empty — liveStream toggled off, or the Markets tab never yet shown).
 
-    @Test("vendor-cited cap for the stream-gap sweep is 60")
-    func streamGapCapIsSixty() {
-        #expect(StockSageStore.streamGapMaxPerSweep == 60)
+    @Test("the stream-gap sweep cap is 20 per 30s-cadence sweep (major fix 2026-09-06)")
+    func streamGapCapIsTwenty() {
+        #expect(StockSageStore.streamGapMaxPerSweep == 20)
+    }
+
+    // MARK: shouldSweepStreamGap — the monotonic floor that stops two callers (MarketsView's 30s
+    // timer, StockSageMonitor's per-cycle call) from stacking into a higher effective rate than
+    // either alone (major fix 2026-09-06).
+
+    @Test("never swept before (nil lastAt) always sweeps")
+    func neverSweptAlwaysSweeps() {
+        #expect(StockSageStore.shouldSweepStreamGap(lastAt: nil, now: Date(timeIntervalSince1970: 0)))
+    }
+
+    // Genuine boundary straddle, hand-derived: 1s under the floor still blocks; exactly at the
+    // floor reopens it (the `>=` in `shouldSweepStreamGap`'s implementation).
+    @Test("boundary straddle: 1s under the floor blocks, exactly at the floor sweeps")
+    func floorBoundaryStraddle() {
+        let last = Date(timeIntervalSince1970: 1_700_000_000)
+        let justUnder = last.addingTimeInterval(StockSageStore.streamGapMinInterval - 1)
+        let exactlyAt = last.addingTimeInterval(StockSageStore.streamGapMinInterval)
+        #expect(!StockSageStore.shouldSweepStreamGap(lastAt: last, now: justUnder),
+                "1s under the floor must still block a second caller from stacking")
+        #expect(StockSageStore.shouldSweepStreamGap(lastAt: last, now: exactlyAt),
+                "exactly at the floor, a legitimate next sweep must be allowed through")
+    }
+
+    @Test("a custom minInterval overrides the default floor")
+    func customMinIntervalOverridesDefault() {
+        let last = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(StockSageStore.shouldSweepStreamGap(lastAt: last, now: last.addingTimeInterval(5), minInterval: 3))
+        #expect(!StockSageStore.shouldSweepStreamGap(lastAt: last, now: last.addingTimeInterval(2), minInterval: 3))
     }
 
     @Test("a candidate set under the cap is returned whole, cursor wraps to 0")

@@ -3,11 +3,16 @@ import Foundation
 /// EODHD earnings-calendar coverage: the calendar endpoint (a genuine next-earnings DATE, US
 /// only — Tadawul has no EODHD coverage at any tier, StockSageEODHD.swift's own measured gap),
 /// PLUS the fundamentals endpoint's `Earnings.History` (past dates, the PROJECTION source when
-/// the calendar and Yahoo both come up empty). Plan-gated (research_earnings_sources_2026-09-06.md):
-/// this account's tier for `/calendar/earnings` is UNKNOWN until probed — `probeCalendarAvailability`
-/// makes exactly ONE request and records ONLY the resulting HTTP status, never the key or the URL
+/// the calendar and Yahoo both come up empty). Plan-gated: `probeCalendarAvailability` makes
+/// exactly ONE request and records ONLY the resulting HTTP status, never the key or the URL
 /// carrying it, so the chain can skip this source for 24h on a plan-tier rejection (401/402/403)
 /// instead of burning a request per symbol against an endpoint this account can't use.
+/// CONFIRMED 2026-09-06 (manual probe, key redacted, status only — STANDING RULES): THIS
+/// ACCOUNT'S KEY GETS 401 UNAUTHORIZED FROM BOTH `/api/calendar/earnings` AND
+/// `/api/fundamentals/*` — the tier question `research_earnings_sources_2026-09-06.md` left open
+/// is settled: neither endpoint is usable at this tier today. That also means the `report_date`
+/// vs `date` field-meaning question below has NOT been (and could not be) verified against a
+/// live 200 body — do not invert either reading without first capturing one.
 @MainActor
 enum StockSageEODHDCalendar {
 
@@ -18,9 +23,12 @@ enum StockSageEODHDCalendar {
     /// percent exist in the real payload but are unused here.
     nonisolated struct Row: Sendable, Equatable {
         let code: String
-        /// Fiscal period this report covers (EODHD's `report_date`) — informational only.
+        /// UNVERIFIED (see the file-level note above — this account's key 401s both EODHD
+        /// endpoints, so no live body has ever confirmed which field means what): assumed to be
+        /// the fiscal period this report covers (EODHD's `report_date`) — informational only.
         let reportPeriod: Date?
-        /// The announcement date itself — what the chain actually wants.
+        /// UNVERIFIED: assumed to be the announcement date itself — what the chain actually
+        /// wants. Do not invert this reading (or `reportPeriod`'s) without a captured 200 body.
         let date: Date
         let beforeAfterMarket: String?
         let estimate: Double?
@@ -65,10 +73,13 @@ enum StockSageEODHDCalendar {
         }
     }
 
-    /// Soonest row at/after `now` — the "next earnings" answer, mirroring the Yahoo/EODHD
-    /// min-epoch convention used everywhere else in this file's family.
+    /// Soonest row not more than a day in the past — mirrors the chain's own `> -86_400`
+    /// staleness guard (StockSageCatalystChain.swift) rather than a plain `>= now` (major fix
+    /// 2026-09-06): `dayFormatter` parses EODHD's `yyyy-MM-dd` at 00:00 UTC, so a report
+    /// happening TODAY is already numerically "earlier than now" — a strict `>= now` filter
+    /// silently drops the single most urgent catalyst (a report due today) every time.
     nonisolated static func nextRow(_ rows: [Row], now: Date) -> Row? {
-        rows.filter { $0.date >= now }.min { $0.date < $1.date }
+        rows.filter { $0.date.timeIntervalSince(now) > -86_400 }.min { $0.date < $1.date }
     }
 
     /// EODHD's calendar carries no explicit confirmation flag (unlike Yahoo's
@@ -161,17 +172,21 @@ enum StockSageEODHDCalendar {
 
     /// 10 API calls/request (owner waived the cost, 2026-09-06) — only called for a US equity
     /// whose calendar AND Yahoo calendarEvents both came up empty (the chain's last resort
-    /// before `.unchecked`).
-    static func fetchEarningsHistory(_ symbol: String) async -> [Date] {
-        guard StockSageEODHD.covers(symbol) else { return [] }
+    /// before `.unchecked`). `nil` means UNAVAILABLE — not covered, empty key, a request that
+    /// never got a 200 back (this account's key is confirmed 401 here, see the file-level note)
+    /// — never asked, so the caller must not count it as a source asked. A real 200 body returns
+    /// an array (possibly empty — genuinely asked, nothing usable), never nil (blocker fix
+    /// 2026-09-06: this used to return `[]` identically for both cases).
+    static func fetchEarningsHistory(_ symbol: String) async -> [Date]? {
+        guard StockSageEODHD.covers(symbol) else { return nil }
         let key = StockSageEODHD.apiKey
-        guard !key.isEmpty else { return [] }
+        guard !key.isEmpty else { return nil }
         let sym = StockSageEODHD.eodhdSymbol(symbol)
         guard let url = URL(string: "https://eodhd.com/api/fundamentals/\(sym)?api_token=\(key)&fmt=json")
-        else { return [] }
+        else { return nil }
         var req = URLRequest(url: url); req.timeoutInterval = 20
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return [] }
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return parseEarningsHistory(data)
     }
 }

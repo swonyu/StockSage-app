@@ -82,20 +82,32 @@ struct StockSageCatalystWatchTests {
     // nothing back, so the honesty floor requires a real, DATED negative record (`date:
     // checkedAt`, never `Date()`) instead of the "not checked yet" wording above.
 
-    @Test("none WITH earningsCheckedAt: dated negative record, exact headline/why/source, pinned verbatim")
+    @Test("none WITH earningsCheckedAt + sourcesAsked: dated negative record, exact headline/why/source, pinned verbatim")
     func noneWithCheckedAtIsADatedNegativeRecord() {
         let idea = SageFix.idea("ASKED", conviction: 0.5)
         let checkedAt = Self.now
-        let brief = W.brief(for: idea, inputs: W.Inputs(earningsCheckedAt: checkedAt, now: Self.now))
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsCheckedAt: checkedAt, now: Self.now,
+                                                        catalystSourcesAsked: ["yahoo calendarEvents"]))
         #expect(brief.primary.kind == .none)
         #expect(brief.primary.headline == "No known catalyst as of \(W.dateStr(checkedAt))")   // pinned verbatim
         #expect(brief.primary.date == checkedAt)                    // the time we ASKED — never a fabricated date
         #expect(brief.primary.why == [
-            "Next earnings date requested from Yahoo calendarEvents — none returned",
+            "Next earnings date requested from yahoo calendarEvents — none returned",
         ])                                                          // n=1 bullet, pinned verbatim
-        #expect(brief.primary.source == "Yahoo calendarEvents (no date returned)")
+        #expect(brief.primary.source == "yahoo calendarEvents (no date returned)")
         #expect(brief.primary.watch == "Re-check after the next full refresh.")   // watch unchanged in spirit
         #expect(brief.secondary.isEmpty)
+    }
+
+    @Test("checkedAt WITHOUT any provable sourcesAsked falls back to the undated 'not fetched yet' shape")
+    func checkedAtAloneWithoutSourcesAskedIsTreatedAsUnchecked() {
+        // Major fix 2026-09-06: `sourcesAsked` is the fail-closed half of the guard — a
+        // `checkedAt` with no provable source (shouldn't happen post-fix, but must degrade
+        // safely if it ever does) must never render as a dated negative.
+        let idea = SageFix.idea("NOSRC", conviction: 0.5)
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsCheckedAt: Self.now, now: Self.now))
+        #expect(brief.primary.headline == "No dated catalyst on file")
+        #expect(brief.primary.date == nil)
     }
 
     @Test("a dated 'none known' record appears in the calendar; an undated (never-checked) one never does")
@@ -106,7 +118,8 @@ struct StockSageCatalystWatchTests {
 
         let uncheckedBrief = W.brief(for: SageFix.idea("UNCHK", conviction: 0.5), inputs: W.Inputs(now: calNow))
         let checkedBrief = W.brief(for: SageFix.idea("CHKD", conviction: 0.5),
-                                   inputs: W.Inputs(earningsCheckedAt: calNow, now: calNow))   // checked today
+                                   inputs: W.Inputs(earningsCheckedAt: calNow, now: calNow,
+                                                    catalystSourcesAsked: ["yahoo calendarEvents"]))   // checked today
         #expect(uncheckedBrief.primary.kind == .none && checkedBrief.primary.kind == .none)
 
         let entries = W.calendar([uncheckedBrief, checkedBrief], now: calNow, calendar: utc)
@@ -381,6 +394,20 @@ struct StockSageCatalystWatchTests {
         #expect(brief.primary.kind == .projectedEarnings)
         #expect(brief.secondary.count == 1)
         #expect(brief.secondary.first?.kind == .extreme)
+    }
+
+    @Test("a lapsed projected date (>24h in the past) never surfaces — defense in depth against a stale cached record")
+    func lapsedProjectedDateIsSuppressed() {
+        // Major fix 2026-09-06: the chain itself now refuses to emit a lapsed projection, but a
+        // record written before that fix could still be sitting on disk. This mirrors that guard
+        // at the view layer so a stale cached `.projected` date can never resurrect itself.
+        let idea = SageFix.idea("STALEPROJ", conviction: 0.5)
+        let lapsedDate = days(-3)   // well past the -86_400 boundary
+        let brief = W.brief(for: idea, inputs: W.Inputs(now: Self.now,
+                                                        catalystProjectedDate: lapsedDate,
+                                                        catalystProjectionBasis: "median gap of last 3 reports = 91 d from 2026-07-30"))
+        #expect(brief.primary.kind != .projectedEarnings, "a lapsed projection must never be reported as an upcoming catalyst")
+        #expect(!brief.all.contains { $0.kind == .projectedEarnings })
     }
 
     @Test("notApplicable: exact fallback headline/why/source, undated — only when nothing else applies")

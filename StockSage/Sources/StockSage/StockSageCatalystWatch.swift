@@ -82,9 +82,10 @@ enum StockSageCatalystWatch {
     struct Inputs: Sendable {
         let earnings: EarningsProximity?
         let earningsDate: Date?
-        /// When the store last ASKED Yahoo calendarEvents for this symbol's earnings date and got
-        /// none back (nil = never asked). Feeds the honesty-floor-required dated "none known as of
-        /// <date>" record in `noneItem` — never invented, only ever the time we actually checked.
+        /// When the store's chain last checked this symbol and got no usable date back (nil =
+        /// never asked). Feeds the honesty-floor-required dated "none known as of <date>" record
+        /// in `noneItem` — never invented, only ever the time we actually checked, and only ever
+        /// rendered when `catalystSourcesAsked` (below) proves something was actually asked.
         let earningsCheckedAt: Date?
         let volumeMove: StockSageCatalyst.Signal?
         let regime: MarketRegime?
@@ -105,17 +106,27 @@ enum StockSageCatalystWatch {
         /// `.projected`, in which case `catalystProjectionBasis` is also non-nil.
         let catalystProjectedDate: Date?
         let catalystProjectionBasis: String?
+        /// Every source the store's chain actually asked for this symbol (e.g. `["eodhd
+        /// calendar", "yahoo calendarEvents"]`), empty when never asked — major fix 2026-09-06:
+        /// `noneItem` used to hard-code "Yahoo calendarEvents" as the source of every dated
+        /// negative, which stopped being true once the chain could ALSO answer "none" from an
+        /// EODHD 200-with-no-row or a failed projection (or, post the sibling blocker fix, could
+        /// never reach a dated negative with an empty list at all). Plumbed through so the
+        /// rendered provenance always matches what the engine can actually prove.
+        let catalystSourcesAsked: [String]
 
         init(earnings: EarningsProximity? = nil, earningsDate: Date? = nil, earningsCheckedAt: Date? = nil,
              volumeMove: StockSageCatalyst.Signal? = nil, regime: MarketRegime? = nil,
              regimeGaugedAt: Date? = nil, seasonality: MonthlySeasonality? = nil, now: Date,
              catalystConfirmed: Bool? = nil, catalystNotApplicable: Bool = false,
-             catalystProjectedDate: Date? = nil, catalystProjectionBasis: String? = nil) {
+             catalystProjectedDate: Date? = nil, catalystProjectionBasis: String? = nil,
+             catalystSourcesAsked: [String] = []) {
             self.earnings = earnings; self.earningsDate = earningsDate; self.earningsCheckedAt = earningsCheckedAt
             self.volumeMove = volumeMove; self.regime = regime
             self.regimeGaugedAt = regimeGaugedAt; self.seasonality = seasonality; self.now = now
             self.catalystConfirmed = catalystConfirmed; self.catalystNotApplicable = catalystNotApplicable
             self.catalystProjectedDate = catalystProjectedDate; self.catalystProjectionBasis = catalystProjectionBasis
+            self.catalystSourcesAsked = catalystSourcesAsked
         }
     }
 
@@ -173,7 +184,13 @@ enum StockSageCatalystWatch {
         // (`inputs.earningsDate` above is nil in that case — dateKnown and projected are mutually
         // exclusive per the store's chain). Precedence: below `.earnings` clear, above `.extreme`.
         let projectedSlot: Item? = {
-            guard let date = inputs.catalystProjectedDate, let basis = inputs.catalystProjectionBasis
+            guard let date = inputs.catalystProjectedDate, let basis = inputs.catalystProjectionBasis,
+                  // Defense in depth (major fix 2026-09-06): the chain itself now refuses to
+                  // return a lapsed projection, but a record written before that fix could still
+                  // be sitting on disk — this mirrors the SAME `> -86_400` staleness boundary the
+                  // known-earnings slot above already enforces, so a stale cached projection can
+                  // never resurrect itself as "Today"'s catalyst after a relaunch.
+                  date.timeIntervalSince(inputs.now) >= -86_400
             else { return nil }
             return projectedEarningsItem(idea: idea, date: date, basis: basis)
         }()
@@ -212,7 +229,7 @@ enum StockSageCatalystWatch {
             // still show a volume-move/extreme/regime/seasonality catalyst above, unaffected.
             let fallback = inputs.catalystNotApplicable
                 ? notApplicableItem(idea: idea)
-                : noneItem(idea: idea, checkedAt: inputs.earningsCheckedAt)
+                : noneItem(idea: idea, checkedAt: inputs.earningsCheckedAt, sourcesAsked: inputs.catalystSourcesAsked)
             return Brief(idea: idea, primary: fallback, secondary: [])
         }
         return Brief(idea: idea, primary: primary, secondary: Array(candidates.dropFirst()))
@@ -346,22 +363,30 @@ enum StockSageCatalystWatch {
             watch: "N/A", weight: .low, source: "—", caveat: nil)
     }
 
-    /// Two honest shapes, never a middle ground: `checkedAt == nil` means this symbol was never
-    /// asked yet, so the copy says exactly that; `checkedAt` present means Yahoo calendarEvents
-    /// WAS asked (at that instant) and returned nothing, so it becomes a real, DATED record
-    /// (`date: checkedAt`, never `Date()`) — a negative result, not an absence of information.
-    private nonisolated static func noneItem(idea: StockSageIdea, checkedAt: Date?) -> Item {
-        guard let checkedAt else {
+    /// Two honest shapes, never a middle ground: `checkedAt == nil` OR `sourcesAsked` empty means
+    /// this symbol was never (provably) asked, so the copy says exactly that; both present means
+    /// the named sources WERE asked (at `checkedAt`) and returned nothing, so it becomes a real,
+    /// DATED record (`date: checkedAt`, never `Date()`) naming its true provenance — a negative
+    /// result, not an absence of information. Major fix 2026-09-06: before `sourcesAsked` was
+    /// plumbed through, this hard-coded "Yahoo calendarEvents" as the source of EVERY dated
+    /// negative — no longer true once the chain can also answer "none" via EODHD or a failed
+    /// projection (`Record.sourcesAsked` is the one field that actually knows). The
+    /// `!sourcesAsked.isEmpty` half of the guard also makes the undated branch the fail-closed
+    /// default for a `checkedAt` with no provable source — independently blunting the blocker
+    /// that used to stamp a dated negative for a question nobody ever actually answered.
+    private nonisolated static func noneItem(idea: StockSageIdea, checkedAt: Date?, sourcesAsked: [String]) -> Item {
+        guard let checkedAt, !sourcesAsked.isEmpty else {
             return Item(symbol: idea.symbol, kind: .none, headline: "No dated catalyst on file", date: nil,
                 why: ["Next earnings date not available for this name — not fetched yet, or the source declined.",
                       "No volume-confirmed move on the latest cached bar."],
                 watch: "Re-check after the next full refresh.", weight: .low, source: "—", caveat: nil)
         }
+        let asked = sourcesAsked.joined(separator: ", ")
         return Item(symbol: idea.symbol, kind: .none,
             headline: "No known catalyst as of \(Self.dateStr(checkedAt))", date: checkedAt,
-            why: ["Next earnings date requested from Yahoo calendarEvents — none returned"],
+            why: ["Next earnings date requested from \(asked) — none returned"],
             watch: "Re-check after the next full refresh.", weight: .low,
-            source: "Yahoo calendarEvents (no date returned)", caveat: nil)
+            source: "\(asked) (no date returned)", caveat: nil)
     }
 
     // MARK: - Catalyst calendar

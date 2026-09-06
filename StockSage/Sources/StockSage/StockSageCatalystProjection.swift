@@ -36,7 +36,12 @@ nonisolated enum StockSageCatalystProjection {
 
     /// `history`: past report dates in ANY order (sorted internally). `nil` when fewer than 3
     /// dates are supplied (the <3-history-dates ⇒ unchecked boundary the chain relies on).
-    nonisolated static func project(history: [Date]) -> Projection? {
+    /// `unitLabel` names what these dates actually ARE in the basis string (default "reports" —
+    /// EODHD fundamentals' `Earnings.History` genuinely is past announcement dates; the caller
+    /// must pass "quarter ends" for Yahoo's `earningsHistory` module, whose dates are fiscal
+    /// PERIOD ends, not announcements — major fix 2026-09-06: the basis string must never claim
+    /// more than the source data actually supports).
+    nonisolated static func project(history: [Date], unitLabel: String = "reports") -> Projection? {
         let sorted = history.sorted()
         guard sorted.count >= 3 else { return nil }
         // Gaps between CONSECUTIVE reports, in whole days. At most the last 9 dates (8 gaps) feed
@@ -50,7 +55,7 @@ nonisolated enum StockSageCatalystProjection {
         let last = sorted[sorted.count - 1]
         let next = last.addingTimeInterval(medianGap.rounded() * 86_400)
         let lastStr = last.formatted(.iso8601.year().month().day())
-        let basis = "median gap of last \(recent.count) reports = \(Int(medianGap.rounded())) d from \(lastStr)"
+        let basis = "median gap of last \(recent.count) \(unitLabel) = \(Int(medianGap.rounded())) d from \(lastStr)"
         return Projection(date: next, dateRangeEnd: next.addingTimeInterval(sevenDays), basis: basis)
     }
 }

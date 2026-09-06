@@ -88,6 +88,23 @@ struct StockSageEODHDCalendarTests {
         #expect(StockSageEODHDCalendar.nextRow([row], now: now) != nil)
     }
 
+    // Major fix 2026-09-06: a `>= now` filter silently drops a report happening TODAY, since
+    // EODHD's `yyyy-MM-dd` parses at midnight UTC — always numerically earlier than `now` unless
+    // `now` is itself exactly midnight. `nextRow` must match the chain's own `> -86_400` boundary
+    // instead. Hand-derived straddle: rows at now-3600s, now-90000s, now+86400s.
+    @Test func nextRowMatchesTheChainsStalenessBoundaryNotAPlainAtOrAfterNowFilter() {
+        let now = Date(timeIntervalSince1970: 1_700_100_000)
+        func mk(_ offset: TimeInterval) -> StockSageEODHDCalendar.Row {
+            .init(code: "A", reportPeriod: nil, date: now.addingTimeInterval(offset),
+                 beforeAfterMarket: nil, estimate: nil, actual: nil)
+        }
+        let today = mk(-3_600)        // 1h in the past — a same-day report, must be picked
+        let stale = mk(-90_000)       // >24h in the past — must be excluded
+        let future = mk(86_400)       // 1 day out — real future candidate, further than `today`
+        let next = StockSageEODHDCalendar.nextRow([stale, future, today], now: now)
+        #expect(next?.date == today.date, "the same-day (barely-past) row must win over the stale and future ones")
+    }
+
     // MARK: confirmed(for:) — documented rule: always false for a next-earnings row
 
     @Test func confirmedIsAlwaysFalseRegardlessOfActual() {

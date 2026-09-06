@@ -165,7 +165,8 @@ struct CatalystsSection: View {
                 catalystConfirmed: record?.confirmed,
                 catalystNotApplicable: record?.status == .notApplicable,
                 catalystProjectedDate: isProjected ? record?.earningsDate : nil,
-                catalystProjectionBasis: isProjected ? record?.projectionBasis : nil))
+                catalystProjectionBasis: isProjected ? record?.projectionBasis : nil,
+                catalystSourcesAsked: record?.sourcesAsked ?? []))
         }
     }
 

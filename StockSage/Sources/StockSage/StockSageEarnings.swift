@@ -156,21 +156,29 @@ enum StockSageEarnings {
     // `earningsHistory` module could not be confirmed this session. Written defensively against
     // Yahoo's documented `quoteSummary?modules=earningsHistory` shape (`earningsHistory.history`:
     // an array of `{quarter: {raw: epoch}, ...}`) — if Tadawul carries no such module, or the
-    // request never lands, this returns `[]` and the chain correctly falls through to `.unchecked`
-    // with a SAHMK TODO, never a guess.
-    static func fetchEarningsHistory(for symbol: String) async -> [Date] {
-        guard ToolPolicy.isExternalAllowed else { return [] }
+    // request never lands, this returns `nil` (UNAVAILABLE — never asked) and the chain correctly
+    // falls through to `.unchecked` with a SAHMK TODO, never a guess. `nil` also distinguishes
+    // "never answered" from "answered, empty" (blocker fix 2026-09-06 — this used to return `[]`
+    // identically for both, letting the caller wrongly count an unreachable provider as asked).
+    static func fetchEarningsHistory(for symbol: String) async -> [Date]? {
+        guard ToolPolicy.isExternalAllowed else { return nil }
         guard let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
               let url = URL(string: "https://query1.finance.yahoo.com/v10/finance/quoteSummary/\(encoded)?modules=earningsHistory")
-        else { return [] }
+        else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        guard let data = await get(req) else { return [] }
+        guard let data = await get(req) else { return nil }
         return parseEarningsHistory(data)
     }
 
-    /// Past report dates from a `quoteSummary?modules=earningsHistory` body, oldest-first.
-    /// Malformed/missing rows are skipped, never guessed.
+    /// Past fiscal QUARTER-END dates, oldest-first — Yahoo's `earningsHistory.history[].quarter`
+    /// is the PERIOD a report covers (e.g. the quarter ended 2026-06-30), NOT the announcement
+    /// date; this module carries no announcement date at all (major fix 2026-09-06: the field was
+    /// previously documented ambiguously as "past report dates", which let a projection built off
+    /// these dates get labelled "reports" in its basis string — systematically early by the whole
+    /// reporting lag, typically 3-6 weeks, while claiming to be projected from prior REPORTS. See
+    /// `StockSageCatalystChain.resolve`'s `historyUnitLabel`, which the store sets to "quarter
+    /// ends" for exactly this source). Malformed/missing rows are skipped, never guessed.
     nonisolated static func parseEarningsHistory(_ data: Data) -> [Date] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let qs = root["quoteSummary"] as? [String: Any],
