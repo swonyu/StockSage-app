@@ -1,5 +1,40 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Pipeline 4 M2b data/UI checkpoint — 2026-09-06 20:18 +03
+
+The existing Massive connection now subscribes to `Q.` alongside `T.`. Quote
+and trade freshness remain independent, with500ms quote publication. The detail
+sheet shows bid/ask prices, share sizes, venue attribution and SIP time. Spread
+is withheld when older than5s, future-dated, locked, crossed or one-sided.
+Distinct same-time QUOTES use exact64-bit per-symbol sequence ordering; the
+separate same-time TRADE-to-Store sequence change remains pending.
+
+The on-demand Tape sheet reads `/v3/trades` and `/v3/quotes`, pinned to one symbol
+and a seven-day window, capped at3pages ×100rows per channel. Partial results,
+invalid rows, entitlement errors and invalid/repeated cursors stay visible.
+Bearer authorization is header-only; pagination rejects other hosts/paths/ports,
+userinfo, fragments and API-key queries, and redirects are disabled.
+The exchange reference is cached24h in process; Nasdaq filtering uses `mic=XNAS`,
+never a guessed numeric ID or tape-C listing. Filtered quote sides are not NBBO.
+
+Shared numeric decoding now rejects JSON booleans and fractional/overflowing
+integer metadata, retaining exact integer spelling before a Double fallback.
+
+Verification: canonical `xcodebuild test`, parallel testing disabled, **1,660
+passed on macOS and1,660 on iPhone 17 Pro (gate)/iOS26.5**, zero failures/skips
+among selected tests. The same three opt-in network/measurement suites listed
+under M2 were explicitly excluded. Result bundles:
+
+- `/private/tmp/stocksage-m2b-broad-macos-20260906-2014.xcresult`
+- `/private/tmp/stocksage-m2b-broad-ios-20260906-2016.xcresult`
+
+**M2b is not complete:** the panel explicitly states ranking/tickets still use
+estimated costs. Next: measured spread through every ranking/gate/export caller,
+conservative cost floors and quote-condition eligibility, compact card display,
+trade sequence propagation, populated visual QA and authenticated endpoint smoke.
+No live provider call, actual order, model load or push was performed by this gate.
+Continue the remaining checklist in `agent-docs/PIPELINE_TAKEOVER_2026-09-06.md`.
+
 ## Pipeline 4 M2 — 2026-09-06 20:00 +03, Codex single-session takeover
 
 Owner stopped the separate pipeline task; its uncommitted M2 changes were

@@ -23,7 +23,7 @@ struct StockSageLiveStreamTests {
         let data = try #require(subscription.data(using: .utf8))
         let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: String])
         #expect(payload["action"] == "subscribe")
-        #expect(payload["params"] == "T.AAPL,T.MSFT")
+        #expect(payload["params"] == "T.AAPL,Q.AAPL,T.MSFT,Q.MSFT")
         #expect(L.massiveSubscription(symbols: []) == nil)
     }
 

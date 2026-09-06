@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Massive REST quote source for the US names (pipeline-4 M1, owner decision 2026-09-06).
 ///
@@ -166,9 +167,13 @@ enum StockSageMassive {
                                                isNewListing: realPreviousClose == nil)
     }
 
-    private nonisolated static func finite(_ any: Any?) -> Double? {
+    nonisolated static func finite(_ any: Any?) -> Double? {
+        if let n = any as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() { return nil }
         let v: Double?
-        if let d = any as? Double { v = d } else if let i = any as? Int { v = Double(i) } else { v = nil }
+        if let d = any as? Double { v = d }
+        else if let i = any as? Int { v = Double(i) }
+        else if let s = any as? String { v = Double(s) }
+        else { v = nil }
         guard let value = v, value.isFinite else { return nil }
         return value
     }
@@ -176,10 +181,14 @@ enum StockSageMassive {
     /// Int64 first: a 19-digit JSON integer bridges to Int64 exactly, and `as? Double` would REFUSE it
     /// (not exactly representable) — the Double branch only catches a payload that spelled it in
     /// exponent form.
-    private nonisolated static func int64(_ any: Any?) -> Int64? {
-        if let n = any as? Int64 { return n }
-        if let n = any as? Int { return Int64(n) }
-        if let d = any as? Double, d.isFinite, d >= 0, d < 9.2e18 { return Int64(d) }
+    nonisolated static func int64(_ any: Any?) -> Int64? {
+        if let n = any as? NSNumber {
+            guard CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+            // Integer JSON spelling first, without rounding through Double. The exact
+            // conversion fallback accepts integral exponent forms but never truncates fractions.
+            return Int64(n.stringValue) ?? Int64(exactly: n.doubleValue)
+        }
+        if let s = any as? String { return Int64(s) }
         return nil
     }
 

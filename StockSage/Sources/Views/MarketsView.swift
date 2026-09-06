@@ -8377,6 +8377,8 @@ struct MarketsView: View {
                 // presented across a step, so the scroll offset would otherwise persist.
                 .id("sheetTopAnchor")
 
+                StockSageNBBOView(symbol: idea.symbol)
+
                 // Sparkline
                 if idea.spark.count >= 2 {
                     let trendWord = (idea.spark.last ?? 0) >= (idea.spark.first ?? 0) ? "up" : "down"

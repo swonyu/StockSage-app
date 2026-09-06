@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import CoreFoundation
 
 /// Real-time price streaming over Massive's Stocks WebSocket. It subscribes only US equities
 /// that Massive covers; all other symbols keep the explicit, keyless Yahoo polling path.
@@ -13,6 +12,8 @@ final class StockSageLiveStream: ObservableObject {
 
     /// True only while an authenticated connection is delivering recent trades.
     @Published private(set) var isStreaming = false
+    /// Coalesced separately from trade prices. A quote must never advance trade freshness.
+    @Published private(set) var quotes: [String: StockSageNBBO] = [:]
 
     /// Auth success is not subscription proof. Unseen or quiet symbols stay in the gap poll.
     var subscribed: Set<String> {
@@ -25,6 +26,7 @@ final class StockSageLiveStream: ObservableObject {
 
     private var connections: [StockSageLiveStreamConnection] = []
     private var freshnessTimer: Task<Void, Never>?
+    private var quoteFlush: Task<Void, Never>?
 
     nonisolated struct Tick: Sendable, Equatable {
         let symbol: String
@@ -35,6 +37,7 @@ final class StockSageLiveStream: ObservableObject {
     nonisolated enum Event: Sendable, Equatable {
         case status(String)
         case trade(Tick)
+        case quote(StockSageNBBO)
     }
 
     /// Decode EVERY event, including mixed status/trade frames. A malformed element must not
@@ -48,12 +51,22 @@ final class StockSageLiveStream: ObservableObject {
             if row["ev"] as? String == "status", let status = row["status"] as? String {
                 return .status(status)
             }
-            guard row["ev"] as? String == "T",
-                  let symbol = (row["sym"] as? String)?.uppercased(), StockSageMassive.covers(symbol),
-                  let price = number(row["p"]), price > 0,
+            guard let symbol = (row["sym"] as? String)?.uppercased(), StockSageMassive.covers(symbol),
                   let milliseconds = number(row["t"]), milliseconds > 0 else { return nil }
-            return .trade(Tick(symbol: symbol, price: price,
-                               timestamp: Date(timeIntervalSince1970: milliseconds / 1_000)))
+            let timestamp = Date(timeIntervalSince1970: milliseconds / 1_000)
+            switch row["ev"] as? String {
+            case "T":
+                guard let price = number(row["p"]), price > 0 else { return nil }
+                return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp))
+            case "Q":
+                guard let bid = number(row["bp"]), bid >= 0, let ask = number(row["ap"]), ask >= 0,
+                      let bidSize = number(row["bs"]), bidSize >= 0,
+                      let askSize = number(row["as"]), askSize >= 0 else { return nil }
+                return .quote(.init(symbol: symbol, bid: bid, ask: ask, bidSize: bidSize, askSize: askSize,
+                                    bidExchange: integer(row["bx"]), askExchange: integer(row["ax"]),
+                                    timestamp: timestamp, sequence: integer(row["q"])))
+            default: return nil
+            }
         }
     }
 
@@ -61,6 +74,7 @@ final class StockSageLiveStream: ObservableObject {
     nonisolated struct StreamState {
         private(set) var isAuthorized = false
         private var latestTrades: [String: Date] = [:]
+        private(set) var latestQuotes: [String: StockSageNBBO] = [:]
 
         mutating func consume(_ event: Event, requested: Set<String>, now: Date) -> Tick? {
             switch event {
@@ -70,6 +84,10 @@ final class StockSageLiveStream: ObservableObject {
                 self = StreamState()
             case .status:
                 break // Informational/subscription messages do not revoke authentication.
+            case .quote(let quote):
+                guard isAuthorized, requested.contains(quote.symbol),
+                      quote.supersedes(latestQuotes[quote.symbol], now: now) else { return nil }
+                latestQuotes[quote.symbol] = quote
             case .trade(let tick):
                 guard isAuthorized, requested.contains(tick.symbol), tick.price.isFinite, tick.price > 0,
                       StockSageStore.acceptsLiveTick(tick.timestamp, after: latestTrades[tick.symbol], now: now)
@@ -94,20 +112,17 @@ final class StockSageLiveStream: ObservableObject {
         guard !symbols.isEmpty,
               let data = try? JSONSerialization.data(withJSONObject: [
                   "action": "subscribe",
-                  "params": symbols.sorted().map { "T.\($0)" }.joined(separator: ","),
+                  "params": symbols.sorted().flatMap { ["T.\($0)", "Q.\($0)"] }.joined(separator: ","),
               ]) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     private nonisolated static func number(_ any: Any?) -> Double? {
-        // JSON booleans bridge to NSNumber/Double; true is not a $1 trade.
-        if let n = any as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() { return nil }
-        let value: Double?
-        if let d = any as? Double { value = d }
-        else if let i = any as? Int { value = Double(i) }
-        else if let s = any as? String { value = Double(s) }
-        else { value = nil }
-        guard let value, value.isFinite else { return nil }
+        StockSageMassive.finite(any)
+    }
+
+    private nonisolated static func integer(_ any: Any?) -> Int64? {
+        guard let value = StockSageMassive.int64(any), value >= 0 else { return nil }
         return value
     }
 
@@ -145,15 +160,33 @@ final class StockSageLiveStream: ObservableObject {
     func stop() {
         freshnessTimer?.cancel()
         freshnessTimer = nil
+        quoteFlush?.cancel()
+        quoteFlush = nil
         connections.forEach { $0.close() }
         connections = []
         isStreaming = false
+        quotes = [:]
     }
 
     fileprivate func connectionStatusChanged() {
         let streaming = connections.contains { $0.state.hasRecentTrades(at: Date()) }
         // @Published emits even for equal assignments: don't redraw Markets for every trade.
         if isStreaming != streaming { isStreaming = streaming }
+        if !connections.contains(where: { $0.state.isAuthorized }), !quotes.isEmpty { quotes = [:] }
+    }
+
+    fileprivate func quotesChanged() {
+        guard quoteFlush == nil else { return }
+        quoteFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            self.quoteFlush = nil
+            guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+            let latest = self.connections.reduce(into: [String: StockSageNBBO]()) {
+                if $1.state.isAuthorized { $0.merge($1.state.latestQuotes) { _, new in new } }
+            }
+            if self.quotes != latest { self.quotes = latest }
+        }
     }
 
     fileprivate func tickReceived(symbol: String, price: Double, at when: Date?) {
@@ -297,6 +330,7 @@ private final class StockSageLiveStreamConnection {
                             self.reconnectAttempt = 0
                             self.owner?.tickReceived(symbol: tick.symbol, price: tick.price, at: tick.timestamp)
                         }
+                        if case .quote = event { self.owner?.quotesChanged() }
                         if !wasAuthorized, self.state.isAuthorized { self.sendSubscription() }
                         if event == .status("auth_failed") || event == .status("error") {
                             self.connectionFailed(task)

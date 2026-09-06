@@ -15,6 +15,14 @@ pushes, actual trades, service purchases, or local model training.
 
 - [x] M2 finish the Massive stream and shared quote ordering; broad device gates.
 - [ ] M2b live NBBO, measured-spread cost input, bounded on-demand tape, exchange attribution.
+  - [x] Authenticated Q subscription on the existing socket; independent quote/trade clocks,
+    500 ms quote publication; detail bid/ask panel with five-second spread freshness.
+  - [x] On-demand trades/quotes tape (seven-day window, three pages ×100 per channel),
+    24-hour exchange reference, MIC-based Nasdaq filtering and explicit partial/error states.
+  - [ ] Thread measured spreads through ALL current cost/ranking/gate/export consumers,
+    retaining conservative floors/slippage/fees; preserve historical backtest assumptions.
+  - [ ] Compact card presentation, same-millisecond TRADE sequence through Store, populated
+    UI verification and authenticated endpoint smoke. Quote sequences are already ordered.
 - [ ] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status.
 - [ ] M4 Massive news/insights with bounded, cited narration.
 - [ ] M5 truthful per-observation provider labels and paid-plan configuration.
@@ -65,6 +73,7 @@ and calibration. No development test may place a real order.
 
 ## Verification so far
 
+- M2 committed as `4514e8b` (no push).
 - macOS stream pass: 10/10, zero skipped/failed;
   `/private/tmp/stocksage-m2-handoff-20260906-1945.xcresult`.
 - Expanded merge/snapshot/stream pass: 34/34, zero skipped/failed;
@@ -82,6 +91,34 @@ and calibration. No development test may place a real order.
   tests, with the same three opt-in suites explicitly excluded. iPhone 17 Pro
   (gate), iOS 26.5, arm64. Result:
   `/private/tmp/stocksage-m2-broad-ios-20260906-1957.xcresult`.
+- M2b NBBO-focused: 15/15 macOS, 15/15 iOS. Quote-book locked/crossed/one-sided
+  states withhold the spread; the final conservative locked-book rule is in the iOS pass.
+- M2b tape + NBBO + stream + snapshots: **38/38 macOS**,
+  `/private/tmp/stocksage-m2b-tape-macos-20260906-2014.xcresult`.
+  Subsequent broad macOS: **1,660/1,660**, zero failures/skips among selected tests;
+  `/private/tmp/stocksage-m2b-broad-macos-20260906-2014.xcresult`.
+  The same three opt-in network/measurement suites were explicitly excluded.
+  Broad iOS: **1,660/1,660**, zero failures/skips among selected tests, same three
+  explicit exclusions; `/private/tmp/stocksage-m2b-broad-ios-20260906-2016.xcresult`.
+
+M2b data/UI checkpoint intentionally does NOT claim measured costs are integrated:
+the detail panel explicitly says ranking/tickets still use estimated costs. The
+next change must cover `StockSageExpectedValue`, `StockSageCapitalAllocator`,
+`StockSageDecisionSnapshot`, `StockSageTodayPlan` and every `MarketsView` net-RR,
+ledger and copy-plan caller together. Do not change symbol-only historical
+backtests to today's spread (lookahead). Keep the full-spread round-trip convention,
+the existing US8bps spread floor, and other cost legs. Preserve live quote identity
+and expiry across Store scans/price updates; clear cost inputs on auth/policy loss.
+Before treating quotes as cost evidence, check condition/indicator eligibility;
+the current panel is observational, never an execution guarantee.
+
+Tape security: header auth only; next pages require HTTPS api.massive.com, the
+same exact endpoint/symbol, normal443 port, no userinfo/fragment/API-key query;
+redirects are disabled. Invalid/repeated cursors, invalid rows and cap truncation
+remain visible. Unknown venue IDs never resolve to Nasdaq by listing tape.
+Budget: at most6 tape pages per opening, plus one reference request per24hours
+while the process lives. Quotes add Q traffic to the SAME Stocks connection;
+message volume depends on the market, not a guaranteed exact doubling.
 
 M2b continuation note: the current price comparator deliberately rejects equal
 timestamps. Add provider/channel-scoped sequence ordering for distinct ticks in
