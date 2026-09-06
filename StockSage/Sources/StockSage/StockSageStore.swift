@@ -2058,7 +2058,13 @@ final class StockSageStore: ObservableObject {
             ])
         }
         if let j = ideas.firstIndex(where: { $0.symbol.uppercased() == key }) {
-            ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime ?? Date())
+            // `asOf: q.marketTime` — NOT `?? Date()` — matches refresh()'s Q9 mirror loop: a
+            // timestamp-less quote must leave `priceAsOf` nil so `cardIsStale` reads it as
+            // unknown (fail-closed), not fresh. This path is also the heal sweep's own merge
+            // (healStaleQuotes -> mergeLiveQuote), so the old `?? Date()` fabricated a fresh
+            // stamp for exactly the row the sweep just re-fetched because it was stale — undoing
+            // the Q9 guarantee inside the same refresh() cycle (fix-pass, review 2026-07-28 Q9).
+            ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime)
         }
     }
 
