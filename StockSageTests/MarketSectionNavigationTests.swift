@@ -9,9 +9,11 @@ struct MarketSectionNavigationTests {
 
     @Test("neighbours follow tab order exactly")
     func neighboursFollowTabOrder() {
-        // Tab order is watchlist, ideas, all, heatmap, portfolio, alerts, briefing.
+        // Tab order is watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, briefing
+        // (Catalysts added 2026-09-06 beside Ideas — it shows the same ideas through a different lens).
         #expect(MarketSection.watchlist.neighbour(after: true) == .ideas)
-        #expect(MarketSection.ideas.neighbour(after: true) == .all)
+        #expect(MarketSection.ideas.neighbour(after: true) == .catalysts)
+        #expect(MarketSection.catalysts.neighbour(after: true) == .all)
         #expect(MarketSection.all.neighbour(after: true) == .heatmap)
         #expect(MarketSection.heatmap.neighbour(after: true) == .portfolio)
         #expect(MarketSection.portfolio.neighbour(after: true) == .alerts)
@@ -19,6 +21,7 @@ struct MarketSectionNavigationTests {
 
         #expect(MarketSection.briefing.neighbour(after: false) == .alerts)
         #expect(MarketSection.ideas.neighbour(after: false) == .watchlist)
+        #expect(MarketSection.catalysts.neighbour(after: false) == .ideas)
     }
 
     @Test("the ends are walls, never a wrap-around")

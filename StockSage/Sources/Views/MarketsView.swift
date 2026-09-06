@@ -1215,7 +1215,7 @@ struct MarketsView: View {
             // DSSegmentPicker call site without a container label — segments speak
             // their titles but the group itself had no name for VoiceOver.
             .accessibilityLabel("Markets section")
-            // ⌘1–⌘7 section jumps (2026-07-17, owner "improve"): the primary nav sits mid-scroll,
+            // ⌘1–⌘8 section jumps (2026-07-17, owner "improve"): the primary nav sits mid-scroll,
             // so Portfolio/Alerts/Briefing are all scroll-and-click today. Number-key jumps collapse
             // that to one keystroke. Zero-size hidden buttons carry the shortcuts (the app has no
             // .commands menu — every shortcut lives on an in-view control, matching the 3 that ship).
@@ -1223,7 +1223,7 @@ struct MarketsView: View {
             .background(sectionShortcutKeys)
     }
 
-    /// Hidden ⌘1–⌘7 accelerators for the seven MarketSection tabs. Rendered zero-size behind the
+    /// Hidden ⌘1–⌘8 accelerators for the eight MarketSection tabs. Rendered zero-size behind the
     /// picker; each sets `$section` so the shortcut mirrors a tab click exactly.
     private var sectionShortcutKeys: some View {
         ForEach(Array(MarketSection.allCases.enumerated()), id: \.element.id) { i, sec in
@@ -1358,6 +1358,7 @@ struct MarketsView: View {
         case .watchlist: signalListView(watchlistOnly: true)
         case .all:       signalListView(watchlistOnly: false)
         case .ideas:           ideasSection
+        case .catalysts:       catalystsSection
         case .heatmap:         heatmap
         case .portfolio:       portfolioSection
         case .alerts:          alertsSection
@@ -4458,6 +4459,15 @@ struct MarketsView: View {
         briefingSymbolsKey = symbols.map(\.symbol).sorted().joined()
         briefingGeneratedAt = Date()
         loadingBriefing = false
+    }
+
+    // MARK: Catalysts (owner request 2026-09-06)
+
+    /// The SAME projected board as the Ideas tab (`displayedIdeas`: sort/filter/search applied),
+    /// viewed by what could move each idea next. Read `displayedIdeas` exactly once here — it
+    /// re-projects on every access. Tapping a card opens the existing detail sheet via `selectedIdea`.
+    private var catalystsSection: some View {
+        CatalystsSection(ideas: displayedIdeas, store: store) { selectedIdea = $0 }
     }
 
     // MARK: Ideas (the advisor across the universe)
@@ -9756,7 +9766,7 @@ struct MarketsView: View {
 
 /// Sections shown inside the single Markets tab.
 enum MarketSection: String, CaseIterable, Identifiable {
-    case watchlist, ideas, all, heatmap, portfolio, alerts, briefing
+    case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, briefing
     var id: String { rawValue }
 
     /// Neighbour in tab order for swipe navigation (iOS). Deliberately does NOT wrap:
@@ -9772,6 +9782,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         switch self {
         case .watchlist: return "Watchlist"
         case .ideas:     return "Ideas"
+        case .catalysts: return "Catalysts"
         case .all:       return "All"
         case .heatmap:   return "Heatmap"
         case .portfolio: return "Portfolio"
@@ -9786,6 +9797,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         switch self {
         case .watchlist: return "star.fill"
         case .ideas:     return "lightbulb.fill"
+        case .catalysts: return "calendar.badge.clock"
         case .all:       return "chart.bar.fill"
         case .heatmap:   return "square.grid.3x3.fill"
         case .portfolio: return "briefcase.fill"
