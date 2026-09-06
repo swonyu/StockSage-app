@@ -74,11 +74,30 @@ enum StockSageCatalystNarrator {
 
     // MARK: Facts — the ONLY thing the model sees
 
+    /// One citable source offered to the model alongside the brief's own facts — built by the
+    /// CALLER (the Explain flow in `CatalystsSection`, fix pass 2026-09-06) from news, filings and
+    /// insider items. The narrator never fetches anything itself; it only formats and validates.
+    struct CitedSource: Sendable, Equatable {
+        let date: Date
+        /// Short origin label, e.g. "EODHD news", "SEC 8-K", "SEC Form 4" — rendered verbatim.
+        let source: String
+        let title: String
+        /// May be empty (a filing item-code line has no snippet of its own).
+        let snippet: String
+        let link: URL?
+    }
+
     /// Pure, deterministic restatement of one brief as plain-text facts. Same formatting helpers
     /// as the engine (`StockSageCurrency.adaptivePrice`, `%.2f` conviction) so a number here reads
     /// byte-identical to what the card/sheet already shows — the model is never given a number
     /// the viewer can't cross-check on screen.
-    nonisolated static func facts(for brief: StockSageCatalystWatch.Brief) -> [String] {
+    ///
+    /// `sources`, when non-empty, appends one NUMBERED line per source — "[n] YYYY-MM-DD
+    /// <source>: <title> — <snippet> (<link>)" — so the model may cite it as "[n]".
+    /// `citationsValid(_:sourceCount:)` is the other half of this contract: it checks the model's
+    /// output never cites a number outside `1...sources.count`.
+    nonisolated static func facts(for brief: StockSageCatalystWatch.Brief,
+                                  sources: [CitedSource] = []) -> [String] {
         let idea = brief.idea
         let advice = idea.advice
         var lines: [String] = []
@@ -107,7 +126,28 @@ enum StockSageCatalystNarrator {
         if let regimeItem = brief.all.first(where: { $0.kind == .regime }) {
             lines.append("Regime: \(regimeItem.headline)")
         }
+        for (i, s) in sources.enumerated() {
+            lines.append(sourceLine(number: i + 1, source: s))
+        }
         return lines
+    }
+
+    /// UTC-fixed day formatter for a source line's date — matches the engine's own UTC-fixed
+    /// date handling elsewhere (StockSageCatalystWatch) so a source date never drifts a day from
+    /// the viewer's local timezone.
+    nonisolated private static func sourceDay(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: date)
+    }
+
+    /// One "[n] YYYY-MM-DD <source>: <title> — <snippet> (<link>)" fact line. Split out of
+    /// `facts(for:sources:)` so the exact format is pinned in one place a test can call directly.
+    nonisolated static func sourceLine(number: Int, source: CitedSource) -> String {
+        let snippetPart = source.snippet.isEmpty ? "" : " — \(source.snippet)"
+        let linkPart = source.link?.absoluteString ?? "no link"
+        return "[\(number)] \(sourceDay(source.date)) \(source.source): \(source.title)\(snippetPart) (\(linkPart))"
     }
 
     /// System instructions for the session — fixed, never per-idea (the facts carry everything
@@ -119,7 +159,9 @@ enum StockSageCatalystNarrator {
         + "English explaining why the catalyst matters for THIS idea and what to watch. Use "
         + "ONLY the facts. Do not add or change any number, date, or name. Refer to the "
         + "company only by its ticker symbol; never name the company. Do not predict "
-        + "direction. Do not recommend buying or selling. No headings, no bullets."
+        + "direction. Do not recommend buying or selling. No headings, no bullets. If numbered "
+        + "sources are listed, cite one as [n] only when you actually use it, and only a number "
+        + "that is listed; never cite a number, date, or name that is not in the facts."
 
     /// The facts, one per line, plus the closing instruction — this (not `instructions`) is the
     /// per-call prompt.
@@ -159,6 +201,22 @@ enum StockSageCatalystNarrator {
         return !numericTokens(text).isSubset(of: factTokens)
     }
 
+    /// True only when every "[n]" bracket citation in `text` names a source that was actually
+    /// offered — i.e. every n falls in `1...sourceCount`. A malformed bracket like "[1a]" is not a
+    /// citation at all (the pattern requires ONLY digits between the brackets) and is silently
+    /// ignored — it neither passes nor fails this check. `sourceCount == 0` means no citation can
+    /// ever be valid (there is nothing to cite), so any "[n]" found then fails.
+    nonisolated static func citationsValid(_ text: String, sourceCount: Int) -> Bool {
+        guard let re = try? NSRegularExpression(pattern: "\\[(\\d+)\\]") else { return true }
+        let ns = text as NSString
+        let matches = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        for m in matches {
+            guard let n = Int(ns.substring(with: m.range(at: 1))) else { continue }
+            if n < 1 || n > sourceCount { return false }
+        }
+        return true
+    }
+
     // MARK: Result + explain
 
     enum Result: Equatable, Sendable {
@@ -186,6 +244,16 @@ enum StockSageCatalystNarrator {
             return "Model-written by the local server model \(model) from the facts above — "
                 + "a paraphrase, not analysis; it can misstate; unvalidated; not advice."
         }
+    }
+
+    /// Evidence-aware label: when at least one citable source (news/filing/insider item) was
+    /// offered, names the count so a viewer sees how much LISTED material backed the paragraph —
+    /// distinct from `label(for:)`'s backend-only wording. `sourceCount == 0` falls back to
+    /// `label(for:)` unchanged (nothing to mention).
+    nonisolated static func label(for source: Source, sourceCount: Int) -> String {
+        guard sourceCount > 0 else { return label(for: source) }
+        return "Model-written from the facts + \(sourceCount) sources (listed) — "
+            + "a paraphrase, not analysis, unvalidated, not advice."
     }
 
     // MARK: Backend selection (router)
@@ -233,13 +301,14 @@ enum StockSageCatalystNarrator {
     /// fabricates: an unavailable model or a request error both come back as `.unavailable`
     /// (never silently as `.text`), and a response that names an off-facts number comes back as
     /// `.withheld` rather than shown. The session is local to this call — no shared mutable state.
-    private static func explainOnDevice(_ brief: StockSageCatalystWatch.Brief) async -> Result {
+    private static func explainOnDevice(_ brief: StockSageCatalystWatch.Brief,
+                                        sources: [CitedSource] = []) async -> Result {
         #if canImport(FoundationModels)
         guard case .available = availability else {
             if case .unavailable(let reason) = availability { return .unavailable(reason) }
             return .unavailable("On-device model not available in this build.")
         }
-        let briefFacts = facts(for: brief)
+        let briefFacts = facts(for: brief, sources: sources)
         let session = LanguageModelSession(instructions: instructions)
         do {
             let response = try await session.respond(
@@ -248,6 +317,9 @@ enum StockSageCatalystNarrator {
             let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
             if introducesForeignNumbers(text, facts: briefFacts) {
                 return .withheld("Withheld: the model introduced a number that is not in the facts.")
+            }
+            guard citationsValid(text, sourceCount: sources.count) else {
+                return .withheld("Withheld: the model cited a source number that was not offered.")
             }
             return .text(text, .onDevice)
         } catch {
@@ -283,14 +355,18 @@ enum StockSageCatalystNarrator {
     /// contract, over `StockSageLocalModelServer.complete(_:)` instead of a local session.
     private static func explainViaServer(_ brief: StockSageCatalystWatch.Brief,
                                          config: StockSageLocalModelServer.Config,
-                                         isOllama: Bool) async -> Result {
-        let briefFacts = facts(for: brief)
+                                         isOllama: Bool,
+                                         sources: [CitedSource] = []) async -> Result {
+        let briefFacts = facts(for: brief, sources: sources)
         let result = await StockSageLocalModelServer.complete(
             config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts))
         switch result {
         case .success(let text):
             if introducesForeignNumbers(text, facts: briefFacts) {
                 return .withheld("Withheld: the model introduced a number that is not in the facts.")
+            }
+            guard citationsValid(text, sourceCount: sources.count) else {
+                return .withheld("Withheld: the model cited a source number that was not offered.")
             }
             return .text(text, .localServer(model: config.model))
         case .failure(let error):
@@ -315,7 +391,10 @@ enum StockSageCatalystNarrator {
     /// like `selectedBackend`/the server defaults do when unset): `.off` explains nothing;
     /// `.onDeviceOnly`/`.localServerOnly` try exactly one backend; `.auto` probes the server
     /// first and falls back on-device, surfacing BOTH reasons only when neither is available.
-    static func explain(_ brief: StockSageCatalystWatch.Brief) async -> Result {
+    /// `sources` — the citable news/filing/insider items the Explain flow fetched in parallel —
+    /// is passed straight through to whichever backend runs; each backend's own number-fence
+    /// AND `citationsValid` check gate the result before it ever becomes `.text`.
+    static func explain(_ brief: StockSageCatalystWatch.Brief, sources: [CitedSource] = []) async -> Result {
         let backend = selectedBackend(UserDefaults.standard.string(forKey: StockSageLocalModelServer.backendKey))
         let urlSetting = UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey)
             ?? StockSageLocalModelServer.defaultURL
@@ -327,7 +406,7 @@ enum StockSageCatalystNarrator {
             return .unavailable("Explanations are turned off in the Explanation model settings.")
 
         case .onDeviceOnly:
-            return await explainOnDevice(brief)
+            return await explainOnDevice(brief, sources: sources)
 
         case .localServerOnly:
             guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
@@ -337,17 +416,17 @@ enum StockSageCatalystNarrator {
             guard probe.reachable, probe.hasModel else {
                 return .unavailable("Local server unavailable: \(probe.detail)")
             }
-            return await explainViaServer(brief, config: config, isOllama: probe.isOllama)
+            return await explainViaServer(brief, config: config, isOllama: probe.isOllama, sources: sources)
 
         case .auto:
             guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
-                return await explainOnDevice(brief)
+                return await explainOnDevice(brief, sources: sources)
             }
             let probe = await StockSageLocalModelServer.probe(config)
             if probe.reachable, probe.hasModel {
-                return await explainViaServer(brief, config: config, isOllama: probe.isOllama)
+                return await explainViaServer(brief, config: config, isOllama: probe.isOllama, sources: sources)
             }
-            let onDeviceResult = await explainOnDevice(brief)
+            let onDeviceResult = await explainOnDevice(brief, sources: sources)
             if case .unavailable(let onDeviceReason) = onDeviceResult {
                 return .unavailable("Local server: \(probe.detail). On-device: \(onDeviceReason)")
             }

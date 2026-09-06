@@ -31,6 +31,10 @@ struct CatalystsSection: View {
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
     @State private var narrating: Set<String> = []
+    /// The citable news/filing/insider sources fetched for the LAST "Explain" press on each
+    /// symbol — kept so `narrationPanel` can render the numbered source list (and its count for
+    /// `label(for:sourceCount:)`) alongside the paragraph it actually backed.
+    @State private var narrationSources: [String: [StockSageCatalystNarrator.CitedSource]] = [:]
     @State private var filings: [String: [StockSageDisclosureService.Filing]] = [:]
     @State private var filingsLoading: Set<String> = []
     @State private var filingsFetched: Set<String> = []
@@ -205,6 +209,15 @@ struct CatalystsSection: View {
             // so it renders on first appearance of this tab — before the auto-probe below ever
             // fires and before any "Explain" press — regardless of whether the panel is expanded.
             if isNonLoopbackConfig { nonLoopbackWarning() }
+            // Privacy line (fix pass 2026-09-06, W4): "Explain" fetches CITABLE SOURCES itself —
+            // separate from, and in addition to, whichever narrator backend answers the
+            // paragraph. Those fetches are the app's own EODHD/SEC calls, so this is true
+            // regardless of the loopback/LAN warning above, which only covers the backend.
+            Text("Explain also sends the symbol to eodhd.com (news) and sec.gov (filings, insider "
+                + "trades) from this device, in addition to whichever narrator backend answers "
+                + "the paragraph.")
+                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             explanationModelSettings(availability: availability)
             if ideas.isEmpty {
                 Text("No ideas yet — run a scan on the Ideas tab.")
@@ -437,18 +450,43 @@ struct CatalystsSection: View {
         if narrating.contains(symbol) {
             ProgressView().controlSize(.small)
         } else if let result = narrations[symbol] {
+            let sources = narrationSources[symbol] ?? []
             switch result {
             case .text(let text, let source):
                 VStack(alignment: .leading, spacing: 3) {
                     Text(text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(StockSageCatalystNarrator.label(for: source))
+                    Text(StockSageCatalystNarrator.label(for: source, sourceCount: sources.count))
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
+                    if !sources.isEmpty { sourceList(sources) }
                 }
             case .withheld(let msg), .unavailable(let msg):
                 Text(msg).font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The numbered "[n] title · date · link" list the paragraph above may have cited — one row
+    /// per source, in the SAME order `facts(for:sources:)` numbered them, so "[2]" in the text
+    /// always matches the 2nd row here. A source with no link renders its title/date only (never
+    /// a dead tap target).
+    @ViewBuilder
+    private func sourceList(_ sources: [StockSageCatalystNarrator.CitedSource]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(sources.enumerated()), id: \.offset) { i, source in
+                let dateStr = source.date.formatted(date: .abbreviated, time: .omitted)
+                HStack(spacing: 4) {
+                    Text("[\(i + 1)]").foregroundStyle(DS.Palette.textSecondary)
+                    if let link = source.link {
+                        Link("\(source.title) · \(dateStr)", destination: link)
+                    } else {
+                        Text("\(source.title) · \(dateStr)").foregroundStyle(DS.Palette.textSecondary)
+                    }
+                }
+                .font(.system(size: font9))
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -476,10 +514,40 @@ struct CatalystsSection: View {
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
         Task {
-            let result = await StockSageCatalystNarrator.explain(brief)
+            let sources = await Self.citedSources(for: symbol)
+            narrationSources[symbol] = sources
+            let result = await StockSageCatalystNarrator.explain(brief, sources: sources)
             narrations[symbol] = result
             narrating.remove(symbol)
         }
+    }
+
+    /// Fetches news, the last 8-K, and insider activity IN PARALLEL (the spinner over the whole
+    /// panel already covers this wait — `narrating` is set before this call and cleared after) and
+    /// flattens them into the narrator's numbering order: news, then the filing, then insider
+    /// rows. Each feed already fails closed to `[]`/`nil` on its own (policy off, no key,
+    /// unreachable, non-US symbol) — nothing here needs its own error handling.
+    private static func citedSources(for symbol: String) async -> [StockSageCatalystNarrator.CitedSource] {
+        async let newsTask = StockSageNewsService.recentNews(for: symbol)
+        async let filingTask = StockSageDisclosureService.recentFilings(for: symbol, forms: ["8-K"], limit: 1)
+        async let insiderTask = StockSageInsider.recentActivity(for: symbol)
+        let (news, filings, insider) = await (newsTask, filingTask, insiderTask)
+
+        var sources: [StockSageCatalystNarrator.CitedSource] = news.map {
+            .init(date: $0.date, source: "EODHD news", title: $0.title, snippet: $0.snippet, link: $0.link)
+        }
+        if let filing = filings.first {
+            let title = filing.itemDescriptions.isEmpty ? "8-K filed" : filing.itemDescriptions.joined(separator: ", ")
+            sources.append(.init(date: filing.filingDate, source: "SEC 8-K", title: title, snippet: "", link: filing.documentURL))
+        }
+        // Only transactions with a parsed date can be dated citable sources — never fabricate one.
+        for t in (insider?.discretionary ?? []).prefix(3) {
+            guard let date = t.date else { continue }
+            let verb = t.code == .openMarketPurchase ? "bought" : "sold"
+            let title = "\(t.insiderName) \(verb) \(Int(t.shares)) shares"
+            sources.append(.init(date: date, source: "SEC Form 4", title: title, snippet: "", link: nil))
+        }
+        return sources
     }
 
     /// `.extreme` needs the idea's actual high/low direction, which the pure, testable

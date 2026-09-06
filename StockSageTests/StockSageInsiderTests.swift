@@ -130,4 +130,57 @@ struct StockSageInsiderTests {
         #expect(I.caveat.contains("UNVALIDATED"))
         #expect(I.caveat.lowercased().contains("tax withholding"))
     }
+
+    // MARK: transactionDate parsing (W4 — insider items need a date to be citable)
+
+    @Test("a discretionary transaction carries its parsed transactionDate")
+    func transactionDateParses() throws {
+        // transactionDate sits at the transaction level in SEC's real schema, alongside
+        // transactionCoding — inserted there, not inside transactionAmounts.
+        let withDate = purchaseFiling.replacingOccurrences(
+            of: "<transactionCoding><transactionCode>P</transactionCode></transactionCoding>",
+            with: "<transactionCoding><transactionCode>P</transactionCode></transactionCoding>"
+                + "<transactionDate><value>2026-08-15</value></transactionDate>")
+        let s = try #require(I.parseForm4(withDate))
+        let t = try #require(s.discretionary.first)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let expected = utc.date(from: DateComponents(year: 2026, month: 8, day: 15))
+        #expect(t.date == expected)
+    }
+
+    @Test("a transaction with no transactionDate in the filing carries a nil date — never fabricated")
+    func transactionDateNilWhenAbsent() throws {
+        let s = try #require(I.parseForm4(purchaseFiling))
+        let t = try #require(s.discretionary.first)
+        #expect(t.date == nil)
+    }
+
+    // MARK: ToolPolicy gating (W4 — this feed hit the network unconditionally before)
+
+    // `NSLock.lock()`/`.unlock()` are `noasync` — calling them directly inside an `async` test
+    // function is a Swift 6 error, so the acquire/release each go through a plain (non-async)
+    // helper the async test calls into instead.
+    private static func lockAndOverride(_ policy: ToolPolicy) -> ToolPolicy? {
+        ToolPolicyTestLock.lock.lock()
+        let prior = ToolPolicy.override
+        ToolPolicy.override = policy
+        return prior
+    }
+
+    private static func unlockAndRestore(_ prior: ToolPolicy?) {
+        ToolPolicy.override = prior
+        ToolPolicyTestLock.lock.unlock()
+    }
+
+    @Test("recentActivity returns nil immediately when external access is off — the gate is the FIRST line, before any network call")
+    func recentActivityGatedByToolPolicy() async {
+        let prior = Self.lockAndOverride(.localOnly)
+        // No network mock exists (and tests must never hit the network) — this only proves the
+        // gate fires: if it did NOT, this call would attempt a real SEC fetch and either hang past
+        // the test timeout or return non-nil from a live response, neither of which this asserts.
+        let result = await I.recentActivity(for: "AAPL")
+        Self.unlockAndRestore(prior)
+        #expect(result == nil)
+    }
 }
