@@ -133,9 +133,15 @@ struct StockSageCatalystWatchPropertyTests {
 
     private func inputs(_ c: Case) -> W.Inputs {
         let (prox, date) = earningsInputs(c.earnings)
-        return W.Inputs(earnings: prox, earningsDate: date, earningsCheckedAt: checkedAt(c.checkedAt),
+        let chk = checkedAt(c.checkedAt)
+        // A `checkedAt` in the real flow is always paired with a non-empty `sourcesAsked` (that's
+        // what the store's chain always stamps together) — major fix 2026-09-06 made an empty
+        // `sourcesAsked` the fail-closed default, so the grid must mirror the real pairing to
+        // still exercise the dated-negative shape it was built to check.
+        return W.Inputs(earnings: prox, earningsDate: date, earningsCheckedAt: chk,
                         volumeMove: volume(c.volume), regime: regime(c.regime),
-                        regimeGaugedAt: days(-0.1), seasonality: season(c.season), now: Self.now)
+                        regimeGaugedAt: days(-0.1), seasonality: season(c.season), now: Self.now,
+                        catalystSourcesAsked: chk != nil ? ["yahoo calendarEvents"] : [])
     }
 
     // MARK: Independent oracle of the documented precedence
@@ -199,9 +205,9 @@ struct StockSageCatalystWatchPropertyTests {
             if b.primary.kind == .none {
                 #expect(b.secondary.isEmpty)
                 if let chk {
-                    #expect(b.primary.why == ["Next earnings date requested from Yahoo calendarEvents — none returned"])
+                    #expect(b.primary.why == ["Next earnings date requested from yahoo calendarEvents — none returned"])
                     #expect(b.primary.date == chk)
-                    #expect(b.primary.source == "Yahoo calendarEvents (no date returned)")
+                    #expect(b.primary.source == "yahoo calendarEvents (no date returned)")
                 } else {
                     #expect(b.primary.why == ["Next earnings date not available for this name — not fetched yet, or the source declined.",
                                               "No volume-confirmed move on the latest cached bar."])
@@ -271,7 +277,7 @@ struct StockSageCatalystWatchPropertyTests {
                 case .none:
                     #expect(item.weight == .low && item.caveat == nil)
                     if let chk = ins.earningsCheckedAt {
-                        #expect(item.source == "Yahoo calendarEvents (no date returned)" && item.date == chk)
+                        #expect(item.source == "yahoo calendarEvents (no date returned)" && item.date == chk)
                     } else {
                         #expect(item.source == "—" && item.date == nil)
                     }

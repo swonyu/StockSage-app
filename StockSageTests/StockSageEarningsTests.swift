@@ -316,4 +316,38 @@ struct StockSageEarningsTests {
         #expect(restored.checkedAt["AAPL"] == now)
         #expect(restored.dates["AAPL"] == nil)   // AAPL's own record is the honest negative too
     }
+
+    // MARK: Blocker fix 2026-09-06 — a `.projected` record must never reach `earningsDates` on
+    // restore, the same rule `refreshCatalyst` already applies at write time. Without this, a
+    // relaunch bypasses that write-time guard entirely and a GUESS becomes an announced date.
+
+    @Test func aProjectedRecordRoundTripsWithoutLeakingIntoEarningsDatesButCheckedAtSurvives() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockSageProjectedRoundTripTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("catalyst_records_v1.json")
+
+        let projectedDate = now.addingTimeInterval(45 * 86_400)
+        let record = StockSageCatalystRecordCache.Record(
+            symbol: "TSLA", earningsDate: projectedDate, checkedAt: now, source: "projection",
+            status: .projected, projectionBasis: "median gap of last 3 reports = 91 d from 2026-07-30")
+        StockSageCatalystRecordCache(entries: [record], savedAt: now).save(to: url)
+
+        let loaded = StockSageCatalystRecordCache.load(from: url)
+        let restored = StockSageStore.applyCatalystRecords(loaded?.entries ?? [])
+        #expect(restored.dates["TSLA"] == nil, "a PROJECTED date must never reach earningsDates on restore")
+        #expect(restored.checkedAt["TSLA"] == now, "checkedAt must still survive so the TTL guard doesn't re-ask immediately")
+    }
+
+    @Test func aDateKnownRecordStillRestoresIntoEarningsDates() {
+        // Sanity companion to the projected-exclusion test above: a genuinely KNOWN date must
+        // still flow through — the fix excludes ONLY `.projected`, nothing else.
+        let date = now.addingTimeInterval(10 * 86_400)
+        let restored = StockSageStore.applyCatalystRecords([
+            .init(symbol: "NVDA", earningsDate: date, checkedAt: now, source: "eodhd calendar", status: .dateKnown),
+        ])
+        #expect(restored.dates["NVDA"] == date)
+        #expect(restored.checkedAt["NVDA"] == now)
+    }
 }

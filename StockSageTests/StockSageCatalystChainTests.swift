@@ -24,13 +24,24 @@ struct StockSageCatalystChainTests {
             dateRangeEnd: rangeEndDays.map { now.addingTimeInterval($0 * 86_400) }, isEstimate: isEstimate)
     }
 
+    /// 3 history dates → 2 gaps of 90 and 92 days → median 91, with the LAST date recent enough
+    /// (1 day before `now`) that the projected next date (last + 91d) lands ~90 days in the
+    /// FUTURE — a genuinely live scenario, distinct from `aLapsedProjectionFallsThroughTo...`
+    /// below, which deliberately ages the same gap pattern into the past.
+    private func threeHistoryDatesProjectingToTheFuture() -> (Date, Date, Date) {
+        let d3 = now.addingTimeInterval(-1 * 86_400)
+        let d2 = d3.addingTimeInterval(-92 * 86_400)
+        let d1 = d2.addingTimeInterval(-90 * 86_400)
+        return (d1, d2, d3)
+    }
+
     @Test func eodhdHitWinsAndShortCircuitsYahooAndHistory() async {
         var yahooCalled = false, historyCalled = false
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
-            eodhdCalendar: { self.row(daysFromNow: 10) },
-            yahooCalendar: { yahooCalled = true; return self.calInfo(daysFromNow: 20, isEstimate: true) },
-            history: { historyCalled = true; return [] })
+            eodhdCalendar: { .answered(self.row(daysFromNow: 10)) },
+            yahooCalendar: { yahooCalled = true; return .answered(self.calInfo(daysFromNow: 20, isEstimate: true)) },
+            history: { historyCalled = true; return .answered([]) })
         #expect(outcome.status == .dateKnown)
         #expect(outcome.source == "eodhd calendar")
         #expect(outcome.confirmed == false)   // documented rule: EODHD calendar rows are always confirmed:false
@@ -38,6 +49,7 @@ struct StockSageCatalystChainTests {
         #expect(outcome.dateRangeEnd == nil)
         #expect(outcome.sourcesAsked == ["eodhd calendar"])
         #expect(outcome.projectionBasis == nil)
+        #expect(outcome.anySourceAnswered)
         #expect(!yahooCalled, "an EODHD hit must short-circuit Yahoo")
         #expect(!historyCalled, "an EODHD hit must short-circuit the history/projection step")
     }
@@ -46,9 +58,9 @@ struct StockSageCatalystChainTests {
         var historyCalled = false
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
-            eodhdCalendar: { nil },
-            yahooCalendar: { self.calInfo(daysFromNow: 15, rangeEndDays: 17, isEstimate: false) },
-            history: { historyCalled = true; return [] })
+            eodhdCalendar: { .answered(nil) },
+            yahooCalendar: { .answered(self.calInfo(daysFromNow: 15, rangeEndDays: 17, isEstimate: false)) },
+            history: { historyCalled = true; return .answered([]) })
         #expect(outcome.status == .dateKnown)
         #expect(outcome.source == "yahoo calendarEvents")
         #expect(outcome.confirmed == true)   // isEstimate:false ⇒ confirmed:true
@@ -61,11 +73,10 @@ struct StockSageCatalystChainTests {
     @Test func bothNilFallsThroughToProjectionWithThreeHistoryDates() async {
         // Hand-derived (mirrors StockSageCatalystProjectionTests): 3 dates → 2 gaps of 90 and
         // 92 days → median 91.
-        let d1 = now.addingTimeInterval(-360 * 86_400)
-        let d2 = d1.addingTimeInterval(90 * 86_400)
-        let d3 = d2.addingTimeInterval(92 * 86_400)
+        let (d1, d2, d3) = threeHistoryDatesProjectingToTheFuture()
         let outcome = await StockSageCatalystChain.resolve(
-            now: now, eodhdCalendar: { nil }, yahooCalendar: { nil }, history: { [d1, d2, d3] })
+            now: now, eodhdCalendar: { .answered(nil) }, yahooCalendar: { .answered(nil) },
+            history: { .answered([d1, d2, d3]) })
         #expect(outcome.status == .projected)
         #expect(outcome.source == "projection")
         #expect(outcome.confirmed == nil)
@@ -75,11 +86,23 @@ struct StockSageCatalystChainTests {
         #expect(outcome.sourcesAsked == ["eodhd calendar", "yahoo calendarEvents", "earnings history"])
     }
 
+    @Test func historyUnitLabelFeedsTheProjectionBasisString() async {
+        // Same fixture as above but a caller (the store, for a Tadawul symbol) names the history
+        // dates "quarter ends" instead of the default "reports" — the basis string must say so,
+        // never claim more than the source actually supports (major fix 2026-09-06).
+        let (d1, d2, d3) = threeHistoryDatesProjectingToTheFuture()
+        let outcome = await StockSageCatalystChain.resolve(
+            now: now, eodhdCalendar: { .answered(nil) }, yahooCalendar: { .answered(nil) },
+            historyUnitLabel: "quarter ends", history: { .answered([d1, d2, d3]) })
+        #expect(outcome.projectionBasis?.contains("median gap of last 3 quarter ends = 91 d from") == true)
+    }
+
     @Test func fewerThanThreeHistoryDatesFallsThroughToUnchecked() async {
         let d1 = now.addingTimeInterval(-360 * 86_400)
         let d2 = d1.addingTimeInterval(90 * 86_400)
         let outcome = await StockSageCatalystChain.resolve(
-            now: now, eodhdCalendar: { nil }, yahooCalendar: { nil }, history: { [d1, d2] })
+            now: now, eodhdCalendar: { .answered(nil) }, yahooCalendar: { .answered(nil) },
+            history: { .answered([d1, d2]) })
         #expect(outcome.status == .unchecked)
         #expect(outcome.earningsDate == nil)
         #expect(outcome.dateRangeEnd == nil)
@@ -87,12 +110,38 @@ struct StockSageCatalystChainTests {
         #expect(outcome.source == "—")
         #expect(outcome.projectionBasis == nil)
         #expect(outcome.sourcesAsked == ["eodhd calendar", "yahoo calendarEvents", "earnings history"])
+        #expect(outcome.anySourceAnswered, "every provider DID answer here — just with nothing usable")
     }
 
     @Test func emptyHistoryAlsoFallsThroughToUnchecked() async {
         let outcome = await StockSageCatalystChain.resolve(
-            now: now, eodhdCalendar: { nil }, yahooCalendar: { nil }, history: { [] })
+            now: now, eodhdCalendar: { .answered(nil) }, yahooCalendar: { .answered(nil) },
+            history: { .answered([]) })
         #expect(outcome.status == .unchecked)
+    }
+
+    // MARK: Blocker fix 2026-09-06 — a question NO source ever answered must never be recorded
+    // as asked, and must leave `anySourceAnswered` false so the store refuses to stamp anything.
+
+    @Test func everyProviderUnavailableLeavesAnySourceAnsweredFalseAndSourcesAskedEmpty() async {
+        let outcome = await StockSageCatalystChain.resolve(
+            now: now, eodhdCalendar: { .unavailable }, yahooCalendar: { .unavailable },
+            history: { .unavailable })
+        #expect(outcome.status == .unchecked)
+        #expect(!outcome.anySourceAnswered, "nobody ever answered — this must not read as a checked negative")
+        #expect(outcome.sourcesAsked.isEmpty, "an unreachable provider must never be recorded as asked")
+    }
+
+    @Test func aMixOfUnavailableAndAnsweredRecordsOnlyTheAnsweredSourceAndSetsAnySourceAnswered() async {
+        // EODHD unreachable (never asked), Yahoo reachable but empty, history never reached
+        // (short-circuited by nothing — Yahoo's `.answered(nil)` falls through to history, which
+        // is also unavailable here) — only "yahoo calendarEvents" should ever be recorded.
+        let outcome = await StockSageCatalystChain.resolve(
+            now: now, eodhdCalendar: { .unavailable }, yahooCalendar: { .answered(nil) },
+            history: { .unavailable })
+        #expect(outcome.status == .unchecked)
+        #expect(outcome.anySourceAnswered, "Yahoo DID answer, even though EODHD and history did not")
+        #expect(outcome.sourcesAsked == ["yahoo calendarEvents"])
     }
 
     // MARK: Stale-date guard — mirrors StockSageStore.earningsRefreshOutcome's own `> -86_400` rule
@@ -100,20 +149,37 @@ struct StockSageCatalystChainTests {
     @Test func aStaleEodhdRowFallsThroughToYahoo() async {
         // Exactly 2 days in the past is well outside the usability guard.
         let outcome = await StockSageCatalystChain.resolve(
-            now: now, eodhdCalendar: { self.row(daysFromNow: -2) },
-            yahooCalendar: { self.calInfo(daysFromNow: 5, isEstimate: true) }, history: { [] })
+            now: now, eodhdCalendar: { .answered(self.row(daysFromNow: -2)) },
+            yahooCalendar: { .answered(self.calInfo(daysFromNow: 5, isEstimate: true)) },
+            history: { .answered([]) })
         #expect(outcome.status == .dateKnown)
         #expect(outcome.source == "yahoo calendarEvents")
     }
 
     @Test func aStaleYahooDateFallsThroughToProjection() async {
-        let d1 = now.addingTimeInterval(-360 * 86_400)
-        let d2 = d1.addingTimeInterval(90 * 86_400)
-        let d3 = d2.addingTimeInterval(92 * 86_400)
+        let (d1, d2, d3) = threeHistoryDatesProjectingToTheFuture()
         let outcome = await StockSageCatalystChain.resolve(
-            now: now, eodhdCalendar: { nil },
-            yahooCalendar: { self.calInfo(daysFromNow: -2, isEstimate: true) },
-            history: { [d1, d2, d3] })
+            now: now, eodhdCalendar: { .answered(nil) },
+            yahooCalendar: { .answered(self.calInfo(daysFromNow: -2, isEstimate: true)) },
+            history: { .answered([d1, d2, d3]) })
         #expect(outcome.status == .projected)
+    }
+
+    // MARK: Major fix 2026-09-06 — a projection that has already lapsed must not be reported as
+    // an upcoming catalyst; the symbol must fall through to the honest `.unchecked` instead.
+
+    @Test func aLapsedProjectionFallsThroughToUncheckedRatherThanAPastCatalyst() async {
+        // 3 history dates 91 days apart, ending 100 days before `now` — the projected next date
+        // (last + 91d) lands 9 days IN THE PAST relative to `now`, well outside the `> -86_400`
+        // guard, so this must NOT surface as `.projected`.
+        let d3 = now.addingTimeInterval(-100 * 86_400)
+        let d2 = d3.addingTimeInterval(-91 * 86_400)
+        let d1 = d2.addingTimeInterval(-91 * 86_400)
+        let outcome = await StockSageCatalystChain.resolve(
+            now: now, eodhdCalendar: { .answered(nil) }, yahooCalendar: { .answered(nil) },
+            history: { .answered([d1, d2, d3]) })
+        #expect(outcome.status == .unchecked, "a projection 9 days in the past must not be reported as a catalyst")
+        #expect(outcome.earningsDate == nil)
+        #expect(outcome.anySourceAnswered)
     }
 }

@@ -113,15 +113,19 @@ enum StockSageQuoteService {
     }
 
     /// GET a request, returning the 200 body. On a 429/503 (Yahoo's keyless endpoint
-    /// rate-limits under load — the dominant failure mode as the universe grows), back
-    /// off ~1.5s and retry ONCE before giving up. Any other status / transport error → nil.
+    /// rate-limits under load — the dominant failure mode as the universe grows), a genuine
+    /// EXPONENTIAL backoff (1s, then 2s) between up to 3 attempts total — same shape as
+    /// `StockSageEarnings.get` (major fix 2026-09-06: a single fixed ~1.5s retry isn't enough
+    /// headroom for the sustained throttle STANDING RULES already documents on this Mac's IP).
+    /// Any other status / transport error → nil.
     private nonisolated static func get(_ req: URLRequest) async -> Data? {
-        for attempt in 0..<2 {
+        for attempt in 0..<3 {
             guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return nil }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200 { return data }
-            if (code == 429 || code == 503), attempt == 0 {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if (code == 429 || code == 503), attempt < 2 {
+                let seconds = pow(2.0, Double(attempt))   // 1, 2 (attempt 0, 1) — 3rd attempt never sleeps again
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                 continue
             }
             return nil

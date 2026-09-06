@@ -1896,24 +1896,41 @@ final class StockSageStore: ObservableObject {
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
             eodhdCalendar: {
-                guard let rows = await StockSageEODHDCalendar.fetchCalendar(up) else { return nil }
-                return StockSageEODHDCalendar.nextRow(rows, now: now)
+                // `fetchCalendar` returns nil for EVERY unreachable case (not covered, empty
+                // key, 24h-unavailable window open, non-200, timeout) — exactly the shape
+                // `.unavailable` needs, so no further translation is required (blocker fix
+                // 2026-09-06: previously this `nil` collapsed indistinguishably into the chain's
+                // OWN "nothing found" nil, which is what let an unasked source get recorded as
+                // asked and a never-answered question get stamped as a dated negative).
+                guard let rows = await StockSageEODHDCalendar.fetchCalendar(up) else { return .unavailable }
+                return .answered(StockSageEODHDCalendar.nextRow(rows, now: now))
             },
             yahooCalendar: {
-                guard case .answered(let info) = await StockSageEarnings.fetchEarningsCalendarOutcome(for: up)
-                else { return nil }
-                return info
+                switch await StockSageEarnings.fetchEarningsCalendarOutcome(for: up) {
+                case .answered(let info): return .answered(info)
+                case .unavailable:        return .unavailable
+                }
             },
+            historyUnitLabel: isUS ? "reports" : "quarter ends",
             history: {
-                isUS ? await StockSageEODHDCalendar.fetchEarningsHistory(up)
-                     : await StockSageEarnings.fetchEarningsHistory(for: up)
+                let dates = isUS ? await StockSageEODHDCalendar.fetchEarningsHistory(up)
+                                 : await StockSageEarnings.fetchEarningsHistory(for: up)
                 // TODO(SAHMK): Tadawul has no EODHD coverage and Yahoo's `earningsHistory` module
                 // is unverified live for `.SR` (429-rate-limited today — see
-                // research_tadawul_realtime_2026-09-06.md). If it comes back empty, this symbol
-                // lands on `.unchecked` with `sourcesAsked` recording the attempt — the next real
-                // fix is a SAHMK Pro key (owner-provisioned), not a code change here.
+                // research_tadawul_realtime_2026-09-06.md). If it comes back empty (`.answered([])`,
+                // not `.unavailable`), this symbol lands on `.unchecked` with `sourcesAsked`
+                // recording the attempt — the next real fix is a SAHMK Pro key (owner-provisioned),
+                // not a code change here.
+                guard let dates else { return .unavailable }
+                return .answered(dates)
             }
         )
+        // Never stamp a dated negative for a question nobody actually answered (blocker fix
+        // 2026-09-06) — `.unchecked` from a chain where every provider was `.unavailable` (e.g.
+        // external access flickered off mid-symbol, or Yahoo's 429s exhausted every retry) must
+        // leave this symbol exactly as it was: absent from `catalystChain`/`earningsCheckedAt`,
+        // rendering "not fetched yet", never a false "checked, none known as of <now>".
+        guard outcome.status != .unchecked || outcome.anySourceAnswered else { return }
         catalystChain[up] = .init(symbol: up, earningsDate: outcome.earningsDate, checkedAt: now,
                                   source: outcome.source, status: outcome.status,
                                   confirmed: outcome.confirmed, dateRangeEnd: outcome.dateRangeEnd,
@@ -1947,11 +1964,21 @@ final class StockSageStore: ObservableObject {
         }
         let all = trackedSymbolsUnion
         let chunks = stride(from: 0, to: all.count, by: 4).map { Array(all[$0 ..< min($0 + 4, all.count)]) }
-        for chunk in chunks {
+        for (index, chunk) in chunks.enumerated() {
             if Task.isCancelled { return }
             await withTaskGroup(of: Void.self) { group in
                 for symbol in chunk { group.addTask { await self.refreshCatalyst(symbol: symbol) } }
                 for await _ in group { }
+            }
+            // Pacing (major fix 2026-09-06; STANDING RULES: Yahoo 429s this Mac's IP today).
+            // Every non-EODHD-covered/miss symbol in a chunk hits Yahoo `calendarEvents`, and a
+            // `.SR` name hits it a second time for `earningsHistory` — with ZERO delay between
+            // chunks, a sustained throttle turned one ~900-name sweep into up to ~2,700 requests
+            // fired as fast as 4-way parallelism allowed (only per-request backoff existed, no
+            // shared cooldown across the sweep). 4 symbols / 750ms caps the whole sweep at
+            // roughly 5.3 req/s regardless of chunk count; skip the sleep after the last chunk.
+            if index < chunks.count - 1 {
+                try? await Task.sleep(for: .milliseconds(750))
             }
         }
     }
@@ -1983,7 +2010,15 @@ final class StockSageStore: ObservableObject {
         var checkedAt: [String: Date] = [:]
         for r in records {
             checkedAt[r.symbol] = r.checkedAt
-            if let d = r.earningsDate { dates[r.symbol] = d }
+            // Only a non-PROJECTED date may reach `earningsDates` — the same rule `refreshCatalyst`
+            // applies at write time (blocker fix 2026-09-06). Without this, a relaunch bypasses
+            // that write-time guard entirely: a `.projected` GUESS becomes a KNOWN date the moment
+            // it round-trips through disk, feeding the earnings-proximity/rank-penalty machinery
+            // (and the "Earnings in ~N days (<date>)" headline) an announced report that was never
+            // actually obtained. Pipeline-1 records (status decodes to `.unchecked`) and
+            // `.notApplicable`/`.unchecked` W1 records are unaffected — neither ever carries a
+            // `.projected` status, so this stays backward-compatible.
+            if r.status != .projected, let d = r.earningsDate { dates[r.symbol] = d }
         }
         return (dates, checkedAt)
     }
@@ -2348,14 +2383,16 @@ final class StockSageStore: ObservableObject {
     /// `StockSageMonitor` every cycle REGARDLESS of watchlist-only mode, because that mode skips
     /// `refresh(scope: .core)` entirely — without this, watchlist-only + a Tadawul board name
     /// leaves that name polled by nothing at all (N2).
-    /// Max symbols one `refreshStreamGap` sweep may poll (blocker fix 2026-09-06). `subscribed`
-    /// is empty whenever the live stream is off (`stocksage.liveStream` toggle, MarketsView.swift)
-    /// OR simply never started yet (Markets tab not shown while the monitor is already looping) —
-    /// without a cap, `streamGapCandidates` then returns EVERY tracked trading symbol (872
-    /// streamable US names during a US session), and the 60s foreground timer alone would poll
-    /// all 872 every minute (~52k calls/h) on top of every other sweep, well past what a keyless
-    /// feed already 429s on.
-    nonisolated static let streamGapMaxPerSweep = 60
+    /// Max symbols one `refreshStreamGap` sweep may poll (blocker fix 2026-09-06, revised for the
+    /// W3 30s cadence — major fix 2026-09-06). `subscribed` is empty whenever the live stream is
+    /// off (`stocksage.liveStream` toggle, MarketsView.swift) OR simply never started yet (Markets
+    /// tab not shown while the monitor is already looping) — without a cap, `streamGapCandidates`
+    /// then returns EVERY tracked trading symbol (872 streamable US names during a US session).
+    /// 20 per 30s-cadence sweep keeps the sustained rate BELOW the pre-W3 60-per-60s baseline
+    /// (60/60s vs 20/30s = 40/60s) even before `lastStreamGapAt`'s floor below removes the
+    /// possibility of two callers stacking — a deliberately conservative number given Yahoo is
+    /// already 429ing this Mac's IP today (STANDING RULES).
+    nonisolated static let streamGapMaxPerSweep = 20
 
     /// Pure rotation: take at most `limit` symbols from `all` starting at `cursor`, wrapping
     /// around — so a candidate set bigger than the cap is still covered across SUCCESSIVE
@@ -2372,10 +2409,32 @@ final class StockSageStore: ObservableObject {
     /// Rotating cursor for `refreshStreamGap`'s cap — instance state so successive sweeps advance.
     private var streamGapCursor = 0
 
+    /// Wall-clock floor between stream-gap sweeps (major fix 2026-09-06). MarketsView's 30s
+    /// `.task` timer and `StockSageMonitor`'s every-cycle call are two OWNERS of one polling
+    /// budget, not two independent budgets — without a floor, a monitor cycle landing between two
+    /// MarketsView ticks (or the two simply racing) doubles the effective rate against an
+    /// endpoint (Yahoo, for every non-EODHD-covered tracked name) that's already 429ing this
+    /// Mac's IP today (STANDING RULES). 25s sits just under the 30s cadence so the owner's stated
+    /// "every 30 seconds" still holds while a redundant near-simultaneous call is dropped.
+    nonisolated static let streamGapMinInterval: TimeInterval = 25
+
+    /// Pure boundary check, directly testable without a real clock or a running sweep — `nil`
+    /// (never swept yet) always sweeps.
+    nonisolated static func shouldSweepStreamGap(lastAt: Date?, now: Date,
+                                                 minInterval: TimeInterval = streamGapMinInterval) -> Bool {
+        guard let lastAt else { return true }
+        return now.timeIntervalSince(lastAt) >= minInterval
+    }
+
+    private var lastStreamGapAt: Date?
+
     func refreshStreamGap() async {
         guard ToolPolicy.webToolsDisabledReason() == nil else { return }
+        let now = Date()
+        guard Self.shouldSweepStreamGap(lastAt: lastStreamGapAt, now: now) else { return }
         let all = trackedDefs(scope: .streamGap).map(\.symbol)
         guard !all.isEmpty else { return }
+        lastStreamGapAt = now
         let (candidates, nextCursor) = Self.rotatedSweepSlice(all: all, cursor: streamGapCursor, limit: Self.streamGapMaxPerSweep)
         streamGapCursor = nextCursor
         let quotes = await StockSageQuoteService.fetchQuotes(for: candidates)
