@@ -43,3 +43,23 @@ struct ActionBadgeColorTests {
         #expect(MarketsView.actionTextColorForTest(.avoid) == .white)
     }
 }
+
+// MARK: - Signed ideaMetric ink (review 2026-07-28 #6 follow-up, 2026-09-06)
+//
+// UI#6 swept the sites the review named; the journal "Realized stats" row (Win / Total R /
+// Avg R / Realized P&L / Expectancy / Avg loss / PF) and the risk-analytics row (Ann. return /
+// Sharpe) still painted a negative value raw `danger` through ideaMetric's `color:` — ~12.5pt
+// TEXT, so the same small-danger-TEXT-is-AA invariant applies. All nine now route through one
+// static seam: a negative value must be dangerSoft, never danger. Token equality, not RGB.
+struct SignedMetricColorTests {
+    @Test func negativeValuesInkDangerSoftNeverDanger() {
+        #expect(MarketsView.signedMetricColor(positive: false) == DS.Palette.dangerSoft)
+        #expect(MarketsView.signedMetricColor(positive: false) != DS.Palette.danger)
+        #expect(MarketsView.signedMetricColor(positive: true) == DS.Palette.successSoft)
+        // Avg loss / Sharpe supply their own "good" ink; the negative branch is fixed regardless.
+        #expect(MarketsView.signedMetricColor(positive: true, positiveColor: .white) == .white)
+        #expect(MarketsView.signedMetricColor(positive: false, positiveColor: .white) == DS.Palette.dangerSoft)
+        // The seam must actually distinguish the two tokens it is guarding between.
+        #expect(DS.Palette.dangerSoft != DS.Palette.danger)
+    }
+}

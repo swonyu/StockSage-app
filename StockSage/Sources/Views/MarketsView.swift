@@ -2782,11 +2782,11 @@ struct MarketsView: View {
                 HStack(spacing: DS.Space.sm) {
                     ideaMetric("Closed", "\(s.closed)")
                     ideaMetric("Win", String(format: "%.0f%%", s.winRate * 100),
-                               color: s.winRate >= 0.5 ? DS.Palette.successSoft : DS.Palette.danger)
+                               color: Self.signedMetricColor(positive: s.winRate >= 0.5))
                     ideaMetric("Total R", String(format: "%+.2f", s.totalR),
-                               color: s.totalR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                               color: Self.signedMetricColor(positive: s.totalR >= 0))
                     ideaMetric("Avg R", String(format: "%+.2f", s.avgR),
-                               color: s.avgR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                               color: Self.signedMetricColor(positive: s.avgR >= 0))
                     // First-real-trade review (2026-07-16): totalProfit sums each trade's profit
                     // in its NATIVE currency, so a mixed-currency closed book (SAR + USD) is a
                     // meaningless 1:1 sum — never show it as one number. profitCurrency is the
@@ -2794,7 +2794,7 @@ struct MarketsView: View {
                     // else labeled), nil when mixed (show "mixed", route to the per-row P&L).
                     ideaMetric("Realized P&L", realizedProfitText(s),
                                color: s.profitSymbol == nil ? DS.Palette.warningSoft
-                                    : (s.totalProfit >= 0 ? DS.Palette.successSoft : DS.Palette.danger))
+                                    : Self.signedMetricColor(positive: s.totalProfit >= 0))
                         .help(s.profitSymbol == nil
                             ? "Closed trades span multiple currencies — a single total can't be summed honestly; see each trade's own P&L below."
                             : "Closed trades only — a record, not a promise of future results.")
@@ -2804,7 +2804,7 @@ struct MarketsView: View {
                 if edge.closedWithR > 0 {
                     HStack(spacing: DS.Space.sm) {
                         ideaMetric("Expectancy", String(format: "%+.2fR", edge.expectancyR),
-                                   color: edge.expectancyR >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                                   color: Self.signedMetricColor(positive: edge.expectancyR >= 0))
                         // Review fix 2026-07-17: avgWinR/avgLossR are sentinel 0 over an EMPTY
                         // bucket (a real win averages > 0; loss magnitude > 0) — render "—"
                         // like the sibling Payoff/PF degenerates, never a colored ±0.00R that
@@ -2812,12 +2812,12 @@ struct MarketsView: View {
                         ideaMetric("Avg win", edge.avgWinR > 0 ? String(format: "+%.2fR", edge.avgWinR) : "—",
                                    color: edge.avgWinR > 0 ? DS.Palette.successSoft : .white)
                         ideaMetric("Avg loss", edge.avgLossR > 0 ? String(format: "−%.2fR", edge.avgLossR) : "—",
-                                   color: edge.avgLossR > 0 ? DS.Palette.danger : .white)
+                                   color: Self.signedMetricColor(positive: edge.avgLossR <= 0, positiveColor: .white))
                         ideaMetric("Payoff", edge.payoffRatio > 0 ? String(format: "%.2f", edge.payoffRatio) : "—")
                         ideaMetric("PF", edge.profitFactor.map { String(format: "%.2f", $0) } ?? "—",
                                    // nil means no losing trades — the engine treats this as pfStrong (∞).
                                    // ?? 0 was turning nil into 0 and falsely painting "—" danger red.
-                                   color: edge.profitFactor.map { $0 >= 1 } ?? true ? DS.Palette.successSoft : DS.Palette.danger)
+                                   color: Self.signedMetricColor(positive: edge.profitFactor.map { $0 >= 1 } ?? true))
                         Spacer(minLength: 0)
                     }
                     if let pf = edge.profitFactor {
@@ -3906,10 +3906,10 @@ struct MarketsView: View {
                 }
                 HStack(spacing: 18) {
                     ideaMetric("Ann. return", String(format: "%+.1f%%", a.annualizedReturn),
-                               color: a.annualizedReturn >= 0 ? DS.Palette.successSoft : DS.Palette.danger)
+                               color: Self.signedMetricColor(positive: a.annualizedReturn >= 0))
                     ideaMetric("Volatility", String(format: "%.1f%%", a.annualizedVolatility))
                     ideaMetric("Sharpe", a.sharpe.map { String(format: "%.2f", $0) } ?? "n/a",
-                               color: a.sharpe == nil ? .secondary : (a.sharpe! >= 1 ? DS.Palette.successSoft : (a.sharpe! >= 0.3 ? .white : DS.Palette.danger)))
+                               color: a.sharpe == nil ? .secondary : Self.signedMetricColor(positive: a.sharpe! >= 0.3, positiveColor: a.sharpe! >= 1 ? DS.Palette.successSoft : .white))
                     ideaMetric("Sortino", a.sortino.map { String(format: "%.2f", $0) } ?? "n/a")
                     Spacer(minLength: 0)
                 }
@@ -9450,6 +9450,15 @@ struct MarketsView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(sub != nil ? "\(label) \(value) \(sub!)" : "\(label) \(value)")
+    }
+
+    /// Ink for a signed ideaMetric value (journal realized stats, risk analytics): `positiveColor`
+    /// when `positive`, else dangerSoft — never raw `danger`, which measures 3.7–4.3:1 on these
+    /// surfaces, under AA 4.5:1 for ideaMetric's ~12.5pt value text (review 2026-07-28 #6; the
+    /// two rows UI#6 left out). Static so `SignedMetricColorTests` reaches it via
+    /// `@testable import` — the `BacktestVerdict.metricColor` seam.
+    static func signedMetricColor(positive: Bool, positiveColor: Color = DS.Palette.successSoft) -> Color {
+        positive ? positiveColor : DS.Palette.dangerSoft
     }
 
     private func convictionMeter(_ value: Double, color: Color) -> some View {
