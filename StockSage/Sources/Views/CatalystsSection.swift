@@ -108,11 +108,6 @@ struct CatalystsSection: View {
     @ScaledMetric(relativeTo: .caption2) private var font13: CGFloat = 13
     @ScaledMetric(relativeTo: .caption2) private var font15: CGFloat = 15
 
-    /// The first 30 symbols, joined — the `.task(id:)` identity that re-runs the earnings
-    /// prefetch only when the visible top-30 actually changes (a re-render with the same top
-    /// 30 must not re-fire the fetch).
-    private var earningsTaskID: String { ideas.prefix(30).map(\.symbol).joined(separator: ",") }
-
     var body: some View {
         // `now` and `briefs` computed ONCE per body (SWIFT_PITFALLS #11: no per-row recompute)
         // and the narrator availability read once too — it is a small, but non-zero, system
@@ -137,7 +132,6 @@ struct CatalystsSection: View {
                 }
             }
         }
-        .task(id: earningsTaskID) { await fetchEarningsForTopIdeas() }
         .task(id: probeTaskID) { await probeIfBackendNeedsServer() }
     }
 
@@ -156,24 +150,9 @@ struct CatalystsSection: View {
             let sym = idea.symbol.uppercased()
             return StockSageCatalystWatch.brief(for: idea, inputs: .init(
                 earnings: earnings[sym], earningsDate: store.earningsDates[sym],
+                earningsCheckedAt: store.earningsCheckedAt[sym],
                 volumeMove: catalystsBySymbol[sym], regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
                 seasonality: store.seasonality[sym], now: now))
-        }
-    }
-
-    /// Mirrors `StockSageStore.refreshEarningsForTopIdeas`: 4-parallel chunks, cached-once per
-    /// symbol inside the store (`refreshEarnings` no-ops when a date is already known), so
-    /// re-entry on every body rebuild is cheap. Checked for cancellation between chunks — a
-    /// mode switch or the top-30 changing cancels the previous `.task` before this returns.
-    private func fetchEarningsForTopIdeas() async {
-        let top = Array(ideas.prefix(30))
-        let chunks = stride(from: 0, to: top.count, by: 4).map { Array(top[$0 ..< min($0 + 4, top.count)]) }
-        for chunk in chunks {
-            if Task.isCancelled { return }
-            await withTaskGroup(of: Void.self) { group in
-                for idea in chunk { group.addTask { await store.refreshEarnings(symbol: idea.symbol) } }
-                for await _ in group { }
-            }
         }
     }
 
@@ -514,7 +493,11 @@ struct CatalystsSection: View {
     private func calendarBody(briefs: [StockSageCatalystWatch.Brief], now: Date) -> some View {
         let entries = StockSageCatalystWatch.calendar(briefs, now: now)
         if !entries.contains(where: { $0.item.date != nil }) {
-            Text("No dated catalysts yet — earnings dates load for the top 30 ideas after the first scan.")
+            // A5 (2026-09-06): no longer promises "top 30" — `refreshEarningsForTracked` (T4)
+            // sweeps every TRACKED symbol daily, not just the top-ranked board names, so a
+            // dated calendar row can appear for anything tracked, not only the board's leaders.
+            Text("No dated catalysts yet — catalyst checks cover every tracked symbol, refreshed "
+                + "daily; a symbol not yet checked shows as unchecked.")
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
@@ -539,21 +522,37 @@ struct CatalystsSection: View {
 
     @ViewBuilder
     private func calendarRow(_ entry: StockSageCatalystWatch.CalendarEntry) -> some View {
+        // A5: a dated "none known as of <date>" record (`isNegativeRecord`) is not a catalyst —
+        // it renders dimmer and swaps the headline sentence for a small "No known catalyst" tag
+        // (the date column already carries the same `checkedAt` date, so repeating "as of <date>"
+        // in the headline too would be redundant) so it reads as a checked-and-empty record at a
+        // glance, never mistaken for a real event. Both pieces are pure static helpers keyed
+        // ONLY on the engine's flag (CatalystsSectionTests), never re-derived from `headline`.
+        let badge = Self.negativeRecordBadge(isNegativeRecord: entry.isNegativeRecord)
+        let rowColor = Self.calendarRowColor(isNegativeRecord: entry.isNegativeRecord)
         HStack(alignment: .top, spacing: DS.Space.xs) {
             Text(entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "—")
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                 .frame(minWidth: 64, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: DS.Space.xs) {
-                    Text(entry.idea.symbol).font(.system(size: font12, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                    Text(entry.item.headline).font(.system(size: font11)).foregroundStyle(.white)
+                    Text(entry.idea.symbol).font(.system(size: font12, weight: .bold, design: .rounded)).foregroundStyle(rowColor)
+                    if let badge {
+                        Text(badge).font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.textSecondary)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+                    } else {
+                        Text(entry.item.headline).font(.system(size: font11)).foregroundStyle(rowColor)
+                    }
                 }
                 if let firstWhy = entry.item.why.first {
                     Text(firstWhy).font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
                 }
                 // Honesty floor: the RVOL detector is "unvalidated" and regime/seasonality carry
                 // their own caveats — the primary card already shows this (line ~165); the
-                // calendar row was the one path that dropped it (fix pass 2026-09-06).
+                // calendar row was the one path that dropped it (fix pass 2026-09-06). Stays
+                // `warningSoft` (never raw `danger`) even on a dimmed negative-record row — a
+                // caveat about a REAL catalyst reads no less true because a neighboring row is dim.
                 if let caveat = entry.item.caveat {
                     Text(caveat).font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
@@ -562,6 +561,7 @@ struct CatalystsSection: View {
             Spacer()
             weightDot(entry.item.weight)
         }
+        .opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
         .touchHitArea()
         .contentShape(Rectangle())
         .onTapGesture { onSelect(entry.idea) }
@@ -624,5 +624,28 @@ struct CatalystsSection: View {
         case .avoid:            return Color.white.opacity(0.22)
         case .reduce, .sell:    return Color(red: 1.0,  green: 0.50, blue: 0.50) // DS.Palette.dangerSoft
         }
+    }
+
+    /// A5: the calendar row's "No known catalyst" tag, sourced ONLY from the engine's
+    /// `isNegativeRecord` flag (never re-parsed from `headline`, which stays free to reword
+    /// without this tag silently going stale). nil for a real catalyst row — nothing to tag.
+    nonisolated static func negativeRecordBadge(isNegativeRecord: Bool) -> String? {
+        isNegativeRecord ? "No known catalyst" : nil
+    }
+
+    /// A5: dims a negative-record calendar row so it reads as a checked-and-empty record, never
+    /// mistaken for a real catalyst at a glance. `Color.white` / `.opacity(0.66)` are
+    /// `DS.Palette.textPrimary` / `.textSecondary` copied as literals — same nonisolated-cannot-
+    /// read-a-MainActor-static constraint as `actionFill` above (`CatalystsSectionTests` pins
+    /// both sides). Never `DS.Palette.danger`/`.dangerSoft` — an empty catalyst record is neutral
+    /// information, not a warning, so a danger tint would misrepresent it as one.
+    nonisolated static func calendarRowColor(isNegativeRecord: Bool) -> Color {
+        isNegativeRecord ? Color.white.opacity(0.66) : Color.white   // DS.Palette.textSecondary / .textPrimary
+    }
+
+    /// A5: whole-row opacity for the same dimming — a second, cruder signal (on top of
+    /// `calendarRowColor`) so the row reads as de-emphasized even at a glance/low contrast.
+    nonisolated static func calendarRowOpacity(isNegativeRecord: Bool) -> Double {
+        isNegativeRecord ? 0.6 : 1.0
     }
 }

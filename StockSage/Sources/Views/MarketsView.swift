@@ -292,15 +292,33 @@ struct MarketsView: View {
     /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
     /// than a refresh button.
     @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
-    /// Recompute the subscription only when the SET of board symbols changes — not on every
-    /// price tick, which would tear the socket down and rebuild it continuously.
+    /// Recompute the subscription only when the SET of TRACKED symbols changes — not on every
+    /// price tick, which would tear the socket down and rebuild it continuously. B4 (owner:
+    /// "every stock tracking should be live"): built from `trackedSymbolsUnion` (board ∪
+    /// watchlist ∪ portfolio ∪ open journal trades), not `store.symbols` (board-only) — a US
+    /// watchlist/portfolio/journal ticker that never made the board still gets a live stream.
     private var streamSubscriptionKey: String {
-        liveStreamEnabled ? StockSageLiveStream.streamable(store.symbols.map(\.symbol)).joined(separator: ",") : ""
+        liveStreamEnabled ? StockSageLiveStream.streamable(store.trackedSymbolsUnion).joined(separator: ",") : ""
     }
 
-    /// Auto-refresh (owner: every 7 minutes while the app is open). Cross-platform — the
-    /// mac window benefits identically; iOS suspends the task with the scene.
+    /// Auto-refresh while the app is open (B3, 2026-09-06: split from one 285s sweep into a 60s
+    /// `.streamGap` top-up + a 900s `.full` sweep — see `refreshIntervals(thermal:)` below and the
+    /// two `.task(id: autoRefreshEnabled)` blocks). Cross-platform — the mac window benefits
+    /// identically; iOS suspends the task with the scene. The manual refresh button, iOS
+    /// pull-to-refresh, and the tab-open `.task` all call `store.refresh()` directly and are
+    /// unaffected by either timer.
     @AppStorage("stocksage.autoRefresh") private var autoRefreshEnabled = true
+
+    /// B3 thermal brake: the interval math behind the two foreground auto-refresh timers, pulled
+    /// out as a pure static function so the exact numbers are pinned without a running timer or a
+    /// real `ProcessInfo` (MarketsRefreshIntervalTests). Mirrors StockSageMonitor's own ×2
+    /// back-off under `.serious`/`.critical` thermal state (StockSageMonitor.swift ~126-129) —
+    /// same brake, same two states, applied to these two cadences instead of the monitor's one.
+    nonisolated static func refreshIntervals(thermal: ProcessInfo.ThermalState) -> (streamGap: Int, full: Int) {
+        let stressed = thermal == .serious || thermal == .critical
+        return stressed ? (streamGap: 120, full: 1800) : (streamGap: 60, full: 900)
+    }
+
     /// iOS restore flow (2026-07-27): fileImporter presentation — the document-picker
     /// counterpart of the mac NSOpenPanel restore.
     @State private var showRestoreImporter = false
@@ -547,17 +565,39 @@ struct MarketsView: View {
             // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
             // entire on-disk history, and lastUpdated now moves twice a second while streaming.
             .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
-            // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). Subscribes
-            // the board's US names to EODHD's trade socket; prices then move on their own. Saudi
-            // names have no stream (EODHD carries no Saudi exchange) and keep polling.
+            // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). B4: subscribes
+            // every TRACKED US name (board ∪ watchlist ∪ portfolio ∪ open journal trades) to
+            // EODHD's trade socket, not just the board, so an off-board US ticker streams too;
+            // prices then move on their own. Saudi names have no stream (EODHD carries no Saudi
+            // exchange) and keep polling.
             .task(id: streamSubscriptionKey) {
                 guard liveStreamEnabled else { StockSageLiveStream.shared.stop(); return }
-                StockSageLiveStream.shared.start(symbols: store.symbols.map(\.symbol))
+                StockSageLiveStream.shared.start(symbols: store.trackedSymbolsUnion)
+            }
+            // B3 (owner: "every stock tracking should be live" + thermal brake parity with
+            // StockSageMonitor): the single 285s sweep is split into two independently-paced
+            // timers. The `.streamGap` timer tops up every TRACKED symbol the live stream doesn't
+            // carry (Tadawul, or a name mid-(re)connect) — `refreshStreamGap()` already filters to
+            // symbols whose market is trading right now (`trackedDefs(scope: .streamGap)`), so
+            // this never polls a closed market at 60s cadence. The `.full` sweep (whole board +
+            // catalyst rescan via the `lastFullRefreshAt`-keyed task above) slows to 900s now that
+            // the stream-gap timer covers the fast path. Both back off ×2 under thermal pressure —
+            // `refreshIntervals(thermal:)` is the single pure home for that math (pinned in
+            // MarketsRefreshIntervalTests), mirroring StockSageMonitor's own ×2 brake.
+            .task(id: autoRefreshEnabled) {
+                guard autoRefreshEnabled else { return }
+                while !Task.isCancelled {
+                    let interval = Self.refreshIntervals(thermal: ProcessInfo.processInfo.thermalState).streamGap
+                    try? await Task.sleep(for: .seconds(interval))
+                    guard !Task.isCancelled, autoRefreshEnabled else { break }
+                    await store.refreshStreamGap()
+                }
             }
             .task(id: autoRefreshEnabled) {
                 guard autoRefreshEnabled else { return }
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(285))
+                    let interval = Self.refreshIntervals(thermal: ProcessInfo.processInfo.thermalState).full
+                    try? await Task.sleep(for: .seconds(interval))
                     guard !Task.isCancelled, autoRefreshEnabled else { break }
                     await store.refresh()
                 }
