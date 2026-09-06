@@ -301,7 +301,7 @@ struct MarketsView: View {
         liveStreamEnabled ? StockSageLiveStream.streamable(store.trackedSymbolsUnion).joined(separator: ",") : ""
     }
 
-    /// Auto-refresh while the app is open (B3, 2026-09-06: split from one 285s sweep into a 60s
+    /// Auto-refresh while the app is open (B3, 2026-09-06: split from one 285s sweep into a 30s
     /// `.streamGap` top-up + a 900s `.full` sweep — see `refreshIntervals(thermal:)` below and the
     /// two `.task(id: autoRefreshEnabled)` blocks). Cross-platform — the mac window benefits
     /// identically; iOS suspends the task with the scene. The manual refresh button, iOS
@@ -314,9 +314,13 @@ struct MarketsView: View {
     /// real `ProcessInfo` (MarketsRefreshIntervalTests). Mirrors StockSageMonitor's own ×2
     /// back-off under `.serious`/`.critical` thermal state (StockSageMonitor.swift ~126-129) —
     /// same brake, same two states, applied to these two cadences instead of the monitor's one.
+    /// W3 (owner: "seamless … automatically every 30 seconds"): the `.streamGap` top-up moved
+    /// from 60s to 30s so a polled (non-streamed, e.g. Tadawul) row heals within the owner's
+    /// stated cadence; `.full` is untouched — the whole-board + catalyst-rescan sweep has no
+    /// 30s-freshness requirement and doubling its rate would double the API budget for nothing.
     nonisolated static func refreshIntervals(thermal: ProcessInfo.ThermalState) -> (streamGap: Int, full: Int) {
         let stressed = thermal == .serious || thermal == .critical
-        return stressed ? (streamGap: 120, full: 1800) : (streamGap: 60, full: 900)
+        return stressed ? (streamGap: 60, full: 1800) : (streamGap: 30, full: 900)
     }
 
     /// iOS restore flow (2026-07-27): fileImporter presentation — the document-picker
@@ -579,7 +583,7 @@ struct MarketsView: View {
             // timers. The `.streamGap` timer tops up every TRACKED symbol the live stream doesn't
             // carry (Tadawul, or a name mid-(re)connect) — `refreshStreamGap()` already filters to
             // symbols whose market is trading right now (`trackedDefs(scope: .streamGap)`), so
-            // this never polls a closed market at 60s cadence. The `.full` sweep (whole board +
+            // this never polls a closed market at 30s cadence. The `.full` sweep (whole board +
             // catalyst rescan via the `lastFullRefreshAt`-keyed task above) slows to 900s now that
             // the stream-gap timer covers the fast path. Both back off ×2 under thermal pressure —
             // `refreshIntervals(thermal:)` is the single pure home for that math (pinned in
@@ -1063,15 +1067,21 @@ struct MarketsView: View {
                     Eyebrow(text: "Signals & Portfolio")
                     #endif
                 }
-                Text(headerSubtitle)
-                    .font(.system(size: mvFont11)).foregroundStyle(.secondary)
-                    // Bound the wrap: this string grows to a full freshness sentence, and
-                    // unbounded it took three lines and shoved the clocks off the header.
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentTransition(.opacity)
-                    .animation(DS.Motion.smooth, value: headerSubtitle)
+                // W3: TimelineView ticks the LIVE branch's "updated Ns ago" every second
+                // (headerSubtitle(now:) — the stale/cached/sample branches recompute identically
+                // each tick since they don't read `now`, so this costs nothing extra for them).
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let text = headerSubtitle(now: context.date)
+                    Text(text)
+                        .font(.system(size: mvFont11)).foregroundStyle(.secondary)
+                        // Bound the wrap: this string grows to a full freshness sentence, and
+                        // unbounded it took three lines and shoved the clocks off the header.
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.opacity)
+                        .animation(DS.Motion.smooth, value: text)
+                }
                 // Extension batch (2026-07-16): schedule-state clock for both markets — a
                 // SCHEDULE readout (holidays not modeled; the caveat is in its .help), never
                 // a data-freshness claim (that stays with the quote banner).
@@ -1133,18 +1143,24 @@ struct MarketsView: View {
 
     /// Live status line: once a real feed lands, show the freshness + market count;
     /// otherwise the educational tagline.
-    private var headerSubtitle: String {
+    /// W3 (owner: "live prices … seamless … update automatically every 30 seconds"): the LIVE
+    /// case's "updated …" fragment counts up instead of showing a frozen clock-face time, so a
+    /// glance tells you the feed is genuinely still moving. `now` is threaded in (never an
+    /// internal `Date()`) so the SAME instant drives both the staleness check and the counter —
+    /// they can't disagree — and so this is directly testable. The "Last close …"/"Price age
+    /// unknown" (stale) and cached/sample branches below are UNTOUCHED — only the live line ticks.
+    private func headerSubtitle(now: Date) -> String {
         if !store.isSampleData, let when = store.lastUpdated {
             // Reuse the same FAIL-CLOSED staleness logic as liveBanner (review item Q8, 2026-07-28)
             // so the header and banner never contradict, and an unknown asOf never reads as live.
             let asOf = store.closeableQuoteAsOf ?? store.quoteAsOf
-            let stale = Self.freshnessStale(asOf: asOf, now: Date())
+            let stale = Self.freshnessStale(asOf: asOf, now: now)
             if stale, let asOf {
                 return "Last close · \(StockSageUniverse.marketCount) market groups · as of \(asOf.formatted(date: .abbreviated, time: .shortened))"
             } else if stale {
                 return "Price age unknown · \(StockSageUniverse.marketCount) market groups · refresh for live"
             }
-            return "Live · \(StockSageUniverse.marketCount) market groups · updated \(Self.timeFormatter.string(from: when))"
+            return "Live · \(StockSageUniverse.marketCount) market groups · \(Self.updatedAgoLabel(since: when, now: now))"
         }
         if store.loadedFromCache, let saved = store.cacheSavedAt {
             // Use a date-aware format so a Friday cache opened Monday isn't shown as just "16:42".
@@ -1164,6 +1180,16 @@ struct MarketsView: View {
             return "⚠︎ SAMPLE prices (not real) — tap ↻ to load live data"
         }
         return "Rule-based momentum signals · educational, not financial advice"
+    }
+
+    /// Pure formatter behind the ticking header "updated …" line (W3) — how long ago the last
+    /// live quote landed, rounded down to whole seconds/minutes. `nonisolated static` and
+    /// side-effect-free (no internal `Date()`) so it's directly unit-testable
+    /// (MarketsUpdatedAgoLabelTests) without a running TimelineView or a real wall clock.
+    nonisolated static func updatedAgoLabel(since when: Date, now: Date) -> String {
+        let secs = max(0, Int(now.timeIntervalSince(when)))
+        if secs < 60 { return "updated \(secs)s ago" }
+        return "updated \(secs / 60)m ago"
     }
 
     /// Pulsing dot shown ONLY while the socket is genuinely open — bound to isStreaming, so it
@@ -2103,11 +2129,15 @@ struct MarketsView: View {
                     .font(.system(size: mvFont14, weight: .semibold)).foregroundStyle(.white)
                     .contentTransition(.numericText())
                     .animation(DS.Motion.smooth, value: value)
+                    // Keyed on the underlying quote price, not `value` (= price × shares) — the
+                    // spec's "keyed on the price value's direction", not the scaled holding value.
+                    .priceFlash(price)
                 if price != nil {
                     Text((up ? "+" : "") + adaptivePrice(pl))
                         .font(.caption).foregroundStyle(Self.signedMetricColor(positive: up))
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: pl)
+                        .priceFlash(price)
                 }
             }
             .animation(DS.Motion.smooth, value: up)
@@ -4316,6 +4346,7 @@ struct MarketsView: View {
                         .font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: p)
+                        .priceFlash(p)
                 }
                 HStack(spacing: 3) {
                     if !isNew {
@@ -4327,6 +4358,9 @@ struct MarketsView: View {
                         .font(.system(size: mvFont12, weight: .medium))
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: change)
+                        // Keyed on the same price the neighboring price Text flashes on — the
+                        // change% moves in lockstep with price, so one direction serves both.
+                        .priceFlash(sym.latest?.price)
                 }
                 .foregroundStyle(isNew ? Color.secondary : (flat ? Color.secondary : Self.signedMetricColor(positive: up)))
             }
@@ -5485,9 +5519,9 @@ struct MarketsView: View {
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
                 // it can never contradict it; live path ages THIS symbol's own priceAsOf.
                 if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
-                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
+                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary, flash: idea.price)
                 } else {
-                    ideaMetric("Price", adaptivePrice(idea.price))
+                    ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
                         .task(id: idea.symbol) {
                             // SEC public disclosure, fetched only for the sheet the owner actually
                             // opened. US listings only; .SR returns nil/[] and renders nothing.
@@ -5666,9 +5700,9 @@ struct MarketsView: View {
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
                 // it can never contradict it; live path ages THIS symbol's own priceAsOf.
                 if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date()) {
-                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary)
+                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary, flash: idea.price)
                 } else {
-                    ideaMetric("Price", adaptivePrice(idea.price))
+                    ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
                         .task(id: idea.symbol) {
                             // SEC public disclosure, fetched only for the sheet the owner actually
                             // opened. US listings only; .SR returns nil/[] and renders nothing.
@@ -8240,7 +8274,7 @@ struct MarketsView: View {
     /// HStack — the ViewThatFits fallback that keeps macOS byte-identical.
     @ViewBuilder
     private func planNumericsMetrics(_ idea: StockSageIdea, a: TradeAdvice) -> some View {
-        ideaMetric("Price", adaptivePrice(idea.price))
+        ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
         if let s = a.stopPrice {
             // Signed distance-to-invalidation, same convention as the board card/best-opportunity
             // card: raw (stop/price − 1)×100, negative for longs, positive for shorts, no abs().
@@ -8500,7 +8534,7 @@ struct MarketsView: View {
                     HStack(spacing: 14) { planNumericsMetrics(idea, a: a) }
                     VStack(alignment: .leading, spacing: IdeaSpace.stack) {
                         HStack(spacing: 14) {
-                            ideaMetric("Price", adaptivePrice(idea.price))
+                            ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
                             if let s = a.stopPrice {
                                 if idea.price > 0 {
                                     let stopDistPct = (s / idea.price - 1) * 100
@@ -9480,8 +9514,13 @@ struct MarketsView: View {
     // whenever a caller passes it; every call site that omits `sub` renders exactly as the
     // original ideaMetric always has (label as-is at mvFont9, value at mvFont12_5/semibold/color,
     // minimumScaleFactor 0.75).
+    /// `flash` (W3, owner: "seamless … look cool"): the RAW numeric price behind a "Price"
+    /// call site only — every other caller (Target, Stop, EV, Vel., R, …) leaves it nil, which
+    /// keeps `.animation(value:)` permanently inert (nil never changes) and `.contentTransition`
+    /// dormant with it, so this is byte-identical for every non-Price metric on the board.
     private func ideaMetric(_ label: String, _ value: String, color: Color = .white,
-                            sub: String? = nil, subColor: Color = DS.Palette.successSoft) -> some View {
+                            sub: String? = nil, subColor: Color = DS.Palette.successSoft,
+                            flash: Double? = nil) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(sub != nil ? label.uppercased() : label)
                 .font(.system(size: sub != nil ? mvFont8 : mvFont9, weight: .semibold))
@@ -9492,12 +9531,18 @@ struct MarketsView: View {
                 // scale floor — give it the same escape hatch as the sibling branch below.
                 Text(value).font(.system(size: mvFont14, weight: .bold, design: .rounded))
                     .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.75)
+                    .contentTransition(.numericText())
+                    .animation(DS.Motion.smooth, value: flash)
+                    .priceFlash(flash)
                 Text(sub).font(.system(size: mvFont8)).foregroundStyle(subColor).lineLimit(1).minimumScaleFactor(0.8)
             } else {
                 Text(value).font(.system(size: mvFont12_5, weight: .semibold, design: .rounded))
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
+                    .contentTransition(.numericText())
+                    .animation(DS.Motion.smooth, value: flash)
+                    .priceFlash(flash)
             }
         }
         .accessibilityElement(children: .ignore)
