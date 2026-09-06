@@ -1974,29 +1974,38 @@ struct MarketsView: View {
     }
 
     private var addPositionForm: some View {
-        HStack(spacing: DS.Space.sm) {
-            field($newSymbol, "Symbol", width: 84, focus: .symbol)
-            field($newShares, "Shares", width: 66, focus: .shares, numeric: true)
-            field($newCost, "Cost/sh", width: 72, focus: .cost, numeric: true)
-            Button {
-                // Validated parse — an unparseable cost ("1,234.56" pasted from a broker, a blank
-                // field) must never default to $0 basis: that renders the ENTIRE value as fake
-                // green profit and inflates the headline Total P&L. The disabled gate below makes
-                // this unreachable with invalid input; the guard is belt-and-suspenders.
-                guard let sh = StockSageInput.positiveAmount(newShares),
-                      let cost = StockSageInput.nonNegativeAmount(newCost) else { return }
-                portfolio.add(symbol: newSymbol, shares: sh, costBasis: cost)
-                newSymbol = ""; newShares = ""; newCost = ""
-            } label: {
-                Image(systemName: "plus.circle.fill").font(.system(size: mvFont20)).foregroundStyle(DS.Palette.accent)
-            }
-            .buttonStyle(LuxPressStyle())
-            .help("Add holding").accessibilityLabel("Add holding")
-            .disabled(newSymbol.trimmingCharacters(in: .whitespaces).isEmpty
-                      || StockSageInput.positiveAmount(newShares) == nil
-                      || StockSageInput.nonNegativeAmount(newCost) == nil)
-            Spacer()
+        // Fixup 2026-09-06 (adversarial review of commit 852cb72): same missing ViewThatFits
+        // fallback as priceAlertFormFields — this row's trailing Spacer absorbs slack space
+        // but does not stop the 3 field()s + button from exceeding the container's width at
+        // large Dynamic Type, since minWidth (review #16) only grows the fields' floor.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: DS.Space.sm) { addPositionFormFields }
+            VStack(alignment: .leading, spacing: DS.Space.sm) { addPositionFormFields }
         }
+    }
+
+    @ViewBuilder private var addPositionFormFields: some View {
+        field($newSymbol, "Symbol", width: 84, focus: .symbol)
+        field($newShares, "Shares", width: 66, focus: .shares, numeric: true)
+        field($newCost, "Cost/sh", width: 72, focus: .cost, numeric: true)
+        Button {
+            // Validated parse — an unparseable cost ("1,234.56" pasted from a broker, a blank
+            // field) must never default to $0 basis: that renders the ENTIRE value as fake
+            // green profit and inflates the headline Total P&L. The disabled gate below makes
+            // this unreachable with invalid input; the guard is belt-and-suspenders.
+            guard let sh = StockSageInput.positiveAmount(newShares),
+                  let cost = StockSageInput.nonNegativeAmount(newCost) else { return }
+            portfolio.add(symbol: newSymbol, shares: sh, costBasis: cost)
+            newSymbol = ""; newShares = ""; newCost = ""
+        } label: {
+            Image(systemName: "plus.circle.fill").font(.system(size: mvFont20)).foregroundStyle(DS.Palette.accent)
+        }
+        .buttonStyle(LuxPressStyle())
+        .help("Add holding").accessibilityLabel("Add holding")
+        .disabled(newSymbol.trimmingCharacters(in: .whitespaces).isEmpty
+                  || StockSageInput.positiveAmount(newShares) == nil
+                  || StockSageInput.nonNegativeAmount(newCost) == nil)
+        Spacer()
     }
 
     private func field(_ text: Binding<String>, _ placeholder: String, width: CGFloat, focus: AddField, numeric: Bool = false) -> some View {
@@ -3333,11 +3342,13 @@ struct MarketsView: View {
                     .accessibilityLabel("Trade side")
                 Spacer(minLength: 0)
             }
-            HStack(spacing: DS.Space.sm) {
-                journalField("Entry", text: $draftEntry, numeric: true)
-                journalField("Stop", text: $draftStop, numeric: true)
-                journalField("Target", text: $draftTarget, numeric: true)
-                journalField("Shares", text: $draftShares, numeric: true)
+            // Fixup 2026-09-06 (adversarial review of commit 852cb72): this 4-field row had
+            // no ViewThatFits fallback like priceAlertFormFields got, and no Spacer either —
+            // so the review's minWidth/maxWidth widening on journalField had nothing to
+            // absorb overflow at large Dynamic Type. Same row/column wrap as priceAlertsPanel.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DS.Space.sm) { draftEntryStopTargetSharesFields }
+                VStack(alignment: .leading, spacing: DS.Space.sm) { draftEntryStopTargetSharesFields }
             }
             HStack(spacing: DS.Space.sm) {
                 journalField("Planned px (opt)", text: $draftPlannedEntry, width: 100, numeric: true)
@@ -3392,6 +3403,16 @@ struct MarketsView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
+    }
+
+    // Fixup 2026-09-06: extracted so the Entry/Stop/Target/Shares fields can be laid out as a
+    // row (HStack) or a column (VStack) via ViewThatFits in addTradeForm — same pattern as
+    // priceAlertFormFields.
+    @ViewBuilder private var draftEntryStopTargetSharesFields: some View {
+        journalField("Entry", text: $draftEntry, numeric: true)
+        journalField("Stop", text: $draftStop, numeric: true)
+        journalField("Target", text: $draftTarget, numeric: true)
+        journalField("Shares", text: $draftShares, numeric: true)
     }
 
     private func journalField(_ placeholder: String, text: Binding<String>, width: CGFloat = 70, numeric: Bool = false) -> some View {
@@ -3722,11 +3743,12 @@ struct MarketsView: View {
                 }
                 Spacer()
             }
-            HStack(spacing: DS.Space.sm) {
-                kellyField($kellyWinRate, "Win %", width: 56)
-                kellyField($kellyPayoff, "Payoff R", width: 64)
-                kellyField($kellyAccount, "Account $", width: 92)
-                Spacer(minLength: 0)
+            // Fixup 2026-09-06 (adversarial review of commit 852cb72): same missing
+            // ViewThatFits fallback as priceAlertFormFields — this row's 3 kellyField()s had
+            // no wrap to fall back to at large Dynamic Type.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DS.Space.sm) { kellySizerFields }
+                VStack(alignment: .leading, spacing: DS.Space.sm) { kellySizerFields }
             }
             if let bt = store.backtest, bt.isSignificant,
                let inp = StockSageKelly.inputs(winRate: bt.winRate, avgWinR: bt.avgWinR, avgLossR: bt.avgLossR) {
@@ -3787,6 +3809,16 @@ struct MarketsView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+    }
+
+    // Fixup 2026-09-06: extracted so the Win%/Payoff/Account fields can be laid out as a row
+    // (HStack) or a column (VStack) via ViewThatFits in kellySizerPanel — same pattern as
+    // priceAlertFormFields.
+    @ViewBuilder private var kellySizerFields: some View {
+        kellyField($kellyWinRate, "Win %", width: 56)
+        kellyField($kellyPayoff, "Payoff R", width: 64)
+        kellyField($kellyAccount, "Account $", width: 92)
+        Spacer(minLength: 0)
     }
 
     private func kellyField(_ text: Binding<String>, _ label: String, width: CGFloat) -> some View {
@@ -7476,21 +7508,43 @@ struct MarketsView: View {
         }
     }
 
+    // Fixup 2026-09-06: extracted so positionSizerPanel's header icon/title and its Acct
+    // $/Risk % fields can be recombined into a row or a column via ViewThatFits below —
+    // same pattern as priceAlertFormFields.
+    @ViewBuilder private var positionSizerHeaderIcon: some View {
+        Image(systemName: "function").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.accent)
+        Text("Position size").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    @ViewBuilder private var positionSizerAcctRiskFields: some View {
+        Text("Acct $").font(.system(size: mvFont9)).foregroundStyle(.secondary)
+        journalField("10000", text: $sizerAccount, width: 72)
+            .accessibilityLabel("Account size in dollars")
+        Text("Risk %").font(.system(size: mvFont9)).foregroundStyle(.secondary)
+        journalField("1", text: $sizerRiskPct, width: 40)
+            .accessibilityLabel("Risk percent per trade")
+    }
+
     @ViewBuilder private func positionSizerPanel(_ idea: StockSageIdea) -> some View {
         if let stop = idea.advice.stopPrice {
             let entry = idea.price
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "function").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.accent)
-                    Text("Position size").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white)
-                        .accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    Text("Acct $").font(.system(size: mvFont9)).foregroundStyle(.secondary)
-                    journalField("10000", text: $sizerAccount, width: 72)
-                        .accessibilityLabel("Account size in dollars")
-                    Text("Risk %").font(.system(size: mvFont9)).foregroundStyle(.secondary)
-                    journalField("1", text: $sizerRiskPct, width: 40)
-                        .accessibilityLabel("Risk percent per trade")
+                // Fixup 2026-09-06 (adversarial review of commit 852cb72): the icon/title plus
+                // 2 journalField()s sat in one HStack with no wrap fallback — the review's
+                // minWidth/maxWidth widening could overflow this row at large Dynamic Type.
+                // Same ViewThatFits row/column pattern as priceAlertFormFields; the column path
+                // puts the header label on its own line above the Acct $/Risk % fields.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) {
+                        positionSizerHeaderIcon
+                        Spacer()
+                        positionSizerAcctRiskFields
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) { positionSizerHeaderIcon; Spacer() }
+                        HStack(spacing: 6) { positionSizerAcctRiskFields }
+                    }
                 }
                 if let acct = parsedAccount, let rf = parsedRiskFraction,
                    let ps = sizedPosition(account: acct, riskFraction: rf, symbol: idea.symbol, entry: entry, stop: stop) {
