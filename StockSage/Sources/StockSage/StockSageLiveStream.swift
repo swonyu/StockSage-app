@@ -81,6 +81,45 @@ final class StockSageLiveStream: ObservableObject {
         min(30, pow(2, Double(max(0, attempt))))
     }
 
+    /// Status-frame classifier. EODHD's control frames carry `status_code`; nil means this is not
+    /// a status frame. Kept separate from `parseTick` (which correctly rejects them) so the
+    /// connection layer can honour `isStreaming`'s "open AND AUTHORIZED" contract. (Review Q5,
+    /// 2026-07-28.)
+    nonisolated static func authStatus(_ text: String) -> Int? {
+        guard let data = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if let c = obj["status_code"] as? Int { return c }
+        if let s = obj["status_code"] as? String { return Int(s) }
+        return nil
+    }
+
+    /// How long the socket may go without ANY frame before we stop claiming LIVE and re-probe.
+    /// A quiet market sends no trades and a NAT/Wi-Fi handover leaves a half-open socket — in both
+    /// cases `receive` simply never returns, so `.failure` (the only thing that cleared
+    /// `isStreaming`) never fires and the pulsing dot lies indefinitely. (Review Q5, 2026-07-28.)
+    private static let silenceTimeout = 45
+    private var watchdog: Task<Void, Never>?
+
+    private func armWatchdog() {
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.silenceTimeout))
+            guard !Task.isCancelled, let self, self.wantsConnection, let t = self.task else { return }
+            // A ping proves the socket is alive without claiming any price moved.
+            t.sendPing { [weak self] error in
+                Task { @MainActor in
+                    guard let self, self.task === t else { return }
+                    if error != nil {
+                        self.isStreaming = false
+                        self.openSocket()
+                    } else {
+                        self.armWatchdog()
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Connection lifecycle
 
     func start(symbols: [String]) {
@@ -94,6 +133,8 @@ final class StockSageLiveStream: ObservableObject {
 
     func stop() {
         wantsConnection = false
+        watchdog?.cancel()
+        watchdog = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         isStreaming = false
@@ -101,6 +142,8 @@ final class StockSageLiveStream: ObservableObject {
     }
 
     private func openSocket() {
+        watchdog?.cancel()
+        watchdog = nil
         task?.cancel(with: .goingAway, reason: nil)
         let key = StockSageEODHD.apiKey
         guard !key.isEmpty, let url = URL(string: "\(Self.host)?api_token=\(key)") else { return }
@@ -126,13 +169,19 @@ final class StockSageLiveStream: ObservableObject {
                 guard let self, self.task === t else { return }
                 switch result {
                 case .success(let message):
-                    self.isStreaming = true
                     self.reconnectAttempt = 0
-                    if case .string(let text) = message, let tick = Self.parseTick(text) {
-                        self.lastTickAt = Date()
-                        StockSageStore.shared.applyLiveTick(symbol: tick.symbol, price: tick.price,
-                                                            at: tick.timestamp)
+                    if case .string(let text) = message {
+                        if let status = Self.authStatus(text) {
+                            // ONLY an explicit 200 means authorized — the `isStreaming` contract.
+                            self.isStreaming = (status == 200)
+                        } else if let tick = Self.parseTick(text) {
+                            self.isStreaming = true
+                            self.lastTickAt = Date()
+                            StockSageStore.shared.applyLiveTick(symbol: tick.symbol, price: tick.price,
+                                                                at: tick.timestamp)
+                        }
                     }
+                    self.armWatchdog()
                     self.receiveLoop()
                 case .failure:
                     self.isStreaming = false

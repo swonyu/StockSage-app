@@ -37,6 +37,12 @@ struct StockSageLiveStreamTests {
         #expect(L.parseTick(#"{"status_code":401,"message":"Unauthorized"}"#) == nil)
     }
 
+    @Test func statusFramesClassifyAndTradeFramesDoNot() {
+        #expect(L.authStatus(#"{"status_code":200,"message":"Authorized"}"#) == 200)
+        #expect(L.authStatus(#"{"status_code":401,"message":"Unauthorized"}"#) == 401)
+        #expect(L.authStatus(#"{"s":"AAPL","p":336.91,"t":1785184080000}"#) == nil)
+    }
+
     @Test("malformed, empty, zero and non-finite prices are all rejected")
     func rejectsGarbage() {
         #expect(L.parseTick("") == nil)
