@@ -51,20 +51,31 @@ enum StockSageEarnings {
     // the Markets fence and is intentionally left untouched.
     private static let ua = StockSageQuoteService.ua
 
+    /// Whether a `calendarEvents` request was actually ANSWERED by the provider, distinct from
+    /// never having asked at all (blocker fix, 2026-09-06). Before this, `fetchNextEarnings`
+    /// returned `nil` identically for "asked, got a 200 with no date" AND for "never asked —
+    /// external access off / non-equity / timeout / non-200 / parse failure", so the store
+    /// stamped a dated "none known" record for cases where nothing was ever actually observed.
+    /// `.answered(date)` — the provider was asked and responded 200; `date` is nil when the body
+    /// carried no earnings date, non-nil otherwise. `.unavailable` — no observation was made at
+    /// all; the caller must NOT stamp anything (honesty floor: unknown stays unknown).
+    enum EarningsFetch: Sendable { case answered(Date?), unavailable }
+
     /// Best-effort next-earnings date via Yahoo quoteSummary `calendarEvents`.
-    /// Equities only (FX/crypto/index have no earnings); nil when access is off or
-    /// Yahoo declines — the warning simply doesn't appear, never blocks.
-    static func fetchNextEarnings(for symbol: String) async -> Date? {
-        guard ToolPolicy.isExternalAllowed else { return nil }
-        guard StockSageAllocation.assetClass(symbol) == "Equity" else { return nil }
+    /// Equities only (FX/crypto/index have no earnings — `.unavailable`, never stamped as
+    /// "checked"); `.unavailable` when access is off or the request never got a 200 back — the
+    /// warning simply doesn't appear, never blocks.
+    static func fetchNextEarningsOutcome(for symbol: String) async -> EarningsFetch {
+        guard ToolPolicy.isExternalAllowed else { return .unavailable }
+        guard StockSageAllocation.assetClass(symbol) == "Equity" else { return .unavailable }
         guard let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
               let url = URL(string: "https://query1.finance.yahoo.com/v10/finance/quoteSummary/\(encoded)?modules=calendarEvents")
-        else { return nil }
+        else { return .unavailable }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return parseEarningsDate(data)
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return .unavailable }
+        return .answered(parseEarningsDate(data))   // a 200 body IS an answer, date or not
     }
 
     /// Parse the soonest earnings epoch from a quoteSummary `calendarEvents` body.

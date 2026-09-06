@@ -112,25 +112,32 @@ struct StockSageCatalystWatchTests {
         let entries = W.calendar([uncheckedBrief, checkedBrief], now: calNow, calendar: utc)
         #expect(entries.count == 1)                                       // n=1: only the dated (checked) one
         #expect(entries[0].idea.symbol == "CHKD")
-        #expect(entries[0].bucket == .today)
+        // Major fix 2026-09-06: a dated "none known" record's date is WHEN WE ASKED, not an
+        // event — it must land in its own dedicated bucket, never `.today` (where it would sort
+        // ahead of a real catalyst also due today).
+        #expect(entries[0].bucket == .checkedNoCatalyst)
         #expect(entries[0].isNegativeRecord)                              // distinct in the pure data from a real catalyst
         #expect(!entries.contains { $0.idea.symbol == "UNCHK" })          // never checked ⇒ never on the calendar
     }
 
-    @Test("checkedAt straddling the thisWeek/later boundary (day 7 vs day 8) buckets correctly")
-    func noneRecordBoundaryStraddle() {
+    @Test("a real earnings date straddling the thisWeek/later boundary (day 7 vs day 8) buckets correctly")
+    func earningsDateBoundaryStraddle() {
         // Genuine straddle of `bucket(for:)`'s `case 2...7` / `default` boundary: day 7 is the
-        // LAST day still `.thisWeek`, day 8 is the FIRST day that falls to `.later`.
+        // LAST day still `.thisWeek`, day 8 is the FIRST day that falls to `.later`. Re-pointed
+        // (major fix 2026-09-06) from `earningsCheckedAt` to a real `earningsDate` — a checkedAt
+        // "none known" record no longer occupies `bucket(for:)`'s real-event buckets at all (see
+        // `noneRecordCalendarPresenceHingesOnCheckedAt` above), so this straddle now pins the
+        // `.earnings` item it was always really testing.
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(identifier: "UTC")!
         let calNow = utc.startOfDay(for: Self.now)
 
-        func checkedBrief(_ symbol: String, dayOffset: Double) -> W.Brief {
+        func earningsBrief(_ symbol: String, dayOffset: Double) -> W.Brief {
             W.brief(for: SageFix.idea(symbol, conviction: 0.5),
-                   inputs: W.Inputs(earningsCheckedAt: calNow.addingTimeInterval(dayOffset * 86_400), now: calNow))
+                   inputs: W.Inputs(earningsDate: calNow.addingTimeInterval(dayOffset * 86_400), now: calNow))
         }
-        let atSeven = checkedBrief("WK7", dayOffset: 7)     // still `.thisWeek`
-        let atEight = checkedBrief("D8", dayOffset: 8)      // first day that is `.later`
+        let atSeven = earningsBrief("WK7", dayOffset: 7)     // still `.thisWeek`
+        let atEight = earningsBrief("D8", dayOffset: 8)      // first day that is `.later`
         let entries = W.calendar([atSeven, atEight], now: calNow, calendar: utc)
         #expect(entries.map(\.idea.symbol) == ["WK7", "D8"])              // sorted by date
         #expect(entries.map(\.bucket) == [.thisWeek, .later])

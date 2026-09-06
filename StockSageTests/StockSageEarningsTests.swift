@@ -139,14 +139,15 @@ struct StockSageEarningsTests {
     }
 
     @Test func earningsRefreshOutcomeStampsCheckedAtOnANilFetch() async {
-        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { nil }
+        // `.answered(nil)`: the provider WAS asked and responded 200, just with no date.
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { .answered(nil) }
         #expect(outcome?.checkedAt == now)
         #expect(outcome?.earningsDate == nil)
     }
 
     @Test func earningsRefreshOutcomeStampsCheckedAtOnADatedFetch() async {
         let found = now.addingTimeInterval(10 * 86_400)
-        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { found }
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { .answered(found) }
         #expect(outcome?.checkedAt == now)
         #expect(outcome?.earningsDate == found)
     }
@@ -156,7 +157,7 @@ struct StockSageEarningsTests {
         // in the past — the unchanged `> -86_400` fetch guard treats that as unusable, yet we DID
         // ask, so checkedAt must still be stamped (never left nil, which would re-ask forever).
         let stale = now.addingTimeInterval(-2 * 86_400)
-        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { stale }
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { .answered(stale) }
         #expect(outcome?.checkedAt == now)
         #expect(outcome?.earningsDate == nil)
     }
@@ -167,10 +168,37 @@ struct StockSageEarningsTests {
         var fetchWasCalled = false
         let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: checkedAt, now: stillFresh) {
             fetchWasCalled = true
-            return stillFresh.addingTimeInterval(86_400)
+            return .answered(stillFresh.addingTimeInterval(86_400))
         }
         #expect(outcome == nil, "Inside the TTL, refreshEarnings must no-op, not re-stamp")
         #expect(!fetchWasCalled, "The TTL guard must short-circuit BEFORE the fetch closure ever runs")
+    }
+
+    // MARK: Blocker fix 2026-09-06 — a FAILED request must never be stamped as an observation.
+    //
+    // Before this fix, `fetchNextEarnings` returned `nil` identically for "asked, 200, no date"
+    // AND for "never asked" (external access off, non-equity, timeout, non-200, parse failure),
+    // so the store stamped a dated "none known" record for a request that was never answered.
+    // `.unavailable` is the ONLY outcome that must leave `checkedAt` untouched (returns nil).
+
+    @Test func earningsRefreshOutcomeStampsNothingWhenNeverAnswered() async {
+        var fetchWasCalled = false
+        let outcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) {
+            fetchWasCalled = true
+            return .unavailable
+        }
+        #expect(fetchWasCalled, "the fetch DID run (TTL passed) — it just never got an answer")
+        #expect(outcome == nil, "an unanswered request must stamp NOTHING, not a dated negative")
+    }
+
+    @Test func earningsRefreshOutcomeUnavailableLeavesCheckedAtNilSoTheNextSweepRetries() async {
+        // Never-answered must not poison the TTL gate: the next sweep should see checkedAt still
+        // nil (never stamped) and immediately re-ask, rather than waiting out a 24h TTL earned by
+        // a request that was never actually answered.
+        let firstOutcome = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) { .unavailable }
+        #expect(firstOutcome == nil)
+        let stillNeverChecked: Date? = firstOutcome?.checkedAt   // nil: nothing to carry forward
+        #expect(StockSageStore.shouldRefreshEarnings(checkedAt: stillNeverChecked, now: now.addingTimeInterval(1)))
     }
 
     // MARK: - A2: catalystRecords / applyCatalystRecords disk round trip

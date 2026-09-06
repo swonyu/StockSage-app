@@ -167,7 +167,7 @@ enum StockSageQuoteService {
     nonisolated static func fetchHistory(_ symbol: String, range: String = "1y", interval: String = "1d") async -> StockSagePriceHistory? {
         guard ToolPolicy.isExternalAllowed else { return nil }
         // .urlHostAllowed for the same reason as fetchOne (F38 2026-07-02) — stricter set,
-        // path-safe for all curated symbols, consistent with StockSageEarnings.fetchNextEarnings.
+        // path-safe for all curated symbols, consistent with StockSageEarnings.fetchNextEarningsOutcome.
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
         guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=\(range)&interval=\(interval)") else { return nil }
         var req = URLRequest(url: url)

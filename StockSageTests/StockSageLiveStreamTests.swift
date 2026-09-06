@@ -143,4 +143,40 @@ struct StockSageLiveStreamTests {
         #expect(L.chunked(symbols, limit: 0) == [symbols])
         #expect(L.chunked(symbols, limit: -1) == [symbols])
     }
+
+    // MARK: subscribedSymbols — blocker fix 2026-09-06: `subscribed` must reflect only
+    // AUTHORIZED-and-streaming connections, never a merely-requested chunk that hasn't (or never
+    // will) come up — or StockSageStore.streamGapCandidates wrongly treats it as covered.
+
+    @Test("a streaming connection's symbols are included; a non-streaming one's are not")
+    func subscribedSymbolsOnlyCountsStreamingConnections() {
+        let result = L.subscribedSymbols(from: [
+            (symbols: ["AAPL", "MSFT"], isStreaming: true),
+            (symbols: ["TSLA"], isStreaming: false),   // still connecting, or dropped/backing off
+        ])
+        #expect(result == ["AAPL", "MSFT"])
+    }
+
+    @Test("no connection streaming yields an empty subscribed set")
+    func subscribedSymbolsEmptyWhenNothingStreaming() {
+        let result = L.subscribedSymbols(from: [
+            (symbols: ["AAPL"], isStreaming: false),
+            (symbols: ["MSFT"], isStreaming: false),
+        ])
+        #expect(result.isEmpty)
+    }
+
+    @Test("every connection streaming unions all their symbols")
+    func subscribedSymbolsUnionsAllStreamingChunks() {
+        let result = L.subscribedSymbols(from: [
+            (symbols: ["AAPL"], isStreaming: true),
+            (symbols: ["MSFT", "NVDA"], isStreaming: true),
+        ])
+        #expect(result == ["AAPL", "MSFT", "NVDA"])
+    }
+
+    @Test("no connections at all yields an empty subscribed set")
+    func subscribedSymbolsEmptyWhenNoConnections() {
+        #expect(L.subscribedSymbols(from: []).isEmpty)
+    }
 }

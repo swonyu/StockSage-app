@@ -306,13 +306,22 @@ enum StockSageCatalystWatch {
 
     enum Bucket: String, CaseIterable, Sendable {
         case today, tomorrow, thisWeek, later, undated
+        /// A dated "none known as of <checkedAt>" negative record — major fix 2026-09-06.
+        /// `checkedAt` is WHEN WE ASKED, not an event date, so it must never share `.today` (or
+        /// any real-event bucket) with an actual catalyst: since `checkedAt` ≈ now for every
+        /// freshly-swept symbol, `refreshEarningsForTracked`'s ~901-name daily sweep used to
+        /// flood `.today` with negative records that sorted (ascending date) AHEAD of every real
+        /// catalyst due today. Ordered last in `allCases` so it always renders as its own
+        /// trailing section, never interleaved with the real-event buckets above it.
+        case checkedNoCatalyst
         nonisolated var title: String {
             switch self {
-            case .today:     return "Today"
-            case .tomorrow:  return "Tomorrow"
-            case .thisWeek:  return "This week"
-            case .later:     return "Later"
-            case .undated:   return "No date on file"
+            case .today:             return "Today"
+            case .tomorrow:          return "Tomorrow"
+            case .thisWeek:          return "This week"
+            case .later:             return "Later"
+            case .undated:           return "No date on file"
+            case .checkedNoCatalyst: return "Checked — no catalyst"
             }
         }
     }
@@ -355,13 +364,16 @@ enum StockSageCatalystWatch {
         var dated: [(date: Date, entry: CalendarEntry)] = []
         var undated: [(weight: Weight, entry: CalendarEntry)] = []
         for brief in briefs {
-            // Not filtered by `kind` here: a dated "none known as of <date>" record (checkedAt
-            // set) is a real, dated entry and lands in its bucket exactly like any other; only an
-            // UNDATED `.none` (below) is excluded, since it says nothing was ever checked.
+            // A dated "none known as of <date>" record (checkedAt set) IS a real, dated entry —
+            // included below — but its date is WHEN WE ASKED, not an event, so it routes to the
+            // dedicated `.checkedNoCatalyst` bucket instead of `bucket(for:)`'s real-event
+            // buckets (major fix 2026-09-06). Only an UNDATED `.none` (below) is excluded
+            // entirely, since it says nothing was ever checked.
             for item in brief.all {
                 if let date = item.date {
-                    let b = bucket(for: date, now: now, calendar: calendar)
-                    dated.append((date, CalendarEntry(bucket: b, item: item, idea: brief.idea, isNegativeRecord: item.kind == .none)))
+                    let isNegative = item.kind == .none
+                    let b = isNegative ? Bucket.checkedNoCatalyst : bucket(for: date, now: now, calendar: calendar)
+                    dated.append((date, CalendarEntry(bucket: b, item: item, idea: brief.idea, isNegativeRecord: isNegative)))
                 }
             }
             if brief.primary.date == nil, brief.primary.kind != .none {
