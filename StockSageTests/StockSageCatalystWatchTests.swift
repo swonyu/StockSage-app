@@ -75,6 +75,35 @@ struct StockSageCatalystWatchTests {
         #expect(brief.secondary.isEmpty)
     }
 
+    // MARK: (a2) a past earnings date is not resurrected as an imminent catalyst — fix pass
+    // 2026-09-06, blocker: the raw `earningsDate` fallback path used to re-derive severity from
+    // ANY non-nil date with no age check, so a date the store's F32 eviction had already dropped
+    // from the derived `earnings` dict came back as `.imminent`/"~0 days" via this fallback.
+
+    @Test("a >24h-past earnings date yields no catalyst, not a resurrected 'imminent' one")
+    func pastEarningsDateIsNotResurrected() {
+        let idea = SageFix.idea("PAST", conviction: 0.5)
+        let inputs = W.Inputs(earningsDate: days(-3), now: Self.now)   // reported 3 days ago
+        let brief = W.brief(for: idea, inputs: inputs)
+        #expect(brief.primary.kind == .none)                          // n=1 past-date case
+        #expect(brief.secondary.isEmpty)
+        let entries = W.calendar([brief], now: Self.now)
+        #expect(entries.isEmpty)                                      // no `.today` (or any) row
+    }
+
+    @Test("an earnings date exactly at the F32 boundary (-86400s) still counts, one instant later doesn't")
+    func earningsBoundaryMatchesStoreEviction() {
+        // Mirrors StockSageStore.deriveEarningsProximity's own boundary comment verbatim: the
+        // derive guard is `>= -86_400` (non-strict), so exactly -86400s is kept.
+        let atBoundary = SageFix.idea("ATB", conviction: 0.5)
+        let atBoundaryBrief = W.brief(for: atBoundary, inputs: W.Inputs(earningsDate: Self.now.addingTimeInterval(-86_400), now: Self.now))
+        #expect(atBoundaryBrief.primary.kind == .earnings)
+
+        let pastBoundary = SageFix.idea("PSTB", conviction: 0.5)
+        let pastBoundaryBrief = W.brief(for: pastBoundary, inputs: W.Inputs(earningsDate: Self.now.addingTimeInterval(-86_400.001), now: Self.now))
+        #expect(pastBoundaryBrief.primary.kind == .none)
+    }
+
     // MARK: (b) earnings why — stop math and the no-stop sentence
 
     @Test("earnings why cites the stop price and the exact -x.x% move when a stop exists")
@@ -150,5 +179,23 @@ struct StockSageCatalystWatchTests {
         let notable = W.brief(for: SageFix.idea("NOT", conviction: 0.5),
                               inputs: W.Inputs(volumeMove: volSignal(tier: .notable), now: Self.now))
         #expect(notable.primary.weight == .low)
+    }
+
+    // MARK: (f) date strings are UTC-fixed — fix pass 2026-09-06, major: bucketing already used a
+    // UTC calendar, but the headline/watch date strings were formatted in the viewer's local time
+    // zone, so a "Today" row could show a date one day off the UTC day that put it there.
+
+    @Test("earnings headline/watch dates are formatted UTC-fixed, independent of the viewer's locale/TZ")
+    func earningsDateStringsAreUTCFixed() {
+        // A literal, not a call to `W.dateStr` — pinning the FORMATTED STRING is what catches a
+        // revert to `date.formatted(date:time:)` (local TZ/locale); calling the same helper the
+        // production code calls would pass even after such a revert. Self.now = 1_757_000_000
+        // (2025-09-04T15:33:20Z); +2 days = 2025-09-06T15:33:20Z ⇒ "Sep 6, 2025" in a fixed
+        // en_US_POSIX/UTC style, verified against a standalone compile+run of the exact
+        // Date.FormatStyle this file uses (fix pass 2026-09-06).
+        let idea = SageFix.idea("TZFIX", conviction: 0.5)
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), now: Self.now))
+        #expect(brief.primary.headline.hasSuffix("(Sep 6, 2025)"))
+        #expect(brief.primary.watch.contains("Sep 6, 2025"))
     }
 }

@@ -100,6 +100,19 @@ enum StockSageCatalystWatch {
         "July", "August", "September", "October", "November", "December",
     ]
 
+    /// Fixed-locale, fixed-timezone (UTC) date formatting — every date string this file (and the
+    /// view, which calls this too) renders MUST use this, never the viewer's local time zone.
+    /// `bucket(for:)` below buckets a date's "today/tomorrow/this week" by UTC calendar day, so a
+    /// headline formatted in local time can read "7 Sep" under a "Today" bucket that was decided
+    /// against UTC's "6 Sep" (fix pass 2026-09-06: a Riyadh, UTC+3, viewer saw exactly this for an
+    /// after-close US earnings timestamp). One shared style keeps bucketing and display in sync,
+    /// and keeps the string locale-independent for pinned tests (mirrors `monthNames` above).
+    private nonisolated static let dateFormatStyle = Date.FormatStyle(
+        date: .abbreviated, time: .omitted,
+        locale: Locale(identifier: "en_US_POSIX"), timeZone: TimeZone(identifier: "UTC")!)
+
+    nonisolated static func dateStr(_ date: Date) -> String { date.formatted(dateFormatStyle) }
+
     nonisolated static let caveat =
         "Rules-based: earnings dates from Yahoo, volume moves from cached history, the regime "
         + "gauge and 1-year seasonality. Describes what is scheduled or just happened — never "
@@ -110,7 +123,13 @@ enum StockSageCatalystWatch {
     nonisolated static func brief(for idea: StockSageIdea, inputs: Inputs) -> Brief {
         var earningsSlot1: Item?
         var earningsSlot3: Item?
-        if let date = inputs.earningsDate {
+        // Guard mirrors the store's own F32 eviction boundary (StockSageStore.deriveEarningsProximity):
+        // a date more than 24h in the past is a report that already happened, not a catalyst to
+        // watch. Without this guard, once the store's DERIVED `earnings` dict evicts a stale date
+        // (F32), this engine falls back to the raw, never-pruned `earningsDates` and re-derives via
+        // `StockSageEarnings.proximity`, whose `max(0, days)` floor turns "3 days ago" back into
+        // "0 days" / `.imminent` — resurrecting exactly the bug F32 fixed (fix pass 2026-09-06).
+        if let date = inputs.earningsDate, date.timeIntervalSince(inputs.now) >= -86_400 {
             let daysUntil = inputs.earnings?.daysUntil
                 ?? StockSageEarnings.proximity(now: inputs.now, earnings: date).daysUntil
             let severity = inputs.earnings?.severity ?? StockSageEarnings.severity(daysUntil: daysUntil)
@@ -162,7 +181,7 @@ enum StockSageCatalystWatch {
 
     private nonisolated static func earningsItem(idea: StockSageIdea, date: Date, daysUntil: Int,
                                                  severity: EarningsProximity.Severity) -> Item {
-        let dateStr = date.formatted(date: .abbreviated, time: .omitted)
+        let dateStr = Self.dateStr(date)
         let headline = "Earnings in ~\(daysUntil) day\(daysUntil == 1 ? "" : "s") (\(dateStr))"
         let action = idea.advice.action
         let isLongBiased = action == .buy || action == .strongBuy || action == .hold
@@ -245,7 +264,7 @@ enum StockSageCatalystWatch {
 
     private nonisolated static func regimeItem(idea: StockSageIdea, regime: MarketRegime, gaugedAt: Date?) -> Item {
         let why = ["A board-wide risk gauge, not a read on this name: it biases size ×\(String(format: "%.2f", regime.sizingBias)); it does not predict direction."]
-        let gaugedStr = gaugedAt.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "not yet"
+        let gaugedStr = gaugedAt.map { Self.dateStr($0) } ?? "not yet"
         let watch = "A change in the gauge (last read \(gaugedStr)) changes the size, not the idea."
         let weight: Weight = regime.state == .crisis ? .high : (regime.state == .trendingBear ? .medium : .low)
         return Item(symbol: idea.symbol, kind: .regime, headline: regime.state.rawValue, date: nil, why: why,

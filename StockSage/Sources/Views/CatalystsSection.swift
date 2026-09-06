@@ -59,7 +59,13 @@ struct CatalystsSection: View {
             if !ideas.isEmpty {
                 switch mode {
                 case .cards:
-                    ForEach(briefs) { catalystCard($0, availability: availability) }
+                    // LazyVStack, not VStack — up to ~450 briefs (see `buildBriefs`), and the
+                    // Ideas tab this view mirrors already made this call (SWIFT_PITFALLS #10/#11;
+                    // fix pass 2026-09-06). The parent MarketsView scroll container is what makes
+                    // the laziness real; this view only needs to not defeat it.
+                    LazyVStack(alignment: .leading, spacing: DS.Space.md) {
+                        ForEach(briefs) { catalystCard($0, availability: availability) }
+                    }
                 case .calendar:
                     calendarBody(briefs: briefs, now: now)
                 }
@@ -197,7 +203,7 @@ struct CatalystsSection: View {
                 Text(primary.headline).font(.system(size: font12, weight: .semibold)).foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
                 if let date = primary.date {
-                    Text(date.formatted(date: .abbreviated, time: .omitted))
+                    Text(StockSageCatalystWatch.dateStr(date))
                         .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                 }
             }
@@ -228,11 +234,22 @@ struct CatalystsSection: View {
 
     @ViewBuilder
     private func secondaryChip(_ item: StockSageCatalystWatch.Item) -> some View {
-        Text(item.headline)
-            .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-            .help(item.why.joined(separator: " "))
+        // `.help` alone is hover-only — invisible on iPhone, where a demoted RVOL move (or
+        // regime/seasonality item) would otherwise show its "unvalidated"/caveat text nowhere
+        // (fix pass 2026-09-06). The caveat renders below the chip so it's visible on every
+        // platform, not only under a mouse cursor.
+        VStack(alignment: .leading, spacing: 2) {
+            Text(item.headline)
+                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+            if let caveat = item.caveat {
+                Text(caveat).font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 180, alignment: .leading)
+            }
+        }
+        .help(item.why.joined(separator: " "))
     }
 
     @ViewBuilder
@@ -356,7 +373,11 @@ struct CatalystsSection: View {
                 if !rows.isEmpty {
                     VStack(alignment: .leading, spacing: DS.Space.xs) {
                         Text(bucket.title).font(.system(size: font12, weight: .semibold)).foregroundStyle(.white)
-                        ForEach(rows) { calendarRow($0) }
+                        // Same eager-render concern as cards mode (up to ~450 rows combined
+                        // across buckets) — LazyVStack here too (fix pass 2026-09-06).
+                        LazyVStack(alignment: .leading, spacing: DS.Space.xs) {
+                            ForEach(rows) { calendarRow($0) }
+                        }
                     }
                     .padding(DS.Space.lg)
                     .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
@@ -369,7 +390,7 @@ struct CatalystsSection: View {
     @ViewBuilder
     private func calendarRow(_ entry: StockSageCatalystWatch.CalendarEntry) -> some View {
         HStack(alignment: .top, spacing: DS.Space.xs) {
-            Text(entry.item.date?.formatted(date: .abbreviated, time: .omitted) ?? "—")
+            Text(entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "—")
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                 .frame(minWidth: 64, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
@@ -379,6 +400,13 @@ struct CatalystsSection: View {
                 }
                 if let firstWhy = entry.item.why.first {
                     Text(firstWhy).font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
+                }
+                // Honesty floor: the RVOL detector is "unvalidated" and regime/seasonality carry
+                // their own caveats — the primary card already shows this (line ~165); the
+                // calendar row was the one path that dropped it (fix pass 2026-09-06).
+                if let caveat = entry.item.caveat {
+                    Text(caveat).font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
