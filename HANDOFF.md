@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Owner-requested installed build replacement — 2026-09-07 01:36 +03
+
+Owner01:34: open the new build and delete the old one. The active installed app
+was a July28 executable, without the new API settings. Quit process18626 via
+native Cmd-Q; verified no StockSage process remained before replacing anything.
+Moved only `/Applications/StockSageX.app` to
+`/Users/saleh/.Trash/StockSageX-old-20260907-0134.app` (recoverable; not purged).
+Installed the existing tested macOS app from
+`/private/tmp/stocksage-codex-m1b.qzpbNS/Build/Products/Debug/StockSageX.app`.
+Executable cmp and codesign --verify --deep --strict passed. This is d7c84a0's
+tested build:1740macOS/1738iOS, no new source changes or redundant builds.
+
+Opened the new installed app, verified only process20169 running, and opened
+Settings → Data sources. The existing saved Massive key appeared only as masked
+secure text. Native Test connection returned:
+`Connected — HTTP 200, AAPL snapshot parsed.`
+No credentials were retrieved/revealed, no second socket/process deliberately
+opened, no settings/portfolio/journal data deleted, and no model loaded. The
+older PID11897 is no longer current. Main worktree remains untouched.
+
+Separate01:32 presence-only shell check was denied again by PreToolUse; do not
+retry or bypass it. Native snapshot testing is now possible and passed, so do
+not keep calling every Massive route credential-blocked. Other endpoints still
+require individual native verification; snapshot success is not add-on access,
+store freshness, or live T/Q delivery proof. Updated API ledger holds evidence.
+M8 tracing was paused for the owner's API/build request; no M8 edits made.
+
+Owner01:37 additionally requested connecting all app AI features to Qwen. Local
+inspection found `/Users/saleh/models/salehman-qwen38-27b/config.json` declares
+Qwen3_5ForCausalLM/qwen3_5_text, bfloat16, no quantization config. No GGUF or other
+quantized config found under the owner's models directory; no Ollama/MLX/vLLM
+server process observed. Mac reports48GiB physical memory. Do not load the
+51GB BF16 checkpoint directly. Quantization/server startup remains a distinct
+resource decision under the owner's earlier save-RAM restriction; no conversion,
+download, server startup, inference request or preference change performed here.
+
 ## N09 earnings API response classification — 2026-09-07 01:24 +03
 
 Fixed the reviewed error/empty conflation without new network requests. The

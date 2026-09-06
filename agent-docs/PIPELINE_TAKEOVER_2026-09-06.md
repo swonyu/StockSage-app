@@ -13,6 +13,14 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest01:36 +03: owner explicitly authorized replacing the installed July build.
+Old app quit and moved to Trash (recoverable); new tested d7c84a0 macOS build is
+installed at `/Applications/StockSageX.app`, process20169. Native Settings → Test
+connection PASSED: HTTP200 and AAPL snapshot parsed using the saved masked key.
+See HANDOFF/API ledger. Shell credential access is still denied; do not retry it.
+Remaining paid routes need their own native checks. Prior blanket live-blocked
+notes below are historical, not proof of a missing key or broken subscription.
+
 - [x] M2 finish the Massive stream and shared quote ordering; broad device gates.
 - [ ] M2b live NBBO, measured-spread cost input, bounded on-demand tape, exchange attribution.
   - [x] Authenticated Q subscription on the existing socket; independent quote/trade clocks,

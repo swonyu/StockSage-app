@@ -3,6 +3,31 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## Latest live result — 01:36 +03
+
+Owner01:34 explicitly requested opening the new build and deleting the old one.
+The installed `/Applications/StockSageX.app` executable was from July28, not the
+tested coverage worktree. Quit its process18626 normally, verified no StockSage
+process remained, moved only that bundle to
+`/Users/saleh/.Trash/StockSageX-old-20260907-0134.app` (recoverable), and installed
+the macOS build tested at d7c84a0. Executable comparison and strict deep codesign
+verification passed. One new installed-app process20169 was running afterward.
+User data/preferences were not deleted or rewritten by the installation.
+
+The new native Settings → Data sources showed a populated SecureField. Its
+existing Test connection control returned **Connected — HTTP 200, AAPL snapshot
+parsed.** This proves the configured key works through the real native snapshot
+request/parser/settings consumer. No key was read/revealed or passed through a
+shell. Full store provenance/freshness and every other paid route remain pending;
+a snapshot pass is not proof of WebSocket delivery or add-on entitlements.
+
+This supersedes the blanket credential-blocked description for native Massive
+snapshot testing. The separate presence-only shell check at01:32 was still
+denied by PreToolUse; no hook/security change or alternate secret extraction was
+attempted. Use supported app controls for further live checks. Do not retry the
+denied credential read. The table below retains the **initial01:06 audit state**
+as history; this section is the newer evidence, not a claim that all routes work.
+
 ## Acceptance rule
 
 VERIFIED requires a dated real request using the configured integration, the
@@ -16,7 +41,7 @@ No key values, authorization headers, account data or raw provider responses are
 recorded here. Verification never authorizes real orders, paid provisioning,
 guard bypasses, a duplicate Stocks socket or loading the large local model.
 
-## Reachable source inventory
+## Reachable source inventory — initial 01:06 audit
 
 Fourteen in-tree Swift files contain URLSession/URLRequest/WebSocket or auth
 entry points. Caller search includes the store, Markets detail, Catalysts,
