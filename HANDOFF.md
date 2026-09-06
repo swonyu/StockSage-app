@@ -1,5 +1,31 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Cited narrator provenance fixed — 2026-09-07 02:05 +03
+
+Live SBLK/Qwen output reproduced a footer bug: any positive evidence count
+discarded the backend/model captured on Result.text. Fixed the shared label
+overload to append the listed evidence count to the existing source-aware label.
+Generation, numeric/citation validation, and settings are unchanged. Singular
+source wording is correct; zero/negative counts preserve the original label.
+
+Revised the existing tests that pinned the generic footer; no new test suite.
+The regression failed against the old implementation (22/23 passed, exit65),
+then passed with the fix (23/23, exit0). Evidence bundles:
+- `/private/tmp/stocksage-narrator-footer-red-20260907-0153.xcresult`
+- `/private/tmp/stocksage-narrator-footer-green-20260907-0159.xcresult`
+- macOS1740/1740, exit0: `/private/tmp/stocksage-narrator-footer-macos-20260907-0200.xcresult`
+- iPhone17Pro(gate)1738/1738, exit0: `/private/tmp/stocksage-narrator-footer-ios-20260907-0202.xcresult`
+Same three opt-in exclusions; no selected failures/skips in either final gate.
+
+Quit the old installed process normally and replaced only the app bundle with
+the tested macOS binary. Executable comparison and strict deep codesign passed.
+Previous bundle is recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-footer-20260907-0204.app`; user data/preferences
+were preserved. New installed process31018 observed. Qwen's existing loopback
+server was left running; no duplicate server, new training, or real orders.
+Owner02:02 reiterated every API must work: per-route native acceptance is next,
+not a blanket success claim. Main worktree and other session remain untouched.
+
 ## Qwen converted and connected — 2026-09-07 01:50 +03
 
 Owner01:41 approved the conversion/server startup that the previous note held

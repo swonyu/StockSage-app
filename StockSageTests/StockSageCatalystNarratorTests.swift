@@ -206,16 +206,24 @@ struct StockSageCatalystNarratorTests {
 
     // MARK: label(for:sourceCount:)
 
-    @Test("label(for:sourceCount:) names the count when N > 0")
+    @Test("evidence labels retain the generating backend, model, and caveats")
     func labelForSourceCountPositive() {
-        let text = N.label(for: .onDevice, sourceCount: 3)
-        #expect(text == "Model-written from the facts + 3 sources (listed) — a paraphrase, not analysis, unvalidated, not advice.")
+        let sources: [N.Source] = [.onDevice, .localServer(model: "qwen3.8"), .localServer(model: "salehman-qwen38-27b-4bit")]
+        for source in sources {
+            for count in [1, 3] {
+                let text = N.label(for: source, sourceCount: count)
+                #expect(text.hasPrefix(N.label(for: source)))
+                #expect(text.hasSuffix("Evidence: \(count) \(count == 1 ? "source" : "sources") (listed)."))
+            }
+        }
     }
 
-    @Test("label(for:sourceCount: 0) falls back to label(for:) unchanged")
+    @Test("nonpositive source counts leave the backend label unchanged")
     func labelForSourceCountZeroFallsBack() {
-        #expect(N.label(for: .onDevice, sourceCount: 0) == N.label(for: .onDevice))
-        #expect(N.label(for: .localServer(model: "qwen3.8"), sourceCount: 0) == N.label(for: .localServer(model: "qwen3.8")))
+        for count in [0, -1] {
+            #expect(N.label(for: .onDevice, sourceCount: count) == N.label(for: .onDevice))
+            #expect(N.label(for: .localServer(model: "qwen3.8"), sourceCount: count) == N.label(for: .localServer(model: "qwen3.8")))
+        }
     }
 
     // MARK: instructions gain the citation rule

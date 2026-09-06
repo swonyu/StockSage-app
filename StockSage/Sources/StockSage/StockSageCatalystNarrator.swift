@@ -267,13 +267,12 @@ enum StockSageCatalystNarrator {
     }
 
     /// Evidence-aware label: when at least one citable source (news/filing/insider item) was
-    /// offered, names the count so a viewer sees how much LISTED material backed the paragraph —
-    /// distinct from `label(for:)`'s backend-only wording. `sourceCount == 0` falls back to
-    /// `label(for:)` unchanged (nothing to mention).
+    /// offered, appends the LISTED count without dropping the generating backend/model or its
+    /// caveats. Nonpositive counts leave `label(for:)` unchanged (nothing to mention).
     nonisolated static func label(for source: Source, sourceCount: Int) -> String {
         guard sourceCount > 0 else { return label(for: source) }
-        return "Model-written from the facts + \(sourceCount) sources (listed) — "
-            + "a paraphrase, not analysis, unvalidated, not advice."
+        return label(for: source)
+            + " Evidence: \(sourceCount) \(sourceCount == 1 ? "source" : "sources") (listed)."
     }
 
     // MARK: Backend selection (router)

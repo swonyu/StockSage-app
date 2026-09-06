@@ -13,6 +13,12 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest02:05 +03: cited explanation footers retain the generating backend/model.
+Regression red then23/23 green; canonical1740macOS/1738iPhone passed. Installed
+the tested update, preserving the previous bundle in Trash and all user data.
+Owner02:02 reiterated all API acceptance; continue supported native per-route
+checks. Qwen server remains the existing single loopback process. See HANDOFF.
+
 Latest01:50 +03: owner-approved Qwen conversion/server connection completed.
 See `LOCAL_QWEN_2026-09-07.md` and HANDOFF. A single loopback server is running
 under launchctl; native SBLK explanation passed end-to-end, PAA was withheld by
