@@ -45,32 +45,36 @@ enum StockSageEODHDCalendar {
 
     /// Parses EODHD's `/api/calendar/earnings` body — either a bare array or `{"earnings": [...]}`
     /// (EODHD has shipped both shapes across sibling endpoints; this accepts either). A row
-    /// missing `code`, or carrying an unparseable `date`, is SKIPPED, never defaulted.
-    nonisolated static func parseCalendar(_ data: Data) -> [Row] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) else { return [] }
-        // `as? [Any]` first, THEN `compactMap` each element to `[String: Any]` — casting the
-        // whole array straight to `[[String: Any]]` fails closed (returns nil) the instant ONE
-        // element isn't a dictionary (e.g. a stray string), which would silently drop every
-        // OTHER, perfectly valid row in the same batch. Per-element casting is what actually
-        // delivers "malformed rows skipped", not "one malformed row voids the whole response".
-        let raw: [Any]
-        if let arr = root as? [Any] {
+    /// missing its identity/date makes the observation unavailable: that row could be the
+    /// next event. nil is malformed/partial, [] is an explicit valid empty response.
+    nonisolated static func parseCalendar(_ data: Data, symbol: String? = nil) -> [Row]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        let raw: [[String: Any]]
+        if let arr = root as? [[String: Any]] {
             raw = arr
-        } else if let obj = root as? [String: Any], let arr = obj["earnings"] as? [Any] {
+        } else if let obj = root as? [String: Any],
+                  obj["error"] == nil || obj["error"] is NSNull,
+                  let arr = obj["earnings"] as? [[String: Any]] {
             raw = arr
         } else {
-            return []
+            return nil
         }
-        return raw.compactMap { element -> Row? in
-            guard let row = element as? [String: Any],
-                  let code = row["code"] as? String,
-                  let dateStr = row["date"] as? String,
-                  let date = dayFormatter.date(from: dateStr) else { return nil }
-            let reportPeriod = (row["report_date"] as? String).flatMap { dayFormatter.date(from: $0) }
+        let rows = raw.compactMap { row -> Row? in
+            guard let code = (row["code"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !code.isEmpty, symbol.map({ $0.uppercased() == code.uppercased() }) ?? true,
+                  let date = day(row["date"]) else { return nil }
+            let reportPeriod = day(row["report_date"])
             return Row(code: code, reportPeriod: reportPeriod, date: date,
                       beforeAfterMarket: row["before_after_market"] as? String,
                       estimate: row["estimate"] as? Double, actual: row["actual"] as? Double)
         }
+        return rows.count == raw.count ? rows : nil
+    }
+
+    private nonisolated static func day(_ value: Any?) -> Date? {
+        guard let text = value as? String, let date = dayFormatter.date(from: text),
+              dayFormatter.string(from: date) == text else { return nil }
+        return date
     }
 
     /// Soonest row not more than a day in the past — mirrors the chain's own `> -86_400`
@@ -105,7 +109,7 @@ enum StockSageEODHDCalendar {
         var req = URLRequest(url: url); req.timeoutInterval = 12
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return parseCalendar(data)
+        return parseCalendar(data, symbol: sym)
     }
 
     // MARK: - Plan-tier availability gate (probe once, skip for 24h on rejection)
@@ -157,26 +161,26 @@ enum StockSageEODHDCalendar {
 
     /// Past report dates from EODHD's `/api/fundamentals/<SYM>.US` `Earnings.History` object (a
     /// dict keyed by date string, each entry carrying its own `date`). Malformed entries are
-    /// skipped; result is oldest-first.
-    nonisolated static func parseEarningsHistory(_ data: Data) -> [Date] {
+    /// unavailable as a whole; a partial history must not be stamped as fully checked.
+    nonisolated static func parseEarningsHistory(_ data: Data) -> [Date]? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["error"] == nil || root["error"] is NSNull,
               let earnings = root["Earnings"] as? [String: Any],
-              let history = earnings["History"] as? [String: Any] else { return [] }
+              let history = earnings["History"] as? [String: Any] else { return nil }
         let dates = history.values.compactMap { entry -> Date? in
             guard let obj = entry as? [String: Any] else { return nil }
             let dateStr = (obj["date"] as? String) ?? (obj["reportDate"] as? String)
-            return dateStr.flatMap { dayFormatter.date(from: $0) }
+            return day(dateStr)
         }
-        return dates.sorted()
+        return dates.count == history.count ? dates.sorted() : nil
     }
 
     /// 10 API calls/request (owner waived the cost, 2026-09-06) — only called for a US equity
     /// whose calendar AND Yahoo calendarEvents both came up empty (the chain's last resort
     /// before `.unchecked`). `nil` means UNAVAILABLE — not covered, empty key, a request that
     /// never got a 200 back (this account's key is confirmed 401 here, see the file-level note)
-    /// — never asked, so the caller must not count it as a source asked. A real 200 body returns
-    /// an array (possibly empty — genuinely asked, nothing usable), never nil (blocker fix
-    /// 2026-09-06: this used to return `[]` identically for both cases).
+    /// — never answered, so the caller must not count it as a source asked. Only a valid
+    /// complete 200 body returns an array; explicit empty history remains a real answer.
     static func fetchEarningsHistory(_ symbol: String) async -> [Date]? {
         guard StockSageEODHD.covers(symbol) else { return nil }
         let key = StockSageEODHD.apiKey

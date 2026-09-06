@@ -290,19 +290,39 @@ struct StockSageEarningsTests {
         #expect(dates == [Date(timeIntervalSince1970: older), Date(timeIntervalSince1970: newer)])
     }
 
-    @Test func earningsHistorySkipsMalformedRowsRatherThanFailingTheWhole() {
+    @Test func partialEarningsHistoryCannotEarnACompleteObservation() {
         let good = 1_700_000_000.0
         let json = """
         {"quoteSummary":{"result":[{"earningsHistory":{"history":[
           {"quarter":{"raw":\(good)}},{"quarter":{}},{"notQuarter":1},{}]}}]}}
         """
         let dates = StockSageEarnings.parseEarningsHistory(Data(json.utf8))
-        #expect(dates == [Date(timeIntervalSince1970: good)])
+        #expect(dates == nil)
     }
 
-    @Test func earningsHistoryMissingModuleParsesToEmpty() {
-        #expect(StockSageEarnings.parseEarningsHistory(Data("{}".utf8)) == [])
-        #expect(StockSageEarnings.parseEarningsHistory(Data("not json".utf8)) == [])
+    @Test func earningsHistoryMissingModuleIsUnavailable() {
+        #expect(StockSageEarnings.parseEarningsHistory(Data("{}".utf8)) == nil)
+        #expect(StockSageEarnings.parseEarningsHistory(Data("not json".utf8)) == nil)
+        #expect(StockSageEarnings.parseEarningsHistory(Data(#"{"quoteSummary":{"result":[{"earningsHistory":{"history":[]}}]}}"#.utf8)) == [])
+    }
+
+    @Test func calendarResponseDistinguishesEmptyMalformedAndProviderErrors() {
+        for json in ["{}", "not json", #"{"quoteSummary":{"result":[]}}"#,
+                     #"{"quoteSummary":{"result":[{}]}}"#,
+                     #"{"quoteSummary":{"error":{"code":"Denied"},"result":[{"calendarEvents":{"earnings":{"earningsDate":[]}}}]}}"#] {
+            if case .answered = StockSageEarnings.parseCalendarOutcome(Data(json.utf8)) {
+                Issue.record("Malformed/error response must be unavailable: \(json)")
+            }
+        }
+        let empty = Data(#"{"quoteSummary":{"error":null,"result":[{"calendarEvents":{"earnings":{"earningsDate":[]}}}]}}"#.utf8)
+        if case .answered(let info) = StockSageEarnings.parseCalendarOutcome(empty) { #expect(info == nil) }
+        else { Issue.record("An explicit valid empty array must remain answered") }
+        for raw in ["true", "-1", "0", "1e100", "\"bad\""] {
+            let json = "{\"quoteSummary\":{\"result\":[{\"calendarEvents\":{\"earnings\":{\"earningsDate\":[{\"raw\":1701000000},{\"raw\":\(raw)}]}}}]}}"
+            if case .answered = StockSageEarnings.parseCalendarOutcome(Data(json.utf8)) {
+                Issue.record("A partial/invalid date range cannot be answered")
+            }
+        }
     }
 
     @Test func aSymbolNotYetSweptHasNoCheckedAtEntry() {

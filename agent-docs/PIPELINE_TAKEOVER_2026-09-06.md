@@ -159,6 +159,36 @@ results, not native parser/UI verification. M9 is committed as60c8d3d. Next safe
 API correction is the already-reviewed N09 malformed200/valid-empty distinction;
 then resume M8 fee/gate parity while live access dependencies remain pending.
 
+### N09 response classification (verified, 2026-09-07 01:24 +03)
+
+- [x] Fast red-capable replay compiles the actual EODHD source with only unused
+  network/config dependencies stubbed: an error object incorrectly returns[];
+  the same command after the fix returnsnil while preserving a real empty[].
+  Repro retained in `/private/tmp/stocksage-n09-repro.IskiBE/` as diagnostic-only.
+- [x] Reuse existing answered/unavailable enums and optional arrays. Yahoo legacy
+  fetch delegates to its richer fetch; both use one validated module/outcome
+  parser. Missing/error envelopes, partial ranges and invalid epochs cannot
+  establish a date or a checked-empty result. Only actual Boolean false confirms.
+- [x] EODHD calendar/history and Yahoo history returnnil for missing/malformed/
+  partial modules, not[]. Explicit empty containers remain valid. EODHD calendar
+  matches requested symbol and round-trips date text to reject normalized bad dates.
+- [x] Actual parser→chain→refresh-stamp regression plus existing calendar/history
+  fixtures:56/56 focused tests, no network/credentials/singleton state used.
+  Old tests treating malformed/partial data as complete answers were corrected
+  to the reviewed contract, with valid positive and empty controls retained.
+- [x] Serialized canonical macOS1740/1740 and iPhone1738/1738, zero selected
+  failures/skips, same three opt-in exclusions. Exact bundles/repro in HANDOFF01:24.
+  Caller review and explicit-path local commit; no push.
+
+This is independent of the live429/403/access blockers; do not promote any route
+to live VERIFIED because these unit/replay checks passed. Existing derived cache
+entries are not purged or retroactively declared valid; prior malformed writes
+cannot be identified without provider evidence and otherwise age through the
+existing TTL. No retry/poll/cost table/model/real-order behavior was changed.
+Next concrete money-safety issue: M8 quantity/minimum-fee parity across shared
+cost evaluation, snapshot, Today/detail gate and exported plans. Preserve the
+distinction between estimated planning costs and an actual broker fee contract.
+
 ## Corrections to historical workflow scripts
 
 The scripts are implementation proposals, not authority to contradict the owner.

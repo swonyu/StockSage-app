@@ -94,11 +94,13 @@ an insufficient subscription. No live trade/quote socket was created.
 2. Distinguish upstream throttling/denial from app bugs. Respect retry limits;
    do not solve429/403 by proxy/IP/header evasion. Required non-US quote/FX
    availability remains an explicit dependency, not synthetic data.
-3. Fix the already-reviewed N09 response-classification defect: Yahoo calendar
-   fetches currently turn ANY200 body into answered(nil) after a parser miss;
-   EODHD calendar parsing also needs valid-empty versus malformed separation.
-   Replay at the real response→chain→record seam before changing code. This
-   does not itself repair the separate live429/403 failures.
+3. N09 response classification now has a passing isolated replay and56 focused
+   tests: Yahoo calendars and Yahoo/EODHD history/calendar payloads distinguish
+   valid-empty from missing/error/partial. Both Yahoo fetch paths share the
+   validated outcome; malformed input cannot earn a refresh stamp in the tested
+   response→chain/refresh seam. Canonical gates passed1740 macOS/1738 iPhone,
+   documented in HANDOFF01:24. This does not repair the separate live429/403
+   failures or prove the provider's live schema; route acceptance above is unchanged.
 4. Verify native UI provenance/freshness and cancellation behavior after real
    data is available, using the existing socket and without overwriting the
    owner's running build. Model discovery is not generation/quality proof.

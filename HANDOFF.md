@@ -1,5 +1,60 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## N09 earnings API response classification — 2026-09-07 01:24 +03
+
+Fixed the reviewed error/empty conflation without new network requests. The
+actual EODHD parser reproduced it in a fast isolated CLI loop: a JSON error
+object returned a non-nil zero-row list, which its fetch/chain treated as answered.
+Unused networking/config dependencies were stubbed, not the parser. Red exited1
+with `FAIL: malformed response became answered empty (0 rows)`; the same command
+after the fix exited0 with `PASS: malformed unavailable, genuine empty answered`.
+The final binary was rerun green after both platform gates.
+
+Diagnostic-only command (run from this worktree; no key/network access):
+```
+xcrun swiftc StockSage/Sources/StockSage/StockSageEODHDCalendar.swift /private/tmp/stocksage-n09-repro.IskiBE/main.swift -o /private/tmp/stocksage-n09-repro.IskiBE/check && /private/tmp/stocksage-n09-repro.IskiBE/check
+```
+
+Yahoo's legacy fetch now delegates to its richer fetch. Both use the same
+validated CalendarFetch outcome rather than wrapping a parser miss in answered.
+The module container must exist and contain a single result without provider
+errors. An explicit empty date list stays answered(nil); missing/partial ranges,
+Boolean/non-finite/out-of-range epochs stay unavailable. Estimate flags require
+an actual Boolean before a date can be called confirmed. Optional convenience
+parsers delegate to this same core, eliminating the duplicated date extraction.
+
+EODHD calendar/history and Yahoo history now return optional arrays: nil for
+missing/error/partial, [] only for a valid explicit empty container. EODHD
+calendar checks the requested symbol; date text round-trips to reject values
+such as2026-02-30 instead of silently normalizing them. Date-field interpretations
+and optional projections are unchanged; they are not newly live-verified.
+
+Two new test functions and revised existing fixtures cover the real parsed
+response→chain and refresh-stamp seams. Malformed replies cannot count as an
+answered source or earn the24h checked timestamp; valid empties can. Old tests
+explicitly encoding malformed-as-empty/partial-as-complete were changed to the
+reviewed contract, with positive and genuinely empty controls retained.
+
+Executed results, xcresulttool counts, serialized builds:
+- Focused Earnings/EODHDCalendar/CatalystChain:56/56,exit0:
+  `/private/tmp/stocksage-n09-focused-20260907-0121.xcresult`.
+- FINAL macOS:1740/1740,exit0:
+  `/private/tmp/stocksage-n09-broad-macos-20260907-0119.xcresult`.
+- FINAL iPhone17Pro(gate),iOS26.5:1738/1738,exit0:
+  `/private/tmp/stocksage-n09-broad-ios-20260907-0122.xcresult`.
+All zero selected failures/skips, same opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. No compile correction required this slice.
+All command handles finished; no temporary debug instrumentation in app source.
+
+No liveAPI acceptance status changed: Yahoo429/SEC403 and authenticated access/
+Derayah-contract blockers remain. Existing derived cache entries were not purged
+or retroactively certified; prior malformed writes cannot be identified without
+provider evidence and otherwise age through the existing TTL. No persistent
+service, model load, retry-policy change, real order, unrelated worktree edit or
+push. Work inline; other pipeline task verified unchanged/stopped at01:10.
+Next is M8 sized minimum-fee/gate/EV/export consistency before P5 tickets.
+
 ## All-API acceptance audit — 2026-09-07 01:06 +03
 
 Owner00:59 requires every integration to work. Reachable route/consumer/status
