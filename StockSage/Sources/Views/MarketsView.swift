@@ -1494,19 +1494,12 @@ struct MarketsView: View {
                     .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 6) {
-                journalField("Ticker", text: $paSymbol, width: 78)
-                DSSegmentPicker(cases: [PriceAlert.Direction.above, .below],
-                                selection: $paDirection) { $0 == .above ? "≥" : "≤" }
-                    .frame(width: 74)
-                    .accessibilityLabel("Alert direction")
-                journalField("Price", text: $paTarget, width: 78, numeric: true)
-                Button { addPriceAlert() } label: {
-                    Text("Add").font(.system(size: mvFont11_5, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 11).padding(.vertical, 6)
-                        .background(DS.Palette.accent, in: Capsule())
-                }.buttonStyle(LuxPressStyle())
-                Spacer()
+            // Review 2026-07-28 #16: wrapped in ViewThatFits so the row can drop to a
+            // column at AX sizes instead of clipping — the ticker/price fields plus the
+            // Add button no longer fit one line once minWidth lets them grow with text.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { priceAlertFormFields }
+                VStack(alignment: .leading, spacing: 6) { priceAlertFormFields }
             }
             if !paError.isEmpty {
                 Text(paError).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
@@ -1528,6 +1521,23 @@ struct MarketsView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+    }
+
+    // Review 2026-07-28 #16: extracted so the same field/picker/button group can be laid
+    // out as a row (HStack) or a column (VStack) via ViewThatFits in priceAlertsPanel —
+    // macOS at 780pt still takes the row; AX3 on a narrow phone drops to the column.
+    @ViewBuilder private var priceAlertFormFields: some View {
+        journalField("Ticker", text: $paSymbol, width: 78)
+        DSSegmentPicker(cases: [PriceAlert.Direction.above, .below],
+                        selection: $paDirection) { $0 == .above ? "≥" : "≤" }
+            .frame(width: 74)
+            .accessibilityLabel("Alert direction")
+        journalField("Price", text: $paTarget, width: 78, numeric: true)
+        Button { addPriceAlert() } label: {
+            Text("Add").font(.system(size: mvFont11_5, weight: .semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 11).padding(.vertical, 6)
+                .background(DS.Palette.accent, in: Capsule())
+        }.buttonStyle(LuxPressStyle())
     }
 
     private func priceAlertRow(_ a: PriceAlert) -> some View {
@@ -1995,7 +2005,11 @@ struct MarketsView: View {
             .textFieldStyle(.plain).font(.system(size: mvFont13))
             .decimalKeyboardOnIOS(numeric)
             .focused($focusedAddField, equals: focus)
-            .padding(.horizontal, 8).padding(.vertical, 6).frame(width: width)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            // Review 2026-07-28 #16: minWidth, not a fixed width — the content scales with
+            // Dynamic Type and the box did not, so entered text clipped inside its own field
+            // at larger text sizes.
+            .frame(minWidth: width, maxWidth: width * 1.8)
             .background(Color.white.opacity(active ? 0.11 : 0.09), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
                 .stroke(active
@@ -3384,7 +3398,11 @@ struct MarketsView: View {
         TextField(placeholder, text: text)
             .textFieldStyle(.plain).font(.system(size: mvFont12))
             .decimalKeyboardOnIOS(numeric)
-            .padding(.horizontal, 8).padding(.vertical, 6).frame(width: width)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            // Review 2026-07-28 #16: minWidth, not a fixed width — the content scales with
+            // Dynamic Type and the box did not, so entered text clipped inside its own field
+            // at larger text sizes.
+            .frame(minWidth: width, maxWidth: width * 1.8)
             .background(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).fill(Color.white.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }
@@ -3775,7 +3793,11 @@ struct MarketsView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.system(size: mvFont9, weight: .semibold)).foregroundStyle(.secondary)
             TextField("", text: text)
-                .textFieldStyle(.plain).font(.system(size: mvFont13)).frame(width: width)
+                .textFieldStyle(.plain).font(.system(size: mvFont13))
+                // Review 2026-07-28 #16: minWidth, not a fixed width — the content scales
+                // with Dynamic Type and the box did not, so entered text clipped inside its
+                // own field at larger text sizes.
+                .frame(minWidth: width, maxWidth: width * 1.8)
                 .decimalKeyboardOnIOS()
                 .padding(.horizontal, 8).padding(.vertical, 5)
                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
