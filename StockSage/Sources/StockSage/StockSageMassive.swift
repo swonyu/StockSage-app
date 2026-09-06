@@ -196,6 +196,89 @@ enum StockSageMassive {
         return out
     }
 
+    // MARK: - Split-adjusted daily history (M1b)
+
+    /// Massive's documented custom-bars endpoint is the history source for covered US equities.
+    /// https://www.massive.com/docs/rest/stocks/aggregates/custom-bars
+    /// `GET /v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from}/{to}` accepts
+    /// `adjusted`, `sort`, and `limit`; each result has `o`, `h`, `l`, `c`, `v`, and a Unix
+    /// millisecond `t`. `adjusted=true` is the documented default and matches Yahoo's adjusted
+    /// daily-chart semantics closely enough for indicators; an unavailable or malformed response
+    /// returns nil so the caller uses Yahoo rather than mixing adjustment bases.
+    nonisolated static func historyRequest(symbol: String, from: String, to: String, key: String) -> URLRequest? {
+        guard !key.isEmpty, covers(symbol),
+              let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              var comps = URLComponents(string: host + "/v2/aggs/ticker/\(encoded)/range/1/day/\(from)/\(to)") else { return nil }
+        comps.queryItems = [
+            URLQueryItem(name: "adjusted", value: "true"),
+            URLQueryItem(name: "sort", value: "asc"),
+            URLQueryItem(name: "limit", value: "50000"),
+        ]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 15
+        return req
+    }
+
+    /// The Yahoo-compatible ranges used by the app. We intentionally decline unsupported ranges
+    /// (and all non-daily intervals) so its existing parser remains the fallback rather than
+    /// silently serving a differently shaped series.
+    nonisolated static func historyDates(for range: String, now: Date = Date()) -> (from: String, to: String)? {
+        let components: DateComponents
+        switch range {
+        case "5d": components = DateComponents(day: -5)
+        case "1mo": components = DateComponents(month: -1)
+        case "3mo": components = DateComponents(month: -3)
+        case "6mo": components = DateComponents(month: -6)
+        case "1y": components = DateComponents(year: -1)
+        case "2y": components = DateComponents(year: -2)
+        case "5y": components = DateComponents(year: -5)
+        case "10y": components = DateComponents(year: -10)
+        default: return nil
+        }
+        guard let start = Calendar(identifier: .gregorian).date(byAdding: components, to: now) else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        return (formatter.string(from: start), formatter.string(from: now))
+    }
+
+    /// Converts Massive's split-adjusted daily aggregate payload into the app's one existing
+    /// history value. Empty or malformed HTTP-200 bodies are deliberately nil, never an
+    /// authoritative empty history; the Yahoo path below can still answer the same request.
+    nonisolated static func parseHistory(_ data: Data, symbol: String) -> StockSagePriceHistory? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["status"] as? String == "OK",
+              let rows = root["results"] as? [[String: Any]], !rows.isEmpty else { return nil }
+        var bars: [(date: Date, open: Double, high: Double, low: Double, close: Double, volume: Double)] = []
+        for row in rows {
+            guard let ms = int64(row["t"]), ms >= 0,
+                  let open = finite(row["o"]), open > 0,
+                  let high = finite(row["h"]), high > 0,
+                  let low = finite(row["l"]), low > 0,
+                  let close = finite(row["c"]), close > 0 else { continue }
+            bars.append((Date(timeIntervalSince1970: Double(ms) / 1_000), open, high, low, close,
+                         finite(row["v"]) ?? 0))
+        }
+        let sorted = bars.sorted { $0.date < $1.date }
+        guard sorted.count >= 2 else { return nil }
+        return StockSagePriceHistory(symbol: symbol,
+                                     dates: sorted.map(\.date), opens: sorted.map(\.open),
+                                     highs: sorted.map(\.high), lows: sorted.map(\.low),
+                                     closes: sorted.map(\.close), volumes: sorted.map(\.volume))
+    }
+
+    /// Massive first for supported US daily requests; nil leaves the existing Yahoo fallback
+    /// completely in charge of indexes, non-US symbols, monthly bars, no-key runs, and failures.
+    static func fetchHistory(symbol: String, range: String, interval: String) async -> StockSagePriceHistory? {
+        guard ToolPolicy.isExternalAllowed, interval == "1d", let dates = historyDates(for: range) else { return nil }
+        let key = apiKey
+        guard let req = historyRequest(symbol: symbol, from: dates.from, to: dates.to, key: key),
+              let (data, response) = try? await URLSession.shared.data(for: req),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return parseHistory(data, symbol: symbol)
+    }
+
     /// "Test connection" for Settings: one single-ticker snapshot (AAPL), reported in words. Never echoes
     /// the key. 401/403 wording follows the vendor's own quickstart ("or you get a 401") and the
     /// snapshot page's plan-access table.

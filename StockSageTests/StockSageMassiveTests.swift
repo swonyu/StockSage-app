@@ -233,4 +233,49 @@ struct StockSageMassiveTests {
         let out = await M.fetchSnapshots(for: [])
         #expect(out.isEmpty)
     }
+
+    // MARK: Split-adjusted aggregate history (M1b)
+
+    /// Result rows from the documented Massive custom-bars sample:
+    /// https://www.massive.com/docs/rest/stocks/aggregates/custom-bars
+    static let aggregateSample = """
+    {"adjusted":true,"results":[
+      {"o":74.06,"h":75.15,"l":73.7975,"c":75.0875,"v":135647456,"t":1577941200000},
+      {"o":74.2875,"h":75.145,"l":74.125,"c":74.3575,"v":146535512,"t":1578027600000}
+    ],"status":"OK","ticker":"AAPL"}
+    """.data(using: .utf8)!
+
+    @Test("split-adjusted aggregate bars map byte-for-byte into the existing history shape")
+    func parsesAggregateHistory() throws {
+        let h = try #require(M.parseHistory(Self.aggregateSample, symbol: "AAPL"))
+        #expect(h.symbol == "AAPL")
+        #expect(h.count == 2)
+        #expect(h.opens == [74.06, 74.2875])
+        #expect(h.highs == [75.15, 75.145])
+        #expect(h.lows == [73.7975, 74.125])
+        #expect(h.closes == [75.0875, 74.3575])
+        #expect(h.volumes == [135647456, 146535512])
+        #expect(h.dates == [Date(timeIntervalSince1970: 1_577_941_200), Date(timeIntervalSince1970: 1_578_027_600)])
+    }
+
+    @Test("aggregate history fails closed and preserves the Yahoo fallback contract")
+    func aggregateHistoryRejectsMalformedOrTooShortBodies() {
+        #expect(M.parseHistory(Data(), symbol: "AAPL") == nil)
+        #expect(M.parseHistory(#"{"status":"OK","results":[]}"#.data(using: .utf8)!, symbol: "AAPL") == nil)
+        #expect(M.parseHistory(#"{"status":"OK","results":[{"o":1,"h":1,"l":1,"c":1,"t":0}]}"#.data(using: .utf8)!, symbol: "AAPL") == nil)
+        #expect(M.parseHistory(#"{"status":"ERROR","results":[]}"#.data(using: .utf8)!, symbol: "AAPL") == nil)
+    }
+
+    @Test("daily history routes only supported Yahoo ranges through Massive")
+    func historyRangeAndRequestRouting() throws {
+        let now = Date(timeIntervalSince1970: 1_725_177_600) // 2024-09-01T00:00:00Z
+        #expect(M.historyDates(for: "1y", now: now)?.from == "2023-09-01")
+        #expect(M.historyDates(for: "5y", now: now)?.from == "2019-09-01")
+        #expect(M.historyDates(for: "max", now: now) == nil)
+        let req = try #require(M.historyRequest(symbol: "AAPL", from: "2023-09-01", to: "2024-09-01", key: "unit-test-key"))
+        #expect(req.url?.absoluteString.contains("/v2/aggs/ticker/AAPL/range/1/day/2023-09-01/2024-09-01") == true)
+        #expect(req.url?.absoluteString.contains("unit-test-key") == false)
+        #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer unit-test-key")
+        #expect(M.historyRequest(symbol: "2222.SR", from: "2023-09-01", to: "2024-09-01", key: "unit-test-key") == nil)
+    }
 }
