@@ -36,4 +36,29 @@ struct CatalystsSectionTests {
     func modeTitles() {
         #expect(CatalystsSection.Mode.allCases.map(\.title) == ["Cards", "Calendar"])
     }
+
+    // MARK: A5 — negative-record calendar row styling (keyed ONLY on the engine's isNegativeRecord flag)
+
+    @Test("negative-record badge reads 'No known catalyst'; a real catalyst gets no badge")
+    func negativeRecordBadge() {
+        #expect(CatalystsSection.negativeRecordBadge(isNegativeRecord: true) == "No known catalyst")
+        #expect(CatalystsSection.negativeRecordBadge(isNegativeRecord: false) == nil)
+    }
+
+    @Test("negative-record row color is the dimmer DS.Palette.textSecondary; a real row is textPrimary")
+    func negativeRecordRowColor() {
+        #expect(CatalystsSection.calendarRowColor(isNegativeRecord: true) == DS.Palette.textSecondary)
+        #expect(CatalystsSection.calendarRowColor(isNegativeRecord: false) == DS.Palette.textPrimary)
+        // The gate must actually dim, not merely differ — pin against the raw danger tones too so
+        // a future edit can't quietly swap in a warning/danger tint for "no catalyst" (neutral).
+        #expect(CatalystsSection.calendarRowColor(isNegativeRecord: true) != DS.Palette.danger)
+        #expect(CatalystsSection.calendarRowColor(isNegativeRecord: true) != DS.Palette.dangerSoft)
+    }
+
+    @Test("negative-record row opacity dims below full; a real row stays at full opacity")
+    func negativeRecordRowOpacity() {
+        #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: true) == 0.6)
+        #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: false) == 1.0)
+        #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: true) < CatalystsSection.calendarRowOpacity(isNegativeRecord: false))
+    }
 }
