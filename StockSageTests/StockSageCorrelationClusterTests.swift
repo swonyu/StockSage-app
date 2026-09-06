@@ -58,21 +58,35 @@ struct StockSageCorrelationClusterTests {
         #expect(CC.largest(m) == nil)
     }
 
-    // Review fix 2026-07-28 (P2-clique): pins the per-candidate-allocation removal. AAA-BBB and
-    // AAA-CCC tie at 0.80 when growing from seed AAA — first candidate found (BBB, lower index)
-    // wins the tie (`>`, not `>=`), then CCC joins next round (min(0.80, 0.75) = 0.75 ≥ 0.70).
-    // DDD stays isolated (0.10 to everyone). Same tie occurs symmetrically from every seed, so
-    // the exact member set is deterministic regardless of which name seeds the search.
+    // Review fix 2026-07-28 (P2-clique): pins the per-candidate-allocation removal.
+    //
+    // Fixup 2026-09-06 (adversarial review, P2-clique major): the ORIGINAL 4-symbol matrix here
+    // (AAA-BBB and AAA-CCC tied at 0.80, AAA-DDD low) was symmetric between the two tied
+    // candidates — BBB and CCC correlated identically (0.75) to EACH OTHER, so whichever one the
+    // tie-break picked first, the other joined on the very next growth step regardless, and the
+    // final clique {AAA,BBB,CCC}/minPairwise=0.75 came out IDENTICAL whether the comparison below
+    // used `>` or `>=`. Verified (Python port of this exact algorithm, both operators): byte-
+    // identical output either way — the test could not have caught a `>` → `>=` regression.
+    //
+    // This 5-symbol matrix breaks that symmetry: BBB and CCC are mutually EXCLUSIVE (0.10 to each
+    // other) and each has its OWN exclusive downstream neighbor (EEE only reachable via BBB, DDD
+    // only reachable via CCC) — so which one wins the AAA-tie changes which neighbor can join next,
+    // and the two operators diverge to genuinely DIFFERENT final cliques. Verified (same Python
+    // port): `>` (current code, first candidate found keeps the pick) grows AAA→BBB→EEE = {AAA,
+    // BBB,EEE}; a hypothetical `>=` (last tied candidate overwrites the pick) grows AAA→CCC→DDD =
+    // {AAA,CCC,DDD} — different membership, same size (3) and same minPairwise (0.70), so a future
+    // `>` → `>=` regression flips the SET this test asserts, not just its size.
     @Test func tieBetweenCandidatesResolvesDeterministically() {
-        let m = CorrelationMatrix(symbols: ["AAA", "BBB", "CCC", "DDD"], matrix: [
-            [1.0, 0.80, 0.80, 0.10],
-            [0.80, 1.0, 0.75, 0.10],
-            [0.80, 0.75, 1.0, 0.10],
-            [0.10, 0.10, 0.10, 1.0],
+        let m = CorrelationMatrix(symbols: ["AAA", "BBB", "CCC", "DDD", "EEE"], matrix: [
+            [1.0, 0.80, 0.80, 0.70, 0.70],
+            [0.80, 1.0, 0.10, 0.10, 0.80],
+            [0.80, 0.10, 1.0, 0.80, 0.10],
+            [0.70, 0.10, 0.80, 1.0, 0.10],
+            [0.70, 0.80, 0.10, 0.10, 1.0],
         ])
         let c = CC.largest(m)!
-        #expect(c.symbols == ["AAA", "BBB", "CCC"])
-        #expect(abs(c.minPairwise - 0.75) < 1e-9)
+        #expect(c.symbols == ["AAA", "BBB", "EEE"], "`>` tie-break must grow AAA→BBB→EEE, NOT AAA→CCC→DDD")
+        #expect(abs(c.minPairwise - 0.70) < 1e-9)
     }
 }
 
