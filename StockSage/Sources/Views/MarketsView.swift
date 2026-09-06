@@ -5075,7 +5075,7 @@ struct MarketsView: View {
                         .font(.system(size: fontChipLabel, weight: .semibold))
                         .foregroundStyle(DS.Palette.warningSoft)
                         .modifier(IdeaChipChrome(tint: DS.Palette.warningSoft))
-                        .help(String(format: "Net EV/day after est. costs is under %.3fR/day — de-ranked on the velocity board. See the detail sheet for the full net-cost breakdown.", StockSageExpectedValue.minNetEVPerDayFloor))
+                        .explain(String(format: "Net EV/day after est. costs is under %.3fR/day — de-ranked on the velocity board. See the detail sheet for the full net-cost breakdown.", StockSageExpectedValue.minNetEVPerDayFloor))
                         .accessibilityLabel("Below net-cost floor — costs exceed edge; de-ranked on velocity board")
                 }
                 // At-the-extreme chip: neutral descriptive fact, not a signal — deliberately
@@ -5150,7 +5150,7 @@ struct MarketsView: View {
                         // T12 (rotation-3 triage): "frictions" was the last straggler — every
                         // other surface (StockSageKelly/NetEdge/TodayPlan/etc.) already says
                         // "round-trip costs" (993bdce), not "frictions".
-                        .help("Gross EV — before est. round-trip costs. The detail sheet's Evidence section shows gross + net velocity, and the net-cost breakdown. Conviction→win-prob estimate × reward:risk. An estimate, not a forecast.")
+                        .explain("Gross EV — before est. round-trip costs. The detail sheet's Evidence section shows gross + net velocity, and the net-cost breakdown. Conviction→win-prob estimate × reward:risk. An estimate, not a forecast.")
                 }
                 if visibleChips.contains(.confluence) {
                     // RANKING_BACKLOG #12 (reframed, pure observer) — display-only badge, never a
@@ -5417,7 +5417,7 @@ struct MarketsView: View {
                         // haircuts)" named the same ordering key the fastLane hover
                         // (StockSageGlossary.explain(.fastLane)) already names precisely —
                         // align on that naming instead of a second, divergent description.
-                        .help("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
+                        .explain("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
                 }
                 // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
@@ -5487,7 +5487,7 @@ struct MarketsView: View {
                 if a.suggestedWeight > 0 {
                     // "Base size" — the raw half-Kelly before regime/vol adjustments.
                     ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
-                        .help(Self.sizeMetricHelp)
+                        .explain(Self.sizeMetricHelp)
                     // Vol-adj size when the brake materially cuts size (>15% cut).
                     // Label is "Vol-adj" — NOT "Effective" or "Final"; the Deploy plan still layers
                     // regime bias and correlation cuts on top, so this remains an intermediate step.
@@ -5598,7 +5598,7 @@ struct MarketsView: View {
                         // haircuts)" named the same ordering key the fastLane hover
                         // (StockSageGlossary.explain(.fastLane)) already names precisely —
                         // align on that naming instead of a second, divergent description.
-                        .help("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
+                        .explain("Gross EV/day. The board ORDERS by per-day log-growth at ½-Kelly, cost-haircut, which can differ — two cards with similar gross Vel. may rank apart.")
                 }
                 // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
@@ -5643,7 +5643,7 @@ struct MarketsView: View {
                 if a.suggestedWeight > 0 {
                     // "Base size" — the raw half-Kelly before regime/vol adjustments.
                     ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
-                        .help(Self.sizeMetricHelp)
+                        .explain(Self.sizeMetricHelp)
                     // Vol-adj size when the brake materially cuts size (>15% cut).
                     // Label is "Vol-adj" — NOT "Effective" or "Final"; the Deploy plan still layers
                     // regime bias and correlation cuts on top, so this remains an intermediate step.
@@ -5898,7 +5898,7 @@ struct MarketsView: View {
                         if idea.advice.suggestedWeight > 0 {
                             // "Base size" — raw half-Kelly before regime/vol adjustments.
                             ideaMetric("Base size", String(format: "%.1f%%", idea.advice.suggestedWeight * 100))
-                                .help(Self.sizeMetricHelp)
+                                .explain(Self.sizeMetricHelp)
                         }
                         Spacer(minLength: 0)
                     }
@@ -6082,7 +6082,7 @@ struct MarketsView: View {
                     if let eb {
                         Text(Self.effectiveBetsCaption(eb))
                             .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            .help("Kish/design-effect: n_eff = N ÷ (1 + (N−1)·ρ̄); ρ̄ = mean pairwise correlation of the plan's positions over their shared \(eb.windowBars)-return recent window (spark-derived) — the same series the plan's correlation de-weighting reads. Sparks are downsampled (~2-day points); cross-calendar pairs understate co-movement, so treat n_eff as an OPTIMISTIC upper bound. Correlations are regime-dependent and rise in crashes (US average pairwise ~0.30–0.40 normal → >0.80 in 2008, ~0.75 Feb–Mar 2020) — a calm-window n_eff overstates crisis diversification. RESEARCH_2026-07-03_weekly_concentration.md §3b.")
+                            .explain("Kish/design-effect: n_eff = N ÷ (1 + (N−1)·ρ̄); ρ̄ = mean pairwise correlation of the plan's positions over their shared \(eb.windowBars)-return recent window (spark-derived) — the same series the plan's correlation de-weighting reads. Sparks are downsampled (~2-day points); cross-calendar pairs understate co-movement, so treat n_eff as an OPTIMISTIC upper bound. Correlations are regime-dependent and rise in crashes (US average pairwise ~0.30–0.40 normal → >0.80 in 2008, ~0.75 Feb–Mar 2020) — a calm-window n_eff overstates crisis diversification. RESEARCH_2026-07-03_weekly_concentration.md §3b.")
                     }
                     // D2 (rotation-3 triage): per-position price-freshness lookup, reused by both
                     // the visible one-line note and the copy-plan export below — AllocatedPosition
@@ -6299,13 +6299,13 @@ struct MarketsView: View {
                 Label(cal.chipTitle, systemImage: assumed ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
                     .font(.system(size: fontChipLabel, weight: .semibold))
                     .foregroundStyle(assumed ? DS.Palette.warningSoft : DS.Palette.successSoft)
-                    .help(calibrationChipHelp(cal))
+                    .explain(calibrationChipHelp(cal))
             }
         } else {
             calibrationChipChrome(assumed: true) {
                 Label("win% assumed", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: fontChipLabel, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
-                    .help("Win-rate uses a cautious hand-set band (\(StockSageExpectedValue.assumedWinBandLabel)), not measured rates — run the Strategy backtest to calibrate.")
+                    .explain("Win-rate uses a cautious hand-set band (\(StockSageExpectedValue.assumedWinBandLabel)), not measured rates — run the Strategy backtest to calibrate.")
             }
         }
     }
@@ -7178,7 +7178,7 @@ struct MarketsView: View {
                     holdStepper(value: $equityHoldDays, range: 1...180, label: "equity", unit: "d")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help(Self.holdAnchorHelp)
+                .explain(Self.holdAnchorHelp)
                 #else
                 HStack(spacing: DS.Space.md) {
                     Text("Hold est:").font(.system(size: mvFont9)).foregroundStyle(.secondary)
@@ -7190,7 +7190,7 @@ struct MarketsView: View {
                     }.frame(maxWidth: 132)
                     Spacer(minLength: 0)
                 }
-                .help(Self.holdAnchorHelp)
+                .explain(Self.holdAnchorHelp)
                 #endif
             }
             .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
@@ -8195,7 +8195,7 @@ struct MarketsView: View {
         // "Base size" = raw half-Kelly before regime/vol/correlation adjustments.
         if a.suggestedWeight > 0 {
             ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
-                .help(Self.sizeMetricHelp)
+                .explain(Self.sizeMetricHelp)
         }
         // F2 dedup (critique fleet #1): "Regime size" / "Vol-adj" metrics dropped from
         // this row — the sizingBrakeWaterfall directly below renders the SAME two figures
@@ -8455,7 +8455,7 @@ struct MarketsView: View {
                             // "Base size" = raw half-Kelly before regime/vol/correlation adjustments.
                             if a.suggestedWeight > 0 {
                                 ideaMetric("Base size", String(format: "%.1f%%", a.suggestedWeight * 100), color: DS.Palette.accent)
-                                    .help(Self.sizeMetricHelp)
+                                    .explain(Self.sizeMetricHelp)
                             }
                         }
                     }

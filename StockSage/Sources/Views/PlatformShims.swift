@@ -48,7 +48,53 @@ extension View {
         self
         #endif
     }
+
+    /// `.help` on every platform, plus a visible ⓘ on iOS. Use for caveats a sighted
+    /// phone user must be able to reach; plain `.help` stays fine for pure hover polish.
+    @ViewBuilder func explain(_ text: String) -> some View {
+        #if os(iOS)
+        self.help(text).modifier(ExplainAffordance(text: text))
+        #else
+        self.help(text)
+        #endif
+    }
 }
+
+#if os(iOS)
+/// iOS has no hover, so `.help` text is invisible to sighted users — review 2026-07-28
+/// counted 138 of this app's caveats living there. `explain(_:)` keeps the `.help`
+/// (VoiceOver hint + iPad pointer) AND adds a tappable ⓘ that presents the same string.
+/// One source, no drift.
+struct ExplainAffordance: ViewModifier {
+    let text: String
+    @State private var showing = false
+    func body(content: Content) -> some View {
+        HStack(spacing: 3) {
+            content
+            Button { showing = true } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DS.Palette.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .touchHitArea()
+            .accessibilityHidden(true)   // the .help already speaks this
+        }
+        .popover(isPresented: $showing) {
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(DS.Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(DS.Space.md)
+            }
+            .frame(maxWidth: 320)
+            .presentationCompactAdaptation(.popover)
+            .presentationBackground(DS.Palette.bgTop)
+        }
+    }
+}
+#endif
 
 #if os(iOS)
 /// iOS suppresses notification banners while the app is FOREGROUND unless a delegate
