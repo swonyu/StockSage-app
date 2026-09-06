@@ -80,4 +80,67 @@ struct StockSageLiveStreamTests {
         #expect(L.backoffSeconds(attempt: 99) == 30)    // never drifts to hours
         #expect(L.backoffSeconds(attempt: -3) == 1)     // defensive
     }
+
+    // B5: EODHD caps a single connection at 50 symbols ("Concurrent subscriptions: up to 50
+    // symbols per connection by default" — eodhd.com/financial-apis/new-real-time-data-api-websockets,
+    // fetched 2026-09-06). `chunked` is the pure batching math behind opening N connections
+    // instead of silently over-subscribing one.
+
+    @Test("the vendor-cited per-connection cap is 50, per the fetched docs sentence")
+    func vendorCapIsFifty() {
+        #expect(StockSageLiveStream.maxSubscriptionsPerConnection == 50)
+    }
+
+    @Test("chunking below the cap yields exactly one chunk holding everything")
+    func chunkedUnderCapIsOneChunk() {
+        let symbols = (1...49).map { "S\($0)" }
+        let chunks = L.chunked(symbols, limit: 50)
+        #expect(chunks.count == 1)
+        #expect(chunks[0] == symbols)
+    }
+
+    @Test("n == c: exactly the cap still fits in one chunk (straddle low side)")
+    func chunkedAtExactlyCapIsOneChunk() {
+        let symbols = (1...50).map { "S\($0)" }
+        let chunks = L.chunked(symbols, limit: 50)
+        #expect(chunks.count == 1)                 // ceil(50/50) == 1
+        #expect(chunks[0].count == 50)
+        #expect(chunks.allSatisfy { $0.count <= 50 })
+        #expect(Set(chunks.flatMap { $0 }) == Set(symbols))
+    }
+
+    @Test("n == c+1: one symbol over the cap spills into a second, smaller chunk (straddle high side)")
+    func chunkedOneOverCapSpillsToSecondChunk() {
+        let symbols = (1...51).map { "S\($0)" }
+        let chunks = L.chunked(symbols, limit: 50)
+        #expect(chunks.count == 2)                  // ceil(51/50) == 2
+        #expect(chunks[0].count == 50)
+        #expect(chunks[1].count == 1)
+        #expect(chunks.allSatisfy { $0.count <= 50 })
+        #expect(Set(chunks.flatMap { $0 }) == Set(symbols))
+    }
+
+    @Test("chunking never drops or duplicates a symbol, for a set well above the cap")
+    func chunkedCoversEverySymbolExactlyOnceAboveCap() {
+        // 872 mirrors the actual streamable-US universe size — the real n this ships with.
+        let symbols = (1...872).map { "S\($0)" }
+        let limit = 50
+        let chunks = L.chunked(symbols, limit: limit)
+        #expect(chunks.count == Int(ceil(Double(symbols.count) / Double(limit))))  // ceil(872/50) == 18
+        #expect(chunks.allSatisfy { !$0.isEmpty && $0.count <= limit })
+        #expect(chunks.flatMap { $0 } == symbols)          // order-preserving, no duplicates
+        #expect(Set(chunks.flatMap { $0 }) == Set(symbols))
+    }
+
+    @Test("empty input chunks to no chunks at all")
+    func chunkedEmptyInputIsEmpty() {
+        #expect(L.chunked([], limit: 50).isEmpty)
+    }
+
+    @Test("a non-positive limit is treated as \"no cap\" — one chunk holding everything")
+    func chunkedNonPositiveLimitIsOneChunk() {
+        let symbols = ["AAPL", "MSFT", "NVDA"]
+        #expect(L.chunked(symbols, limit: 0) == [symbols])
+        #expect(L.chunked(symbols, limit: -1) == [symbols])
+    }
 }
