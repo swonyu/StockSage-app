@@ -8,6 +8,13 @@ import Foundation
 // the heal sweep's four brakes (scope, staleness, backoff, cap) with no Store instance and no
 // network fetch. `marketIsTrading` is a separate pre-filter applied by the caller and isn't
 // exercised here (see StockSageStore.swift healStaleQuotes(scopedTo:)).
+//
+// Every original fixture below was already stale, so the staleness brake itself — the hand-
+// inlined `StockSageQuoteFreshness.isStale` substitution (deviation (2) from the review's
+// snippet) — went unpinned: deleting that guard clause left all four original tests green.
+// freshInScopeRowIsExcluded and nilMarketTimeIsStaleFailClosed (fix-pass, adversarial review)
+// close that gap: the first fails on revert to `return false` (unconditionally stale), the
+// second fails on revert to `return true` (unconditionally fresh) or to a force-unwrap.
 
 @Suite("healStaleQuotes candidate selection")
 struct StockSageHealStaleQuotesTests {
@@ -59,6 +66,25 @@ struct StockSageHealStaleQuotesTests {
         let result = S.healCandidates(
             symbols: symbols, scope: ["AAPL"], backoff: ["AAPL": Self.olderStaleTime], cap: 40, asOf: Self.asOf
         )
+        #expect(result == ["AAPL"])
+    }
+
+    @Test("fresh in-scope row is excluded")
+    func freshInScopeRowIsExcluded() {
+        // 1h old, well inside the 48h equity tolerance -> not stale -> not a heal candidate,
+        // even though it's in scope with no backoff recorded. Pins the staleness brake itself.
+        let freshTime = Self.asOf.addingTimeInterval(-3600)
+        let symbols = [Self.sym("AAPL", marketTime: freshTime)]
+        let result = S.healCandidates(symbols: symbols, scope: ["AAPL"], backoff: [:], cap: 40, asOf: Self.asOf)
+        #expect(result.isEmpty)
+    }
+
+    @Test("nil marketTime is stale fail-closed")
+    func nilMarketTimeIsStaleFailClosed() {
+        // Owner-signed 2026-07-27 fail-closed contract: a timestamp-less quote can't be judged
+        // fresh, so it must be treated as stale and healed, not skipped.
+        let symbols = [Self.sym("AAPL", marketTime: nil)]
+        let result = S.healCandidates(symbols: symbols, scope: ["AAPL"], backoff: [:], cap: 40, asOf: Self.asOf)
         #expect(result == ["AAPL"])
     }
 }
