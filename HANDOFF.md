@@ -1,5 +1,26 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## All-API acceptance audit — 2026-09-07 01:06 +03
+
+Owner00:59 requires every integration to work. Reachable route/consumer/status
+inventory and bounded live-probe evidence are in
+`agent-docs/API_VERIFICATION_2026-09-07.md`. Six Yahoo chart/FX/calendar/history-
+module GETs returned429; SEC ticker map with Disclosure's existing agent returned
+403. No downstream SEC call, retry loop, proxy/header evasion, key access or
+second socket. Default localhost Ollama discovery returned a transport error;
+the owner's actual configured server and generation were NOT tested.
+
+These probes used a small Python stdlib HTTP/JSON diagnostic, not the native
+URLSession/parser/UI. Process exit0 only means the status collection completed;
+it is explicitly NOT seven API passes. No payloads/keys/account details saved.
+Massive/EODHD authenticated checks and the actual broker contract remain blocked.
+The all-API requirement is not satisfied yet. Next independent API correction:
+N09 malformed200→answered(nil), with regression at the response/chain seam;
+then M8 minimum-fee/gate consistency before P5 tickets. No live order authority.
+
+M9 code/tests were committed locally as60c8d3d before this read-only API audit.
+No code changes since its1738/1736 canonical gates; audit changes are docs only.
+
 ## P5 prerequisite / M9 dated-FX checkpoint — 2026-09-07 01:01 +03
 
 Completed the second M9 boundary on top of fd0ff0d. infraFX now retains an

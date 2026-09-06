@@ -150,6 +150,15 @@ portfolio/balance/BUY/SELL/CANCEL/MODIFY remain separate sandbox acceptance item
 Live key access is still the previously documented guard blocker; API-wide
 verification must not be represented as complete while it remains blocked.
 
+01:06 follow-through: current reachable route ledger and actual transport probes
+are in API_VERIFICATION_2026-09-07.md. Six Yahoo requests returned429; the SEC
+Disclosure ticker-map request returned403. No retries, alternative access path
+or dependent SEC requests followed. Default local-model discovery also failed;
+actual configured server/generation remain unverified. These are HTTP-diagnostic
+results, not native parser/UI verification. M9 is committed as60c8d3d. Next safe
+API correction is the already-reviewed N09 malformed200/valid-empty distinction;
+then resume M8 fee/gate parity while live access dependencies remain pending.
+
 ## Corrections to historical workflow scripts
 
 The scripts are implementation proposals, not authority to contradict the owner.
