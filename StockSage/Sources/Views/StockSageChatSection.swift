@@ -20,9 +20,49 @@ struct StockSageChatSection: View {
     }
 
     var body: some View {
+        chatLayout
+            .task { refreshOpening() }
+            .onChange(of: store.lastUpdated) { _, _ in refreshOpening() }
+            .onChange(of: settings) { _, _ in cancel() }
+            .onDisappear { cancel() }
+            .confirmationDialog("Delete local Chat history?", isPresented: $confirmClear) {
+                Button("Delete history", role: .destructive) { request?.cancel(); request = nil; chat.clear() }
+            } message: { Text("Deletes this app's saved conversation and source snapshots. It cannot erase screenshots or server logs.") }
+    }
+
+    @ViewBuilder private var chatLayout: some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    conversation.padding(24).frame(maxWidth: 860, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                    Color.clear.frame(height: 1).id("chat-bottom")
+                }
+                .onChange(of: chat.pending) { _, _ in
+                    // Only a send/completion moves the transcript, never market ticks.
+                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+                }
+            }
+            Divider()
+            composer.padding(20).frame(maxWidth: 860)
+                .frame(maxWidth: .infinity).background(DS.Palette.bgTop)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #else
+        VStack(alignment: .leading, spacing: 16) { conversation; composer }.padding(16)
+        #endif
+    }
+
+    private var conversation: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
+                #if os(iOS)
                 Label("Chat", systemImage: "bubble.left.and.bubble.right.fill").font(.title2.bold())
+                #else
+                Label("Your conversation", systemImage: "bubble.left.and.bubble.right")
+                    .font(.headline).foregroundStyle(.secondary)
+                #endif
                 Spacer()
                 Button("Model settings", action: openModelSettings)
                 Button("Clear history", role: .destructive) { confirmClear = true }
@@ -76,32 +116,43 @@ struct StockSageChatSection: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            VStack(alignment: .leading, spacing: 8) {
-                TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $question, axis: .vertical)
-                    .lineLimit(2...5).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Question for Qwen")
-                HStack {
-                    Button("Ask Qwen", systemImage: "arrow.up.circle.fill", action: send)
-                        .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config == nil)
-                    if chat.pending != nil { Button("Cancel") { cancel() } }
-                    Spacer()
-                    Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
-                }
-                if let issue = issue ?? chat.storageError { Text(issue).foregroundStyle(DS.Palette.warningSoft) }
-                Text(config == nil
+        }
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $question, axis: .vertical)
+                .lineLimit(2...5).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Question for Qwen")
+            HStack {
+                Button("Ask Qwen", systemImage: "arrow.up.circle.fill", action: send)
+                    .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config == nil)
+                    #if os(macOS)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    #endif
+                if chat.pending != nil { Button("Cancel") { cancel() } }
+                Spacer()
+                Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
+            }
+            if let issue = issue ?? chat.storageError { Text(issue).foregroundStyle(DS.Palette.warningSoft) }
+            #if os(macOS)
+            if config == nil {
+                connectionNotice
+            } else {
+                DisclosureGroup("Privacy and model connection") { connectionNotice }
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            #else
+            connectionNotice
+            #endif
+        }
+    }
+
+    private var connectionNotice: some View {
+        Text(config == nil
                     ? "Chat requires the local server enabled in Catalysts → Explanation model. On iPhone, localhost is the phone, not your Mac; private HTTPS serving is not configured in this slice."
                     : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive/EODHD, when web access is enabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .padding(16)
-        .task { refreshOpening() }
-        .onChange(of: store.lastUpdated) { _, _ in refreshOpening() }
-        .onChange(of: settings) { _, _ in cancel() }
-        .onDisappear { cancel() }
-        .confirmationDialog("Delete local Chat history?", isPresented: $confirmClear) {
-            Button("Delete history", role: .destructive) { request?.cancel(); request = nil; chat.clear() }
-        } message: { Text("Deletes this app's saved conversation and source snapshots. It cannot erase screenshots or server logs.") }
     }
 
     private func sourceCard(_ source: StockSageChat.Source) -> some View {

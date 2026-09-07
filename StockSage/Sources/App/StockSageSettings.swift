@@ -25,7 +25,7 @@ struct StockSageSettingsView: View {
 
     var body: some View {
         Form {
-            Section {
+            Section("General") {
                 #if os(macOS)
                 Toggle("Launch StockSage at login", isOn: Binding(
                     get: { loginItemOn },
@@ -46,7 +46,7 @@ struct StockSageSettingsView: View {
                 Toggle("Show menu-bar ticker", isOn: $menuBarEnabled)
             }
 
-            Section {
+            Section("Getting started") {
                 // OnboardingSheet's header comment promised "reopenable from Settings"
                 // since the extension batch — this is that affordance (auto-shift
                 // backlog #2, 2026-07-16). The main window re-presents live via
@@ -64,13 +64,14 @@ struct StockSageSettingsView: View {
             }
 
             Section {
-                Text("Free · no accounts · data stays on this Mac.")
+                Text("Market data uses your configured providers. Local model serving is configured in Catalysts → Explanation model. These settings do not start a model server.")
                     .font(.system(size: 11))
                     .foregroundStyle(DS.Palette.textSecondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(width: 520)
+        .navigationTitle("StockSage settings")
         #if os(macOS)
         .onAppear { refreshLoginItemStatus() }
         #endif

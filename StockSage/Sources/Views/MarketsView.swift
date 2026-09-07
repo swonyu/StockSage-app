@@ -24,6 +24,10 @@ struct MarketsView: View {
         .filter { StockSageAllocation.assetClass($0.symbol) == "Equity" }.count
 
     @State private var section: MarketSection
+    #if os(macOS)
+    @State private var desktopPortfolioPage: StockSageDesktop.PortfolioPage = .holdings
+    @State private var desktopBriefingExpanded = false
+    #endif
     #if os(iOS)
     /// iPhone left navigation drawer. Not persisted — a drawer left open across launches
     /// would hide the board on cold start, which is the opposite of the fix.
@@ -473,6 +477,10 @@ struct MarketsView: View {
 
     @ViewBuilder private var normalBody: some View {
         VStack(spacing: 0) {
+            Group {
+            #if os(macOS)
+            desktopWorkspace
+            #else
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.lg) {
                     erasedOnIOS(feedBanner)
@@ -559,6 +567,8 @@ struct MarketsView: View {
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            #endif
+            }
             #if os(iOS)
             // Native pull-to-refresh (review 2026-07-27): same live-quote refresh as the header
             // button — stdlib .refreshable, replacing the unwired custom PullToRefresh file.
@@ -639,6 +649,7 @@ struct MarketsView: View {
             // beneath — provenance is an honesty surface, so it should never scroll
             // away. Fade-only entrance (an offset would slide a PINNED bar over
             // content). Same auto-inset behavior as the bottom bar.
+            #if os(iOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 headerBody
                     .opacity(appeared ? 1 : 0)
@@ -651,6 +662,7 @@ struct MarketsView: View {
                     .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1),
                              alignment: .bottom)
             }
+            #endif
             // Disclaimer footer REMOVED (owner directive 2026-07-27: private build,
             // "not needed"). If this app ever ships publicly, restore from git history
             // (MarketDisclaimerFooter + StockSageMini, deleted this commit).
@@ -761,6 +773,99 @@ struct MarketsView: View {
             if newVal == nil { lastSheetSymbol = nil }
         }
     }
+
+    #if os(macOS)
+    /// The changing page is INSIDE the common lifecycle owner, never another store/task root.
+    private var desktopWorkspace: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(StockSageDesktop.title(for: section))
+                            .font(.system(size: 30, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                        Text(StockSageDesktop.subtitle(for: section))
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    liveStreamIndicator
+                    refreshButton
+                }
+                .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 18)
+                feedBanner.padding(.horizontal, 28).padding(.bottom, 16)
+                Divider().opacity(0.5)
+                if section == .chat {
+                    StockSageChatSection(store: store, openModelSettings: openDesktopModelSettings)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 22) {
+                                Color.clear.frame(height: 0).id("desktop-page-top")
+                                if section == .briefing { desktopHome }
+                                else { content }
+                            }
+                            .padding(28).frame(maxWidth: 1200, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .top)
+                        }
+                        .onChange(of: section) { _, _ in proxy.scrollTo("desktop-page-top", anchor: .top) }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            StockSageDesktopNavigation(selection: $section)
+        }
+        .background(Color(red: 0.094, green: 0.094, blue: 0.102))
+    }
+
+    private func openDesktopModelSettings() {
+        UserDefaults.standard.set(true, forKey: "marketsCatalystsModelSettingsExpanded")
+        section = .catalysts
+    }
+
+    private var desktopHome: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack {
+                Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                Spacer()
+                MarketSessionClockView()
+            }
+            briefingSection
+            HStack(spacing: 14) {
+                desktopHomeLink("Watchlist", detail: "Tracked tickers: \(store.userSymbols.count)", section: .watchlist)
+                desktopHomeLink("Find ideas", detail: "Compare evidence and risk", section: .ideas)
+                desktopHomeLink("Ask Qwen", detail: "Your local research chat", section: .chat)
+            }
+            Text("Market context").font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 18)], alignment: .leading, spacing: 18) {
+                regimeCard
+                catalystCard
+            }
+            forwardProgressStrip
+            DisclosureGroup("Research assumptions and money velocity") { moneyVelocityCard.padding(.top, 12) }
+                .font(.callout)
+        }
+    }
+
+    private func desktopHomeLink(_ title: String, detail: String, section target: MarketSection) -> some View {
+        Button { section = target } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Image(systemName: StockSageDesktop.icon(for: target)).foregroundStyle(StockSageDesktop.berry)
+                    Spacer()
+                    Image(systemName: "arrow.up.right").foregroundStyle(.secondary)
+                }.font(.system(size: 17))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                    Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .background(DS.Bezel.cardFill, in: .rect(cornerRadius: 12))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain).accessibilityLabel("\(title), \(detail)")
+    }
+    #endif
 
     /// Honest feed status: the live (green) note once real quotes land, otherwise
     /// the sample/offline notice — surfacing `feedError` (web off, unreachable)
@@ -1935,6 +2040,43 @@ struct MarketsView: View {
     }
 
     private var portfolioSection: some View {
+        #if os(macOS)
+        VStack(alignment: .leading, spacing: 24) {
+            Picker("Portfolio view", selection: $desktopPortfolioPage) {
+                ForEach(StockSageDesktop.PortfolioPage.allCases) { page in Text(page.rawValue).tag(page) }
+            }
+            .pickerStyle(.segmented).frame(maxWidth: 510)
+            .accessibilityIdentifier("desktop.portfolio.tabs")
+            switch desktopPortfolioPage {
+            case .holdings: portfolioHoldings
+            case .journal: tradeJournalPanel
+            case .paper: forwardScoreboardPanel
+            case .analytics:
+                if !portfolio.positions.isEmpty {
+                    allocationPanel
+                    riskParityPanel
+                    portfolioAnalyticsPanel
+                }
+                correlationHeatmapPanel
+                kellySizerPanel
+            }
+        }
+        #else
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            portfolioHoldings
+            if !portfolio.positions.isEmpty { allocationPanel }
+            if !portfolio.positions.isEmpty { riskParityPanel }
+            if !portfolio.positions.isEmpty { portfolioAnalyticsPanel }
+            correlationHeatmapPanel
+            forwardScoreboardPanel
+            tradeJournalPanel
+            kellySizerPanel
+        }
+        .animation(DS.Motion.smooth, value: portfolio.positions.isEmpty)
+        #endif
+    }
+
+    private var portfolioHoldings: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             portfolioSummary
             addPositionForm
@@ -1960,15 +2102,7 @@ struct MarketsView: View {
                     .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                 .transition(.opacity)
             }
-            if !portfolio.positions.isEmpty { allocationPanel }
-            if !portfolio.positions.isEmpty { riskParityPanel }
-            if !portfolio.positions.isEmpty { portfolioAnalyticsPanel }
-            correlationHeatmapPanel
-            forwardScoreboardPanel   // engine's bias-corrected paper track vs the owner's own journal
-            tradeJournalPanel   // records the owner's actual trades + realized P&L/R
-            kellySizerPanel   // a standalone calculator — useful with or without holdings
         }
-        .animation(DS.Motion.smooth, value: portfolio.positions.isEmpty)
     }
 
     private var portfolioSummary: some View {
@@ -3576,6 +3710,9 @@ struct MarketsView: View {
         draftSide = bearish ? .short : .long   // side follows the idea's direction
         showAddTrade = true
         selectedIdea = nil          // dismiss the detail sheet
+        #if os(macOS)
+        desktopPortfolioPage = .journal
+        #endif
         section = .portfolio        // the journal lives in the Portfolio section
     }
 
@@ -4365,6 +4502,9 @@ struct MarketsView: View {
                 }
                 .foregroundStyle(isNew ? Color.secondary : (flat ? Color.secondary : Self.signedMetricColor(positive: up)))
             }
+            #if os(macOS)
+            .monospacedDigit().frame(minWidth: 92, alignment: .trailing)
+            #endif
             if let signal {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("Rules: " + signal.recommendation.rawValue)
@@ -4414,7 +4554,9 @@ struct MarketsView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
             .stroke(hovered ? DS.Palette.accent.opacity(0.35) : DS.Palette.surfaceStroke, lineWidth: 1))
+        #if os(iOS)
         .scaleEffect(hovered ? 1.008 : 1.0)
+        #endif
         // Tabs-audit 2026-07-09: 0.55 was sub-AA on this row's own secondary text — the exact
         // gap the ideas-card comment deferred "to its own wave"; heatmap got the same fix
         // earlier today (0.85 AA floor). Clock icon + "· stale" caption stay the primary cues.
@@ -4499,10 +4641,20 @@ struct MarketsView: View {
             }
             Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : currentBriefing)
                 .font(.callout).foregroundStyle(DS.Palette.textSecondary)
+                #if os(macOS)
+                .lineLimit(desktopBriefingExpanded ? nil : 6)
+                #endif
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .contentTransition(.opacity)
                 .animation(DS.Motion.smooth, value: currentBriefing.isEmpty)
+            #if os(macOS)
+            Button(desktopBriefingExpanded ? "Show less" : "Read full briefing · strength and weakness") {
+                desktopBriefingExpanded.toggle()
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("desktop.briefing.expand")
+            #endif
             if !currentBriefing.isEmpty, let generatedAt = briefingGeneratedAt {
                 let stale = generatedAt < Date().addingTimeInterval(-4 * 3600)
                 Text((stale ? "⚠︎ Generated " : "Generated ")
@@ -4551,12 +4703,31 @@ struct MarketsView: View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             ideasHeader
             bestOpportunityCard
+            #if os(macOS)
+            DisclosureGroup("Planning tools · allocation, fast lane and today's actions") {
+                VStack(alignment: .leading, spacing: 16) {
+                    capitalAllocationCard
+                    fastLaneStrip
+                    todaysActionsCard
+                    alertsPanel
+                }.padding(.top, 14)
+            }
+            .font(.callout).padding(.vertical, 8)
+            DisclosureGroup("Backtests and strategy diagnostics") {
+                VStack(alignment: .leading, spacing: 16) {
+                    strategyBacktestPanel
+                    backtestPanel
+                }.padding(.top, 14)
+            }
+            .font(.callout).padding(.bottom, 16)
+            #else
             capitalAllocationCard
             fastLaneStrip
             todaysActionsCard
             alertsPanel
             strategyBacktestPanel
             backtestPanel
+            #endif
             if store.ideas.isEmpty {
                 Text(store.isLoadingIdeas
                      ? "Analyzing every market on 1-year price history…"
@@ -5358,7 +5529,9 @@ struct MarketsView: View {
                 .frame(width: 3).padding(.vertical, 8)
                 .accessibilityHidden(true)
         }
+        #if os(iOS)
         .scaleEffect(hovered ? 1.008 : 1.0)
+        #endif
         .shadow(color: DS.Palette.accent.opacity(hovered ? 0.10 : 0), radius: 10, y: 3)
         .animation(DS.Motion.smooth, value: hovered)
         // One combined, activatable element (mirrors the watchlist card): the

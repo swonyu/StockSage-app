@@ -1,5 +1,59 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## macOS right-sidebar redesign — 2026-09-07
+
+Owner resumed the redesign at18:07 after stopping the app/model/automation. This
+resumes UI work only: Qwen LaunchAgent remains disabled, port8765 has no listener,
+and stocksage-overnight-implementation remains PAUSED. The owner context waives
+routine design reconfirmation; approved spec/inline plan are committed at5baad2a
+in docs/superpowers/{specs,plans}/2026-09-07-macos-redesign*.md. Existing wt/coverage
+is retained, with the other Codex task independently inactive before edits.
+
+Implemented a right-side220pt navigation panel/64pt icon rail, persisted Mac-only
+collapse choice, all nine destinations and original Command-number assignments.
+Home replaces Briefing's Mac label/default; Markets replaces All's label. Header
+and source/freshness banner stay above the page. Neutral Mac canvas/card surfaces,
+wide content, aligned price digits and no hovering-row zoom; iPhone visuals remain
+in their original platform branch. Home groups briefing, quick links and market
+context. A six-line briefing preview expands to the complete unchanged summary,
+including both strength and weakness. Ideas planning/backtest tools are disclosures.
+Portfolio has Holdings/Journal/Paper/Analytics; every idea-to-journal caller still
+uses the shared prefill function, now selecting Journal on Mac. No record mutation
+or market/AI calculation was redesigned.
+
+Chat has its own transcript scroll and fixed composer, Command-Return to send,
+visible invalid-configuration notices and an expandable privacy note. Its existing
+send/cancel/storage/provenance checks are unchanged. Sidebar SettingsLink reuses
+the native Settings scene; Model settings routes to the existing Catalysts controls.
+No new dependencies, model startup, inference request or actual brokerage order.
+
+Verification:10 focused navigation/Chat tests pass after the expected missing-type
+red run and two corrected compile errors. Full macOS gate:1829/1829 pass, zero
+selected failures/skips, exit0. iPhone17Pro(gate):1826/1826 pass, zero selected
+failures/skips, exit0. Existing warnings in unrelated tests are not new failures.
+Artifacts: /private/tmp/stocksage-desktop-{red,focused,focused2,focused3,macos,ios}-20260907
+with .log/.xcresult suffixes. Canonical commands/exclusions are in the plan; same
+derived-data path and iPhone17Pro(gate) simulator as M11. No Swift edits during gates.
+
+Native preview: launched the new Debug product; screenshot/AX confirmed Home,
+right sidebar, Holdings and switching to Journal. Home's overlong summary prompted
+the six-line preview fix. This was normal app data with normal quote refresh, NOT
+an offline fixture. Clicking Chat then crashed SkyComputerUseService; retry and
+fresh runtime failed too (18:20 crash reports, Array.remove(at:) assertion). The
+StockSage process survived. Final preview expansion, Chat/fixed composer, all-route
+sweep, collapsed/minimum-window behavior and Settings are NOT visually verified.
+Code/test success is not a substitute for those remaining native checks.
+
+Installed the tested Debug product at /Applications/StockSageX.app after staging
+and verifying its signature. Previous app is recoverable at
+/Users/saleh/.Trash/StockSageX-pre-redesign-20260907-1817.app; no owner data removed.
+Post-install strict/deep signature verification passes. A checksum/link-aware rsync
+dry-run reports no differences against the built app (plain diff warned on framework
+symlink loops). The earlier temporary preview may still be open; quit/reopen the
+installed app to load the final fixes. Native control could not complete that step.
+Main checkout's unrelated project.pbxproj, AGENTS.md and review documents remain
+untouched. No push or merge. The residual visual checklist is not marked complete.
+
 ## Full-review M11: stale saves must not revive deleted records — 2026-09-07 12:28 +03
 
 Started at db5d595 with the peer independently inactive, no other compiler writer,

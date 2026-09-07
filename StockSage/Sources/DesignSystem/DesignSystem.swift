@@ -53,8 +53,13 @@ enum DS {
         // violet-warm cast that flatters the crimson accent — replaces the flat
         // codeSurface grey. Going DARKER only raises text contrast, so the
         // dangerSoft AA measurements (derived on the lighter 0.125 surface) hold.
+        #if os(macOS)
+        static let bgTop         = Color(red: 0.094, green: 0.094, blue: 0.102)
+        static let bgBottom      = bgTop
+        #else
         static let bgTop         = Color(red: 0.10, green: 0.09, blue: 0.11)
         static let bgBottom      = Color(red: 0.045, green: 0.04, blue: 0.06)
+        #endif
         static let surface       = Color.white.opacity(0.07)
         static let surfaceAlt    = Color.white.opacity(0.06)
         static let surfaceStroke = Color.white.opacity(0.12)
@@ -123,9 +128,14 @@ enum DS {
         static let shellFill        = Color.white.opacity(0.04)
         static let shellStroke      = Color.white.opacity(0.09)
         static let coreFill         = Color.white.opacity(0.06)
+        #if os(macOS)
+        static let coreInnerHighlight = LinearGradient(colors: [Color.white.opacity(0.045), Color.white.opacity(0.045)],
+            startPoint: .top, endPoint: .bottom)
+        #else
         static let coreInnerHighlight = LinearGradient(
             colors: [Color.white.opacity(0.14), Color.white.opacity(0.02)],
             startPoint: .top, endPoint: .bottom)
+        #endif
         /// Subtle fill for machined card containers — the background layer under
         /// the coreInnerHighlight stroke. Matches all per-view inline cards.
         /// 0.035 → 0.045 (macOS 27 overhaul): the darker canvas needs cards a
@@ -133,7 +143,11 @@ enum DS {
         /// Card sites chain .fill(cardFill).strokeBorder(coreInnerHighlight) on ONE
         /// shape view (goal-2 merge, 2026-07-16): identical pixels to the old
         /// 2-shape ZStack, one less view+layer per card — switch-commit work.
-        static let cardFill             = Color.white.opacity(0.045)
+        #if os(macOS)
+        static let cardFill = Color(red: 0.137, green: 0.137, blue: 0.149)
+        #else
+        static let cardFill = Color.white.opacity(0.045)
+        #endif
     }
 
     // MARK: Gradients
@@ -155,6 +169,9 @@ enum DS {
 /// content without ever competing with it.
 struct DSCanvasBackground: View {
     var body: some View {
+        #if os(macOS)
+        DS.Palette.bgTop
+        #else
         ZStack {
             DS.Gradient.bg
             RadialGradient(colors: [DS.Palette.accent.opacity(0.08), .clear],
@@ -162,6 +179,7 @@ struct DSCanvasBackground: View {
                 .blendMode(.screen)
         }
         .compositingGroup()
+        #endif
     }
 }
 
@@ -341,4 +359,3 @@ struct DSSegmentPicker<T: Hashable>: View {
                            startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 }
-

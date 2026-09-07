@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import StockSage
 
 // Swipe navigation between board sections (iPhone, 2026-07-28). The gesture itself is UI,
@@ -6,6 +7,21 @@ import Testing
 
 @Suite("Section swipe navigation")
 struct MarketSectionNavigationTests {
+
+    #if os(macOS)
+    @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
+        #expect(Set(StockSageDesktop.sections) == Set(MarketSection.allCases))
+        #expect(StockSageDesktop.sections.count == MarketSection.allCases.count)
+        #expect(StockSageDesktop.sections.first == .briefing)
+        #expect(StockSageDesktop.title(for: .briefing) == "Home")
+        #expect(StockSageDesktop.title(for: .all) == "Markets")
+        for (index, section) in MarketSection.allCases.enumerated() {
+            #expect(StockSageDesktop.shortcut(for: section) == index + 1)
+        }
+        #expect(StockSageDesktop.sidebarWidth(collapsed: true) == 64)
+        #expect(StockSageDesktop.sidebarWidth(collapsed: false) == 220)
+    }
+    #endif
 
     @Test("neighbours follow tab order exactly")
     func neighboursFollowTabOrder() {

@@ -13,6 +13,21 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest2026-09-07 redesign continuation: owner resumed at18:07, UI only; Qwen
+LaunchAgent stays disabled and overnight automation PAUSED (supersedes old12:20
+automation/approval notes below). Approved spec/plan at5baad2a. Mac now has a
+right220/64pt collapsible sidebar, Home default, wide neutral workspace, fixed
+source banner, Portfolio subtabs, collapsed Ideas tools and fixed Chat composer.
+Existing nine routes/shortcuts, iPhone presentation and financial/data logic retained.
+Home briefing is an expandable preview; idea-to-journal navigation selects Journal.
+10 focused tests; canonical1829 Mac/1826 iPhone pass with usual opt-in exclusions.
+Native Home/sidebar/Holdings and Journal navigation checked; CUA helper crashed
+on Chat and recovery failed. Full visual acceptance is explicitly unfinished.
+Installed tested/signed Debug app at /Applications/StockSageX.app; prior copy in
+Trash, no data deleted. Earlier temp preview needs normal quit/reopen to load final
+fixes; native helper cannot perform it. No model restart, new automation, orders,
+push, merge or changes to main checkout's unrelated files. See latest HANDOFF entry.
+
 Latest12:28 +03: M11 stale-save deletion resurrection fixed for journal, holdings and
 paper records with per-ID deletion markers, preserved foreign additions and failed-save
 rollback. Corrected red selection62 total/3 failures/13 assertions ->102 focused green.

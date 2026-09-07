@@ -32,7 +32,7 @@ macOS-only persisted collapsed flag; StockSageDesktop.sections:[MarketSection],
 title(for:MarketSection)->String, shortcut(for:MarketSection)->Int,
 sidebarWidth(collapsed:Bool)->CGFloat. No store observation in the sidebar.
 
-- [ ] Add and execute desktop navigation contract tests (Mac-only):
+- [x] Add and execute desktop navigation contract tests (Mac-only):
 
 ```swift
 @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
@@ -49,7 +49,7 @@ sidebarWidth(collapsed:Bool)->CGFloat. No store observation in the sidebar.
 }
 ```
 
-- [ ] Implement desktop metadata/sidebar, native SettingsLink, labelled selection,
+- [x] Implement desktop metadata/sidebar, native SettingsLink, labelled selection,
   accessible collapse action and Reduce Motion/Transparency support. Exact ordering:
 
 ```swift
@@ -65,16 +65,16 @@ static func shortcut(for section: MarketSection) -> Int {
 }
 ```
 
-- [ ] Wrap current iPhone scroll tree in its platform branch. On Mac render fixed
+- [x] Wrap current iPhone scroll tree in its platform branch. On Mac render fixed
   heading/status, desktop page and trailing sidebar; keep current lifecycle modifiers
   on the common root so section switching cannot duplicate polling. Use the existing
   section switch for unchanged pages, Home composition for .briefing and full-height
   Chat for .chat. Set Mac's WindowGroup default destination/size explicitly.
-- [ ] Separate Portfolio into Holdings/Journal/Paper/Analytics with existing components;
+- [x] Separate Portfolio into Holdings/Journal/Paper/Analytics with existing components;
   move Ideas tools into disclosures. Do not change their bindings or computations.
-- [ ] Apply neutral macOS-only canvas/card tokens, roomy typography and column widths.
+- [x] Apply neutral macOS-only canvas/card tokens, roomy typography and column widths.
   Preserve semantic colors and all stale/source/error labels. Keep all iPhone branches.
-- [ ] Execute the focused navigation tests and compile the macOS app; inspect resulting
+- [x] Execute the focused navigation tests and compile the macOS app; inspect resulting
   diff for duplicated tasks, section reachability and controls displaced offscreen.
 
 Focused command (unique artifact suffix per execution):
@@ -111,11 +111,11 @@ VStack(alignment: .leading, spacing: 16) { conversation; composer }.padding(16)
 #endif
 ```
 
-- [ ] Extract existing transcript/composer without duplicating StateObject or send tasks.
+- [x] Extract existing transcript/composer without duplicating StateObject or send tasks.
   Keep privacy copy accessible under an explicit disclosure on Mac, full text on iPhone.
   Keep failed/cancelled answers, provenance and clear-history confirmation unchanged.
-- [ ] Run navigation and Chat focused suites; inspect both platform compilation branches.
-- [ ] Run full canonical gates serially, Mac then iPhone17Pro(gate), using existing
+- [x] Run navigation and Chat focused suites; inspect both platform compilation branches.
+- [x] Run full canonical gates serially, Mac then iPhone17Pro(gate), using existing
   derived data and exclusions below. Never edit Swift while a gate is running.
 
 ```sh
@@ -133,6 +133,13 @@ Repeat with destination
 - [ ] Inspect offline populated native UI when feasible: all nine routes, minimum/full
   window, rail toggle/shortcuts, four Portfolio tabs, Settings, long Chat and fixed input.
   Report any unavailable native check explicitly; do not claim screenshots from builds.
-- [ ] Self-review diff, record exact test counts/artifacts and UI evidence, explicitly
+
+  Partial native check: Home/right sidebar/Holdings screenshot, Journal switch by AX
+  on the new Debug product with normal app data, not an offline fixture. The CUA
+  helper crashed on Chat and two recovery attempts failed; remaining routes, minimum
+  window, collapse, Settings and final Home/Chat fixes are not visually verified.
+  This checkbox deliberately remains open. Full canonical gates passed1829 Mac and
+  1826 iPhone, with10 focused navigation/Chat tests; details/artifacts in HANDOFF.md.
+- [x] Self-review diff, record exact test counts/artifacts and UI evidence, explicitly
   stage only this task's files, commit with required heredoc/coauthor, do not push.
   Keep previous app recoverable if installing; leave Qwen/automation off.

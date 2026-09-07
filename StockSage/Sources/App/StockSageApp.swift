@@ -38,7 +38,7 @@ struct StockSageApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        WindowGroup("StockSage", id: "main") {
             // Unit-test hosts must not launch refresh/scan/monitor or write owner state.
             if !StockSageStore.isRunningTests {
                 // Review triage 2026-07-27: an Xcode-assistant edit wrapped this in a DEBUG
@@ -46,7 +46,13 @@ struct StockSageApp: App {
                 // STRUCT, so every Debug build showed the error card instead of the app. Reverted
                 // to the direct view; its delegate-timing init() fix above was kept (it's better
                 // than the old onAppear wiring).
-                MarketsView()
+                Group {
+                    #if os(macOS)
+                    MarketsView(qaSection: .briefing)
+                    #else
+                    MarketsView()
+                    #endif
+                }
                     #if os(macOS)
                     .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
                                                             // a 900pt canvas onto a 430pt phone (clip)
@@ -91,6 +97,8 @@ struct StockSageApp: App {
         }
         #if os(macOS)
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 1280, height: 840)
+        .windowToolbarStyle(.unifiedCompact)
         #endif
 
         // MENU BAR PARKED (2026-07-16): with MenuBarExtra present, the main run loop wedges in
