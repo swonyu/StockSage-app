@@ -10,6 +10,27 @@ import SwiftUI
 @Suite("CatalystsSection — pure view helpers")
 struct CatalystsSectionTests {
 
+    @Test("an explanation is current only for the facts AND settings that requested it")
+    func narrationSettingsAndFactsMustMatch() {
+        let saved = ["localServerOnly", "http://127.0.0.1:8765", "model-A"]
+        let facts = ["Price: 100"]
+        #expect(CatalystsSection.narrationRefreshReason(savedFacts: facts, currentFacts: facts,
+            savedSettings: saved, currentSettings: saved) == nil)
+        for (index, value) in [(0, "off"), (0, "onDeviceOnly"), (0, "auto"),
+                                (1, "http://127.0.0.1:11434"), (2, "model-B")] {
+            var current = saved
+            current[index] = value
+            #expect(CatalystsSection.narrationRefreshReason(savedFacts: facts, currentFacts: facts,
+                savedSettings: saved, currentSettings: current) != nil)
+        }
+        #expect(CatalystsSection.narrationRefreshReason(savedFacts: facts, currentFacts: facts,
+            savedSettings: nil, currentSettings: saved) != nil)
+        #expect(CatalystsSection.narrationRefreshReason(savedFacts: facts, currentFacts: ["Price: 101"],
+            savedSettings: saved, currentSettings: saved) != nil)
+        #expect(CatalystsSection.narrationRefreshReason(savedFacts: nil, currentFacts: facts,
+            savedSettings: saved, currentSettings: saved) != nil)
+    }
+
     @Test("one icon per catalyst Kind — all twelve cases")
     func iconPerKind() {
         #expect(CatalystsSection.iconName(for: .earnings) == "calendar.badge.exclamationmark")

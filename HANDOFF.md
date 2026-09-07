@@ -1,5 +1,56 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Explanation freshness includes request settings (2026-09-07 06:42 +03)
+
+N14/UI14 bounded lifecycle fix. The generating-model label was ALREADY correct,
+but the Catalyst Explain panel only compared fact strings; changing backend,
+URL or model did not mark an old response stale. Diagnostic workflow first
+extracted that existing display decision unchanged into narrationRefreshReason,
+then exercised the production helper without changing owner preferences or
+calling a model. `/private/tmp/stocksage-narration-settings.HJogxm/check`
+reported settingsChanged=true/staleWarning=false, exit1; --control changed only
+model-B back to model-A and passed. Regression9pass/1fail before the fix.
+
+The panel now compares both original facts and the three request settings.
+Stale text stays readable below "Previous explanation — not current", with an
+Original app facts disclosure and its original numbered sources/model. It is
+not relabelled as a fresh explanation. Footer wording says supplied facts
+snapshot rather than facts above, which could now mean the changed live card.
+Facts/settings/sources/result publish together after generation, not as partial
+metadata before awaits. A settings change during source retrieval prevents the
+pending call from silently using newly selected settings; a change during
+generation leaves a stale snapshot. Cancellation clears the spinner via defer.
+No new coordinator, dependency, request retry, model or persistent cache.
+
+Original replay now prints `Narration settings freshness self-check ok`, exit0;
+unchanged-settings control also passes. Test covers model, URL, all other backend
+modes, missing metadata, changed facts and unchanged inputs. Focused47/47 passed:
+`/private/tmp/stocksage-narration-settings-red-20260907.xcresult`,
+`/private/tmp/stocksage-narration-settings-green-20260907.xcresult`.
+Serial canonical macOS1769/1769 and iPhone17Pro(gate)1767/1767 passed, exit0,
+zero selected failures/skips, same three opt-in exclusions (CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests):
+`/private/tmp/stocksage-narration-settings-macos-20260907.xcresult`,
+`/private/tmp/stocksage-narration-settings-ios-20260907.xcresult`.
+
+Tested installed appPID13924; executable/debug-dylib cmp and strict deep codesign
+passed. Normal quit initially met an open detail sheet; installer stopped before
+any replacement, then normal sheet close/quit succeeded. Previous app recoverable:
+`/Users/saleh/.Trash/StockSageX-pre-narration-settings-20260907-0639.app`.
+Native PAA Explain at06:41 used existing QwenPID23631, no injected response:
+failed-citation/numeric draft retained in full, prominent warning, exact generating
+model and new snapshot footer visible in AX and a populated screenshot. Same
+backend/URL/model settings confirmed; no owner settings or money inputs changed.
+Live settings mutation and in-flight switching were NOT UI-smoked; settings
+decisions use the isolated regression, async publication was reviewed inline.
+
+This does not add wall-clock expiry, prove semantic grounding, or solve the
+separate connection-probe freshness race. Next concrete review item: N10/N14,
+quote provider/time are absent from narrator facts, so equal-price provenance
+changes can escape fact-string invalidation. Primary AI, APIs and contract-gated
+P5 retain their independent requirements. No push, real trades, credential access,
+cloud upload or model reload; main worktree and stopped sibling task preserved.
+
 ## AI assessment checks selected evidence, not every offered fact (2026-09-07 06:26 +03)
 
 N13 bounded source-grounding step. The primary badge parser displayed selected

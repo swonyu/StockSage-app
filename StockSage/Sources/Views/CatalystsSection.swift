@@ -31,6 +31,7 @@ struct CatalystsSection: View {
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
     @State private var narrationFacts: [String: [String]] = [:]
+    @State private var narrationSettings: [String: [String]] = [:]
     @State private var narrating: Set<String> = []
     /// The citable news/filing/insider sources fetched for the LAST "Explain" press on each
     /// symbol — kept so `narrationPanel` can render the numbered source list (and its count for
@@ -65,6 +66,7 @@ struct CatalystsSection: View {
     /// The `.task(id:)` identity for the auto-probe below — re-probes only when a setting a
     /// probe result actually depends on changes, never on an unrelated body rebuild.
     private var probeTaskID: String { serverURL + "|" + serverModel + "|" + backendRaw }
+    private var explanationSettings: [String] { [backendRaw, serverURL, serverModel] }
 
     /// [network-safety-warn-first], fix pass 2026-09-06 (review blocker): true whenever the
     /// PERSISTED server settings parse to a non-loopback host, independent of which backend is
@@ -490,11 +492,16 @@ struct CatalystsSection: View {
         let symbol = brief.idea.symbol
         if narrating.contains(symbol) {
             ProgressView().controlSize(.small)
-        } else if narrations[symbol] != nil, narrationFacts[symbol] != StockSageCatalystNarrator.facts(for: brief) {
-            Text("Facts changed since this explanation. Tap Explain to refresh it.")
-                .font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
         } else if let result = narrations[symbol] {
             let sources = narrationSources[symbol] ?? []
+            let refreshReason = Self.narrationRefreshReason(
+                savedFacts: narrationFacts[symbol], currentFacts: StockSageCatalystNarrator.facts(for: brief),
+                savedSettings: narrationSettings[symbol], currentSettings: explanationSettings)
+            if let refreshReason {
+                Text("Previous explanation — not current. " + refreshReason)
+                    .font(.system(size: font11, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             switch result {
             case .text(let text, let source), .unverified(let text, let source, _):
                 VStack(alignment: .leading, spacing: 3) {
@@ -514,8 +521,29 @@ struct CatalystsSection: View {
                 Text(msg).font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if refreshReason != nil, let facts = narrationFacts[symbol] {
+                DisclosureGroup("Original app facts for this explanation") {
+                    ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
+                        Text(verbatim: fact).font(.system(size: font9)).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+            }
             if !sources.isEmpty { Self.sourceList(sources) }
         }
+    }
+
+    /// Shared display decision, separate from SwiftUI state so lifecycle changes are testable.
+    nonisolated static func narrationRefreshReason(savedFacts: [String]?, currentFacts: [String],
+                                                   savedSettings: [String]?, currentSettings: [String]) -> String? {
+        guard savedFacts == currentFacts else {
+            return "Facts changed since this explanation. Tap Explain to refresh it."
+        }
+        guard savedSettings == currentSettings else {
+            return "Model settings changed since this explanation. Tap Explain with your chosen settings to refresh it."
+        }
+        return nil
     }
 
     /// The numbered "[n] title · date · link" list the paragraph above may have cited — one row
@@ -571,13 +599,21 @@ struct CatalystsSection: View {
         let symbol = brief.idea.symbol
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
-        narrationFacts[symbol] = StockSageCatalystNarrator.facts(for: brief)
+        let facts = StockSageCatalystNarrator.facts(for: brief)
+        let settings = explanationSettings
         Task {
+            defer { narrating.remove(symbol) }
             let sources = await Self.citedSources(for: symbol)
-            narrationSources[symbol] = sources
+            // Do not silently send a pending Explain request to newly selected settings.
+            guard !Task.isCancelled, settings == explanationSettings else { return }
             let result = await StockSageCatalystNarrator.explain(brief, sources: sources)
+            guard !Task.isCancelled else { return }
+            // Publish the response and its ORIGINAL context together, after the last await.
+            // A settings change during generation leaves a readable, explicitly stale snapshot.
+            narrationFacts[symbol] = facts
+            narrationSettings[symbol] = settings
+            narrationSources[symbol] = sources
             narrations[symbol] = result
-            narrating.remove(symbol)
         }
     }
 

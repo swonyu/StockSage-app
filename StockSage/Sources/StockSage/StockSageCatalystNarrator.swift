@@ -260,7 +260,7 @@ enum StockSageCatalystNarrator {
     /// own rationale) and its limits, per the house honesty floor. This is the ON-DEVICE text;
     /// `label(for:)` is the source-aware version the view actually renders.
     nonisolated static let label =
-        "Model-written on-device from the facts above — a paraphrase, not analysis; it can "
+        "Model-written on-device from the supplied facts snapshot — a paraphrase, not analysis; it can "
         + "misstate; unvalidated; not advice."
 
     /// Source-aware label — `.onDevice` reads exactly as `label` above (so that test keeps
@@ -272,7 +272,7 @@ enum StockSageCatalystNarrator {
         case .onDevice:
             return label
         case .localServer(let model):
-            return "Model-written by the local server model \(model) from the facts above — "
+            return "Model-written by the local server model \(model) from the supplied facts snapshot — "
                 + "a paraphrase, not analysis; it can misstate; unvalidated; not advice."
         }
     }

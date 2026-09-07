@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest06:42 +03: Explain freshness now includes captured backend/URL/model as well
+as facts. Old responses remain readable, explicitly stale, with original facts,
+sources and model; metadata publishes after generation. Pending source fetches
+cannot silently route to changed settings. Behavior-preserving diagnostic seam,
+red9pass/1fail→47focused; canonical1769macOS/1767iPhone passed. Tested app
+installed; real PAA failed-check draft and snapshot footer visibly verified.
+Settings changes tested with isolated inputs, NOT by mutating owner preferences.
+No push/new model. Next N10/N14: quote source/time missing from narrator facts;
+probe lifecycle, semantic grounding, independent APIs/full Chat/P5 remain open.
+Exact evidence and limits in HANDOFF.
+
 Latest06:26 +03: primary Qwen assessment now checks numerical claims against
 SELECTED fact IDs and requires inline F references to be selected. Previously
 uncited facts could whitelist unrelated figures. Missing-evidence repair remains
