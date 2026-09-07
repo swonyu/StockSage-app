@@ -13,6 +13,13 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest23:32 +03,2026-09-07: owner resumed "continue auto". Existing same-task
+15-minute heartbeat is ACTIVE again; Qwen stays disabled. Verified the installed
+app's compact Home briefing/quick links visually. Native control failed again
+during the collapse check; remaining acceptance checklist stays open. No app code
+changed, no new build or inference. See latest HANDOFF; this supersedes earlier
+automation-PAUSED notes, not the model shutdown or no-push restrictions.
+
 Latest2026-09-07 redesign continuation: owner resumed at18:07, UI only; Qwen
 LaunchAgent stays disabled and overnight automation PAUSED (supersedes old12:20
 automation/approval notes below). Approved spec/plan at5baad2a. Mac now has a

@@ -15,7 +15,8 @@ gets a desktop transcript/composer layout. No additional dependencies or data la
 
 - Approved spec: docs/superpowers/specs/2026-09-07-macos-redesign-design.md.
 - Minimum900×700; preferred1280×840; rail220/64pt; page1200pt; Chat860pt.
-- Preserve iPhone rendering, financial logic and owner data. Qwen/automation remain off.
+- Preserve iPhone rendering, financial logic and owner data. Qwen remains off.
+  Owner resumed the same-task15-minute automation at23:32 +03 on2026-09-07.
 - Explicit staging, heredoc commits on wt/coverage; no pushes or real orders.
 - Preserve nine MarketSection identities and existing Command-number assignments.
 - Default Mac to Briefing-as-Home; explicit QA and iPhone destinations are unchanged.
@@ -137,9 +138,14 @@ Repeat with destination
   Partial native check: Home/right sidebar/Holdings screenshot, Journal switch by AX
   on the new Debug product with normal app data, not an offline fixture. The CUA
   helper crashed on Chat and two recovery attempts failed; remaining routes, minimum
-  window, collapse, Settings and final Home/Chat fixes are not visually verified.
+  window, collapse, Settings and final Chat fixes are not visually verified.
+  At23:32 continuation, the installed app's compact Home briefing and quick links
+  were visually verified. The rail-toggle attempt then returned user-changed-app;
+  the required fresh state query failed with native pipe closed. Do not count it
+  as a successful toggle. Qwen stays off; automation is now resumed by the owner.
   This checkbox deliberately remains open. Full canonical gates passed1829 Mac and
   1826 iPhone, with10 focused navigation/Chat tests; details/artifacts in HANDOFF.md.
 - [x] Self-review diff, record exact test counts/artifacts and UI evidence, explicitly
   stage only this task's files, commit with required heredoc/coauthor, do not push.
-  Keep previous app recoverable if installing; leave Qwen/automation off.
+  Keep previous app recoverable if installing; leave Qwen off and follow the latest
+  owner instruction for the same-task automation.

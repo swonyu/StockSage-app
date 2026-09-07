@@ -1,5 +1,23 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Autonomous continuation resumed — 2026-09-07 23:32 +03
+
+Owner said "continue auto". Resumed the existing stocksage-overnight-implementation
+heartbeat (ACTIVE, every15 minutes, same task); updated its stale approval/stop
+instructions to the approved redesign and current owner resume. This does not
+restart Qwen: LaunchAgent remains disabled and port8765 has no listener. Worktree
+was clean at99d904f; peer task independently remains inactive and no compiler ran.
+
+Opened /Applications/StockSageX.app, not the old temporary build. Native screenshot
+now verifies the final compact Home briefing, complete quick links, right sidebar
+and visible cached/not-live provenance. Normal app refresh may run; no model calls
+or owner record changes were requested. The rail-toggle attempt returned a user-
+changed-app notice, and the required fresh state query failed with native pipe
+closed. Collapse/expansion and other pending checks remain unverified; do not infer
+an app crash or a successful toggle. Installed app remains running. No code changes
+or repeated full gates in this documentation-only checkpoint; prior1829/1826 results
+below remain the last executed gates. Preserve outstanding native acceptance work.
+
 ## macOS right-sidebar redesign — 2026-09-07
 
 Owner resumed the redesign at18:07 after stopping the app/model/automation. This
