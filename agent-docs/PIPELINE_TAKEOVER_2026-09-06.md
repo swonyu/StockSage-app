@@ -13,6 +13,19 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest12:01 +03: M10 CSV export/import now recognizes CRLF (including quoted
+notes), accepts finite positive decimal-exponent export values without loosening
+human-input rules, and deduplicates against previously accepted rows in the same
+batch. Bad closures remain failures, not duplicate skips. Error locations now name
+physical starting lines after multiline notes. Original22 pass/4 fail -> newline
+24/2 -> numeric36/1 -> dedup37/1 (new line-location repro) ->61 focused green.
+Canonical macOS1821 / iPhone1819 pass, usual three opt-in exclusions. Approximate minute-based
+CSV identity retained; use JSON for ID/metadata preservation. No claim of general
+malformed-quote hardening, native picker acceptance or live API/P5 readiness.
+No owner data, model/app restart or push; built/gated, not installed, prior CUA
+blocker unchanged. Next M11 stale-instance deletion resurrection in isolated stores.
+Exact commands/artifacts and scope are in HANDOFF.
+
 Latest 11:46 +03: full-review UI03 JSON restore now applies journal, portfolio lots
 and watchlist through one native-caller path. Red actual-store replay:7 pass/1 fail,
 eight missing-state/count assertions; codec-only tests had missed both ignored

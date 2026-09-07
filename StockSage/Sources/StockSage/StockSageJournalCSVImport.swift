@@ -2,9 +2,10 @@ import Foundation
 
 // MARK: - Journal CSV import
 //
-// Round-trips exactly what StockSageJournalCSV.csv(...) exports (same header, same 11
-// columns, same RFC-4180 escaping, same ISO8601 dates). Pure parser — never touches the
-// store; the caller decides what to do with the result. HONESTY FLOOR: a row that doesn't
+// Imports StockSageJournalCSV's 11-column interchange format with RFC-4180 escaping
+// and ISO8601 dates. CSV omits IDs and extra journal metadata; use JSON for backups.
+// Pure parser — never touches the store; the caller decides what to do with the result.
+// HONESTY FLOOR: a row that doesn't
 // parse is never silently dropped — it comes back as a rowError the UI must show.
 
 /// One imported trade's provenance: a fresh id (ids are per-store, never carried across a
@@ -23,24 +24,24 @@ struct ImportPreview: Sendable, Equatable {
 }
 
 enum StockSageJournalCSVImport {
-    /// `line` is 1-based over the RAW input lines (header = line 1), matching what a user
-    /// sees if they open the file in a text editor / the row number Excel would report.
+    /// `line` is the record's 1-based starting physical file line (header = line 1),
+    /// including newlines inside quoted fields, matching a text editor rather than Excel rows.
     static func parse(_ csv: String, existing: [TradeRecord] = []) -> (trades: [TradeRecord], rowErrors: [(line: Int, reason: String)]) {
         let rawRows = splitRFC4180(csv)
         guard let headerRow = rawRows.first else { return ([], [(1, "empty file")]) }
-        guard headerRow.joined(separator: ",") == StockSageJournalCSV.header else {
+        guard headerRow.fields.joined(separator: ",") == StockSageJournalCSV.header else {
             return ([], [(1, "header doesn't match the export format — expected: \(StockSageJournalCSV.header)")])
         }
 
         let iso = ISO8601DateFormatter()
-        // Dedup key for existing trades: (symbol, side, entry, shares, openedAt-to-the-minute).
-        let existingKeys = Set(existing.map { dupeKey(symbol: $0.symbol, side: $0.side, entry: $0.entry, shares: $0.shares, openedAt: $0.openedAt) })
+        // Same existing identity policy, extended to rows accepted earlier in this batch.
+        var seenKeys = Set(existing.map { dupeKey(symbol: $0.symbol, side: $0.side, entry: $0.entry, shares: $0.shares, openedAt: $0.openedAt) })
 
         var trades: [TradeRecord] = []
         var errors: [(line: Int, reason: String)] = []
 
-        for (i, fields) in rawRows.dropFirst().enumerated() {
-            let line = i + 2   // 1-based, +1 for the header row already consumed
+        for row in rawRows.dropFirst() {
+            let line = row.line, fields = row.fields
             guard fields.count == 11 else {
                 errors.append((line, "expected 11 columns, found \(fields.count)"))
                 continue
@@ -50,21 +51,21 @@ enum StockSageJournalCSVImport {
             guard let side = TradeRecord.Side(rawValue: fields[1]) else {
                 errors.append((line, "side must be \"Long\" or \"Short\", found \"\(fields[1])\"")); continue
             }
-            guard let entry = StockSageInput.positiveAmount(fields[2]) else {
+            guard let entry = positiveCSVNumber(fields[2]) else {
                 errors.append((line, "entry must be a positive number, found \"\(fields[2])\"")); continue
             }
-            guard let stop = StockSageInput.positiveAmount(fields[3]) else {
+            guard let stop = positiveCSVNumber(fields[3]) else {
                 errors.append((line, "stop must be a positive number, found \"\(fields[3])\"")); continue
             }
             let target: Double?
             if fields[4].isEmpty {
                 target = nil
-            } else if let t = StockSageInput.positiveAmount(fields[4]) {
+            } else if let t = positiveCSVNumber(fields[4]) {
                 target = t
             } else {
                 errors.append((line, "target must be blank or a positive number, found \"\(fields[4])\"")); continue
             }
-            guard let shares = StockSageInput.positiveAmount(fields[5]) else {
+            guard let shares = positiveCSVNumber(fields[5]) else {
                 errors.append((line, "shares must be a positive number, found \"\(fields[5])\"")); continue
             }
             guard !fields[6].isEmpty, let openedAt = iso.date(from: fields[6]) else {
@@ -73,7 +74,7 @@ enum StockSageJournalCSVImport {
             let exitPrice: Double?
             if fields[7].isEmpty {
                 exitPrice = nil
-            } else if let e = StockSageInput.positiveAmount(fields[7]) {
+            } else if let e = positiveCSVNumber(fields[7]) {
                 exitPrice = e
             } else {
                 errors.append((line, "exitPrice must be blank or a positive number, found \"\(fields[7])\"")); continue
@@ -86,20 +87,18 @@ enum StockSageJournalCSVImport {
             } else {
                 errors.append((line, "closedAt must be blank or a valid ISO8601 date, found \"\(fields[8])\"")); continue
             }
-            // fields[9] (realizedR) is DERIVED (TradeRecord.realizedR reads exitPrice/entry/stop
-            // live) — never stored, so it's read only for a sanity mismatch, not assigned.
+            // fields[9] (realizedR) is DERIVED from accepted exit/entry/stop values;
+            // ignore the incoming text, never store it as an asserted performance figure.
             let note = fields[10].isEmpty ? nil : fields[10]
 
             let key = dupeKey(symbol: symbol, side: side, entry: entry, shares: shares, openedAt: openedAt)
-            if existingKeys.contains(key) {
-                errors.append((line, Self.duplicateReason))
-                continue
-            }
-
             let trade = TradeRecord(symbol: symbol, side: side, entry: entry, stop: stop, target: target,
                                     shares: shares, openedAt: openedAt, exitPrice: exitPrice, closedAt: closedAt,
                                     note: note)
             if let error = trade.closureError { errors.append((line, error)); continue }
+            guard seenKeys.insert(key).inserted else {
+                errors.append((line, Self.duplicateReason)); continue
+            }
             trades.append(trade)
         }
         return (trades, errors)
@@ -107,7 +106,18 @@ enum StockSageJournalCSVImport {
 
     /// The one row-error reason that is an intentional skip, not a failure — shared between
     /// parse()'s append and preview()'s partition so the two can never drift.
-    static let duplicateReason = "duplicate of existing trade — skipped"
+    static let duplicateReason = "duplicate of an existing or earlier accepted trade — skipped"
+
+    /// CSV must accept String(Double)'s decimal exponents without loosening human-input
+    /// rules. Keep the existing unambiguous comma policy; never admit hex, NaN or infinity.
+    private static func positiveCSVNumber(_ raw: String) -> Double? {
+        if let value = StockSageInput.positiveAmount(raw) { return value }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.range(of: #"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[eE][+-]?[0-9]+$"#,
+                         options: .regularExpression) != nil,
+              let value = Double(text), value.isFinite, value > 0 else { return nil }
+        return value
+    }
 
     /// Same as `parse(_:existing:)` but wrapped as an `ImportPreview` for the UI's confirmation
     /// alert. Duplicates are intentional SKIPS, failures are FAILURES — partitioned so the UI's
@@ -130,20 +140,22 @@ enum StockSageJournalCSVImport {
     /// RFC-4180 row splitter: handles quoted fields containing commas, doubled quotes, and
     /// embedded newlines (CR, LF, CRLF) — a naive `.split(separator: "\n")` would break a
     /// multi-line quoted note into multiple fake rows.
-    private static func splitRFC4180(_ csv: String) -> [[String]] {
-        var rows: [[String]] = []
+    private static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String])] {
+        var rows: [(line: Int, fields: [String])] = []
         var fields: [String] = []
         var field = ""
         var inQuotes = false
         let chars = Array(csv)
         var i = 0
         var sawAnyContent = false
+        var physicalLine = 1, rowStart = 1
 
         func endField() { fields.append(field); field = "" }
-        func endRow() { endField(); rows.append(fields); fields = [] }
+        func endRow() { endField(); rows.append((rowStart, fields)); fields = []; rowStart = physicalLine }
 
         while i < chars.count {
             let c = chars[i]
+            if c == "\r" || c == "\n" || c == "\r\n" { physicalLine += 1 }
             if inQuotes {
                 if c == "\"" {
                     if i + 1 < chars.count, chars[i + 1] == "\"" {
@@ -158,11 +170,8 @@ enum StockSageJournalCSVImport {
                 inQuotes = true; sawAnyContent = true; i += 1
             case ",":
                 sawAnyContent = true; endField(); i += 1
-            case "\r":
-                sawAnyContent = true
-                if i + 1 < chars.count, chars[i + 1] == "\n" { i += 1 }
-                endRow(); i += 1
-            case "\n":
+            case "\r", "\n", "\r\n":
+                // Swift treats CRLF as ONE extended-grapheme Character.
                 sawAnyContent = true; endRow(); i += 1
             default:
                 sawAnyContent = true; field.append(c); i += 1

@@ -1,5 +1,55 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review M10: CSV compatibility and duplicate accounting — 2026-09-07 12:01 +03
+
+Started clean at3eaa047, peer independently notLoaded/completed, no compiler writer.
+Claude PID52276 remains rooted in .claude/chrome; installed app/model PIDs unchanged.
+Read the actual export -> preview -> journal.importNew UI path and every parser caller.
+No new UI, dependency, shared human-input policy or live-service access was needed.
+
+Red actual API tests:22 pass/4 fail,25 assertions. CRLF failed header parsing and
+an export-only CRLF note was not quoted. Tiny/large finite values written by
+String(Double) were refused on reimport. In-batch duplicate rows acquired fresh IDs
+and persisted three journal records instead of two; a malformed closure later got
+misreported as an intentional duplicate. Plain numbers and LF/CR were controls.
+Focused command: xcodebuild test -project StockSage.xcodeproj -scheme StockSage
+-configuration Debug -destination 'platform=macOS,arch=arm64'
+-derivedDataPath /private/tmp/stocksage-codex-m1b.qzpbNS
+-only-testing:StockSageTests/StockSageJournalCSVImportTests
+-only-testing:StockSageTests/StockSageJournalCSVTests (red artifact below).
+
+One-variable probes: recognizing Swift's single CRLF Character and using scalar
+matching for export escaping left24 pass/2 fail (numeric/dedup only). CSV-only
+decimal-exponent parsing left36 pass/1 fail across the parser/export/input suites
+(only dedup). Accepted-row seen-key insertion, AFTER closure validation, fixed the
+original repro. An added multiline error-location test then isolated37 pass/1 fail:
+the UI's "line" was a logical row index, one short after a two-line note. The splitter
+now carries each record's physical starting line, counting CR/LF/CRLF inside quotes.
+
+CSV accepts the exporter's finite positive decimal exponents; human money/percent
+validation stays unchanged, as does the grouping-aware comma policy. Tests reject
+hex, NaN/inf, overflow, zero-underflow, nonpositive and malformed notation in all five
+numeric fields. Quoted Unicode notes/commas/doubled quotes retain exact content with
+LF, CR and CRLF. Duplicate identity remains the existing symbol/side/entry/shares/
+opened-minute key; first validated row wins, invalid rows do not reserve keys, and
+skips/errors remain disjoint on repeat import. Actual saves use isolated UUID suites
+and reopened stores, not owner defaults. Derived realizedR remains computed, never
+trusted from the file. CSV is interchange, not a lossless journal backup (IDs and
+extra metadata are omitted); JSON remains the identity-preserving path. General
+malformed-quote grammar hardening is not claimed by this scoped compatibility fix.
+
+Final61 focused tests pass in five suites, including journal-store and JSON-backup
+regressions. Canonical serial gates:1821/1821 macOS and1819/1819 iPhone17Pro(gate)
+pass, both exit0, zero selected failures/skips. Usual explicit exclusions: CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-csv-{red,lines,numbers,dedup,focused,macos,ios}-20260907.xcresult
+and matching .log files. Inline diff/caller/test review completed; no debug probes left.
+No owner records changed, trade/provider calls, model/app restart or push. Built/gated,
+not installed: prior CUA normal-close/visual blocker remains. Main's unrelated pbxproj
+and review/AGENTS artifacts remain untouched. Next M11: reproduce delete-then-save
+across two isolated instances before designing deletion retention. Native/live API/P5
+acceptance and N15 inner fetch/build cancellation remain distinct unfinished work.
+
 ## Full-review UI03: restore journal, holdings and watchlist — 2026-09-07 11:46 +03
 
 Started clean at c7fccd3 with the peer independently inactive and no compiler writer.

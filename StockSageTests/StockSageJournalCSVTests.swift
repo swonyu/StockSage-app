@@ -34,5 +34,6 @@ struct StockSageJournalCSVTests {
         #expect(StockSageJournalCSV.escape("a,b") == "\"a,b\"")
         #expect(StockSageJournalCSV.escape("say \"hi\"") == "\"say \"\"hi\"\"\"")
         #expect(StockSageJournalCSV.escape("line1\nline2") == "\"line1\nline2\"")
+        #expect(StockSageJournalCSV.escape("line1\r\nline2") == "\"line1\r\nline2\"")
     }
 }
