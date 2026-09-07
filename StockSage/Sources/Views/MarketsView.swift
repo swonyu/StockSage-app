@@ -2722,15 +2722,13 @@ struct MarketsView: View {
                         let panel = NSOpenPanel()
                         panel.allowedContentTypes = [.json]
                         panel.allowsMultipleSelection = false
-                        guard panel.runModal() == .OK, let url = panel.url,
-                              let data = try? Data(contentsOf: url) else { return }
-                        switch StockSageBackup.restore(from: data) {
-                        case .success(let payload):
-                            let result = journal.importNew(payload.trades)
-                            journalDataFeedback = "Restored \(result.added) trade\(result.added == 1 ? "" : "s")"
-                                + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
-                                + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "")
-                                + "; \(payload.positions.count) portfolio position(s) in file — add via Portfolio."
+                        guard panel.runModal() == .OK, let url = panel.url else { return }
+                        guard let data = try? Data(contentsOf: url) else {
+                            journalDataFeedback = "Restore failed: couldn't read the file."; return
+                        }
+                        switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
+                        case .success(let summary):
+                            journalDataFeedback = summary.message
                         case .failure(let err):
                             journalDataFeedback = "Restore failed: \(err.localizedDescription)"
                         }
@@ -2751,12 +2749,12 @@ struct MarketsView: View {
                     Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 .menuStyle(.borderlessButton).fixedSize()
-                .help("Import a broker/journal CSV, back up or restore ALL app data (JSON), or import your journal from the Salehman AI app")
+                .help("Import a journal CSV; back up or merge journal, portfolio and watchlist (JSON); or import your journal from Salehman AI. JSON backup excludes settings, credentials, chat and research imports.")
                 #else
                 // iOS Data affordance (2026-07-27): the mac menu above is NSOpenPanel-bound, so
                 // fencing it left iPhone with NO export path. Share sheet is the iOS-native
                 // equivalent — journal CSV and the full JSON backup travel via AirDrop/Files/
-                // Messages. Import/restore stay mac-side for now (no document-picker flow yet).
+                // Messages. JSON restoration uses the native document picker below.
                 Menu {
                     ShareLink(item: StockSageJournalCSV.csv(journal.trades),
                               preview: SharePreview("StockSage journal (CSV)")) {
@@ -2767,7 +2765,7 @@ struct MarketsView: View {
                                                                         userSymbols: store.userSymbols),
                                            encoding: .utf8) ?? "{}",
                               preview: SharePreview("StockSage backup (JSON)")) {
-                        Label("Share full backup (JSON)", systemImage: "externaldrive.badge.icloud")
+                        Label("Share journal, portfolio & watchlist (JSON)", systemImage: "externaldrive.badge.icloud")
                     }
                     Divider()
                     Button { showRestoreImporter = true } label: {
@@ -2777,20 +2775,16 @@ struct MarketsView: View {
                     Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 .fileImporter(isPresented: $showRestoreImporter, allowedContentTypes: [.json]) { result in
-                    // Same restore semantics as the mac path: merge by trade id, honest counts.
+                    // Same three-store merge as macOS; existing records win, counts are actual adds.
                     guard case .success(let url) = result else { return }
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                     guard let data = try? Data(contentsOf: url) else {
                         journalDataFeedback = "Restore failed: couldn't read the file."; return
                     }
-                    switch StockSageBackup.restore(from: data) {
-                    case .success(let payload):
-                        let result = journal.importNew(payload.trades)
-                        journalDataFeedback = "Restored \(result.added) trade\(result.added == 1 ? "" : "s")"
-                            + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
-                            + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "")
-                            + "; \(payload.positions.count) portfolio position(s) in file — add via Portfolio."
+                    switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
+                    case .success(let summary):
+                        journalDataFeedback = summary.message
                     case .failure(let err):
                         journalDataFeedback = "Restore failed: \(err.localizedDescription)"
                     }

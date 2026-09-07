@@ -1050,6 +1050,27 @@ final class StockSageJournalStore: ObservableObject {
         return (added, skipped, rejected)
     }
 
+    /// Backup has already validated every incoming record. Prepare a single batch without
+    /// changing memory/defaults, so a later portfolio/watchlist failure changes nothing.
+    func prepareBackupImport(_ incoming: [TradeRecord]) throws -> (added: Int, apply: () -> Void) {
+        let stored = defaults.object(forKey: key)
+        guard stored == nil || stored is Data else { throw CocoaError(.fileReadCorruptFile) }
+        let disk = try defaults.data(forKey: key).map { try JSONDecoder().decode([TradeRecord].self, from: $0) } ?? []
+        guard var merged = reconciled(trades, disk: disk) else {
+            throw StockSageBackup.BackupError.restoreFailed(lastError ?? "Conflicting journal records.")
+        }
+        var ids = Set(merged.map(\.id))
+        let additions = incoming.filter { ids.insert($0.id).inserted }
+        merged.insert(contentsOf: additions, at: 0)
+        let data = try JSONEncoder().encode(merged)
+        let records = merged
+        return (additions.count, {
+            self.defaults.set(data, forKey: self.key)
+            self.trades = records
+            self.lastError = nil
+        })
+    }
+
     @discardableResult func close(_ id: UUID, exitPrice: Double, plannedExit: Double? = nil, exitFill: Double? = nil, at date: Date = Date()) -> Bool {
         guard let i = trades.firstIndex(where: { $0.id == id }) else { lastError = "Journal trade not found."; return false }
         var candidate = trades[i]
@@ -1094,31 +1115,39 @@ final class StockSageJournalStore: ObservableObject {
     /// (a close is terminal), foreign ids (another process's adds) are preserved. Deletions
     /// pass `reconciling: false`. `qaSeed` still bypasses save() entirely (in-memory only).
     private func save(reconciling: Bool = true, replacing original: TradeRecord? = nil) -> Bool {
+        var records = trades
         if reconciling,
            let data = defaults.data(forKey: key),
            let disk = try? JSONDecoder().decode([TradeRecord].self, from: data) {
-            var mineIds = Set(trades.map(\.id))
-            for d in disk {
-                if let i = trades.firstIndex(where: { $0.id == d.id }) {
-                    // An invalid foreign update cannot silently acquire terminal-close priority
-                    // or be overwritten. An explicit close may repair the exact loaded version.
-                    if d.closureError != nil, trades[i] != d, original != d {
-                        lastError = "Conflicting journal closure data changed on disk. Nothing was saved; reload and review the original record."
-                        return false
-                    }
-                    if trades[i].isOpen && !d.isOpen { trades[i] = d }   // disk close wins
-                } else if !mineIds.contains(d.id) {
-                    trades.append(d)                                     // foreign trade — never drop
-                    mineIds.insert(d.id)
-                }
-            }
+            guard let merged = reconciled(records, disk: disk, replacing: original) else { return false }
+            records = merged
         }
-        guard let data = try? JSONEncoder().encode(trades) else {
+        guard let data = try? JSONEncoder().encode(records) else {
             lastError = "Couldn't encode the journal; the previous saved records were kept."
             return false
         }
         defaults.set(data, forKey: key)
+        trades = records
         return true
+    }
+
+    /// One reconciliation rule for ordinary saves and backup preparation: disk closes win,
+    /// foreign IDs survive, and conflicting invalid closures require explicit repair.
+    private func reconciled(_ records: [TradeRecord], disk: [TradeRecord], replacing original: TradeRecord? = nil) -> [TradeRecord]? {
+        var merged = records
+        var ids = Set(merged.map(\.id))
+        for d in disk {
+            if let i = merged.firstIndex(where: { $0.id == d.id }) {
+                if d.closureError != nil, merged[i] != d, original != d {
+                    lastError = "Conflicting journal closure data changed on disk. Nothing was saved; reload and review the original record."
+                    return nil
+                }
+                if merged[i].isOpen && !d.isOpen { merged[i] = d }
+            } else if ids.insert(d.id).inserted {
+                merged.append(d)
+            }
+        }
+        return merged
     }
 
     /// QA-only in-memory REPLACE: assigns `trades` directly, bypassing `save()` so nothing

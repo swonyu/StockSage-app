@@ -13,6 +13,20 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest 11:46 +03: full-review UI03 JSON restore now applies journal, portfolio lots
+and watchlist through one native-caller path. Red actual-store replay:7 pass/1 fail,
+eight missing-state/count assertions; codec-only tests had missed both ignored
+collections. Validate/prepare every collection before applying; existing IDs win,
+lot IDs survive repeats, foreign records/terminal closes are reconciled, watchlist
+normalizes without fetching prices.112 focused tests pass, including six bad-file
+and eight destination-failure cases with no partial writes. Canonical macOS1816
+and iPhone1814 pass, zero selected failures/skips, usual three opt-in exclusions.
+Scope labels no longer claim ALL app data. Crash-atomic multi-key
+writes/cross-process locking and deletion tombstones are not claimed; parent-app
+import remains journal-only. No owner data/model/app restart/push; built/gated,
+not installed, prior CUA blocker unchanged. Next M10 actual CSV CRLF/exponent and
+in-batch dedup repro. Native/live API/P5 and N15 remain separate. See HANDOFF.
+
 Latest 11:26 +03: full-review N16 removal now clears untracked quote/idea rows
 and badges immediately; intermediate full/retry scan publications recheck current
 membership, so late chunks cannot resurrect them. Held/curated coverage survives

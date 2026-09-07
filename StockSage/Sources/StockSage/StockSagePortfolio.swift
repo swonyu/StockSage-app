@@ -57,6 +57,25 @@ final class StockSagePortfolio: ObservableObject {
         save(reconciling: false)
     }
 
+    /// Validated backup lots keep their IDs. Never call add() here: it creates a fresh ID,
+    /// which would duplicate every holding on repeat restore and erase lot provenance.
+    func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> (added: Int, apply: () -> Void) {
+        let stored = defaults.object(forKey: Self.key)
+        guard stored == nil || stored is Data else { throw CocoaError(.fileReadCorruptFile) }
+        let disk = try defaults.data(forKey: Self.key).map { try JSONDecoder().decode([PortfolioPosition].self, from: $0) } ?? []
+        var merged = positions
+        var ids = Set(merged.map(\.id))
+        for lot in disk where ids.insert(lot.id).inserted { merged.append(lot) }
+        let additions = incoming.filter { ids.insert($0.id).inserted }
+        merged.append(contentsOf: additions)
+        let data = try JSONEncoder().encode(merged)
+        let records = merged
+        return (additions.count, {
+            self.defaults.set(data, forKey: Self.key)
+            self.positions = records
+        })
+    }
+
     /// LOST-UPDATE FIX (2026-07-09, C8 — same cross-process clobber class as the paper/journal
     /// stores, fixed the same day from LIVE paper-store evidence). This is the owner's REAL
     /// position book. Lots are IMMUTABLE once added (add/remove/clear only — no in-place

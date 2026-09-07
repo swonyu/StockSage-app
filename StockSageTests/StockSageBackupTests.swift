@@ -7,6 +7,145 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @MainActor @Test func nativeRestorePersistsAllThreeCollectionsAndIsRepeatable() throws {
+        let suite = "stocksage-backup-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let trade = fixtureTrade(), position = fixturePosition()
+        let data = StockSageBackup.export(trades: [trade], positions: [position], userSymbols: ["TSLA", "NVDA"])
+        let summary = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
+        #expect(summary.trades == 1)
+        #expect(summary.positions == 1)
+        #expect(summary.symbols == 2)
+        #expect(journal.trades == [trade])
+        #expect(portfolio.positions == [position])
+        #expect(store.userSymbols == ["TSLA", "NVDA"])
+        #expect(store.symbols.isEmpty) // restore preferences, never invent quotes or fetch a live price
+        #expect(StockSageJournalStore(defaults: defaults).trades == [trade])
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == [position])
+        #expect(StockSageStore(defaults: defaults, heldSymbols: { [] }).userSymbols == ["TSLA", "NVDA"])
+        let repeated = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
+        #expect(repeated.trades == 0 && repeated.positions == 0 && repeated.symbols == 0)
+        #expect(repeated.skipped == 4)
+        #expect(portfolio.positions == [position])
+    }
+
+    @MainActor @Test func restoreKeepsExistingAndForeignRecordsAndDistinctLots() throws {
+        let suite = "stocksage-backup-merge-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var original = fixtureTrade()
+        original.closedAt = nil; original.exitPrice = nil
+        let journal = StockSageJournalStore(defaults: defaults)
+        #expect(journal.add(original))
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { portfolio.positions.map(\.symbol) })
+        // Another instance writes after these stores loaded. Preserve its terminal close,
+        // foreign lot and watchlist symbol as well as the local in-memory records.
+        let foreignJournal = StockSageJournalStore(defaults: defaults)
+        #expect(foreignJournal.close(original.id, exitPrice: 170, at: Date(timeIntervalSince1970: 1_701_000_000)))
+        StockSagePortfolio(userDefaults: defaults).add(symbol: "MSFT", shares: 2, costBasis: 310)
+        defaults.set(["TSLA"], forKey: "stocksage_user_symbols")
+        let foreignPositions = StockSagePortfolio(userDefaults: defaults).positions
+        let newTrade = TradeRecord(symbol: "NVDA", side: .long, entry: 100, stop: 95,
+            target: nil, shares: 2, openedAt: original.openedAt)
+        let lot = fixturePosition()
+        let data = StockSageBackup.export(trades: [fixtureTrade(), newTrade, newTrade],
+            positions: [lot, lot], userSymbols: [" tsla ", "nvda", "NVDA"])
+        let result = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
+        #expect(result.trades == 1 && result.positions == 1 && result.symbols == 1)
+        #expect(result.skipped == 5)
+        #expect(journal.trades == [newTrade] + foreignJournal.trades)
+        #expect(portfolio.positions == foreignPositions + [lot])
+        #expect(portfolio.positions.count == 2) // same ticker, different immutable lot IDs
+        #expect(store.userSymbols == ["TSLA", "NVDA"])
+        #expect(store.trackedSymbolsUnion.contains("MSFT"))
+        #expect(StockSageJournalStore(defaults: defaults).trades == journal.trades)
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == portfolio.positions)
+        #expect(StockSageStore(defaults: defaults, heldSymbols: { [] }).userSymbols == store.userSymbols)
+    }
+
+    @MainActor @Test(arguments: ["journal", "position", "watchlist", "schema", "truncated", "corrupt"])
+    func invalidBackupCannotChangeAnyCollection(fault: String) throws {
+        let suite = "stocksage-backup-invalid-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        portfolio.add(symbol: "TEST", shares: 3, costBasis: 12)
+        defaults.set(["TEST"], forKey: "stocksage_user_symbols")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let positionsBefore = portfolio.positions
+        let valid = StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        var json = try #require(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+        switch fault {
+        case "journal":
+            var records = try #require(json["trades"] as? [[String: Any]])
+            records[0]["shares"] = -1
+            json["trades"] = records
+        case "position":
+            var records = try #require(json["positions"] as? [[String: Any]])
+            records[0]["shares"] = 0
+            json["positions"] = records
+        case "watchlist": json["userSymbols"] = ["NVDA", " "]
+        case "schema": json["schemaVersion"] = 99
+        case "truncated": json.removeValue(forKey: "positions")
+        default: break
+        }
+        let data = fault == "corrupt" ? Data("{bad".utf8) : try JSONSerialization.data(withJSONObject: json)
+        switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
+        case .success: Issue.record("Invalid \(fault) must reject the entire restore")
+        case .failure: break
+        }
+        #expect(journal.trades.isEmpty)
+        #expect(portfolio.positions == positionsBefore)
+        #expect(store.userSymbols == ["TEST"])
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
+    @MainActor @Test(arguments: ["journal", "portfolio", "watchlist", "journal-type", "portfolio-type", "journal-encode", "portfolio-encode", "journal-conflict"])
+    func preparationFailureCannotPartiallyApplyAValidBackup(fault: String) throws {
+        let suite = "stocksage-backup-prepare-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        switch fault {
+        case "journal": defaults.set(Data("bad".utf8), forKey: "stocksage.journal.v1")
+        case "portfolio": defaults.set(Data("bad".utf8), forKey: "stocksage_portfolio_v1")
+        case "watchlist": defaults.set(42, forKey: "stocksage_user_symbols")
+        case "journal-type": defaults.set(42, forKey: "stocksage.journal.v1")
+        case "portfolio-type": defaults.set(42, forKey: "stocksage_portfolio_v1")
+        case "journal-encode":
+            var trade = fixtureTrade(); trade.conviction = .nan
+            journal.qaSeed([trade])
+        case "portfolio-encode":
+            var lot = fixturePosition(); lot.costBasis = .infinity
+            portfolio.qaSeed([lot])
+        case "journal-conflict":
+            var trade = fixtureTrade(); trade.closedAt = nil
+            journal.qaSeed([fixtureTrade()])
+            defaults.set(try JSONEncoder().encode([trade]), forKey: "stocksage.journal.v1")
+        default: break
+        }
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let journalIDs = journal.trades.map(\.id), lotIDs = portfolio.positions.map(\.id)
+        let data = StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
+        case .success: Issue.record("Destination \(fault) failure must not partially restore")
+        case .failure(let error): #expect(error.localizedDescription.contains("Nothing was restored"))
+        }
+        #expect(journal.trades.map(\.id) == journalIDs)
+        #expect(portfolio.positions.map(\.id) == lotIDs)
+        #expect(store.userSymbols.isEmpty)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
     @Test func incoherentJournalRejectsTheWholeRestoreWithoutRepairingIt() {
         var invalid = fixtureTrade()
         invalid.closedAt = nil

@@ -1,5 +1,58 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review UI03: restore journal, holdings and watchlist — 2026-09-07 11:46 +03
+
+Started clean at c7fccd3 with the peer independently inactive and no compiler writer.
+Both macOS and iPhone JSON pickers decoded all three backup collections but only
+called journal.importNew; positions were relegated to an "add via Portfolio" message
+and watchlist entries were ignored. Existing tests covered decoding, not application.
+
+Extracted the two callers into one store-injected restore overload before fixing it.
+The actual-path regression uses UUID-scoped UserDefaults and fresh store instances:
+7 pass / 1 fail, eight assertions (missing in-memory/reloaded positions/watchlist and
+incorrect repeat counts); the codec round-trip and trade persistence controls passed.
+Focused invocation: xcodebuild test -project StockSage.xcodeproj -scheme StockSage
+-configuration Debug -destination 'platform=macOS,arch=arm64'
+-derivedDataPath /private/tmp/stocksage-codex-m1b.qzpbNS
+-only-testing:StockSageTests/StockSageBackupTests, with the red artifact below.
+
+Shared restore now validates the whole payload, prepares/encodes all three destination
+updates, then applies them without an await. Each store owns its existing keys and
+publishes its resulting state. Journal preparation reuses the ordinary save's extracted
+reconciliation rule (foreign IDs preserved, disk terminal close wins, invalid conflicts
+fail); CSV/parent imports retain their existing per-record import semantics. Holdings
+merge by original lot ID, NOT add(), which would allocate new IDs and duplicate repeat
+restores. Different lots of the same symbol survive. Existing IDs win over backup
+records; repeated/in-file duplicates are counted as skips. Watchlist entries normalize
+through validateNewSymbol and merge case-insensitively, without fetching/inventing
+quotes. Financial records are preserved rather than guessed/repaired.
+
+Tests cover fresh/repeated restores, independent lots, foreign writes/terminal close,
+normalized duplicates, six invalid-file variants and eight destination/preparation
+failures (malformed JSON, wrong stored types, nonfinite encoding, closure conflict).
+Failures leave all three collections/defaults unchanged; positive controls reopen
+stores from the same isolated suite. First 80 focused tests passed; final112 in seven
+suites include existing journal reconciliation/CSV/portfolio/tracking/scan regressions.
+Final review added wrong-UserDefaults-type guards and corrected stale scope comments.
+Both native callers now report actual three-collection counts; mac file-read failure
+is visible. Removed the misleading ALL-data promise: settings, credentials, chat and
+research imports are outside this JSON format. No schema/key changes.
+
+Canonical serial gates:1816/1816 macOS and1814/1814 iPhone 17 Pro (gate) pass,
+both exit0, zero selected failures/skips (iPhone1814 tests in191 suites).
+The usual explicit opt-in exclusions remain CalibrationPersistRunTests,
+LiveUniverseVerificationTests and StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-full-restore-{red,focused,focused-final,macos,ios}-20260907.xcresult
+and matching .log files. These are isolated application-path tests, not a clicked
+native file-picker acceptance run. The three UserDefaults writes are NOT crash-atomic
+or cross-process locked; deletion tombstones (M11) remain separate. Parent migration
+still imports journal only; export's pre-existing encoding-error fallback is unchanged.
+No owner records, real providers, notifications, orders, model/app restarts or pushes.
+Built/gated, not installed: prior native CUA normal-close/visual blocker remains.
+Main checkout's unrelated pbxproj/AGENTS/review artifacts stay untouched. Next M10:
+actual CSV round-trip tests for CRLF/scientific notation and same-batch duplicates.
+Native/live API/P5 acceptance and N15 inner fetch/build cancellation remain separate.
+
 ## Full-review N16: removal wins during live scans — 2026-09-07 11:26 +03
 
 Started clean at 5b44c97; peer task independently inactive, no compiler writer.

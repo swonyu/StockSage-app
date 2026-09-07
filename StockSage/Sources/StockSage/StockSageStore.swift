@@ -692,6 +692,23 @@ final class StockSageStore: ObservableObject {
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: [symbol: q])
     }
 
+    /// Backup tickers were validated/normalized by the decoder. Restore the preference,
+    /// not a quote: no network or invented prices, even when the app is offline.
+    func prepareBackupImport(_ incoming: [String]) throws -> (added: Int, apply: () -> Void) {
+        let stored = defaults.object(forKey: Self.userSymbolsKey)
+        guard stored == nil || stored is [String] else { throw CocoaError(.fileReadCorruptFile) }
+        var merged = userSymbols
+        var known = Set(merged.map { $0.uppercased() })
+        for symbol in (stored as? [String] ?? []) where known.insert(symbol.uppercased()).inserted { merged.append(symbol) }
+        let additions = incoming.filter { known.insert($0.uppercased()).inserted }
+        merged.append(contentsOf: additions)
+        let symbols = merged
+        return (additions.count, {
+            self.defaults.set(symbols, forKey: Self.userSymbolsKey)
+            self.userSymbols = symbols
+        })
+    }
+
     /// Remove a watchlist entry; curated/held instruments remain tracked.
     func removeSymbol(_ symbol: String) {
         let up = symbol.uppercased()
