@@ -73,7 +73,7 @@ enum StockSageCapitalAllocator {
         // Step 1+2: fund only buy-family ideas with a defined R and positive EV; the raw weight
         // IS half-Kelly (already a FRACTION in [0,0.5] — do NOT divide by account; it also
         // already encodes the edge, so no separate EV multiplier — that would double-count).
-        struct Fundable { let symbol: String; let entry: Double; let stop: Double; let weight: Double; let halfKelly: Double; let evR: Double; let velocity: Double }
+        struct Fundable { let idea: StockSageIdea; let symbol: String; let entry: Double; let stop: Double; let weight: Double; let halfKelly: Double; let evR: Double; let velocity: Double }
         var fundable: [Fundable] = []
         for idea in ideas {
             let a = idea.advice
@@ -121,7 +121,7 @@ enum StockSageCapitalAllocator {
                 unpriced.insert(idea.symbol)
                 continue
             }
-            fundable.append(Fundable(symbol: idea.symbol, entry: idea.price, stop: stop,
+            fundable.append(Fundable(idea: idea, symbol: idea.symbol, entry: idea.price, stop: stop,
                                      weight: weight, halfKelly: k.halfKelly, evR: ev.evR,
                                      velocity: StockSageExpectedValue.velocity(for: idea, calibration: calibration) ?? 0))
         }
@@ -139,7 +139,7 @@ enum StockSageCapitalAllocator {
         let deweightedForCorrelation = zip(rawWeights, adjWeights).contains { $0 - $1 > 1e-12 }
         if deweightedForCorrelation {
             fundable = zip(fundable, adjWeights).map { f, w in
-                Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop, weight: w, halfKelly: f.halfKelly, evR: f.evR, velocity: f.velocity)
+                Fundable(idea: f.idea, symbol: f.symbol, entry: f.entry, stop: f.stop, weight: w, halfKelly: f.halfKelly, evR: f.evR, velocity: f.velocity)
             }
         }
 
@@ -156,7 +156,7 @@ enum StockSageCapitalAllocator {
                 if cum + f.weight <= cap + 1e-12 {
                     kept.append(f); cum += f.weight
                 } else if cap - cum > 1e-9 {
-                    kept.append(Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop,
+                    kept.append(Fundable(idea: f.idea, symbol: f.symbol, entry: f.entry, stop: f.stop,
                                          weight: cap - cum, halfKelly: f.halfKelly, evR: f.evR,
                                          velocity: f.velocity))
                     cum = cap
@@ -176,6 +176,7 @@ enum StockSageCapitalAllocator {
         // AllocatedPosition stay RAW-NATIVE — every consumer already renders them through
         // `approxAmount(symbol:)` / converts via `majorUnitValue`×rate.
         var positions: [AllocatedPosition] = []
+        var rejectedForCosts: [String] = []
         var usdAtRisk = 0.0
         for f in fundable {
             let scaled = f.weight * scaleApplied
@@ -184,6 +185,13 @@ enum StockSageCapitalAllocator {
                                                        symbol: f.symbol, fxRatesToUSD: fxRatesToUSD),
                   ps.shares > 0,
                   let rawUnit = StockSagePositionSizer.rawQuoteUnitToUSD(symbol: f.symbol, fxRatesToUSD: fxRatesToUSD) else { continue }
+            let p = StockSageExpectedValue.winProbEstimate(conviction: f.idea.advice.conviction, calibration: calibration)
+            guard let edge = StockSageNetEdge.evaluate(for: f.idea, winProb: p, orderNotional: ps.notional),
+                  edge.clearsCost(estWinProb: p) else {
+                rejectedForCosts.append(f.symbol)
+                continue
+            }
+            // ponytail: leave rejected risk in cash; redistributing it requires a new sizing/cost pass.
             usdAtRisk += ps.dollarsAtRisk * rawUnit
             positions.append(AllocatedPosition(symbol: f.symbol, riskFraction: scaled, shares: ps.shares,
                                                dollarsAtRisk: ps.dollarsAtRisk, notional: ps.notional,
@@ -194,13 +202,16 @@ enum StockSageCapitalAllocator {
         let totalHeat = usdAtRisk / account
         let sorted = positions.sorted(by: positionOrder)
         var finalCaveat = caveat
+        if !rejectedForCosts.isEmpty {
+            finalCaveat += " Excluded after final-size cost check: " + rejectedForCosts.sorted().joined(separator: ", ") + ". Released risk stays in cash."
+        }
         if deweightedForCorrelation { finalCaveat += " A correlated cluster was de-weighted to count as ~one bet, not several." }
         if let regime, abs(regime.sizingBias - 1) > 0.01 {
             finalCaveat += String(format: " Sized ×%.2f for the %@ regime.", regime.sizingBias, regime.state.rawValue)
         }
         return CapitalAllocation(positions: sorted, totalHeat: totalHeat, requestedHeat: requestedHeat,
                                  scaleApplied: scaleApplied, account: account, maxHeat: cap, caveat: finalCaveat,
-                                 fundableCandidateCount: fundable.count, unpricedSymbols: unpriced.sorted())
+                                 fundableCandidateCount: fundable.count - rejectedForCosts.count, unpricedSymbols: unpriced.sorted())
     }
 
     /// #8 (BUGHUNT_NEWENGINES): the position sort is a TOTAL order, not just (risk desc, symbol
@@ -272,6 +283,10 @@ enum StockSageCapitalAllocator {
             return blocked(headroom <= 0
                 ? "No heat headroom left — the book is already at \(Int((heatBefore * 100).rounded()))% open risk."
                 : "Position size rounds to zero shares at this account size.")
+        }
+        guard let edge = StockSageNetEdge.evaluate(for: idea, winProb: ev.winProbEstimate, orderNotional: ps.notional),
+              edge.clearsCost(estWinProb: ev.winProbEstimate) else {
+            return blocked("Estimated costs exceed the edge at the final share size, including per-order broker minimums.")
         }
         let reason = suggested < k.suggestedFraction
             ? "Capped by remaining heat headroom (\(Int((headroom * 100).rounded()))% left of the \(Int((cap * 100).rounded()))% cap)."

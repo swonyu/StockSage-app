@@ -467,8 +467,9 @@ enum StockSageExpectedValue {
         guard let r = regime else { return base }                   // nil regime → IDENTICAL to today
         return bannedFromTopRank(side(idea), regime: r.state) ? base - 1_000_000 : base
     }
-    private nonisolated static func velocityRankKey(for idea: StockSageIdea, holds: VelocityHoldDays,
-                                                    calibration: StockSageConvictionCalibration? = nil) -> Double? {
+    nonisolated static func velocityRankKey(for idea: StockSageIdea, holds: VelocityHoldDays,
+                                           calibration: StockSageConvictionCalibration? = nil,
+                                           netEVOverride: Double? = nil) -> Double? {
         // Velocity is the BUY-side compounding lane (matches bestOpportunity / CapitalAllocator) —
         // a short does not compound the same way, so only buy-family ideas qualify. (Fixes a short
         // topping the Fast Lane while it is correctly barred from the best-opportunity card.)
@@ -484,8 +485,10 @@ enum StockSageExpectedValue {
         // high-net idea, instead of keeping its full gross velocity behind a binary pass/fail.
         // Log-growth stays the growth-rate-optimal core; the net ratio is the cost haircut.
         let grossLG = expectedLogGrowth(winProb: e.winProbEstimate, rewardR: e.rewardR)
+        // Sized plans reuse the SAME ranking formula, with their quantity-aware cost result.
+        let resolvedNetEV = netEVOverride ?? netEVR(for: idea, calibration: calibration)
         let netRatio: Double = {                                  // [AUDIT] net EV ÷ gross EV, clamped ≥ 0
-            guard let ne = netEVR(for: idea, calibration: calibration), e.evR > 0 else { return 1 }  // [AUDIT] no net data ⇒ ratio 1 (=gross)
+            guard let ne = resolvedNetEV, e.evR > 0 else { return 1 }  // [AUDIT] no net data ⇒ ratio 1 (=gross)
             return Swift.max(0, ne / e.evR)                       // [AUDIT] net≤0 ⇒ ratio 0 ⇒ key 0 (below every +rate peer)
         }()
         let v = grossLG * netRatio / hold                         // [AUDIT] PROXY for net per-day log-growth: gross log-growth scaled by netEV/grossEV arithmetic-cost haircut (not true net log-growth, but correct for ranking).
@@ -494,7 +497,7 @@ enum StockSageExpectedValue {
         // The old clearsCostAfterFrictions binary gate is SUBSUMED: anything net≤0 has ratio=0
         // ⇒ key=0, and the floor (< 0.005) then adds the −500_000 de-rank. Nothing previously
         // demoted is resurrected. Honest companion label via netCostFloorFlag(for:).
-        if belowNetCostFloor(for: idea, holds: holds, calibration: calibration) { return v - 500_000 }
+        if let ne = resolvedNetEV, ne / hold < minNetEVPerDayFloor { return v - 500_000 }
         return idea.advice.conviction >= minConvictionToRank ? v : v - 1000
     }
 

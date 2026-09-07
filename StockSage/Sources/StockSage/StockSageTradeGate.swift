@@ -49,12 +49,25 @@ enum StockSageTradeGate {
                                      maxCorrelation: Double? = nil,
                                      daysToEarnings: Int? = nil,
                                      rrIsNet: Bool = false,
-                                     sizingFXAvailable: Bool = true) -> TradeGateVerdict {
+                                     sizingFXAvailable: Bool = true,
+                                     sizedShares: Int? = nil,
+                                     sizedNetEVR: Double? = nil,
+                                     perOrderMinimumUnpriced: Bool = false) -> TradeGateVerdict {
         var checks: [TradeGateCheck] = []
         let rrPrefix = rrIsNet ? "Net reward:risk (after est. costs)" : "Reward:risk"
 
         if !sizingFXAvailable {
             checks.append(TradeGateCheck(level: .fail, label: StockSagePositionSizer.unavailableFXMessage))
+        }
+        // M8: a sized ticket cannot clear using an unsized cost result or zero shares.
+        if let sizedShares, sizedShares <= 0 {
+            checks.append(TradeGateCheck(level: .fail, label: "0 shares — below the 1-share minimum at your account size; no fundable order"))
+        }
+        if let sizedNetEVR, sizedNetEVR <= 0 {
+            checks.append(TradeGateCheck(level: .fail, label: "Sized net expectancy is not positive after estimated costs — no cost-clearing order"))
+        }
+        if perOrderMinimumUnpriced {
+            checks.append(TradeGateCheck(level: .warn, label: "Per-order broker minimums not priced — enter a fundable account size and risk %"))
         }
 
         // 1. A defined stop — without it, risk is undefined and sizing is meaningless.

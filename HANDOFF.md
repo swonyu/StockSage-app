@@ -1,5 +1,64 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## M8 — quantity-aware costs across sized decisions (2026-09-07 04:31 +03)
+
+Fixed the reproduced minimum-fee disagreement without changing the fee table or
+the model's opinions. DecisionSnapshot now sizes first, then derives net R:R,
+net expectancy, net velocity, floor flag and cost-failure reason from ONE NetEdge.
+Its gate rejects zero-share and non-positive sized expectancy; an unknown foreign
+order size warns that minimums are unpriced. Missing FX still blocks, never 1:1.
+Board/detail/CTA net displays and copied plans reuse that snapshot. Removed the
+view-only invented $10,000/1% snapshot defaults. Unsized research ranking remains
+the existing rules model; both Today's Plan ranking modes now apply sized costs
+before top-N truncation. Gross fields remain labelled gross.
+
+Single and multi-plan exports omit actionable terms for blocked rows. Allocation
+and marginal-add checks re-evaluate costs at FINAL rounded shares after risk
+limits. Rejected allocations leave their risk budget in cash, with named reasons;
+no redistribution loop or new sizing strategy. Existing raw-quote-unit fee and
+short-financing assumptions are retained and disclosed, not certified broker
+tariffs. This does not establish that Derayah trading/API acceptance is ready.
+
+Evidence:
+- A standalone production-module replay in `/private/tmp/stocksage-m8.OzjDIX/`
+  failed before the fix: one-share SAP.DE, entry100/stop95/target115, accountUSD600,
+  risk1%, EURUSD1.1: snapshot2.773585R:R versus sized1.531646, CLEAR. Afterward it
+  prints `M8 sized-cost self-check ok`, sized netEV0.648R and CAUTION.
+- Stronger regression: SAP.DE100/99/103, accountUSD120, risk1%, EURUSD1.1,
+  conviction0.9. Before: displayed2.076923 versus sized0.025641R:R, CLEAR despite
+  costs. After: BLOCKED, netEV-1.672R, sized floor/ranking and status-only exports.
+  `/private/tmp/stocksage-m8-red2-20260907.xcresult`: 9pass/1fail, exit65.
+- `/private/tmp/stocksage-m8-focused3-20260907.xcresult`: 101/101, exit0. Covers
+  size/FX changes, long/short financing, missing FX, zero shares, ranking max1,
+  final-size allocation/add rejection and copied-plan parity. Initial test label
+  typo and two integration compile errors were fixed before these passing runs.
+- Native installed-build test at04:25: 1080.SR, temporary accountUSD10/risk1%,
+  yielded1share, gateBLOCKED, netR:R-0.5 and netEV-5.70R, ~1204bps total estimated
+  cost including minimums. Screenshot/AX verified; original account text and blank
+  risk field restored. No journal, alert, real order or account connection made.
+- Final broad gates, including the 64-bit share-count formatting regression:
+  macOS1755/1755 and iPhone1753/1753, both exit0, zero selected failures/skips.
+  `/private/tmp/stocksage-m8-final2-macos-20260907-0428.xcresult`
+  `/private/tmp/stocksage-m8-final2-ios-20260907-0430.xcresult`
+  Same three opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests and StrategyBaselineMeasurementTests. These runs
+  do NOT claim live API acceptance or measured strategy performance.
+
+The tested app replaced `/Applications/StockSageX.app`; old bundle recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-m8-20260907-0425.app`. Executable and debug dylib
+comparisons plus strict/deep codesign passed. Original Qwen PID23631 unchanged;
+no training, downloads or uploads. Main worktree/pbxproj untouched; no pushes.
+Final formatting-only build installed after its macOS gate, process72465; the
+preceding M8 bundle is recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-m8-format-20260907-0430.app`. Both binary
+comparisons and strict/deep signature verification passed again. The one-share
+native check above preceded only that 64-bit formatting correction.
+
+Next: M4 gross/net projection horizon mismatch (still visible natively), then
+sample-header/test-cache isolation and semantic news/model checks. Broker contract,
+live per-route API acceptance, full Chat/iPhone serving and P5 remain open. The
+15-minute heartbeat continues in this task; this is not overall completion.
+
 ## Final native research verification — 2026-09-07 03:57 +03
 
 Final installed QCOM badge: **AI Hold**,03:55snapshot, RulesAvoid, exact4-bit

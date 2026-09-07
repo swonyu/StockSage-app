@@ -131,10 +131,21 @@ enum StockSageNetEdge {
     }
 
     nonisolated static func netRR(for idea: StockSageIdea, now: Date = Date()) -> Double? {
+        evaluate(for: idea, now: now)?.netRR
+    }
+
+    /// One current cost result for an idea. Notional is in RAW quote units, just like
+    /// PositionSize.notional; converting it to USD here would change the share count twice.
+    /// No size means the existing bps-only estimate, not a fabricated broker minimum.
+    nonisolated static func evaluate(for idea: StockSageIdea, winProb: Double? = nil,
+                                     orderNotional: Double? = nil, now: Date = Date()) -> NetEdge? {
         guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return nil }
+        let c = costs(forSymbol: idea.symbol, nbbo: idea.nbbo, now: now)
         let (rate, days) = StockSageExpectedValue.financingCostInputs(for: idea)
-        return netRR(symbol: idea.symbol, entry: idea.price, stop: stop, target: target,
-                     annualFinancingRate: rate, holdDays: days, nbbo: idea.nbbo, now: now)
+        return evaluate(entry: idea.price, stop: stop, target: target,
+                        spreadBps: c.spreadBps, slippageBps: c.slippageBps, takerFeeBps: c.takerFeeBps,
+                        annualFinancingRate: rate, holdDays: days, winProb: winProb,
+                        perOrderMinimum: c.perOrderMinimum, orderNotional: orderNotional)
     }
 
     /// Conservative retail-honest annualized borrow/margin-cost ESTIMATE for a general-collateral

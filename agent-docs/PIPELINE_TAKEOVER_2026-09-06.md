@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest04:31 +03: M8 quantity/minimum-fee parity fixed in shared snapshots, both
+sized Today-plan ranking modes, board/detail/CTA net displays, copied plans and
+final-size allocation/add checks. Unknown minimums warn; zero-share or cost-losing
+tickets block. Original production replay red→green,101 focused tests, final
+macOS1755/iPhone1753 passed with the same3 opt-in exclusions. Native one-share
+1080.SR check confirmed the blocked gate and negative net ledger; sizing inputs
+restored. Final tested app installed, previous bundles recoverable in Trash.
+Existing tariff assumptions remain estimates. Next M4 weekly gross/net mismatch,
+then sample/test-cache isolation; APIs/P5/full Chat are not declared complete.
+No pushes, trades, model restart or private-data upload. All work stays inline.
+
 Latest03:57 +03: final QCOM native Hold badge verified with actual news and3
 private WhatsApp snapshot leads. AMZN/APP also returned Hold. Inline references
 now validate separately from financial numbers; regression red then broad1752/
