@@ -6,6 +6,7 @@ import CoreFoundation
 /// Provider observations only: never a target/EV/ranking input or an instruction to trade.
 @MainActor
 enum StockSageMassiveEvents {
+    nonisolated static let pageLimit = 10
     nonisolated enum Feed: String, Codable, Sendable, CaseIterable {
         case filing8K, ratings, guidance, dividends, insider
 
@@ -124,7 +125,7 @@ enum StockSageMassiveEvents {
             case .requestUnavailable: "Request not made: missing configuration or unsupported input."
             case .invalidPayload: "Response failed data validation."
             case .conflictingTransactionDirection: "Filing has conflicting purchase/sale and acquired/disposed fields; transaction direction is unverified."
-            case .incompleteResponse: "Response exceeds the one-page/100-row coverage limit; more data is required."
+            case .incompleteResponse: "Complete coverage unavailable: page/row limit or unsafe/repeated continuation; more data is required."
             case .responseTooLarge: "Response exceeds the 2 MB validation limit."
             }
         }
@@ -181,10 +182,13 @@ enum StockSageMassiveEvents {
         return r
     }
 
-    /// ponytail: one complete page/100 rows/2MB per feed; pagination means unavailable,
-    /// not checked-empty. Add pagination only when this explicit coverage ceiling is measured.
-    /// Select one observation per kind (latest, except the earliest upcoming ex-date).
+    /// Single-response callers must still prove completeness; only fetch follows continuations.
     nonisolated static func parse(_ data: Data, feed: Feed, symbol: String, now: Date) throws -> Event? {
+        let page = try parsePage(data, feed: feed, symbol: symbol, now: now)
+        guard page.next == nil else { throw Failure.incompleteResponse }
+        return page.event
+    }
+    private nonisolated static func parsePage(_ data: Data, feed: Feed, symbol: String, now: Date) throws -> (event: Event?, next: String?) {
         guard data.count <= 2_000_000 else { throw Failure.responseTooLarge }
         guard StockSageMassive.covers(symbol), now.timeIntervalSince1970.isFinite,
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -192,7 +196,11 @@ enum StockSageMassiveEvents {
             throw Failure.invalidPayload
         }
         guard rows.count <= 100 else { throw Failure.incompleteResponse }
-        if let next = root["next_url"], !(next is NSNull), (next as? String) != "" { throw Failure.incompleteResponse }
+        var next: String?
+        if let raw = root["next_url"], !(raw is NSNull) {
+            guard let text = raw as? String else { throw Failure.invalidPayload }
+            next = text.isEmpty ? nil : text
+        }
         var events: [Event] = []
         for value in rows {
             guard let row = value as? [String: Any] else { throw Failure.invalidPayload }
@@ -202,11 +210,29 @@ enum StockSageMassiveEvents {
             guard inWindow(date, feed: feed, now: now) else { continue }
             if let event = try event(row, feed: feed, symbol: symbol.uppercased(), date: date) { events.append(event) }
         }
-        return events.sorted {
+        return (selected(events, feed: feed), next)
+    }
+    private nonisolated static func selected(_ events: [Event], feed: Feed) -> Event? {
+        events.min {
             if $0.date != $1.date { return feed == .dividends ? $0.date < $1.date : $0.date > $1.date }
             // Stable content tie-break also handles multiple disclosures/transactions in a filing.
             return ($0.id + $0.headline + $0.details.joined()) < ($1.id + $1.headline + $1.details.joined())
-        }.first
+        }
+    }
+
+    /// Same trust boundary as MassiveTicks: bearer auth never follows an arbitrary vendor URL.
+    private nonisolated static func nextRequest(_ next: String, feed: Feed, key: String,
+                                                pagesLoaded: Int, visited: Set<String>) -> URLRequest? {
+        guard pagesLoaded < pageLimit, !visited.contains(next), next.utf8.count <= 8_192,
+              !key.isEmpty, let parts = URLComponents(string: next),
+              parts.scheme == "https", parts.host == "api.massive.com",
+              parts.port == nil || parts.port == 443, parts.user == nil, parts.password == nil,
+              parts.fragment == nil, parts.percentEncodedPath == feed.path,
+              !(parts.queryItems ?? []).contains(where: { $0.name.lowercased() == "apikey" }),
+              let url = parts.url else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     private nonisolated static func number(_ row: [String: Any], _ key: String) throws -> Double? {
@@ -337,7 +363,43 @@ enum StockSageMassiveEvents {
         return nil
     }
     static func fetch(_ feed: Feed, symbol: String, now: Date = Date()) async -> Observation {
-        observation(await get(feed, symbol: symbol, now: now), feed: feed, symbol: symbol, now: now)
+        await fetch(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey) {
+            await get(feed, request: $0, now: Date())
+        }
+    }
+    /// Injectable transport keeps the real request/response path testable without credentials or network.
+    static func fetch(_ feed: Feed, symbol: String, now: Date, key: String,
+                      load: (URLRequest) async -> Result<Data, Failure>) async -> Observation {
+        guard var request = request(feed, symbol: symbol, now: now, key: key) else {
+            return observation(.failure(.requestUnavailable), feed: feed, symbol: symbol, now: now)
+        }
+        // ponytail: 10 sequential pages, 100 rows/page, 2MB TOTAL per symbol/feed.
+        // Raise only on measured need; a cap/error never publishes a partial or checked-empty result.
+        var visited: Set<String> = []
+        var bytes = 0
+        var best: Event?
+        do {
+            for pageIndex in 0..<pageLimit {
+                guard !Task.isCancelled else { throw Failure.cancelled }
+                if let url = request.url?.absoluteString { visited.insert(url) }
+                let data = try await load(request).get()
+                guard !Task.isCancelled else { throw Failure.cancelled }
+                guard data.count <= 2_000_000 - bytes else { throw Failure.responseTooLarge }
+                bytes += data.count
+                let page = try parsePage(data, feed: feed, symbol: symbol, now: now)
+                best = selected([best, page.event].compactMap { $0 }, feed: feed)
+                guard let next = page.next else {
+                    return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: .answered, event: best)
+                }
+                guard let next = nextRequest(next, feed: feed, key: key, pagesLoaded: pageIndex + 1, visited: visited) else {
+                    throw Failure.incompleteResponse
+                }
+                request = next
+            }
+            throw Failure.incompleteResponse
+        } catch {
+            return observation(.failure(error as? Failure ?? .invalidPayload), feed: feed, symbol: symbol, now: now)
+        }
     }
     nonisolated static func observation(_ response: Result<Data, Failure>, feed: Feed, symbol: String, now: Date) -> Observation {
         do {
@@ -349,10 +411,13 @@ enum StockSageMassiveEvents {
         }
     }
     private static func get(_ feed: Feed, symbol: String, now: Date, limit: Int = 100) async -> Result<Data, Failure> {
+        await get(feed, request: request(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey, limit: limit), now: now)
+    }
+    private static func get(_ feed: Feed, request: URLRequest?, now: Date) async -> Result<Data, Failure> {
         guard ToolPolicy.isExternalAllowed else { return .failure(.externalAccessDisabled) }
         guard !Task.isCancelled else { return .failure(.cancelled) }
         guard available(feed, now: now) else { return .failure(.cooldown) }
-        guard let request = request(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey, limit: limit) else {
+        guard let request else {
             return .failure(.requestUnavailable)
         }
         do {

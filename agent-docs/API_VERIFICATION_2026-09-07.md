@@ -3,6 +3,29 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## Form4 pagination: all nine configured fetches pass — 05:54 +03
+
+Shared company-event fetch now follows up to10 sequential100-row pages with a
+2MB aggregate validation cap, exact-host/path header authentication/no redirects,
+and policy/cancellation/cooldown checks on every request. Any bad/incomplete
+later page remains unavailable with no selected event. All five feeds use this
+path; no new Store concurrency, retry loop or partial-success semantics.
+
+Installed app's actual fetches at02:51:17–02:51:32Z answered for all nine former
+pagination failures: CRWD,UTHR,NAVN,STX,CRNX,CBRS,FLYW,CHYM,CLBK. Eight required
+two pages; CHYM required eight (706rows/1,748,224bytes), within measured bounds.
+CRNX is complete-empty of qualifying transactions; the other eight select an
+event. All24 captured pages replay offline to identical native Observations.
+No key/header was inspected; raw cursor/request-ID stripped from private captures.
+Regression red→21focused passed; full1764macOS/1762iPhone passed with the same
+three opt-in exclusions. Tested app installed; exact artifacts/limits in HANDOFF.
+
+Request/parser acceptance is complete for THESE nine responses. Store/UI is not
+yet verified: the cache still holds nine failures checked05:48 until their normal
+15-minute retry is due after06:03. No manual cache edit/reset. Verify normal
+refresh and native feed disclosure next; SBLK/TEM source conflicts remain real.
+No universal API success or pipeline-completion claim.
+
 ## SBLK/TEM Form4: source conflict, not access failure — 05:34 +03
 
 Both configured fetches reached the installed app's parser. Offline replay

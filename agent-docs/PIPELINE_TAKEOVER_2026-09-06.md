@@ -13,6 +13,16 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest05:54 +03: company-event bounded pagination implemented at shared fetch:
+10sequential pages/100rows/2MB TOTAL, same-host/path bearer/no redirects,
+per-page guards, no partial success. Real nine formerly truncated Form4 fetches
+all answered: eight2-page cases, CHYM8pages/706rows.24 captured pages replay
+to identical native observations, including a genuine qualifying-empty CRNX.
+Red18pass/1fail→focused21; full1764macOS/1762iPhone green; tested app installed.
+NEXT verify normal due refresh after06:03 and native Company feeds UI: nine
+05:48 cached warnings still fresh at05:54, not manually changed. SBLK/TEM source
+conflicts remain; broader API/Chat/P5 acceptance not complete. See HANDOFF.
+
 Latest05:34 +03: the last two Form4 invalidPayload failures are genuine S/A
 direction contradictions in SBLK/TEM's original filings, independently verified
 against SEC/issuer copies. Keep rejection, now explain the precise source conflict

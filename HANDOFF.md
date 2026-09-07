@@ -1,5 +1,74 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Company-event pagination implemented and live-replayed (2026-09-07 05:54 +03)
+
+Actual CRWD HTTP200 response at02:41Z:149,572bytes/100rows plus next_url.
+Offline replay failed incompleteResponse; removing ALL rows still failed;
+removing ONLY next_url made the100 original rows pass. This isolated the
+one-page coverage ceiling, not missing access or a malformed transaction.
+Official continuation contract: https://massive.com/docs/rest/stocks/filings/form-4
+
+The shared five-feed fetch now follows at most10 sequential pages,100rows/page,
+2MB TOTAL, retaining the existing four-symbol Store concurrency. Each page
+passes the same row/symbol/date/transaction validation. Only complete success
+selects an event (latest, earliest upcoming for dividends). A later error,
+oversize response, unsafe/repeated cursor or exhausted cap yields unavailable,
+nil event, never a partial or checked-empty success. Single-response parse still
+rejects continuation. Selection uses the same deterministic content tie-break.
+Continuation requests reuse the MassiveTicks trust-boundary pattern: exact
+HTTPS api.massive.com/feed path,443/default port, no userinfo/fragment/API-key
+query, bounded URL length, header-only bearer, no redirects. Every production
+page retains policy/cancellation/cooldown checks; cancellation after a response
+also prevents publication. Probe stays status-only and one request.
+
+Real installed-app fetches,02:51:17–02:51:32Z, all answered successfully:
+
+| Symbol | Pages | Rows | Raw response bytes | Selected event |
+|---|---:|---:|---:|---|
+| CRWD | 2 | 139 | 207536 | yes |
+| UTHR | 2 | 199 | 306269 | yes |
+| NAVN | 2 | 136 | 228916 | yes |
+| STX | 2 | 183 | 221196 | yes |
+| CRNX | 2 | 103 | 213513 | no qualifying transaction |
+| CBRS | 2 | 146 | 236072 | yes |
+| FLYW | 2 | 111 | 265333 | yes |
+| CHYM | 8 | 706 | 1748224 | yes |
+| CLBK | 2 | 138 | 130246 | yes |
+
+All real continuation URLs used the exact expected HTTPS host/path and only a
+cursor query. Native fetch invoked through the app's Swift debugger context;
+no key/header inspection or alternate credential path. Captured public pages
+at parsePage, stripped request IDs and replaced cursor URLs with fixed markers.
+Debugger detached/breakpoints removed. Private scratch:
+`/private/tmp/stocksage-form4-pages.b8WfQx/{main.swift,check,capture.lldb}`.
+`check --captured-pages` replays all24 pages OFFLINE, compares each entire
+Observation against its native result (9/9 identical), prints
+`Form 4 complete-pagination replay self-check ok`, exit0. Original one-page
+`check` still exits1 intentionally; `--page-control` isolates the old guard.
+
+Regression at the real injectable request/response seam:18pass/1fail before
+paging,21/21 after. Covers all feeds, bad late rows/statuses, cursor security,
+repeats,10-page completion/cap,100-row boundary, aggregate bytes/cancellation:
+`/private/tmp/stocksage-form4-pages-red-20260907.xcresult`
+`/private/tmp/stocksage-form4-pages-green-20260907.xcresult`.
+Full serial macOS1764/1764 and iPhone17Pro(gate)1762/1762 passed, exit0, zero
+selected failures/skips; same three opt-in exclusions (CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests):
+`/private/tmp/stocksage-form4-pages-macos-20260907-0548.xcresult`
+`/private/tmp/stocksage-form4-pages-ios-20260907-0550.xcresult`.
+Tested Mac installed asPID98852; executable/debug-dylib comparisons and strict
+deep codesign passed. Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-form4-pages-20260907-0551.app`.
+
+IMPORTANT acceptance boundary: the targeted live fetches do not write the Store.
+At05:54 the ordinary app cache still has9 old incompleteResponse warnings from
+05:48 checks, plus the2 genuine SBLK/TEM direction conflicts. Do NOT edit/delete
+cache to manufacture success. Next verify the normal due refresh after06:03 +03,
+then native Company feeds UI. Request/parser success is proved; new Store/UI
+publication remains pending. Other API/Chat/P5 work is not declared complete.
+Only coverage worktree changed; main files preserved, no push/trade/new model,
+original QwenPID23631 unchanged. Inline review found no further blocker.
+
 ## Remaining Form4 validation failures are contradictory source filings (2026-09-07 05:32 +03)
 
 SBLK and TEM do NOT have the prior security-spelling bug or a missing credential.

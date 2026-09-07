@@ -117,6 +117,93 @@ struct StockSageMassiveEventsTests {
         #expect(throws: (any Error).self) { try E.parse(body(badNumber), feed: .dividends, symbol: "AAPL", now: now) }
     }
 
+    @Test @MainActor func pagedFetchValidatesEveryPageBeforeSelectingTheEvent() async throws {
+        for feed in E.Feed.allCases {
+            let next = "https://api.massive.com" + feed.path + "?cursor=fixture-two"
+            let original = fixture(feed)
+            let first = body(original.replacingOccurrences(of: "2026-09-06", with: feed == .dividends ? "2026-09-07" : "2026-09-05"),
+                             tail: ",\"next_url\":\"\(next)\"")
+            let expected = E.observation(.success(body(original)), feed: feed, symbol: "AAPL", now: now)
+            var requests: [URLRequest] = []
+            let complete = await E.fetch(feed, symbol: "AAPL", now: now, key: "fixture-only") { request in
+                requests.append(request)
+                return .success(requests.count == 1 ? first : body(original))
+            }
+            #expect(complete == expected)
+            #expect(requests.count == 2)
+            #expect(requests.last?.url?.absoluteString == next)
+            #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-only" })
+        }
+    }
+
+    @Test @MainActor func pagingNeverPublishesPartialDataOrFollowsUnsafeContinuations() async {
+        let next = "https://api.massive.com" + E.Feed.insider.path + "?cursor=fixture-two"
+        let first = body(fixture(.insider), tail: ",\"next_url\":\"\(next)\"")
+        let cases: [(Result<Data, E.Failure>, E.Failure)] = [
+            (.failure(.http(503)), .http(503)), (.failure(.timedOut), .timedOut),
+            (.failure(.cooldown), .cooldown), (.failure(.externalAccessDisabled), .externalAccessDisabled),
+            (.success(body("null")), .invalidPayload),
+            (.success(body(fixture(.insider).replacingOccurrences(of: "AAPL", with: "MSFT"))), .invalidPayload),
+            (.success(body(fixture(.insider).replacingOccurrences(of: #""transaction_acquired_disposed":"A""#, with: #""transaction_acquired_disposed":"D""#))), .conflictingTransactionDirection),
+            (.success(body("", tail: #", "next_url":true"#)), .invalidPayload),
+            (.success(first), .incompleteResponse), // repeated cursor, despite a valid selected event
+            (.success(body(Array(repeating: fixture(.insider), count: 101).joined(separator: ","))), .incompleteResponse)]
+        for (last, failure) in cases {
+            var calls = 0
+            let record = await E.fetch(.insider, symbol: "AAPL", now: now, key: "fixture-only") { _ in
+                calls += 1
+                return calls == 1 ? .success(first) : last
+            }
+            #expect(calls == 2 && record.outcome == .unavailable && record.event == nil && record.failure == failure)
+        }
+        for unsafe in [next.replacingOccurrences(of: "https:", with: "http:"),
+                       next.replacingOccurrences(of: "api.massive.com", with: "api.massive.com.evil.test"),
+                       next.replacingOccurrences(of: "api.massive.com", with: "user:pass@api.massive.com"),
+                       next.replacingOccurrences(of: "api.massive.com", with: "api.massive.com:444"),
+                       next.replacingOccurrences(of: "/form-4", with: "/form%2D4"),
+                       next.replacingOccurrences(of: "/form-4", with: "/other"),
+                       next + "#fragment", next + "&%61piKey=FIXTURE_SECRET", String(repeating: "x", count: 8_193)] {
+            var calls = 0
+            let record = await E.fetch(.insider, symbol: "AAPL", now: now, key: "fixture-only") { _ in
+                calls += 1
+                return .success(body(fixture(.insider), tail: ",\"next_url\":\"\(unsafe)\""))
+            }
+            #expect(calls == 1 && record.failure == .incompleteResponse && record.event == nil)
+            #expect(!E.statusLine(.insider, observation: record, now: now).contains("FIXTURE_SECRET"))
+        }
+    }
+
+    @Test @MainActor func pagingBoundsAndCancellationRetainCompleteResultSemantics() async {
+        for complete in [false, true] {
+            var calls = 0
+            let record = await E.fetch(.insider, symbol: "AAPL", now: now, key: "fixture-only") { _ in
+                calls += 1
+                let tail = complete && calls == E.pageLimit ? "" : ",\"next_url\":\"https://api.massive.com\(E.Feed.insider.path)?cursor=\(calls)\""
+                return .success(body(Array(repeating: fixture(.insider), count: 100).joined(separator: ","), tail: tail))
+            }
+            #expect(calls == 10 && E.pageLimit == 10)
+            #expect(record.outcome == (complete ? .answered : .unavailable))
+            #expect(record.failure == (complete ? nil : .incompleteResponse))
+            #expect((record.event != nil) == complete)
+        }
+        var calls = 0
+        let oversized = await E.fetch(.insider, symbol: "AAPL", now: now, key: "fixture-only") { _ in
+            calls += 1
+            var data = body(fixture(.insider), tail: ",\"next_url\":\"https://api.massive.com\(E.Feed.insider.path)?cursor=\(calls)\"")
+            data.append(Data(repeating: 32, count: 1_000_001 - data.count))
+            return .success(data)
+        }
+        #expect(calls == 2 && oversized.failure == .responseTooLarge && oversized.event == nil)
+        let cancelled = Task { @MainActor in
+            await E.fetch(.insider, symbol: "AAPL", now: now, key: "fixture-only") { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return .success(body(fixture(.insider)))
+            }
+        }
+        let record = await cancelled.value
+        #expect(record.failure == .cancelled && record.event == nil && record.outcome == .unavailable)
+    }
+
     @Test func windowsStraddleSevenFourteenThirtyAndRespectUTC() {
         for feed in E.Feed.allCases {
             let sign = feed == .dividends ? 1 : -1
