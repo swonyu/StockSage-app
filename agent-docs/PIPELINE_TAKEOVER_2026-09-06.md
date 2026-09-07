@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest08:32 +03: full-review M1 query ceiling corrected. Actual fit/EV replay
+confirmed midpoint-only clipping (0.5225 instead of0.465 at conviction0.50;
+0.5675R instead of0.395R at2R payoff). Shared selector-split predicate now
+identifies thin identity at lookup, including legacy snapshots; raw validated
+identity/learned maps/bins/provenance stay unchanged.17pass/2fail regression
+before fix ->124focused pass; original/minimal/control replays all green;
+canonical1780macOS/1778iPhone passed. No stored calibration edits or model reload.
+Built/gated, not installed: CUA remains unavailable and running app preserved.
+Next M2/M3 time-available/finalized labels, then remaining native/phone/API/P5
+acceptance. See HANDOFF for exact artifacts and unsuccessful first filter/build.
+
 Latest08:10 +03: Chat source integration built/gated: existing bounded news fetch
 plus private export selection for one explicitly named ticker. Sources stay quoted
 and unverified, separate from immutable observed facts; request-owned attachment

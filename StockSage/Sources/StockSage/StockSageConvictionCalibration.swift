@@ -51,7 +51,7 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
     }
     let bins: [Bin]           // ascending by `upper`, equal-width over [0,1]
     let sampleSize: Int       // total trades the fit was built from
-    let method: Method        // provenance of the winProb map (F01/F02) — metadata only, no numeric effect
+    let method: Method        // provenance; thin identity also enforces the F01 query ceiling
 
     // MARK: - Persisted snapshot (calibration runtime activation)
     //
@@ -92,11 +92,18 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
     /// Calibrated win probability for a conviction in [0,1]: the band it falls into. Uses the SAME
     /// half-open index math as `fit()`'s bucketing, so a conviction on an exact internal edge is
     /// looked up in the band it was trained into (not the one below).
+    /// Thin, unvalidated identity is additionally capped at the QUERY's prior, not its midpoint's.
     nonisolated func winProb(_ conviction: Double) -> Double {
         guard !bins.isEmpty else { return 0.5 }
         let c = Swift.max(0, Swift.min(1, conviction))
         let idx = Swift.min(bins.count - 1, Int(c * Double(bins.count)))
-        return bins[idx].winProb
+        let probability = bins[idx].winProb
+        // Existing snapshots already carry method + sampleSize. Use the selector's actual split
+        // rule, so reloads get the same protection without a new field or refitting stored data.
+        if method == .identity, Self.selectorSplit(sampleSize) == nil {
+            return Swift.min(probability, StockSageExpectedValue.priorWinProb(c))
+        }
+        return probability
     }
 
     /// [AUDIT] Sample-count seam: isotonic regression is unreliable below ~1000–2000 realized
@@ -562,6 +569,17 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
         return sum / Double(test.count)
     }
 
+    private nonisolated static let selectorMinTrainSamples = 30
+
+    /// One split rule for selection and the persisted thin-identity query envelope.
+    /// 30% holdout, one-row embargo, at least 30 training rows: 43 is thin; 44 can split.
+    private nonisolated static func selectorSplit(_ count: Int) -> (trainEnd: Int, testStart: Int)? {
+        let testN = Int((Double(count) * 0.3).rounded())
+        let trainEnd = count - testN - 1
+        guard testN >= 1, trainEnd >= selectorMinTrainSamples else { return nil }
+        return (trainEnd, count - testN)
+    }
+
     /// OOS candidate-selector (iter7). Called from fit(_:) only when candidateSelectorEnabled == true.
     /// Leak-free: candidates are fit on TRAIN only, scored on TEST only, then the winner is refit on ALL data.
     /// Identity is the conservative floor — selected if nothing beats it by more than 1e-9.
@@ -570,23 +588,12 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
         binCount: Int, minPerBin: Int, z: Double, prior: Double
     ) -> StockSageConvictionCalibration? {
         let n = outcomes.count
-        // Need enough for a meaningful split. minTrainSamples mirrors the outer minSamples guard (30).
-        let testFraction = 0.3
-        let embargo = 1
-        let minTrainSamples = 30
-
-        let testN = Int((Double(n) * testFraction).rounded())
-        let gap = Swift.max(0, embargo)
-        guard testN >= 1, n - testN - gap >= minTrainSamples else {
+        guard let split = selectorSplit(n) else {
             // Too thin to split honestly → prior-clamped identity (F01: conservative floor, not conviction-as-P(win)).
             return buildIdentity(outcomes, binCount: binCount, minPerBin: minPerBin, clampToPrior: true)
         }
-        let trainEnd = n - testN - gap
-        let train = Array(outcomes[0..<trainEnd])
-        let test  = Array(outcomes[(n - testN)..<n])
-        guard !train.isEmpty, !test.isEmpty else {
-            return buildIdentity(outcomes, binCount: binCount, minPerBin: minPerBin, clampToPrior: true)
-        }
+        let train = Array(outcomes[0..<split.trainEnd])
+        let test  = Array(outcomes[split.testStart..<n])
 
         // Adaptive nBins (same rule as isotonic/Platt paths).
         let nBinsAll = Swift.max(2, Swift.min(binCount, Swift.max(1, n / Swift.max(1, minPerBin))))
@@ -614,13 +621,9 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
 
         // --- CANDIDATE 3: ISOTONIC (fit on TRAIN only) ---
         var isoTrainCal: StockSageConvictionCalibration? = nil
-        // INVARIANT (F35 2026-07-02): train.count >= minTrainSamples is ALWAYS true here —
-        // the guard at line 479 ensures n - testN - gap >= minTrainSamples, and
-        // train = outcomes[0..<trainEnd] where trainEnd = n - testN - gap, so
-        // train.count == n - testN - gap >= minTrainSamples by construction.
-        // The assert documents this invariant; it must never fire.
-        assert(train.count >= minTrainSamples,
-               "Invariant violated: train.count \(train.count) < minTrainSamples \(minTrainSamples); guard at selectCalibration entry should have prevented this path")
+        // F35: selectorSplit guarantees the training minimum before either candidate is fit.
+        assert(train.count >= selectorMinTrainSamples,
+               "Invariant violated: training rows below selector minimum after split guard")
         do {
             // Use same adaptive nBins but fit on train subset.
             let nBinsTrain = Swift.max(2, Swift.min(binCount, Swift.max(1, train.count / Swift.max(1, minPerBin))))
@@ -711,7 +714,9 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
         // is clamped to the conservative prior — winProb = min(conviction, prior) — so it is
         // GENUINELY "strictly more conservative" (never conviction-as-P(win) for c ≳ 0.45, the
         // exact defect F01 named). Low conviction (< ~0.4545, identity already below prior) is
-        // untouched, so no idea is ever promoted — the clamp only lowers. The OOS-floor scoring
+        // untouched, so no idea is ever promoted — the clamp only lowers. winProb(_:) also caps
+        // at the query's prior: the midpoint cap alone is too high on the lower half of a band.
+        // The OOS-floor scoring
         // and the OOS-VALIDATED identity winner pass clampToPrior:false → byte-identical (the
         // large-journal identity is empirically OOS-selected, not an unvalidated fallback).
         let mapFn: (Double) -> Double = clampToPrior

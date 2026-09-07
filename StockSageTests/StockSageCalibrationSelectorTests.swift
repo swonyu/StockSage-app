@@ -220,6 +220,69 @@ struct StockSageCalibrationSelectorTests {
         }
     }
 
+    @Test func thinIdentityCeilingAppliesAtQueryNotOnlyMidpoint() throws {
+        let saved = Cal.candidateSelectorEnabled; defer { Cal.candidateSelectorEnabled = saved }
+        Cal.candidateSelectorEnabled = true
+        let minimal = Array(repeating: (conviction: 0.5, won: false), count: 30)
+        let fitted = try #require(Cal.fit(minimal))
+        #expect(fitted.method == .identity)
+        #expect(abs(fitted.winProb(0.5) - 0.465) < 1e-12)
+        let ev = try #require(StockSageExpectedValue.ev(conviction: 0.5, entry: 100,
+                                                      stop: 90, target: 120, calibration: fitted))
+        #expect(abs(ev.evR - 0.395) < 1e-12, "2R payoff must not inherit the midpoint's inflated 0.5675R EV")
+
+        for n in 30...43 {
+            let rows = Array(repeating: (conviction: 0.5, won: false), count: n)
+            for binCount in [2, 3, 5] {
+                for minPerBin in [1, 20] {
+                    let cal = try #require(Cal.fit(rows, binCount: binCount, minPerBin: minPerBin))
+                    #expect(cal.method == .identity)
+                    var queries = (-1...101).map { Double($0) / 100 }
+                    for edge in 1..<cal.bins.count {
+                        let c = Double(edge) / Double(cal.bins.count)
+                        queries += [c.nextDown, c, c.nextUp]
+                    }
+                    var previous = 0.0
+                    for c in queries.sorted() {
+                        let bounded = max(0, min(1, c))
+                        let index = min(cal.bins.count - 1, Int(bounded * Double(cal.bins.count)))
+                        let prior = 0.35 + 0.23 * bounded // independent F01 ceiling
+                        let actual = cal.winProb(c)
+                        #expect(abs(actual - min(cal.bins[index].winProb, prior)) < 1e-12,
+                                "n=\(n), bins=\(cal.bins.count), c=\(c): cap the query, never promote the stored map")
+                        #expect(actual >= previous - 1e-12 && actual >= 0 && actual <= 1)
+                        previous = actual
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func thinIdentityLegacyDecodeAndValidatedIdentityControl() throws {
+        // Existing persisted shape: no new provenance field or migration may be required.
+        let data = Data(#"{"bins":[{"upper":0.5,"winProb":0.25,"n":15},{"upper":1,"winProb":0.5225,"n":15}],"sampleSize":30,"method":"identity"}"#.utf8)
+        let legacy = try JSONDecoder().decode(Cal.self, from: data)
+        let roundTrip = try PropertyListDecoder().decode(Cal.self, from: PropertyListEncoder().encode(legacy))
+        #expect(roundTrip == legacy)
+        #expect(abs(roundTrip.winProb(0.5) - 0.465) < 1e-12)
+        #expect(roundTrip.winProb(0.49) == 0.25)
+        #expect(roundTrip.winProb(0.75) == 0.5225)
+        #expect(roundTrip.chipTitle.contains("assumed"))
+
+        let rawBins = [Cal.Bin(upper: 0.5, winProb: 0.25, n: 22),
+                       Cal.Bin(upper: 1, winProb: 0.75, n: 22)]
+        // 43 => 29 train / 1 embargo / 13 test; 44 => 30 / 1 / 13.
+        #expect(abs(Cal(bins: rawBins, sampleSize: 43, method: .identity).winProb(0.5) - 0.465) < 1e-12)
+        for n in [44, 200] {
+            #expect(Cal(bins: rawBins, sampleSize: n, method: .identity).winProb(0.5) == 0.75,
+                    "OOS-selected identity stays raw")
+        }
+        for method in [Cal.Method.beta, .platt, .isotonicWilson] {
+            #expect(Cal(bins: rawBins, sampleSize: 30, method: method).winProb(0.5) == 0.75,
+                    "This correction must not change learned maps")
+        }
+    }
+
     // MARK: - 5. Selector picks non-identity when a candidate genuinely lowers OOS Brier
 
     @Test func selectorPicksNonIdentityWhenCandidateLowersOOSBrier() {

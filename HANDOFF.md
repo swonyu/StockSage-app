@@ -1,5 +1,55 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review M1: thin-calibration query ceiling — 2026-09-07 08:32 +03
+
+Reproduced the review's actual public API path before editing: 30 alternating
+outcomes at conviction0.50 returned0.5225 instead of the prior ceiling0.465;
+entry100/stop90/target120 then produced0.5675R EV instead of0.395R. The same
+failure survived minimization to30 identical conviction0.50/all-loss records.
+Conviction0.49 and midpoint0.75 were controls;0.51 still failed, while changing
+only minPerBin to1 (five bins, query0.50 now a midpoint) passed. Stored bins
+were already capped: this proved midpoint-only clipping, not raw identity mode
+or incorrect exact-edge bucketing, was the cause.
+
+winProb now additionally caps an unvalidated identity lookup at the QUERY's
+shared prior. Extracted the existing selector split rule (30% holdout, one-row
+embargo,30 training minimum) and reused it to recognize thin persisted identity
+maps. No new stored field, manual snapshot edit, refit or schema migration.
+The43/44 boundary, OOS-selected raw identity, learned beta/Platt/isotonic maps,
+stored bins, and assumed-label provenance are preserved. EV/ranking/sizing
+receive the correction through the existing shared probability API. This is a
+correction to the approved prior policy, not new evidence of a trading edge.
+
+Regression:17selector tests passed/2new tests failed BEFORE the fix. Final
+124focused calibration/snapshot/EV tests passed. Tests sweep n30...43, bin
+counts2/3/5, minPerBin1/20, a conviction grid and nextDown/exact/nextUp around
+every internal edge; pin monotonicity/no promotion, EV, legacy decoding/plist
+round-trip, unchanged low/midpoint controls and separately validated maps.
+Production-module scratch /private/tmp/stocksage-prior-envelope.uMWwDq/check
+was recompiled against the final Debug dylib: original, --minimal, --below,
+--midpoint, --inside, --five-bins all exit0, `Prior envelope self-check ok`.
+Original/minimal now give0.465 and0.395R, with original stored bins unchanged.
+
+Canonical serial1780/1780macOS and1778/1778iPhone17Pro(gate) passed, exit0,
+zero selected failures/skips. Same three opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Result bundles:
+/private/tmp/stocksage-prior-envelope-{red-suite,focused,macos,ios}-20260907.xcresult.
+The first method-only filter selected ZERO tests (red bundle, not evidence);
+the first post-fix build caught an assertion still using the moved minimum
+constant (green bundle, no tests run). The assertion now shares that constant;
+only the subsequent focused/full results above are passing evidence.
+
+Inline review and diff checks complete. No debug instrumentation in repo,
+dependencies, actual calibration writes, new tasks, keys, model reload or push.
+Main worktree's unrelated project.pbxproj and three untracked docs unchanged.
+AppPID34669 and QwenPID23631 still running. Installed app is still the first
+Chat build: CUA failure remains an installation/visual-acceptance blocker, not
+a reason to kill the app or retry an unchanged service failure. This fix is
+built/gated, NOT installed. Next: full-review M2/M3 prediction/label-availability
+timing and finalized-vs-censored calibration outcomes; native acceptance,
+phone serving, remaining live API verification and P5 are still open.
+
 ## Chat research sources: news + private export leads — 2026-09-07 08:10 +03
 
 Chat now enriches explicit ticker questions using the EXISTING recentNews and
