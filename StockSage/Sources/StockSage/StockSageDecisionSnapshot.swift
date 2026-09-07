@@ -207,7 +207,7 @@ enum StockSageDecisionSnapshotBuilder {
                                                orderNotional: size?.notional)
         let netEVR = netEdge?.netExpectancyR
         let netVelocity = netEVR.flatMap { net in
-            StockSageExpectedValue.expectedHoldDays(for: idea, holds: holds).flatMap { $0 > 0 ? net / $0 : nil }
+            StockSageExpectedValue.velocityHoldDays(for: idea, holds: holds).map { net / $0 }
         }
         let netRR = netEdge?.netRR
 

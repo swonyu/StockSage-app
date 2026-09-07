@@ -1,5 +1,51 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## M4 — shared gross/net velocity horizon (2026-09-07 04:44 +03)
+
+Fixed the full-review P1 where costs appeared to INCREASE daily/weekly returns.
+Gross velocity already inflated hold time for variable absolute price moves;
+net velocity, its actual ranking key, sized snapshots and turnover labels did not.
+`velocityHoldDays(for:holds:)` now supplies that same positive, finite denominator
+to all five paths. Weekly gross/net sums inherit it without changing their
+same-basket/concentration contract. Fee numerators, short-borrow assumptions,
+probability mapping and the existing dispersion heuristic are unchanged. This is
+arithmetic consistency, not validation of a holding-time model or profitable edge.
+
+Evidence from the diagnosing-bugs red/green workflow:
+- Production-module replay: `/private/tmp/stocksage-m4.Dh1v2W/main.swift` (recompile
+  against the current Debug dylib before running). Synthetic AAPL100/90/120,
+  conviction1, spark[100,101,101,103]: gross .0222R/day, old net .03635R/day;
+  same-stock weekly .111R gross versus .18175R net. Per-trade EV already fell
+  correctly from .74R to .727R; constant-move control removed the mismatch.
+  After fix: net .02181R/day, weekly .10905R, snapshot parity, exit0 and
+  `M4 same-horizon self-check ok` (original exit1).
+- Regression first failed on both actual ranking and the gross/net/cadence seam:
+  `/private/tmp/stocksage-m4-red-macos-20260907.xcresult`, 4pass/2fail, exit65.
+  Existing Jensen test previously checked only gross display, never rank order.
+- Focused140/140, exit0: `/private/tmp/stocksage-m4-focused-macos-20260907.xcresult`.
+  Covers uneven/constant/empty sparks, default/custom holds, sized and unsized
+  snapshots, actual ranking and sized override, same-stock weekly sums, turnover,
+  zero-cost primitive equality, unsupported classes and invalid hold inputs.
+- Full serial gates: macOS1756/1756 and iPhone17Pro(gate)1754/1754, both exit0,
+  zero selected failures/skips:
+  `/private/tmp/stocksage-m4-final-macos-20260907-0441.xcresult`
+  `/private/tmp/stocksage-m4-final-ios-20260907-0442.xcresult`
+  Same three explicit opt-in exclusions: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. Not live API
+  acceptance or strategy-performance evidence. Only the known existing warnings.
+- Native before/after AX and screenshots: main weekly net6.8R/gross4.8R becomes
+  net4.6R/gross4.8R; fastest PAA net1.20 becomes .78R/day. 1080.SR detail now
+  shows gross .221/net .180R/day, formerly net .265. Original account text and
+  empty risk field left untouched; no copy, journal, alert or trading action.
+
+Tested app installed as `/Applications/StockSageX.app`, PID76843. Executable AND
+debug dylib comparisons and strict/deep codesign passed. Prior app normally quit
+and preserved at `/Users/saleh/.Trash/StockSageX-pre-m4-20260907-0443.app`.
+Qwen remains the original PID23631; no model reload/train/cloud upload. No pushes,
+real orders or changes in the main worktree. Next: sample-header/test-cache
+isolation, then remaining API/model-quality/P4/P5 work. Not overall completion;
+the existing 15-minute heartbeat remains in this task.
+
 ## M8 — quantity-aware costs across sized decisions (2026-09-07 04:31 +03)
 
 Fixed the reproduced minimum-fee disagreement without changing the fee table or

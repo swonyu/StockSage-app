@@ -183,14 +183,22 @@ enum StockSageExpectedValue {
         return 1 + Swift.min(variance / (mu * mu), 3)
     }
 
+    /// Shared horizon for gross/net rates, ranking and their turnover disclosure. Reuses the
+    /// existing dispersion approximation; not a measured holding period or a financing change.
+    nonisolated static func velocityHoldDays(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults) -> Double? {
+        guard let base = expectedHoldDays(for: idea, holds: holds) else { return nil }
+        let hold = base * jensenHoldInflation(idea.spark)
+        return hold.isFinite && hold > 0 ? hold : nil
+    }
+
     /// Velocity = EV ÷ Jensen-adjusted expected hold = expected R PER DAY, so a fast-turnover
     /// setup beats a slow swing of equal EV (more compounding cycles). nil if no EV or no
     /// hold estimate. An estimate on an estimate — the UI says so.
     nonisolated static func velocity(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults,
                                      calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let e = ev(for: idea, calibration: calibration),
-              let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
-        return e.evR / (hold * jensenHoldInflation(idea.spark))
+              let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
+        return e.evR / hold
     }
 
     /// Ideas ranked by velocity (EV/day) desc; ideas without a velocity fall last (stable).
@@ -315,13 +323,13 @@ enum StockSageExpectedValue {
                                          annualFinancingRate: rate, holdDays: days, winProb: p)?.netExpectancyR
     }
 
-    /// [AUDIT] NET EV/day = net-of-cost EV ÷ expected hold. The honest velocity rate after frictions.
+    /// [AUDIT] NET EV/day = net-of-cost EV ÷ the SAME adjusted hold as gross velocity.
     /// nil when there's no net EV or no hold estimate (index/FX). When cost data nets to nothing
     /// (cost == 0) this equals the gross velocity exactly (Guardrail 4: net==gross when cost=0).
     nonisolated static func netVelocity(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults,
                                         calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let ne = netEVR(for: idea, calibration: calibration),
-              let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }   // [AUDIT] hold→0 guarded
+              let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
         return ne / hold
     }
 
@@ -478,7 +486,7 @@ enum StockSageExpectedValue {
         // compounder beats a high-variance lottery setup of equal raw EV. Displayed velocity is
         // still EV/day; this is only the ordering key.
         guard let e = ev(for: idea, calibration: calibration),
-              let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
+              let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
         // [AUDIT] NET-of-cost ordering (iter6): rank by per-day log-growth scaled by the NET/gross
         // EV ratio, so round-trip frictions (StockSageNetEdge) shrink the rate CONTINUOUSLY —
         // a churny flip whose gross EV survives but whose NET EV is thin now sorts BELOW a slower
@@ -1035,7 +1043,7 @@ enum StockSageExpectedValue {
     /// How many ROUND TRIPS the weekly projection implicitly assumes. `expectedWeeklyR`
     /// multiplies each top-N idea's per-day velocity by `tradingDays` — i.e. it assumes each
     /// slot stays deployed all week, re-entering as its setups resolve: tradingDays ÷
-    /// expectedHold re-cycles per slot (a 3-day crypto hold ⇒ ~1.7 round trips in a 5-day
+    /// velocityHoldDays re-cycles per slot (a 3-day crypto hold ⇒ ~1.7 round trips in a 5-day
     /// week; a 12-day equity swing ⇒ ~0.4 — you pay its round trip roughly every 2.4 weeks).
     /// Each re-cycle pays the full round-trip frictions the GROSS weekly figure excludes —
     /// week-horizon research roadmap #1 (turnover awareness): turnover is the #1 documented
@@ -1048,7 +1056,7 @@ enum StockSageExpectedValue {
                                                     calibration: StockSageConvictionCalibration? = nil) -> Double? {
         let lane = fastLane(ideas, holds: holds, calibration: calibration).prefix(Swift.max(0, maxConcurrent))
         let cycles = lane.compactMap { idea -> Double? in
-            guard let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
+            guard let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
             return tradingDays / hold
         }
         guard !cycles.isEmpty else { return nil }
@@ -1070,7 +1078,7 @@ enum StockSageExpectedValue {
         // assumedWeeklyRoundTrips), so the label and the number describe the same setups.
         let laneCount = fastLane(ideas, holds: holds, calibration: calibration)
             .prefix(Swift.max(0, maxConcurrent))
-            .filter { (expectedHoldDays(for: $0, holds: holds) ?? 0) > 0 }
+            .filter { velocityHoldDays(for: $0, holds: holds) != nil }
             .count
         return String(format: "Assumes ≈%.1f round trips across the top %d this week — every re-entry pays the est. round-trip costs this gross figure excludes (turnover is the #1 documented edge-killer at this horizon).",
                       trips, laneCount)

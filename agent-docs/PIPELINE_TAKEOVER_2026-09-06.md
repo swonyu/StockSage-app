@@ -13,6 +13,16 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest04:44 +03: full-review M4 gross/net horizon defect fixed through one shared
+velocity-hold helper, including real ranking, sized snapshots and turnover labels.
+Original replay red→green; regression4pass/2fail then focused140/140; full serial
+macOS1756/iPhone1754 gates passed, same3 opt-in exclusions. Native main weekly
+net6.8R/gross4.8R now net4.6R/gross4.8R, 1080.SR daily .221gross/.180net.
+Tested build installed, prior bundle recoverable in Trash, original sizing inputs
+untouched. No fee/probability/borrowing assumption change, model restart, push or
+trade. Next sample-header/test-cache isolation. API acceptance, semantic news
+quality, full Chat/iPhone serving and P5 remain open; no overall completion claim.
+
 Latest04:31 +03: M8 quantity/minimum-fee parity fixed in shared snapshots, both
 sized Today-plan ranking modes, board/detail/CTA net displays, copied plans and
 final-size allocation/add checks. Unknown minimums warn; zero-share or cost-losing
