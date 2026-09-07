@@ -1,5 +1,53 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review N07: removed cache rows cannot re-enroll offline — 2026-09-07 11:03 +03
+
+Verified clean wt/coverage at 487da21, inactive peer task, no compiler writer.
+The long-running Claude process is rooted in .claude/chrome, not this worktree;
+left it and all unrelated processes alone. History confirms 777e9b5 introduced
+Q11's save-side retainedCacheEntries filter, but offline load still trusted all
+entries until a later successful refresh could persist the removal.
+
+Red replay wrote a two-row cache to a temporary directory and restored it against
+current tracked definitions, without another save. A removed custom row returned
+on the rebuilt board and kept its new-listing flag: 13 pass / 1 fail in the cache
+suite (three parameter cases, six assertions failed). Watchlist/holding retention,
+cache timestamps and unchanged file bytes provided controls. The initial test
+seam supplied tracking to the existing loader without applying it; the final
+implementation instead keeps raw load unchanged and adds a retaining(tracked:)
+transformation, preserving the original load-before-tracking initialization order.
+
+Offline Store restoration now applies that transformation before rebuilding rows
+or new-listing flags. It reuses Q11's actual membership filter, normalizes keys,
+and preserves every retained Entry and savedAt. Membership comes from the existing
+curated + user-watchlist + portfolio/open-journal trackedDefs composition, never
+from cached/idea rows themselves. Removing a watchlist entry does not exclude an
+instrument still held. An empty retained cache takes the existing no-usable-cache
+fallback. No cache schema, prices, market times, sequences, retention-save policy,
+owner watchlist, portfolio or journal records were changed or deleted.
+
+Final replay covers removed/watchlisted/held, mixed-case keys, empty tracking,
+rebuilt rows/new-listing flags and byte-identical disk contents. 32 focused tests
+pass across QuoteCache, TrackedSymbols, ComposeTrackedDefs, CancelHonesty and
+CancelSaveDecision (initial focused selection ran 28 before correcting the
+ComposeTrackedDefs suite name). Canonical serial gates pass 1811/1811 macOS and
+1809/1809 iPhone 17 Pro (gate), exit 0, zero selected failures/skips. Usual explicit
+opt-in exclusions: CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-removal-cache-{red,focused,focused-final,macos,ios}-20260907.xcresult
+and matching .log files, including complete xcodebuild invocations. Final inline
+review required no further source edits.
+
+Scope limit: this proves disk decode → current-membership filtering → row rebuild,
+not a clicked removal or actual process relaunch. N16 remains OPEN: removeSymbol
+still leaves ideas in memory, and intermediate runChunkedScan publications lack
+the normal scan-end tracked-set filter. Existing cancel tests cover missing/delta
+metadata, not that live board. Next build a red replay for remove→partial-scan→
+cancel (including retry) before fixing it. Built/gated, not installed; prior CUA
+normal-close/visual blocker remains, installed PID34669 unchanged. No model/app
+restart, real notifications/trades, provider calls or push. Main checkout's
+unrelated project.pbxproj and review/AGENTS artifacts remain unchanged.
+
 ## Full-review UI04: durable iPhone monitoring opt-out — 2026-09-07 10:50 +03
 
 iPhone automatic monitoring now consults `stocksage.monitor.iosEnabled` on every

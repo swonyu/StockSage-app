@@ -13,6 +13,37 @@ struct StockSageQuoteCacheTests {
         #expect(StockSageQuoteCache.load() == nil)
     }
 
+    @Test(arguments: ["removed", "watchlist", "holding"])
+    func offlineRestoreUsesCurrentTrackingWithoutWaitingForAnotherSave(reason: String) throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("before-removal.json")
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let curated = StockSageQuoteCache.Entry(symbol: "AAPL", price: 150, previousClose: 149,
+                                               time: t, marketTime: t, priceSource: .massiveSIP)
+        let custom = StockSageQuoteCache.Entry(symbol: "gone", price: 30, previousClose: 30,
+            time: t, isNewListing: true, marketTime: t, massiveTradeSequence: 99, priceSource: .massiveSIP)
+        let cache = StockSageQuoteCache(entries: [curated, custom], savedAt: t)
+        cache.save(to: url) // last successful refresh, before the watchlist change
+        let original = try Data(contentsOf: url)
+        let defs = StockSageStore.composeTrackedDefs(
+            base: [StockSageSymbol(symbol: "AAPL", market: "NASDAQ")],
+            userSymbols: reason == "watchlist" ? ["GONE"] : [],
+            offBoardHoldings: reason == "holding" ? ["GONE"] : [])
+        #expect(defs.contains { $0.symbol.uppercased() == "GONE" } == (reason != "removed"))
+        let loaded = try #require(StockSageQuoteCache.load(from: url))
+        let restored = loaded.retaining(tracked: Set(defs.map { $0.symbol.lowercased() }))
+        let expected = reason == "removed" ? [curated] : [curated, custom]
+        #expect(restored.entries == expected, "a cache row alone cannot re-enroll a removed symbol")
+        #expect(restored.savedAt == t)
+        let rows = restored.symbols(marketFor: { _ in "cached" })
+        #expect(rows.map(\.symbol) == expected.map(\.symbol))
+        #expect(restored.entries.filter(\.isNewListing).count == (reason == "removed" ? 0 : 1))
+        #expect(loaded.retaining(tracked: []).entries.isEmpty)
+        #expect(StockSageQuoteCache.load(from: url) == cache) // unrestricted retention reads unchanged
+        #expect(try Data(contentsOf: url) == original) // read-only restore, no pruning or re-stamping
+    }
+
     @Test func sampleRowsNeverBecomeLastGoodCacheAndOldContaminationIsIgnored() throws {
         let t = Date(timeIntervalSince1970: 1_700_000_000)
         let real = StockSageQuoteCache.Entry(symbol: "MSFT", price: 400, previousClose: 390,

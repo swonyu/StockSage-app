@@ -13,6 +13,19 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest 11:03 +03: full-review N07 offline restoration now intersects cached rows
+with current curated/watchlist/holding definitions before rebuilding the board
+and new-listing flags. Reuses Q11's save-side membership rule without rewriting
+cache files or restamping observations. Actual temp-file replay was 13 pass /
+1 fail; final 32 focused and 1811 macOS / 1809 iPhone canonical pass, usual three
+opt-in exclusions. Holding/watchlist retention, case normalization, empty set and
+byte-identical cache controls pass. Built/gated, not installed; CUA blocker and
+main checkout artifacts unchanged. No owner-file edits/deletions, model/app
+restart or push. N16 remains next: live ideas survive removal/intermediate scan
+publishes; existing cancel tests only cover metadata. Build its actual red replay
+before editing. Native phone/live API/P5 acceptance remains unclaimed. HANDOFF
+records precise scope, initial/final seam and artifacts.
+
 Latest 10:50 +03: full-review UI04 iPhone monitoring opt-out now persists separately
 from the live task. Background stop retains the choice; explicit toggles save it;
 initial/foreground resume reads it fresh. Mac launch opt-in remains separate.

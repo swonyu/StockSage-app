@@ -46,6 +46,13 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     var entries: [Entry]
     var savedAt: Date
 
+    /// Restore membership from today's tracking, not the last successful refresh. Keep
+    /// retained observations and the cache clock unchanged; this never rewrites the file.
+    nonisolated func retaining(tracked: Set<String>) -> StockSageQuoteCache {
+        StockSageQuoteCache(entries: StockSageStore.retainedCacheEntries(
+            previous: entries, tracked: Set(tracked.map { $0.uppercased() })), savedAt: savedAt)
+    }
+
     /// Extract a cache from live symbol rows (the last quote per symbol). Touches the
     /// MainActor-isolated quote models, so it runs on the main actor. `newListings` is the
     /// store's per-refresh set of brand-new-listing symbols (uppercased) — threaded through so

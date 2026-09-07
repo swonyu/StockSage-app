@@ -473,9 +473,8 @@ final class StockSageStore: ObservableObject {
     }
 
     /// Pure: which disk-cache entries survive Q11 retention — only symbols still in `tracked`
-    /// (major fix 2026-09-06). A symbol `removeSymbol` dropped must not be carried forward, or
-    /// it is resurrected on the board at next launch (`loadCachedQuotes` below has no
-    /// tracked-set filter of its own — it trusts every entry the cache hands it).
+    /// (major fix 2026-09-06). Also reused at offline restoration: removal must survive a
+    /// relaunch BEFORE any refresh gets the opportunity to write a filtered cache.
     nonisolated static func retainedCacheEntries(
         previous: [StockSageQuoteCache.Entry], tracked: Set<String>
     ) -> [StockSageQuoteCache.Entry] {
@@ -485,8 +484,11 @@ final class StockSageStore: ObservableObject {
     /// Seed the board from the disk cache (last successful quotes) so launch shows real
     /// last-good numbers instantly + works offline, instead of fabricated sample data.
     private func loadCachedQuotes() {
-        guard let cache = StockSageQuoteCache.load(), !cache.entries.isEmpty else { return }
-        let labels = Dictionary(trackedDefs().map { ($0.symbol.uppercased(), $0.market) },
+        guard let persisted = StockSageQuoteCache.load(), !persisted.entries.isEmpty else { return }
+        let defs = trackedDefs()
+        let cache = persisted.retaining(tracked: Set(defs.map(\.symbol)))
+        guard !cache.entries.isEmpty else { return }
+        let labels = Dictionary(defs.map { ($0.symbol.uppercased(), $0.market) },
                                 uniquingKeysWith: { a, _ in a })
         symbols = cache.symbols(marketFor: { labels[$0.uppercased()] ?? Self.userMarketLabel })
         rebuildSymbolIndex()
@@ -2932,8 +2934,8 @@ final class StockSageStore: ObservableObject {
         // `userSymbols`/`symbols` above, which never touches the disk cache (major fix
         // 2026-09-06). Pre-filter `previous` to symbols STILL tracked (any scope — curated
         // universe ∪ watchlist ∪ off-board holdings) so a removed ticker actually leaves the
-        // disk cache instead of reappearing on the board (via `loadCachedQuotes`, which rebuilds
-        // `symbols` from every cache entry with no tracked-set filter of its own) on next launch.
+        // disk cache. Offline restoration also filters independently, so it does not need to
+        // wait for this refresh before respecting the removal.
         let stillTracked = Set(trackedDefs().map { $0.symbol.uppercased() })
         let retainedPrevious = StockSageQuoteCache.load().map {
             StockSageQuoteCache(entries: Self.retainedCacheEntries(previous: $0.entries, tracked: stillTracked), savedAt: $0.savedAt)
