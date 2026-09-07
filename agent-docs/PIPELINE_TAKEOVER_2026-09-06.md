@@ -13,6 +13,15 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest05:19 +03: Form4 live/docs spelling mismatch fixed in shared parser:
+non_derivative and non-derivative are exact aliases; unknowns/derivatives retain
+their guards. Original GILD HTTP200/11-row replay red→green, focused17/17,
+full serial1760macOS/1758iPhone passed. Tested app installed; native GILD5/5
+checks and September2 Form4 sale verified. App refresh recovered283 of285
+validation failures. Remaining SBLK/TEM invalidPayload and nine pagination-limit
+failures need separate diagnosis; API/P5 acceptance is not complete. Main worktree
+untouched, no push/trade/model reload. See HANDOFF and API_VERIFICATION.
+
 Latest05:01 +03: sample-header root fixed, not relabelled. Fresh demo clocks blocked
 older genuine market closes and survived into last-good cache. Shared ordering now
 distinguishes sample provenance; scan/header ignore it, cache extraction/load keep

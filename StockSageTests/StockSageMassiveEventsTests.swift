@@ -150,6 +150,27 @@ struct StockSageMassiveEventsTests {
         #expect(throws: (any Error).self) { try E.parse(body(numericPlan), feed: .insider, symbol: "AAPL", now: now) }
     }
 
+    @Test func insiderLiveSecuritySpellingMatchesDocumentedSpellingWithoutAcceptingUnknownTypes() {
+        // GILD HTTP200 replay, 2026-09-07: live rows use non_derivative; docs use non-derivative.
+        for (code, side) in [("P", "A"), ("S", "D")] {
+            let row = fixture(.insider)
+                .replacingOccurrences(of: #""transaction_code":"P""#, with: "\"transaction_code\":\"\(code)\"")
+                .replacingOccurrences(of: #""transaction_acquired_disposed":"A""#, with: "\"transaction_acquired_disposed\":\"\(side)\"")
+            let expected = E.observation(.success(body(row)), feed: .insider, symbol: "AAPL", now: now)
+            let live = E.observation(.success(body(row.replacingOccurrences(of: "non-derivative", with: "non_derivative"))),
+                                     feed: .insider, symbol: "AAPL", now: now)
+            #expect(expected.outcome == .answered && expected.event != nil)
+            #expect(live == expected)
+            for security in ["derivative", "unknown", "non derivative", "NON_DERIVATIVE"] {
+                let result = E.observation(.success(body(row.replacingOccurrences(of: "non-derivative", with: security))),
+                                           feed: .insider, symbol: "AAPL", now: now)
+                #expect(result.event == nil)
+                #expect(result.outcome == (security == "derivative" ? .answered : .unavailable))
+                #expect(result.failure == (security == "derivative" ? nil : .invalidPayload))
+            }
+        }
+    }
+
     @Test func completeEmptyIsDifferentFromUnavailableAndCacheRoundTrips() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("m6-fixture-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }

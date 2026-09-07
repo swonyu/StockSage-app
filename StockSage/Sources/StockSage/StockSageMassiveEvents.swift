@@ -292,8 +292,10 @@ enum StockSageMassiveEvents {
             if row["record_type"] as? String == "holding" { return nil }
             guard let code = row["transaction_code"] as? String else { throw Failure.invalidPayload }
             guard code == "P" || code == "S" else { return nil }
-            guard let security = row["security_type"] as? String, ["derivative", "non-derivative"].contains(security) else { throw Failure.invalidPayload }
-            guard security == "non-derivative" else { return nil }
+            // Live Form 4 rows use non_derivative (GILD, 2026-09-07); docs use non-derivative.
+            guard let security = row["security_type"] as? String,
+                  ["derivative", "non-derivative", "non_derivative"].contains(security) else { throw Failure.invalidPayload }
+            guard security != "derivative" else { return nil }
             guard let tx = row["transaction_date"] as? String, let txDate = day(tx), txDate <= date,
                   let shares = try number(row, "transaction_shares"), shares > 0,
                   let owner = text(row, "owner_name"),

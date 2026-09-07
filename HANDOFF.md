@@ -1,5 +1,53 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Form 4 live-schema mismatch fixed (2026-09-07 05:19 +03)
+
+GILD was not missing API access: one bounded configured request returned HTTP200,
+13,663 bytes and11 rows, but the production parser rejected seven rows. Live
+`security_type` is `non_derivative`; the official Form4 docs say `non-derivative`:
+https://massive.com/docs/rest/stocks/filings/form-4
+Changing ONLY that field in the captured response made the replay pass. The
+shared parser now accepts both exact spellings, still rejects unknown types,
+and still excludes derivatives. No caps, credentials, retries, trading logic or
+UI validation were relaxed. The diagnosing-bugs workflow isolated a provider
+contract mismatch that the documentation-shaped fixture did not cover.
+
+Evidence:
+- `/private/tmp/stocksage-form4.vqNqtf/main.swift` and `check`: isolated compiled
+  production-module request/response replay using existing app configuration.
+  No key value/header was printed or exported. The private scratch capture keeps
+  public filing data, strips request ID, replaces any pagination URL with a fixed
+  marker, and freezes time. Offline original replay repeatedly exited1 with
+  invalidPayload; field-only control passed. After fix the UNMODIFIED capture and
+  all11 isolated rows pass, `Form 4 replay self-check ok`, exit0. This diagnostic
+  is not itself native-consumer acceptance; that was verified separately below.
+- Regression at the actual response→observation seam covers purchase/sale aliases,
+  full event equality and unknown/derivative exclusions. Before fix16pass/1fail:
+  `/private/tmp/stocksage-form4-red-20260907.xcresult`; after fix17/17:
+  `/private/tmp/stocksage-form4-green-20260907.xcresult`.
+- Full serial gates: macOS1760/1760 and iPhone17Pro(gate)1758/1758, exit0,
+  zero selected failures/skips. Same three opt-in suite exclusions:
+  CalibrationPersistRunTests, LiveUniverseVerificationTests,
+  StrategyBaselineMeasurementTests.
+  `/private/tmp/stocksage-form4-macos-20260907-0516.xcresult`
+  `/private/tmp/stocksage-form4-ios-20260907-0517.xcresult`.
+- Installed the tested macOS bundle; executable AND debug dylib comparisons and
+  strict deep codesign verification passed. Prior app recoverable at
+  `/Users/saleh/.Trash/StockSageX-pre-form4-fix-20260907-0517.app`.
+- Native Catalysts GILD expanded disclosure/screenshot now shows5/5 current checks
+  and a Form4 sale filed September2. App-owned cache independently records an
+  answered Form4 check at2026-09-07T02:17:12Z. No manual cache edit.
+- Normal installed-app refresh reduced Form4 invalidPayload285→2 (283 recovered).
+  At05:19, SBLK and TEM still fail validation; nine remain incompleteResponse:
+  CRWD,UTHR,NAVN,STX,CRNX,CBRS,FLYW,CHYM,CLBK. Do not label these empty/successful
+  or assume the same cause. Diagnose those two payloads next, then the measured
+  pagination ceiling. All other API acceptance and P5 remain open.
+
+Only this worktree changed. Main's unrelated files preserved, no push/trade/new
+model process; original Qwen PID23631 remains. Installed app PID88355. Temporary
+debugger/probe attempts made no production edits; debugger detached, breakpoints
+removed, and the offline replay above provided the actual red/green evidence.
+
 ## Demo-quote contamination and test-host isolation (2026-09-07 05:01 +03)
 
 The "sample" header was NOT just a cosmetic label bug. The real quote cache held

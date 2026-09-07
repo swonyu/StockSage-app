@@ -3,6 +3,30 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## Form4 configured response and native consumer — 05:19 +03
+
+One GILD request returnedHTTP200/13,663bytes/11rows; the actual shared parser
+rejected live security_type=non_derivative, although docs specify non-derivative.
+Field-only control proved the mismatch. Both exact aliases are now accepted;
+unknown security types, derivatives and incomplete pages retain existing checks.
+Original captured response now passes without normalization. Regression red,
+then17/17 focused and1760macOS/1758iPhone full serial gates passed (same three
+opt-in exclusions). Exact evidence and limitations are in HANDOFF05:19.
+
+The newly installed app's normal refresh and native GILD disclosure independently
+show5/5 current company-feed checks, including a Form4 sale filedSeptember2;
+the persisted Form4 checkedAt is2026-09-07T02:17:12Z. This is actual configured
+request→parser→store→UI evidence for this response, not universal feed acceptance.
+The private offline diagnostic used normal configuration helpers; it did not
+print/export key values or headers. No app cache was manually edited.
+
+Across the app's company cache, Form4 invalidPayload fell285→2. Still failing:
+SBLK,TEM (invalidPayload); CRWD,UTHR,NAVN,STX,CRNX,CBRS,FLYW,CHYM,CLBK
+(incompleteResponse, existing one-page/100-row ceiling). These11 remain explicitly
+unavailable, not empty or verified. Diagnose the two validation cases next, then
+bounded pagination using real evidence. Other routes below retain their separate
+acceptance requirements. No real orders, pushes or extra model process.
+
 ## Native research consumer verified — 03:57 +03
 
 QCOM03:55, AMZN03:47 and APP03:49 rendered Hold opinions from the exact local
