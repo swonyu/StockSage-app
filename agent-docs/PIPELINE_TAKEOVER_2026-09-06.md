@@ -13,6 +13,20 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest10:30 +03: full-review N18 one-shot alerts revalidate current preference,
+task cancellation and exact armed definition/ID before every enqueue, including
+after earlier sends suspend. Actual callback-boundary races were4pass/2fail;
+guard-only verification exposed re-arm's reused identity (4pass/3fail). Re-arm
+now creates a fresh one-shot UUID through the Store's existing UI action, with
+unchanged symbol/target/direction and no persistence migration. Late old-arm
+completion IDs cannot latch the replacement; accepted dispatches remain accounted
+for after cancellation.53focused and1808macOS/1806iPhone canonical pass, usual
+3 opt-in exclusions. No real notifications/owner writes/model or installed-app
+changes/push. Built/gated, not installed; CUA visual/normal-close blocker remains.
+Native re-arm UI and actual OS receipt are not claimed; no cross-cycle delivery
+queue added. Next UI04 durable monitoring opt-out; phone/live API/P5 acceptance
+remains. Exact red/green artifacts and limitations in HANDOFF.
+
 Latest10:08 +03: full-review N17 failed watchlist enqueue no longer consumes
 dedupe. The production loop was first extracted with behavior preserved and
 isolated preferences/sender:9pass/1fail, then13pass/1fail controls reproduced

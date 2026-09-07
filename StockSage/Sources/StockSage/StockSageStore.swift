@@ -414,10 +414,10 @@ final class StockSageStore: ObservableObject {
         savePriceAlerts()
     }
 
-    /// Re-arm a triggered alert so it can fire again.
+    /// Re-arm with a new one-shot ID so an old in-flight cycle cannot fire or latch this arm.
     func resetPriceAlert(_ id: UUID) {
         guard let i = priceAlerts.firstIndex(where: { $0.id == id }) else { return }
-        priceAlerts[i].triggeredAt = nil
+        priceAlerts[i] = priceAlerts[i].rearmed()
         savePriceAlerts()
     }
 

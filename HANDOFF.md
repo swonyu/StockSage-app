@@ -1,5 +1,54 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review N18: revalidate one-shot alerts before enqueue — 2026-09-07 10:30 +03
+
+Extracted the existing price-alert fetch/check/send path with behavior preserved,
+using callbacks for current alerts, quote fetch, enqueue and ID-filtered latch.
+The private production entry point delegates to it; shared-store access remains
+lazy and behind the existing notification preference check. Tests use isolated
+defaults/in-memory alerts, not owner records, network or real notifications.
+
+Initial4pass/2fail reproduced both await windows: delete, mute, already-trigger,
+edit or replace during quote fetch still enqueued the captured alert; changes
+during the first enqueue, including cancellation, still let the rest of the old
+batch fire. Unchanged cases and cancellation during fetch were controls. Direct
+preference reads correctly returned false: this was stale eligibility in the
+loop, not cached preferences or a UI-only latch error.
+
+Before EVERY enqueue the loop now checks cancellation, current price-alert
+preference and full equality with a current still-armed alert. Captured candidates
+come from the existing newlyTriggered evaluator, so equality includes the nil
+trigger state as well as ID/symbol/target/direction. Existing freshness and hourly
+cap checks remain; accepted enqueues are still recorded/latching is not skipped
+merely because cancellation arrived after dispatch began.
+
+Value equality alone left a trigger→re-arm identity hole. With guards in place,
+4pass/3fail remained solely on re-arm cases and a new identity/Codable test.
+resetPriceAlert now delegates to PriceAlert.rearmed(), creating a fresh UUID for
+each one-shot arm while retaining its symbol/target/direction. No schema change
+or migration. The actual UI caller and Store ID-filtered latch were source-read;
+old completion IDs cannot match the replacement arm. No owner alert was re-armed.
+
+Final53focused pass (initial green52 preceded the late-completion control):15
+fetch/batch mutation variants, identity roundtrip and failed/late-rearmed enqueue
+sequences cover the production callback boundary. Accepted old-arm completions
+leave a replacement arm eligible; a failed enqueue remains retryable; accepted
+unchanged alerts stop repeating. Tests simulate the Store's ID-filtered latch,
+not actual owner UserDefaults writes or a clicked native re-arm control.
+Canonical serial1808/1808macOS and1806/1806iPhone17Pro(gate) pass, exit0, zero
+selected failures/skips. Usual explicit opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-price-alert-race-{red,rearm-red,focused,focused-final,macos,ios}-20260907.xcresult
+and matching.log files. Final source review required no further edits.
+
+Limit: a request already handed to the OS cannot be retracted here; this change
+does not add cross-cycle delivery serialization or prove OS display/receipt.
+No real pushes, owner defaults, model/service restarts or installed-app changes;
+no push. Built/gated, not installed: CUA normal-close/visual acceptance remains
+blocked. Next UI04: persist desired monitoring state independently of the live
+task so iPhone foregrounding cannot silently undo an opt-out.
+
 ## Full-review N17: failed watchlist enqueue stays retryable — 2026-09-07 10:08 +03
 
 The original pure monitor tests never exercised an enqueue result. Extracted the

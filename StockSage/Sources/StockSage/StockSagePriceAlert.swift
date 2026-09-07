@@ -31,6 +31,11 @@ struct PriceAlert: Sendable, Equatable, Identifiable, Codable {
 
     nonisolated var isArmed: Bool { triggeredAt == nil }
 
+    /// A new one-shot intent: old fetches/accepted-send callbacks must not match this arm.
+    func rearmed() -> PriceAlert {
+        PriceAlert(symbol: symbol, target: target, direction: direction)
+    }
+
     /// Has `price` reached the target in this alert's direction?
     nonisolated func isMet(by price: Double) -> Bool {
         switch direction {

@@ -316,12 +316,26 @@ final class StockSageMonitor {
     /// drop any quote whose market timestamp is materially old — a level reached only at a stale
     /// close won't fire a push while the market is shut and the owner can't act.
     private func checkPriceAlerts() async {
+        await checkPriceAlerts(
+            currentAlerts: { StockSageStore.shared.priceAlerts },
+            fetchQuotes: { await StockSageQuoteService.fetchQuotes(for: $0) },
+            enqueue: { await self.sendPriceAlert($0, price: $1) },
+            markTriggered: { StockSageStore.shared.markPriceAlertsTriggered($0) })
+    }
+
+    /// The actual fetch/check/send path with live state read at call time. Closures keep the
+    /// asynchronous boundaries replayable without loading the shared board or sending pushes.
+    func checkPriceAlerts(
+        currentAlerts: @MainActor () -> [PriceAlert],
+        fetchQuotes: @MainActor ([String]) async -> [String: StockSageQuoteService.LiveQuote],
+        enqueue: @MainActor (PriceAlert, Double) async -> Bool,
+        markTriggered: @MainActor ([UUID]) -> Void
+    ) async {
         // Muted type: check nothing, consume nothing — the user's armed alerts stay armed.
         guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { return }
-        let store = StockSageStore.shared
-        let armed = store.priceAlerts.filter { $0.isArmed }
+        let armed = currentAlerts().filter { $0.isArmed }
         guard !armed.isEmpty else { return }
-        let q = await StockSageQuoteService.fetchQuotes(for: Array(Set(armed.map { $0.symbol })))
+        let q = await fetchQuotes(Array(Set(armed.map { $0.symbol })))
         // CONCURRENCY #2 (L3-09): a stop() during the fetch await above must not let this cycle
         // push a one-shot price alert — same idiom as runCycle's post-await guards. Without this,
         // a stop()→start() overlap could double-push the SAME alert: the cancelled cycle's fetch
@@ -353,18 +367,23 @@ final class StockSageMonitor {
         // actually went out.
         var delivered: [UUID] = []
         for a in fired {
+            guard !Task.isCancelled,
+                  StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { break }
+            // Fetching and every earlier enqueue can suspend this cycle. Require the same
+            // still-armed definition/identity, not just membership in the captured array.
+            guard currentAlerts().contains(a) else { continue }
             // A user-set price alert is a ONE-SHOT the owner explicitly armed and it disarms on
             // trigger, so it is exempt from hysteresis and cooldown. It still respects the GLOBAL
             // hourly cap so a market-wide move cannot produce a flood.
             let px = prices[a.symbol] ?? a.target
             guard StockSageNotificationBudget.countWithinHour(budget.recentAlerts, now: Date())
                     < StockSageNotificationBudget.hourlyCap else { break }
-            if await sendPriceAlert(a, price: px) {
+            if await enqueue(a, px) {
                 delivered.append(a.id)
                 budget.record(symbol: a.symbol, price: px); budget.save(to: defaults)
             }
         }
-        if !delivered.isEmpty { store.markPriceAlertsTriggered(delivered) }
+        if !delivered.isEmpty { markTriggered(delivered) }
     }
 
     /// Drive stop-breach/target-hit pushes for TRACKED IDEAS via the tested
