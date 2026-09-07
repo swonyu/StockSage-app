@@ -150,22 +150,51 @@ struct StockSageNotificationBudgetTests {
         suite.removePersistentDomain(forName: "budget.persist.test")
     }
 
-    @Test("expired records are dropped on load rather than growing forever")
-    func expiredRecordsPrunedOnLoad() throws {
-        let suite = try #require(UserDefaults(suiteName: "budget.prune.test"))
-        suite.removePersistentDomain(forName: "budget.prune.test")
+    @Test("relaunch preserves price hysteresis after cooldown and hourly timestamps expire")
+    func relaunchMatchesContinuingBudget() throws {
+        let name = "budget.restart.\(UUID().uuidString)"
+        let suite = try #require(UserDefaults(suiteName: name))
+        defer { suite.removePersistentDomain(forName: name) }
+        var original = B(loadingFrom: suite, now: t0)
+        original.record(symbol: "AAPL", price: 100, now: t0)
+        original.save(to: suite)
 
-        var b = B(loadingFrom: suite, now: t0)
-        b.record(symbol: "OLD", price: 50, now: t0)
-        b.save(to: suite)
+        // N19: cooldown expiry must not erase the independent last-alerted-price anchor.
+        // Exercise the real save/load/allow chain on both sides of each time boundary.
+        for seconds in [60.0, 1799, 1800, 1860, 3600, 3601, 86_400] {
+            let now = t0.addingTimeInterval(seconds)
+            for price in [100.0, 100.1, 99.9, 100.49, 100.5, 99.5, 101] {
+                var continuing = original
+                var restored = B(loadingFrom: suite, now: now)
+                let before = continuing.allow(symbol: "aapl", price: price, now: now)
+                let after = restored.allow(symbol: "aapl", price: price, now: now)
+                #expect(after == before, "restart changed decision at \(seconds)s / \(price)")
+                #expect(restored.perSymbol["AAPL"] == original.perSymbol["AAPL"])
+                #expect(restored.recentAlerts == continuing.recentAlerts)
+                #expect(restored.suppressedSinceLastAllowed == continuing.suppressedSinceLastAllowed)
+            }
+        }
+    }
 
-        // Reload a day later: the cooldown has long expired, so the record must not survive.
-        var later = B(loadingFrom: suite, now: t0.addingTimeInterval(86_400))
-        let allowed = later.allow(symbol: "OLD", price: 50, now: t0.addingTimeInterval(86_400))
-        #expect(allowed, "an expired cooldown must not keep refusing")
-        #expect(later.recentAlerts.isEmpty, "hour-old timestamps must be pruned on load")
-
-        suite.removePersistentDomain(forName: "budget.prune.test")
+    @Test("explicitly cleared hysteresis stays cleared after save and relaunch")
+    func clearedAnchorDoesNotReturn() throws {
+        let name = "budget.clear.\(UUID().uuidString)"
+        let suite = try #require(UserDefaults(suiteName: name))
+        defer { suite.removePersistentDomain(forName: name) }
+        var first = B(loadingFrom: suite, now: t0)
+        first.record(symbol: "AAPL", price: 100, now: t0)
+        first.record(symbol: "MSFT", price: 200, now: t0)
+        first.save(to: suite)
+        let later = t0.addingTimeInterval(1860)
+        var restored = B(loadingFrom: suite, now: later)
+        restored.clear(symbol: "aapl")
+        restored.save(to: suite)
+        var final = B(loadingFrom: suite, now: later)
+        let clearedAllowed = final.allow(symbol: "AAPL", price: 100, now: later)
+        let otherAllowed = final.allow(symbol: "MSFT", price: 200, now: later)
+        #expect(clearedAllowed)
+        #expect(!otherAllowed)
+        #expect(final.recentAlerts.count == 2) // clearing one anchor never erases the global cap
     }
 
     @Test("a corrupt or absent blob loads as empty rather than crashing")

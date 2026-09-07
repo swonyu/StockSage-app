@@ -13,6 +13,19 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest09:53 +03: full-review N19 notification budget restore now preserves the
+last-alerted-price anchors used by a continuing process. Actual31minute and
+next-day replays previously allowed a0.1% wobble only after restart;1minute and
+real-move controls passed. Removing the restore-only cooldown pruning restores
+parity without changing cooldown, price threshold or hourly cap.49 boundary/
+price comparisons plus persisted-clear control:11pass/2fail red ->13pass;
+50focused and1798macOS/1796iPhone canonical pass, usual3 opt-in exclusions.
+All4 standalone replay modes green. No owner notifications/settings/model/app
+changes or push; built/gated, not installed. N08/N21 already fixed in4514e8b,
+confirmed by source/history and related green tests; no redundant fix added.
+Next N17 failed-enqueue retry and N18 post-await preference/armed-state checks;
+native/phone/live API/P5 acceptance remains. Exact artifacts/limits in HANDOFF.
+
 Latest09:38 +03: full-review M3 journal closure boundaries implemented. Single-
 record replay proved open status could coexist with realized10profit/1R;
 inverted close also entered aggregate results. Shared paired-field/finite/time-

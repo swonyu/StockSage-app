@@ -1,5 +1,46 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review N19: notification budget restart parity — 2026-09-07 09:53 +03
+
+N08 (pre-heal quote cache) and N21 (targeted new-listing reconciliation) were
+already corrected in4514e8b: refresh serializes current symbols after healing,
+and targeted merges route through mergeLiveQuotes. Source/history checked;
+related cache/heal/new-listing tests pass. No duplicate production fix or claim
+of a new full refresh/network/cache integration test was made.
+
+N19 reproduced against the actual notification-budget source using an isolated
+UserDefaults suite: record TEST at100, save, compare continuing versus restored
+instances at31minutes with price100.1. Continuing refused; restored allowed and
+had zero price anchors. The1minute control and31minute/101price control passed;
+the next-day wobble also failed. Restore incorrectly treated cooldown expiry as
+hysteresis expiry. Removed that filter, preserving live-process policy: one
+last-alerted-price anchor per symbol, unchanged30minute cooldown/0.5% hysteresis/
+8-per-hour cap. Hourly timestamps still expire; clear(symbol:) still removes only
+that symbol's anchor. Retention ceiling is documented beside the load: any future
+anchor expiry must be applied to both running and restored budgets.
+
+Regression suite:11pass/2fail before fix ->13pass, including49 time/price parity
+cases across cooldown/hour boundaries and a persisted clear/other-symbol control.
+The old test incorrectly demanded anchor expiry after a day; replaced it with
+continuing-versus-restored parity. First test-build attempt failed because a
+mutating allow call was inside #expect; corrected by evaluating before the macro,
+then obtained the real red run. No runtime fix was made before that red result.
+Standalone /private/tmp/stocksage-alert-budget.h2fiws/check now passes default,
+--minute, --move and --day, printing `Notification budget self-check ok`.
+
+Focused50/50 passed (budget, monitor decisions, price alerts, quote cache, heal,
+new-listing reconciliation). Canonical serial1798/1798macOS and1796/1796iPhone17Pro
+(gate) passed, zero selected failures/skips. Usual explicit opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-alert-budget-{red,red2,focused,macos,ios}-20260907.xcresult
+and corresponding.log files; red is the compile attempt, red2 the actual11/2 run.
+
+No actual notifications, owner defaults, model process or installed app changed;
+no push. Built/gated, not installed: existing CUA normal-close/visual-acceptance
+blocker remains. N17 failed watchlist enqueue dedupe and N18 post-await muted/
+deleted alert checks remain OPEN; N19 does not claim to fix those separate paths.
+
 ## Full-review M3: coherent journal closure boundaries — 2026-09-07 09:38 +03
 
 Reproduced with one real TradeRecord/API call, no owner data: entry100/stop90,
