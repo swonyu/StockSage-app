@@ -160,7 +160,7 @@ struct StockSageCatalystNarratorTests {
         #expect(N.facts(for: brief(symbol: "NOSRC")) == N.facts(for: brief(symbol: "NOSRC"), sources: []))
     }
 
-    @Test("a number reused from a numbered source line passes the fence; a foreign number is withheld")
+    @Test("a number reused from a numbered source line passes the fence; a foreign number fails it")
     func fenceExtensionAcceptsSourceNumbersRejectsForeign() {
         let facts = N.facts(for: brief(symbol: "FENCE"), sources: [oneSource()])
         // "2026" and "09" and "01" all appear in the source's own date line "[1] 2026-09-01 ...".
@@ -237,6 +237,24 @@ struct StockSageCatalystNarratorTests {
 
     // MARK: Result equality
 
+    @Test("failed number/citation checks preserve the draft and its generating model")
+    func failedChecksKeepVisibleDraftWithoutPromotingItToCheckedText() {
+        for source in [N.Source.onDevice, .localServer(model: "captured-qwen")] {
+            for text in ["AAPL reports 999 revenue.", "AAPL source [2]."] {
+                // 2 exists as a factual number but NOT a valid source ID, isolating citation failure.
+                let result = N.checkedResponse(text, facts: ["Price: 100", "Count: 2", "[1] A source"], source: source, sourceCount: 1)
+                guard case .unverified(let draft, let actual, let reason) = result else {
+                    Issue.record("Failed response was discarded or promoted: \(result)")
+                    continue
+                }
+                #expect(draft == text && actual == source && !reason.isEmpty)
+                #expect(result != .text(text, source))
+            }
+        }
+        #expect(N.checkedResponse("AAPL price 100 [1].", facts: ["Price: 100", "[1] Source"],
+                                  source: .onDevice, sourceCount: 1) == .text("AAPL price 100 [1].", .onDevice))
+    }
+
     @Test("Result compares by case and payload")
     func resultEqualityByValue() {
         #expect(N.Result.text("a", .onDevice) == .text("a", .onDevice))
@@ -244,8 +262,8 @@ struct StockSageCatalystNarratorTests {
         #expect(N.Result.text("a", .onDevice) != .text("a", .localServer(model: "qwen3.8")))
         #expect(N.Result.text("a", .localServer(model: "qwen3.8")) == .text("a", .localServer(model: "qwen3.8")))
         #expect(N.Result.text("a", .localServer(model: "qwen3.8")) != .text("a", .localServer(model: "llama3")))
-        #expect(N.Result.withheld("x") == .withheld("x"))
+        #expect(N.Result.unverified("x", .onDevice, reason: "check failed") == .unverified("x", .onDevice, reason: "check failed"))
         #expect(N.Result.unavailable("y") == .unavailable("y"))
-        #expect(N.Result.text("a", .onDevice) != .withheld("a"))
+        #expect(N.Result.text("a", .onDevice) != .unverified("a", .onDevice, reason: "check failed"))
     }
 }

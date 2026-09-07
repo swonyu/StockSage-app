@@ -3,6 +3,16 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## Form4 Store/UI acceptance completed — 06:07 +03
+
+Normal toolbar refresh after the retry window persisted all nine previously
+truncated Form4 observations as answered at03:04:39–03:04:45Z. No manual cache
+change. Native CRWD card and expanded Company feeds disclosure show5/5 current
+checks, selected Form4 sale filedSeptember4 and checkedSeptember7. The remaining
+cached failures are exactly SBLK/TEM's genuine direction conflicts. The nine-case
+request/parser acceptance below now includes Store/UI publication. Broader API
+routes and P5 retain their independent requirements.
+
 ## Form4 pagination: all nine configured fetches pass — 05:54 +03
 
 Shared company-event fetch now follows up to10 sequential100-row pages with a

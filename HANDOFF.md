@@ -1,5 +1,63 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Explain retains failed output as an unverified draft (2026-09-07 06:08 +03)
+
+Owner's explicit "never withhold" request also applies to the older Catalyst
+Explain paragraph, not only the newer primary AI assessment. Both local-server
+and on-device response paths previously discarded text/source and kept only a
+withheld reason. Extracted their identical check into one real shared response
+boundary, reproduced the loss, then replaced withheld with
+unverified(text, generatingSource, reason). The existing UI renders the retained
+plain/selectable text, a prominent failed-check warning, the generating model
+label/caveats and the same numbered source list. It is NOT marked checked text,
+promoted to app facts, or used to change primary badges, sizing or execution.
+Unavailable transports/models remain unavailable; no fabricated draft/retry.
+
+The tiny compiled production-module replay
+`/private/tmp/stocksage-narrator-draft.sEJ9wn/check` exited1 with only a withheld
+reason for an out-of-range citation. Changing ONLY[2]→[1] passed. After the fix,
+the original input passes with exact text/source retained and a warning:
+`Narrator visible-draft self-check ok`, exit0. No model/network/configuration
+needed for this feedback loop. Regression covers both backends, foreign numbers,
+out-of-range citations (where the number itself is a valid fact), and valid text.
+Red23pass/1fail→33/33 focused narrator/view tests:
+`/private/tmp/stocksage-narrator-draft-red-20260907.xcresult`
+`/private/tmp/stocksage-narrator-draft-green-20260907.xcresult`.
+Full serial macOS1765/1765, iPhone17Pro(gate)1763/1763 passed, exit0, zero
+selected failures/skips; same three opt-in exclusions (CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests):
+`/private/tmp/stocksage-narrator-draft-macos-20260907-0603.xcresult`
+`/private/tmp/stocksage-narrator-draft-ios-20260907-0605.xcresult`.
+Tested Mac bundle installed asPID5107; binary/debug-dylib comparison and strict
+deep codesign passed. Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-narrator-draft-20260907-0607.app`.
+
+The diagnostic/implementation workflow fixed one shared result boundary rather
+than disabling the guards in two backends. Numeric/citation checks still do NOT
+prove semantic grounding, sign/subject/unit correctness or profitable analysis.
+Existing changed-facts suppression remains; stale paragraphs are not silently
+presented under new facts. This is Explain parity, not the full proactive Chat.
+Native PAA Explain smoke at06:08–06:09 +03 used the EXISTING Qwen server/model
+and actual app facts (no injected response). It generated an unoffered[1] citation;
+the numeric check failed, but the complete paragraph remained visible beneath
+"Unverified draft" with the exact local model path and caveats. Accessibility
+text AND populated screenshot were inspected. This proves the real
+request→shared-result→native-panel failed-check path, not improved semantic
+accuracy or on-device FoundationModels generation. No response was rewritten.
+No push, trades, key inspection, extra model, cloud upload, training or
+main-worktree edits. Original QwenPID23631 unchanged; tested appPID5107.
+
+## Pagination Store/UI acceptance completed (2026-09-07 06:07 +03)
+
+Normal installed-app refresh (toolbar action, after the15-minute due window)
+persisted answered Form4 observations for ALL nine former incompleteResponse
+symbols at03:04:39–03:04:45Z. No cache editing/reset or synthetic timestamp.
+Native CRWD card visibly shows5/5 current checks, a Form4 sale filedSeptember4,
+and its expanded disclosure says Form4 checkedSeptember7 with one selected
+event. This closes the request→parser→Store→UI acceptance gap recorded below.
+The cache now has exactly two failures, SBLK/TEM conflictingTransactionDirection;
+those source-data contradictions remain unresolved. No all-API/P5 completion claim.
+
 ## Company-event pagination implemented and live-replayed (2026-09-07 05:54 +03)
 
 Actual CRWD HTTP200 response at02:41Z:149,572bytes/100rows plus next_url.

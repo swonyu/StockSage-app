@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest06:08 +03: normal native refresh persisted all9 Form4 pagination recoveries
+at03:04:39–45Z; CRWD expanded disclosure visibly5/5 current checks. Only genuine
+SBLK/TEM direction conflicts remain. No cache manipulation. Explain parity now
+preserves failed numeric/citation responses as labelled unverified drafts with
+the generating source; both backends share the tested response boundary. Red
+23pass/1fail→33focused; full1765macOS/1763iPhone passed and tested app installed.
+Real PAA Explain then generated an unoffered[1] citation: failed-check draft,
+warning and exact Qwen model label remained visibly rendered (AX+screenshot).
+No injected output or model reload. Broader semantic grounding, proactive Chat,
+other API routes and contract-gated P5 remain. See HANDOFF.
+
 Latest05:54 +03: company-event bounded pagination implemented at shared fetch:
 10sequential pages/100rows/2MB TOTAL, same-host/path bearer/no redirects,
 per-page guards, no partial success. Real nine formerly truncated Form4 fetches

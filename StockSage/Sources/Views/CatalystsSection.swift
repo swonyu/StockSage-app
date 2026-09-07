@@ -496,15 +496,21 @@ struct CatalystsSection: View {
         } else if let result = narrations[symbol] {
             let sources = narrationSources[symbol] ?? []
             switch result {
-            case .text(let text, let source):
+            case .text(let text, let source), .unverified(let text, let source, _):
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
+                    if case .unverified(_, _, let reason) = result {
+                        Text("Unverified draft — \(reason)")
+                            .font(.system(size: font11, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(verbatim: text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
+                        .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(StockSageCatalystNarrator.label(for: source, sourceCount: sources.count))
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            case .withheld(let msg), .unavailable(let msg):
+            case .unavailable(let msg):
                 Text(msg).font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }

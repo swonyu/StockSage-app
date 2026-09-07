@@ -16,7 +16,7 @@ import FoundationModels
 // The hard constraint (honesty floor: model text "can misstate") is that the model must never
 // be allowed to LOOK authoritative about a number it made up. `facts(for:)` is the ONLY thing
 // the model is shown; `introducesForeignNumbers` then checks its own output against those same
-// facts and WITHHOLDS the paragraph rather than ship an invented figure. Everything here is a
+// facts and labels failed checks as an UNVERIFIED DRAFT without discarding the text. Everything here is a
 // paraphrase layer — the engine's `why`/`watch` strings remain the primary, always-present
 // explanation; this is additive, never load-bearing.
 //
@@ -214,8 +214,8 @@ enum StockSageCatalystNarrator {
     }
 
     /// True when `text` contains a numeric token that appears nowhere in `facts` — the model
-    /// invented (or mis-copied) a number. The check that lets `explain(_:)` withhold rather than
-    /// ship a fabricated figure.
+    /// invented (or mis-copied) a number. A failed check marks an unverified draft; it never
+    /// upgrades that number to an app fact. Passing this token check does not prove truth.
     nonisolated static func introducesForeignNumbers(_ text: String, facts: [String]) -> Bool {
         let factTokens = facts.reduce(into: Set<String>()) { $0.formUnion(numericTokens($1)) }
         return !numericTokens(text).isSubset(of: factTokens)
@@ -241,8 +241,19 @@ enum StockSageCatalystNarrator {
 
     enum Result: Equatable, Sendable {
         case text(String, Source)
-        case withheld(String)
+        case unverified(String, Source, reason: String)
         case unavailable(String)
+    }
+
+    /// Both backends pass their response through the same deterministic result boundary.
+    static func checkedResponse(_ text: String, facts: [String], source: Source, sourceCount: Int) -> Result {
+        if introducesForeignNumbers(text, facts: facts) {
+            return .unverified(text, source, reason: "The model introduced a number that is not in the supplied facts. Verify it before relying on it.")
+        }
+        guard citationsValid(text, sourceCount: sourceCount) else {
+            return .unverified(text, source, reason: "The model cited a source number that was not offered. Verify its attribution before relying on it.")
+        }
+        return .text(text, source)
     }
 
     /// Always present on a rendered paragraph — names what it is (a paraphrase, not the engine's
@@ -319,7 +330,8 @@ enum StockSageCatalystNarrator {
     /// Availability check → local session → respond → trim → number-fence. Never throws, never
     /// fabricates: an unavailable model or a request error both come back as `.unavailable`
     /// (never silently as `.text`), and a response that names an off-facts number comes back as
-    /// `.withheld` rather than shown. The session is local to this call — no shared mutable state.
+    /// `.unverified` with the draft and generating source preserved. The session is local to
+    /// this call — no shared mutable state.
     private static func explainOnDevice(_ brief: StockSageCatalystWatch.Brief,
                                         sources: [CitedSource] = []) async -> Result {
         #if canImport(FoundationModels)
@@ -334,13 +346,7 @@ enum StockSageCatalystNarrator {
                 to: prompt(facts: briefFacts),
                 options: GenerationOptions(temperature: 0.2, maximumResponseTokens: 200))
             let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if introducesForeignNumbers(text, facts: briefFacts) {
-                return .withheld("Withheld: the model introduced a number that is not in the facts.")
-            }
-            guard citationsValid(text, sourceCount: sources.count) else {
-                return .withheld("Withheld: the model cited a source number that was not offered.")
-            }
-            return .text(text, .onDevice)
+            return checkedResponse(text, facts: briefFacts, source: .onDevice, sourceCount: sources.count)
         } catch {
             #if DEBUG
             print("StockSageCatalystNarrator: on-device explain failed: \(error)")
@@ -381,13 +387,7 @@ enum StockSageCatalystNarrator {
             config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts))
         switch result {
         case .success(let text):
-            if introducesForeignNumbers(text, facts: briefFacts) {
-                return .withheld("Withheld: the model introduced a number that is not in the facts.")
-            }
-            guard citationsValid(text, sourceCount: sources.count) else {
-                return .withheld("Withheld: the model cited a source number that was not offered.")
-            }
-            return .text(text, .localServer(model: config.model))
+            return checkedResponse(text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count)
         case .failure(let error):
             return .unavailable(humanServerError(error))
         }
