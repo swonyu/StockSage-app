@@ -47,8 +47,40 @@ struct CatalystsSection: View {
     @AppStorage(StockSageLocalModelServer.backendKey) private var backendRaw: String = "auto"
     @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL: String = StockSageLocalModelServer.defaultURL
     @AppStorage(StockSageLocalModelServer.modelKey) private var serverModel: String = StockSageLocalModelServer.defaultModel
-    @State private var probe: StockSageLocalModelServer.Probe?
-    @State private var probing = false
+    @State private var probeState = ConnectionProbeState()
+    private var probe: StockSageLocalModelServer.Probe? { probeState.current(for: explanationSettings) }
+    private var probing: Bool { probeState.isProbing(for: explanationSettings) }
+
+    /// Shared state transitions for manual and automatic connection checks.
+    struct ConnectionProbeState {
+        private var result: StockSageLocalModelServer.Probe?
+        private var settings: [String]?
+        private var requestID: UUID?
+        private(set) var probing = false
+
+        mutating func begin(settings: [String]) -> UUID {
+            let id = UUID()
+            result = nil
+            self.settings = settings
+            requestID = id
+            probing = true
+            return id
+        }
+
+        mutating func finish(_ result: StockSageLocalModelServer.Probe?, request: UUID,
+                             currentSettings: [String], cancelled: Bool) {
+            // A superseded completion owns neither the displayed result nor the spinner.
+            guard requestID == request else { return }
+            defer { requestID = nil; probing = false }
+            self.result = !cancelled && settings == currentSettings ? result : nil
+        }
+
+        func current(for settings: [String]) -> StockSageLocalModelServer.Probe? {
+            self.settings == settings ? result : nil
+        }
+
+        func isProbing(for settings: [String]) -> Bool { self.settings == settings && probing }
+    }
 
     private var backendBinding: Binding<StockSageLocalModelServer.Backend> {
         Binding(get: { StockSageCatalystNarrator.selectedBackend(backendRaw) },
@@ -63,9 +95,7 @@ struct CatalystsSection: View {
         return (probe.reachable && probe.hasModel) ? DS.Palette.successSoft : DS.Palette.warningSoft
     }
 
-    /// The `.task(id:)` identity for the auto-probe below — re-probes only when a setting a
-    /// probe result actually depends on changes, never on an unrelated body rebuild.
-    private var probeTaskID: String { serverURL + "|" + serverModel + "|" + backendRaw }
+    /// Structured task identity: no delimiter collisions between URL/model settings.
     private var explanationSettings: [String] { [backendRaw, serverURL, serverModel] }
 
     /// [network-safety-warn-first], fix pass 2026-09-06 (review blocker): true whenever the
@@ -90,10 +120,12 @@ struct CatalystsSection: View {
 
     private func testConnection() {
         guard !probing else { return }
-        probing = true
+        let request = probeState.begin(settings: explanationSettings)
+        let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel)
         Task {
-            probe = await StockSageCatalystNarrator.probeServer()
-            probing = false
+            let result = await StockSageCatalystNarrator.probeServer(config: config)
+            probeState.finish(result, request: request, currentSettings: explanationSettings,
+                              cancelled: Task.isCancelled)
         }
     }
 
@@ -101,11 +133,17 @@ struct CatalystsSection: View {
     /// — `.onDeviceOnly`/`.off` never need one, so this no-ops there rather than pinging a server
     /// nobody asked for.
     private func probeIfBackendNeedsServer() async {
+        guard !Task.isCancelled else { return }
         let backend = StockSageCatalystNarrator.selectedBackend(backendRaw)
-        guard backend == .auto || backend == .localServerOnly else { return }
-        probing = true
-        probe = await StockSageCatalystNarrator.probeServer()
-        probing = false
+        guard backend == .auto || backend == .localServerOnly else {
+            probeState = .init()
+            return
+        }
+        let request = probeState.begin(settings: explanationSettings)
+        let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel)
+        let result = await StockSageCatalystNarrator.probeServer(config: config)
+        probeState.finish(result, request: request, currentSettings: explanationSettings,
+                          cancelled: Task.isCancelled)
     }
 
     @ScaledMetric(relativeTo: .caption2) private var font9: CGFloat = 9
@@ -139,7 +177,8 @@ struct CatalystsSection: View {
                 }
             }
         }
-        .task(id: probeTaskID) { await probeIfBackendNeedsServer() }
+        .task(id: explanationSettings) { await probeIfBackendNeedsServer() }
+        .onDisappear { probeState = .init() }
     }
 
     // MARK: - Data

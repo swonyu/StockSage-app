@@ -321,15 +321,10 @@ enum StockSageCatalystNarrator {
         }
     }
 
-    /// Reads the current local-server settings from `UserDefaults` (falling back to the shared
-    /// defaults when unset) and probes it — `nil` when the settings don't even parse into a
-    /// `Config`. What the view's "Test connection" button and its auto-probe `.task` both call.
-    static func probeServer() async -> StockSageLocalModelServer.Probe? {
-        let url = UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey)
-            ?? StockSageLocalModelServer.defaultURL
-        let model = UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey)
-            ?? StockSageLocalModelServer.defaultModel
-        guard let config = StockSageLocalModelServer.config(url: url, model: model) else { return nil }
+    /// Probe the settings captured at the button/task boundary, never re-read preferences
+    /// after scheduling. Invalid settings return nil without contacting any endpoint.
+    static func probeServer(config: StockSageLocalModelServer.Config?) async -> StockSageLocalModelServer.Probe? {
+        guard let config else { return nil }
         return await StockSageLocalModelServer.probe(config)
     }
 

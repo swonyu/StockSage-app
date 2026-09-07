@@ -4,11 +4,60 @@ import SwiftUI
 
 // Pure-helper pins for the catalysts tab view (owner request 2026-09-06, build step
 // C3-view). Everything else in CatalystsSection needs a running app (it renders
-// StockSageIdea/StockSageStore state); these three are the only parts pulled out as
-// `nonisolated static func`/plain values specifically so they're checkable here.
+// StockSageIdea/StockSageStore state); helpers and connection lifecycle transitions
+// are plain values so they can be checked without owner settings or real network calls.
 
 @Suite("CatalystsSection — pure view helpers")
 struct CatalystsSectionTests {
+
+    @Test("late connection probes cannot publish for new settings or clear a newer spinner")
+    @MainActor func connectionProbeCompletionBelongsToItsRequest() async {
+        let a = ["localServerOnly", "http://127.0.0.1:8765", "model-A"]
+        let b = ["localServerOnly", "http://127.0.0.1:8765", "model-B"]
+        let reachable = StockSageLocalModelServer.Probe(reachable: true, isOllama: false,
+            models: ["model-A"], hasModel: true, detail: "model-A present")
+        var state = CatalystsSection.ConnectionProbeState()
+        let old = state.begin(settings: a)
+        let latest = state.begin(settings: b)
+        state.finish(reachable, request: old, currentSettings: b, cancelled: false)
+        #expect(state.current(for: b) == nil)
+        #expect(state.probing)
+        #expect(!StockSageCatalystNarrator.explainAvailable(backend: .localServerOnly,
+            onDevice: .unavailable("fixture"), probe: state.current(for: b)))
+        state.finish(nil, request: latest, currentSettings: b, cancelled: false)
+        #expect(!state.probing && state.current(for: b) == nil)
+
+        // A single matching request works; a settings edit hides it BEFORE another task starts.
+        let matching = state.begin(settings: a)
+        state.finish(reachable, request: matching, currentSettings: a, cancelled: false)
+        #expect(state.current(for: a) == reachable)
+        for settings in [b, ["localServerOnly", "http://127.0.0.1:11434", "model-A"],
+                         ["off", a[1], a[2]], ["onDeviceOnly", a[1], a[2]]] {
+            #expect(state.current(for: settings) == nil && !state.isProbing(for: settings))
+        }
+
+        // Same-settings overlap still needs request identity, not only settings equality.
+        let sameOld = state.begin(settings: a)
+        let sameNew = state.begin(settings: a)
+        #expect(state.current(for: a) == nil)
+        state.finish(reachable, request: sameOld, currentSettings: a, cancelled: false)
+        #expect(state.current(for: a) == nil && state.isProbing(for: a))
+        state.finish(nil, request: sameNew, currentSettings: a, cancelled: false)
+        state.finish(reachable, request: sameOld, currentSettings: a, cancelled: false)
+        #expect(state.current(for: a) == nil && !state.probing)
+
+        // Cancellation, a settings edit during await, and disappearance all reject late replies.
+        for cancelled in [false, true] {
+            let id = state.begin(settings: a)
+            state.finish(reachable, request: id, currentSettings: cancelled ? a : b, cancelled: cancelled)
+            #expect(state.current(for: a) == nil && !state.probing)
+        }
+        let disappeared = state.begin(settings: a)
+        state = .init()
+        state.finish(reachable, request: disappeared, currentSettings: a, cancelled: false)
+        #expect(state.current(for: a) == nil && !state.probing)
+        #expect(await StockSageCatalystNarrator.probeServer(config: nil) == nil)
+    }
 
     @Test("an explanation is current only for the facts AND settings that requested it")
     func narrationSettingsAndFactsMustMatch() {

@@ -13,6 +13,16 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest07:11 +03: connection status and Explain availability now belong to the
+captured settings AND newest request. Superseded/cancelled replies cannot overwrite
+the current result or clear a newer spinner; config is captured before scheduling.
+Auto off/on-device and disappearance invalidate probe state; manual tests remain
+available. Actual shared-state replay: four failure modes red->green, unchanged
+control green;10pass/1fail->46focused; final1771macOS/1769iPhone passed. Installed
+app's automatic/manual probes and populated settings panel verified with unchanged
+QwenPID23631/settings. No push/model reload. Next Explain citation/number diagnostics;
+semantic grounding, other API acceptance/full Chat/P5 remain. See HANDOFF.
+
 Latest06:57 +03: shared Explain facts now include quote source and millisecond
 market time, with unknown metadata explicit and no clock substitution. Equal-price
 provider/time changes now invalidate old explanations; original facts disclosure

@@ -1,5 +1,57 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Connection probes belong to their request and settings (2026-09-07 07:11 +03)
+
+N14/UI14 adjacent lifecycle fix. Manual and automatic probes previously wrote the
+same result/spinner unconditionally after await. Behavior-preserving extraction
+of those transitions into ConnectionProbeState gave a deterministic real-state
+replay: `/private/tmp/stocksage-probe-freshness.LfMN6t/check` printed
+oldReplyEnabledNewModel=true/newerRequestStillProbing=false, exit1. It also failed
+--same-settings, --changed-before-start and --cancelled; --control (one matching,
+uncancelled request) passed. The initial view regression was10pass/1fail.
+
+Both callbacks now use the same small value-state boundary: each begin clears the
+old result and owns a UUID; a superseded completion cannot publish OR clear the
+newer's spinner. Current results/spinners match the selected settings even before
+the next automatic task starts. Cancelled or settings-mismatched completions do
+not publish. Task identity uses the existing settings array, not a delimiter-joined
+string. Disappearance and automatic off/on-device selection invalidate state.
+Manual Test connection still explicitly probes in those modes. Config is captured
+before scheduling; probeServer takes it rather than rereading UserDefaults later.
+All status text/color and Explain availability consume the filtered result.
+
+All five replay modes now print `Connection probe freshness self-check ok`, exit0.
+One regression covers old-before-new/old-after-new completion, same-setting overlap,
+settings changes, cancellation, disappearance, successful control and nil config
+(no I/O). Focused46/46 passed. Artifacts:
+`/private/tmp/stocksage-probe-freshness-red-20260907.xcresult`,
+`/private/tmp/stocksage-probe-freshness-green-20260907.xcresult`.
+Final serial canonical macOS1771/1771 and iPhone17Pro(gate)1769/1769 passed,
+exit0, zero selected failures/skips; same three opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Final bundles:
+`/private/tmp/stocksage-probe-freshness-macos-20260907.xcresult`,
+`/private/tmp/stocksage-probe-freshness-ios-20260907.xcresult`.
+
+Tested Mac installed asPID24163; executable/debug-dylib cmp and strict deep
+codesign passed. Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-probe-freshness-20260907-0707.app`.
+Native auto-probe and manual Test connection confirmed the saved local Qwen model
+reachable/present with Explain available (AX plus populated screenshot). Offscreen
+AX click scrolled the long list unexpectedly; native scrollbar setValue("0") and
+small scrolls restored the viewport, then a visible coordinate click verified
+the actual control again. No settings edits, synthetic UI responses or extra
+Explain generations. Original QwenPID23631 unchanged. Races were replay-tested,
+NOT forced by changing owner settings or slowing the real endpoint.
+
+Inline review traced both callers and all three result consumers. This is request
+ownership, not continuous server health monitoring or a wall-clock expiry policy.
+No dependency, trade, push, credential access, cloud upload or model reload; main
+worktree changes preserved and sibling task independently confirmed inactive.
+Next bounded issue: Explain citation/number diagnostics (native PAA's unoffered
+[1] currently surfaces as a financial-number failure). Semantic grounding,
+independent API acceptance, full Chat and contract-gated P5 remain open.
+
 ## Explain facts retain quote source and market time (2026-09-07 06:57 +03)
 
 N10/N14 bounded provenance fix. The shared narrator fact builder omitted the
