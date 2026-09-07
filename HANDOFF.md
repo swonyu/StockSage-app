@@ -1,5 +1,53 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## AI assessment checks selected evidence, not every offered fact (2026-09-07 06:26 +03)
+
+N13 bounded source-grounding step. The primary badge parser displayed selected
+F IDs but whitelisted numbers from ALL offered facts. A compiled production-module
+replay with F1=AAPL revenue100 and F2=MSFT revenue200 accepted the false claim
+"AAPL revenue200 (F1)" with evidence[F1]. Original replay exited1; changing ONLY
+200→100 passed. The shared parser now checks numbers against selected facts and
+requires inline F references to belong to the displayed evidence list. W references
+remain bounded unverified group leads, never evidence or a numerical whitelist.
+The prompt states the same contract; all six AI actions remain available.
+
+Missing-evidence repair preflights other fields against all offered IDs WITHOUT
+publishing those temporary IDs. Its one actual repair still has to pass selected
+evidence validation and preserve the original action/reason/risk exactly. This
+avoids falsely rejecting a legitimate quote from F2 merely because the old
+temporary preflight used F1. Failed replies retain their original visible draft;
+no bad record/badge is published, no extra repair for a four-key invalid reply.
+No changes to rules, sizing, money, journal or execution paths.
+
+Diagnostic/implementation workflow: regressions at parser AND real coordinator
+failed first (10pass/3fail), then37/37 focused assessment/narrator tests passed.
+The existing F13 citation fixture now actually selects F13; digit/reference and
+private-group checks still pass. Original `/private/tmp/stocksage-grounding.GSpxE9/check`
+now prints `Cited-fact numeric binding self-check ok`, exit0 (control also passed).
+Artifacts: `/private/tmp/stocksage-cited-facts-red-20260907.xcresult`,
+`/private/tmp/stocksage-cited-facts-green-20260907.xcresult`.
+Serial canonical gates: macOS1768/1768 and iPhone17Pro(gate)1766/1766 passed,
+zero selected failures/skips, same three opt-in exclusions (CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests):
+`/private/tmp/stocksage-cited-facts-macos-20260907.xcresult`,
+`/private/tmp/stocksage-cited-facts-ios-20260907.xcresult`.
+
+Tested Mac bundle installed asPID9366; binary/debug-dylib cmp and strict deep
+codesign passed. Previous bundle recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-cited-facts-20260907-0624.app`.
+Actual auto-assessed PAA snapshot03:24:16Z rendered Buy, separate Rules Strong Buy,
+with selectedF1,F2,F3,F4,F5,F6,F9,F14. Native AX and populated screenshot inspected:
+50/200DMA,+16%,6months,ratio9 belong to citedF4;20.5% volatility to citedF5.
+No injected response or extra generation request; original QwenPID23631 unchanged.
+Account/risk inputs remained untouched. No push/trades/credentials/cloud upload.
+
+Inline review traced both parse calls, repair, draft retention and evidence UI.
+This is selected-fact NUMERIC MEMBERSHIP, not semantic entailment: a model can
+still swap subjects/signs/units or values among multiple cited facts, or invent a
+word-only claim. The older Explain numeric check still has its separate source
+contract. N13 remains open for typed claim/source binding; no model-accuracy,
+all-API, full-Chat or P5 completion claim. Main-worktree changes preserved.
+
 ## Explain retains failed output as an unverified draft (2026-09-07 06:08 +03)
 
 Owner's explicit "never withhold" request also applies to the older Catalyst

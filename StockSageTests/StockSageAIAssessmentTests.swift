@@ -40,6 +40,7 @@ struct StockSageAIAssessmentTests {
         #expect(A.parse(four, facts: c.facts)?.evidence.count == 4)
         // Minimized native QCOM failure: F13 is a citation, not an invented financial 13.
         let cited = json.replacingOccurrences(of: "could support ORCL", with: "is mixed (F13)")
+            .replacingOccurrences(of: "[\"F1\"]", with: "[\"F13\"]")
         let facts = Array(repeating: "Dated source says uncertainty remains.", count: 16)
         #expect(A.parse(cited, facts: facts) != nil)
         #expect(A.parse(cited.replacingOccurrences(of: "F13", with: "F99"), facts: facts) == nil)
@@ -47,7 +48,7 @@ struct StockSageAIAssessmentTests {
         let groupReference = cited.replacingOccurrences(of: "a gap can bypass a stop", with: "group claims (W1/W3) are unverified")
         #expect(A.parse(groupReference, facts: facts, leadCount: 3) != nil)
         #expect(A.parse(groupReference, facts: facts, leadCount: 2) == nil)
-        #expect(A.parse(groupReference.replacingOccurrences(of: "[\"F1\"]", with: "[\"W1\"]"), facts: facts, leadCount: 3) == nil)
+        #expect(A.parse(groupReference.replacingOccurrences(of: "[\"F13\"]", with: "[\"W1\"]"), facts: facts, leadCount: 3) == nil)
         #expect(A.parse(groupReference.replacingOccurrences(of: "are unverified", with: "promise 99999"), facts: facts, leadCount: 3) == nil)
     }
 
@@ -64,6 +65,56 @@ struct StockSageAIAssessmentTests {
             json.replacingOccurrences(of: "The earnings catalyst could support ORCL.", with: " "),
             String(repeating: "x", count: 4_001)]
         for value in invalid { #expect(A.parse(value, facts: context.facts) == nil) }
+    }
+
+    @Test func numbersAndInlineFactReferencesMustBelongToSelectedEvidence() {
+        let facts = ["AAPL revenue: USD 100.", "MSFT revenue: USD 200."]
+        let borrowed = #"{"action":"Hold","reason":"AAPL revenue is USD 200 (F1).","risk":"Outcome remains uncertain.","evidence":["F1"]}"#
+        #expect(A.parse(borrowed, facts: facts) == nil)
+        #expect(A.parse(borrowed.replacingOccurrences(of: "200", with: "100"), facts: facts) != nil)
+        #expect(A.parse(borrowed.replacingOccurrences(of: "AAPL", with: "MSFT")
+            .replacingOccurrences(of: "F1", with: "F2"), facts: facts) != nil)
+        // Neither dropping the inline citation nor moving the claim to risk can bypass selection.
+        #expect(A.parse(borrowed.replacingOccurrences(of: " (F1)", with: ""), facts: facts) == nil)
+        let risk = #"{"action":"Hold","reason":"The outlook is uncertain.","risk":"AAPL revenue is USD 200 (F1).","evidence":["F1"]}"#
+        #expect(A.parse(risk, facts: facts) == nil)
+        let uncited = json.replacingOccurrences(of: "could support ORCL", with: "is uncertain (F2)")
+        #expect(A.parse(uncited, facts: facts) == nil)
+        #expect(A.parse(uncited.replacingOccurrences(of: "[\"F1\"]", with: "[\"F2\"]"), facts: facts) != nil)
+    }
+
+    @Test func borrowedQuoteCannotPublishABadgeButRemainsReadable() async {
+        let c = context
+        #expect(c.facts[1].contains("159.70"))
+        let borrowed = #"{"action":"Hold","reason":"The observed quote is USD 159.70 (F1).","risk":"The outlook is uncertain.","evidence":["F1"]}"#
+        for (reply, accepted) in [(borrowed, false), (borrowed.replacingOccurrences(of: "F1", with: "F2"), true)] {
+            let state = StockSageAIAssessments()
+            var calls = 0
+            await state.assess(c, config: config, now: now, stillValid: { true }) { _, _ in
+                calls += 1
+                return reply
+            }
+            #expect(calls == 1 && state.activeSymbol == nil)
+            #expect((state.records["ORCL"] != nil) == accepted)
+            #expect((state.errors["ORCL"] == nil) == accepted)
+            if !accepted { #expect(state.drafts["ORCL"]?.text == reply) }
+            #expect(c.idea.advice.action == .avoid && c.idea.advice.suggestedWeight == 0)
+        }
+    }
+
+    @Test func evidenceRepairStillSupportsNumbersOutsideTheFirstFact() async {
+        let draft = #"{"action":"Hold","reason":"The observed quote is USD 159.70 (F2).","risk":"The outlook is uncertain."}"#
+        for (id, accepted) in [("F2", true), ("F1", false)] {
+            let state = StockSageAIAssessments()
+            var calls = 0
+            await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in
+                calls += 1
+                return calls == 1 ? draft : String(draft.dropLast()) + ",\"evidence\":[\"\(id)\"]}"
+            }
+            #expect(calls == 2)
+            #expect((state.records["ORCL"] != nil) == accepted)
+            if !accepted { #expect(state.drafts["ORCL"]?.text == draft) }
+        }
     }
 
     @Test func factsCarryConfirmedDateCoverageAndNeverUpgradeProjection() {

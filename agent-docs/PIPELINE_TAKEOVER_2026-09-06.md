@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest06:26 +03: primary Qwen assessment now checks numerical claims against
+SELECTED fact IDs and requires inline F references to be selected. Previously
+uncited facts could whitelist unrelated figures. Missing-evidence repair remains
+one shot, never changes the opinion and cannot publish temporary citations.
+Failed output stays readable; rules/money/execution untouched. Production replay
+red→green,10pass/3fail→37focused; canonical1768macOS/1766iPhone passed.
+Tested app installed; actual PAA numeric assessment and its cited facts inspected
+in native AX+screenshot, no injected output/new model. No push. This is bounded
+numeric membership, NOT semantic subject/sign/unit grounding; N13, full Chat,
+independent API acceptance and contract-gated P5 remain. See HANDOFF.
+
 Latest06:08 +03: normal native refresh persisted all9 Form4 pagination recoveries
 at03:04:39–45Z; CRWD expanded disclosure visibly5/5 current checks. Only genuine
 SBLK/TEM direction conflicts remain. No cache manipulation. Explain parity now
