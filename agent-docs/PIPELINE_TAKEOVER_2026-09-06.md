@@ -13,6 +13,21 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest12:28 +03: M11 stale-save deletion resurrection fixed for journal, holdings and
+paper records with per-ID deletion markers, preserved foreign additions and failed-save
+rollback. Corrected red selection62 total/3 failures/13 assertions ->102 focused green.
+Canonical macOS1828 / iPhone1826 pass, zero selected failures/skips, usual exclusions.
+Only successful explicit JSON restore revives old journal/holding IDs. Markers do not
+expire; this is not transactional storage or live-refresh of idle in-memory snapshots.
+No owner records, live calls, app/model restart or push; built/gated, not installed.
+Main artifacts and prior native CUA blocker unchanged. Exact evidence/limits in HANDOFF.
+NEW PRIMARY REQUEST at12:20: reconstruct/simplify the whole macOS interface with an
+Apple Music-inspired RIGHT-hand collapsible navigation sidebar. Inspect existing
+layout, present the design and obtain approval before redesign implementation. Keep
+iPhone UI, financial/data logic and model lifecycle intact. The existing15-minute
+automation is updated to this priority; earlier design approval does not approve this
+new visual design. Other review/pipeline tasks remain secondary, not complete.
+
 Latest12:01 +03: M10 CSV export/import now recognizes CRLF (including quoted
 notes), accepts finite positive decimal-exponent export values without loosening
 human-input rules, and deduplicates against previously accepted rows in the same

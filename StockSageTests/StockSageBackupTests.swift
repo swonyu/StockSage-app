@@ -7,6 +7,112 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @MainActor @Test func deletionMarkersSurviveLegacyWritesAndOnlySuccessfulExplicitRestoreRevivesIDs() throws {
+        let suite = "stocksage-backup-deletions-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let data = StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        _ = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
+        let journalBytes = try #require(defaults.data(forKey: "stocksage.journal.v1"))
+        let portfolioBytes = try #require(defaults.data(forKey: "stocksage_portfolio_v1"))
+        let journalMarkers = StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1")
+        let portfolioMarkers = StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1")
+        journal.remove(fixtureTrade().id)
+        portfolio.remove(fixturePosition().id)
+        #expect(journalMarkers.contains(fixtureTrade().id))
+        #expect(portfolioMarkers.contains(fixturePosition().id))
+        // Simulate an older writer replacing ONLY the original array keys, unaware of markers.
+        defaults.set(journalBytes, forKey: "stocksage.journal.v1")
+        defaults.set(portfolioBytes, forKey: "stocksage_portfolio_v1")
+        #expect(StockSageJournalStore(defaults: defaults).trades.isEmpty)
+        #expect(StockSagePortfolio(userDefaults: defaults).positions.isEmpty)
+        #expect(!journal.add(fixtureTrade())) // ordinary add/import is not an explicit restore
+        #expect(!journal.close(fixtureTrade().id, exitPrice: 170))
+
+        defaults.set(42, forKey: "stocksage_user_symbols") // last preparation step must fail
+        switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
+        case .success: Issue.record("Failed preparation must not remove deletion markers")
+        case .failure: break
+        }
+        #expect(journalMarkers.contains(fixtureTrade().id) && portfolioMarkers.contains(fixturePosition().id))
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == journalBytes)
+        #expect(defaults.data(forKey: "stocksage_portfolio_v1") == portfolioBytes)
+        defaults.set(["NVDA"], forKey: "stocksage_user_symbols")
+        let restored = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
+        #expect(restored.trades == 1 && restored.positions == 1 && restored.symbols == 0)
+        #expect(!journalMarkers.contains(fixtureTrade().id) && !portfolioMarkers.contains(fixturePosition().id))
+        #expect(StockSageJournalStore(defaults: defaults).trades == [fixtureTrade()])
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == [fixturePosition()])
+    }
+
+    @MainActor @Test func deletionMarkersAreIndependentAndScopedByStoreAndCustomKey() throws {
+        let suite = "stocksage-deletion-scope-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let trade = fixtureTrade()
+        let journal = StockSageJournalStore(defaults: defaults)
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let custom = StockSageJournalStore(defaults: defaults, key: "custom.journal")
+        #expect(journal.add(trade) && custom.add(trade))
+        paper.add(trade)
+        journal.remove(trade.id)
+        #expect(StockSagePaperTradeStore(defaults: defaults).trades == [trade])
+        #expect(StockSageJournalStore(defaults: defaults, key: "custom.journal").trades == [trade])
+        let ledgerA = StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1")
+        let ledgerB = StockSageRecordDeletions(defaults: try #require(UserDefaults(suiteName: suite)), recordKey: "stocksage.journal.v1")
+        let second = UUID(), third = UUID()
+        ledgerA.mark([second]); ledgerB.mark([third])
+        #expect(ledgerA.contains(trade.id) && ledgerA.contains(second) && ledgerA.contains(third))
+        #expect(ledgerB.contains(trade.id) && ledgerB.contains(second) && ledgerB.contains(third))
+    }
+
+    @MainActor @Test func unreadableBooksCannotBeOverwrittenOrAcquireDeletionMarkers() throws {
+        let suite = "stocksage-deletion-read-failure-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let trade = fixtureTrade()
+        journal.add(trade); paper.add(trade)
+        portfolio.add(symbol: "KEEP", shares: 1, costBasis: 100)
+        let lot = try #require(portfolio.positions.first)
+        let keys = ["stocksage.journal.v1", "stocksage_portfolio_v1", "stocksage.papertrades.v1"]
+        for value in [Data("corrupt".utf8) as Any, 42 as Any] {
+            for key in keys { defaults.set(value, forKey: key) }
+            let before = defaults.persistentDomain(forName: suite) ?? [:]
+            journal.remove(trade.id); portfolio.remove(lot.id); paper.remove(trade.id)
+            portfolio.clear(); paper.reset()
+            #expect(journal.trades == [trade] && paper.trades == [trade] && portfolio.positions == [lot])
+            #expect(journal.lastError != nil && portfolio.lastError != nil && paper.lastError != nil)
+            #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+        }
+    }
+
+    @MainActor @Test func failedEncodingDoesNotTurnAnUncommittedDeleteIntoADurableOne() throws {
+        let suite = "stocksage-deletion-encode-failure-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        journal.add(fixtureTrade())
+        portfolio.add(symbol: "KEEP", shares: 1, costBasis: 100)
+        let lot = try #require(portfolio.positions.first)
+        let invalidTrade = TradeRecord(symbol: "BAD", side: .long, entry: 100, stop: 90,
+            target: nil, shares: .infinity, openedAt: Date(timeIntervalSince1970: 0))
+        let invalidLot = PortfolioPosition(symbol: "BAD", shares: .infinity, costBasis: 1)
+        journal.qaSeed([fixtureTrade(), invalidTrade]); portfolio.qaSeed([lot, invalidLot])
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        journal.remove(fixtureTrade().id); portfolio.remove(lot.id)
+        #expect(journal.trades == [fixtureTrade(), invalidTrade])
+        #expect(portfolio.positions == [lot, invalidLot])
+        #expect(journal.lastError != nil && portfolio.lastError != nil)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
     @MainActor @Test func nativeRestorePersistsAllThreeCollectionsAndIsRepeatable() throws {
         let suite = "stocksage-backup-test-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

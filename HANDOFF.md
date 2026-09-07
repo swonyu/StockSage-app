@@ -1,5 +1,56 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review M11: stale saves must not revive deleted records — 2026-09-07 12:28 +03
+
+Started at db5d595 with the peer independently inactive, no other compiler writer,
+and Claude PID52276 still rooted in .claude/chrome. Reproduced against two isolated
+instances of the journal, holdings and paper stores: deletion dropped foreign disk
+additions, then the stale instance's next save revived the deleted ID. First red
+selection accidentally omitted the portfolio aggregation suite (50 total, two failed);
+corrected selection:62 total,59 passed/3 failed,13 assertions. No owner defaults used.
+
+All three stores now share a small per-record deletion-marker helper, scoped by their
+existing defaults suite and record key. Loads and reconciled saves filter deleted IDs;
+remove preserves unrelated disk additions, clear/reset includes currently saved IDs,
+and late paper-close batches cannot resurrect records. One preference per deleted UUID
+avoids overwriting a shared marker list. Strict read/encode precedes marking/writing;
+failed mutations keep prior memory and stored bytes. Paper mutations invalidate its
+cached scoreboard. Successful fully prepared JSON restore may explicitly revive original
+journal/holding IDs; ordinary adds and late journal closes cannot. Failed three-store
+restore preparation leaves markers intact. No existing record format/key migration.
+
+Focused green:73 tests, then102 tests in six suites including legacy array rewrites,
+independent/custom-key markers, malformed/wrong-type saved books, encoding failures,
+late closes, foreign additions and successful/failed explicit restore. Canonical serial
+gates:1828/1828 macOS and1826/1826 iPhone17Pro(gate), both exit0, zero selected
+failures/skips. Explicit opt-in exclusions remain CalibrationPersistRunTests,
+LiveUniverseVerificationTests and StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-deletion-{red,red-all,focused,focused-final,macos,ios}-20260907.xcresult
+and matching .log files. Focused final selection: StockSageJournalStoreQASeedTests,
+StockSagePortfolioAggregationTests, StockSagePaperTraderTests, StockSageBackupTests,
+StockSageJournalCSVImportTests and StockSagePortfolioTests. Gates use the existing
+/private/tmp/stocksage-codex-m1b.qzpbNS derived data and iPhone simulator
+3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA. Inline source/caller/test diff reviewed.
+
+Limits: record-array writes are still nontransactional, not globally crash-atomic or
+cross-process locked; actual simultaneous process interleavings are not exhaustively
+tested. Markers do not expire while stale writers may exist, so deletion metadata grows.
+Idle instances do not live-refresh their in-memory UI; updated readers filter legacy
+array writes, but old app versions may display stale records. New portfolio/paper error
+properties do not yet add error presentation to their UI. No owner records deleted,
+live provider/order calls, app/model restarts or push. Built/gated, not installed;
+the prior native CUA normal-close/visual blocker remains. Main checkout's unrelated
+pbxproj/AGENTS/review artifacts remain untouched.
+
+PRIORITY CHANGE: at12:20 +03 Saleh requested a complete simpler macOS redesign with
+an Apple Music-inspired RIGHT-hand collapsible sidebar. The current mac shell places
+context cards before all selected sections, nine segments in a narrow picker, and
+centers content in a780pt column. Redesign proposal/approval comes next; preserve the
+iPhone presentation, existing engine/state and live/model lifecycle. The 15-minute
+automation now prioritizes this request and must not treat the old September6 design
+approval as approval of this new visual design. Other backlog/live API/P5 work remains
+unfinished and secondary; do not silently continue unrelated fixes instead.
+
 ## Full-review M10: CSV compatibility and duplicate accounting — 2026-09-07 12:01 +03
 
 Started clean at3eaa047, peer independently notLoaded/completed, no compiler writer.

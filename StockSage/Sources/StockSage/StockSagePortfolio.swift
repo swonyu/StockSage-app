@@ -21,9 +21,11 @@ final class StockSagePortfolio: ObservableObject {
     static let shared = StockSagePortfolio()
 
     @Published private(set) var positions: [PortfolioPosition] = []
+    @Published private(set) var lastError: String?
 
     private static let key = "stocksage_portfolio_v1"
     private let defaults: UserDefaults
+    private var deletions: StockSageRecordDeletions { .init(defaults: defaults, recordKey: Self.key) }
 
     private init() {
         self.defaults = .standard
@@ -40,39 +42,36 @@ final class StockSagePortfolio: ObservableObject {
     func add(symbol: String, shares: Double, costBasis: Double) {
         let s = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !s.isEmpty, shares > 0, shares.isFinite, costBasis >= 0, costBasis.isFinite else { return }
+        let before = positions
         positions.append(PortfolioPosition(symbol: s, shares: shares, costBasis: costBasis))
-        save()
+        if !save() { positions = before }
     }
 
-    // Explicit deletions bypass the reconciling save (a merged save would resurrect the
-    // removed lot from disk). Same ponytail ceiling as the paper/journal stores: a CONCURRENT
-    // process's next merged save can still resurrect it; tombstones if that ever matters.
+    // Deletes merge foreign lots, excluding only the explicitly deleted IDs.
     func remove(_ id: UUID) {
-        positions.removeAll { $0.id == id }
-        save(reconciling: false)
+        _ = save(removing: [id])
     }
 
     func clear() {
-        positions.removeAll()
-        save(reconciling: false)
+        _ = save(clearAll: true)
     }
 
     /// Validated backup lots keep their IDs. Never call add() here: it creates a fresh ID,
     /// which would duplicate every holding on repeat restore and erase lot provenance.
     func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> (added: Int, apply: () -> Void) {
-        let stored = defaults.object(forKey: Self.key)
-        guard stored == nil || stored is Data else { throw CocoaError(.fileReadCorruptFile) }
-        let disk = try defaults.data(forKey: Self.key).map { try JSONDecoder().decode([PortfolioPosition].self, from: $0) } ?? []
-        var merged = positions
+        let disk = try deletions.read(PortfolioPosition.self)
+        var merged = positions.filter { !deletions.contains($0.id) }
         var ids = Set(merged.map(\.id))
-        for lot in disk where ids.insert(lot.id).inserted { merged.append(lot) }
+        for lot in disk where !deletions.contains(lot.id) && ids.insert(lot.id).inserted { merged.append(lot) }
         let additions = incoming.filter { ids.insert($0.id).inserted }
         merged.append(contentsOf: additions)
         let data = try JSONEncoder().encode(merged)
         let records = merged
         return (additions.count, {
+            self.deletions.restore(Set(additions.map(\.id)))
             self.defaults.set(data, forKey: Self.key)
             self.positions = records
+            self.lastError = nil
         })
     }
 
@@ -81,26 +80,30 @@ final class StockSagePortfolio: ObservableObject {
     /// position book. Lots are IMMUTABLE once added (add/remove/clear only — no in-place
     /// edits exist), so the ONLY cross-process hazard is a stale whole-array write DROPPING
     /// another instance's lot: reconcile by preserving foreign ids; per-id conflicts are
-    /// impossible. Deletions pass `reconciling: false`; `qaSeed` never touches disk.
-    private func save(reconciling: Bool = true) {
-        if reconciling,
-           let data = defaults.data(forKey: Self.key),
-           let disk = try? JSONDecoder().decode([PortfolioPosition].self, from: data) {
-            var mineIds = Set(positions.map(\.id))
-            for d in disk where !mineIds.contains(d.id) {
-                positions.append(d)
-                mineIds.insert(d.id)
-            }
+    /// impossible. Deletes retain markers; `qaSeed` never touches disk.
+    private func save(removing: Set<UUID> = [], clearAll: Bool = false) -> Bool {
+        guard let disk = try? deletions.read(PortfolioPosition.self) else {
+            lastError = "Couldn't read the saved portfolio; no records were changed."; return false
         }
-        if let data = try? JSONEncoder().encode(positions) {
-            defaults.set(data, forKey: Self.key)
+        let removed = clearAll ? Set((positions + disk).map(\.id)) : removing
+        var records = positions.filter { !removed.contains($0.id) && !deletions.contains($0.id) }
+        var ids = Set(records.map(\.id))
+        for lot in disk where !removed.contains(lot.id) && !deletions.contains(lot.id) && ids.insert(lot.id).inserted {
+            records.append(lot)
         }
+        guard let data = try? JSONEncoder().encode(records) else {
+            lastError = "Couldn't encode the portfolio; the previous saved records were kept."; return false
+        }
+        deletions.mark(removed)
+        defaults.set(data, forKey: Self.key)
+        positions = records
+        lastError = nil
+        return true
     }
 
     private func load() {
-        guard let data = defaults.data(forKey: Self.key),
-              let decoded = try? JSONDecoder().decode([PortfolioPosition].self, from: data) else { return }
-        positions = decoded
+        guard let decoded = try? deletions.read(PortfolioPosition.self) else { return }
+        positions = decoded.filter { !deletions.contains($0.id) }
     }
 
     /// QA-only in-memory seed: assigns `positions` directly, bypassing `save()` so nothing

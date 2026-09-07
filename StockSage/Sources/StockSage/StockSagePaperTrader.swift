@@ -240,9 +240,11 @@ final class StockSagePaperTradeStore: ObservableObject {
     static let shared = StockSagePaperTradeStore()
 
     @Published private(set) var trades: [TradeRecord] = []
+    @Published private(set) var lastError: String?
     /// DISTINCT from the journal's "stocksage.journal.v1" — paper and real never share storage.
     private let key: String
     private let defaults: UserDefaults
+    private var deletions: StockSageRecordDeletions { .init(defaults: defaults, recordKey: key) }
     /// Master switch. The owner asked for paper trading, so it is ON by default; OFF ⇒ the store is
     /// never mutated by the refresh (byte-identical to no paper trading).
     var enabled = true
@@ -283,13 +285,18 @@ final class StockSagePaperTradeStore: ObservableObject {
         trades.contains { $0.isOpen && $0.symbol.uppercased() == symbol.uppercased() }
     }
 
-    func add(_ t: TradeRecord) { trades.insert(t, at: 0); save() }
+    func add(_ t: TradeRecord) {
+        let before = trades
+        trades.insert(t, at: 0)
+        if !save() { trades = before }
+    }
 
     /// Replace an open trade with its closed version (matched by id) — the mark-to-market apply.
     func applyClose(_ closed: TradeRecord) {
         guard let i = trades.firstIndex(where: { $0.id == closed.id }) else { return }
+        let before = trades
         trades[i] = closed
-        save()
+        if !save() { trades = before }
     }
 
     /// MEM-01a: batch counterpart to calling `applyClose` then `add` in a loop, one per element —
@@ -303,26 +310,23 @@ final class StockSagePaperTradeStore: ObservableObject {
     /// own guard) is skipped rather than silently appended.
     func apply(closes: [TradeRecord], opens: [TradeRecord]) {
         guard !closes.isEmpty || !opens.isEmpty else { return }
+        let before = trades
         for c in closes {
             guard let i = trades.firstIndex(where: { $0.id == c.id }) else { continue }
             trades[i] = c
         }
         trades.insert(contentsOf: opens.reversed(), at: 0)
-        save()
+        if !save() { trades = before }
     }
 
-    // Deletions are explicit user intent — they BYPASS the reconciling save below (a merged
-    // save would resurrect the removed record from disk). ponytail: no tombstones — a
-    // CONCURRENT process's next merged save can still resurrect a removed trade; add
-    // tombstoned ids if removal-under-concurrency ever matters.
-    func remove(_ id: UUID) { trades.removeAll { $0.id == id }; save(reconciling: false) }
+    // Deletions retain per-ID intent while preserving unrelated foreign records.
+    func remove(_ id: UUID) { _ = save(removing: [id]) }
     /// Owner "clear paper history" — wipes the paper record only (the real journal is untouched).
-    func reset() { trades = []; save(reconciling: false) }
+    func reset() { _ = save(clearAll: true) }
 
     private func load() {
-        guard let data = defaults.data(forKey: key),
-              let decoded = try? JSONDecoder().decode([TradeRecord].self, from: data) else { return }
-        trades = decoded
+        guard let decoded = try? deletions.read(TradeRecord.self) else { return }
+        trades = decoded.filter { !deletions.contains($0.id) }
     }
 
     /// LOST-UPDATE FIX (2026-07-09 — found from LIVE data, not review: GE/SAN.MC/O39.SI each
@@ -334,24 +338,30 @@ final class StockSagePaperTradeStore: ObservableObject {
     ///   • per id, a CLOSED record beats an open one (a close is terminal — markToMarket only
     ///     ever moves open→closed, and `isOpen` is computed from `closedAt`);
     ///   • ids this process has never seen (another process's opens) are preserved, appended.
-    /// Deletions pass `reconciling: false` (see remove/reset).
-    private func save(reconciling: Bool = true) {
-        if reconciling,
-           let data = defaults.data(forKey: key),
-           let disk = try? JSONDecoder().decode([TradeRecord].self, from: data) {
-            var mineIds = Set(trades.map(\.id))
-            for d in disk {
-                if let i = trades.firstIndex(where: { $0.id == d.id }) {
-                    if trades[i].isOpen && !d.isOpen { trades[i] = d }   // disk close wins
-                } else if !mineIds.contains(d.id) {
-                    trades.append(d)                                     // foreign trade — never drop
-                    mineIds.insert(d.id)
-                }
+    /// Deleted IDs are filtered from both snapshots; clear/reset includes current disk IDs.
+    private func save(removing: Set<UUID> = [], clearAll: Bool = false) -> Bool {
+        guard let disk = try? deletions.read(TradeRecord.self) else {
+            lastError = "Couldn't read the saved paper history; no records were changed."; return false
+        }
+        let removed = clearAll ? Set((trades + disk).map(\.id)) : removing
+        var records = trades.filter { !removed.contains($0.id) && !deletions.contains($0.id) }
+        var ids = Set(records.map(\.id))
+        for d in disk where !removed.contains(d.id) && !deletions.contains(d.id) {
+            if let i = records.firstIndex(where: { $0.id == d.id }) {
+                if records[i].isOpen && !d.isOpen { records[i] = d }
+            } else if ids.insert(d.id).inserted {
+                records.append(d)
             }
         }
-        if let data = try? JSONEncoder().encode(trades) {
-            defaults.set(data, forKey: key)
+        guard let data = try? JSONEncoder().encode(records) else {
+            lastError = "Couldn't encode the paper history; the previous saved records were kept."; return false
         }
+        deletions.mark(removed)
+        defaults.set(data, forKey: key)
+        trades = records
+        scoreboard = nil // a cached scoreboard cannot describe the previous book after a mutation
+        lastError = nil
+        return true
     }
 }
 

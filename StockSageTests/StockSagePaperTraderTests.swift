@@ -449,12 +449,35 @@ struct StockSagePaperTraderTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let t = StockSagePaperTrader.open(from: idea("AAA", price: 100, .buy, stop: 90, target: 120), at: d(0))!
         a.add(t)
-        // remove() bypasses reconciliation — the record must NOT come back from disk.
+        // remove() retains its deletion intent — the record must NOT come back from disk.
         a.remove(t.id)
         #expect(StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1").trades.isEmpty)
-        a.add(t)
+        let replacement = StockSagePaperTrader.open(from: idea("AAA", price: 100, .buy, stop: 90, target: 120), at: d(1))!
+        a.add(replacement) // a new record ID, not an attempt to revive the deleted one
+        #expect(a.trades == [replacement])
         a.reset()
         #expect(StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1").trades.isEmpty)
+    }
+
+    @Test(arguments: [false, true]) func deletionSurvivesStalePaperBatch(resetAll: Bool) throws {
+        let (a, defaults, suite) = isolatedStore()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gone = TradeRecord(symbol: "GONE", side: .long, entry: 100, stop: 90,
+            target: nil, shares: 1, openedAt: Date(timeIntervalSince1970: 0))
+        let foreign = TradeRecord(symbol: "FOREIGN", side: .long, entry: 100, stop: 90,
+            target: nil, shares: 1, openedAt: Date(timeIntervalSince1970: 1))
+        let next = TradeRecord(symbol: "NEXT", side: .long, entry: 100, stop: 90,
+            target: nil, shares: 1, openedAt: Date(timeIntervalSince1970: 2))
+        a.add(gone)
+        let b = StockSagePaperTradeStore(defaults: defaults)
+        b.add(foreign)
+        if resetAll { a.reset() } else { a.remove(gone.id) }
+        let kept: Set<UUID> = resetAll ? [] : [foreign.id]
+        #expect(Set(StockSagePaperTradeStore(defaults: defaults).trades.map(\.id)) == kept)
+        var lateClose = gone; lateClose.closedAt = next.openedAt; lateClose.exitPrice = 110
+        b.apply(closes: [lateClose], opens: [next])
+        #expect(Set(b.trades.map(\.id)) == kept.union([next.id]))
+        #expect(Set(StockSagePaperTradeStore(defaults: defaults).trades.map(\.id)) == kept.union([next.id]))
     }
 
     // MARK: - scoreboard(_:latestClose:) — the bias-corrected forward bracket

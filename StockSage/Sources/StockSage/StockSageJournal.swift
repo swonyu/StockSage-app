@@ -995,6 +995,7 @@ final class StockSageJournalStore: ObservableObject {
     @Published private(set) var lastError: String?
     private let key: String
     private let defaults: UserDefaults
+    private var deletions: StockSageRecordDeletions { .init(defaults: defaults, recordKey: key) }
 
     /// `defaults`/`key` injectable for the reconciliation tests ONLY (mirrors
     /// StockSagePaperTradeStore's seam) — production is always the `.shared` singleton on
@@ -1026,6 +1027,9 @@ final class StockSageJournalStore: ObservableObject {
     var compounding: CompoundingCurve? { StockSageJournal.compoundingCurve(trades) }
 
     @discardableResult func add(_ t: TradeRecord) -> Bool {
+        guard !deletions.contains(t.id) else {
+            lastError = "This journal record was deleted. Use JSON Restore to restore its original ID."; return false
+        }
         if let error = t.closureError { lastError = error; return false }
         let before = trades
         trades.insert(t, at: 0)
@@ -1053,9 +1057,7 @@ final class StockSageJournalStore: ObservableObject {
     /// Backup has already validated every incoming record. Prepare a single batch without
     /// changing memory/defaults, so a later portfolio/watchlist failure changes nothing.
     func prepareBackupImport(_ incoming: [TradeRecord]) throws -> (added: Int, apply: () -> Void) {
-        let stored = defaults.object(forKey: key)
-        guard stored == nil || stored is Data else { throw CocoaError(.fileReadCorruptFile) }
-        let disk = try defaults.data(forKey: key).map { try JSONDecoder().decode([TradeRecord].self, from: $0) } ?? []
+        let disk = try deletions.read(TradeRecord.self)
         guard var merged = reconciled(trades, disk: disk) else {
             throw StockSageBackup.BackupError.restoreFailed(lastError ?? "Conflicting journal records.")
         }
@@ -1065,6 +1067,7 @@ final class StockSageJournalStore: ObservableObject {
         let data = try JSONEncoder().encode(merged)
         let records = merged
         return (additions.count, {
+            self.deletions.restore(Set(additions.map(\.id)))
             self.defaults.set(data, forKey: self.key)
             self.trades = records
             self.lastError = nil
@@ -1072,6 +1075,7 @@ final class StockSageJournalStore: ObservableObject {
     }
 
     @discardableResult func close(_ id: UUID, exitPrice: Double, plannedExit: Double? = nil, exitFill: Double? = nil, at date: Date = Date()) -> Bool {
+        guard !deletions.contains(id) else { lastError = "This journal record was deleted; it cannot be closed."; return false }
         guard let i = trades.firstIndex(where: { $0.id == id }) else { lastError = "Journal trade not found."; return false }
         var candidate = trades[i]
         candidate.exitPrice = exitPrice
@@ -1091,19 +1095,14 @@ final class StockSageJournalStore: ObservableObject {
         return true
     }
 
-    // Explicit deletion — bypasses the reconciling save (a merged save would resurrect the
-    // removed trade from disk). Same ponytail ceiling as the paper store: a CONCURRENT
-    // process's next merged save can still resurrect it; tombstones if that ever matters.
+    // Preserve foreign records while committing a durable deletion for this ID.
     func remove(_ id: UUID) {
-        let before = trades
-        trades.removeAll { $0.id == id }
-        if save(reconciling: false) { lastError = nil } else { trades = before }
+        if save(removing: [id]) { lastError = nil }
     }
 
     private func load() {
-        guard let data = defaults.data(forKey: key),
-              let decoded = try? JSONDecoder().decode([TradeRecord].self, from: data) else { return }
-        trades = decoded
+        guard let decoded = try? deletions.read(TradeRecord.self) else { return }
+        trades = decoded.filter { !deletions.contains($0.id) }
     }
 
     /// LOST-UPDATE FIX (2026-07-09): identical defect class to StockSagePaperTradeStore's,
@@ -1113,19 +1112,18 @@ final class StockSageJournalStore: ObservableObject {
     /// panel — so a clobbered close here silently distorts calibration with a lost REAL
     /// outcome. Reconcile with disk before writing: per id a CLOSED record beats an open one
     /// (a close is terminal), foreign ids (another process's adds) are preserved. Deletions
-    /// pass `reconciling: false`. `qaSeed` still bypasses save() entirely (in-memory only).
-    private func save(reconciling: Bool = true, replacing original: TradeRecord? = nil) -> Bool {
-        var records = trades
-        if reconciling,
-           let data = defaults.data(forKey: key),
-           let disk = try? JSONDecoder().decode([TradeRecord].self, from: data) {
-            guard let merged = reconciled(records, disk: disk, replacing: original) else { return false }
-            records = merged
+    /// exclude only deleted IDs. `qaSeed` still bypasses save() entirely (in-memory only).
+    private func save(removing: Set<UUID> = [], replacing original: TradeRecord? = nil) -> Bool {
+        guard let disk = try? deletions.read(TradeRecord.self) else {
+            lastError = "Couldn't read the saved journal; no records were changed."; return false
         }
+        guard let records = reconciled(trades, disk: disk, replacing: original, removing: removing) else { return false }
         guard let data = try? JSONEncoder().encode(records) else {
             lastError = "Couldn't encode the journal; the previous saved records were kept."
             return false
         }
+        // Encode first: a failed save must not leave a deletion marker behind.
+        deletions.mark(removing)
         defaults.set(data, forKey: key)
         trades = records
         return true
@@ -1133,10 +1131,11 @@ final class StockSageJournalStore: ObservableObject {
 
     /// One reconciliation rule for ordinary saves and backup preparation: disk closes win,
     /// foreign IDs survive, and conflicting invalid closures require explicit repair.
-    private func reconciled(_ records: [TradeRecord], disk: [TradeRecord], replacing original: TradeRecord? = nil) -> [TradeRecord]? {
-        var merged = records
+    private func reconciled(_ records: [TradeRecord], disk: [TradeRecord], replacing original: TradeRecord? = nil,
+                            removing: Set<UUID> = []) -> [TradeRecord]? {
+        var merged = records.filter { !removing.contains($0.id) && !deletions.contains($0.id) }
         var ids = Set(merged.map(\.id))
-        for d in disk {
+        for d in disk where !removing.contains(d.id) && !deletions.contains(d.id) {
             if let i = merged.firstIndex(where: { $0.id == d.id }) {
                 if d.closureError != nil, merged[i] != d, original != d {
                     lastError = "Conflicting journal closure data changed on disk. Nothing was saved; reload and review the original record."

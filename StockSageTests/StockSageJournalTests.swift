@@ -978,4 +978,19 @@ struct StockSageJournalStoreQASeedTests {
         a.remove(t.id)
         #expect(StockSageJournalStore(defaults: defaults, key: "stocksage.journal.v1").trades.isEmpty)
     }
+
+    @Test func deletedJournalRecordStaysDeletedAfterStaleSaveWithoutDroppingForeignTrade() {
+        let (a, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gone = journalTrade("GONE", day: 0), foreign = journalTrade("FOREIGN", day: 1)
+        let next = journalTrade("NEXT", day: 2)
+        a.add(gone)
+        let b = StockSageJournalStore(defaults: defaults)
+        b.add(foreign)
+        a.remove(gone.id)
+        #expect(StockSageJournalStore(defaults: defaults).trades == [foreign])
+        #expect(b.add(next))
+        #expect(Set(b.trades.map(\.id)) == [foreign.id, next.id])
+        #expect(Set(StockSageJournalStore(defaults: defaults).trades.map(\.id)) == [foreign.id, next.id])
+    }
 }
