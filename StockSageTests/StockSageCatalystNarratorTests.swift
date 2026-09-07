@@ -34,6 +34,41 @@ struct StockSageCatalystNarratorTests {
         #expect(facts.contains("Target: none"))
     }
 
+    @Test("quote provenance reaches the prompt and invalidates equal-price explanations")
+    @MainActor func quoteProvenanceIsPartOfTheFactsSnapshot() {
+        let base = brief(symbol: "AAPL").idea.withLivePrice(100, asOf: Self.now, priceSource: .massiveSIP)
+        func facts(_ idea: StockSageIdea) -> [String] {
+            N.facts(for: StockSageCatalystWatch.brief(for: idea, inputs: .init(now: Self.now)))
+        }
+        let original = facts(base)
+        let settings = ["localServerOnly", "http://127.0.0.1:8765", "fixture-model"]
+        let provenance = original.first { $0.hasPrefix("Quote source:") } ?? ""
+        #expect(provenance.contains("Massive SIP") && provenance.contains("not a live execution quote"))
+        #expect(provenance.contains(Self.now.ISO8601Format(.init(includingFractionalSeconds: true))))
+        #expect(N.prompt(facts: original).contains(provenance) && !provenance.isEmpty)
+
+        let sources: [StockSagePriceSource?] = [.yahoo, .yahooBars, .massiveDaily, .eodhd, .sample, nil]
+        let changes = sources.map { base.withLivePrice(100, asOf: Self.now, priceSource: $0) }
+            + [Self.now.addingTimeInterval(0.125), Self.now.addingTimeInterval(-86_400), nil].map {
+                base.withLivePrice(100, asOf: $0, priceSource: .massiveSIP)
+            }
+        for changed in changes {
+            #expect(changed.price == base.price && changed.advice == base.advice)
+            let current = facts(changed)
+            #expect(current != original)
+            #expect(CatalystsSection.narrationRefreshReason(savedFacts: original, currentFacts: current,
+                savedSettings: settings, currentSettings: settings) != nil)
+        }
+        #expect(CatalystsSection.narrationRefreshReason(savedFacts: original, currentFacts: facts(base),
+            savedSettings: settings, currentSettings: settings) == nil)
+        // Missing/invalid market time is unknown, never replaced by the scan or wall clock.
+        let missing: [Date?] = [nil, Date(timeIntervalSince1970: .nan), Date(timeIntervalSince1970: .infinity)]
+        for at in missing {
+            let unknown = facts(base.withLivePrice(100, asOf: at, priceSource: nil))
+            #expect(unknown.contains { $0.hasPrefix("Quote source: unknown; market time: unknown.") })
+        }
+    }
+
     // MARK: prompt(facts:)
 
     @Test("prompt contains every fact line plus the closing instruction")

@@ -116,6 +116,12 @@ enum StockSageCatalystNarrator {
         lines.append("Action: \(advice.action.rawValue) (rules-based conviction "
             + "\(String(format: "%.2f", advice.conviction)) — not a probability)")
         lines.append("Price: \(StockSageCurrency.adaptivePrice(idea.price))")
+        // Market time belongs to the quote, never the scan clock. Keep subsecond updates
+        // visible to the same fact-string comparison that invalidates an old explanation.
+        let quoteTime = idea.priceAsOf.flatMap {
+            $0.timeIntervalSince1970.isFinite ? $0.ISO8601Format(.init(includingFractionalSeconds: true)) : nil
+        } ?? "unknown"
+        lines.append("Quote source: \(idea.priceSource?.label ?? "unknown"); market time: \(quoteTime). Observed snapshot, not a live execution quote.")
         if let stop = advice.stopPrice {
             lines.append("Stop: \(StockSageCurrency.adaptivePrice(stop))")
         } else {

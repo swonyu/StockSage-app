@@ -1,5 +1,50 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Explain facts retain quote source and market time (2026-09-07 06:57 +03)
+
+N10/N14 bounded provenance fix. The shared narrator fact builder omitted the
+quote provider and timestamp. A compiled production-module replay through
+withLivePrice -> CatalystWatch.brief -> narrator.facts -> narrationRefreshReason
+proved equal-price provider-only and timestamp-only changes incorrectly remained
+current (both exit1); unchanged-input and price-only controls passed (exit0).
+Harness: `/private/tmp/stocksage-quote-provenance.lO8RBo/check` (default,
+--timestamp, --control, --price). Original regression24pass/1fail.
+
+The existing shared fact builder now includes the source label and UTC market
+timestamp with milliseconds, explicitly described as an observed snapshot, not
+a live execution quote. Missing or nonfinite dates remain unknown; no scan-time
+or wall-clock fallback. Both narrator backends and the existing freshness check
+consume this line. The Original app facts disclosure is available for fresh as
+well as stale results. No new model calls on ticks, cache, dependency or money
+logic. All four original replays now print `Quote provenance self-check ok`, exit0.
+Focused48/48 passed; regression covers all source alternatives, missing/invalid
+metadata, unchanged inputs and subsecond/previous-day timestamp changes.
+Red/green evidence: `/private/tmp/stocksage-quote-provenance-red-20260907.xcresult`,
+`/private/tmp/stocksage-quote-provenance-green-20260907.xcresult`.
+
+Final serial canonical macOS1770/1770 and iPhone17Pro(gate)1768/1768 passed,
+exit0, zero selected failures/skips; same three opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Final gates include the disclosure change:
+`/private/tmp/stocksage-quote-provenance-macos-20260907.xcresult`,
+`/private/tmp/stocksage-quote-provenance-ios-20260907.xcresult`.
+
+Tested Mac bundle installed asPID18562; executable/debug-dylib cmp and strict
+deep codesign passed. Prior app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-quote-provenance-20260907-0651.app`.
+One real native PAA Explain used the existing Qwen serverPID23631. Expanded
+disclosure shows `Quote source: Massive SIP; market time: 2026-09-04T20:23:46.598Z`
+and the not-live disclaimer (AX and populated screenshot inspected). Unsupported
+[1] citation still leaves the full warned draft visible. No injected response,
+owner-settings mutation, model reload, credentials, cloud upload, push or trade.
+Main worktree's pre-existing changes remain untouched; sibling task stayed idle.
+
+Inline review traced all four shared-facts callers and freshness publication.
+This is millisecond snapshot identity, NOT nanosecond tick identity, wall-clock
+expiry or semantic truth. Connection-probe settings freshness is the next bounded
+lifecycle check; citation diagnostic ordering, semantic grounding, independent
+API acceptance, full Chat and contract-gated P5 remain open.
+
 ## Explanation freshness includes request settings (2026-09-07 06:42 +03)
 
 N14/UI14 bounded lifecycle fix. The generating-model label was ALREADY correct,

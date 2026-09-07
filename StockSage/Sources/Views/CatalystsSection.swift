@@ -521,7 +521,7 @@ struct CatalystsSection: View {
                 Text(msg).font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if refreshReason != nil, let facts = narrationFacts[symbol] {
+            if let facts = narrationFacts[symbol] {
                 DisclosureGroup("Original app facts for this explanation") {
                     ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
                         Text(verbatim: fact).font(.system(size: font9)).textSelection(.enabled)

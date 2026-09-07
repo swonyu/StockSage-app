@@ -13,6 +13,16 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest06:57 +03: shared Explain facts now include quote source and millisecond
+market time, with unknown metadata explicit and no clock substitution. Equal-price
+provider/time changes now invalidate old explanations; original facts disclosure
+also available on fresh results. Production replay/controls red->green,
+24pass/1fail->48focused; final canonical1770macOS/1768iPhone passed. Tested app
+installed; actual PAA disclosure visibly shows Massive SIP and Sep4 market time,
+not a current execution quote. Full failed-citation draft stays readable. No
+settings mutation, push or model reload. Next connection-probe settings freshness;
+semantic grounding, other APIs/full Chat/P5 remain open. See HANDOFF.
+
 Latest06:42 +03: Explain freshness now includes captured backend/URL/model as well
 as facts. Old responses remain readable, explicitly stale, with original facts,
 sources and model; metadata publishes after generation. Pending source fetches
