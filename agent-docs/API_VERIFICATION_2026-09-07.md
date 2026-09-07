@@ -3,6 +3,23 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## SBLK/TEM Form4: source conflict, not access failure — 05:34 +03
+
+Both configured fetches reached the installed app's parser. Offline replay
+isolated one contradictory row each: S transaction code with A acquired/disposed
+flag. The original SBLK SEC filing and TEM issuer-hosted filing contain the SAME
+conflict; exact primary-source links and accessions are in HANDOFF05:32. Do not
+guess which field is correct, call the feed empty, or override the validator.
+
+The existing failure path now distinguishes conflictingTransactionDirection from
+generic invalidPayload. Focused18/18 and serial1761macOS/1759iPhone passed,
+with the same three opt-in exclusions. Installed native SBLK disclosure visibly
+states the conflict, still4/5 checks. Normal refresh persisted the precise reason
+for TEM02:33:22Z and SBLK02:33:24Z. No manual cache edits or credential inspection.
+These two remain data-quality failures; nine separate incompleteResponse cases
+remain at the measured one-page/100-row ceiling. Pagination is the next code
+issue; no all-API or pipeline-completion claim. Full artifacts in HANDOFF.
+
 ## Form4 configured response and native consumer — 05:19 +03
 
 One GILD request returnedHTTP200/13,663bytes/11rows; the actual shared parser

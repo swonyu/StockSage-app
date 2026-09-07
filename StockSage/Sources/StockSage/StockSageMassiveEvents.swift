@@ -111,6 +111,7 @@ enum StockSageMassiveEvents {
     nonisolated enum Failure: Error, Codable, Sendable, Equatable {
         case http(Int), transport, timedOut, cooldown, externalAccessDisabled, cancelled, requestUnavailable
         case invalidPayload, incompleteResponse, responseTooLarge
+        case conflictingTransactionDirection
 
         var message: String {
             switch self {
@@ -122,6 +123,7 @@ enum StockSageMassiveEvents {
             case .cancelled: "Request cancelled."
             case .requestUnavailable: "Request not made: missing configuration or unsupported input."
             case .invalidPayload: "Response failed data validation."
+            case .conflictingTransactionDirection: "Filing has conflicting purchase/sale and acquired/disposed fields; transaction direction is unverified."
             case .incompleteResponse: "Response exceeds the one-page/100-row coverage limit; more data is required."
             case .responseTooLarge: "Response exceeds the 2 MB validation limit."
             }
@@ -301,7 +303,9 @@ enum StockSageMassiveEvents {
                   let owner = text(row, "owner_name"),
                   let form = row["form_type"] as? String, ["4", "4/A"].contains(form) else { throw Failure.invalidPayload }
             if let side = row["transaction_acquired_disposed"] as? String,
-               side != (code == "P" ? "A" : "D") { throw Failure.invalidPayload }
+               side != (code == "P" ? "A" : "D") {
+                throw ["A", "D"].contains(side) ? Failure.conflictingTransactionDirection : .invalidPayload
+            }
             headline = "Form \(form) \(code == "P" ? "purchase" : "sale") filed · \(dateText)"
             let price = try number(row, "transaction_price_per_share")
             if let price, price < 0 { throw Failure.invalidPayload }

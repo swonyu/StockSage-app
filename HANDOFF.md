@@ -1,5 +1,53 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Remaining Form4 validation failures are contradictory source filings (2026-09-07 05:32 +03)
+
+SBLK and TEM do NOT have the prior security-spelling bug or a missing credential.
+Two targeted read-only fetches ran through the installed app's own fetch path,
+from its existing Swift debugger context. Captured only the public response at
+the parser boundary (SBLK2,414bytes/2rows; TEM83,666bytes/48rows); removed request
+IDs/cursor URLs, never inspected credentials. Debugger detached and all breakpoints
+removed. No app settings, journal or cached observation was manually changed.
+
+Offline original replay minimized each failure to one row: SBLK index1,
+accession0002005037-26-000012, and TEM index46, accession0002113721-26-000016.
+Both code the transaction S (sale) but label shares A (acquired). Changing ONLY
+A→D makes the replay pass, but that control is NOT a correction authorized for
+real data. The same S/A conflict appears in the primary filings themselves:
+- SBLK: https://www.sec.gov/Archives/edgar/data/1386716/000200503726000012/xslF345X06/primary_doc.xml
+- TEM issuer copy: https://investors.tempus.com/node/10586/html
+- SEC interpretation233.03 says transaction codes and acquired/disposed labels
+  must be consistent: https://www.sec.gov/rules-regulations/staff-guidance/corporation-finance-interpretations/exchange-act-section-16-related-rules-forms
+
+Keep the rejection; do not invent purchase/sale direction or checked-empty status.
+Added a fixed conflictingTransactionDirection failure category through the
+existing response/cache/UI path instead of the unhelpful generic invalidPayload.
+Unknown direction strings still get invalidPayload; no row/cap/entitlement bypass.
+One regression pins P/D and S/A rejection, nil event, Codable preservation and
+specific UI copy. Red17pass/1fail→focused18/18:
+`/private/tmp/stocksage-form4-direction-red-20260907.xcresult`
+`/private/tmp/stocksage-form4-direction-green-20260907.xcresult`.
+`/private/tmp/stocksage-form4-remaining.MTlwKF/check --expect-conflict` also red→green
+against BOTH untouched captured responses, keeping them unavailable with no
+event. `--direction-control` is diagnostic-only; never writes the captured data.
+The standalone harness loads no user configuration and performs no network I/O.
+
+Full serial macOS1761/1761 and iPhone17Pro(gate)1759/1759 passed, exit0, zero
+selected failures/skips; same three opt-in exclusions (CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests):
+`/private/tmp/stocksage-form4-direction-macos-20260907-0530.xcresult`
+`/private/tmp/stocksage-form4-direction-ios-20260907-0532.xcresult`.
+Installed tested Mac bundle; executable/debug-dylib comparisons and strict deep
+codesign passed. Prior app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-form4-direction-20260907-0533.app`.
+Native SBLK expanded disclosure and screenshot show the specific conflict reason,
+not generic validation or a missing-key message, and correctly retain4/5 checks.
+Normal app refresh persisted conflictingTransactionDirection for TEM02:33:22Z
+and SBLK02:33:24Z; cache now has exactly two conflicts plus nine incompleteResponse
+failures. No cache reset or edit. Installed appPID94169, original Qwen unchanged.
+The two source conflicts remain real unresolved data-quality failures, not API
+successes. Next separate issue: the nine measured one-page/100-row limits.
+
 ## Form 4 live-schema mismatch fixed (2026-09-07 05:19 +03)
 
 GILD was not missing API access: one bounded configured request returned HTTP200,

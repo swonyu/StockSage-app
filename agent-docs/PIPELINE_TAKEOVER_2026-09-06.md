@@ -13,6 +13,14 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest05:34 +03: the last two Form4 invalidPayload failures are genuine S/A
+direction contradictions in SBLK/TEM's original filings, independently verified
+against SEC/issuer copies. Keep rejection, now explain the precise source conflict
+through the existing cache/UI. Red17pass/1fail→focused18/18; full1761macOS/
+1759iPhone passed. Installed native SBLK warning and both new persisted reasons
+verified, no cache edits or corrected trade invented. Nine pagination-limit
+failures remain next. No push/trade/extra model; main files preserved. See HANDOFF.
+
 Latest05:19 +03: Form4 live/docs spelling mismatch fixed in shared parser:
 non_derivative and non-derivative are exact aliases; unknowns/derivatives retain
 their guards. Original GILD HTTP200/11-row replay red→green, focused17/17,

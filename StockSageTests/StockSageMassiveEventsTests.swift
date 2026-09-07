@@ -171,6 +171,20 @@ struct StockSageMassiveEventsTests {
         }
     }
 
+    @Test func contradictoryInsiderDirectionIsExplainedWithoutInventingACorrectedTrade() throws {
+        let message = "Filing has conflicting purchase/sale and acquired/disposed fields; transaction direction is unverified."
+        for row in [fixture(.insider).replacingOccurrences(of: #""transaction_acquired_disposed":"A""#, with: #""transaction_acquired_disposed":"D""#),
+                    fixture(.insider).replacingOccurrences(of: #""transaction_code":"P""#, with: #""transaction_code":"S""#)] {
+            let record = E.observation(.success(body(row)), feed: .insider, symbol: "AAPL", now: now)
+            #expect(record.outcome == .unavailable && record.event == nil)
+            #expect(record.failure?.message == message)
+            let restored = try JSONDecoder().decode(E.Observation.self, from: JSONEncoder().encode(record))
+            #expect(restored == record)
+            let copy = E.statusLine(.insider, observation: restored, now: now)
+            #expect(copy.contains(message) && copy.contains("not an empty result"))
+        }
+    }
+
     @Test func completeEmptyIsDifferentFromUnavailableAndCacheRoundTrips() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("m6-fixture-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
