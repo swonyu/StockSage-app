@@ -1,5 +1,65 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review N16: removal wins during live scans — 2026-09-07 11:26 +03
+
+Started clean at 5b44c97; peer task independently inactive, no compiler writer.
+Claude PID52276 remained rooted in .claude/chrome and was left alone. Reused N07's
+offline fix; this milestone addresses in-memory quote/idea membership during scans.
+
+Added a bare Store initializer with explicit UserDefaults and a live held-symbol
+provider so watchlist/scan tests do not bootstrap owner caches or calibration.
+The private production convenience initializer still uses standard preferences,
+live portfolio/open-journal holdings and the original sample/cache/calibration
+startup order. Store-owned preference reads/writes now consistently use that
+instance's defaults; keys and formats are unchanged. This is a narrow test seam,
+not a claim that every Store service dependency has been isolated.
+
+The actual shared runChunkedScan now accepts an optional fetch/build callback;
+production leaves it nil and runs the unchanged provider/analysis path. Tests
+use the REAL chunk loop, Task cancellation forwarding, merge, publication and
+watchdog-task cleanup, supplying only deterministic chunk inputs/results.
+The 120-second watchdog timeout itself was not exercised.
+The initial board is itself seeded through that loop, not by assigning ideas.
+
+Red: 9 pass / 1 fail, 17 failed assertions across full/retry before-publication,
+full/retry after-publication and holding cases; unchanged was a control. The
+watchlist persisted removal and the parent really cancelled after two chunks,
+but the idea remained/reappeared in trackedSymbolsUnion. Held quote rows were
+also incorrectly dropped. Immediate removal cleanup alone reduced this to
+9 pass / 1 fail, six assertions solely in full/retry before-publication cases,
+isolating a second source: late chunk publication bypassed final reconciliation.
+
+removeSymbol now drops quote/idea rows, missing entries, deltas and new-listing
+flags when the name is genuinely untracked; curated/held names retain coverage
+after the watchlist preference is removed. Every intermediate chunk publication
+filters against CURRENT trackedDefs before prices are merged into the live board.
+Full completion already had its own final filter; both full and retry scans use
+this shared loop. Accumulated ranked results deliberately remain a scan snapshot:
+cancelledScanCommit must still know a chunk published when its ONLY idea was then
+removed, or it would fail to name the unscanned remainder. A dedicated control
+pins that case. No new deletion tombstone, retry queue, ranking or risk policy.
+
+Final seven replay cases also check a fresh isolated Store's saved watchlist,
+holding retention, quote index/union consistency and rejection of a cancelled
+chunk's late result. Final fixture review aligned history keys with chunk symbols.
+58 focused tests pass in eight suites (final run ~0.035s test bodies). Canonical
+serial gates: 1812/1812 macOS and 1810/1810 iPhone 17 Pro (gate), exit 0, zero
+selected failures/skips. Usual explicit opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-removal-scan-{red,cleanup-red,focused,focused-final,macos,ios}-20260907.xcresult
+and matching .log files. Final inline production/test review is recorded above.
+
+Limits: the tests invoke the shared loop in full/retry shapes, not the clicked UI
+or the full network-backed wrappers. They do not verify cancellation inside the
+real fetch/build implementation (N15 remains distinct). No owner watchlist,
+portfolio, journal or cache was edited; no real provider/notification/trading
+action, app/model restart or push. Built/gated, not installed: prior CUA normal-
+close/visual blocker remains; main checkout's unrelated project.pbxproj and
+review/AGENTS artifacts stay untouched. Next UI03: verify the current full-restore
+path/history and reproduce whether holdings/watchlist restore with trades in
+isolated stores. Native phone/live API/P5 acceptance remains separate.
+
 ## Full-review N07: removed cache rows cannot re-enroll offline — 2026-09-07 11:03 +03
 
 Verified clean wt/coverage at 487da21, inactive peer task, no compiler writer.

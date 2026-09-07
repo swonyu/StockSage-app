@@ -13,6 +13,20 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest 11:26 +03: full-review N16 removal now clears untracked quote/idea rows
+and badges immediately; intermediate full/retry scan publications recheck current
+membership, so late chunks cannot resurrect them. Held/curated coverage survives
+watchlist removal. A bare Store plus optional chunk callback enabled the actual
+loop replay without owner state or network: 9 pass / 1 fail (17 assertions),
+cleanup-only 9 pass / 1 fail (six late-publication assertions), then 58 focused
+green across seven replay cases and existing suites. Scan accumulation remains
+intact for cancelled-coverage bookkeeping, including an emptied published board.
+Canonical 1812 macOS / 1810 iPhone pass, usual three opt-in exclusions. No app/
+model restart or push; built/gated, not installed, prior CUA blocker unchanged.
+N15 inner fetch/build cancellation and actual native/live API/P5 acceptance are
+not claimed. Next UI03 full restore: inspect current history, then reproduce
+holdings/watchlist plus trades in isolated stores. Full evidence in HANDOFF.
+
 Latest 11:03 +03: full-review N07 offline restoration now intersects cached rows
 with current curated/watchlist/holding definitions before rebuilding the board
 and new-listing flags. Reuses Q11's save-side membership rule without rewriting

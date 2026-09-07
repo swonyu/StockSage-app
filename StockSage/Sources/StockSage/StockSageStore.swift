@@ -115,6 +115,8 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
 @MainActor
 final class StockSageStore: ObservableObject {
     static let shared = StockSageStore()
+    private let defaults: UserDefaults
+    private let heldSymbols: @MainActor () -> [String]
 
     @Published private(set) var symbols: [StockSageSymbol] = []
     /// P3 (2026-07-28 review): uppercased-symbol → index into `symbols`. Rebuilt only by the
@@ -330,14 +332,26 @@ final class StockSageStore: ObservableObject {
         Self.trackedSymbols(
             board: symbols.map(\.symbol) + ideas.map(\.symbol),
             watchlist: userSymbols,
-            portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
-            journalOpen: StockSageJournalStore.shared.open.map(\.symbol)
+            portfolio: offBoardHoldingSymbols,
+            journalOpen: []
         )
     }
 
-    private init() {
-        userSymbols = (UserDefaults.standard.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
-        priceAlerts = Self.loadPriceAlerts()
+    /// Bare watchlist/scan state for isolated tests. Production alone performs the cache,
+    /// sample and calibration bootstrap in the convenience initializer below.
+    init(defaults: UserDefaults, heldSymbols: @escaping @MainActor () -> [String]) {
+        self.defaults = defaults
+        self.heldSymbols = heldSymbols
+        userSymbols = (defaults.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
+        priceAlerts = Self.loadPriceAlerts(from: defaults)
+    }
+
+    private convenience init() {
+        self.init(defaults: .standard, heldSymbols: {
+            Self.trackedSymbols(board: [], watchlist: [],
+                portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
+                journalOpen: StockSageJournalStore.shared.open.map(\.symbol))
+        })
         seedSampleData()
         loadCachedQuotes()   // prefer real last-good prices over the sample seed when we have them
         loadCatalystRecords()   // A2: restore checkedAt/earningsDates so the TTL guard isn't blind on relaunch
@@ -386,15 +400,15 @@ final class StockSageStore: ObservableObject {
 
     // MARK: Price alerts (user-set target levels)
 
-    private static func loadPriceAlerts() -> [PriceAlert] {
-        guard let data = UserDefaults.standard.data(forKey: priceAlertsKey),
+    private static func loadPriceAlerts(from defaults: UserDefaults) -> [PriceAlert] {
+        guard let data = defaults.data(forKey: priceAlertsKey),
               let decoded = try? JSONDecoder().decode([PriceAlert].self, from: data) else { return [] }
         return decoded
     }
 
     private func savePriceAlerts() {
         if let data = try? JSONEncoder().encode(priceAlerts) {
-            UserDefaults.standard.set(data, forKey: Self.priceAlertsKey)
+            defaults.set(data, forKey: Self.priceAlertsKey)
         }
     }
 
@@ -577,9 +591,7 @@ final class StockSageStore: ObservableObject {
     /// `trackedSymbols` union (TRACKED, 2026-09-06) with board/watchlist left empty — this is
     /// only the two off-board inputs.
     private var offBoardHoldingSymbols: [String] {
-        Self.trackedSymbols(board: [], watchlist: [],
-                            portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
-                            journalOpen: StockSageJournalStore.shared.open.map(\.symbol))
+        heldSymbols()
     }
 
     /// Pure rule `trackedDefs(scope:)` is a thin shell over: curated universe (`base`) ∪
@@ -665,7 +677,7 @@ final class StockSageStore: ObservableObject {
             return
         }
         userSymbols.append(symbol)
-        UserDefaults.standard.set(userSymbols, forKey: Self.userSymbolsKey)
+        defaults.set(userSymbols, forKey: Self.userSymbolsKey)
         // Show it on the board now, without disturbing the sample/live flag.
         let added = StockSageSymbol(symbol: symbol, market: Self.userMarketLabel, quotes: [
             StockSageQuote(price: q.previousClose, previousPrice: q.previousClose, time: Date(timeIntervalSinceNow: -86_400)),
@@ -680,13 +692,20 @@ final class StockSageStore: ObservableObject {
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: [symbol: q])
     }
 
-    /// Remove a user-added ticker (no-op for curated-universe symbols).
+    /// Remove a watchlist entry; curated/held instruments remain tracked.
     func removeSymbol(_ symbol: String) {
         let up = symbol.uppercased()
         guard userSymbols.contains(where: { $0.uppercased() == up }) else { return }
         userSymbols.removeAll { $0.uppercased() == up }
-        UserDefaults.standard.set(userSymbols, forKey: Self.userSymbolsKey)
+        defaults.set(userSymbols, forKey: Self.userSymbolsKey)
+        // Removing a watchlist preference must not untrack an actual holding (or a
+        // curated name from a legacy/imported watchlist). Otherwise remove its quote/idea rows.
+        guard !trackedDefs().contains(where: { $0.symbol.uppercased() == up }) else { return }
         symbols = symbols.filter { $0.symbol.uppercased() != up }
+        ideas.removeAll { $0.symbol.uppercased() == up }
+        ideasMissing.removeAll { $0.uppercased() == up }
+        scanDeltas = scanDeltas.filter { $0.key.uppercased() != up }
+        newListings.remove(up)
         rebuildSymbolIndex()
     }
 
@@ -921,7 +940,9 @@ final class StockSageStore: ObservableObject {
     func cancelIdeasRefresh() { ideasRefreshTask?.cancel() }
 
     /// Result of `runChunkedScan` — everything a caller needs to commit (or discard) the scan.
-    private struct ChunkedScanResult {
+    struct ChunkedScanResult {
+        /// Scan accumulation, not current membership: cancel bookkeeping needs to know
+        /// that a chunk published even if all of its ideas have since been removed.
         var ranked: [StockSageIdea]
         var accumulatedHistories: [String: StockSagePriceHistory]
         var scanThrottled: Bool
@@ -942,13 +963,15 @@ final class StockSageStore: ObservableObject {
     /// wants the LIVE `@Published scanThrottled` banner (performRefreshIdeas) can wire it up;
     /// `retryFailedIdeas` passes nil — retry never had a throttle banner and must not start
     /// flipping the FULL-SCAN flag for a partial-subset retry (see its call site). The caller
-    /// applies its OWN tracked-set filtering, snapshot/alerts/history-cache-save policy AFTER
-    /// this returns — this method only ever does the chunk-scan-and-merge, nothing
-    /// scan-identity-aware.
-    private func runChunkedScan(defs: [StockSageSymbol], total: Int, startingRanked: [StockSageIdea],
+    /// applies its OWN final tracked-set filtering, snapshot/alerts/history-cache-save policy
+    /// AFTER this returns. Intermediate live publications also reconcile current tracking;
+    /// the accumulated result retains the scan's history for cancel bookkeeping.
+    func runChunkedScan(defs: [StockSageSymbol], total: Int, startingRanked: [StockSageIdea],
                                  cache: StockSageHistoryCache?, cachePriceHistories: [String: StockSagePriceHistory],
                                  benchmark: StockSagePriceHistory?, calibration: StockSageConvictionCalibration?,
-                                 journalTrades: [TradeRecord], onThrottle: (() -> Void)? = nil) async -> ChunkedScanResult {
+                                 journalTrades: [TradeRecord], onThrottle: (() -> Void)? = nil,
+                                 fetchAndBuild: (@MainActor ([StockSageSymbol]) async ->
+                                    (histories: [String: StockSagePriceHistory], built: [StockSageIdea]))? = nil) async -> ChunkedScanResult {
         let chunks = StockSageScanChunking.chunks(defs)
         var accumulatedHistories: [String: StockSagePriceHistory] = [:]
         var ranked = startingRanked
@@ -983,6 +1006,9 @@ final class StockSageStore: ObservableObject {
 
             let priorAttempted = attemptedSoFar + cachedHistories.count
             let chunkWork = Task { () -> (histories: [String: StockSagePriceHistory], built: [StockSageIdea]) in
+                // Tests can supply a suspended chunk while exercising this real loop's
+                // cancellation, merge and publication. Production keeps the path below.
+                if let fetchAndBuild { return await fetchAndBuild(chunkDefs) }
                 let fetched = await StockSageQuoteService.fetchHistories(for: toFetch, onProgress: { [weak self] n in
                     self?.ideasProgress = (current: priorAttempted + n, total: total)
                 })
@@ -1025,7 +1051,11 @@ final class StockSageStore: ObservableObject {
 
             if !built.isEmpty {
                 ranked = StockSageScanChunking.mergeChunk(current: ranked, newlyBuilt: built, rankScore: Self.rankScore)
-                ideas = Self.ideasWithLatestPrices(ranked, symbols: self.symbols, previous: ideas)
+                // A removal during this chunk's await must win on the LIVE board, including
+                // retries/cancelled scans that never reach the final commit's membership filter.
+                let stillTracked = Set(trackedDefs().map { $0.symbol.uppercased() })
+                let visible = ranked.filter { stillTracked.contains($0.symbol.uppercased()) }
+                ideas = Self.ideasWithLatestPrices(visible, symbols: self.symbols, previous: ideas)
             }
 
             // Audit 2026-07-12 (concurrency R1): a per-chunk watchdog timeout truncates the universe
