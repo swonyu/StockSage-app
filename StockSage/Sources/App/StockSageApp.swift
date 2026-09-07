@@ -20,7 +20,9 @@ struct StockSageApp: App {
     // re-evaluated the whole scene on every store publish (each quote tick). MarketsView
     // owns its own observation; the App struct needs none.
     @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
+    #if os(macOS)
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
+    #endif
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
     @State private var showOnboarding = false
     @Environment(\.scenePhase) private var scenePhase
@@ -59,16 +61,10 @@ struct StockSageApp: App {
                     }
                     .task {
                         if !onboardingDone { showOnboarding = true }
+                        #if os(macOS)
                         // Autostart is a Settings opt-in (default OFF): the monitor's own honesty
                         // gates (no sample/cached/stale pushes) still apply to every cycle.
                         if monitorAutostart { try? StockSageMonitor.shared.start() }
-                        #if os(iOS)
-                        // iOS (2026-07-27, owner: "make it also send notifications"): the monitor's
-                        // only start switch lives in the macOS-fenced Settings scene, and iOS has no
-                        // background daemon anyway — foreground polling IS the iOS monitor model, so
-                        // it starts with the app. Request permission with proper error handling.
-                        await requestNotificationAuthorization()
-                        try? StockSageMonitor.shared.start()
                         #endif
                     }
                     // Settings' "Show the welcome checklist again" flips onboardingDone to
@@ -78,16 +74,15 @@ struct StockSageApp: App {
                         if !onboardingDone { showOnboarding = true }
                     }
                     #if os(iOS)
-                    // Review 2026-07-27: foreground polling IS the iOS monitor model — keep it
-                    // strictly foreground. Backgrounding used to leave the poll loop running
-                    // (battery + API quota burn) until iOS suspended us mid-cycle, which then
-                    // surfaced a spurious offline banner on return.
-                    .onChange(of: scenePhase) {
+                    // One lifecycle entry for launch AND return: respect the saved iOS opt-out.
+                    // No start after awaiting permission (the app could have backgrounded or
+                    // been opted out meanwhile). start() owns the single permission request.
+                    .onChange(of: scenePhase, initial: true) {
                         switch scenePhase {
                         case .active:
-                            try? StockSageMonitor.shared.start()
+                            StockSageMonitor.shared.resumeForegroundMonitoring()
                             StockSageMonitor.shared.clearBadge()   // alerts read on return — badge honest again
-                        case .background: StockSageMonitor.shared.stop()
+                        case .background: StockSageMonitor.shared.stop() // pause; retain the user's choice
                         default: break
                         }
                     }
@@ -113,19 +108,4 @@ struct StockSageApp: App {
         }
         #endif
     }
-    
-    #if os(iOS)
-    /// Request notification authorization and log the result for debugging
-    private func requestNotificationAuthorization() async {
-        do {
-            let granted = try await UNUserNotificationCenter.current()
-                .requestAuthorization(options: [.alert, .sound, .badge])
-            if !granted {
-                print("⚠️ StockSage: Notification permission denied - alerts will not appear")
-            }
-        } catch {
-            print("⚠️ StockSage: Failed to request notification authorization: \(error)")
-        }
-    }
-    #endif
 }

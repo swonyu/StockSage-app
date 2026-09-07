@@ -13,6 +13,19 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest 10:50 +03: full-review UI04 iPhone monitoring opt-out now persists separately
+from the live task. Background stop retains the choice; explicit toggles save it;
+initial/foreground resume reads it fresh. Mac launch opt-in remains separate.
+The real resume seam reproduced 14 pass / 2 fail despite correctly saved off;
+one guard made all 16 monitor tests pass. Native observation replaces the two
+view snapshots, and the duplicate permission-await start is removed. Final 48
+focused and 1810 macOS / 1808 iPhone canonical tests pass, usual three opt-in
+exclusions. New tests use isolated preferences/simulated starts, not actual OS
+permission/lifecycle events. Built/gated, not installed; prior CUA visual/normal-
+close blocker remains. No app/model restart or push; main checkout unchanged.
+Next verify N07/N16 custom-removal durability against history before editing;
+native phone/live API/P5 acceptance remains. Details and artifacts in HANDOFF.
+
 Latest10:30 +03: full-review N18 one-shot alerts revalidate current preference,
 task cancellation and exact armed definition/ID before every enqueue, including
 after earlier sends suspend. Actual callback-boundary races were4pass/2fail;

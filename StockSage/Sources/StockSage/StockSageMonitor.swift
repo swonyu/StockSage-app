@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import UserNotifications
 
 // MARK: - StockSageMonitor
@@ -16,7 +17,7 @@ import UserNotifications
 //   * Reads symbols from `StockSageStore` (in-memory; sample data until Chat A's
 //     live feed replaces it).
 @MainActor
-final class StockSageMonitor {
+final class StockSageMonitor: ObservableObject {
     static let shared = StockSageMonitor()
     init(defaults: UserDefaults = .standard,
          strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)? = nil) {
@@ -29,7 +30,22 @@ final class StockSageMonitor {
     private let strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)?
 
     private var task: Task<Void, Never>?
-    private(set) var isRunning = false
+    @Published private(set) var isRunning = false
+    /// iOS foreground polling remains enabled until explicitly opted out. This is not
+    /// the Mac's separate launch opt-in, and a transient background stop must not edit it.
+    private static let foregroundMonitoringKey = "stocksage.monitor.iosEnabled"
+    var foregroundMonitoringEnabled: Bool {
+        get { defaults.object(forKey: Self.foregroundMonitoringKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Self.foregroundMonitoringKey) }
+    }
+
+    /// The iOS lifecycle entry point. A supplied starter tests resume decisions without
+    /// launching timers, requesting notification permission or touching the shared board.
+    func resumeForegroundMonitoring(start: (@MainActor () -> Void)? = nil) {
+        guard foregroundMonitoringEnabled else { return }
+        if let start { start() } else { try? self.start() }
+    }
+
     /// Rate control for every outbound push (owner report 2026-07-28: "it sends so much").
     /// Loaded from disk, not fresh — see StockSageNotificationBudget's persistence note: an
     /// in-memory-only budget is wiped by every OS app kill, which is exactly when the cold-start
@@ -500,7 +516,13 @@ final class StockSageMonitor {
     }
 
     private func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error {
+                print("⚠️ StockSage: Failed to request notification authorization: \(error)")
+            } else if !granted {
+                print("⚠️ StockSage: Notification permission denied - alerts will not appear")
+            }
+        }
     }
 
     // MARK: - Pure decision helpers (testable without the async I/O / @MainActor state above)

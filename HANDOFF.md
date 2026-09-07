@@ -1,5 +1,52 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review UI04: durable iPhone monitoring opt-out — 2026-09-07 10:50 +03
+
+iPhone automatic monitoring now consults `stocksage.monitor.iosEnabled` on every
+foreground resume. Only an explicit Alerts toggle change writes that preference;
+background `stop()` remains transient. An absent preference preserves the existing
+iPhone enabled default (the old view-only off state had no durable value to migrate).
+The independent Mac `stocksage.monitor.autostart` opt-in remains default-off and
+is now macOS-fenced at both declaration and launch call.
+
+The existing iOS start calls were first routed through a behavior-preserving
+`resumeForegroundMonitoring` seam with an optional simulated starter. Two new
+regressions exercise the actual resume entry point using isolated UserDefaults:
+saved off/on through background and a new Monitor instance, a stray Mac autostart
+flag, the absent-key legacy default, and off→on changes on the same instance.
+Red command: canonical macOS xcodebuild test with
+`-only-testing:StockSageTests/StockSageMonitorTests`; full invocation is in the red
+log below. Result: 14 pass / 2 fail, with two start attempts despite saved off.
+The saved-value and new-instance checks passed, isolating unconditional resume
+rather than persistence loss or a merely visual toggle problem. Adding only the
+shared preference guard made all 16 tests pass (test bodies ~0.015s).
+
+Final wiring removes both onAppear snapshots of monitor state. MarketsView now
+observes `@Published isRunning` via the existing shared Monitor, so launch, stop
+and foreground changes update the toggle. iPhone initial/return starts have one
+owner: `.onChange(of: scenePhase, initial: true)` on the test-guarded root view.
+Removed the duplicate permission-await task, which could otherwise resume after
+backgrounding/opt-out; Monitor.start retains the native permission request and
+now logs its denied/error result. No permission callback starts monitoring.
+The native initial-onChange API was checked in the installed SwiftUICore SDK.
+Ordinary board refreshes, scans, live streams and Qwen requests are unchanged.
+
+Final 48 focused tests pass across monitor, budget, price-alert and alert-decision
+suites. Canonical serial gates: 1810/1810 macOS, 1808/1808 iPhone 17 Pro (gate),
+exit 0, zero selected failures/skips. Usual explicit opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-monitor-optout-{red,guard,focused,macos,ios}-20260907.xcresult
+and matching .log files. Inline final source review required no further edits.
+
+Limits: the new tests simulate starts, not OS authorization, native lifecycle
+events or a clicked toggle. They do not start polling, send notifications or edit
+owner preferences. Built/gated, not installed: the prior CUA normal-close/visual
+acceptance blocker remains. No app/model restart or push. Main checkout's unrelated
+project.pbxproj and untracked review/AGENTS artifacts remain untouched. Next:
+verify N07/N16 custom-removal persistence against current history before editing;
+native phone/live API/P5 acceptance remains separate and unclaimed.
+
 ## Full-review N18: revalidate one-shot alerts before enqueue — 2026-09-07 10:30 +03
 
 Extracted the existing price-alert fetch/check/send path with behavior preserved,

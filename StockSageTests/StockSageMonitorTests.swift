@@ -11,6 +11,44 @@ import Foundation
 struct StockSageMonitorTests {
     typealias Monitor = StockSageMonitor
 
+    @MainActor @Test(arguments: [false, true])
+    func foregroundChoiceSurvivesBackgroundAndRelaunch(enabled: Bool) throws {
+        let name = "monitor.foreground.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        // A Mac autostart preference must never override an iPhone opt-out.
+        defaults.set(true, forKey: "stocksage.monitor.autostart")
+        let monitor = Monitor(defaults: defaults)
+        monitor.foregroundMonitoringEnabled = enabled
+        monitor.stop() // background suspension, not an explicit change of preference
+        #expect(monitor.foregroundMonitoringEnabled == enabled)
+        var starts = 0
+        monitor.resumeForegroundMonitoring { starts += 1 }
+        let relaunched = Monitor(defaults: defaults)
+        #expect(relaunched.foregroundMonitoringEnabled == enabled)
+        relaunched.resumeForegroundMonitoring { starts += 1 }
+        #expect(starts == (enabled ? 2 : 0), "foregrounding/relaunch must preserve the saved opt-out")
+    }
+
+    @MainActor @Test func foregroundResumeReadsLatestChoiceAndRetainsLegacyDefault() throws {
+        let name = "monitor.foreground-changes.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let monitor = Monitor(defaults: defaults)
+        #expect(monitor.foregroundMonitoringEnabled) // preserve existing iPhone default
+        var starts = 0
+        monitor.resumeForegroundMonitoring { starts += 1 }
+        #expect(starts == 1)
+        monitor.foregroundMonitoringEnabled = false
+        monitor.stop()
+        monitor.resumeForegroundMonitoring { starts += 1 }
+        #expect(starts == 1)
+        monitor.foregroundMonitoringEnabled = true
+        monitor.resumeForegroundMonitoring { starts += 1 }
+        #expect(starts == 2)
+        #expect(!defaults.bool(forKey: "stocksage.monitor.autostart"))
+    }
+
     @MainActor @Test func failedWatchlistEnqueueRetriesThenDedupesOnlyAfterAcceptance() async throws {
         let name = "monitor.retry.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: name))

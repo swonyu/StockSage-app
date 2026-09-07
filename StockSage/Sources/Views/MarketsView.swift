@@ -374,8 +374,9 @@ struct MarketsView: View {
     /// matching the app's other primary inputs.
     private enum AddField: Hashable { case symbol, shares, cost }
     @FocusState private var focusedAddField: AddField?
-    // Alerts (wired to StockSageMonitor — strong-signal Mac notifications).
-    @State private var monitoring = false
+    // Observe the live task, not an onAppear snapshot that misses launch/foreground changes.
+    @ObservedObject private var monitor = StockSageMonitor.shared
+    private var monitoring: Bool { monitor.isRunning }
     // Shared key with StockSageMonitor.watchlistOnlyKey — scopes the alert scan to the watchlist.
     @AppStorage("marketsWatchlistOnly") private var watchlistOnly = false
     // User-set price-alert form.
@@ -690,10 +691,6 @@ struct MarketsView: View {
         .background(DSCanvasBackground().ignoresSafeArea())
         .onAppear {
             appeared = true
-            // Sync the toggle with the singleton: the monitor is a process-lifetime task that
-            // survives window close/reopen, so a freshly-built view must read the live state
-            // rather than defaulting to false (which would make the running monitor unstoppable).
-            monitoring = StockSageMonitor.shared.isRunning
         }
         // Home-screen widget feed (2026-07-28). Written HERE rather than in the store because
         // every input — best opportunity, the account size heat needs, the paper book — is
@@ -1464,10 +1461,6 @@ struct MarketsView: View {
                     Image(systemName: "bell.badge.fill").font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Strong-signal alerts").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
-                        // Review 2026-07-27: re-sync here, not only at root onAppear — on iOS the
-                        // app-level .task auto-starts the monitor AFTER first render, so the root
-                        // read races it and the toggle showed OFF while alerts were live.
-                        .onAppear { monitoring = StockSageMonitor.shared.isRunning }
                         .sensoryFeedback(.selection, trigger: monitoring)
                         // Review fix 2026-07-17 (supersedes POST2420-COPY item 5): the cycle
                         // REFRESHES core + watchlist but EVALUATES the whole board — a
@@ -1744,20 +1737,19 @@ struct MarketsView: View {
 
     private func toggleMonitoring(_ on: Bool) {
         monitorError = ""
+        #if os(iOS)
+        monitor.foregroundMonitoringEnabled = on
+        #endif
         if on {
             do {
-                try StockSageMonitor.shared.start()
-                monitoring = true
+                try monitor.start()
             } catch StockSageMonitor.MonitorError.alreadyRunning {
-                // Monitor is already live (e.g. window was closed and reopened) — treat as
-                // success so the toggle reaches ON and stop() becomes reachable again.
-                monitoring = true
+                // Already live: the observed state correctly keeps the toggle on.
             } catch {
                 monitorError = error.localizedDescription
-                monitoring = false
             }
         } else {
-            StockSageMonitor.shared.stop(); monitoring = false
+            monitor.stop()
         }
     }
 
