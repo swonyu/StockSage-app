@@ -52,7 +52,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     /// the flag survives a relaunch instead of it being dropped entirely (Finding 4 fix).
     @MainActor static func from(symbols: [StockSageSymbol], savedAt: Date, newListings: Set<String> = []) -> StockSageQuoteCache {
         let entries = symbols.compactMap { s -> Entry? in
-            guard let q = s.latest else { return nil }
+            guard let q = s.latest, q.priceSource != .sample else { return nil }
             return Entry(symbol: s.symbol, price: q.price, previousClose: q.previousPrice, time: q.time,
                         isNewListing: newListings.contains(s.symbol.uppercased()), marketTime: q.marketTime,
                         massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource)
@@ -95,6 +95,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     // MARK: Thin file I/O (Application Support)
 
     nonisolated static func diskURL() -> URL? {
+        guard !StockSageStore.isRunningTests else { return nil }
         guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                      in: .userDomainMask, appropriateFor: nil, create: true) else { return nil }
         // STANDALONE DEVIATION (review HIGH, 2026-07-16): own filename — see
@@ -107,7 +108,11 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     /// StockSageCatalystRecordCache's seam).
     nonisolated static func load(from url: URL? = nil) -> StockSageQuoteCache? {
         guard let url = url ?? diskURL(), let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(StockSageQuoteCache.self, from: data)
+        guard var cache = try? JSONDecoder().decode(StockSageQuoteCache.self, from: data) else { return nil }
+        // Recover files written when a demo's newer clock could beat a real market close.
+        // Ignore only explicitly synthetic entries; retain genuine/legacy data unchanged.
+        cache.entries.removeAll { $0.priceSource == .sample }
+        return cache
     }
 
     nonisolated func save(to url: URL? = nil) {

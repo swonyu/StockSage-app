@@ -13,6 +13,16 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest05:01 +03: sample-header root fixed, not relabelled. Fresh demo clocks blocked
+older genuine market closes and survived into last-good cache. Shared ordering now
+distinguishes sample provenance; scan/header ignore it, cache extraction/load keep
+it out. Unit-test hosts no longer launch Markets; default quote-cache I/O isolated.
+Red replays/regressions→focused57, full macOS1759/iPhone1757 green. Real cache
+checksum unchanged across gates. Native provider refresh recovered all5 demo rows:
+902quotes,864MassiveSIP+38Yahoo,0sample; header correctly dated/not-live. Old app and
+cache preserved, main worktree untouched, no push/trade/model reload. Next live
+per-route acceptance/company-event Form4 diagnosis, then semantic quality/Chat/P5.
+
 Latest04:44 +03: full-review M4 gross/net horizon defect fixed through one shared
 velocity-hold helper, including real ranking, sized snapshots and turnover labels.
 Original replay red→green; regression4pass/2fail then focused140/140; full serial

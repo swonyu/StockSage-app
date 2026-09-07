@@ -7,6 +7,32 @@ import Foundation
 @MainActor
 struct StockSageQuoteCacheTests {
 
+    @Test func testHostCannotResolveTheOwnersDefaultQuoteCache() {
+        #expect(StockSageStore.isRunningTests)
+        #expect(StockSageQuoteCache.diskURL() == nil)
+        #expect(StockSageQuoteCache.load() == nil)
+    }
+
+    @Test func sampleRowsNeverBecomeLastGoodCacheAndOldContaminationIsIgnored() throws {
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        let real = StockSageQuoteCache.Entry(symbol: "MSFT", price: 400, previousClose: 390,
+            time: t, marketTime: t, priceSource: .massiveSIP)
+        let demo = StockSageQuoteCache.Entry(symbol: "AAPL", price: 227.1, previousClose: 226,
+            time: t, marketTime: t, priceSource: .sample)
+        let mixed = StockSageQuoteCache(entries: [demo, real], savedAt: t)
+        let extracted = StockSageQuoteCache.from(symbols: mixed.symbols(marketFor: { _ in "NASDAQ" }), savedAt: t)
+        #expect(extracted.entries == [real])
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("old-contaminated-cache.json")
+        let original = try JSONEncoder().encode(mixed)
+        try original.write(to: url)
+        let restored = try #require(StockSageQuoteCache.load(from: url))
+        #expect(restored.entries == [real])
+        #expect(restored.savedAt == t)
+        #expect(try Data(contentsOf: url) == original) // recovery reads, never rewrites history
+    }
+
     @Test func tradeSequenceSurvivesDiskRebuildAndLegacyFilesStayUnknown() throws {
         let t = Date(timeIntervalSince1970: 1_700_000_000)
         let seq: Int64 = 9_007_199_254_740_993

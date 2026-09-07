@@ -18,6 +18,41 @@ import Foundation
 // on the board but its quote is price == 0 (the exact `price > 0` boundary) and must be skipped
 // exactly like GOOG.
 struct MarketsPolledQuoteMergeTests {
+    @Test func demoClockCannotBlockRealPricesOrContaminateScanAndHeader() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let market = now.addingTimeInterval(-2 * 86_400)
+        let demo = StockSageSymbol(symbol: "AAPL", market: "NASDAQ", quotes: [
+            StockSageQuote(price: 227.1, previousPrice: 226, marketTime: now, priceSource: .sample)])
+        let real = StockSageSymbol(symbol: "MSFT", market: "NASDAQ", quotes: [
+            StockSageQuote(price: 400, previousPrice: 390, marketTime: market, priceSource: .massiveSIP)])
+        let demoIdea = StockSageIdea(symbol: "AAPL", market: "NASDAQ", price: 227.1,
+            advice: advice(), spark: [], priceAsOf: now, priceSource: .sample)
+        let live = StockSageQuoteService.LiveQuote(symbol: "AAPL", price: 245,
+            previousClose: 240, marketTime: market, priceSource: .massiveSIP)
+        let result = StockSageStore.mergedPolledQuotes(symbols: [demo], ideas: [demoIdea],
+            symbolIndex: ["AAPL": 0], quotes: ["AAPL": live], now: now)
+        #expect(result.acceptedKeys == ["AAPL"])
+        #expect(result.symbols[0].latest?.price == 245)
+        #expect(result.symbols[0].latest?.priceSource == .massiveSIP)
+        #expect(result.ideas[0].priceAsOf == market)
+        #expect(result.ideas[0].advice == demoIdea.advice)
+
+        let fresh = demoIdea.withLivePrice(245, asOf: market, priceSource: .massiveDaily)
+        let scan = StockSageStore.ideasWithLatestPrices([fresh], symbols: [demo], previous: [demoIdea], now: now)
+        #expect(scan == [fresh])
+        #expect(StockSageStore.closeableQuoteAsOf([demo, real]) == market)
+        #expect(StockSageStore.quoteSourceLabel([demo, real], asOf: market) == StockSagePriceSource.massiveSIP.label)
+
+        // Reverse direction: a newer synthetic quote must never overwrite genuine evidence.
+        let injected = StockSageQuoteService.LiveQuote(symbol: "AAPL", price: 999,
+            previousClose: 999, marketTime: now, priceSource: .sample)
+        let rejected = StockSageStore.mergedPolledQuotes(symbols: result.symbols, ideas: result.ideas,
+            symbolIndex: ["AAPL": 0], quotes: ["AAPL": injected], now: now)
+        #expect(rejected.acceptedKeys.isEmpty)
+        #expect(rejected.symbols == result.symbols)
+        #expect(rejected.ideas == result.ideas)
+    }
+
     private static let oldPrice: [String: Double] = ["AAPL": 150, "MSFT": 300, "GOOG": 140, "TSLA": 250]
     // Hand-picked, unambiguous instant distinct from any "now"-derived value a bug could smuggle in.
     private static let oldAsOf = Date(timeIntervalSince1970: 1_700_000_000)   // 2023-11-14T22:13:20Z

@@ -1,5 +1,63 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Demo-quote contamination and test-host isolation (2026-09-07 05:01 +03)
+
+The "sample" header was NOT just a cosmetic label bug. The real quote cache held
+902 entries: five sample rows (the exact startup seed set),35Yahoo,862MassiveSIP.
+Sample quotes carried a fresh Date(), so the shared monotonic-clock guard rejected
+genuine older market closes on those symbols. Full refresh preserved and cached the
+demo rows; scan publication could copy their synthetic prices onto real histories.
+The failure reproduces without XCTest, disk I/O or network; test pollution is not
+required for this ordering bug. Unit-test hosts nevertheless had access to the real
+default cache and launched the normal auto-refreshing Markets screen.
+
+Fixed at shared seams, not by suppressing the source label:
+- Quote/tick ordering now rejects explicitly sample incoming observations and
+  ignores an existing sample clock when considering real data. Provenance flows
+  through full/targeted/polled refreshes, streams, infraFX and scan publication.
+  Genuine timestamp/sequence ordering and undated/future guards remain in place.
+- Header clock/source selection excludes synthetic observations. The sample-only
+  startup banner still exists; a mixed board cannot derive freshness from demos.
+- Quote-cache extraction excludes samples; loading old contaminated files ignores
+  only explicitly sample entries, preserving other values/dates and not rewriting
+  on read. No manual cache deletion or price replacement was performed.
+- Unit-test app hosts skip Markets startup and iOS telemetry/notification setup.
+  Default quote-cache I/O is disabled under the existing test detector; explicit
+  temporary-URL round trips remain enabled. This is not a claim that every other
+  singleton/UserDefaults persistence path has been independently isolated.
+
+Diagnosing-bugs evidence:
+- `/private/tmp/stocksage-sample.9Pu3sd/main.swift`: fresh demo AAPL227.1 blocked
+  real245 with a two-day-old timestamp, acceptedKeys empty, exit1. Removing only
+  the demo timestamp made the control pass. After fix: real245/MassiveSIP accepted,
+  `Sample recovery self-check ok`, exit0. Non-test default-cache access also passes.
+- `/private/tmp/stocksage-sample-red-20260907.xcresult`:21pass/2fail before fix.
+  Separate `/private/tmp/stocksage-sample-isolation-red-20260907.xcresult` failed
+  the default-cache isolation regression before its guard. Focused57/57 green:
+  `/private/tmp/stocksage-sample-focused2-20260907.xcresult`.
+- Full serial gates: macOS1759/1759 and iPhone17Pro(gate)1757/1757, exit0,
+  zero selected failures/skips. Same three opt-in exclusions (CalibrationPersistRun,
+  LiveUniverseVerification, StrategyBaselineMeasurement test suites):
+  `/private/tmp/stocksage-sample-final-macos-20260907-0456.xcresult`
+  `/private/tmp/stocksage-sample-final-ios-20260907-0458.xcresult`.
+  With the installed app normally quit, the owner's real quote-cache SHA256 stayed
+  `58a4613c459e16c67dc2c246072b9a3ea449487aaf041d3ad75454c677e09bce` across both gates.
+- Native normal launch after installation:902entries,864MassiveSIP+38Yahoo, ZERO
+  samples. All five seed rows recovered through the normal provider refresh.
+  AAPL/NVDA now have September4 market times; the three Saudi names September6.
+  AX and screenshot show "Last quote · Yahoo · as of 6 Sep 2026 at 3:19PM" and
+  amber "Last observed quote (not live)", replacing today's green sample stamp.
+  M4 weekly consistency remains4.6Rnet/4.8Rgross. No sizing/alert/journal action.
+
+Tested app installed at `/Applications/StockSageX.app`,PID83180; executable+dylib
+comparisons and strict/deep codesign passed. Old app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-sample-fix-20260907-0500.app`; pre-recovery cache
+copy at `/private/tmp/stocksage-sample.9Pu3sd/quote-cache-before.json` (outside git).
+Original QwenPID23631 unchanged; no training, cloud upload, push or real trade.
+Main worktree/pbxproj preserved. Next: remaining live per-route acceptance and
+company-event/Form4 diagnosis, then model-news semantic checks/full Chat/P5.
+Keep the existing15-minute same-task heartbeat; not overall completion.
+
 ## M4 — shared gross/net velocity horizon (2026-09-07 04:44 +03)
 
 Fixed the full-review P1 where costs appeared to INCREASE daily/weekly returns.

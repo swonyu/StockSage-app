@@ -26,6 +26,7 @@ struct StockSageApp: App {
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
+        guard !StockSageStore.isRunningTests else { return }
         #if os(iOS)
         // Set delegate BEFORE the app finishes launching so foreground banners work
         UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared
@@ -36,59 +37,62 @@ struct StockSageApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            // Review triage 2026-07-27: an Xcode-assistant edit wrapped this in a DEBUG
-            // fallback keyed on NSClassFromString("MarketsView") — always nil for a SwiftUI
-            // STRUCT, so every Debug build showed the error card instead of the app. Reverted
-            // to the direct view; its delegate-timing init() fix above was kept (it's better
-            // than the old onAppear wiring).
-            MarketsView()
-                #if os(macOS)
-                .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
-                                                        // a 900pt canvas onto a 430pt phone (clip)
-                #endif
-                // Dark-committed brand (macOS 27 overhaul, 2026-07-16): the app paints a
-                // dark canvas, so declare dark — otherwise system controls (pickers,
-                // Form, menus) follow the OS scheme and render light-on-dark-canvas in
-                // light mode, and materials would sample incoherently.
-                .preferredColorScheme(.dark)
-                .sheet(isPresented: $showOnboarding) {
-                    OnboardingSheet(isPresented: $showOnboarding)
-                }
-                .task {
-                    if !onboardingDone { showOnboarding = true }
-                    // Autostart is a Settings opt-in (default OFF): the monitor's own honesty
-                    // gates (no sample/cached/stale pushes) still apply to every cycle.
-                    if monitorAutostart { try? StockSageMonitor.shared.start() }
-                    #if os(iOS)
-                    // iOS (2026-07-27, owner: "make it also send notifications"): the monitor's
-                    // only start switch lives in the macOS-fenced Settings scene, and iOS has no
-                    // background daemon anyway — foreground polling IS the iOS monitor model, so
-                    // it starts with the app. Request permission with proper error handling.
-                    await requestNotificationAuthorization()
-                    try? StockSageMonitor.shared.start()
+            // Unit-test hosts must not launch refresh/scan/monitor or write owner state.
+            if !StockSageStore.isRunningTests {
+                // Review triage 2026-07-27: an Xcode-assistant edit wrapped this in a DEBUG
+                // fallback keyed on NSClassFromString("MarketsView") — always nil for a SwiftUI
+                // STRUCT, so every Debug build showed the error card instead of the app. Reverted
+                // to the direct view; its delegate-timing init() fix above was kept (it's better
+                // than the old onAppear wiring).
+                MarketsView()
+                    #if os(macOS)
+                    .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
+                                                            // a 900pt canvas onto a 430pt phone (clip)
                     #endif
-                }
-                // Settings' "Show the welcome checklist again" flips onboardingDone to
-                // false — re-present live (the .task above runs once per window; without
-                // this the reopen would silently wait for the next launch).
-                .onChange(of: onboardingDone) {
-                    if !onboardingDone { showOnboarding = true }
-                }
-                #if os(iOS)
-                // Review 2026-07-27: foreground polling IS the iOS monitor model — keep it
-                // strictly foreground. Backgrounding used to leave the poll loop running
-                // (battery + API quota burn) until iOS suspended us mid-cycle, which then
-                // surfaced a spurious offline banner on return.
-                .onChange(of: scenePhase) {
-                    switch scenePhase {
-                    case .active:
-                        try? StockSageMonitor.shared.start()
-                        StockSageMonitor.shared.clearBadge()   // alerts read on return — badge honest again
-                    case .background: StockSageMonitor.shared.stop()
-                    default: break
+                    // Dark-committed brand (macOS 27 overhaul, 2026-07-16): the app paints a
+                    // dark canvas, so declare dark — otherwise system controls (pickers,
+                    // Form, menus) follow the OS scheme and render light-on-dark-canvas in
+                    // light mode, and materials would sample incoherently.
+                    .preferredColorScheme(.dark)
+                    .sheet(isPresented: $showOnboarding) {
+                        OnboardingSheet(isPresented: $showOnboarding)
                     }
-                }
-                #endif
+                    .task {
+                        if !onboardingDone { showOnboarding = true }
+                        // Autostart is a Settings opt-in (default OFF): the monitor's own honesty
+                        // gates (no sample/cached/stale pushes) still apply to every cycle.
+                        if monitorAutostart { try? StockSageMonitor.shared.start() }
+                        #if os(iOS)
+                        // iOS (2026-07-27, owner: "make it also send notifications"): the monitor's
+                        // only start switch lives in the macOS-fenced Settings scene, and iOS has no
+                        // background daemon anyway — foreground polling IS the iOS monitor model, so
+                        // it starts with the app. Request permission with proper error handling.
+                        await requestNotificationAuthorization()
+                        try? StockSageMonitor.shared.start()
+                        #endif
+                    }
+                    // Settings' "Show the welcome checklist again" flips onboardingDone to
+                    // false — re-present live (the .task above runs once per window; without
+                    // this the reopen would silently wait for the next launch).
+                    .onChange(of: onboardingDone) {
+                        if !onboardingDone { showOnboarding = true }
+                    }
+                    #if os(iOS)
+                    // Review 2026-07-27: foreground polling IS the iOS monitor model — keep it
+                    // strictly foreground. Backgrounding used to leave the poll loop running
+                    // (battery + API quota burn) until iOS suspended us mid-cycle, which then
+                    // surfaced a spurious offline banner on return.
+                    .onChange(of: scenePhase) {
+                        switch scenePhase {
+                        case .active:
+                            try? StockSageMonitor.shared.start()
+                            StockSageMonitor.shared.clearBadge()   // alerts read on return — badge honest again
+                        case .background: StockSageMonitor.shared.stop()
+                        default: break
+                        }
+                    }
+                    #endif
+            }
         }
         #if os(macOS)
         .windowResizability(.contentMinSize)
