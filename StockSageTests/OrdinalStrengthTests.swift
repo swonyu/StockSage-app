@@ -39,4 +39,21 @@ struct OrdinalStrengthTests {
         #expect(!M.ordinalStrengthLabel(0.65).contains("%"))
         #expect(M.ordinalStrengthLabel(0.95) == "5/5")
     }
+
+    @Test("screen readers get the same five-level scale as signal cards")
+    func screenReaderScaleMatchesCard() {
+        for recommendation in [StockSageRecommendation.buy, .strongBuy, .sell, .strongSell] {
+            let signal = StockSageSignal(symbol: "TEST", recommendation: recommendation,
+                                         confidence: 0.45, reason: "")
+            #expect(M.ordinalStrengthLabel(signal.confidence) == "3/5")
+            #expect(M.signalAccessibilitySummary(signal) == "rules signal \(recommendation.rawValue), strength level 3 of 5, not a win probability")
+        }
+        #expect(M.signalAccessibilitySummary(nil) == "rules signal none")
+        let hold = StockSageSignal(symbol: "TEST", recommendation: .hold, confidence: 0.65, reason: "")
+        #expect(M.signalAccessibilitySummary(hold) == "rules signal Hold")
+        for confidence in [Double.nan, Double.infinity] {
+            let invalid = StockSageSignal(symbol: "TEST", recommendation: .buy, confidence: confidence, reason: "")
+            #expect(M.signalAccessibilitySummary(invalid) == "rules signal Buy, strength level 1 of 5, not a win probability")
+        }
+    }
 }

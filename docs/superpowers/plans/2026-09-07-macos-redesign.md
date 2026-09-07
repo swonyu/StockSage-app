@@ -145,6 +145,14 @@ Repeat with destination
   as a successful toggle. Qwen stays off; automation is now resumed by the owner.
   This checkbox deliberately remains open. Full canonical gates passed1829 Mac and
   1826 iPhone, with10 focused navigation/Chat tests; details/artifacts in HANDOFF.md.
+  At23:48, Watchlist and the collapsed rail were verified by screenshot/AX, including
+  labelled icon-only destinations and retained selection. Expansion remains pending.
+  Chat caused another native-pipe failure; stop repeated recovery attempts until a
+  fresh state is available. The check also exposed spoken strength45 percent versus
+  visible3/5. The shared-label fix passed8 focused and1830 Mac/1827 iPhone canonical
+  tests. It is frozen as /private/tmp/stocksage-desktop-a11y-ready-20260907.app,
+  signature/checksum verified, but NOT installed while the owner's app remains open
+  and native control cannot safely close it. Full evidence and next step in HANDOFF.
 - [x] Self-review diff, record exact test counts/artifacts and UI evidence, explicitly
   stage only this task's files, commit with required heredoc/coauthor, do not push.
   Keep previous app recoverable if installing; leave Qwen off and follow the latest

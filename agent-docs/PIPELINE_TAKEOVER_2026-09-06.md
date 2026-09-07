@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest heartbeat23:48 +03 (completed after midnight2026-09-08): Watchlist and
+collapsed right rail now visually/AX verified. Chat again broke the native helper;
+expansion/Settings/other routes remain pending. Found speech45 percent versus
+visible3/5; shared signal-card label now uses the existing ordinal band calculation,
+retains Hold/nil suppression and clarifies not a win probability. Red4 tests/one
+failure/four assertions ->8 focused green; canonical1830 Mac/1827 iPhone pass,
+usual exclusions. Frozen signed ready app at
+/private/tmp/stocksage-desktop-a11y-ready-20260907.app; NOT installed until normal
+closure of the running owner's app. No force-quit, model restart, orders or push.
+Heartbeat stays ACTIVE. HANDOFF records exact artifacts and pending native checks.
+
 Latest23:32 +03,2026-09-07: owner resumed "continue auto". Existing same-task
 15-minute heartbeat is ACTIVE again; Qwen stays disabled. Verified the installed
 app's compact Home briefing/quick links visually. Native control failed again

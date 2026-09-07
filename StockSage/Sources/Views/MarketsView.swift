@@ -4585,10 +4585,8 @@ struct MarketsView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        // Tabs-audit 2026-07-09 a11y parity: speak the visible "strength N%" qualifier (its
-        // absence made a marginal 55% Buy and a 90% Buy sound identical) and the new-listing
-        // honesty state, mirroring the visibility conditions exactly.
-        .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price")\(source.map { ", \($0)" } ?? ""), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), rules signal \(signal?.recommendation.rawValue ?? "none")\(signal.flatMap { $0.recommendation != .hold ? ", strength \(Int($0.confidence * 100)) percent" : nil } ?? "")\(stale ? ", stale quote — market likely closed" : "")")
+        // Speak the same strength scale and visibility conditions as the card.
+        .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price")\(source.map { ", \($0)" } ?? ""), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), \(Self.signalAccessibilitySummary(signal))\(stale ? ", stale quote — market likely closed" : "")")
     }
 
     // Review 2026-07-28 #6 (mirrors actionColor): sell/strongSell was `danger` (white-on-#FF453A,
@@ -6539,6 +6537,13 @@ struct MarketsView: View {
     nonisolated static func ordinalStrengthLabel(_ confidence: Double) -> String {
         let level = ordinalStrengthLevel(confidence)
         return "\(level)/5"
+    }
+
+    nonisolated static func signalAccessibilitySummary(_ signal: StockSageSignal?) -> String {
+        guard let signal else { return "rules signal none" }
+        let label = "rules signal \(signal.recommendation.rawValue)"
+        guard signal.recommendation != .hold else { return label }
+        return label + ", strength level \(ordinalStrengthLevel(signal.confidence)) of 5, not a win probability"
     }
 
     /// 1...5 band for a 0...1 score. 0.0-0.2 -> 1, 0.2-0.4 -> 2, 0.4-0.6 -> 3, 0.6-0.8 -> 4,

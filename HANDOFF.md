@@ -1,5 +1,44 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Desktop acceptance and spoken-strength parity — 2026-09-07 23:48 +03
+
+Started clean at aaf66d4, peer independently inactive, Qwen disabled/no8765 listener,
+and no compiler writer. Installed app's Watchlist rendered correctly. Native click
+and screenshot/AX confirmed the RIGHT sidebar collapses to its icon rail, retains
+all nine labelled accessibility destinations/selection, and offers Expand sidebar.
+Expansion itself is not yet checked. Chat click then lost the native pipe; screenshot
+also failed and the keyboard recovery was rejected until a fresh native state can
+be obtained. No repeated recovery loop, no alternate UI automation or forced quit.
+
+The Watchlist check exposed a genuine accessibility mismatch: visible strength3/5,
+but combined VoiceOver label said45 percent. Both Watchlist and Markets render
+signalCard; its one leftover percentage expression bypassed the existing ordinal
+mapping. Extracted that exact expression unchanged into the caller's tested label
+seam, then reproduced four assertion failures (Buy/Strong Buy/Sell/Strong Sell),
+with the three prior ordinal tests passing. Tests use synthetic signals, not owner
+records or provider calls. The fix reuses ordinalStrengthLevel, explicitly says
+level N of5/not a win probability, and retains Hold/no-signal suppression. Invalid
+scores inherit the visible label's safe finite-value handling. No engine/ranking,
+price/source text, visible styling or iPhone layout changes.
+
+Verification completed after midnight on2026-09-08: red4 tests/3 pass/1 failure
+(four assertions), focused8/8 pass across OrdinalStrengthTests and navigation,
+canonical macOS1830/1830 and iPhone17Pro(gate)1827/1827 pass, zero selected
+failures/skips, exit0. Canonical exclusions remain CalibrationPersistRunTests,
+LiveUniverseVerificationTests and StrategyBaselineMeasurementTests. Artifacts:
+/private/tmp/stocksage-desktop-a11y-{red,focused,macos,ios}-20260907.log/.xcresult.
+Same derived data and gate simulator as the redesign plan; serial builds, no Swift
+edits while compiling. Inline diff/caller review complete, no debug instrumentation.
+
+Native final-label verification is unavailable; installed99d904f remains running.
+Frozen tested copy: /private/tmp/stocksage-desktop-a11y-ready-20260907.app, strict/deep
+codesign verified and checksum/link-aware rsync dry-run identical to the built app.
+NOT installed. Next: after normal app closure is verified, install this tested copy
+with the current installed app preserved in a new unique Trash path; then check the
+native label and remaining design acceptance items. Do not force-quit the owner's
+app or keep retrying the failing UI helper. No owner records, real orders, pushes,
+model startup or unrelated checkout changes. The15-minute heartbeat stays ACTIVE.
+
 ## Autonomous continuation resumed — 2026-09-07 23:32 +03
 
 Owner said "continue auto". Resumed the existing stocksage-overnight-implementation
