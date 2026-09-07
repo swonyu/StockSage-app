@@ -1,5 +1,95 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Final native research verification — 2026-09-07 03:57 +03
+
+Final installed QCOM badge: **AI Hold**,03:55snapshot, RulesAvoid, exact4-bit
+model ID, real news-source disclosure and3 private export leads. Visual screenshot
+and AX both show the complete opinion, counter-case and provenance. AMZN03:47
+and APP03:49 each rendered accepted Hold with3 private leads and news disclosures
+in the preceding research build (only citation parsing changed afterward).
+Quotes were dated September4, not live execution prices; no rating was forced.
+Native main best-opportunity also showed PAA AIBuy versus RulesStrongBuy.
+
+News-enriched QCOM exposed another false rejection: inline F13 was read as a
+financial13 by the existing numeric tokenizer. Fixed in the shared assessment
+parser, not in each view: validate F IDs against offered facts and W IDs against
+the captured lead count, exclude only those identifiers from number comparison.
+Unknown references and W-as-verified-evidence remain invalid. Regression was
+9/10 passing and1 failed before fix, exit65. Final macOS1752/1752 and iPhone
+1750/1750, exit0, same3 opt-in exclusions, zero selected failures/skips:
+- `/private/tmp/stocksage-ai-inline-red-20260907-0349.xcresult`
+- `/private/tmp/stocksage-ai-inline-final-macos-20260907-0350.xcresult`
+- `/private/tmp/stocksage-ai-inline-final-ios-20260907-0352.xcresult`
+
+Final install normally quit58374 and preserved that bundle in
+`/Users/saleh/.Trash/StockSageX-pre-inline-20260907-0354.app`. Executable AND debug
+dylib comparison and strict deep codesign passed; user data/settings preserved.
+Qwen remains the original single process23631; no training or cloud upload.
+
+Remaining quality findings are explicit: APP conflated different feed windows
+with30days despite mechanical checks passing; QCOM repeats provider commentary
+as fundamentals without an independent filing check. News often mentions the
+target within another company's article. These are semantic/relevance evaluation
+cases, not evidence of verified predictions. The main header still reports a
+newer sample quote while these target quotes are genuine MassiveSIP; investigate
+cache/test isolation separately, never manually rewrite caches to hide it.
+M8 minimum-fee and M4 gross/net-horizon defects, all-route live API acceptance,
+older narrator draft-display parity, full Chat/iPhone serving and P5 are still
+open. Main worktree/pbxproj untouched, no real orders or pushes. Keep overnight
+work in this one task; don't equate this feature release with overall completion.
+
+## Primary Qwen assessments, news and private group leads — 2026-09-07 03:45 +03
+
+Implemented owner02:19 Qwen-selected primary badges, then03:20 news/visible
+drafts/private WhatsApp research. Separate AI records never mutate TradeAdvice
+or sizing/EV/stops/execution. Shared Ideas/Catalysts/detail badges show AI action,
+time and secondary Rules action; rankings, filters, widget and trade-plan exports
+remain explicitly Rules-based. Global one-request ceiling, bounded top3 after
+scan, selected detail and explicit Reassess; no per-tick model work or new server.
+Existing news service supplies at most3 recent excerpts; failures/unknown dates
+stay explicit. Exact model and fact/source disclosures are visible. Invalid model
+output is a plain-text unverified draft, not hidden or promoted to a valid badge.
+The older optional Catalyst narrator's withholding behavior is unchanged.
+
+Both owner-provided WhatsApp exports imported locally:546messages(24+522),
+private0600 index outside git, no source archive edits/extraction/upload/training.
+Latest3 relevant distinct messages within30days are W-leads, outside F-facts and
+the numeric whitelist. Sender/contact redaction is heuristic; identities/CFA
+claims/performance remain unverified. Snapshot, NOT live WhatsApp. Timezone
+Asia/Riyadh is explicitly assumed. Full limits/research references and refresh
+instructions: `agent-docs/QWEN_RESEARCH_2026-09-07.md`.
+
+QCOM root cause captured: valid three-key JSON omitted evidence. One format-only
+repair preserves action/reason/risk exactly. The first real repair supplied four
+valid references and hit an arbitrary three-reference cap; removed that display
+cap, retaining offered-ID/uniqueness/size checks. Four-ID regression:8/10 passed,
+2 failed on old code, exit65; final broad tests include both passing. Actual
+original-response replay now exits0: Hold, original two sentences unchanged,
+F3/F4/F5/F6. No retry-until-Buy, invented evidence or adjusted financial threshold.
+
+Final gates: macOS1752/1752 and iPhone17Pro(gate), iOS26.5,1750/1750, both exit0,
+no selected failures/skips. Same3 explicit opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests, StrategyBaselineMeasurementTests.
+- `/private/tmp/stocksage-ai-citations-red-20260907-0340.xcresult`
+- `/private/tmp/stocksage-ai-research-final-macos-20260907-0341.xcresult`
+- `/private/tmp/stocksage-ai-research-final-ios-20260907-0343.xcresult`
+- Earlier focused news/group tests67/67:
+  `/private/tmp/stocksage-ai-research-focused-20260907-0333.xcresult`
+- Local actual failure/replay harness and captured public facts:
+  `/private/tmp/stocksage-ai-smoke.zpIGHz/diagnose.swift`, `QCOM-replay.json`.
+- Importer `python3 tools/import_whatsapp_research.py --demo`: self-check ok.
+Initial missing-interface tests failed at compile, not runtime. One mistaken
+method-specific selector selected zero tests; it is NOT counted as passing proof.
+
+Normally quit installed process48827 (close sheet before Cmd-Q), preserved only
+the old bundle in `/Users/saleh/.Trash/StockSageX-pre-research-20260907-0346.app`,
+copied the final tested macOS app to `/Applications/StockSageX.app`, verified both
+executable and debug dylib byte-for-byte plus strict deep codesign, and opened it.
+User data/preferences untouched. Existing Qwen process23631 remains unchanged.
+Native final stock/source checks follow below. Main worktree untouched; no push
+or real trades. Full Chat, secure iPhone serving, M8/M4 fixes, provider acceptance
+and P5 remain open; green software gates do not establish a profitable strategy.
+
 ## Company-feed failure diagnostics — 2026-09-07 02:31 +03
 
 Native GILD coverage showed four successful checks and an unavailable Form4

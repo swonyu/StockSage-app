@@ -227,6 +227,7 @@ struct MarketsView: View {
     }
 
     @ObservedObject private var store = StockSageStore.shared
+    @ObservedObject private var aiAssessments = StockSageAIAssessments.shared
     @ObservedObject private var portfolio = StockSagePortfolio.shared
     @ObservedObject private var journal = StockSageJournalStore.shared
     @ObservedObject private var paperStore = StockSagePaperTradeStore.shared
@@ -569,6 +570,15 @@ struct MarketsView: View {
             // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
             // entire on-disk history, and lastUpdated now moves twice a second while streaming.
             .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
+            .task(id: store.isLoadingIdeas) {
+                guard !store.isLoadingIdeas, !store.isSampleData,
+                      !CommandLine.arguments.contains("--qa") else { return }
+                // ponytail: at most three serial assessments per completed scan; detail handles other names.
+                for idea in displayedIdeas.prefix(3) {
+                    guard !Task.isCancelled else { return }
+                    await aiAssessments.assess(idea, store: store)
+                }
+            }
             .task(id: StockSageMassiveEvents.RefreshKey(symbols: store.trackedSymbolsUnion.sorted(), refreshedAt: store.lastFullRefreshAt)) {
                 guard !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshCompanyEvents()
@@ -1464,7 +1474,7 @@ struct MarketsView: View {
                         // quote fresh (the freshness gate, not the refresh scope, is what
                         // blocks stale pushes). The old "among the core + watchlist" copy
                         // under-claimed the scope. Interpolated so counts can't drift.
-                        Text("Get a notification when a Strong Buy or Strong Sell appears. Each cycle refreshes the \(StockSageUniverse.core.count)-name curated core + your watchlist; other board names are included while a recent full refresh keeps their quotes fresh.")
+                        Text("Get a notification when a rules-based Strong Buy or Strong Sell appears; these are not Qwen badges. Each cycle refreshes the \(StockSageUniverse.core.count)-name curated core + your watchlist; other board names are included while a recent full refresh keeps their quotes fresh.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -1715,7 +1725,7 @@ struct MarketsView: View {
             Text(s.symbol).font(.system(size: mvFont14, weight: .bold, design: .rounded)).foregroundStyle(.white)
             Text(s.reason).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(s.reason)
             Spacer(minLength: 8)
-            Text(s.recommendation.rawValue)
+            Text("Rules: " + s.recommendation.rawValue)
                 .font(.system(size: mvFont11, weight: .bold)).foregroundStyle(recTextColor(s.recommendation))
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(recColor(s.recommendation), in: Capsule())
@@ -3562,7 +3572,7 @@ struct MarketsView: View {
         // T11 (rotation-3 triage): "N% conviction" read as a win-probability percent — F08
         // (wave-8) already relabeled this everywhere else to "signal strength N/100"
         // (StockSageTradePlan.swift's own note), this journal-note prefill was the straggler.
-        draftNote = "From idea: \(idea.advice.action.rawValue), signal strength \(Int(idea.advice.conviction * 100))/100"
+        draftNote = "From Rules idea: \(idea.advice.action.rawValue), signal strength \(Int(idea.advice.conviction * 100))/100; not the AI assessment"
         draftConviction = idea.advice.conviction   // recorded on the trade for journal calibration
         draftSide = bearish ? .short : .long   // side follows the idea's direction
         showAddTrade = true
@@ -4358,7 +4368,7 @@ struct MarketsView: View {
             }
             if let signal {
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(signal.recommendation.rawValue)
+                    Text("Rules: " + signal.recommendation.rawValue)
                         .font(.system(size: mvFont11, weight: .bold)).foregroundStyle(recTextColor(signal.recommendation))
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(recColor(signal.recommendation), in: Capsule())
@@ -4437,7 +4447,7 @@ struct MarketsView: View {
         // Tabs-audit 2026-07-09 a11y parity: speak the visible "strength N%" qualifier (its
         // absence made a marginal 55% Buy and a 90% Buy sound identical) and the new-listing
         // honesty state, mirroring the visibility conditions exactly.
-        .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price")\(source.map { ", \($0)" } ?? ""), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), signal \(signal?.recommendation.rawValue ?? "none")\(signal.flatMap { $0.recommendation != .hold ? ", strength \(Int($0.confidence * 100)) percent" : nil } ?? "")\(stale ? ", stale quote — market likely closed" : "")")
+        .accessibilityLabel("\(sym.symbol), \(sym.market), \(sym.latest.map { adaptivePrice($0.price) } ?? "no price")\(source.map { ", \($0)" } ?? ""), \(isNew ? "newly listed, not yet evaluated" : String(format: "%+.1f percent", change)), rules signal \(signal?.recommendation.rawValue ?? "none")\(signal.flatMap { $0.recommendation != .hold ? ", strength \(Int($0.confidence * 100)) percent" : nil } ?? "")\(stale ? ", stale quote — market likely closed" : "")")
     }
 
     // Review 2026-07-28 #6 (mirrors actionColor): sell/strongSell was `danger` (white-on-#FF453A,
@@ -4563,21 +4573,21 @@ struct MarketsView: View {
                             Button { ideaSort = s } label: { Label(s.label, systemImage: ideaSort == s ? "checkmark" : "") }
                         }
                     } label: {
-                        Label("Sort: \(ideaSort.label)", systemImage: "arrow.up.arrow.down")
+                        Label("Rules sort: \(ideaSort.label)", systemImage: "arrow.up.arrow.down")
                             .font(.system(size: mvFont10)).foregroundStyle(DS.Palette.accent)
                     }
                     .menuStyle(.borderlessButton).fixedSize()
                     .accessibilityLabel("Sort ideas")
                     Menu {
                         ForEach(IdeaFilter.allCases) { f in
-                            Button { ideaFilter = f } label: { Label(f.rawValue, systemImage: ideaFilter == f ? "checkmark" : "") }
+                            Button { ideaFilter = f } label: { Label("Rules: " + f.rawValue, systemImage: ideaFilter == f ? "checkmark" : "") }
                         }
                     } label: {
-                        Label(ideaFilter == .all ? "Filter" : ideaFilter.rawValue, systemImage: "line.3.horizontal.decrease.circle")
+                        Label(ideaFilter == .all ? "Rules filter" : "Rules: " + ideaFilter.rawValue, systemImage: "line.3.horizontal.decrease.circle")
                             .font(.system(size: mvFont10)).foregroundStyle(ideaFilter == .all ? .secondary : DS.Palette.accent)
                     }
                     .menuStyle(.borderlessButton).fixedSize()
-                    .accessibilityLabel("Filter ideas by action")
+                    .accessibilityLabel("Filter ideas by rules action, not AI assessment")
                     Menu {
                         ForEach([0.0, 0.5, 0.6, 0.7, 0.8], id: \.self) { v in
                             Button { ideaMinConv = v } label: {
@@ -4665,9 +4675,9 @@ struct MarketsView: View {
         let avgRR = rrs.isEmpty ? 0 : rrs.reduce(0, +) / Double(rrs.count)
         HStack(spacing: DS.Space.sm) {
             summaryChip("\(ideas.count)", "shown", .white) { ideaFilter = .all; ideaMinConv = 0; ideaSearch = "" }
-            if strong > 0 { summaryChip("\(strong)", "strong buy", DS.Palette.successSoft) { ideaFilter = .strongBuy } }
-            if buys > 0 { summaryChip("\(buys)", "buys", .white) { ideaFilter = .buys } }
-            if sells > 0 { summaryChip("\(sells)", "sells", DS.Palette.warningSoft) { ideaFilter = .sells } }
+            if strong > 0 { summaryChip("\(strong)", "rules strong buy", DS.Palette.successSoft) { ideaFilter = .strongBuy } }
+            if buys > 0 { summaryChip("\(buys)", "rules buys", .white) { ideaFilter = .buys } }
+            if sells > 0 { summaryChip("\(sells)", "rules sells", DS.Palette.warningSoft) { ideaFilter = .sells } }
             // T9 (rotation-3 triage): "avg conv" read as an average PROBABILITY of winning —
             // it's the average rules-based signal score (F08 vocabulary), same idiom as the
             // idea card's own "Signal strength — a rules-based score, not a probability." .help.
@@ -4781,6 +4791,9 @@ struct MarketsView: View {
     /// `StockSageAdvisor.caveat`. What remains here is Tier-1: it qualifies every EV number on
     /// the board and must never be collapsible.
     @ViewBuilder private var ideasHeaderBlurb: some View {
+        Text("Primary badges are unvalidated AI assessments. The top three ideas are assessed after a scan; open another idea to assess it. Assessments retrieve selected recent news via Massive/EODHD when external access is enabled. Failed checks leave a visible unverified draft. Filters, rank, signal blocks and money calculations remain Rules-based, not Qwen probabilities.")
+            .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+            .fixedSize(horizontal: false, vertical: true)
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
         // assumed — right where they're read. F01/F02: keyed on the calibration METHOD,
         // not on non-nil (an identity calibration is an assumption, not a measurement).
@@ -4848,7 +4861,7 @@ struct MarketsView: View {
                         .background(.white.opacity(0.08), in: Capsule())
                     }
                     .buttonStyle(LuxPressStyle())
-                    .help("Copy the ranked ideas as CSV (rank, action, conviction, stop/target, weight, rationale)")
+                    .help("Copy rules-ranked ideas as CSV (rules action/conviction/levels/weight/rationale), not AI assessments")
                     .accessibilityLabel("Copy ideas board as CSV")
                 }
                 if store.isLoadingIdeas {
@@ -5139,12 +5152,7 @@ struct MarketsView: View {
                 // Badge row order: risk warnings FIRST (earnings/floor), then
                 // opportunity signals (EV/confluence). Action chip is always the identity anchor.
                 // Action badge has minWidth so EV chip aligns across cards.
-                Text(a.action.rawValue)
-                    .font(.system(size: mvFont11, weight: .bold)).foregroundStyle(actionTextColor(a.action))
-                    .lineLimit(1).fixedSize()   // 440pt: "Strong Buy" must never wrap into "Strong/Buy" (narrow lens 2026-07-09)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(actionColor(a.action), in: Capsule())
-                    .frame(minWidth: 74, alignment: .center)
+                StockSageAIBadge(idea: idea, store: store)
                 // Staleness badge — mirrors watchlist card pattern.
                 if visibleChips.contains(.stale) {
                     Image(systemName: "clock.badge.exclamationmark")
@@ -5371,7 +5379,7 @@ struct MarketsView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel({ () -> String in
-            var label = "\(idea.symbol), \(a.action.rawValue), signal strength: \(Self.signalBlockCount(a.conviction)) of 5 signal blocks, rules-based, not a probability"
+            var label = "\(idea.symbol), \(aiAssessments.accessibility(for: idea, store: store)), signal strength: \(Self.signalBlockCount(a.conviction)) of 5 signal blocks, rules-based, not a probability"
             switch earnFlag {
             case .demoted(let d):     label += ", earnings imminent in about \(d) days — demoted in the rank"
             case .approaching(let d): label += ", earnings approaching in about \(d) days"
@@ -5890,7 +5898,7 @@ struct MarketsView: View {
             // caveat are folded in here so VoiceOver hears them (the .accessibilityLabel below
             // collapses the Button to one leaf, silencing the inner per-Text labels).
             let orderLabel: String = {
-                var s = "Best opportunity: \(idea.symbol), \(idea.advice.action.rawValue), estimated EV \(String(format: "%.2f", ev.evR)) R gross, entry \(adaptivePrice(idea.price))"
+                var s = "Best rules-ranked opportunity: \(idea.symbol), \(aiAssessments.accessibility(for: idea, store: store)), rules-estimated EV \(String(format: "%.2f", ev.evR)) R gross, entry \(adaptivePrice(idea.price))"
                 if let stop = idea.advice.stopPrice { s += ", stop \(adaptivePrice(stop))" }
                 if let target = idea.advice.targetPrice { s += ", target \(adaptivePrice(target))" }
                 // F-review fix (2026-07-10, S5): no trailing period on either clause — every
@@ -5954,9 +5962,7 @@ struct MarketsView: View {
                         }
                         Spacer()
                         calibrationChip   // is the green Est. EV / Win est. below measured or assumed?
-                        Text(idea.advice.action.rawValue).font(.system(size: mvFont10, weight: .bold))
-                            .foregroundStyle(actionTextColor(idea.advice.action))
-                            .padding(.horizontal, 7).padding(.vertical, 2).background(actionColor(idea.advice.action), in: Capsule())
+                        StockSageAIBadge(idea: idea, store: store)
                     }
                     // F7 (rotation-3 triage): this card's "best" is provisional during the
                     // first-ever scan — say so, folded into orderLabel above for VoiceOver.
@@ -6560,7 +6566,7 @@ struct MarketsView: View {
         StockSageWidgetSnapshot(
             asOf: Date(),
             bestSymbol: best?.idea.symbol,
-            bestAction: best?.idea.advice.action.rawValue,
+            bestAction: best.map { "Rules: " + $0.idea.advice.action.rawValue },
             bestStrength: best.map { Self.ordinalStrengthLevel($0.idea.advice.conviction) },
             openPositions: paperStore.open.count,
             portfolioHeatPct: heatPct,
@@ -7019,7 +7025,7 @@ struct MarketsView: View {
                 return ("Set account to size — add one in the position sizer below.", false, false)
             }()
             let accessibilityText: String = {
-                var s = "Do this now: \(idea.symbol), \(idea.advice.action.rawValue), estimated EV \(String(format: "%.2f", ev.evR)) R gross, entry \(adaptivePrice(idea.price))"
+                var s = "Rules-based trade plan: \(idea.symbol), rules action \(idea.advice.action.rawValue), estimated EV \(String(format: "%.2f", ev.evR)) R gross, entry \(adaptivePrice(idea.price))"
                 if let stop = idea.advice.stopPrice { s += ", stop \(adaptivePrice(stop))" }
                 // C1 wave: the size line carries the loss-not-profit honesty tail and the
                 // >100%-of-account warning tint — VoiceOver gets the same facts.
@@ -7063,7 +7069,7 @@ struct MarketsView: View {
             }()
             BestOpportunityActionCard(
                 symbol: idea.symbol,
-                actionLabel: idea.advice.action.rawValue,
+                actionLabel: "Rules: " + idea.advice.action.rawValue,
                 actionColor: actionColor(idea.advice.action),
                 actionTextColor: actionTextColor(idea.advice.action),
                 isCrypto: isCrypto,
@@ -8118,6 +8124,7 @@ struct MarketsView: View {
         var plan = StockSageTradePlan.text(symbol: idea.symbol, market: idea.market, price: idea.price,
                                            advice: a, rewardRisk: rr, size: size, flags: riskFlags,
                                            ladder: planLadder, chandelierLevel: planChandelier)
+        plan = "Rules-based trade plan — not the AI badge or an AI-generated order.\n" + plan
         // First-real-trade review (2026-07-16): Tadawul rejects off-grid prices — the exported
         // plan (the broker ticket source) carries the placeable equivalents for .SR orders.
         // Display-only; the engine's stop/target (and every EV/R:R derived from them) unchanged.
@@ -8356,11 +8363,7 @@ struct MarketsView: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(idea.symbol)\(StockSageTadawulNames.name(for: idea.symbol).map { ", \($0.english)" } ?? ""), \(idea.market)")
                     Spacer()
-                    Text(a.action.rawValue)
-                        .font(.system(size: mvFont12, weight: .bold)).foregroundStyle(actionTextColor(a.action))
-                        .padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(actionColor(a.action), in: Capsule())
-                        .accessibilityLabel("Action: \(a.action.rawValue)")
+                    StockSageAIBadge(idea: idea, store: store)
                     // Prev/next candidate stepper — board order, next to the X (see
                     // sheetNavControls for the press-time-resolution + ⌘-modifier rationale).
                     sheetNavControls(idea)
@@ -8374,6 +8377,7 @@ struct MarketsView: View {
                 // presented across a step, so the scroll offset would otherwise persist.
                 .id("sheetTopAnchor")
 
+                StockSageAIAssessmentPanel(idea: idea, store: store)
                 StockSageNBBOView(symbol: idea.symbol)
 
                 // Sparkline
@@ -9406,6 +9410,8 @@ struct MarketsView: View {
             await store.refreshLiquidity(symbol: idea.symbol)
             guard !Task.isCancelled else { return }
             await store.refreshTrailingStop(symbol: idea.symbol)
+            guard !Task.isCancelled, selectedIdea?.symbol == idea.symbol else { return }
+            await aiAssessments.assess(store.ideas.first(where: { $0.symbol == idea.symbol }) ?? idea, store: store)
         }
     }
 

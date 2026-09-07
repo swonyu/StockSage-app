@@ -23,6 +23,14 @@ import Foundation
 // practice, a macOS-build feature today — the code compiles and runs identically on iOS, the
 // network path just isn't loopback there.
 enum StockSageLocalModelServer {
+    /// Facts go only to the configured endpoint, never to a redirect target; no shared cookies.
+    private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+
+    final class NoRedirect: NSObject, URLSessionTaskDelegate {
+        nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
+                                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                                    completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+    }
 
     // MARK: Backend selection
 
@@ -101,11 +109,11 @@ enum StockSageLocalModelServer {
         s.hasSuffix(":latest") ? String(s.dropLast(":latest".count)) : s
     }
 
-    private nonisolated static func fetchJSONObject(_ url: URL) async -> [String: Any]? {
+    private static func fetchJSONObject(_ url: URL) async -> [String: Any]? {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.5
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
             return try JSONSerialization.jsonObject(with: data) as? [String: Any]
         } catch {
@@ -196,14 +204,14 @@ enum StockSageLocalModelServer {
         case badResponse(String)
     }
 
-    /// One chat turn against the local server. `URLSession.shared`, never throws — every failure
+    /// One chat turn against the local server. Ephemeral/no redirects, never throws — every failure
     /// mode (a dropped connection, a non-2xx status, a body that doesn't parse) comes back as a
     /// `.failure(ServerError)` the caller renders as a human sentence.
     static func complete(_ c: Config, isOllama: Bool, system: String, user: String,
                          maxTokens: Int = 170) async -> Swift.Result<String, ServerError> {
         let request = chatRequest(c, system: system, user: user, isOllama: isOllama, maxTokens: maxTokens)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.badResponse("No HTTP response from the server"))
             }

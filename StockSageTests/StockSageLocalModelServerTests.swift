@@ -12,6 +12,21 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    @Test @MainActor func redirectsCannotForwardModelFactsToAnotherEndpoint() throws {
+        let session = URLSession(configuration: .ephemeral)
+        let url = URL(string: "http://127.0.0.1:8765/v1/chat/completions")!
+        let task = session.dataTask(with: url) // Never resumed; no network request.
+        defer { task.cancel(); session.invalidateAndCancel() }
+        let response = try #require(HTTPURLResponse(url: url, statusCode: 307, httpVersion: nil, headerFields: nil))
+        var called = false
+        S.NoRedirect().urlSession(session, task: task, willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: URL(string: "https://example.com/collect")!)) { request in
+                called = true
+                #expect(request == nil)
+            }
+        #expect(called)
+    }
+
     // MARK: config(url:model:)
 
     @Test("a trailing slash is stripped from the base URL; the model is kept as-is")

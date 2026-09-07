@@ -13,6 +13,21 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest03:57 +03: final QCOM native Hold badge verified with actual news and3
+private WhatsApp snapshot leads. AMZN/APP also returned Hold. Inline references
+now validate separately from financial numbers; regression red then broad1752/
+1750 green, final tested build installed. Semantic/relevance errors, sample-header
+inconsistency and older narrator draft parity remain followups, alongside M8/M4,
+live per-route API acceptance and P5. No overall completion claim or push.
+
+Latest03:45 +03: Qwen chooses primary assessment badges, separate from Rules
+money paths. Bounded existing-service news plus private local WhatsApp snapshot
+retrieval; failed output visible as an unverified draft. Missing-citation QCOM
+failure reproduced and repaired live without changing its Hold opinion. Final
+macOS1752/iPhone1750 passed; new tested app installed with old bundle recoverable
+in Trash. No training, new server, cloud upload, real orders or push. See HANDOFF
+and QWEN_RESEARCH. Native stock/source checks in progress; P4/P5 not complete.
+
 Latest02:31 +03: per-company feed failures now preserve safe typed diagnostics
 through request/parser, cache and existing UI. Focused16; macOS1741/iPhone1739
 all passed. Not installed yet; GILD Form4's actual cause still unverified.

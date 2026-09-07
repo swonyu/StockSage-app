@@ -186,6 +186,9 @@ struct CatalystsSection: View {
             Text("The same ranked ideas as the Ideas tab, in the same order — viewed by what could move each one next.")
                 .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Primary badges are AI assessments; open Details for the reasoning or to assess a name with selected recent Massive/EODHD news. Failed checks leave a visible unverified draft. Rules action remains separate; AI does not change sizing or execution checks.")
+                .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
             DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }
                 .frame(maxWidth: 260)
             if let regime = store.regime {
@@ -713,13 +716,7 @@ struct CatalystsSection: View {
 
     @ViewBuilder
     private func actionCapsule(_ idea: StockSageIdea) -> some View {
-        let action = idea.advice.action
-        let ink: Color = action == .avoid ? .white : Color(white: 0.06)
-        Text(action.rawValue)
-            .font(.system(size: font9, weight: .semibold))
-            .foregroundStyle(ink)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Self.actionFill(for: action), in: Capsule())
+        StockSageAIBadge(idea: idea, store: store)
     }
 
     // MARK: - Pure helpers (nonisolated, unit-tested — CatalystsSectionTests)

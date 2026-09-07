@@ -3,6 +3,28 @@
 Owner00:59 +03: every API must work. This is an endpoint-by-endpoint acceptance
 ledger, not a claim that the integrations below are currently working.
 
+## Native research consumer verified — 03:57 +03
+
+QCOM03:55, AMZN03:47 and APP03:49 rendered Hold opinions from the exact local
+Qwen model with selected Massive news and3 local group leads each. AMZN news
+links/source labels/dates were inspected; QCOM's full supplied facts showed
+actual Massive news rows, not fixtures. This verifies this bounded news→model→UI
+consumer, not the EODHD fallback or every provider route. Form4 still reports
+Response failed data validation for QCOM/AMZN; not a guessed missing credential.
+Semantic mistakes and sample-header inconsistency remain recorded in HANDOFF.
+Final software gates1752macOS/1750iPhone passed; final installed build includes
+inline-reference parsing. No new subscription, key extraction or WhatsApp API.
+
+## Qwen primary assessment and research — 03:45 +03
+
+The final tested research build is installed (macOS1752/iPhone1750, all passed).
+Actual captured QCOM response replay against the local model now repairs missing
+citations while preserving its Hold action and reasoning, exit0. No credential
+access involved. Assessment reuses existing Massive-first/EODHD-fallback news;
+source-bearing native checks follow in HANDOFF. This does not certify every
+provider route.546 private export messages are a local snapshot, not a WhatsApp
+API integration. No model training or cloud upload. See QWEN_RESEARCH/HANDOFF.
+
 ## Company-feed diagnostics and ORCL — 02:31 +03
 
 Native company-feed disclosures showed GILD4/5 (Form4 unavailable), with five

@@ -376,11 +376,11 @@ final class StockSageStore: ObservableObject {
     //
     // True whenever the process is hosted by the XCTest/Swift-Testing runner — Swift Testing
     // suites under `xcodebuild test` still load through the XCTest bundle machinery, so the
-    // XCTestCase class is present in-process either way. Gates ONLY the calibration auto-fit
-    // triggers' background Task spawn (both scan-end and launch-time) — nothing else in this
-    // file reads it. Production is completely unaffected: `NSClassFromString` only resolves a
+    // XCTestCase class is present in-process either way. Shared by automatic calibration,
+    // provider refresh and AI assessment work to keep test hosts isolated.
+    // Production is completely unaffected: `NSClassFromString` only resolves a
     // class when the XCTest framework is actually loaded, which never happens in a shipped app.
-    private nonisolated static var isRunningTests: Bool { NSClassFromString("XCTestCase") != nil }
+    nonisolated static var isRunningTests: Bool { NSClassFromString("XCTestCase") != nil }
 
     // MARK: Price alerts (user-set target levels)
 
