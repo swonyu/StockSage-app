@@ -2708,10 +2708,11 @@ struct MarketsView: View {
                         guard panel.runModal() == .OK, let url = panel.url,
                               let csv = try? String(contentsOf: url, encoding: .utf8) else { return }
                         let preview = StockSageJournalCSVImport.preview(csv, existing: journal.trades)
-                        for t in preview.trades { journal.add(t) }
-                        journalDataFeedback = "Imported \(preview.imported) trade\(preview.imported == 1 ? "" : "s")"
+                        let result = journal.importNew(preview.trades)
+                        journalDataFeedback = "Imported \(result.added) trade\(result.added == 1 ? "" : "s")"
                             + (preview.skipped > 0 ? ", skipped \(preview.skipped) duplicate\(preview.skipped == 1 ? "" : "s")" : "")
                             + (preview.errors.isEmpty ? "." : "; \(preview.errors.count) row\(preview.errors.count == 1 ? "" : "s") failed (first: line \(preview.errors[0].line) — \(preview.errors[0].reason)).")
+                            + (result.rejected > 0 ? " \(result.rejected) parsed record(s) could not be saved." : "")
                     }
                     Divider()
                     Button("Export backup…") {
@@ -2733,11 +2734,10 @@ struct MarketsView: View {
                               let data = try? Data(contentsOf: url) else { return }
                         switch StockSageBackup.restore(from: data) {
                         case .success(let payload):
-                            let existing = Set(journal.trades.map(\.id))
-                            var added = 0
-                            for t in payload.trades where !existing.contains(t.id) { journal.add(t); added += 1 }
-                            journalDataFeedback = "Restored \(added) trade\(added == 1 ? "" : "s")"
-                                + (payload.trades.count > added ? " (\(payload.trades.count - added) already present)" : "")
+                            let result = journal.importNew(payload.trades)
+                            journalDataFeedback = "Restored \(result.added) trade\(result.added == 1 ? "" : "s")"
+                                + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
+                                + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "")
                                 + "; \(payload.positions.count) portfolio position(s) in file — add via Portfolio."
                         case .failure(let err):
                             journalDataFeedback = "Restore failed: \(err.localizedDescription)"
@@ -2747,11 +2747,10 @@ struct MarketsView: View {
                     Divider()
                     Button("Import from Salehman AI…") {
                         if let parent = StockSageBackup.importFromParentApp() {
-                            let existing = Set(journal.trades.map(\.id))
-                            var added = 0
-                            for t in parent.trades where !existing.contains(t.id) { journal.add(t); added += 1 }
-                            journalDataFeedback = "Imported \(added) trade\(added == 1 ? "" : "s") from Salehman AI"
-                                + (parent.trades.count > added ? " (\(parent.trades.count - added) already present)" : "") + "."
+                            let result = journal.importNew(parent.trades)
+                            journalDataFeedback = "Imported \(result.added) trade\(result.added == 1 ? "" : "s") from Salehman AI"
+                                + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
+                                + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "") + "."
                         } else {
                             journalDataFeedback = "No Salehman AI data found on this Mac."
                         }
@@ -2795,11 +2794,10 @@ struct MarketsView: View {
                     }
                     switch StockSageBackup.restore(from: data) {
                     case .success(let payload):
-                        let existing = Set(journal.trades.map(\.id))
-                        var added = 0
-                        for t in payload.trades where !existing.contains(t.id) { journal.add(t); added += 1 }
-                        journalDataFeedback = "Restored \(added) trade\(added == 1 ? "" : "s")"
-                            + (payload.trades.count > added ? " (\(payload.trades.count - added) already present)" : "")
+                        let result = journal.importNew(payload.trades)
+                        journalDataFeedback = "Restored \(result.added) trade\(result.added == 1 ? "" : "s")"
+                            + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
+                            + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "")
                             + "; \(payload.positions.count) portfolio position(s) in file — add via Portfolio."
                     case .failure(let err):
                         journalDataFeedback = "Restore failed: \(err.localizedDescription)"
@@ -2819,6 +2817,20 @@ struct MarketsView: View {
             if let journalDataFeedback {
                 Text(journalDataFeedback).font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error = journal.lastError {
+                Text(error).font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !journal.invalidClosures.isEmpty {
+                Text("\(journal.invalidClosures.count) retained record(s) have inconsistent closure data. They are excluded from realized results; position status and exposure totals may be incomplete. Verify the broker statement. Export retains the original fields.")
+                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(journal.invalidClosures) { trade in
+                    Text("\(trade.symbol): \(trade.closureError ?? "Closure needs review")")
+                        .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             lossLimitBanner   // STOP-TRADING / approaching-limit circuit breaker (above system-health)
 
@@ -3243,7 +3255,7 @@ struct MarketsView: View {
                             .font(.caption2).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    ForEach(journal.open) { journalOpenRow($0) }
+                    ForEach(journal.open.filter { $0.closureError == nil }) { journalOpenRow($0) }
                 }
                 if !journal.closed.isEmpty {
                     Text("Closed").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.secondary)
@@ -3533,7 +3545,7 @@ struct MarketsView: View {
                                 note: trimmedNote.isEmpty ? nil : trimmedNote, conviction: draftConviction,
                                 plannedEntry: StockSageInput.positiveAmount(draftPlannedEntry),
                                 entryFill: StockSageInput.positiveAmount(draftEntryFill))
-        journal.add(trade)
+        guard journal.add(trade) else { return }
         draftSymbol = ""; draftEntry = ""; draftStop = ""; draftTarget = ""; draftShares = ""; draftNote = ""
         draftConviction = nil
         draftPlannedEntry = ""; draftEntryFill = ""
@@ -3689,9 +3701,9 @@ struct MarketsView: View {
                         .help("Your actual exit fill price. Measures your real execution cost vs. the plan — never changes P&L.")
                     Button {
                         guard !needsCloseReconciliation, let exit = StockSageInput.positiveAmount(closeExitText) else { return }
-                        journal.close(trade.id, exitPrice: exit,
+                        guard journal.close(trade.id, exitPrice: exit,
                                      plannedExit: StockSageInput.positiveAmount(closePlannedExitText),
-                                     exitFill: StockSageInput.positiveAmount(closeExitFillText))
+                                     exitFill: StockSageInput.positiveAmount(closeExitFillText)) else { return }
                         closingTradeID = nil
                         closePlannedExitText = ""; closeExitFillText = ""
                     } label: {

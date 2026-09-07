@@ -145,6 +145,28 @@ struct StockSageJournalTests {
         #expect(t(.long, entry: 50, stop: 45, shares: 4).realizedProfit == nil)   // still open
     }
 
+    @Test func incoherentClosureCannotBecomeRealizedAccounting() {
+        let opened = Date(timeIntervalSince1970: 100)
+        for (exit, close) in [(110.0, nil), (nil, opened), (110.0, opened.addingTimeInterval(-1)),
+                              (Double.infinity, opened), (-1.0, opened)] as [(Double?, Date?)] {
+            let record = TradeRecord(symbol: "X", side: .long, entry: 100, stop: 90,
+                                     target: nil, shares: 1, openedAt: opened,
+                                     exitPrice: exit, closedAt: close)
+            #expect(record.realizedProfit == nil && record.realizedR == nil)
+            #expect(StockSageJournal.stats([record]).closed == 0)
+            #expect(StockSageJournal.stats([record]).totalProfit == 0)
+            #expect(StockSageJournal.edge([record]).closedWithR == 0)
+            #expect(StockSageJournal.monthlyPnL([record]).isEmpty)
+            #expect(StockSageJournal.compoundingCurve([record]) == nil)
+            #expect(StockSageJournal.openActions([record], mark: { _ in 120 }).isEmpty)
+        }
+        let sameTime = TradeRecord(symbol: "X", side: .long, entry: 100, stop: 100,
+                                   target: nil, shares: 1, openedAt: opened, exitPrice: 110, closedAt: opened)
+        #expect(sameTime.realizedProfit == 10 && sameTime.realizedR == nil)
+        #expect(StockSageJournal.stats([sameTime]).closed == 1,
+                "A coherent zero-duration, undefined-risk legacy trade still counts")
+    }
+
     @Test func edgeDecomposesWinsAndLosses() {
         let trades = [
             t(.long, entry: 100, stop: 90, shares: 1, exit: 120),   // +2R win
@@ -828,6 +850,98 @@ struct StockSageJournalStoreQASeedTests {
     private func journalTrade(_ symbol: String, day: Int) -> TradeRecord {
         TradeRecord(symbol: symbol, side: .long, entry: 100, stop: 90, target: 120, shares: 1,
                     openedAt: Date(timeIntervalSince1970: Double(day) * 86_400))
+    }
+
+    @Test func journalRejectsIncoherentAddsWithoutChangingMemoryOrDisk() {
+        let (store, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let valid = journalTrade("AAA", day: 1)
+        store.add(valid)
+        let bytes = defaults.data(forKey: "stocksage.journal.v1")
+        var invalid = journalTrade("BAD", day: 1)
+        invalid.exitPrice = 110
+        store.add(invalid)
+        #expect(store.trades == [valid])
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == bytes)
+    }
+
+    @Test func journalRejectsInvalidClosesAtomically() {
+        let (store, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let record = journalTrade("AAA", day: 1)
+        store.add(record)
+        let bytes = defaults.data(forKey: "stocksage.journal.v1")
+        store.close(record.id, exitPrice: 110, plannedExit: 109, exitFill: 110,
+                    at: record.openedAt.addingTimeInterval(-1))
+        #expect(store.trades == [record])
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == bytes)
+        store.close(record.id, exitPrice: .infinity, at: record.openedAt.addingTimeInterval(1))
+        #expect(store.trades == [record])
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == bytes)
+    }
+
+    @Test func legacyInvalidClosureStaysVisibleAndBytePreservedOnLoad() throws {
+        let (unused, defaults, suite) = isolatedJournal()
+        _ = unused
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var legacy = journalTrade("LEGACY", day: 1)
+        legacy.closedAt = legacy.openedAt.addingTimeInterval(60)
+        let bytes = try JSONEncoder().encode([legacy])
+        defaults.set(bytes, forKey: "stocksage.journal.v1")
+        let store = StockSageJournalStore(defaults: defaults, key: "stocksage.journal.v1")
+        #expect(store.trades == [legacy] && store.invalidClosures == [legacy])
+        #expect(store.closed.isEmpty && store.stats.closed == 0)
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == bytes)
+        #expect(store.add(journalTrade("NEW", day: 2)))
+        let saved = try JSONDecoder().decode([TradeRecord].self, from: #require(defaults.data(forKey: "stocksage.journal.v1")))
+        #expect(saved.first(where: { $0.id == legacy.id }) == legacy, "A later save must retain the original fields")
+        #expect(store.close(legacy.id, exitPrice: 110, at: legacy.openedAt.addingTimeInterval(60)))
+        #expect(store.invalidClosures.isEmpty && store.closed.count == 1)
+    }
+
+    @Test func importCountsRejectedRecordsAndRetainsTheirErrorAfterSuccess() {
+        let (store, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var bad = journalTrade("BAD", day: 1); bad.exitPrice = 110
+        let good = journalTrade("GOOD", day: 1)
+        let result = store.importNew([bad, good, good])
+        #expect(result.added == 1 && result.skipped == 1 && result.rejected == 1)
+        #expect(store.trades == [good])
+        #expect(store.lastError == bad.closureError)
+    }
+
+    @Test func invalidDiskCloseCannotSilentlyDisplaceAnOpenRecord() throws {
+        let (store, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = journalTrade("ORIGINAL", day: 1)
+        store.add(original)
+        var invalidDisk = original
+        invalidDisk.closedAt = original.openedAt.addingTimeInterval(60) // no exit
+        let bytes = try JSONEncoder().encode([invalidDisk])
+        defaults.set(bytes, forKey: "stocksage.journal.v1")
+        #expect(!store.add(journalTrade("OTHER", day: 2)))
+        #expect(store.trades == [original])
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == bytes)
+        #expect(store.lastError != nil)
+    }
+
+    @Test func encodingFailureAndInvalidMetadataDoNotCommitPartialEdits() {
+        let (store, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let good = journalTrade("GOOD", day: 1)
+        store.add(good)
+        let bytes = defaults.data(forKey: "stocksage.journal.v1")
+        let nonencodable = TradeRecord(symbol: "BAD", side: .long, entry: 100, stop: 90,
+                                       target: nil, shares: .infinity, openedAt: good.openedAt)
+        #expect(!store.add(nonencodable) && store.trades == [good])
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == bytes)
+        #expect(!store.close(good.id, exitPrice: 110, plannedExit: .infinity, at: good.openedAt))
+        #expect(!store.close(good.id, exitPrice: 110, at: Date(timeIntervalSince1970: .infinity)))
+        #expect(store.trades == [good] && defaults.data(forKey: "stocksage.journal.v1") == bytes)
+        #expect(store.close(good.id, exitPrice: 110, plannedExit: 109, exitFill: 110, at: good.openedAt))
+        #expect(store.lastError == nil && store.closed.first?.exitFill == 110)
+        #expect(store.close(good.id, exitPrice: 111, at: good.openedAt))
+        #expect(store.closed.first?.plannedExit == 109 && store.closed.first?.exitFill == 110)
     }
 
     @Test func journalStaleProcessSaveCannotResurrectAClosedTrade() {

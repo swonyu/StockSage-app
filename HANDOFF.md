@@ -1,5 +1,75 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review M3: coherent journal closure boundaries — 2026-09-07 09:38 +03
+
+Reproduced with one real TradeRecord/API call, no owner data: entry100/stop90,
+one share, exit110 and no close time reported isOpen=true AND realizedProfit10,
+realizedR1. Repeated and JSON-roundtrip replays failed identically. Removing the
+exit or supplying a coherent close passed. An inverted close time also reached
+aggregate closed-count/profit (1/10), proving this was not contained by the
+summary's open filter. Initial regressions were85pass/5fail: calculations,
+CSV import, backup validation, store add and store close all admitted the defect.
+
+One pure closureError/isFinalized policy now requires paired exit/close fields,
+finite timestamps, positive finite exit, and close>=open. Same-time records remain
+allowed because ISO exports have second precision; calibration retains its
+stricter prediction/availability policy. Realized P&L/R and exit slippage require
+finalization, and nonfinite computed P&L/R are undefined rather than emitted.
+Journal financial aggregates share that cohort; coherent entry==stop legacy
+records still count with undefined R. The separate descriptive history count
+intentionally preserves raw legacy close flags, never laundering them into R.
+Malformed open records cannot generate openActions. Days-held conversion is
+bounded against nonfinite/out-of-range input to avoid an Int conversion trap.
+
+New adds and close edits validate before mutation. Encoding failure rolls memory
+back to its prior value and preserves stored bytes; optional close measurements
+must be positive finite when supplied, and omitted measurements still retain
+previous values. Existing records are not repaired/deleted on load: their exact
+fields stay retained/exportable, excluded from realized results, with explicit
+UI warnings about uncertain position status and potentially incomplete exposure.
+The add/close editors do not dismiss a rejected change. CSV reports malformed
+closures as row errors while preserving good rows; backup decoding rejects the
+entire payload before returning it to the applying UI, with the journal index.
+
+Import callers (CSV, mac/iPhone backup, parent migration and onboarding) now
+reuse the same add path and report actual additions, ID duplicates and rejections
+separately. Review found two related failures, locked down BEFORE correction:
+successful later rows erased an earlier error; an invalid disk close silently
+displaced an open in-memory record. That boundary run was10pass/2fail. Imports
+now retain the first rejection; conflicting invalid disk updates refuse the write
+without destroying either side. An explicit valid close may repair only the exact
+invalid version already loaded. Known foreign records and coherent close-wins
+reconciliation remain intact. No actual owner record was edited or repaired.
+
+Final175focused journal/CSV/backup/paper/slippage/loss-limit/execution-quality/
+calibration tests pass. Nine new tests also cover byte-preserved legacy load/save,
+actual import counts, failed-encode rollback, optional measurement preservation,
+and coherent same-time/undefined-risk controls. Original production-module replay
+/private/tmp/stocksage-journal-closure.zQZOid/check was recompiled: default,
+--roundtrip, --inverted, --coherent and --no-exit all exit0 and print
+`Journal closure self-check ok`. Invalid cases now yield nil realized values and
+zero finalized count; the coherent control remains10profit/1R/one closed trade.
+
+Canonical serial1797/1797macOS and1795/1795iPhone17Pro(gate) pass, exit0,
+zero selected failures/skips. Same opt-in exclusions: CalibrationPersistRunTests,
+LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. Bundles under
+/private/tmp/stocksage-journal-closure-{red,focused,boundary-red,focused-final,macos,ios}-20260907.xcresult;
+logs use the same basenames. First focused90pass preceded the extra boundary
+corrections; focused-final175pass is the complete functional change. Only a
+non-runtime import-cost/transaction-limit comment was added after the mac gate.
+
+Limits: existing per-record reconciliation is not a whole-book transaction and
+has quadratic batch cost; whole restore of holdings/watchlist (UI03), general
+CSV format/dedup issues and deletion tombstones are NOT declared fixed here.
+Closure consistency is not broker reconciliation, correct entry/stop economics,
+or proof of profitable trading. No schema migration, new dependency, model reload,
+credential access, actual import/restore, trade or push. Main's unrelated four
+paths unchanged; appPID34669 and QwenPID23631 remain alive. Built/gated, NOT
+installed: the installed app is still the first Chat build and CUA remains the
+normal-install/native-acceptance blocker; no unchanged retry or force-stop.
+Next concrete issue: N08 poll→heal→save→reload retaining the accepted final quote.
+Native/phone/live-API acceptance and contract-gated P5 remain open.
+
 ## Full-review M2: calibration label-availability purge — 2026-09-07 09:15 +03
 
 Reproduced the actual public split before editing: six overlapping journal

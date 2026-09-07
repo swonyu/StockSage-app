@@ -56,6 +56,24 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
 
     nonisolated var isOpen: Bool { closedAt == nil }
 
+    /// Validate the recorded pair without repairing/deleting legacy evidence. Equal timestamps
+    /// are allowed (exports have second precision); calibration imposes its stricter time split.
+    nonisolated var closureError: String? {
+        guard openedAt.timeIntervalSinceReferenceDate.isFinite else { return "The journal open time must be finite." }
+        switch (exitPrice, closedAt) {
+        case (nil, nil): return nil
+        case let (exit?, close?):
+            guard exit > 0, exit.isFinite else { return "The journal exit price must be positive and finite." }
+            guard close.timeIntervalSinceReferenceDate.isFinite, close >= openedAt else {
+                return "The journal close time must be finite and not precede its open time."
+            }
+            return nil
+        default: return "A journal exit price and close time must both be present, or both absent."
+        }
+    }
+
+    nonisolated var isFinalized: Bool { !isOpen && closureError == nil }
+
     /// Cost-positive, direction-adjusted slippage in bps of the planned price for one execution
     /// leg. Positive = you paid more than planned (a buy filled higher, or a sell filled lower);
     /// negative = price improvement. nil (never fabricated) unless both prices are positive finite.
@@ -74,7 +92,7 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     /// Exit-leg slippage — nil unless BOTH plannedExit and exitFill are set AND the trade is
     /// closed. A long exits via a SELL; a short exits via a BUY.
     nonisolated var exitSlippageBps: Double? {
-        guard !isOpen, let p = plannedExit, let f = exitFill else { return nil }
+        guard isFinalized, let p = plannedExit, let f = exitFill else { return nil }
         return Self.legSlippageBps(planned: p, fill: f, isBuy: side == .short)
     }
 
@@ -109,12 +127,21 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
         return perShare / risk
     }
 
-    nonisolated var realizedProfit: Double? { exitPrice.map { profit(at: $0) } }
-    nonisolated var realizedR: Double? { exitPrice.flatMap { rMultiple(at: $0) } }
+    nonisolated var realizedProfit: Double? {
+        guard isFinalized, let exitPrice else { return nil }
+        let value = profit(at: exitPrice)
+        return value.isFinite ? value : nil
+    }
+    nonisolated var realizedR: Double? {
+        guard isFinalized, let exitPrice, let value = rMultiple(at: exitPrice), value.isFinite else { return nil }
+        return value
+    }
 
     /// Whole calendar days held — to `closedAt` if closed, else to `now`. Never negative.
     nonisolated func daysHeld(asOf now: Date) -> Int {
-        Swift.max(0, Int(((closedAt ?? now).timeIntervalSince(openedAt) / 86_400).rounded(.down)))
+        let days = ((closedAt ?? now).timeIntervalSince(openedAt) / 86_400).rounded(.down)
+        guard days.isFinite, days > 0, days < Double(Int.max) else { return 0 }
+        return Int(days)
     }
 
     /// Value-preserving corporate-action rebase (retro split adjustment, 2026-07-26 CLBK 2.2:1):
@@ -137,7 +164,7 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// Aggregate stats over the CLOSED trades — the owner's realized track record.
+/// Aggregate stats over coherently FINALIZED trades — the owner's realized track record.
 struct JournalStats: Sendable, Equatable {
     let closed: Int
     let wins: Int
@@ -420,7 +447,7 @@ enum StockSageJournal {
     /// the account by (1 + fraction·R). Clamped at 0 (ruin is absorbing). Pure — this
     /// is the PAST path of the owner's OWN trades at a fixed risk %, NOT a projection.
     nonisolated static func compoundingCurve(_ trades: [TradeRecord], fraction: Double = 0.01) -> CompoundingCurve? {
-        let rs = trades.filter { !$0.isOpen }
+        let rs = trades.filter(\.isFinalized)
             .sorted { ($0.closedAt ?? .distantPast) < ($1.closedAt ?? .distantPast) }
             .compactMap { $0.realizedR }
         guard !rs.isEmpty else { return nil }
@@ -439,7 +466,7 @@ enum StockSageJournal {
     nonisolated static func yearlyPnL(_ trades: [TradeRecord]) -> [YearlyPnL] {
         var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
         var byYear: [String: [TradeRecord]] = [:]
-        for t in trades where !t.isOpen {
+        for t in trades where t.isFinalized {
             guard let c = t.closedAt else { continue }
             byYear[String(cal.component(.year, from: c)), default: []].append(t)
         }
@@ -471,7 +498,7 @@ enum StockSageJournal {
     /// Expectancy trend: mean R of the first half vs the most-recent half of closed
     /// trades (by close time). `band` = the flat zone. nil under 6 closed-with-R.
     nonisolated static func expectancyTrend(_ trades: [TradeRecord], band: Double = 0.10) -> ExpectancyTrend? {
-        let rs = trades.filter { !$0.isOpen }
+        let rs = trades.filter(\.isFinalized)
             .sorted { ($0.closedAt ?? .distantPast) < ($1.closedAt ?? .distantPast) }
             .compactMap { $0.realizedR }
         guard rs.count >= 6 else { return nil }
@@ -520,7 +547,7 @@ enum StockSageJournal {
 
     /// System health over the journal's closed trades. nil with no closed-with-R.
     nonisolated static func systemHealth(_ trades: [TradeRecord], minTrades: Int = 20) -> SystemHealth? {
-        let rs = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
+        let rs = trades.filter(\.isFinalized).compactMap { $0.realizedR }
         guard !rs.isEmpty else { return nil }
         let e = edge(trades)
         return classifyHealth(profitFactor: e.profitFactor, expectancyR: e.expectancyR,
@@ -534,7 +561,7 @@ enum StockSageJournal {
     /// an honest payoff. nil otherwise — never size off 3 lucky trades.
     nonisolated static func kellyInputs(_ trades: [TradeRecord], minTrades: Int = 10)
         -> (winRate: Double, payoffRatio: Double, n: Int)? {
-        let rs = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
+        let rs = trades.filter(\.isFinalized).compactMap { $0.realizedR }
         guard rs.count >= minTrades else { return nil }
         let wins = rs.filter { $0 > 0 }
         let losses = rs.filter { $0 < 0 }
@@ -550,7 +577,7 @@ enum StockSageJournal {
     /// ordered by close time — the same drawdown math the backtester uses, applied
     /// to the OWNER's own record. nil with no closed-with-R trades.
     nonisolated static func equityRisk(_ trades: [TradeRecord]) -> JournalRisk? {
-        let ordered = trades.filter { !$0.isOpen }
+        let ordered = trades.filter(\.isFinalized)
             .sorted { ($0.closedAt ?? .distantPast) < ($1.closedAt ?? .distantPast) }
         let rs = ordered.compactMap { $0.realizedR }
         guard !rs.isEmpty else { return nil }
@@ -575,7 +602,7 @@ enum StockSageJournal {
             let interval = c.timeIntervalSince(t.openedAt) / 86_400
             return interval >= 0 ? interval : nil
         }
-        let closed = trades.filter { !$0.isOpen }
+        let closed = trades.filter(\.isFinalized)
         // Wins are strictly profitable; a BREAKEVEN (scratch, profit==0) is a NON-winner,
         // not a loser — fold it into the non-win bucket (<= 0) so it isn't silently dropped
         // from the averages/counts (which would bias the discipline read by an invisible sample).
@@ -592,7 +619,7 @@ enum StockSageJournal {
     /// visible, not just the average. Boundaries (each trade in exactly one bin):
     /// (−∞,−1] · (−1,0] · (0,1] · (1,2] · (2,∞) — lower-exclusive, upper-inclusive.
     nonisolated static func rDistribution(_ trades: [TradeRecord]) -> RDistribution? {
-        let rs = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
+        let rs = trades.filter(\.isFinalized).compactMap { $0.realizedR }
         guard !rs.isEmpty else { return nil }
         var counts = [0, 0, 0, 0, 0]
         for r in rs {
@@ -626,7 +653,7 @@ enum StockSageJournal {
     /// 95%): N ≥ (z·s/|mean|)². nil when the mean is ~0 (a zero edge never confirms)
     /// or <2 trades. A sample-size estimate, not a promise the edge survives.
     nonisolated static func tradesToSignificance(_ trades: [TradeRecord], z: Double = 2) -> (needed: Int, more: Int)? {
-        let rs = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
+        let rs = trades.filter(\.isFinalized).compactMap { $0.realizedR }
         guard rs.count >= 2 else { return nil }
         let n = rs.count
         let mean = rs.reduce(0, +) / Double(n)
@@ -647,7 +674,7 @@ enum StockSageJournal {
     /// Mean realized R with its standard error (sampleStdev/√n). nil for <2 trades
     /// with a defined R (no spread to estimate).
     nonisolated static func expectancyConfidence(_ trades: [TradeRecord]) -> ExpectancyCI? {
-        let rs = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
+        let rs = trades.filter(\.isFinalized).compactMap { $0.realizedR }
         guard rs.count >= 2 else { return nil }
         let n = rs.count
         let mean = rs.reduce(0, +) / Double(n)
@@ -659,7 +686,7 @@ enum StockSageJournal {
     /// Best/worst realized trade and the current streak (by close time). Breakeven
     /// (R == 0) trades don't count toward the streak. nil with no closed-with-R trades.
     nonisolated static func streak(_ trades: [TradeRecord]) -> JournalStreak? {
-        let closed = trades.filter { !$0.isOpen }.compactMap { t in t.realizedR.map { (t, $0) } }
+        let closed = trades.filter(\.isFinalized).compactMap { t in t.realizedR.map { (t, $0) } }
         guard !closed.isEmpty else { return nil }
         let best = closed.max { $0.1 < $1.1 }!
         let worst = closed.min { $0.1 < $1.1 }!
@@ -681,7 +708,7 @@ enum StockSageJournal {
     }
 
     nonisolated static func stats(_ trades: [TradeRecord]) -> JournalStats {
-        let closed = trades.filter { !$0.isOpen }
+        let closed = trades.filter(\.isFinalized)
         let rs = closed.compactMap { $0.realizedR }
         let profits = closed.compactMap { $0.realizedProfit }
         let wins = profits.filter { $0 > 0 }.count
@@ -707,7 +734,7 @@ enum StockSageJournal {
     /// Edge decomposition: average win R, average loss R, payoff ratio, and the
     /// per-trade expectancy (winRate·avgWin − lossRate·avgLoss == mean realized R).
     nonisolated static func edge(_ trades: [TradeRecord]) -> JournalEdge {
-        let rs = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
+        let rs = trades.filter(\.isFinalized).compactMap { $0.realizedR }
         let wins = rs.filter { $0 > 0 }
         let losses = rs.filter { $0 < 0 }
         let avgWin = wins.isEmpty ? 0 : wins.reduce(0, +) / Double(wins.count)
@@ -726,7 +753,7 @@ enum StockSageJournal {
     /// Realized performance split LONG vs SHORT — are you actually good at shorting,
     /// or only making money long? Closed trades only; sides with no trades omitted.
     nonisolated static func bySide(_ trades: [TradeRecord]) -> [SidePnL] {
-        let closed = trades.filter { !$0.isOpen }
+        let closed = trades.filter(\.isFinalized)
         return TradeRecord.Side.allCases.compactMap { side in
             let ts = closed.filter { $0.side == side }
             guard !ts.isEmpty else { return nil }
@@ -754,7 +781,7 @@ enum StockSageJournal {
         // wins[i]/total[i] over closed trades carrying a conviction, bucketed like winProb(_:).
         var wins = Array(repeating: 0, count: nBands)
         var total = Array(repeating: 0, count: nBands)
-        for t in trades where !t.isOpen {
+        for t in trades where t.isFinalized {
             guard let c = t.conviction, let r = t.realizedR else { continue }
             let cc = Swift.max(0, Swift.min(1, c))
             let idx = Swift.min(nBands - 1, Int(cc * Double(nBands)))
@@ -778,7 +805,7 @@ enum StockSageJournal {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         var groups: [String: (count: Int, r: Double)] = [:]
-        for t in trades where !t.isOpen {
+        for t in trades where t.isFinalized {
             guard let closed = t.closedAt else { continue }
             let c = cal.dateComponents([.year, .month], from: closed)
             guard let y = c.year, let m = c.month else { continue }
@@ -799,7 +826,7 @@ enum StockSageJournal {
     /// Realized P&L grouped by the symbol's sector — which industries you actually
     /// make money in. Closed trades only, sorted by total R (best first).
     nonisolated static func bySector(_ trades: [TradeRecord]) -> [SectorPnL] {
-        let closed = trades.filter { !$0.isOpen }
+        let closed = trades.filter(\.isFinalized)
         var groups: [String: [TradeRecord]] = [:]
         for t in closed { groups[StockSageSector.sector(t.symbol), default: []].append(t) }
         return groups.map { sector, ts in
@@ -831,7 +858,7 @@ enum StockSageJournal {
     /// (stop/target hit) sorts first, then by |R|. Closed trades and unpriced symbols are skipped.
     nonisolated static func openActions(_ trades: [TradeRecord], mark: (String) -> Double?) -> [OpenAction] {
         let acts = trades.compactMap { t -> OpenAction? in
-            guard t.isOpen, let px = mark(t.symbol), px > 0, px.isFinite,
+            guard t.isOpen, t.closureError == nil, let px = mark(t.symbol), px > 0, px.isFinite,
                   t.entry > 0, t.entry.isFinite, t.stop > 0, t.stop.isFinite,
                   t.shares > 0, t.shares.isFinite, t.target.map({ $0 > 0 && $0.isFinite }) ?? true else { return nil }
             let isLong = t.side == .long
@@ -882,6 +909,8 @@ enum StockSageJournal {
     /// name"). `rDefinedCount` <= `count`; when they differ, the caller's .help should disclose
     /// how many of the closed trades actually contributed to totalR. nil when there are zero
     /// closed trades on the symbol — display-only, nothing here feeds ranking/EV/sizing.
+    /// This historical record count deliberately preserves legacy close flags; unlike realized
+    /// analytics it is not a count of validated closures. Invalid fields never contribute R.
     nonisolated static func history(for symbol: String, in trades: [TradeRecord]) -> (count: Int, totalR: Double, rDefinedCount: Int)? {
         let sym = symbol.uppercased()
         let closed = trades.filter { !$0.isOpen && $0.symbol.uppercased() == sym }
@@ -934,7 +963,7 @@ enum StockSageJournal {
         var totalR = 0.0
         var contributingTrades = 0
         var rLegs = 0
-        for t in trades where !t.isOpen {
+        for t in trades where t.isFinalized {
             let assumedPerLeg = StockSageNetEdge.defaultCosts(forSymbol: t.symbol).roundTripBps / 2
             if let s = t.entrySlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
             if let s = t.exitSlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
@@ -963,6 +992,7 @@ final class StockSageJournalStore: ObservableObject {
     static let shared = StockSageJournalStore()
 
     @Published private(set) var trades: [TradeRecord] = []
+    @Published private(set) var lastError: String?
     private let key: String
     private let defaults: UserDefaults
 
@@ -976,7 +1006,8 @@ final class StockSageJournalStore: ObservableObject {
     }
 
     var open: [TradeRecord] { trades.filter { $0.isOpen } }
-    var closed: [TradeRecord] { trades.filter { !$0.isOpen } }
+    var closed: [TradeRecord] { trades.filter(\.isFinalized) }
+    var invalidClosures: [TradeRecord] { trades.filter { $0.closureError != nil } }
     var stats: JournalStats { StockSageJournal.stats(trades) }
     var edgeStats: JournalEdge { StockSageJournal.edge(trades) }
     var sectorPnL: [SectorPnL] { StockSageJournal.bySector(trades) }
@@ -994,28 +1025,58 @@ final class StockSageJournalStore: ObservableObject {
     var expectancyTrend: ExpectancyTrend? { StockSageJournal.expectancyTrend(trades) }
     var compounding: CompoundingCurve? { StockSageJournal.compoundingCurve(trades) }
 
-    func add(_ t: TradeRecord) {
+    @discardableResult func add(_ t: TradeRecord) -> Bool {
+        if let error = t.closureError { lastError = error; return false }
+        let before = trades
         trades.insert(t, at: 0)
-        save()
+        guard save() else { trades = before; return false }
+        lastError = nil
+        return true
     }
 
-    func close(_ id: UUID, exitPrice: Double, plannedExit: Double? = nil, exitFill: Double? = nil, at date: Date = Date()) {
-        guard exitPrice > 0, let i = trades.firstIndex(where: { $0.id == id }) else { return }
-        trades[i].exitPrice = exitPrice
-        trades[i].closedAt = date
+    /// Import callers report actual writes, duplicates and rejected records separately.
+    /// Reuse add's validation; never describe a rejected record as "already present".
+    /// ponytail: existing per-record reconciled saves have quadratic batch cost; use an atomic
+    /// batch writer if large-import measurements justify it. This is not a whole-book transaction.
+    func importNew(_ incoming: [TradeRecord]) -> (added: Int, skipped: Int, rejected: Int) {
+        var added = 0, skipped = 0, rejected = 0
+        var firstError: String?
+        for trade in incoming {
+            if trades.contains(where: { $0.id == trade.id }) { skipped += 1 }
+            else if add(trade) { added += 1 }
+            else { rejected += 1; firstError = firstError ?? lastError }
+        }
+        if let firstError { lastError = firstError }
+        return (added, skipped, rejected)
+    }
+
+    @discardableResult func close(_ id: UUID, exitPrice: Double, plannedExit: Double? = nil, exitFill: Double? = nil, at date: Date = Date()) -> Bool {
+        guard let i = trades.firstIndex(where: { $0.id == id }) else { lastError = "Journal trade not found."; return false }
+        var candidate = trades[i]
+        candidate.exitPrice = exitPrice
+        candidate.closedAt = date
+        if let error = candidate.closureError { lastError = error; return false }
+        guard [plannedExit, exitFill].compactMap({ $0 }).allSatisfy({ $0 > 0 && $0.isFinite }) else {
+            lastError = "Journal planned/fill prices must be positive and finite when supplied."; return false
+        }
         // Review 2026-07-09: nil params never WIPE an already-captured measurement — a
         // future caller using the old close(id:exitPrice:) shape must not erase fills.
-        if plannedExit != nil { trades[i].plannedExit = plannedExit }
-        if exitFill != nil { trades[i].exitFill = exitFill }
-        save()
+        if plannedExit != nil { candidate.plannedExit = plannedExit }
+        if exitFill != nil { candidate.exitFill = exitFill }
+        let before = trades
+        trades[i] = candidate
+        guard save(replacing: before[i]) else { trades = before; return false }
+        lastError = nil
+        return true
     }
 
     // Explicit deletion — bypasses the reconciling save (a merged save would resurrect the
     // removed trade from disk). Same ponytail ceiling as the paper store: a CONCURRENT
     // process's next merged save can still resurrect it; tombstones if that ever matters.
     func remove(_ id: UUID) {
+        let before = trades
         trades.removeAll { $0.id == id }
-        save(reconciling: false)
+        if save(reconciling: false) { lastError = nil } else { trades = before }
     }
 
     private func load() {
@@ -1032,13 +1093,19 @@ final class StockSageJournalStore: ObservableObject {
     /// outcome. Reconcile with disk before writing: per id a CLOSED record beats an open one
     /// (a close is terminal), foreign ids (another process's adds) are preserved. Deletions
     /// pass `reconciling: false`. `qaSeed` still bypasses save() entirely (in-memory only).
-    private func save(reconciling: Bool = true) {
+    private func save(reconciling: Bool = true, replacing original: TradeRecord? = nil) -> Bool {
         if reconciling,
            let data = defaults.data(forKey: key),
            let disk = try? JSONDecoder().decode([TradeRecord].self, from: data) {
             var mineIds = Set(trades.map(\.id))
             for d in disk {
                 if let i = trades.firstIndex(where: { $0.id == d.id }) {
+                    // An invalid foreign update cannot silently acquire terminal-close priority
+                    // or be overwritten. An explicit close may repair the exact loaded version.
+                    if d.closureError != nil, trades[i] != d, original != d {
+                        lastError = "Conflicting journal closure data changed on disk. Nothing was saved; reload and review the original record."
+                        return false
+                    }
                     if trades[i].isOpen && !d.isOpen { trades[i] = d }   // disk close wins
                 } else if !mineIds.contains(d.id) {
                     trades.append(d)                                     // foreign trade — never drop
@@ -1046,9 +1113,12 @@ final class StockSageJournalStore: ObservableObject {
                 }
             }
         }
-        if let data = try? JSONEncoder().encode(trades) {
-            defaults.set(data, forKey: key)
+        guard let data = try? JSONEncoder().encode(trades) else {
+            lastError = "Couldn't encode the journal; the previous saved records were kept."
+            return false
         }
+        defaults.set(data, forKey: key)
+        return true
     }
 
     /// QA-only in-memory REPLACE: assigns `trades` directly, bypassing `save()` so nothing

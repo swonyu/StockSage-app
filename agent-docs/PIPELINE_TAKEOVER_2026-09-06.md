@@ -13,6 +13,22 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest09:38 +03: full-review M3 journal closure boundaries implemented. Single-
+record replay proved open status could coexist with realized10profit/1R;
+inverted close also entered aggregate results. Shared paired-field/finite/time-
+ordered closure validation now protects accounting, add/close, CSV and backup
+validation. Legacy fields remain retained/exportable and visibly flagged, not
+repaired/deleted; invalid records do not drive realized metrics. Imports report
+actual accepted/duplicate/rejected counts; editors retain failed drafts.
+Invalid concurrent disk-close conflicts reject the write rather than promote or
+erase it; encoding failure rolls back memory.85pass/5fail plus10pass/2fail red
+regressions ->175focused pass; all five production-module replay modes green;
+canonical1797macOS/1795iPhone pass with the usual three opt-in exclusions.
+No owner data/model/process changes or push. Built/gated, not installed; CUA
+still blocks normal reinstall/visual acceptance. Whole-book restore, transactional
+batch import, CSV interchange/tombstones remain separate. Next N08 final healed
+quote persistence; native/phone/live API/P5 acceptance remains. See HANDOFF.
+
 Latest09:15 +03: full-review M2 fixed at the shared calibration split. Actual
 overlap replay and minimized case failed before editing; row embargo/input-order
 controls isolated unavailable labels as the cause. Journal/manual/offline fits

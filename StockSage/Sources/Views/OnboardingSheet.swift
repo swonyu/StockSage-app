@@ -74,13 +74,10 @@ struct OnboardingSheet: View {
                 Button("Import data from Salehman AI") {
                     if let parent = StockSageBackup.importFromParentApp() {
                         let journal = StockSageJournalStore.shared
-                        let existing = Set(journal.trades.map(\.id))
-                        var added = 0
-                        for t in parent.trades where !existing.contains(t.id) {
-                            journal.add(t); added += 1
-                        }
-                        importResult = "Imported \(added) journal trade\(added == 1 ? "" : "s")"
-                            + (parent.trades.count > added ? " (\(parent.trades.count - added) already present)" : "")
+                        let result = journal.importNew(parent.trades)
+                        importResult = "Imported \(result.added) journal trade\(result.added == 1 ? "" : "s")"
+                            + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
+                            + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved — check journal errors" : "")
                             + ". Portfolio positions found: \(parent.positions.count) — add them from the Portfolio section."
                     } else {
                         importResult = "No Salehman AI data found on this Mac."

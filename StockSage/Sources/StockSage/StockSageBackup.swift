@@ -27,6 +27,7 @@ enum StockSageBackup {
     enum BackupError: Error, LocalizedError {
         case unsupportedSchemaVersion(found: Int, supported: Int)
         case decodeFailed(String)
+        case invalidJournalRecord(index: Int, reason: String)
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +35,8 @@ enum StockSageBackup {
                 return "This backup file is schema version \(found); this app reads version \(supported). It may be from a newer or older version of StockSage."
             case .decodeFailed(let reason):
                 return "Couldn't read this backup file — it may be corrupt or not a StockSage backup. (\(reason))"
+            case .invalidJournalRecord(let index, let reason):
+                return "Invalid journal trade \(index): \(reason) Nothing was restored."
             }
         }
     }
@@ -88,6 +91,9 @@ enum StockSageBackup {
             let payload = try decoder.decode(BackupPayload.self, from: data)
             guard payload.schemaVersion == currentSchemaVersion else {
                 return .failure(.unsupportedSchemaVersion(found: payload.schemaVersion, supported: currentSchemaVersion))
+            }
+            for (index, trade) in payload.trades.enumerated() {
+                if let error = trade.closureError { return .failure(.invalidJournalRecord(index: index + 1, reason: error)) }
             }
             return .success(payload)
         } catch {

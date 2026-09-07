@@ -7,6 +7,18 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @Test func incoherentJournalRejectsTheWholeRestoreWithoutRepairingIt() {
+        var invalid = fixtureTrade()
+        invalid.closedAt = nil
+        let data = StockSageBackup.export(trades: [fixtureTrade(), invalid], positions: [fixturePosition()], userSymbols: ["AAPL"])
+        switch StockSageBackup.restore(from: data) {
+        case .success:
+            Issue.record("An exit without a close time must fail the entire restore, not be repaired or dropped")
+        case .failure(let error):
+            #expect(error.localizedDescription.contains("journal") || error.localizedDescription.contains("trade"))
+        }
+    }
+
     private func fixtureTrade() -> TradeRecord {
         TradeRecord(
             id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,

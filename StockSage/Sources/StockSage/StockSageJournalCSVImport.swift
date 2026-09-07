@@ -96,9 +96,11 @@ enum StockSageJournalCSVImport {
                 continue
             }
 
-            trades.append(TradeRecord(symbol: symbol, side: side, entry: entry, stop: stop, target: target,
-                                      shares: shares, openedAt: openedAt, exitPrice: exitPrice, closedAt: closedAt,
-                                      note: note))
+            let trade = TradeRecord(symbol: symbol, side: side, entry: entry, stop: stop, target: target,
+                                    shares: shares, openedAt: openedAt, exitPrice: exitPrice, closedAt: closedAt,
+                                    note: note)
+            if let error = trade.closureError { errors.append((line, error)); continue }
+            trades.append(trade)
         }
         return (trades, errors)
     }

@@ -6,6 +6,18 @@ import Foundation
 
 struct StockSageJournalCSVImportTests {
 
+    @Test func incoherentClosureReportsRowErrorsAndKeepsTheValidRow() {
+        let csv = StockSageJournalCSV.header + "\n" +
+            "GOOD,Long,100,90,,1,1970-01-02T00:00:00Z,110,1970-01-03T00:00:00Z,,\n" +
+            "EXIT_ONLY,Long,100,90,,1,1970-01-02T00:00:00Z,110,,,\n" +
+            "CLOSE_ONLY,Long,100,90,,1,1970-01-02T00:00:00Z,,1970-01-03T00:00:00Z,,\n" +
+            "INVERTED,Long,100,90,,1,1970-01-02T00:00:00Z,110,1970-01-01T00:00:00Z,,"
+        let result = StockSageJournalCSVImport.preview(csv)
+        #expect(result.trades.map(\.symbol) == ["GOOD"])
+        #expect(result.imported == 1 && result.skipped == 0)
+        #expect(result.errors.map(\.line) == [3, 4, 5])
+    }
+
     @Test func roundTripsExportedTrades() {
         let trades = [
             TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: 124, shares: 10,
