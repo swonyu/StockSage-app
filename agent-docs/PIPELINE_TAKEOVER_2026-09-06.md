@@ -13,6 +13,20 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest07:51 +03: native Chat first vertical slice implemented on existing
+MarketSection/client: bounded typed app briefing, existing event log, specific Q&A,
+per-question source snapshots, local24-turn history/delete and stale-request guards.
+No new server, cloud fallback or execution path; prose remains interpretation/draft.
+Seven focused tests; first canonical1776macOS/1774iPhone passed. Real production
+client Arabic Qwen smoke passed. Final UI-shortcut re-gate also1776macOS/1774iPhone
+passed, zero selected failures/skips, same opt-in exclusions (see HANDOFF).
+Native navigation verified, but opening Chat crashed SkyComputerUseService's
+Array.remove(at:) (StockSage remained alive); populated UI acceptance and final
+settings-shortcut reinstall are pending CUA recovery. Existing installed build
+already contains Chat. No force-kill, settings mutation or Qwen reload.
+Next recover native acceptance, then source-bound news/WhatsApp retrieval; full
+Chat, semantic grounding, phone serving and P5 are NOT marked complete. See HANDOFF.
+
 Latest07:22 +03: Explain now reports invalid citations before numeric errors,
 and oversized source IDs fail instead of being ignored. Retains full draft/source;
 no prompt, model, primary badge or numeric-helper change. Captured PAA/minimal/

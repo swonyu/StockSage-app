@@ -1451,6 +1451,7 @@ struct MarketsView: View {
         case .portfolio:       portfolioSection
         case .alerts:          alertsSection
         case .briefing:        briefingSection
+        case .chat:            StockSageChatSection(store: store, openModelSettings: { section = .catalysts })
         }
     }
 
@@ -9751,7 +9752,7 @@ struct MarketsView: View {
 
 /// Sections shown inside the single Markets tab.
 enum MarketSection: String, CaseIterable, Identifiable {
-    case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, briefing
+    case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, chat, briefing
     var id: String { rawValue }
 
     /// Neighbour in tab order for swipe navigation (iOS). Deliberately does NOT wrap:
@@ -9773,6 +9774,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .portfolio: return "Portfolio"
         case .alerts:    return "Alerts"
         case .briefing:  return "Briefing"
+        case .chat:      return "Chat"
         }
     }
 
@@ -9788,6 +9790,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .portfolio: return "briefcase.fill"
         case .alerts:    return "bell.fill"
         case .briefing:  return "doc.text.fill"
+        case .chat:      return "bubble.left.and.bubble.right.fill"
         }
     }
 

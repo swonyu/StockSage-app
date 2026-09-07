@@ -1,5 +1,68 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Native Chat first vertical slice — 2026-09-07 07:51 +03
+
+Added Chat to existing MarketSection (between Alerts and Briefing; Briefing kept).
+It opens a deterministic typed quote briefing for at most four watchlist/board
+symbols, refreshed from app data, plus the existing capped crossing-event log.
+No automatic inference on every quote; no new monitor, notification permission,
+backend, model, dependency or money/order path. Model settings routes directly to
+Catalysts/Explanation model, reusing the same keys and loopback-only AI policy.
+
+Specific ticker questions capture new source/market-time/currency/subject records,
+technical rules opinions and available earnings schedules. Follow-ups retain
+subject selection but rebuild facts. Model-selected IDs render original typed
+records, not model-rewritten financial numbers. Prose ALWAYS remains unverified
+interpretation; numeric prose (including Arabic digits), bad schema and unknown
+IDs stay visible as labelled drafts, never a newly trusted quote or trade signal.
+No semantic-entailment/profit claim. News/filings, WhatsApp leads, portfolio balances
+and journal notes are NOT yet retrieved by Chat (the existing primary assessment's
+WhatsApp/news path is unchanged). This is not completion of the whole V3 design.
+
+History: last24 turns, last2 bounded turns supplied as explicitly historical
+conversation, each answer keeps its original snapshot/model. Local App Support
+StockSageChat/history.json, atomic/protected writes,0600 file/0700 directory,
+excluded from backup. Clear deletes that app copy; not external backups/logs.
+Corrupt/oversized history is not silently overwritten. Pending UUID ownership,
+cancellation on tab/settings changes, and final config checks prevent late replies
+from reviving cleared history or overwriting a newer request. Likely-credential
+questions are rejected before persistence/send; automatic context excludes account
+identifiers/credentials entirely. This is a heuristic input check, not a universal
+secret detector. External/phone inference remains disabled in this slice.
+
+Seven focused checks passed (four new tests plus section navigation). First full
+canonical passes:1776macOS/1774iPhone, zero selected failures/skips, same three
+opt-in exclusions. Bundles /private/tmp/stocksage-chat-{focused,macos,ios}-20260907.xcresult.
+Final serial gate after adding the direct settings button: macOS1776/1776 and
+iPhone1774/1774 passed, exit0, zero selected failures/skips, same exclusions
+(CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests). Final bundles:
+/private/tmp/stocksage-chat-final-macos-20260907.xcresult and
+/private/tmp/stocksage-chat-final-ios-20260907.xcresult. No source changes during builds.
+
+Real local-Qwen production-client smoke (one Arabic general question, empty facts,
+NOT a live stock-price test): /private/tmp/stocksage-chat-smoke.lMbfeR/check,
+log /private/tmp/stocksage-chat-smoke-20260907.log. It returned valid JSON, explained
+old observations versus executable prices in Arabic, and printed
+`Chat local-model self-check ok`, exit0. Original QwenPID23631 unchanged.
+
+Installed the first green Chat build at /Applications/StockSageX.app, PID34669:
+executable/debug-dylib cmp and strict deep codesign passed. Previous app recoverable
+at /Users/saleh/.Trash/StockSageX-pre-chat-20260907-0744.app. Native screenshot/AX
+verified the new navigation entry. On opening Chat, SkyComputerUseService crashed
+in Swift Array.remove(at:), NOT StockSage. Reset/reacquisition (name, explicit path)
+repeated the same service failure; app stayed running. Crash evidence:
+/Users/saleh/Library/Logs/DiagnosticReports/SkyComputerUseService-2026-09-07-074429.ips.
+Do NOT claim populated Chat UI/Q&A was visually verified. The subsequently added
+settings shortcut is built/gated but not reinstalled while normal CUA Quit is
+unavailable; no force-kill or UI-automation bypass was used.
+
+Next: recover native inspection, install the final settings-shortcut build and
+verify populated Chat, then extend source-bound news/WhatsApp retrieval. Secure
+iPhone serving, semantic grounding, independent API acceptance and contract-gated
+P5 remain separate work. Main worktree's unrelated four paths preserved; no push,
+real trade, cloud upload, credential access, model training/reload or new task.
+
 ## Explain distinguishes invalid citations from financial numbers (2026-09-07 07:22 +03)
 
 The captured native PAA paragraph contained an unoffered[1], but checkedResponse
