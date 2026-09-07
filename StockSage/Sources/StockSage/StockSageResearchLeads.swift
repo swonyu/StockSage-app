@@ -2,6 +2,7 @@ import Foundation
 
 /// Private export snapshots only. Never a trusted-price source, network client, or training corpus.
 enum StockSageResearchLeads {
+    nonisolated static let aliases = ["QCOM": "Qualcomm", "AMZN": "Amazon", "APP": "AppLovin", "ORCL": "Oracle"]
     nonisolated struct Message: Codable, Sendable {
         let id: String
         let date: Date
@@ -36,7 +37,6 @@ enum StockSageResearchLeads {
         guard document.schema == 1, document.messages.count <= 10_000,
               document.importedAt <= now, now.timeIntervalSince1970.isFinite,
               symbol.range(of: #"^[A-Z0-9.-]{1,12}$"#, options: .regularExpression) != nil else { return nil }
-        let aliases = ["QCOM": "Qualcomm", "AMZN": "Amazon", "APP": "AppLovin", "ORCL": "Oracle"]
         let ticker = #"(?<![A-Za-z0-9])"# + NSRegularExpression.escapedPattern(for: symbol) + #"(?![A-Za-z0-9])"#
         var seen: Set<String> = []
         // ponytail: bounded keyword retrieval over at most 10k messages; semantic indexing only after measured misses.

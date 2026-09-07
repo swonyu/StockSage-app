@@ -13,6 +13,16 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest08:10 +03: Chat source integration built/gated: existing bounded news fetch
+plus private export selection for one explicitly named ticker. Sources stay quoted
+and unverified, separate from immutable observed facts; request-owned attachment
+and backward-compatible history.19focused,1778macOS/1776iPhone passed. Actual local
+Qwen smoke used3ORCL export leads and correctly described their evidential limits;
+no live news request in that smoke. CUA still fails, so source-card UI/reinstall
+remain pending; installed app is the first Chat build. No push/model reload/keys.
+Next code issue: full-review M1 thin-sample query envelope, then M2/M3 temporal
+calibration labels. Native acceptance, phone serving, live APIs and P5 remain.
+
 Latest07:51 +03: native Chat first vertical slice implemented on existing
 MarketSection/client: bounded typed app briefing, existing event log, specific Q&A,
 per-question source snapshots, local24-turn history/delete and stale-request guards.

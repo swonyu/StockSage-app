@@ -56,16 +56,21 @@ struct StockSageChatSection: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(turn.question).font(.headline).textSelection(.enabled)
                         Text(turn.notice).font(.caption).foregroundStyle(.secondary)
-                        if chat.pending == turn.id { ProgressView("Asking the local model…") }
+                        if chat.pending == turn.id { ProgressView("Preparing sources / asking the local model…") }
                         else { Text(turn.answer).textSelection(.enabled) }
                         ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
                             Text(fact.text).font(.callout).padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
+                        }
+                        ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
+                            sourceCard(source)
                         }
                         DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Historical snapshot, not current evidence. Model: \(turn.model)")
                                 Text(turn.snapshot.context)
+                                Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
                                 ForEach(turn.snapshot.facts) { Text($0.text) }
+                                ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
                             }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -85,7 +90,7 @@ struct StockSageChatSection: View {
                 if let issue = issue ?? chat.storageError { Text(issue).foregroundStyle(DS.Palette.warningSoft) }
                 Text(config == nil
                     ? "Chat requires the local server enabled in Catalysts → Explanation model. On iPhone, localhost is the phone, not your Mac; private HTTPS serving is not configured in this slice."
-                    : "Uses your existing local Qwen server. No broker credentials, account identifiers, journal notes or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
+                    : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive/EODHD, when web access is enabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -97,6 +102,15 @@ struct StockSageChatSection: View {
         .confirmationDialog("Delete local Chat history?", isPresented: $confirmClear) {
             Button("Delete history", role: .destructive) { request?.cancel(); request = nil; chat.clear() }
         } message: { Text("Deletes this app's saved conversation and source snapshots. It cannot erase screenshots or server logs.") }
+    }
+
+    private func sourceCard(_ source: StockSageChat.Source) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("\(source.subject) · \(source.attribution) · \(source.date.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
+            Text(source.warning).font(.caption).foregroundStyle(.secondary)
+            Text(source.excerpt).font(.callout).textSelection(.enabled)
+            if let link = source.link { Link("Read attributed source", destination: link) }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func snapshot(for question: String, followUp: Bool) -> StockSageChat.Snapshot {
@@ -117,11 +131,30 @@ struct StockSageChatSection: View {
         }
         guard let config else { issue = "Enable a loopback local model in Catalysts → Explanation model."; return }
         let facts = snapshot(for: text, followUp: true)
-        let prompt = StockSageChat.prompt(question: text, snapshot: facts, history: chat.turns)
-        guard prompt.utf8.count <= 16_000 else { issue = "This context is too large. Ask about fewer tickers."; return }
+        let history = chat.turns
+        let researchTicker = StockSageChat.requestedSymbols(question: text, symbols: store.symbols).first?.symbol
         guard let id = chat.begin(question: text, snapshot: facts, model: config.model) else { return }
         question = ""; issue = nil
         request = Task {
+            var enriched = facts
+            if let ticker = researchTicker {
+                let webAllowed = ToolPolicy.isExternalAllowed
+                let news = webAllowed ? await StockSageNewsService.recentNews(for: ticker, limit: 3, now: facts.at) : []
+                guard !Task.isCancelled, chat.pending == id, StockSageAIAssessments.configuration == config else {
+                    if chat.pending == id { chat.cancel() }
+                    return
+                }
+                enriched = StockSageChat.addingResearch(to: facts, symbol: ticker, news: news,
+                    leads: StockSageResearchLeads.load(symbol: ticker, now: facts.at), webAllowed: webAllowed)
+                guard chat.attachResearch(id: id, snapshot: enriched) else { return }
+            }
+            var prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: history)
+            // Prefer current evidence over old conversation when the bounded request is full.
+            if prompt.utf8.count > 16_000 { prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: []) }
+            guard prompt.utf8.count <= 16_000 else {
+                chat.finish(id: id, text: nil, unavailable: "This context is too large for the local request. Ask a shorter question or use fewer tickers. Source snapshots remain available.")
+                return
+            }
             let probe = await StockSageLocalModelServer.probe(config)
             guard !Task.isCancelled, StockSageAIAssessments.configuration == config else {
                 if chat.pending == id { chat.cancel() }

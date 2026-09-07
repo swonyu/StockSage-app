@@ -1,5 +1,66 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Chat research sources: news + private export leads — 2026-09-07 08:10 +03
+
+Chat now enriches explicit ticker questions using the EXISTING recentNews and
+ResearchLeads.load paths. First selected ticker only: at most3 news excerpts from
+7days and3 deduplicated local group excerpts from30days,400characters each.
+News honors ToolPolicy and the existing Massive-first/EODHD-fallback request
+bounds; only the ticker is sent to those providers. Private messages go only to
+the captured loopback model, never to news providers. No new connector, training,
+embedding job, cloud upload, credentials access or service provisioning.
+
+Quoted sources are a separate Codable array, not monetary Fact records. They
+retain subject/provider/date, import/timezone warning for group leads, and safe
+HTTPS links for news only. Group links are never followed or promoted to clickable
+source links. CFA identity/returns remain explicitly unverified. Model IDs can
+select source cards but cannot rewrite captured quotes; prose stays interpretation
+or visible unverified draft. Empty retrieval is not proof of no news/discussion.
+One pre-generation attachResearch transition requires current request ownership,
+unchanged original facts/time/context, and no prior attachment. Cancel/clear/new
+question cannot be overwritten by late fetches. Existing history decodes without
+the optional new fields. Overfull requests drop old conversational context first,
+never current evidence;16k-byte hard request ceiling remains (not a tokenizer-based
+general context-length proof). General questions without a named ticker do not
+start supplemental retrieval. Lowercase app/on/ai are no longer silently treated
+as APP/ON/AI; explicit uppercase/cashtags and the four existing company aliases
+remain supported. Alias lookup is shared, not a second differently maintained map.
+
+19focused tests passed, including new source isolation/windows/dedup/serialization,
+legacy-history decoding, wrong-quote/late/double-attachment rejection, and lexical
+selection. Final serial canonical1778/1778macOS and1776/1776iPhone17Pro(gate) passed,
+exit0, zero selected failures/skips; same opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Bundles:
+/private/tmp/stocksage-chat-research-{focused,macos,ios}-20260907.xcresult.
+
+Actual local export rechecked (metadata only): schema1,546messages, imported
+2026-09-07T00:29:15Z. Production-module smoke
+/private/tmp/stocksage-chat-research.i6bDwN/check loaded3actual ORCL leads, kept
+market facts unchanged, and sent3434prompt bytes to existing QwenPID23631.
+No news requests in THIS smoke (newsRequests=0); no actual live quote was supplied.
+Qwen returned valid JSON citing ORCL.lead.1/2/3 and explicitly described claims as
+unverified leads requiring independent sources, not prices/outcomes/proof of
+returns. `Chat private-research self-check ok`, exit0. Log inside the private
+scratch directory: /private/tmp/stocksage-chat-research.i6bDwN/smoke.log.
+This proves local retrieval/client integration for that case, not profitable
+forecasting, complete news coverage or native visual acceptance.
+
+Native CUA reacquisition still exits with "native pipe closed before response";
+StockSagePID34669 and original Qwen remain running. No repeated reset loop,
+force-kill, access-control/UI-automation bypass or unrelated-process interruption.
+Installed app remains the FIRST Chat build from the previous checkpoint; this
+source integration and the settings shortcut are built/gated but await normal
+reinstall/visual acceptance after CUA recovery. Do not claim the installed app
+already exposes the new source cards or that live news was checked this pulse.
+
+Coverage worktree was clean at start, peer task independently notLoaded/revision5,
+and no competing compiler. Main's same four unrelated paths preserved; no push or
+real trade. Next safe code issue while native inspection remains unavailable:
+reproduce full-review M1 (thin-sample query prior envelope), then M2/M3 label timing.
+Native acceptance/reinstall, secure phone serving, live API checks and contract-
+gated P5 remain outstanding, not replaced by passing tests or mocks.
+
 ## Native Chat first vertical slice — 2026-09-07 07:51 +03
 
 Added Chat to existing MarketSection (between Alerts and Briefing; Briefing kept).
