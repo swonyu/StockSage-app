@@ -1,5 +1,48 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review N17: failed watchlist enqueue stays retryable — 2026-09-07 10:08 +03
+
+The original pure monitor tests never exercised an enqueue result. Extracted the
+existing post-fetch watchlist loop, preserving its behavior before correction;
+runWatchlistCycle still calls that exact loop, publishes quotes, then checks
+price/idea alerts in the original order. Instance-scoped UserDefaults and an
+optional strong-signal sender let tests exercise the real loop without network,
+shared-board mutation or system pushes. Production defaults remain standard
+preferences and the unchanged native notification sender; budget reads/writes
+and preference checks consistently use the instance's defaults.
+
+Red: one fresh TEST quote at110/previous100, first sender result false, subsequent
+results true. Three cycles attempted only one enqueue and persisted no accepted
+alert.9pass/1fail initially, then13pass/1fail with controls. Freshness stayed true;
+the saved budget remained empty; a fresh monitor using that SAME saved budget and
+quote could send. This isolated premature in-memory dedupe advancement, not a
+budget charge or stale quote. The failure repeats at the actual production loop
+seam (initial test body0.002s), not a copied decision simulation.
+
+Watchlist now uses runCycle's existing delivered-result rule: failed enqueue
+retains the prior recommendation; accepted enqueue records the budget and advances
+dedupe. Deliberate mute/budget suppression still advances dedupe to prevent queued
+bursts. Inspection-only/stale observations do not consume eligibility. No new
+retry timer, thresholds, trade behavior or notification permission policy.
+
+Final49focused tests pass across monitor, budget, price-alert and alert-decision
+suites. Six new test functions cover fail→retry→dedupe, accepted-only control,
+fresh-monitor failure probe, stale/inspection/mute/cap controls, a cancelled failed
+batch followed by retry, and muting strong signals during the first send. Actual
+OS display/delivery is NOT proven by a simulated enqueue acceptance result.
+Canonical serial1804/1804macOS and1802/1802iPhone17Pro(gate) pass, exit0 and zero
+selected failures/skips. Usual explicit opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Bundles/logs:
+/private/tmp/stocksage-monitor-retry-{red,controls-red,focused,macos,ios}-20260907.xcresult
+(logs use matching.log basenames). Final review found no additional change needed.
+
+No real notifications, owner defaults, model/service restarts, installed-app
+replacement or push. Built/gated, not installed; the existing CUA normal-close/
+visual blocker remains. N18 is still OPEN: one-shot price alerts capture armed
+state before a quote fetch and need post-await ID/state/preference checks before
+each enqueue. Strong-signal mute coverage here is not a fix for that other path.
+
 ## Full-review N19: notification budget restart parity — 2026-09-07 09:53 +03
 
 N08 (pre-heal quote cache) and N21 (targeted new-listing reconciliation) were

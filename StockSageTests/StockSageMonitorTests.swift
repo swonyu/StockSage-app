@@ -2,16 +2,147 @@ import Testing
 import Foundation
 @testable import StockSage
 
-// MARK: - StockSageMonitor (pure decision helpers)
+// MARK: - StockSageMonitor (stateful enqueue regression + pure decisions)
 //
-// `runCycle`/`runWatchlistCycle` are @MainActor, side-effecting (real live-network fetch +
-// real UNUserNotificationCenter push + StockSageStore.shared singleton state), so the
-// notify-or-not DECISION is pulled out into small `nonisolated static` pure functions the
-// monitor's loops call inline — the same "thin shell over a tested rule" shape
-// `StockSageAlertDecision` already uses. These tests pin that decision logic directly.
+// Exercise the production post-fetch watchlist loop with per-test preferences/budgets and
+// a simulated enqueue result: no live quotes, shared board mutations or system pushes.
+// The pure tests below separately pin the shared freshness/stop/target decision rules.
 
 struct StockSageMonitorTests {
     typealias Monitor = StockSageMonitor
+
+    @MainActor @Test func failedWatchlistEnqueueRetriesThenDedupesOnlyAfterAcceptance() async throws {
+        let name = "monitor.retry.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var attempts = 0
+        let monitor = Monitor(defaults: defaults) { signal, _ in
+            #expect(signal.recommendation == .strongBuy)
+            attempts += 1
+            return attempts > 1
+        }
+        let quotes = ["TEST": StockSageQuoteService.LiveQuote(symbol: "TEST", price: 110,
+                                                             previousClose: 100, marketTime: Date())]
+        let first = await monitor.evaluateWatchlistQuotes(["TEST"], quotes: quotes)
+        #expect(first.signals.count == 1 && first.examined == 1)
+        #expect(attempts == 1)
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.isEmpty)
+        let second = await monitor.evaluateWatchlistQuotes(["TEST"], quotes: quotes)
+        #expect(second.signals == first.signals)
+        #expect(second.freshPrices["TEST"] == 110)
+        #expect(attempts == 2, "a failed enqueue must not consume the signal's next attempt")
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 1)
+        _ = await monitor.evaluateWatchlistQuotes(["TEST"], quotes: quotes)
+        #expect(attempts == 2, "the accepted retry must not be sent again")
+    }
+
+    @MainActor @Test func acceptedWatchlistSignalDoesNotRepeat() async throws {
+        let name = "monitor.accepted.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var attempts = 0
+        let monitor = Monitor(defaults: defaults) { _, _ in attempts += 1; return true }
+        let quotes = ["TEST": StockSageQuoteService.LiveQuote(symbol: "TEST", price: 110,
+                                                             previousClose: 100, marketTime: Date())]
+        for _ in 0..<3 { _ = await monitor.evaluateWatchlistQuotes(["TEST"], quotes: quotes) }
+        #expect(attempts == 1)
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 1)
+        #expect(monitor.suppressedAlertCount == 0) // dedupe, not a repeated budget refusal
+    }
+
+    @MainActor @Test func failedSendLeavesBudgetAvailableToANewMonitor() async throws {
+        let name = "monitor.failure-probe.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let failing = Monitor(defaults: defaults) { _, _ in false }
+        let quotes = ["TEST": StockSageQuoteService.LiveQuote(symbol: "TEST", price: 110,
+                                                             previousClose: 100, marketTime: Date())]
+        _ = await failing.evaluateWatchlistQuotes(["TEST"], quotes: quotes)
+        let saved = StockSageNotificationBudget(loadingFrom: defaults)
+        #expect(saved.recentAlerts.isEmpty && saved.perSymbol.isEmpty)
+        var attempts = 0
+        let fresh = Monitor(defaults: defaults) { _, _ in attempts += 1; return true }
+        _ = await fresh.evaluateWatchlistQuotes(["TEST"], quotes: quotes)
+        #expect(attempts == 1) // same quote and persisted budget, only dedupe instance differs
+    }
+
+    @MainActor @Test(arguments: ["stale", "inspect", "muted", "capped"])
+    func retryFixPreservesDeliberateSuppression(mode: String) async throws {
+        let name = "monitor.suppression.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let now = Date()
+        if mode == "muted" { defaults.set(false, forKey: StockSageNotifyPrefs.strongSignalsKey) }
+        if mode == "capped" {
+            var budget = StockSageNotificationBudget(loadingFrom: defaults)
+            for i in 0..<StockSageNotificationBudget.hourlyCap {
+                budget.record(symbol: "SEED\(i)", price: 100, now: now)
+            }
+            budget.save(to: defaults)
+        }
+        var attempts = 0
+        let monitor = Monitor(defaults: defaults) { _, _ in attempts += 1; return true }
+        let staleTime = now.addingTimeInterval(-72 * 3600)
+        let quotes = ["TEST": StockSageQuoteService.LiveQuote(symbol: "TEST", price: 110,
+            previousClose: 100, marketTime: mode == "stale" ? staleTime : now)]
+        _ = await monitor.evaluateWatchlistQuotes(["TEST"], quotes: quotes, notify: mode != "inspect")
+        #expect(attempts == 0)
+        defaults.set(true, forKey: StockSageNotifyPrefs.strongSignalsKey)
+        let fresh = ["TEST": StockSageQuoteService.LiveQuote(symbol: "TEST", price: 110,
+                                                            previousClose: 100, marketTime: now)]
+        _ = await monitor.evaluateWatchlistQuotes(["TEST"], quotes: fresh)
+        #expect(attempts == ((mode == "stale" || mode == "inspect") ? 1 : 0))
+        #expect(monitor.suppressedAlertCount == (mode == "capped" ? 1 : 0))
+        // Muting/budget rejection deliberately advance dedupe to avoid a queued alert burst;
+        // inspection-only or stale observations never consume a later eligible notification.
+    }
+
+    @MainActor @Test func cancelledWatchlistBatchStopsAndItsFailedSendCanRetry() async throws {
+        let name = "monitor.cancel.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var sent: [String] = []
+        let monitor = Monitor(defaults: defaults) { signal, _ in
+            sent.append(signal.symbol)
+            if sent.count == 1 {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return false
+            }
+            return true
+        }
+        let quotes = Dictionary(uniqueKeysWithValues: ["FIRST", "SECOND"].map {
+            ($0, StockSageQuoteService.LiveQuote(symbol: $0, price: 110,
+                                                previousClose: 100, marketTime: Date()))
+        })
+        let cancelled = Task { await monitor.evaluateWatchlistQuotes(["FIRST", "SECOND"], quotes: quotes) }
+        let result = await cancelled.value
+        #expect(result.examined == 1)
+        #expect(sent == ["FIRST"])
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.isEmpty)
+        _ = await monitor.evaluateWatchlistQuotes(["FIRST", "SECOND"], quotes: quotes)
+        #expect(sent == ["FIRST", "FIRST", "SECOND"])
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 2)
+    }
+
+    @MainActor @Test func mutingDuringOneSendPreventsTheNextStrongSignal() async throws {
+        let name = "monitor.mute.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var sent: [String] = []
+        let monitor = Monitor(defaults: defaults) { signal, _ in
+            sent.append(signal.symbol)
+            defaults.set(false, forKey: StockSageNotifyPrefs.strongSignalsKey)
+            await Task.yield()
+            return true
+        }
+        let quotes = Dictionary(uniqueKeysWithValues: ["FIRST", "SECOND"].map {
+            ($0, StockSageQuoteService.LiveQuote(symbol: $0, price: 110,
+                                                previousClose: 100, marketTime: Date()))
+        })
+        _ = await monitor.evaluateWatchlistQuotes(["FIRST", "SECOND"], quotes: quotes)
+        #expect(sent == ["FIRST"])
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 1)
+    }
 
     // MARK: Finding 1 — strong-signal push must never fire on a STALE quote
 

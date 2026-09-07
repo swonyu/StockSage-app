@@ -13,6 +13,19 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest10:08 +03: full-review N17 failed watchlist enqueue no longer consumes
+dedupe. The production loop was first extracted with behavior preserved and
+isolated preferences/sender:9pass/1fail, then13pass/1fail controls reproduced
+failure→no retry. Same quote/budget succeeded in a fresh monitor, isolating the
+premature baseline update. Reused core runCycle's accepted/deliberately-suppressed
+versus failed-send rule; mute/cap/staleness/inspection/cancellation behavior stays
+covered.49focused,1804macOS/1802iPhone canonical pass, usual3 opt-in exclusions.
+No owner notifications/settings, model/app replacement or push. Built/gated,
+not installed; CUA remains the existing normal-close/visual blocker. Next N18
+one-shot price-alert post-await ID/armed-state/preference checks; the tested
+strong-signal mute behavior is NOT that fix. Native/phone/live API/P5 acceptance
+remains. Exact red/green artifacts and limitations are in HANDOFF.
+
 Latest09:53 +03: full-review N19 notification budget restore now preserves the
 last-alerted-price anchors used by a continuing process. Actual31minute and
 next-day replays previously allowed a0.1% wobble only after restart;1minute and
