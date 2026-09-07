@@ -231,13 +231,14 @@ enum StockSageCatalystNarrator {
     /// offered — i.e. every n falls in `1...sourceCount`. A malformed bracket like "[1a]" is not a
     /// citation at all (the pattern requires ONLY digits between the brackets) and is silently
     /// ignored — it neither passes nor fails this check. `sourceCount == 0` means no citation can
-    /// ever be valid (there is nothing to cite), so any "[n]" found then fails.
+    /// ever be valid (there is nothing to cite), so any "[n]" found then fails. An ID too large
+    /// to parse is invalid, never silently ignored.
     nonisolated static func citationsValid(_ text: String, sourceCount: Int) -> Bool {
-        guard let re = try? NSRegularExpression(pattern: "\\[(\\d+)\\]") else { return true }
+        guard let re = try? NSRegularExpression(pattern: "\\[(\\d+)\\]") else { return false }
         let ns = text as NSString
         let matches = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
         for m in matches {
-            guard let n = Int(ns.substring(with: m.range(at: 1))) else { continue }
+            guard let n = Int(ns.substring(with: m.range(at: 1))) else { return false }
             if n < 1 || n > sourceCount { return false }
         }
         return true
@@ -253,11 +254,12 @@ enum StockSageCatalystNarrator {
 
     /// Both backends pass their response through the same deterministic result boundary.
     static func checkedResponse(_ text: String, facts: [String], source: Source, sourceCount: Int) -> Result {
-        if introducesForeignNumbers(text, facts: facts) {
-            return .unverified(text, source, reason: "The model introduced a number that is not in the supplied facts. Verify it before relying on it.")
-        }
+        // An unsupported [n] is an attribution error, not an invented financial figure.
         guard citationsValid(text, sourceCount: sourceCount) else {
             return .unverified(text, source, reason: "The model cited a source number that was not offered. Verify its attribution before relying on it.")
+        }
+        if introducesForeignNumbers(text, facts: facts) {
+            return .unverified(text, source, reason: "The model introduced a number that is not in the supplied facts. Verify it before relying on it.")
         }
         return .text(text, source)
     }

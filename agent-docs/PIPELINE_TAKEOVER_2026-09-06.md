@@ -13,6 +13,17 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest07:22 +03: Explain now reports invalid citations before numeric errors,
+and oversized source IDs fail instead of being ignored. Retains full draft/source;
+no prompt, model, primary badge or numeric-helper change. Captured PAA/minimal/
+overflow replays red->green;25pass/1fail->48focused; final1772macOS/1770iPhone
+passed. Tested app installed; one fresh native PAA reply rendered normally, without
+a bracket citation (invalid case verified by replay, not injected into UI).
+Next product slice: approved native Chat, reusing existing briefing/client/navigation
+with bounded history and fresh per-question context. Architecture fully reread.
+Semantic grounding, independent API acceptance, phone serving and P5 remain open.
+No push, settings edit or Qwen reload. See HANDOFF.
+
 Latest07:11 +03: connection status and Explain availability now belong to the
 captured settings AND newest request. Superseded/cancelled replies cannot overwrite
 the current result or clear a newer spinner; config is captured before scheduling.

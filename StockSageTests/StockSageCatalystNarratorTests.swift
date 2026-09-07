@@ -272,6 +272,36 @@ struct StockSageCatalystNarratorTests {
 
     // MARK: Result equality
 
+    @Test("citation errors are diagnosed before numbers and oversized IDs cannot pass")
+    func citationDiagnosticsDoNotMasqueradeAsFinancialNumbers() {
+        let large = String(repeating: "9", count: 40)
+        for source in [N.Source.onDevice, .localServer(model: "captured-qwen")] {
+            for (text, facts, count) in [
+                ("Target 27 [1].", ["Target 27"], 0),
+                ("Target 27 [0].", ["Target 27"], 1),
+                ("Target 27 [2].", ["Target 27", "[1] Source"], 1),
+                ("Source [\(large)].", ["Reference value \(large)"], 1)
+            ] {
+                guard case .unverified(let draft, let actual, let reason) =
+                    N.checkedResponse(text, facts: facts, source: source, sourceCount: count) else {
+                    Issue.record("Unsupported citation was discarded or accepted: \(text)")
+                    continue
+                }
+                #expect(draft == text && actual == source && reason.contains("source number"))
+            }
+            #expect(N.checkedResponse("Target 27.", facts: ["Target 27"], source: source,
+                sourceCount: 0) == .text("Target 27.", source))
+            // Once a citation is valid, genuinely foreign financial numbers still fail.
+            guard case .unverified(_, _, let reason) = N.checkedResponse("Target 99 [1].",
+                facts: ["Target 27", "[1] Source"], source: source, sourceCount: 1) else {
+                Issue.record("Foreign financial number was accepted")
+                continue
+            }
+            #expect(reason.contains("number that is not in the supplied facts"))
+        }
+        #expect(!N.citationsValid("[\(large)]", sourceCount: 1))
+    }
+
     @Test("failed number/citation checks preserve the draft and its generating model")
     func failedChecksKeepVisibleDraftWithoutPromotingItToCheckedText() {
         for source in [N.Source.onDevice, .localServer(model: "captured-qwen")] {

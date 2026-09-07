@@ -1,5 +1,57 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Explain distinguishes invalid citations from financial numbers (2026-09-07 07:22 +03)
+
+The captured native PAA paragraph contained an unoffered[1], but checkedResponse
+reported an invented financial number because the numeric check ran first.
+Production-module replay `/private/tmp/stocksage-citation-diagnostic.lwUzdI/check`
+failed with that exact warning (exit1). Minimal `Target 27 [1]` still failed;
+removing only[1] passed, and adding only an unrelated fact containing1 changed
+the warning to the correct citation failure. citationsValid itself returned false
+throughout. This isolates error ordering, not a missing PAA financial fact.
+A separate --overflow replay proved a40-digit ID could pass when those digits
+also occurred in facts: Int parsing failed and the citation was silently skipped.
+
+The same response boundary used by BOTH backends now validates citations first.
+Unparseable/oversized IDs fail; failed text/source remain unchanged and visible
+as an unverified draft. Valid citations still undergo the unchanged numeric check.
+No prompt/temperature/model, primary badge, financial rule or shared numeric-helper
+change. The existing [n] grammar is unchanged; malformed bracket prose is not
+newly interpreted as a citation. This does not establish semantic entailment.
+
+All five replay modes pass (full, --minimal, --control, --fact-one, --overflow):
+`Citation diagnostic self-check ok`, exit0. New regression covers both backend
+sources, zero/out-of-range/oversized IDs, retained draft/source, valid text and
+genuine foreign financial numbers. Red25pass/1fail -> focused48/48 passed:
+`/private/tmp/stocksage-citation-diagnostic-red-20260907.xcresult`,
+`/private/tmp/stocksage-citation-diagnostic-green-20260907.xcresult`.
+Final serial canonical macOS1772/1772 and iPhone17Pro(gate)1770/1770 passed,
+exit0, zero selected failures/skips; same three opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Final bundles:
+`/private/tmp/stocksage-citation-diagnostic-macos-20260907.xcresult`,
+`/private/tmp/stocksage-citation-diagnostic-ios-20260907.xcresult`.
+An initial macOS invocation had a misspelled derivedDataPath flag (exit64,
+no tests run); corrected before the actual gate. Its separate diagnostic log is
+`/private/tmp/stocksage-citation-diagnostic-invocation-error-20260907.log`.
+
+Installed tested MacPID29461; executable/debug-dylib cmp and strict deep codesign
+passed. Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-pre-citation-diagnostic-20260907-0721.app`.
+One actual PAA Explain via unchanged QwenPID23631 rendered normally with the
+original model/footer and facts disclosure (native AX/populated screenshot).
+This fresh output contained no bracket citation; the bad-citation warning was
+verified by replay, NOT forced into the UI. No extra generation/retry, settings
+edit, model restart, credential access, cloud upload, push or trade. Main changes
+preserved; sibling task independently confirmed inactive.
+
+Inline review traced both checkedResponse callers and all citation/number-helper
+consumers. Next product slice is approved native Chat: reuse MarketSection,
+existing deterministic briefing and local client, with bounded local history and
+per-question fact snapshots. V3 architecture reread in full (428lines) this pass.
+No Chat completion claim yet; semantic grounding, independent API acceptance,
+phone serving and contract-gated P5 retain their separate acceptance requirements.
+
 ## Connection probes belong to their request and settings (2026-09-07 07:11 +03)
 
 N14/UI14 adjacent lifecycle fix. Manual and automatic probes previously wrote the
