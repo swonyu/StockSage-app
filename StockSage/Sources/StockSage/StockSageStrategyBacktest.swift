@@ -104,21 +104,19 @@ enum StockSageStrategyBacktest {
     /// result, so this can NEVER reach `StockSageQuoteService` ("no new network" holds by
     /// construction). `h.closes.count > 205` mirrors `StockSageBacktester.runTrades`'s own
     /// `n > warmup(200) + 5` guard (StockSageBacktester.swift:190) — a shorter history yields zero
-    /// trades there anyway; checking here just skips the wasted walk-forward call. `fit(fromBacktest:)`
+    /// trades there anyway; checking here just skips the wasted walk-forward call. `fit(observations:)`
     /// has its own minSamples=30 floor and returns nil below it — the caller keeps its existing
     /// snapshot / the conservative prior. Tolerates `benchmark == nil` the same way the manual
     /// path does (relative-strength term drops out, RS-disabled but not a failure).
     nonisolated static func offlineCalibrationFit(histories: [String: StockSagePriceHistory],
                                                   benchmark: StockSagePriceHistory?) -> StockSageConvictionCalibration? {
-        var trades: [BacktestTrade] = []
-        var dates: [Date] = []
+        var observations: [StockSageConvictionCalibration.Observation] = []
         for sym in sampleSymbols {
             guard let h = histories[sym.uppercased()], h.closes.count > 205 else { continue }
             let d = StockSageBacktester.runDetailed(h, costs: StockSageNetEdge.defaultCosts(forSymbol: sym), benchmark: benchmark)
-            trades.append(contentsOf: d.trades)
-            dates.append(contentsOf: d.trades.map { h.dates[$0.entryIndex] })
+            observations.append(contentsOf: StockSageConvictionCalibration.observations(fromBacktest: d.trades, dates: h.dates))
         }
-        return StockSageConvictionCalibration.fit(fromBacktest: trades, dates: dates)
+        return StockSageConvictionCalibration.fit(observations: observations)
     }
 
     /// ESTIMATE of the number of distinct strategy variants explored across this engine's

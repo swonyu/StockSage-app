@@ -13,6 +13,23 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest09:15 +03: full-review M2 fixed at the shared calibration split. Actual
+overlap replay and minimized case failed before editing; row embargo/input-order
+controls isolated unavailable labels as the cause. Journal/manual/offline fits
+now retain prediction and availability times, preserve prediction groups, and
+purge training labels not strictly known before held-out predictions. Daily-bar
+starts are not exit timestamps: use the next observed boundary, omit missing
+boundaries/openAtEnd; exact intraday/vendor-revision timing remains outside scope.
+Old snapshots stay stored but cannot activate before a time-aware refit. Purged
+thin samples remain explicitly prior-capped even with50total observations.
+14pass/4fail and later bar-start20pass/1fail red regressions ->132focused pass;
+final canonical1788macOS/1786iPhone pass, zero selected failures/skips, usual
+three opt-in exclusions. All six production-module replay modes now pass.
+Built/gated, not installed; CUA still blocks normal reinstall/visual acceptance,
+original app/model untouched. Next M3 journal add/import/restore/accounting
+closure consistency; native/phone/live API/P5 acceptance remain. No push or
+owner calibration writes. Exact evidence and limits in HANDOFF.
+
 Latest08:32 +03: full-review M1 query ceiling corrected. Actual fit/EV replay
 confirmed midpoint-only clipping (0.5225 instead of0.465 at conviction0.50;
 0.5675R instead of0.395R at2R payoff). Shared selector-split predicate now

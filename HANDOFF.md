@@ -1,5 +1,73 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full-review M2: calibration label-availability purge — 2026-09-07 09:15 +03
+
+Reproduced the actual public split before editing: six overlapping journal
+trades produced three training labels unavailable at the first test prediction.
+The minimized three-row case still leaked one label; reversed input and a larger
+row embargo still failed. Fifty overlapping rows leaked34labels. A short,
+nonoverlapping six-row control passed. This isolated lost event timing, not
+input order or tiny-sample arithmetic: a record-count embargo is not a purge.
+
+Journal, manual backtest and offline backtest now retain prediction AND label-
+availability times through the same split. Whole prediction-time groups stay
+together at both boundaries; training labels must be strictly known before the
+first test prediction. Candidate scoring uses that purged cohort, retaining the
+existing30-training-label minimum; only after selection is the winner refit on
+all finalized observations. Insufficient time-separated evidence remains an
+explicit unvalidated, prior-capped identity, including totals above44records.
+Backtest openAtEnd labels, unusable chronology, and incoherent/unfinalized journal
+records are excluded from calibration. The dateless backtest fallback is removed;
+the undated tuple API remains only the low-level numerical/test seam.
+
+Daily bars require special care: Massive's timestamp is the aggregate window
+START, not a known exit time (https://massive.com/docs/rest/stocks/aggregates/custom-bars).
+The actual Massive mapper preserves that timestamp. Backtests therefore use the
+decision-bar boundary as a conservative prediction lower bound and the NEXT
+observed bar boundary as an exit-availability upper bound. Without that next
+boundary the label is omitted, never assigned an invented intraday time. This
+can conservatively discard valid adjacent observations; it does not certify
+exact fill/publication times or point-in-time vendor revisions. Journal timing
+uses the recorded openedAt/closedAt values, not an inferred earlier advice time.
+
+Optional persisted validation provenance distinguishes current policy from old
+undated maps. Old snapshots still decode and stay stored, but do not activate in
+sizing; the existing offline auto-fit trigger can replace them. No actual owner
+snapshot was edited, no manual/network calibration run was invoked. Previously
+validated nonidentity maps under the new policy keep their learned probabilities;
+the existing300-bar/five-symbol positive fixture still earns such a fit unchanged.
+
+Evidence: initial18-test regression was14pass/4fail before the fix. A later
+bar-start-specific red regression was20pass/1fail before correcting availability.
+Final132focused calibration/selector/snapshot/EV tests pass, including overlap,
+input permutations, grouped boundaries, same-time rejection, missing/censored
+labels, exact33/30/29 available-training counts from50total, and legacy persistence.
+The first focused build hit a test-fixture typechecker limit (no tests ran); an
+explicit typed closure fixed it. Subsequent130/131focused passes preceded the
+final132pass result; only the final artifacts describe the complete correction.
+
+Production-module replay /private/tmp/stocksage-calibration-time.ZHzgMa/check
+was recompiled against the final Debug dylib. Default, --minimal, --reverse,
+--extra-gap, --large and --nonoverlap all exit0 with
+`Calibration time self-check ok`; the nonoverlap control retains3train/2test.
+Canonical serial1788/1788macOS and1786/1786iPhone17Pro(gate) pass, exit0,
+zero selected failures/skips. Same three opt-in exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests. Final bundles:
+/private/tmp/stocksage-calibration-time-{final,macos,ios}-20260907.xcresult.
+Red bundles: stocksage-calibration-time-red-20260907.xcresult and
+stocksage-calibration-bar-time-red-20260907.xcresult, both under /private/tmp.
+Logs use the same basenames. No repo debug instrumentation or new dependencies.
+
+Inline review, caller sweep and diff checks complete. Main worktree's unrelated
+project.pbxproj and three untracked docs preserved; appPID34669 and QwenPID23631
+remain running. No new task, credential access, model reload, real trade or push.
+Built/gated, NOT installed: CUA remains unavailable and the installed app is still
+the first Chat build. M3 is addressed only at calibration consumption; coherent
+closure at journal add/import/restore and realized-accounting boundaries is next.
+Native acceptance/reinstall, secure phone serving, remaining live API verification
+and contract-gated P5 remain open. This is correctness evidence, not a trading edge.
+
 ## Full-review M1: thin-calibration query ceiling — 2026-09-07 08:32 +03
 
 Reproduced the review's actual public API path before editing: 30 alternating

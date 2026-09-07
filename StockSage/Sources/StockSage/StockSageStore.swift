@@ -351,9 +351,11 @@ final class StockSageStore: ObservableObject {
         // Decode-fail (no key, corrupt blob, schema mismatch) ⇒ both stay nil ⇒ the conservative
         // linear prior — silently honest, matching loadPriceAlerts' failure posture above.
         if let snap = StockSageConvictionCalibration.Snapshot.load() {
-            backtestConvictionCalibration = snap.calibration
+            backtestConvictionCalibration = snap.usableCalibration
             persistedCalibrationSnapshot = snap
         }
+        // Pre-purge snapshots remain stored for audit, but cannot drive sizing. The existing
+        // offline trigger below refits them under the time-aware policy when histories suffice.
         // Decision 3, Trigger B: no persisted fit, or the persisted data is >7d stale — refit
         // offline from whatever price history is already on disk (zero new network). No-op when
         // there's no cache yet or the pooled sample is too thin (autoFitCalibration's guard).
@@ -1573,7 +1575,7 @@ final class StockSageStore: ObservableObject {
     /// `Snapshot.fittedAt`'s doc), so this measures data age, not fit-run age.
     /// `nonisolated` + pure so it's unit-testable without the `@MainActor` singleton.
     nonisolated static func shouldAutoFit(snapshot: StockSageConvictionCalibration.Snapshot?, now: Date) -> Bool {
-        guard let s = snapshot else { return true }
+        guard let s = snapshot, s.usableCalibration != nil else { return true }
         return now.timeIntervalSince(s.fittedAt) > 7 * 86_400
     }
 
@@ -1638,10 +1640,11 @@ final class StockSageStore: ObservableObject {
             strategyError = "Couldn't load histories to backtest the strategy — try again."
             return
         }
-        let (results, trades, tradeDates): ([BacktestResult], [BacktestTrade], [Date]) = await Task.detached {
+        let (results, trades, tradeDates, observations): ([BacktestResult], [BacktestTrade], [Date], [StockSageConvictionCalibration.Observation]) = await Task.detached {
             var rs: [BacktestResult] = []
             var ts: [BacktestTrade] = []
             var ds: [Date] = []
+            var observations: [StockSageConvictionCalibration.Observation] = []
             for sym in symbols {
                 guard let h = histories[sym.uppercased()] else { continue }
                 // Faithful: charge asset-class costs AND feed the ^GSPC benchmark so the backtest
@@ -1655,16 +1658,16 @@ final class StockSageStore: ObservableObject {
                 // Thread entry dates aligned 1:1 with trades for the pooled chronological DD.
                 // entryIndex = i+1 (the fill bar), always in-bounds: i < n-1 so entryIndex ≤ n-1.
                 ds.append(contentsOf: d.trades.map { h.dates[$0.entryIndex] })
+                observations.append(contentsOf: StockSageConvictionCalibration.observations(fromBacktest: d.trades, dates: h.dates))
             }
-            return (rs, ts, ds)
+            return (rs, ts, ds, observations)
         }.value
         strategyBacktest = StockSageStrategyBacktest.aggregate(results, trades: trades, tradeEntryDates: tradeDates)
         // Learn conviction→win-prob from the realized BACKTEST trades (nil if too thin). The computed
         // `convictionCalibration` prefers the owner's journal fit over this when their journal is rich enough.
-        // `trades` is appended symbol-by-symbol above, so it is NOT globally time-ordered on its own —
-        // pass the 1:1-aligned `tradeDates` so the OOS candidate-selector's train/test split is a
-        // genuine chronological holdout (matching fit(fromJournal:)'s own sort-by-close-date fix).
-        backtestConvictionCalibration = StockSageConvictionCalibration.fit(fromBacktest: trades, dates: tradeDates)
+        // Keep prediction AND label-availability times through selection across symbols.
+        // Entry dates above remain solely the aggregate drawdown's existing timeline.
+        backtestConvictionCalibration = StockSageConvictionCalibration.fit(observations: observations)
         // Decision 4: the manual backtest persists its fit too, same as the offline auto-fit
         // triggers — so a calibration earned from a full 5y run also survives a relaunch.
         if let cal = backtestConvictionCalibration {

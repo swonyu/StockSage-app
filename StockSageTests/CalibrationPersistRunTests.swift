@@ -26,7 +26,7 @@ struct CalibrationPersistRunTests {
         let benchmark = await benchmarkTask
 
         var ts: [BacktestTrade] = []
-        var ds: [Date] = []
+        var observations: [StockSageConvictionCalibration.Observation] = []
         var loaded = 0
         for sym in symbols {
             guard let h = histories[sym.uppercased()] else { continue }
@@ -34,12 +34,12 @@ struct CalibrationPersistRunTests {
             let d = StockSageBacktester.runDetailed(h, costs: StockSageNetEdge.defaultCosts(forSymbol: sym),
                                                     benchmark: benchmark)
             ts.append(contentsOf: d.trades)
-            ds.append(contentsOf: d.trades.map { h.dates[$0.entryIndex] })
+            observations.append(contentsOf: StockSageConvictionCalibration.observations(fromBacktest: d.trades, dates: h.dates))
         }
 
         // The manual button's calibration leg (StockSageStore.swift ~1341-1350), verbatim:
-        // same fit function, same chronological dates, same Snapshot source/format/key.
-        let fit = StockSageConvictionCalibration.fit(fromBacktest: ts, dates: ds)
+        // same fit function, finalized/time-purged observations, same Snapshot source/key.
+        let fit = StockSageConvictionCalibration.fit(observations: observations)
         var evidence = """
         === CALIBRATION PERSIST RUN (owner-requested, 2026-07-10) ===
         loaded \(loaded)/\(symbols.count) symbols, pooled trades=\(ts.count), benchmark bars=\(benchmark?.closes.count ?? 0)
