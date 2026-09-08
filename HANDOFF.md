@@ -1,5 +1,55 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Chronos-2 CPU compatibility — 2026-09-08 15:31 +03
+
+Continued inline fromf8793e4, owner-approved research sequence; peer inactive.
+Added only tools/intraday_chronos.py, one offline regression, and research evidence.
+Existing baseline/walk-forward/Kronos source unchanged, preserving prior hash-bound
+replays. Qwen61562 and StockSage26453 still running; their settings/environments
+untouched. Mainfc455cc clean, review-followups's unrelated pbxproj/AGENTS/docs
+unchanged. No app/Swift/native-control work, orders, cloud, push, merge or subagents.
+
+Frozen scope recorded in tools/intraday_research.md BEFORE download/inference.
+Chronos-2 official revision29ec3766d36d6f73f0696f85560a422f50e8498c, local config
+and477,930,472-byte safetensors, exact size/hash check, anonymous HTTPS download.
+Separate.research/chronos-venv: chronos-forecasting2.3.1,torch2.14.0,
+transformers5.16.1,accelerate1.14.0,numpy2.2.6,pandas2.2.2,einops0.8.1,
+safetensors0.8.0; pip check passes. Official80,559-byte wheel retained privately,
+SHA256d9d00ec9b1621235bfb26685638bf054885f4c000863678f1c775dfab2697496;
+all18 installed source/license files byte-identical, Apache LICENSE/NOTICE retained.
+
+Reuses Kronos clock-only June1 11:10ET ten events,100 completed minute OHLC bars;
+input/event hashes independently match exactly. Forecast target=open, with only
+past high/low/close covariates, no future covariates/labels.22 steps starting T,
+CPU/float32/one thread/seed7/inference+eval/cross_learningFalse. Direct constructor
+and strict safetensors loader, no remote-code/Hub loading; Python socket audit hook
+plus HF offline mode (not claimed as an OS sandbox). Recipe written before inference.
+Ratios median-open[16]/[1]-1 and[21]/[6]-1 are NOT median/expected returns or return
+confidence bounds. Only selected marginal price quantiles0.1/0.5/0.9 checked.
+
+32 research tests pass; new red-before-implementation regression covers causal
+mapping/no future bars, exact delay ratios, bad quantiles/assets and no repair.
+Ten forecasts each repeated, then a second fresh process: all660 quantile values,
+input/event hashes, ratios and quality counts exactly reproduce.0/220 selected
+quantile crossings, finite/positive prices throughout. This does NOT prove price
+accuracy, calibrated intervals, superiority, profit or trading readiness. Chronos
+forecasts only opens here, so do not compare its0 crossings to Kronos's15 invalid
+full OHLC candles. Both remain research-only; no app badges/order wiring.
+
+First run median0.02065s/max0.03425s per forecast;59.110s cold import/load,
+60.13s external wall,1,345,732,608-byte maxRSS,zero swaps. Second fresh process
+4.10s external wall,1,344,389,120-byte maxRSS,zero swaps. Both exited0 under2GB/
+5-minute checks; no forecast model left resident. Disk980MB env+464MB assets.
+Private reports:.research/runs/20260908-chronos-compat-v1{,-recheck}/report.json;
+main SHA256b3e4794d37470da9fff5c8b592ca9204796100098c79c99e29dbbd55f4d7b628.
+Assets/outputs0600 and ignored. Reproduction/limits in tools/intraday_research.md.
+
+Next: freeze a bounded comparative experiment and prospective paper protocol.
+June–August andSeptember4 are already-observed development evidence, not a fresh
+holdout. Keep the negative walk-forward and Kronos OHLC findings intact; do not
+retune tests or promote a winner from these compatibility checks. No new Xcode
+or native-UI claims; pending Chat/window acceptance unchanged.
+
 ## Kronos CPU compatibility — 2026-09-08 15:17 +03
 
 Next bounded step after569f950, inline onwt/coverage; peer independently inactive.

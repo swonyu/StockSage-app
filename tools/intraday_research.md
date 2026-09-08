@@ -294,3 +294,89 @@ revision`29ec3766d36d6f73f0696f85560a422f50e8498c`. No Chronos download/inferenc
 The HF official-benchmark API returned47 datasets and no matching forecasting task;
 this is not a claim that forecasting benchmarks do not exist. No general
 forecasting leaderboard score establishes net intraday trading profitability.
+
+## Chronos-2 CPU compatibility — frozen scope, 2026-09-08
+
+Before download/inference: use the same ten June1 11:10ET contexts from the
+Kronos smoke, reusing its clock-only selector and exact delayed-open return helper.
+Chronos-2 revision `29ec3766d36d6f73f0696f85560a422f50e8498c`, Apache2.0,
+477,930,472-byte safetensors (SHA256
+`ddcda3c7508bf2528087723e98a20707cc04b7f370ae275a9fd88078ddba4f42`).
+Only local pinned configuration/weights; no remote code, downloads at inference,
+training, GPU/MPS, model server, paid service, app integration, orders or push.
+
+Use a separate `.research/chronos-venv`, official chronos-forecasting2.3.1,
+torch2.14.0,transformers5.16.1,accelerate1.14.0,numpy2.2.6,pandas2.2.2,einops0.8.1.
+CPU one thread, float32, seed7, inference/eval; ten independent forecasts twice,
+fresh-process replay, 2GB peak-RSS check and five-minute time ceiling. Do not
+expand workload automatically on failure. Download public assets anonymously;
+retain wheel provenance/license and exact asset hashes in ignored `.research/`.
+
+Target:100 completed minute opens, with matching high/low/close as past-only
+covariates, no future covariates or realized labels. Forecast22 steps starting T,
+quantiles0.1/0.5/0.9. Delay d in{1,6}: median-open[d+15]/median-open[d]-1.
+This ratio of marginal price medians is NOT the median return or a confidence
+interval for returns. Measure positive/finite prices and quantile crossings,
+not OHLC consistency (only open is forecast). Never silently sort/repair output.
+This is a compatibility test, not accuracy/P&L evidence or a fair speed ranking
+against Kronos's sampled six-feature decoder. June–August is already observed;
+future strategy comparisons must preserve that disclosure and freeze their rules.
+
+### Executed compatibility result
+
+`tools/intraday_chronos.py` reuses the original archive reader, Kronos causal
+context selector and delay helper without changing any previous research runner.
+Constructs Chronos2Model directly from verified local JSON, loads strict
+safetensors on CPU; never calls a Hub/remote-code loader. A process-local Python
+audit hook refuses socket connect/DNS/sendto calls in addition to HF offline mode.
+This is a narrow offline guard, not a general OS-level network sandbox.
+Immutable recipe records code/package-source hashes, versions, events and limits
+before inference. Runtime/package inventory and all forecasts stay private.
+
+```sh
+# Already installed; reproduction setup only, not needed each run.
+.research/venv/bin/python -m venv .research/chronos-venv
+.research/chronos-venv/bin/python -m pip install --only-binary=:all: \
+  chronos-forecasting==2.3.1 torch==2.14.0 transformers==5.16.1 \
+  accelerate==1.14.0 numpy==2.2.6 pandas==2.2.2 einops==0.8.1 safetensors==0.8.0
+
+# Pinned assets must already exist; choose a NEW output directory.
+.research/chronos-venv/bin/python tools/intraday_chronos.py \
+  --archive .research/studies/20260908-jun-aug-v1/chunk-2026-06-01-2026-06-14-attempt1 \
+  --assets .research/chronos-v1 --output .research/runs/20260908-chronos-compat-v1
+.research/venv/bin/python -m unittest discover -s tools -p 'test_intraday*.py' -v
+```
+
+All32 research tests pass, including real LightGBM regressions. The new offline
+regression initially failed before implementation, then passed causal input
+mapping/no-future-bars, exact delay ratios, malformed quantile rejection and
+missing/altered asset checks. A crossed-quantile fixture is counted, not repaired.
+All ten inputs/events/hashes exactly match the Kronos compatibility report.
+Ten events replayed within the process and in a second fresh process: all
+660 open-price quantiles, delay ratios and quality counts identical. All prices
+finite/positive; **0/220 steps cross the selected0.1/0.5/0.9 quantiles**. This is
+not accuracy or empirical interval-coverage evidence, and cannot be compared with
+Kronos's full OHLC invariant check: Chronos forecasts only open in this variant.
+The upstream predict_quantiles API's second output is named mean but is actually
+the median; we explicitly select the0.5 column and never label it expected return.
+
+Measured first run: median0.02065s/max0.03425s per forecast,59.110s cold import/load,
+60.13s external wall,1,345,732,608-byte maxRSS,822,724,096-byte peak footprint,
+zero swaps. Second fresh process:4.10s external wall,1,344,389,120-byte maxRSS,
+zero swaps. Both exited0 within2GB/5-minute checks; no resident Chronos server.
+Disk:980MB isolated environment and464MB assets (`du`). Qwen/Kronos/LightGBM
+environments untouched. This timing is not a controlled speed leaderboard.
+
+Model/config files0600 and SHA256 verified. The official2.3.1 wheel (80,559 bytes,
+SHA256`d9d00ec9b1621235bfb26685638bf054885f4c000863678f1c775dfab2697496`)
+is retained in `.research/chronos-package-v1/`; all18 installed source/license
+files match it byte-for-byte. Apache LICENSE/NOTICE remain installed. pip check
+passes. Full transitive runtime versions are recorded in the private report.
+Reports/recipes: `.research/runs/20260908-chronos-compat-v1{,-recheck}/`.
+Main report SHA256:`b3e4794d37470da9fff5c8b592ca9204796100098c79c99e29dbbd55f4d7b628`.
+
+Sources checked2026-09-08: [official model card](https://huggingface.co/amazon/chronos-2),
+[official source](https://github.com/amazon-science/chronos-forecasting),
+[published package2.3.1](https://pypi.org/project/chronos-forecasting/2.3.1/).
+The model-selection skill informed official-source/checkpoint verification, not
+a claim of trading superiority. No strategy promotion, Swift/app change or push.
