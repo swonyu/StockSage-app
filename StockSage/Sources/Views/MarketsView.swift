@@ -778,6 +778,7 @@ struct MarketsView: View {
     /// The changing page is INSIDE the common lifecycle owner, never another store/task root.
     private var desktopWorkspace: some View {
         HStack(spacing: 0) {
+            StockSageDesktopNavigation(selection: $section)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center, spacing: 16) {
                     VStack(alignment: .leading, spacing: 5) {
@@ -811,7 +812,6 @@ struct MarketsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            StockSageDesktopNavigation(selection: $section)
         }
         .background(Color(red: 0.094, green: 0.094, blue: 0.102))
     }

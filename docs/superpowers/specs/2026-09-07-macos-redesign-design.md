@@ -4,10 +4,15 @@ Direction approved by Saleh's “continue the redesign” at18:07 +03, following
 right-sidebar proposal. The project's owner context waives routine reconfirmation.
 All work stays inline on wt/coverage. No model restart or automation reactivation.
 
+Update2026-09-08 16:38 +03:Saleh explicitly requested the tabs on the LEFT.
+This supersedes the original side choice only; existing styling, routes, widths,
+collapse preference and iPhone presentation remain unchanged. Qwen's later ON
+instruction and the existing15-minute automation remain in effect.
+
 ## Experience
 
 Rebuild the macOS presentation as a calm, wide native workspace, inspired by Apple
-Music's hierarchy rather than its content. A RIGHT-hand navigation sidebar slides
+Music's hierarchy rather than its content. A LEFT-hand navigation sidebar slides
 between a220pt labelled panel and a64pt icon rail. The selected destination remains
 visible in both modes. Settings is pinned at the bottom, never buried in the page.
 Retain all nine existing section identities and their Command-number shortcuts:
@@ -41,7 +46,7 @@ selection well #3D2630. Existing semantic gain/loss/caution and accessible prima
 button colors remain unchanged. This avoids recoloring financial meaning as branding.
 Use restrained native material on navigation only, generous24–32pt gutters, flat
 card fills, thin separators and no decorative aurora on Mac. The signature is the
-right-side library-style rail; do not add decorative charts, invented prices or art.
+left-side library-style rail; do not add decorative charts, invented prices or art.
 Respect Reduce Motion/Transparency, visible keyboard focus and VoiceOver labels.
 Minimum main window900×700, preferred1280×840. Expanded and collapsed modes must fit
 the minimum window. Wide content caps at1200pt for tables/cards and860pt for Chat.

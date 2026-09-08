@@ -101,7 +101,7 @@ struct StockSageDesktopNavigation: View {
                 Button {
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { collapsed.toggle() }
                 } label: {
-                    utilityRow(collapsed ? "Expand sidebar" : "Collapse sidebar", icon: "sidebar.right")
+                    utilityRow(collapsed ? "Expand sidebar" : "Collapse sidebar", icon: "sidebar.left")
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut("s", modifiers: [.command, .control])
@@ -117,7 +117,7 @@ struct StockSageDesktopNavigation: View {
             if reduceTransparency { Color(white: 0.12) }
             else { Rectangle().fill(.regularMaterial) }
         }
-        .overlay(alignment: .leading) { Rectangle().fill(.white.opacity(0.08)).frame(width: 1) }
+        .overlay(alignment: .trailing) { Rectangle().fill(.white.opacity(0.08)).frame(width: 1) }
         .accessibilityElement(children: .contain)
     }
 
@@ -138,8 +138,8 @@ struct StockSageDesktopNavigation: View {
         .padding(.horizontal, 10).frame(height: 40)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(selected ? StockSageDesktop.selection : .clear, in: .rect(cornerRadius: 8))
-        .overlay(alignment: .trailing) {
-            if selected { Capsule().fill(StockSageDesktop.berry).frame(width: 3, height: 18).padding(.trailing, 2) }
+        .overlay(alignment: .leading) {
+            if selected { Capsule().fill(StockSageDesktop.berry).frame(width: 3, height: 18).padding(.leading, 2) }
         }
         .contentShape(.rect)
     }

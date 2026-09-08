@@ -3,7 +3,12 @@
 > **For agentic workers:** Use executing-plans inline. Owner requires all work in
 > this task, without new tasks/subagents. Existing wt/coverage is already isolated.
 
-**Goal:** Replace the cramped macOS board with a right-sidebar native workspace.
+**Goal:** Replace the cramped macOS board with a left-sidebar native workspace
+(owner amended the original right-side choice at16:38 +03 on2026-09-08).
+
+Left-side update installed at17:21 +03:4 focused navigation,1830 macOS and1827
+iPhone gate tests passed. Normal quit/reopen succeeded with a recoverable prior
+bundle; native Chat/window-size acceptance below remains open. Qwen stays ON.
 
 **Architecture:** MarketsView retains all stores, tasks and mutations. Desktop-only
 chrome and section composition reuse existing working views; Chat shares logic but
@@ -67,7 +72,7 @@ static func shortcut(for section: MarketSection) -> Int {
 ```
 
 - [x] Wrap current iPhone scroll tree in its platform branch. On Mac render fixed
-  heading/status, desktop page and trailing sidebar; keep current lifecycle modifiers
+  heading/status, desktop page and leading sidebar; keep current lifecycle modifiers
   on the common root so section switching cannot duplicate polling. Use the existing
   section switch for unchanged pages, Home composition for .briefing and full-height
   Chat for .chat. Set Mac's WindowGroup default destination/size explicitly.

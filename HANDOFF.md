@@ -1,5 +1,25 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Left sidebar installed — 2026-09-08 17:21 +03
+
+Owner requested left-side tabs. Moved the existing macOS navigation before the
+content and mirrored its divider, selected-row accent and collapse icon. Routes,
+shortcuts, saved collapse state, widths, lifecycle and iPhone layout are unchanged.
+Updated the redesign spec/plan; no new abstraction or dependency.
+
+Fresh executed checks:4 focused navigation tests,1830 canonical macOS tests and
+1827 iPhone17Pro(gate) tests, all passed, gates serial with the existing three
+exclusions. Logs and xcresults:`/private/tmp/stocksage-left-sidebar-20260908.M4mAPS/`.
+Normal AppleEvent quit succeeded; verified oldPID26453 exited before replacing
+`/Applications/StockSageX.app`. Prior bundle is recoverable at
+`/Users/saleh/.Trash/StockSageX-before-left-sidebar-20260908-1721.app`.
+Staged/tested/installed bundle contents match by checksum-aware dry-run comparison;
+strict deep codesign verification passed. New runningPID99055; debug dylibSHA256
+39166ad3f6edd30c36a6d429d1606bdc2f971f2a0764536cf0391362626829d7.
+No fresh native screenshot/Chat/window-size acceptance claimed; broken native
+helper was not retried. Qwen61562 stays on, frozen research sources/recipe and
+other worktrees untouched. Same-task15-minute automation retained; no push.
+
 ## Prospective recorder frozen — 2026-09-08
 
 Owner-approved research continued inline fromebf95be. New finite recorder and
