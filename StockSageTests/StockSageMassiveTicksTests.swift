@@ -8,6 +8,49 @@ struct StockSageMassiveTicksTests {
     let from = Date(timeIntervalSince1970: 1_517_561_900)
     let to = Date(timeIntervalSince1970: 1_517_562_100)
 
+    @Test func intradayRequiresCompletedFreshValidBarsWithoutPaddingGaps() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_030)
+        let from = now.addingTimeInterval(-3600)
+        func row(_ seconds: Int64, high: Double = 102) -> [String: Any] {
+            ["t": seconds * 1_000, "o":100, "h":high, "l":99, "c":101, "v":20]
+        }
+        func parse(_ rows: [[String: Any]], ticker: String = "AAPL", next: Bool = false) throws -> T.Intraday? {
+            var root: [String: Any] = ["status":"OK", "ticker":ticker, "results":rows]
+            if next { root["next_url"] = "more" }
+            return T.parseIntradayFacts(try JSONSerialization.data(withJSONObject: root), symbol: "AAPL", from: from, now: now)
+        }
+        let valid = try #require(try parse([row(1_799_999_880), row(1_799_999_940), row(1_800_000_000)]))
+        #expect(valid.facts.count == 3 && valid.asOf == Date(timeIntervalSince1970: 1_800_000_000), "Current incomplete bar excluded")
+        #expect(valid.fresh(at: now) && !valid.fresh(at: now.addingTimeInterval(181)))
+        #expect(try parse([row(1_799_999_880), row(1_799_999_940)], ticker: "MSFT") == nil)
+        #expect(try parse([row(1_799_999_880), row(1_799_999_940)], next: true) == nil)
+        #expect(try parse([row(1_799_999_880), row(1_799_999_940, high: 98)]) == nil)
+        #expect(try parse([row(1_799_999_880), row(1_799_999_880)]) == nil)
+        #expect(try parse([row(1_799_999_880)]) == nil)
+        #expect(try parse([row(1_799_999_580), row(1_799_999_640)]) == nil)
+    }
+
+    @Test func intradayTickFallbackRequiresDistinctQualifiedFreshObservations() throws {
+        let now = to
+        func trade(age: TimeInterval, conditions: [Int64] = [701]) -> T.Trade {
+            .init(price: 100, size: 10, exchange: nil, timestamp: now.addingTimeInterval(-age),
+                  sequence: nil, conditions: conditions, participantTime: now.addingTimeInterval(-age), correction: 0)
+        }
+        func facts(_ trades: [T.Trade]) -> T.Intraday? {
+            T.intradayTradeFacts(T.eligiblePaperTrades(trades, allowed: [701], now: now), now: now)
+        }
+        let result = try #require(facts([trade(age: 10), trade(age: 2), trade(age: 1, conditions: [999])]))
+        #expect(result.facts.count == 3 && result.asOf == now.addingTimeInterval(-2))
+        #expect(result.facts[0].contains("NOT OHLC candles"))
+        #expect(result.fresh(at: now.addingTimeInterval(118)))
+        #expect(!result.fresh(at: now.addingTimeInterval(119)))
+        #expect(facts([trade(age: 1)]) == nil)
+        #expect(facts([trade(age: 1), trade(age: 1)]) == nil)
+        #expect(facts([trade(age: 121), trade(age: 1)]) == nil)
+        #expect(facts([trade(age: 2, conditions: [999]), trade(age: 1)]) == nil)
+        #expect(facts([trade(age: -1), trade(age: 1)]) == nil)
+    }
+
     @Test @MainActor func paperFallbackRejectsAveragesPriorReferencesAndLateReports() throws {
         let reference = Data(#"{"status":"OK","results":[{"id":701,"name":"Form T/Extended Hours","asset_class":"stocks","data_types":["trade"]},{"id":702,"name":"Odd Lot Trade","asset_class":"stocks","data_types":["trade"]},{"id":703,"name":"Prior Reference Price","asset_class":"stocks","data_types":["trade"]},{"id":704,"name":"Average Price Trade","asset_class":"stocks","data_types":["trade"]}]}"#.utf8)
         let allowed = try T.parsePaperTradeConditions(reference)

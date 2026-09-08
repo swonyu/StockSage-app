@@ -222,10 +222,8 @@ enum StockSageMassiveTicks {
         return allowed
     }
 
-    static func paperQuote(_ trades: [Trade], symbol: String, allowed: Set<Int64>,
-                                      now: Date) -> StockSageQuoteService.LiveQuote? {
-        guard StockSageMassive.covers(symbol) else { return nil }
-        let eligible = trades.filter { trade in
+    nonisolated static func eligiblePaperTrades(_ trades: [Trade], allowed: Set<Int64>, now: Date) -> [Trade] {
+        trades.filter { trade in
             guard let conditions = trade.conditions, !conditions.isEmpty,
                   conditions.allSatisfy(allowed.contains), trade.correction == 0,
                   let participant = trade.participantTime, participant <= trade.timestamp,
@@ -233,8 +231,13 @@ enum StockSageMassiveTicks {
                   (0...120).contains(now.timeIntervalSince(trade.timestamp)),
                   trade.price.isFinite, trade.price > 0, trade.size.isFinite, trade.size > 0 else { return false }
             return true
-        }.max { $0.participantTime! < $1.participantTime! }
-        guard let trade = eligible else { return nil }
+        }.sorted { $0.participantTime! < $1.participantTime! }
+    }
+
+    static func paperQuote(_ trades: [Trade], symbol: String, allowed: Set<Int64>,
+                           now: Date) -> StockSageQuoteService.LiveQuote? {
+        guard StockSageMassive.covers(symbol),
+              let trade = eligiblePaperTrades(trades, allowed: allowed, now: now).last else { return nil }
         // No previous-close claim is supplied by a tick. Research retains its daily-bar inputs.
         return .init(symbol: symbol, price: trade.price, previousClose: trade.price,
                      marketTime: trade.participantTime, isNewListing: true,
@@ -242,24 +245,89 @@ enum StockSageMassiveTicks {
     }
 
     static func freshPaperQuote(symbol: String, now: Date = Date()) async -> StockSageQuoteService.LiveQuote? {
+        guard let trade = await freshPaperTrades(symbol: symbol, now: now).last else { return nil }
+        return .init(symbol: symbol, price: trade.price, previousClose: trade.price,
+                     marketTime: trade.participantTime, isNewListing: true,
+                     massiveTradeSequence: trade.sequence, priceSource: .massiveSIP)
+    }
+
+    private static func freshPaperTrades(symbol: String, now: Date) async -> [Trade] {
         do {
             let allowed: Set<Int64>
             if let cache = paperConditionsCache, (0..<86_400).contains(now.timeIntervalSince(cache.at)) {
                 allowed = cache.values
             } else {
                 guard let url = URL(string: StockSageMassive.host + "/v3/reference/conditions?asset_class=stocks&data_type=trade&limit=1000"),
-                      let request = authorized(url, key: StockSageMassive.apiKey) else { return nil }
+                      let request = authorized(url, key: StockSageMassive.apiKey) else { return [] }
                 allowed = try parsePaperTradeConditions(await data(for: request))
                 paperConditionsCache = (now, allowed)
             }
             try Task.checkCancellation()
             let from = now.addingTimeInterval(-120)
             guard let request = request(kind: .trades, symbol: symbol, from: from, to: now,
-                                        key: StockSageMassive.apiKey) else { return nil }
+                                        key: StockSageMassive.apiKey) else { return [] }
             let page = try parse(await data(for: request), kind: .trades, symbol: symbol, from: from, to: now)
             // ponytail: one 100-row page; if none qualifies, wait rather than paging the full tape.
-            return paperQuote(page.trades, symbol: symbol, allowed: allowed, now: Date())
-        } catch { return nil } // No raw response, URL or credential-bearing error reaches UI/logs.
+            return eligiblePaperTrades(page.trades, allowed: allowed, now: Date())
+        } catch { return [] } // No raw response, URL or credential-bearing error reaches UI/logs.
+    }
+
+    /// Dated intraday evidence, never fed into the daily indicator engine as if it were days.
+    nonisolated struct Intraday: Sendable {
+        let facts: [String]
+        let asOf: Date
+        var maximumAge: TimeInterval = 180
+        func fresh(at now: Date) -> Bool { (0...maximumAge).contains(now.timeIntervalSince(asOf)) }
+    }
+    nonisolated static func parseIntradayFacts(_ data: Data, symbol: String, from: Date, now: Date) -> Intraday? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["status"] as? String == "OK", root["ticker"] as? String == symbol,
+              root["next_url"] == nil, let rows = root["results"] as? [[String: Any]], rows.count <= 200 else { return nil }
+        var bars: [(at: Date, open: Double, high: Double, low: Double, close: Double, volume: Double)] = []
+        var seen: Set<Int64> = []
+        for row in rows {
+            guard let ms = StockSageMassive.int64(row["t"]), ms > 0, ms % 60_000 == 0,
+                  seen.insert(ms).inserted,
+                  let o = StockSageMassive.finite(row["o"]), o > 0,
+                  let h = StockSageMassive.finite(row["h"]), h >= o,
+                  let l = StockSageMassive.finite(row["l"]), l > 0, l <= o,
+                  let c = StockSageMassive.finite(row["c"]), c >= l, c <= h,
+                  let v = StockSageMassive.finite(row["v"]), v >= 0 else { return nil }
+            let at = Date(timeIntervalSince1970: Double(ms) / 1_000)
+            guard at >= from, at.addingTimeInterval(60) <= now else { continue }
+            bars.append((at, o, h, l, c, v))
+        }
+        bars.sort { $0.at < $1.at }
+        guard bars.count >= 2, let first = bars.first, let last = bars.last,
+              (0...180).contains(now.timeIntervalSince(last.at.addingTimeInterval(60))) else { return nil }
+        let facts = ["Intraday evidence: \(bars.count) completed one-minute Massive bars from \(first.at.ISO8601Format()) through \(last.at.addingTimeInterval(60).ISO8601Format()). Missing minutes are not filled; no claim of continuous liquidity."]
+            + bars.suffix(5).map { "Completed minute starting \($0.at.ISO8601Format()): open \($0.open), high \($0.high), low \($0.low), close \($0.close) USD; volume \($0.volume) shares." }
+        return Intraday(facts: facts, asOf: last.at.addingTimeInterval(60))
+    }
+
+    static func intradayFacts(symbol: String, from: Date, now: Date) async -> Intraday? {
+        guard StockSageMassive.covers(symbol), from < now,
+              let fromNS = nanoseconds(from), let toNS = nanoseconds(now),
+              let lower = Int64(fromNS), let upper = Int64(toNS),
+              let url = URL(string: StockSageMassive.host + "/v2/aggs/ticker/\(symbol)/range/1/minute/\(lower / 1_000_000)/\(upper / 1_000_000)?adjusted=true&sort=asc&limit=200"),
+              let request = authorized(url, key: StockSageMassive.apiKey) else { return nil }
+        if let data = try? await data(for: request),
+           let bars = parseIntradayFacts(data, symbol: symbol, from: from, now: now) { return bars }
+        let trades = await freshPaperTrades(symbol: symbol, now: Date())
+            .filter { ($0.participantTime ?? .distantPast) >= from }
+        return intradayTradeFacts(trades, now: Date())
+    }
+
+    /// Input must already pass eligiblePaperTrades; these are observations, not synthetic candles.
+    nonisolated static func intradayTradeFacts(_ eligible: [Trade], now: Date) -> Intraday? {
+        let trades = eligible.filter { trade in
+            guard let at = trade.participantTime else { return false }
+            return (0...120).contains(now.timeIntervalSince(at))
+        }.sorted { $0.participantTime! < $1.participantTime! }
+        guard Set(trades.compactMap(\.participantTime)).count >= 2, let last = trades.last else { return nil }
+        let facts = ["Recent completed minute candles unavailable. Intraday fallback: \(trades.count) individually qualified SIP trades in a bounded two-minute tape. These are NOT OHLC candles, a complete volume census, executable quotes or proof of liquidity."]
+            + trades.suffix(5).map { "Qualified trade at \($0.participantTime!.ISO8601Format()): price \($0.price) USD; individual trade size \($0.size) shares." }
+        return Intraday(facts: facts, asOf: last.participantTime!, maximumAge: 120)
     }
 
     static func fetch(symbol: String, from: Date, to: Date) async -> Tape {

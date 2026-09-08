@@ -5,6 +5,64 @@ start/stop, lease/read/save, timer, market discovery, history/news/context,
 model validation, pending decisions, entries/exits, marking and the panel.
 Reviewed the relevant Massive snapshot/tick and MLX request/batching seams.
 
+## Same-day extension — owner selected00:58, expanded review01:09 +03
+
+The native account now uses the existing04:00–20:00 New York session with19:55
+entry cutoff and deterministic close-out requests. This supersedes the paper
+prompt's next-week horizon, not the separate board badge or frozen research pilot.
+
+- The Book cancels pending entries at cutoff and requests exits without requiring
+  Qwen, news or minute bars. A position carried from a previous New York date blocks
+  new buys until resolved. Missing later prices, closed sessions or sleep leave an
+  explicit unresolved holding; they never produce a synthetic closing fill.
+- First activation is saved atomically under the account lease: retire pre-policy
+  pending buys, retain holdings/exits/history, and make same-day research due.
+  A recorded activation prevents repeating that transition at every restart.
+  Without this, an old weekly-policy pending Buy could survive the app update.
+- Before and after model inference, evidence must still be fresh. Recent completed
+  minute bars are separate from daily technical background. Wrong ticker/status,
+  pagination, invalid OHLC/volume, duplicate timestamps and unfinished bars cannot
+  create accepted minute evidence. Two completed bars and last-end age≤180s are
+  required. Gaps are not padded.
+- Live after-hours responses returned HTTP200 with last-bar-start ages1236s AMGN,
+  1356s STX,396s LRCX,156s SNOW and336s DELL. This was real sparse candle coverage,
+  not a reason to relabel old candles. Reused the condition-checked two-minute
+  trade window as an explicitly labelled fallback, requiring two distinct actual
+  participant timestamps. These are individual observations, not OHLC, total
+  volume, executable quotes or proof of liquidity. Its freshness ceiling is120s.
+- New Buy/Strong Buy opinions must cite an actual intraday bar/trade fact, not only
+  daily background or the intraday caveat. An otherwise verified opinion stays
+  recorded if its entry is skipped. This proves a citation is present, not that
+  the model reasoned correctly about it. No automatic strengthening to Buy.
+- Position quote fallbacks now reuse the four-worker helper rather than serial
+  lookups; the timer remains separate from research. MainActor saves, one cycle,
+  cancellation, price-basis protection and all cash/position/cost limits remain.
+- The panel exposes100 latest records and measured cycle time, verified opinions,
+  unavailable checks and paper fills. Request failures and verification failures
+  have separate messages. It does not advertise another research due time during
+  close-out. Stored history is still subject to the existing explicit size caps.
+
+Artifacts: `/private/tmp/stocksage-sameday-20260909.RgZox4/`. Initial lifecycle
+regression reproduced8 assertion issues before production changes (the red log is
+in the preceding fresh-fast artifact directory). The later review-extension red
+was a missing-helper compile failure, not an executed assertion-level red. A
+45-test focused pass and1869-test macOS pass preceded the activation refinement;
+they do not verify the final activation code. An intermediate opt-in live pass
+(`third.log`,43 tests) recovered fresh prices for5/5 names and adequate intraday
+facts for4/5; STX still lacked adequate evidence at that instant. No claim that
+every provider observation becomes available. Final source passed1870 macOS and
+1867 iPhone simulator tests, including one-time activation. Installation and live
+activation were verified at01:19; exact checksums and retained-ledger checks are in
+HANDOFF. No source changes after the final gates. Live closing behavior at the
+19:55 New York cutoff is still unobserved; deterministic tests are not a live close.
+
+The earlier installed quote fix produced a real native-ledger USO13-share paper
+fill before this extension. It is not a same-day-build result, a broker fill or
+evidence of profit. Same-day policy cannot guarantee no overnight carry when this
+Mac is asleep or eligible observations are unavailable. Intraday-specific stop,
+target and strategy calibration still require prospective net-of-cost research;
+the existing2%/4% simulation limits were not presented as optimized parameters.
+
 ## Fixed in this review
 
 1. **Stale snapshot masks an available fresh trade.** Paper research and fills

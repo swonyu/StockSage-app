@@ -11,6 +11,50 @@ struct StockSagePaperAutomationTests {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source)
     }
 
+    @Test func sameDayCutoffCancelsBuysAndClosesOnlyOnLaterPrices() throws {
+        let cutoff = try Date("2026-09-08T23:55:00Z", strategy: .iso8601)
+        var pending = A.Book()
+        pending.propose(symbol: "AAPL", action: .buy, at: cutoff.addingTimeInterval(-1))
+        pending.settle(quotes: ["AAPL": quote(at: cutoff)], at: cutoff)
+        #expect(pending.pending.isEmpty && pending.open.isEmpty, "No new entry at or after the same-day cutoff")
+        var held = A.Book()
+        held.propose(symbol: "AAPL", action: .buy, at: cutoff.addingTimeInterval(-10))
+        held.settle(quotes: ["AAPL": quote(at: cutoff.addingTimeInterval(-9))], at: cutoff.addingTimeInterval(-8))
+        try #require(held.open.count == 1)
+        held.settle(quotes: ["AAPL": quote(at: cutoff)], at: cutoff)
+        #expect(held.open.count == 1 && held.pending.count == 1)
+        held.settle(quotes: ["AAPL": quote(at: cutoff.addingTimeInterval(1))], at: cutoff.addingTimeInterval(2))
+        #expect(held.open.isEmpty && held.trades.count == 1 && held.valid)
+        held.propose(symbol: "MSFT", action: .buy, at: cutoff)
+        #expect(held.pending.isEmpty)
+        #expect(!A.researchInstructions.contains("next trading week"))
+    }
+
+    @Test func entryCutoffUsesNewYorkDSTNotDeviceMidnight() throws {
+        for (iso, allowed) in [("2026-09-08T23:54:59Z", true), ("2026-09-08T23:55:00Z", false),
+                               ("2026-11-03T00:54:59Z", true), ("2026-11-03T00:55:00Z", false),
+                               ("2026-09-09T07:59:59Z", false), ("2026-09-09T08:00:00Z", true)] {
+            #expect(A.entryWindowOpen(try Date(iso, strategy: .iso8601)) == allowed)
+        }
+    }
+
+    @Test func missingCloseNeverFabricatesFillAndOverdueHoldingBlocksNewBuys() throws {
+        let before = try Date("2026-09-08T23:54:00Z", strategy: .iso8601)
+        var book = A.Book()
+        book.propose(symbol: "AAPL", action: .buy, at: before)
+        book.settle(quotes: ["AAPL": quote(at: before.addingTimeInterval(1))], at: before.addingTimeInterval(2))
+        let closed = try Date("2026-09-09T00:01:00Z", strategy: .iso8601)
+        book.settle(quotes: [:], at: closed)
+        #expect(book.open.count == 1, "No synthetic closing price when the app missed the cutoff")
+        let next = try Date("2026-09-09T08:01:00Z", strategy: .iso8601)
+        book.propose(symbol: "MSFT", action: .buy, at: next)
+        #expect(!book.pending.contains { $0.buy })
+        book.settle(quotes: [:], at: next)
+        #expect(book.pending.count == 1 && book.pending.first?.buy == false)
+        book.settle(quotes: ["AAPL": quote(at: next.addingTimeInterval(1))], at: next.addingTimeInterval(2))
+        #expect(book.open.isEmpty && book.valid)
+    }
+
     @Test func staleSnapshotFallsBackForResearchAndLaterPaperFill() async throws {
         var calls: [String] = []
         let stale = quote(at: now.addingTimeInterval(-360))
@@ -50,6 +94,44 @@ struct StockSagePaperAutomationTests {
         #expect(peak == 4 && active == 0 && finished == Set(symbols))
     }
 
+    @Test func positionQuoteFallbackIsBoundedAndConcurrent() async {
+        var active = 0, peak = 0
+        let names = ["AAPL", "MSFT", "AMZN", "META", "GOOG"]
+        let result = await A.fetchPaperQuotes(for: names, at: now, snapshots: { _ in [:] }, tick: { symbol, at in
+            active += 1; peak = max(peak, active)
+            try? await Task.sleep(for: .milliseconds(5))
+            active -= 1
+            return self.quote(symbol, at: at)
+        })
+        #expect(peak == 4 && active == 0 && Set(result.keys) == Set(names))
+    }
+
+    @Test func sameDayEntryEvidenceCannotBeOnlyDailyBackgroundOrSummary() {
+        // Zero-based indices 2 and 3 are actual intraday observations; index 1 is their caveat.
+        #expect(!A.hasIntradayEvidence(["F1", "F2"], factIndices: 2..<4))
+        #expect(A.hasIntradayEvidence(["F1", "F3"], factIndices: 2..<4))
+        #expect(A.hasIntradayEvidence(["F4"], factIndices: 2..<4))
+        #expect(!A.hasIntradayEvidence(["F5"], factIndices: 2..<4))
+        #expect(!A.hasIntradayEvidence(["F3"], factIndices: 2..<2))
+    }
+
+    @Test func policyActivationRetiresOldEntryRequestsOnceWithoutDeletingHoldings() throws {
+        var book = A.Book()
+        book.propose(symbol: "AAPL", action: .buy, at: now)
+        book.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        book.propose(symbol: "MSFT", action: .buy, at: now.addingTimeInterval(3))
+        book.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(3))
+        book.lastResearch = now
+        let holding = try #require(book.open.first)
+        book.activateSameDay(at: now.addingTimeInterval(4))
+        #expect(book.open.first?.id == holding.id && book.pending.count == 1 && book.pending.first?.buy == false)
+        #expect(book.lastResearch == nil && book.valid)
+        let count = book.decisions.count
+        book.lastResearch = now.addingTimeInterval(5)
+        book.activateSameDay(at: now.addingTimeInterval(6))
+        #expect(book.decisions.count == count && book.lastResearch == now.addingTimeInterval(5))
+    }
+
     @Test func cancellationDoesNotStartTheRestOfTheResearchQueue() async {
         var started = 0
         let task = Task {
@@ -85,6 +167,10 @@ struct StockSagePaperAutomationTests {
                 if age > 120 { recovered += 1 }
                 print("PAPER_LIVE \(symbol) snapshot_age=\(age) selected_age=\(Date().timeIntervalSince(q.marketTime!))")
             } else { print("PAPER_LIVE \(symbol) snapshot_age=\(age) no_eligible_trade") }
+            let intradayAt = Date()
+            let minute = await StockSageMassiveTicks.intradayFacts(symbol: symbol,
+                from: max(intradayAt.addingTimeInterval(-3600), A.sessionTime(intradayAt, hour: 4, minute: 0)), now: intradayAt)
+            print("PAPER_INTRADAY \(symbol) fresh=\(minute?.fresh(at: Date()) ?? false) facts=\(minute?.facts.count ?? 0)")
         }
         print("PAPER_LIVE recovered=\(recovered)")
         for name in ["baseline", "optimized", "batched", "batched512"] {
@@ -241,11 +327,13 @@ struct StockSagePaperAutomationTests {
     @Test func closedSessionStillExpiresWithoutFilling() throws {
         let at = try Date("2026-09-08T23:59:59Z", strategy: .iso8601)
         var book = A.Book()
-        book.propose(symbol: "AAPL", action: .buy, at: at)
+        book.propose(symbol: "AAPL", action: .buy, at: now)
+        book.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        book.propose(symbol: "AAPL", action: .sell, at: at)
         book.settle(quotes: ["AAPL": quote(at: at.addingTimeInterval(1))], at: at.addingTimeInterval(2))
-        #expect(book.open.isEmpty && book.pending.count == 1 && book.cash == 10_000)
+        #expect(book.open.count == 1 && book.pending.count == 1)
         book.settle(quotes: [:], at: at.addingTimeInterval(120))
-        #expect(book.open.isEmpty && book.pending.isEmpty && book.decisions.last?.action == "Expired")
+        #expect(book.open.count == 1 && book.pending.isEmpty && book.decisions.last?.action == "Expired")
     }
 
     @Test func paperCashCostsAndLaterFillAreReproducible() throws {

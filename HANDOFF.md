@@ -1,5 +1,58 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Same-day native automation installed — 2026-09-09 01:19 +03
+
+Owner chose same-day trades at00:58 and requested further autonomous improvement
+at01:09. This supersedes the earlier next-week native paper prompt, not board AI
+badges, real-broker policy or the frozen prospective research. Sole writer remains
+this task in `/Users/saleh/StockSage-wt/qwen-context`, codex/qwen-chat-context.
+
+New entries stop and deterministic exit requests start at19:55 America/New_York,
+within the existing04:00–20:00 pre/regular/after-hours simulation. The next cutoff
+is September9 at02:55 Riyadh. Pending buys are cancelled at cutoff; overdue holdings
+block new buys and retry exits next open session. No later eligible observation,
+no fill: sleep/outages never fabricate a close. Qwen is not required for timer exits.
+On first start the app atomically records policy activation, retires pre-policy
+pending buys and makes same-day research due. Holdings/exits/history remain intact;
+the marker prevents repeating this transition on subsequent restarts.
+
+Qwen now receives current completed minute bars or explicitly labelled qualified
+trade observations if recent candles are unavailable. Daily indicators remain
+background. New Buy/Strong Buy opinions must cite an actual intraday observation,
+not merely daily rules or a caveat. All existing response validation remains; failed
+requests and failed verification have distinct messages. Position quote lookups
+reuse four bounded workers. UI exposes100 recent records and actual cycle duration,
+verified-opinion/unavailable counts and paper fills. No new weights, thresholds,
+forced Buy, leverage, real orders or claimed predictive edge. Full review and
+limitations: `agent-docs/PAPER_AUTOMATION_REVIEW_2026-09-09.md`.
+
+Final source gates: macOS1870 tests/192 suites70.811s and iPhone17Pro(gate)1867
+tests/192 suites64.975s, both exit0 with the same three canonical exclusions.
+Artifacts: `/private/tmp/stocksage-sameday-20260909.RgZox4/`,
+`macos-release.log`/`.xcresult`, `ios-release.log`/`.xcresult`. No post-gate source
+edits. Exact Mac-tested bundle preserved before iPhone testing; strict/deep
+codesign and checksum-aware rsync including symlinks passed. Normal quit of9355
+and lease release verified before replacement. Installed `/Applications/StockSageX.app`
+is nowPID19766; enabled1 and exclusive account writer lease verified. DylibSHA256:
+`f155d93e5bc89d879ad7afa977349f454777f46853c89386f9f4d8118273e8b5`.
+Previous bundle is recoverable at
+`/Users/saleh/.Trash/StockSageX-before-sameday-20260909.app`.
+A private pre-transition ledger copy is in the artifact root; the ledger was not
+hand-edited. Actual startup recorded exactly one activation with0 old pending buys,
+retained all old trade/decision IDs, and immediately screened13145 returned tickers,
+12087 supported/333 fresh, selecting102 (TSM/USO holdings plus100 new candidates).
+USO13 shares and TSM4 shares were filled by the prior build and remain open; do not
+call them results of this same-day version. USO's first new intraday assessment was
+unavailable; independent timer exits remain active. No new same-day fill or successful
+live end-of-session close is claimed at this checkpoint.
+
+The same27B MLX servicePID7192, concurrency4/prefill512, loopback8765 and20GiB cap
+was left unchanged. Earlier measured1.93x response throughput is not4x and does not
+measure the new intraday cycle. IBKR relay remainsOFF; no other worktree edits,
+frozen-pilot changes, merge or push. The finite frozen-recorder check remained
+waiting, no actions, next signalSeptember9 at18:10 Riyadh. Continue existing
+15-minute quiet-on-unchanged autonomous checks; verify live state before action.
+
 ## Fresh-price fallback and faster native research installed — 2026-09-09 00:57 +03
 
 Owner requested the stale Massive observation fix,4x faster research, and a full
