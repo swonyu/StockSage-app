@@ -1,5 +1,26 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Research recommendation approved; settlement slice starting — 2026-09-09 02:25 +03
+
+Owner approved the same-day/IBKR recommendations. Research report is
+`agent-docs/SAME_DAY_TRADING_IBKR_RESEARCH_2026-09-09.md`; approved first-slice
+design and checks are in `docs/superpowers/specs/2026-09-09-paper-settlement-design.md`.
+Implement settlement-aware native paper cash first; quote-side execution, session
+alignment and separate strategy experiments remain subsequent work, not completed.
+No IBKR relay activation, real orders, leverage/model changes, frozen-pilot edits,
+merge or push. This task remains the sole writer/installer in qwen-context.
+
+Read-only live check at02:25: installed clock-fix appPID23768 holds the account.json.lock
+lease; QwenPID7192 remains on loopback8765. USO13 and TSM4 remain open,0 pending,
+0 closed,802 decisions and exactly1 same-day activation. Post-clock cycles completed
+01:49:19–01:53:28 (102/102,248s,31 verified/71 unavailable),02:04:32–02:08:09
+(102/102,217s,24/78),02:19:42–02:23:59 (102/102,256s,31/71), all Riyadh times.
+Each recorded0 buys/0 sells; do not infer causes for unavailable model output whose
+raw text was not saved. Keep this running build undisturbed until its02:55 Riyadh
+same-day close-out is actually observed. No successful live close is yet claimed.
+Frozen recorder tick returned waiting/no actions, next signalSeptember9 18:10
+Riyadh. Coverage worktree clean; no research policy or source changes.
+
 ## Explicit New York decision clock installed — 2026-09-09 01:36 +03
 
 Autonomous follow-up reproduced a real reasoning bug: an accepted LLY opinion at
