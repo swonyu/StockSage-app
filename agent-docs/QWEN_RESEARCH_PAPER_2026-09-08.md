@@ -91,6 +91,23 @@ The signed Mac bundle is staged at
 `/private/tmp/stocksage-qwen-context-20260908/StockSageX-ready.app`.
 Strict/deep signature verification and a checksum-aware comparison against the
 tested product passed. Native UI inspection failed with "Sky Computer Use native
-pipe closed before response". The running installed app has not been replaced;
-normal closure was requested before installation. Automation has not been enabled,
-and no first-cycle result or paper fill is claimed at this checkpoint.
+pipe closed before response"; no visual acceptance is claimed.
+
+The owner then directed this task to close the app. A normal AppleEvent quit
+succeeded, and process absence was verified before installation. The tested
+bundle is now installed at `/Applications/StockSageX.app`, running as PID46019.
+Its contents match the tested bundle by checksum; strict/deep signature checks
+pass. The previous app is recoverable at
+`/Users/saleh/.Trash/StockSageX-before-qwen-paper-20260908-214612.app`.
+Installed debug-dylib SHA256:
+`cb23971b149ec8a0a05c2718c60550f9e31c112985c61c2cb5454f0739eed7c3`.
+
+Only the new `stocksage.qwenPaper.enabled` flag was enabled. The first real
+research cycle started at 18:46:18 UTC and completed at 18:46:30 UTC on September8.
+ORCL returned an evidence-referenced **Hold** opinion. The saved ledger has no
+trades or pending orders and retains its full $10,000 simulated cash. The running
+app holds the account writer lease. Qwen remains the original PID61562.
+Next research is due after fifteen minutes, subject to the stated availability
+and data gates. Use **Chat > Qwen research and paper trading > Pause automation**
+to stop it. No profitable outcome or simulated fill is inferred from this first
+successful research cycle.

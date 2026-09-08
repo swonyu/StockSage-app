@@ -17,9 +17,15 @@ Frozen prospective research, real journal, broker flows and other worktrees unto
 Verification:24 focused tests,1838macOS and1835iPhone17Pro(gate) tests passed;
 same three canonical exclusions. Logs/xcresults/benchmark receipts and signed
 staged Mac app: `/private/tmp/stocksage-qwen-context-20260908/`.
-Native helper failed "pipe closed before response"; normal app closure requested
-before replacing installed StockSageX. Not yet installed or enabled; no first-cycle
-result claimed. See `agent-docs/QWEN_RESEARCH_PAPER_2026-09-08.md` for operation,
+Native helper failed "pipe closed before response"; no visual acceptance claimed.
+Owner then said "u do it": normal AppleEvent quit succeeded and process absence
+was checked before installing the tested bundle. Backup:
+`/Users/saleh/.Trash/StockSageX-before-qwen-paper-20260908-214612.app`.
+Strict/deep signature and checksum comparison passed. App nowPID46019; original
+Qwen61562 unchanged. New simulation flag enabled, account writer lock verified.
+First cycle18:46:18–18:46:30UTC completed with an evidence-referenced ORCL Hold;
+saved account has10K cash, zero trades and zero pending requests.
+See `agent-docs/QWEN_RESEARCH_PAPER_2026-09-08.md` for operation,
 policy, limitations and exact account/artifact paths. No push.
 
 ## Sleep interrupted prospective timing — 2026-09-08 19:41 +03
