@@ -214,3 +214,83 @@ Sources checked2026-09-08:
 [LightGBM4.6 parameters](https://lightgbm.readthedocs.io/en/v4.6.0/Parameters.html),
 [macOS OpenMP dependency](https://lightgbm.readthedocs.io/en/v4.6.0/Installation-Guide.html),
 [SciPy loader issue](https://github.com/scipy/scipy/issues/25635).
+
+## Kronos CPU compatibility — 2026-09-08
+
+`tools/intraday_kronos.py` is a bounded engineering smoke, **not a new trading
+strategy or a change to the previous walk-forward study**. It performs no network
+access, training or orders. Reviewed upstream source, configuration and safetensors
+must all match the eight exact size/SHA256 pins in `ASSETS` before model import.
+Unexpected source/extension/bytecode files are refused. Public downloads were
+anonymous and HTTPS-only; MIT LICENSE retained. Assets total114,878,586 bytes.
+
+Official checkpoints: [Kronos-small](https://huggingface.co/NeoQuasar/Kronos-small)
+24,741,696 parameters, model revision`901c26c1332695a2a8f243eb2f37243a37bea320`;
+[Tokenizer-base](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base)
+revision`0e0117387f39004a9016484a186a908917e22426`. Source pinned to
+[Kronos67b630e](https://github.com/shiyu-coder/Kronos/tree/67b630e67f6a18c9e9be918d9b4337c960db1e9a).
+The files are private under `.research/kronos-v1/{model,predictor,tokenizer}` plus
+LICENSE. Downloaded only three Python files, license, two configs and two weight
+files. Do not use arbitrary remote-code loading, pickle weights, auto device
+selection or unpinned `main` model downloads in this runner.
+
+Separate runtime, never Qwen's venv or the pinned LightGBM venv:
+
+```sh
+# Already installed on this Mac; first-time setup only.
+.research/venv/bin/python -m venv .research/kronos-venv
+.research/kronos-venv/bin/python -m pip install --only-binary=:all: \
+  torch==2.14.0 numpy==2.2.6 pandas==2.2.2 einops==0.8.1 \
+  huggingface_hub==0.33.1 safetensors==0.6.2 tqdm==4.67.1
+
+# Assets must already have the pinned files. Choose a NEW report directory.
+.research/kronos-venv/bin/python tools/intraday_kronos.py \
+  --archive .research/studies/20260908-jun-aug-v1/chunk-2026-06-01-2026-06-14-attempt1 \
+  --assets .research/kronos-v1 --output .research/runs/20260908-kronos-compat-v2
+```
+
+Only ten fixed June1 events (one per symbol,11:10ET). Each input contains
+100 completed consecutive1-minute OHLC bars, ending one minute before signal T.
+Future timestamps are computed; no future price/realized target is passed. Forecast
+22 minute opens beginning T; delay1 return is opens[16]/opens[1]-1, delay6 is
+opens[21]/opens[6]-1. This aligns timestamps with the existing15-minute holdings,
+but uses1-minute OHLC sequences rather than the baseline's5-minute OHLCV features.
+Equal100-minute elapsed context does NOT mean identical input representation.
+
+The upstream OHLC-only mode pads missing volume/amount for model input; this does
+not assert that real volume is zero. We deliberately do not let the upstream
+volume-present/amount-absent path synthesize turnover from mean OHLC. See
+[upstream preprocessing](https://github.com/shiyu-coder/Kronos/blob/67b630e67f6a18c9e9be918d9b4337c960db1e9a/model/kronos.py#L467).
+Fixed CPU/one thread/inference+eval mode/seed7/T1/top_p0.9/top_k0/one sampled path.
+Two-GB/5-minute checks prevent automatically expanding this smoke into a big run.
+
+Verified:31 research tests pass. Initial new-test import failed before implementation;
+final causal-input tests and existing real LightGBM replay pass. Dependency imports
+and pip check succeed. All eight assets and0600 permissions match. Each of ten
+forecasts replayed exactly, also across a second fresh process. Median forecast
+0.210s, max0.232s in finalv2;6.24s external wall (1.624s import/load), peakRSS
+563,970,048 bytes, zero swaps. Initial coldv1 import/load took8.223s. Environment
+occupies836MB on disk, assets112MB (`du`); no persistent Kronos server remains.
+
+**Quality finding:15 of220 unique forecast candles violate OHLC ordering.**
+All predicted opens were finite/positive; the entire candle is not thereby valid.
+Violations: AMZN1,META5,MSFT1,NVDA3,ORCL2,QCOM1,TSLA2; AAPL/APP/GOOGL0.
+No prices were silently repaired and none is a verified observation. No P&L,
+accuracy, superiority or app-trading-readiness claim from this smoke. Generated
+OHLC must not be presented as trustworthy market data.
+
+Self-review removed a subtle future-availability dependency: the first draft reused
+the labelled-example selector. The final selector uses only the session clock and
+complete past context; a regression removes every future bar and still reproduces
+the exact event/input. Outputs on this complete archive are unchanged by the fix.
+Private final recipes/reports: `.research/runs/20260908-kronos-compat-v2{,-recheck}/`.
+Main report SHA256:`59e581ceedd1aa8fd38fc082b8b129d7fa35118240afed69bad08503ad56f600`.
+Initialv1 artifacts remain intact as an audit trail; no report was overwritten.
+Qwen61562 and StockSage26453 untouched; previous archive/model/runner hashes unchanged.
+
+[Chronos-2](https://huggingface.co/amazon/chronos-2) was checked only as the subsequent
+candidate:119,477,664 parameters,477,930,472-byte weights,Apache2.0,
+revision`29ec3766d36d6f73f0696f85560a422f50e8498c`. No Chronos download/inference yet.
+The HF official-benchmark API returned47 datasets and no matching forecasting task;
+this is not a claim that forecasting benchmarks do not exist. No general
+forecasting leaderboard score establishes net intraday trading profitability.

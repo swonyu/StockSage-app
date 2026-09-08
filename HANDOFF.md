@@ -1,5 +1,54 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Kronos CPU compatibility — 2026-09-08 15:17 +03
+
+Next bounded step after569f950, inline onwt/coverage; peer independently inactive.
+No Swift/app/settings/orders changes, push, merge, model training or cloud work.
+Qwen61562 and StockSage26453 remain running; both earlier research runners are
+byte-identical, preserving their source-pinned replay. Other worktrees untouched.
+
+Official model/source/card and anonymous HF metadata verified: Kronos-small24.7M
+plus tokenizer,114,878,586 total asset bytes; code/model/tokenizer revisions and
+eight exact file sizes/SHA256 pins are in tools/intraday_kronos.py. Source reviewed
+before import, MIT license retained. Anonymous HTTPS-only downloads; no credential
+use, remote pickle, arbitrary code loader or additional language-model server.
+Runtime in.research/kronos-venv (836MB disk): torch2.14.0,numpy2.2.6,pandas2.2.2,
+einops0.8.1,huggingface_hub0.33.1,safetensors0.6.2,tqdm4.67.1. Imports/pip check pass;
+no change to Qwen or LightGBM environments. Assets in.research/kronos-v1 (112MB disk),
+all eight files0600; loader rejects hash/size mismatches and unlisted files.
+
+Ten fixed11:10ET June1 events from the existing June1–14 archive. CPU explicitly,
+one thread, inference/eval mode,seed7,T1,top_p0.9,top_k0,one sample. Each event uses
+100 completed1-minute OHLC bars; computed22 future timestamps, no outcome/prices.
+Predicted opens[16]/opens[1]-1 and opens[21]/opens[6]-1 align with15-minute holdings
+after1/6-minute delay. This is a1-minute OHLC-only input variant, not identical
+5-minute engineered OHLCV information. Volume/amount omitted using upstream's
+supported placeholder mode; no synthetic turnover masquerading as observations.
+
+Self-review fixed a future-availability selection dependency: the first draft
+reused labelled samples. Final selection is session-clock-only and a new test
+removes all future bars without changing the event/context. No model saw future
+prices in either draft; originalv1 reports retained and finalv2 outputs match them.
+Final31 research tests pass, including actual LightGBM regressions. Two freshv2
+processes reproduce all inputs/forecasts/violation counts exactly. Runtime6.24s
+external wall,0.210s median/0.232s max forecast,563,970,048-byte maxRSS,zero swaps;
+under2GB/5-minute smoke ceilings. Both Kronos processes exited; none left resident.
+
+Important negative finding:15/220 unique forecast candles violate OHLC ordering
+(AMZN1,META5,MSFT1,NVDA3,ORCL2,QCOM1,TSLA2). Opens are finite/positive; that does
+not make full candles valid. No silent correction, accuracy/P&L claim or promotion.
+Private final reports/recipes:.research/runs/20260908-kronos-compat-v2{,-recheck}/.
+Main report SHA256:59e581ceedd1aa8fd38fc082b8b129d7fa35118240afed69bad08503ad56f600.
+Plan:docs/superpowers/plans/2026-09-08-kronos-compatibility.md; commands, limitations,
+source links and measured versions/resources in tools/intraday_research.md.
+
+Chronos-2 only metadata-checked, NOT downloaded/run:119.5M parameters,478MB weights,
+Apache2.0, revision29ec3766d36d6f73f0696f85560a422f50e8498c. No relevant forecast task
+in the47-entry HF official-benchmark API response; not a claim no benchmarks exist.
+Next: bounded Chronos compatibility and a prespecified comparison using this causal
+timestamp bridge. Do not retune the now-observed June–August/September4 results or
+claim an untouched test. No new Xcode/native-UI claims; native helper still pending.
+
 ## Intraday walk-forward pilot — 2026-09-08 14:53 +03
 
 Continued the owner-approved research sequence inline fromfd410d0 onwt/coverage.
