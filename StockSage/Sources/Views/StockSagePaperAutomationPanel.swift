@@ -27,7 +27,7 @@ struct StockSagePaperAutomationPanel: View {
                 }
                 HStack(spacing: 20) {
                     VStack(alignment: .leading) {
-                        Text("Paper cash").font(.caption)
+                        Text("Total paper cash").font(.caption)
                         Text(automation.book.cash, format: .currency(code: "USD")).monospacedDigit()
                     }
                     VStack(alignment: .leading) {
@@ -37,6 +37,29 @@ struct StockSagePaperAutomationPanel: View {
                             Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))").font(.caption)
                         } else { Text("Fresh marks unavailable").font(.caption) }
                     }
+                }
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    let at = context.date
+                    let sales = automation.book.unsettledSales(at: at)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Settled available: \(automation.book.buyingCash(at: at).formatted(.currency(code: "USD"))) · Unsettled proceeds: \(automation.book.unsettledProceeds(at: at).formatted(.currency(code: "USD")))")
+                        if automation.book.settledCash(at: at) < 0 {
+                            Text("Legacy funding deficit: \((-automation.book.settledCash(at: at)).formatted(.currency(code: "USD"))). New entries wait for settlement; holdings and exits are retained.")
+                                .foregroundStyle(DS.Palette.warningSoft)
+                        }
+                        if !sales.isEmpty {
+                            DisclosureGroup("Scheduled paper settlements · \(sales.count)") {
+                                ForEach(sales) { trade in
+                                    if let closed = trade.closedAt, let date = StockSagePaperAutomation.settlementDate(forSaleAt: closed) {
+                                        Text("\(trade.symbol): \(settlementDateLabel(date)) New York · \((trade.exitPrice! * trade.shares).formatted(.currency(code: "USD")))")
+                                    } else {
+                                        Text("\(trade.symbol): settlement calendar unavailable; proceeds remain unspendable.")
+                                            .foregroundStyle(DS.Palette.warningSoft)
+                                    }
+                                }
+                            }
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
                 }
                 Text("\(automation.book.open.count) paper positions · \(automation.book.pending.count) pending · \(automation.book.trades.filter { !$0.isOpen }.count) closed")
                     .font(.caption)
@@ -64,6 +87,7 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop at 19:55 New York and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
                     Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Qwen reviews all paper holdings first, then up to \(StockSagePaperAutomation.discoveryLimit) affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
                     Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
+                    Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
                     Text("Simulated fills require a Massive SIP observation after the decision, received within two minutes. When snapshots are stale or missing, a bounded tick-tape fallback checks trade conditions and actual participant time; average-price, prior-reference, corrected and unknown-condition trades are excluded. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts. Exits use a subsequent observed price; gaps and missed crossings can worsen outcomes.")
                     Text("Runs while this Mac is awake and StockSage is open. Weekday session hours do not include a holiday calendar; stale or missing data blocks fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
                 }.font(.caption).foregroundStyle(.secondary)
@@ -95,5 +119,11 @@ struct StockSagePaperAutomationPanel: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func settlementDateLabel(_ date: Date) -> String {
+        var style = Date.FormatStyle(date: .abbreviated, time: .omitted)
+        style.timeZone = TimeZone(identifier: "America/New_York")!
+        return style.format(date)
     }
 }

@@ -72,3 +72,15 @@ the implementation plan under the already approved research design.
   a clearing service being open.
 - [SEC T+1 investor bulletin](https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins/new-t1-settlement-cycle-what-investors-need-know-investor-bulletin):
   standard next-business-day settlement for most US securities.
+
+## Executed first-slice evidence
+
+- Real production regression: 27 tests/one expected failure, exit65; the method
+  filter initially selected zero tests, so only `red-suite` counts as red evidence.
+- Final focused53 tests, macOS1877 tests and iPhone1874 tests all passed, exit0.
+- Existing schema, equity and history survive round-trip checks; no live ledger
+  mutation was performed by the agent. UI is built, not visually verified.
+- Exact tested Mac bundle retained in
+  `/private/tmp/stocksage-paper-settlement-20260909.iuEqUb/verified-mac/StockSageX.app`.
+  At02:43 Riyadh installation is deferred until the running app's02:55 close-out
+  is observed. See HANDOFF for hashes, logs, current holdings and safe installation.

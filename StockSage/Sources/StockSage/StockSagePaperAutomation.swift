@@ -57,6 +57,21 @@ final class StockSagePaperAutomation: ObservableObject {
         }
         static func money(_ value: Double) -> Double { (value * 100).rounded() / 100 }
 
+        /// Receivables remain in total cash/equity, but cannot fund another same-day entry.
+        func unsettledSales(at now: Date) -> [TradeRecord] {
+            trades.filter { trade in
+                guard let closed = trade.closedAt, trade.exitPrice != nil else { return false }
+                guard let settlement = StockSagePaperAutomation.settlementDate(forSaleAt: closed) else { return true }
+                return now < settlement
+            }
+        }
+        func unsettledProceeds(at now: Date) -> Double {
+            Self.money(unsettledSales(at: now).reduce(0) { $0 + Self.money($1.exitPrice! * $1.shares) })
+        }
+        func settledCash(at now: Date) -> Double { Self.money(cash - unsettledProceeds(at: now)) }
+        // Preserve a negative legacy balance for disclosure; clamp only new spending capacity.
+        func buyingCash(at now: Date) -> Double { max(0, settledCash(at: now)) }
+
         var valid: Bool {
             version == 1 && cursor >= 0 && trades.count <= 50_000 && decisions.count <= 50_000
                 && open.count <= 5 && pending.count <= 5 && cash.isFinite && cash >= 0
@@ -91,6 +106,12 @@ final class StockSagePaperAutomation: ObservableObject {
                  reason: "Cancelled \(cancelled) pre-policy pending entries. Holdings, exit requests and history retained. Fresh same-day research is due; close-out starts at 19:55 New York.", at: now)
         }
 
+        mutating func activateSettlement(at now: Date) {
+            guard !decisions.contains(where: { $0.action == "T+1 cash policy activated" }) else { return }
+            note(action: "T+1 cash policy activated",
+                 reason: "New entries require settled paper cash. Net sale proceeds release on the scheduled next New York settlement date; unsupported dates remain unavailable. Historical fills and research cadence retained; this is not a broker balance.", at: now)
+        }
+
         /// A validated model opinion can request a paper action, never supply price or size.
         mutating func propose(symbol: String, action: TradeAdvice.Action, at: Date) {
             guard StockSagePaperAutomation.validSymbol(symbol), !pending.contains(where: { $0.symbol == symbol }) else { return }
@@ -102,7 +123,9 @@ final class StockSagePaperAutomation: ObservableObject {
                 note(symbol: symbol, action: "Skipped", reason: "Same-day entry window closed or an overdue holding still needs an exit.", at: at)
                 return
             }
-            if buy && !held && open.count + pending.filter(\.buy).count < 5 && cash > 0 {
+            if buy && !held && buyingCash(at: at) <= 0 {
+                note(symbol: symbol, action: "Skipped", reason: "No settled paper cash available; sale proceeds cannot fund same-day entries.", at: at)
+            } else if buy && !held && open.count + pending.filter(\.buy).count < 5 {
                 pending.append(.init(id: UUID(), symbol: symbol, buy: true, at: at))
             } else if sell && held {
                 pending.append(.init(id: UUID(), symbol: symbol, buy: false, at: at))
@@ -127,10 +150,11 @@ final class StockSagePaperAutomation: ObservableObject {
                 pending.removeAll { $0.id == order.id }
                 let fill = q.price * (order.buy ? 1 + StockSagePaperAutomation.costRate : 1 - StockSagePaperAutomation.costRate)
                 if order.buy {
-                    let shares = min(1_000_000, floor(min(cash, StockSagePaperAutomation.positionCap) / fill))
+                    let available = buyingCash(at: now)
+                    let shares = min(1_000_000, floor(min(available, StockSagePaperAutomation.positionCap) / fill))
                     guard shares >= 1, open.count < 5, !open.contains(where: { $0.symbol == order.symbol }),
-                          Self.money(fill * shares) <= cash else {
-                        note(symbol: order.symbol, action: "Skipped", reason: "Insufficient paper cash or position capacity at the observed fill.", at: now)
+                          Self.money(fill * shares) <= available else {
+                        note(symbol: order.symbol, action: "Skipped", reason: "Insufficient settled paper cash or position capacity at the observed fill.", at: now)
                         continue
                     }
                     trades.append(TradeRecord(id: order.id, symbol: order.symbol, side: .long, entry: fill,
@@ -220,6 +244,30 @@ final class StockSagePaperAutomation: ObservableObject {
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) ?? now
     }
+
+    /// Scheduled US equity T+1; midnight release is a simulation convention, not broker confirmation.
+    /// FINRA calendar, verified 2026-09-09: /rules-guidance/key-topics/margin-accounts/margin-extension-holiday-schedule
+    /// ponytail: explicit 2026 + January 2027 calendar; extend from verified notices before expiry.
+    nonisolated static func settlementDate(forSaleAt sale: Date) -> Date? {
+        guard sale.timeIntervalSince1970.isFinite else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        func dayKey(_ date: Date) -> Int {
+            let parts = calendar.dateComponents([.year, .month, .day], from: date)
+            return (parts.year ?? 0) * 10_000 + (parts.month ?? 0) * 100 + (parts.day ?? 0)
+        }
+        guard (20260101...20270131).contains(dayKey(sale)) else { return nil }
+        let holidays: Set<Int> = [20260101, 20260119, 20260216, 20260403, 20260525, 20260619,
+            20260703, 20260907, 20261012, 20261111, 20261126, 20261225, 20270101, 20270118]
+        var day = calendar.startOfDay(for: sale)
+        for _ in 0..<8 {
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day),
+                  (20260101...20270131).contains(dayKey(next)) else { return nil }
+            day = next
+            if !calendar.isDateInWeekend(day), !holidays.contains(dayKey(day)) { return day }
+        }
+        return nil
+    }
     nonisolated static func entryWindowOpen(_ now: Date) -> Bool {
         paperSessionOpen(now) && now < sessionTime(now, hour: 19, minute: 55)
     }
@@ -301,7 +349,7 @@ final class StockSagePaperAutomation: ObservableObject {
         for decision in book.decisions where !decision.symbol.isEmpty {
             attempted[decision.symbol] = max(attempted[decision.symbol] ?? .distantPast, decision.at)
         }
-        let affordable = min(book.cash, positionCap)
+        let affordable = min(book.buyingCash(at: now), positionCap)
         let candidates = (market?.rows ?? []).filter {
             let q = $0.quote
             return validSymbol(q.symbol) && StockSageMassive.covers(q.symbol) && fresh(q, at: now)
@@ -373,6 +421,7 @@ final class StockSagePaperAutomation: ObservableObject {
         guard !isRunning, !StockSageStore.isRunningTests, !CommandLine.arguments.contains("--qa"), acquire() else { return }
         var next = book
         next.activateSameDay(at: Date())
+        next.activateSettlement(at: Date())
         if next.decisions.count != book.decisions.count, !save(next) { release(); return }
         defaults.set(true, forKey: Self.enabledKey)
         generation = UUID()
@@ -547,7 +596,7 @@ final class StockSagePaperAutomation: ObservableObject {
         let position = held.map { "Currently held in the paper account: \($0.shares) shares, simulated entry \($0.entry) USD. Sell/Reduce closes this holding; Hold keeps it." }
             ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."
         let facts = context.facts + intraday.facts + ["Daily background bars end \(historyAt.ISO8601Format()); daily indicators are not intraday predictions. Same-day policy: no new entries from 19:55 New York and no intended overnight holdings.",
-            position, "Paper cash: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Do not invent a trade just to spend cash.", Self.sessionClockFact(at: Date())]
+            position, "Settled paper cash available for entries: \(book.buyingCash(at: Date())) USD. Total paper cash including unsettled sale proceeds: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Simulated T+1 cash policy, not broker buying power. Do not invent a trade just to spend cash.", Self.sessionClockFact(at: Date())]
         // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
         let intradayIndices = (context.facts.count + 1)..<(context.facts.count + intraday.facts.count)
         let entryInstruction = "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "

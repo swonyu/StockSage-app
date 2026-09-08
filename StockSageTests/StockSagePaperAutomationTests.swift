@@ -413,6 +413,24 @@ struct StockSagePaperAutomationTests {
         #expect(!A.validSymbol("2222.SR") && !A.validSymbol("BTC-USD") && !A.validSymbol("^GSPC"))
     }
 
+    @Test func sameDaySaleCannotFinanceAnotherCashAccountEntry() {
+        var book = A.Book()
+        let names = ["AAPL", "MSFT", "ORCL", "NVDA", "GOOG"]
+        for symbol in names { book.propose(symbol: symbol, action: .buy, at: now) }
+        book.settle(quotes: Dictionary(uniqueKeysWithValues: names.map {
+            ($0, quote($0, at: now.addingTimeInterval(1)))
+        }), at: now.addingTimeInterval(2))
+        #expect(book.cash == 490.5 && book.open.count == 5)
+        book.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(3))
+        book.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(4))], at: now.addingTimeInterval(5))
+        #expect(book.cash == 2388.6 && book.open.count == 4)
+        book.propose(symbol: "META", action: .buy, at: now.addingTimeInterval(6))
+        book.settle(quotes: ["META": quote("META", price: 600, at: now.addingTimeInterval(7))],
+                    at: now.addingTimeInterval(8))
+        #expect(!book.open.contains { $0.symbol == "META" }, "Only $490.50 remains settled; sale proceeds are not same-day buying power")
+        #expect(book.valid)
+    }
+
     @Test func stopUsesSubsequentObservedPriceNotAnInventedStopFill() {
         var book = A.Book()
         book.propose(symbol: "AAPL", action: .buy, at: now)
@@ -422,6 +440,93 @@ struct StockSagePaperAutomationTests {
         book.settle(quotes: ["AAPL": quote(price: 94, at: now.addingTimeInterval(5))], at: now.addingTimeInterval(6))
         #expect(book.open.isEmpty && abs((book.trades[0].exitPrice ?? 0) - 93.906) < 0.000001)
         #expect(book.trades[0].exitPrice != book.trades[0].stop)
+    }
+
+    @Test func settlementCalendarUsesNewYorkBusinessDatesIncludingBankHolidays() throws {
+        let cases = [
+            ("2026-09-08T23:59:59Z", "2026-09-09T04:00:00Z"),
+            ("2026-09-09T00:00:00Z", "2026-09-09T04:00:00Z"), // Still September 8 in New York.
+            ("2026-09-04T19:00:00Z", "2026-09-08T04:00:00Z"), // Weekend + Labor Day.
+            ("2026-04-02T19:00:00Z", "2026-04-06T04:00:00Z"), // Good Friday.
+            ("2026-07-02T19:00:00Z", "2026-07-06T04:00:00Z"), // Observed Independence Day.
+            ("2026-10-09T19:00:00Z", "2026-10-13T04:00:00Z"), // Columbus Day: exchange open, no settlement.
+            ("2026-10-12T19:00:00Z", "2026-10-13T04:00:00Z"),
+            ("2026-11-10T19:00:00Z", "2026-11-12T05:00:00Z"), // Veterans Day.
+            ("2026-11-11T19:00:00Z", "2026-11-12T05:00:00Z"),
+            ("2026-03-06T19:00:00Z", "2026-03-09T04:00:00Z"), // Spring DST.
+            ("2026-10-30T19:00:00Z", "2026-11-02T05:00:00Z"), // Fall DST.
+            ("2026-11-25T19:00:00Z", "2026-11-27T05:00:00Z"), // Early-close day still settles.
+            ("2026-12-31T19:00:00Z", "2027-01-04T05:00:00Z"),
+            ("2027-01-15T19:00:00Z", "2027-01-19T05:00:00Z")
+        ]
+        for (sale, expected) in cases {
+            #expect(A.settlementDate(forSaleAt: try Date(sale, strategy: .iso8601)) == (try Date(expected, strategy: .iso8601)))
+        }
+        for unsupported in ["2025-12-31T19:00:00Z", "2027-01-29T19:00:00Z", "2027-02-01T19:00:00Z"] {
+            #expect(A.settlementDate(forSaleAt: try Date(unsupported, strategy: .iso8601)) == nil)
+        }
+        #expect(A.settlementDate(forSaleAt: Date(timeIntervalSince1970: .nan)) == nil)
+    }
+
+    @Test func proceedsReleaseAtScheduledDateWithoutChangingEquityOrHistory() throws {
+        var book = A.Book()
+        book.propose(symbol: "AAPL", action: .buy, at: now)
+        book.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        book.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(3))
+        book.settle(quotes: ["AAPL": quote(price: 105, at: now.addingTimeInterval(4))], at: now.addingTimeInterval(5))
+        let due = try #require(A.settlementDate(forSaleAt: now))
+        let before = try JSONEncoder().encode(book)
+        #expect(book.cash == 10_091.11)
+        #expect(book.unsettledProceeds(at: due.addingTimeInterval(-1)) == 1993.01)
+        #expect(book.settledCash(at: due.addingTimeInterval(-1)) == 8098.1)
+        #expect(book.settledCash(at: due) == book.cash && book.unsettledProceeds(at: due) == 0)
+        #expect(book.equity(quotes: [:], at: due.addingTimeInterval(-1)) == book.equity(quotes: [:], at: due))
+        let restored = try JSONDecoder().decode(A.Book.self, from: before)
+        #expect(restored.trades == book.trades && restored.valid && restored.version == 1)
+        #expect(restored.settledCash(at: due.addingTimeInterval(-1)) == 8098.1)
+        #expect(restored.settledCash(at: due) == 10_091.11)
+    }
+
+    @Test func fundingDeficitBlocksOnlyEntriesAndUnknownDatesKeepProceedsUnavailable() throws {
+        var book = A.Book()
+        // A historical full-cash round trip plus an already recycled $100 holding.
+        book.trades = [
+            .init(symbol: "AAPL", side: .long, entry: 100, stop: 98, target: 104, shares: 100,
+                  openedAt: now.addingTimeInterval(-10), exitPrice: 100, closedAt: now),
+            .init(symbol: "MSFT", side: .long, entry: 100, stop: 98, target: 104, shares: 1, openedAt: now)
+        ]
+        #expect(book.valid && book.cash == 9900 && book.settledCash(at: now) == -100 && book.buyingCash(at: now) == 0)
+        book.propose(symbol: "META", action: .buy, at: now.addingTimeInterval(1))
+        #expect(book.pending.isEmpty && book.decisions.last?.reason.contains("settled paper cash") == true)
+        let market = StockSageMassive.MarketSnapshot(returnedCount: 1, rows: [.init(quote: quote("META", price: 1, at: now), dollarVolume: 1000)])
+        #expect(A.researchTargets(market: market, book: book, at: now) == ["MSFT"], "Zero funds must not suppress held-position research")
+        book.propose(symbol: "MSFT", action: .sell, at: now.addingTimeInterval(1))
+        book.settle(quotes: ["MSFT": quote("MSFT", at: now.addingTimeInterval(2))], at: now.addingTimeInterval(3))
+        #expect(book.open.isEmpty && book.valid && book.settledCash(at: now.addingTimeInterval(3)) == -100)
+        let unsupported = try Date("2027-02-01T19:00:00Z", strategy: .iso8601)
+        book.trades = [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98, target: 104, shares: 100,
+                            openedAt: unsupported, exitPrice: 101, closedAt: unsupported)]
+        #expect(book.unsettledProceeds(at: unsupported.addingTimeInterval(14 * 86_400)) == 10_100)
+        #expect(book.buyingCash(at: unsupported.addingTimeInterval(14 * 86_400)) == 0 && book.valid)
+    }
+
+    @Test func concurrentPendingFillsRecheckSettledCashAndActivationIsIdempotent() throws {
+        var book = A.Book()
+        book.trades = [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98, target: 104, shares: 95,
+                            openedAt: now.addingTimeInterval(-10), exitPrice: 100, closedAt: now)]
+        for symbol in ["META", "AMD"] { book.propose(symbol: symbol, action: .buy, at: now) }
+        book.lastResearch = now
+        let orders = book.pending.map(\.id), trades = book.trades
+        book.activateSettlement(at: now)
+        book.activateSettlement(at: now.addingTimeInterval(1))
+        #expect(book.pending.map(\.id) == orders && book.trades == trades && book.lastResearch == now)
+        #expect(book.decisions.filter { $0.action == "T+1 cash policy activated" }.count == 1)
+        book.settle(quotes: ["META": quote("META", price: 300, at: now.addingTimeInterval(1)),
+                             "AMD": quote("AMD", price: 300, at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        #expect(book.open.count == 1 && book.open.first?.shares == 1 && book.pending.isEmpty)
+        #expect(book.settledCash(at: now.addingTimeInterval(2)) == 199.7 && book.cash == 9699.7 && book.valid)
+        let restored = try JSONDecoder().decode(A.Book.self, from: JSONEncoder().encode(book))
+        #expect(restored.decisions.map(\.id) == book.decisions.map(\.id) && restored.trades == book.trades)
     }
 
     @Test func accountLeasePersistenceAndCorruptionProtection() throws {

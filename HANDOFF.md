@@ -1,5 +1,51 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Settlement-aware paper cash tested; installation deferred — 2026-09-09 02:43 +03
+
+First approved recommendation implemented in qwen-context, NOT yet installed.
+`Book.cash` remains total trade-date cash/equity. Derived net unsettled sale proceeds
+reduce settled spending capacity at proposal, fill-time sizing, discovery and Qwen
+context. Subsequent pending orders recheck the remaining balance. Zero settled cash
+does not prevent sells, protective exits or held-stock research. Negative historical
+funding balances remain visible; only new spending capacity is clamped to zero.
+Existing schema/trades/IDs/cadence stay intact. A separate one-time T+1 activation
+decision is saved by normal startup; no manual ledger edits.
+
+New York scheduled T+1 uses the verified 2026/January2027 settlement calendar,
+including Columbus/Veterans Day. Unknown dates retain proceeds as unspendable.
+Midnight release is explicitly a simulation convention, not an IBKR settlement
+confirmation. UI exposes total/settled/unsettled amounts, settlement dates, unknown
+calendar and legacy deficit states, with a30-second date refresh. Current10bps
+assumptions still apply; bid/ask execution, session-calendar alignment and strategy
+experiments remain subsequent work. Do not claim those recommendations complete.
+
+Actual red:27 paper tests,1 expected failure from a new$600 entry funded by same-day
+sale proceeds despite only$490.50 remaining settled, exit65. The first method-name
+filter selected0 tests and is NOT red evidence; `red-suite` is the actual reproduction.
+Final focused53 tests/3 suites passed0.085s. Canonical macOS1877 tests/192 suites
+passed56.855s; iPhone17Pro(gate)1874 tests/192 suites passed54.934s. Both exit0 with
+the unchanged three exclusions. No post-gate source edits. Final source review
+covered all cash-spending callers, independent exit paths, Codable compatibility,
+calendar bounds, rounding and the difference between spending capacity and equity.
+Native visual acceptance is not claimed.
+
+Artifacts: `/private/tmp/stocksage-paper-settlement-20260909.iuEqUb/`, focused,
+macos and ios logs/xcresults. Exact Mac-tested bundle preserved before iPhone testing
+at `verified-mac/StockSageX.app`; strict/deep codesign passed. Its dylibSHA256 is
+`af50927a65314816d8c314dd72dbdd8759de1924c41b14e02993c28a8dbea122`.
+
+NEXT AT02:55 RIYADH: observe the existing app's19:55 New York close-out before any
+replacement. Installed app remainsPID23768 with the old verified699a1fe8... hash
+and exclusive lease. At02:43,2 open USO/TSM trades,0 pending,911 decisions,1 same-day
+activation,0 T+1 activations; all pre-clock trade/decision IDs retained. The02:34
+cycle completed102/102 in210s,28 verified/74 unavailable,0 buys/sells. Do not force
+an exit or invent a price if later eligible observations never arrive. Once the
+close-out outcome is recorded, normally quit, verify process/lease release, retain
+the prior bundle recoverably, install THIS exact tested bundle and reopen. Verify
+history preservation and exactly one T+1 activation. Preserve QwenPID7192, loopback
+8765, broker relayOFF, frozen pilot and all other worktrees. Continue existing
+15-minute heartbeat, no new agents, merge or push.
+
 ## Research recommendation approved; settlement slice starting — 2026-09-09 02:25 +03
 
 Owner approved the same-day/IBKR recommendations. Research report is
