@@ -99,7 +99,7 @@ final class StockSagePaperAutomation: ObservableObject {
                     note(symbol: order.symbol, action: "Expired", reason: "No eligible post-decision fill within two minutes, or clock moved backwards.", at: now)
                     continue
                 }
-                guard StockSagePaperAutomation.regularHours(now),
+                guard StockSagePaperAutomation.paperSessionOpen(now),
                       let q = quotes[order.symbol], StockSagePaperAutomation.fresh(q, at: now),
                       q.symbol == order.symbol, let quoteTime = q.marketTime, quoteTime > order.at else { continue }
                 pending.removeAll { $0.id == order.id }
@@ -121,7 +121,7 @@ final class StockSagePaperAutomation: ObservableObject {
                      reason: "Simulated at a later Massive observation with an assumed 10 bps adverse fill.", at: now,
                      facts: ["Observed price: \(q.price)", "Market timestamp: \(quoteTime.ISO8601Format())", "Simulated fill: \(fill)"])
             }
-            guard StockSagePaperAutomation.regularHours(now) else { return }
+            guard StockSagePaperAutomation.paperSessionOpen(now) else { return }
             for trade in open where !pending.contains(where: { $0.symbol == trade.symbol }) {
                 guard let q = quotes[trade.symbol], q.symbol == trade.symbol,
                       StockSagePaperAutomation.fresh(q, at: now), q.marketTime! > trade.openedAt else { continue }
@@ -168,8 +168,13 @@ final class StockSagePaperAutomation: ObservableObject {
             && StockSageCurrency.conversionCurrencyForSymbol(symbol) == "USD"
             && StockSageAllocation.assetClass(symbol) == "Equity"
     }
-    nonisolated static func regularHours(_ now: Date) -> Bool {
-        StockSageMarketHours.nasdaqState(at: now, calendar: Calendar(identifier: .gregorian)).phase == .open
+    /// Native simulation only: the existing New York clock handles weekday and DST boundaries.
+    /// This does not establish holiday eligibility, fresh data, liquidity or broker permission.
+    nonisolated static func paperSessionOpen(_ now: Date) -> Bool {
+        switch StockSageMarketHours.nasdaqState(at: now, calendar: Calendar(identifier: .gregorian)).phase {
+        case .preMarket, .open, .afterHours: return true
+        default: return false
+        }
     }
     nonisolated static func fresh(_ quote: StockSageQuoteService.LiveQuote, at now: Date) -> Bool {
         guard quote.price.isFinite, quote.price > 0, quote.priceSource == .massiveSIP,
@@ -267,7 +272,7 @@ final class StockSagePaperAutomation: ObservableObject {
         next.settle(quotes: [:], at: now)
         if next.pending.count != book.pending.count, !save(next) { return }
         guard ToolPolicy.isExternalAllowed, !store.isSampleData else { status = "Waiting: web access or usable market data unavailable"; return }
-        guard Self.regularHours(now) else { status = "Waiting for scheduled US regular hours; holidays require fresh quotes"; return }
+        guard Self.paperSessionOpen(now) else { status = "Waiting for scheduled US sessions (04:00–20:00 New York time); holidays require fresh quotes"; return }
         let held = Array(Set(book.open.map(\.symbol) + book.pending.map(\.symbol))).sorted()
         let latest = await StockSageQuoteService.fetchQuotes(for: held)
         guard !Task.isCancelled, isRunning else { return }
@@ -352,7 +357,7 @@ final class StockSagePaperAutomation: ObservableObject {
             next = book
             next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
                       risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: config.model)
-            if Self.regularHours(decisionAt), Self.fresh(quote, at: decisionAt),
+            if Self.paperSessionOpen(decisionAt), Self.fresh(quote, at: decisionAt),
                store.userSymbols.contains(symbol) || next.open.contains(where: { $0.symbol == symbol }) {
                 next.propose(symbol: symbol, action: verdict.action, at: decisionAt)
             } else {

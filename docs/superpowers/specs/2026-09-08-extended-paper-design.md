@@ -39,3 +39,15 @@ and exits in pre-market, regular and after-hours. Combined base d13ab2b; task
 
 Source: [Nasdaq trading schedule](https://www.nasdaq.com/market-activity/stock-market-holiday-schedule),
 verified2026-09-08. The simulator does not prove broker entitlement or liquidity.
+
+## Executed evidence
+
+- Actual red:8 tests/8 issues, exit65. Focused final:8 tests passed in0.018s.
+- Final serial canonical gates:1851 macOS tests (56.610s) and1848 iPhone tests
+  (55.500s), both exit0 with the existing three exclusions.
+- 46 research tests passed in2.330s; frozen research and IBKR source unchanged.
+- Logs/results: `/private/tmp/stocksage-extended-paper-20260908.fL0dYG/`.
+- Verified installation at00:01 Riyadh on September9; prior app recoverable in
+  Trash. Actual after-hours ORCL research completed21:01:13 UTC with Hold and
+  no order. No forced fill, broker acceptance or native visual test is claimed.
+- Exact bundle hash, process/lease checks and limitations are in HANDOFF.

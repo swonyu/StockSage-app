@@ -1,5 +1,54 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Extended-hours native paper installed — 2026-09-09 00:01 +03
+
+Owner approved at23:54 on September8: native Qwen research, entries and exits
+in pre-market, regular and after-hours. Task01a0822f-6195-7f81-b4dc-6a0402fcaa4b
+handed task01a0772c-d7ba-7c50-906c-0a3a3e9baef1 the clean combined d13ab2b
+worktree and sole writer/install ownership for this slice. Design195ddc5:
+`docs/superpowers/specs/2026-09-08-extended-paper-design.md`.
+
+One shared paperSessionOpen predicate now accepts the existing New York clock's
+preMarket/open/afterHours phases: weekdays04:00 inclusive to20:00 exclusive,
+DST-aware. All four native research/proposal/fill/stop-exit call sites use it.
+Closed/weekend phases remain ineligible. Fresh later-than-decision Massive SIP
+observations, two-minute expiry, cash/position caps, assumed costs, persistence
+and no-backfill rules are unchanged. Hold/Avoid still does not request an order.
+UI explicitly names the extended window and discloses that assumed10bps costs
+do not measure spread/depth or extended-hours liquidity. Holiday scheduling is
+still not modeled; fresh-data checks remain, not a claim of full market readiness.
+
+Actual red:8 tests with8 issues (six boundary failures and two blocked extended
+entries), exit65. Focused final:8 tests passed in0.018s. Final serial canonical
+gates:1851 macOS tests in56.610s and1848 iPhone17Pro(gate) tests in55.500s,
+both exit0 with the established CalibrationPersistRunTests/
+LiveUniverseVerificationTests/StrategyBaselineMeasurementTests exclusions.
+Tests cover DST/weekends, session boundaries, later-only pre/post entries and
+stop exits, closed-session expiry, neutral opinions and invalid quotes in all
+three sessions.46 research regressions freshly passed in2.330s. Artifacts:
+`/private/tmp/stocksage-extended-paper-20260908.fL0dYG/`.
+Self-review/diff checks passed; Form4/copied-plan sources, IBKR relay and frozen
+research source files compare unchanged against d13ab2b. No new dependency.
+
+Installed app's oldPID79003 was already absent at the pre-quit check; cause not
+inferred. A normal AppleEvent quit returned0 and process absence was confirmed
+before replacement. Prior combined bundle retained at
+`/Users/saleh/.Trash/StockSageX-before-extended-paper-20260909-0001.app`.
+Tested/staged/installed contents match by checksum-aware dry-run comparison;
+strict/deep codesign passed. Installed debug dylibSHA256:
+4d369ce001c907a31e6a548051ece4b4da0b4901313cd1a28081ff061211d32a.
+Reopened appPID87669, saved native paper flag1, account lease file held. Original
+Qwen61562 unchanged. No new visual acceptance claim; broken native helper not retried.
+
+Observed actual after-hours cycle21:01:02–21:01:13 UTC (17:01 New York): ORCL
+returned Hold and Research complete was persisted. Ledger advanced15→19 decisions
+(including the disclosed observation gap), with zero trades/pending requests and
+no forced Buy. This verifies research resumed outside regular hours; actual
+market-observed extended-hours paper fills remain unobserved. Their mechanics
+passed deterministic tests, not a profitability or broker-fill validation.
+IBKR relay is NOT running, outsideRth remains false, and the free-trial account
+is still diagnostic-only. No broker orders, model changes, merge or push.
+
 ## Combined app installed; paper automation ON — 2026-09-08
 
 Owner explicitly requested all preparation before account approval and then

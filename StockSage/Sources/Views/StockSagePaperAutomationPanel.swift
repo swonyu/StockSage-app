@@ -17,6 +17,8 @@ struct StockSagePaperAutomationPanel: View {
                     }
                 }
                 Text(automation.status).font(.callout)
+                Text("Paper sessions: pre-market, regular and after-hours · 04:00–20:00 New York time")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 20) {
                     VStack(alignment: .leading) {
                         Text("Paper cash").font(.caption)
@@ -35,7 +37,7 @@ struct StockSagePaperAutomationPanel: View {
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
                 DisclosureGroup("Simulation policy and limitations") {
                     Text("Separate $10,000 account. Qwen researches up to four US watchlist or held stocks every fifteen minutes, rotating through the list. Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy can open; Sell/Reduce closes the entire simulated holding. Hold/Avoid creates no order.")
-                    Text("Simulated fills require a Massive SIP observation after the decision, received within two minutes. Costs assume 10 basis points per side. A 2% stop and 4% target are simulation rules, not price forecasts. Exits use a subsequent observed price; gaps and missed crossings can worsen outcomes.")
+                    Text("Simulated fills require a Massive SIP observation after the decision, received within two minutes. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts. Exits use a subsequent observed price; gaps and missed crossings can worsen outcomes.")
                     Text("Runs while this Mac is awake and StockSage is open. Weekday session hours do not include a holiday calendar; stale or missing data blocks fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
                 }.font(.caption).foregroundStyle(.secondary)
                 if !automation.book.open.isEmpty {

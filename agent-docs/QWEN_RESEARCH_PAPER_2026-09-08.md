@@ -9,7 +9,9 @@ changes, new dependencies, or changes to the frozen prospective research pilot.
 StockSage's macOS Chat page contains **Qwen research and paper trading** with
 Start/Pause controls, cash, estimated liquidation value, holdings and saved
 research evidence. Once enabled it resumes on app launch. It runs while StockSage
-is open and the Mac is awake, during scheduled US regular hours. It requires
+is open and the Mac is awake, during scheduled US pre-market, regular and
+after-hours sessions: weekdays04:00 inclusive to20:00 exclusive, New York time
+(DST-aware). It requires
 existing web permission, usable data and the configured local Qwen server.
 
 Every fifteen minutes it researches up to four US watchlist/held stocks, rotating
@@ -29,6 +31,11 @@ is 10 basis points per side. Stops at 2% and targets at 4% request an exit when
 observed; the exit fills at a subsequent observation, not an invented stop price.
 Position observation runs approximately every thirty seconds while research
 inference proceeds separately.
+
+Extended-hours support is native simulation only. It does not enable the IBKR
+relay or change its outsideRth/account restrictions. Fixed assumed costs do not
+measure actual spreads, order-book depth or extended-hours liquidity; simulated
+fills are not evidence that a broker would accept or fill the same order.
 
 The ledger is `~/Library/Application Support/StockSageQwenPaper/account.json`.
 A lifetime process lock, validation and atomic replacement protect it against
