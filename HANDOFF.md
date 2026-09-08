@@ -1,5 +1,64 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Fixed forecaster comparison — 2026-09-08 15:56 +03
+
+Continued inline from18394aa, owner-approved bounded research; peer still inactive.
+Only new comparison tool/tests and research/HANDOFF evidence. Earlier four runners
+unchanged, no app/Swift/Qwen/settings/broker/record changes, downloads/dependencies,
+training, cloud, push, merge or subagents. Qwen61562 and StockSage26453 remain on.
+Mainfc455cc clean and other worktree's unrelated pbxproj/AGENTS/review docs preserved.
+
+Frozen before inference: first previous walk-forward blockJuly8/9/10/13/14, ten
+symbols, five11:10–11:30ET events per day=250. Same100 completed minute OHLC
+contexts; exact1/6-minute delays and15-minute holds. Separate immutable context
+and outcome files; independent checks prove causal cutoffs and500 aligned labels.
+Reuse existing fold1 LightGBM trainedJune1–29 (11,000 rows), no fitting/tuning.
+Same5bps gross entry threshold for six candidates, all1/5/10/50bps assumed RT
+costs and both delays=48 scenarios. ExistingUSD10k/whole-share/no-borrow/5-position/
+20%-entry account simulator, capital carried across five dates; no stop modeled.
+This is an already-observed narrow morning-window comparison, NOT fresh holdout.
+
+At1-minute/5bps: zero0%/0 trades/25.576bp MAE;momentum-1.195%/46/39.201bp;
+reversal-0.179%/36/34.694bp;LightGBM0%/0/25.778bp;Kronos-0.052%/32/30.443bp;
+Chronos-0.886%/33/27.903bp. Neither forecaster beats no-change MAE here. Kronos
+is+0.167% only at1-minute/1bps among its eight scenarios; all others negative.
+At6-minute/5bps:Kronos-0.244%,Chronos-0.411%. All scenarios retained; no selected
+winner, trading-edge/weekly-return claim or app promotion. LightGBM abstention
+does not prove skill. Full table/limitations in tools/intraday_research.md.
+
+Kronos124/5,500 OHLC forecast-step violations counted without open exclusion;
+Chronos0/5,500 selected-quantile crossings, OHLC quality explicitly not applicable.
+Forecast steps overlap and are not independent observations. Generated nonfinite
+non-open fields serialize as null, not repaired market facts. Usable opens must
+be finite/positive; missing/nonfinite/duplicate/unmatched predictions fail scoring.
+
+35 research tests pass. Review caught internally hash-valid incomplete inputs:
+added failing249-event fixture, then full250-event schedule guard. Retainedv1/v2
+artifacts; v1 Kronos completed but Chronos refused changed source before loading.
+Finalv3 also uses null for inapplicable quality checks. All prepared input/label/
+baseline bytes unchanged across versions, v1/v3 Kronos outputs match. Two final
+fresh-process runs per model reproduce every forecast and quality count exactly;
+all48 scored results/trade logs and markdown also replay exactly. Independent
+PnL/cash/cap/daily-equity checks pass twice. No swaps; final first-run Kronos
+94.54s/555,319,296-byte peakRSS;Chronos15.54s/1,336,983,552 bytes. Rechecks104.69s/
+556,056,576 bytes and16.69s/1,335,803,904 bytes; under2GB/5-minute checks. No model
+left resident. Scoring1.38s/236,978,176 bytes. No new Xcode/native acceptance claim.
+
+Private root:.research/comparisons/20260908-first-fold-v3/;
+kronos-v1{,-recheck},chronos-v1{,-recheck},evaluation-v1{,-recheck} subdirectories.
+RecipeSHA:b54d6bd501656137924d8f76eec638e36a80892a0d424a072342e674f87a4ff8.
+BundleSHA:b514c3a2971c637fc3d02198bf1ae95953470cd2af48d34a6a9f4cc5317d0e5b.
+ReportSHA:53bcf5f0ff47adc5ead5e432dba41fc2178888dcfa6146889c7997c78891052c.
+Private files0600/ignored; exact commands in tools/intraday_research.md.
+
+Next required milestone: implement a bounded prospective paper-recording protocol
+with frozen schedule/rules, retrieval and prediction-completion timestamps BEFORE
+eligible entry, explicit missed/late/error events, append-only raw revisions and
+later outcome scoring. The existing15-minute heartbeat is not exact-time execution;
+never backdate a late forecast or call retrospective records prospective. Current
+comparison is not that ledger. Do not optimize these already-seen dates or promote
+a candidate to live decisions. Native Chat/window acceptance remains unchanged.
+
 ## Chronos-2 CPU compatibility — 2026-09-08 15:31 +03
 
 Continued inline fromf8793e4, owner-approved research sequence; peer inactive.

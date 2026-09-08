@@ -380,3 +380,135 @@ Sources checked2026-09-08: [official model card](https://huggingface.co/amazon/c
 [published package2.3.1](https://pypi.org/project/chronos-forecasting/2.3.1/).
 The model-selection skill informed official-source/checkpoint verification, not
 a claim of trading superiority. No strategy promotion, Swift/app change or push.
+
+## Fixed comparative pilot — prespecified 2026-09-08
+
+Before inference/scoring: use the first previous walk-forward test block,
+July8/9/10/13/14,2026, and the same ten symbols. Exactly five clock-selected
+signals per day at11:10/11:15/11:20/11:25/11:30ET:250 events total. No event
+selection using returns, labels, prediction quality or realized tradeability.
+Missing required context/labels is a whole-study failure, not a dropped row.
+This narrow morning-window subset is engineering/exploratory evidence on already-
+seen dates, not an untouched holdout, a full-day strategy or a profitability test.
+
+Six candidates: zero,15-minute momentum,reversal,previous fold1 LightGBM,
+Kronos-small and Chronos-2. No fitting, fine-tuning or threshold search here.
+Reuse the saved LightGBM trained onJune1–29,11,000 rows, model SHA256
+`079d5bd6392983a62c1f36c337b849197ec4d0f1bd4993fa35015e6f89520836`.
+Keep all previous runner/checkpoint hashes and model settings unchanged. Both
+forecasters consume the same100 completed minute OHLC bars; LightGBM retains
+its original5-minute OHLCV engineered features (not equal information).
+
+Fixed entry threshold strictly greater than5bps gross predicted return for all
+candidates; this is a new prespecified policy, NOT the earlier validation-selected
+thresholds. Report all1/5/10/50bps assumed RT cost scenarios and1/6-minute entry
+delays,48 combinations; carry the sameUSD10k cash account across all five dates.
+Reuse exact delayed-open15-minute targets, deterministic ranking/tie-breaks,
+long-only whole-share/max5 positions/20%-entry/no-borrow simulator. No stops.
+No-trade is the counterfactual; prediction MAE is calculated on all250 events,
+not only trades. No candidate is selected on the resulting table.
+
+Model subprocesses receive only an immutable context bundle; labels and baseline
+predictions are separate hash-bound files for scoring. Fresh process per model,
+CPU1 thread, existing environments/assets only, one seed7 path for Kronos and
+open-price0.1/0.5/0.9 quantiles for Chronos. No network, downloads or training.
+Every finite positive-open forecast is scored; record invalid Kronos OHLC and
+Chronos crossings without repair or exclusion. Nonfinite/unusable opens or missing/
+duplicate/unmatched event IDs fail scoring for the entire study. No "best effort"
+candidate dropping. Each inference process remains under2GB/5-minute checks;
+run serially, repeat both once, and compare all output values before reporting.
+
+Prospective protocol remains a separate required next milestone: lock versions,
+rules and event schedule before the first live observation; append retrieval and
+prediction-completion timestamps before the permitted entry; reject late signals;
+retain missed/failed events and provider corrections without backdating records.
+Only score realized outcomes after their timestamps. No automatic app/broker
+integration or capital allocation from this retrospective comparison.
+
+### Executed fixed comparison
+
+`tools/intraday_comparison.py` composes the existing archive/calendar/context,
+delay and simulator helpers. All four earlier research runners remain byte-
+identical. No retraining: the pinned fold1 LightGBM artifact is reused. The exact
+250 clock-selected inputs are separate from500 labels (two delays). Independent
+checks confirm all input timestamps precede signal T and both entry/exit indices
+match the labels. A private recipe precedes processing; hashes bind code, source
+study, saved fit, contexts, labels and baseline predictions. Model stages read
+the context file only, not the label/baseline files. Prediction IDs must join the
+entire fixed schedule. No missing-candidate or failed-event partial results.
+
+Final artifacts: `.research/comparisons/20260908-first-fold-v3/` with recipe,
+bundle,inputs,samples,baselines JSON; `kronos-v1{,-recheck}/` and
+`chronos-v1{,-recheck}/` hold independent prediction runs;
+`evaluation-v1{,-recheck}/` hold all48 scenarios and complete trade logs.
+
+```sh
+.research/venv/bin/python tools/intraday_comparison.py prepare \
+  --study .research/studies/20260908-jun-aug-v1 \
+  --lightgbm .research/runs/20260908-jun-aug-v1/fold-1-lightgbm.txt \
+  --root .research/comparisons/20260908-first-fold-v3
+
+# Execute serially, in their existing isolated environments. New output paths only.
+.research/kronos-venv/bin/python tools/intraday_comparison.py predict \
+  --root .research/comparisons/20260908-first-fold-v3 --candidate kronos \
+  --assets .research/kronos-v1 --output .research/comparisons/20260908-first-fold-v3/kronos-v1
+.research/chronos-venv/bin/python tools/intraday_comparison.py predict \
+  --root .research/comparisons/20260908-first-fold-v3 --candidate chronos \
+  --assets .research/chronos-v1 --output .research/comparisons/20260908-first-fold-v3/chronos-v1
+.research/venv/bin/python tools/intraday_comparison.py evaluate \
+  --root .research/comparisons/20260908-first-fold-v3 \
+  --study .research/studies/20260908-jun-aug-v1 \
+  --kronos .research/comparisons/20260908-first-fold-v3/kronos-v1 \
+  --chronos .research/comparisons/20260908-first-fold-v3/chronos-v1 \
+  --output .research/comparisons/20260908-first-fold-v3/evaluation-v1
+```
+
+At the fixed1-minute delay/5bps **assumed** round-trip cost, five morning windows:
+
+| Candidate | Return-prediction MAE bps | Simulated net return | Trades |
+|---|---:|---:|---:|
+| No-change / no-trade |25.576|0.000%|0|
+| Momentum |39.201|-1.195%|46|
+| Reversal |34.694|-0.179%|36|
+| Saved LightGBM |25.778|0.000%|0|
+| Kronos-small |30.443|-0.052%|32|
+| Chronos-2 |27.903|-0.886%|33|
+
+Neither forecaster beats no-change MAE in this primary window. No-trade LightGBM
+does not demonstrate a trading edge. Kronos is positive only at1-minute/1bps
+(+0.167%) among its eight scenarios;5bps flips it negative. At6-minute/5bps,
+Kronos-0.244%,Chronos-0.411%. All costs/delays remain in the report. These are
+already-seen selected-stock windows with correlated/overlapping targets, not
+independent trials, verified broker costs or evidence for future/weekly returns.
+No candidate was selected or promoted. Prospective paper recording is NOT yet
+implemented by this delivery; the protocol above describes what remains required.
+
+Quality: Kronos124/5,500 generated OHLC steps violate ordering; finite positive
+opens were still evaluated, never silently repaired or excluded. A nonfinite
+generated non-open field is represented as null, not a replacement price. Chronos
+0/5,500 selected-quantile crossings; OHLC check explicitly not applicable. Counts
+refer to forecast steps in overlapping windows, not5,500 independent observations.
+
+All35 research tests pass, including full-fit LightGBM regressions. New schedule,
+strict ID joins and changed-hash tests pass. Self-review added a red/green regression
+showing even internally valid hashes must not permit a249-event input bundle.
+Earlier v1/v2 bundles retained. v1 Kronos completed, then Chronos correctly refused
+the changed source hash before model load. Finalv3 only adds that boundary guard
+and uses null for inapplicable quality metrics. Contexts/labels/baseline files are
+byte-identical across all three; v1 andv3 Kronos forecasts also match exactly.
+
+Both final model processes repeated once: all250-event predictions/quality counts
+identical; all48 scenarios/trade logs and markdown replay exactly. Independent
+cash/PnL reconciliation, five-position/20%-entry caps and five daily equity values
+pass for both reports. No swaps; finalfirst-run resources: Kronos94.54s wall,
+555,319,296-byte peakRSS (median0.367s forecast);Chronos15.54s wall,
+1,336,983,552-byte peakRSS (median0.0354s forecast). Rechecks104.69s/16.69s and
+556,056,576/1,335,803,904 bytes. All under2GB/5-minute checks, serial forecasters,
+no resident forecast server. Preparation1.77s initial/3.38s intermediate, scoring
+1.38s/236,978,176-byte peakRSS. Timings are not a controlled speed comparison.
+
+Final recipe SHA256:`b54d6bd501656137924d8f76eec638e36a80892a0d424a072342e674f87a4ff8`.
+Bundle SHA256:`b514c3a2971c637fc3d02198bf1ae95953470cd2af48d34a6a9f4cc5317d0e5b`.
+Report SHA256:`53bcf5f0ff47adc5ead5e432dba41fc2178888dcfa6146889c7997c78891052c`.
+All private files0600 and ignored. Qwen and StockSage remain running unchanged;
+no new dependencies/downloads, app/Swift change, real orders, merge or push.
