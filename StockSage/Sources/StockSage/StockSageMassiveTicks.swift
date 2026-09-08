@@ -1,6 +1,6 @@
 import Foundation
 
-/// On-demand SIP tape. Never called by the board sweep or stream timer.
+/// On-demand SIP tape and bounded paper-price fallback. Never called by the board sweep.
 /// https://massive.com/docs/rest/stocks/trades-quotes/trades: price, decimal_size/size,
 /// exchange, id, sip_timestamp (ns), sequence_number, tape, conditions, trf_id.
 /// https://massive.com/docs/rest/stocks/trades-quotes/quotes: bid/ask_price/size/exchange,
@@ -18,6 +18,9 @@ enum StockSageMassiveTicks {
         let exchange: Int64?
         let timestamp: Date
         let sequence: Int64?
+        var conditions: [Int64]? = nil
+        var participantTime: Date? = nil
+        var correction: Int64? = nil
     }
     nonisolated struct Exchange: Sendable, Equatable {
         let id: Int64
@@ -49,6 +52,7 @@ enum StockSageMassiveTicks {
     }
 
     private static var exchangeCache: (at: Date, values: [Int64: Exchange])?
+    private static var paperConditionsCache: (at: Date, values: Set<Int64>)?
     private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
 
     nonisolated static func request(kind: Kind, symbol: String, from: Date, to: Date, key: String) -> URLRequest? {
@@ -108,8 +112,15 @@ enum StockSageMassiveTicks {
                       let size = StockSageMassive.finite(row["decimal_size"] ?? row["size"]), size > 0 else {
                     page.rejected += 1; continue
                 }
+                let rawConditions = row["conditions"] as? [Any]
+                let conditions = rawConditions?.compactMap { StockSageMassive.int64($0) }
+                let participant = StockSageMassive.int64(row["participant_timestamp"])
+                    .flatMap { $0 > 0 ? StockSageMassive.date(fromNanoseconds: $0) : nil }
                 page.trades.append(.init(price: price, size: size, exchange: StockSageMassive.int64(row["exchange"]),
-                                         timestamp: at, sequence: sequence))
+                    timestamp: at, sequence: sequence,
+                    conditions: conditions?.count == rawConditions?.count ? conditions : nil,
+                    participantTime: participant,
+                    correction: row["correction"] == nil ? 0 : StockSageMassive.int64(row["correction"])))
             case .quotes:
                 // Optional/missing sides are unavailable, never synthetic liquidity.
                 let bid = row["bid_price"] == nil ? 0 : StockSageMassive.finite(row["bid_price"])
@@ -187,6 +198,68 @@ enum StockSageMassiveTicks {
         guard let url = URL(string: StockSageMassive.host + "/v3/reference/conditions?asset_class=stocks&data_type=quote&limit=1000"),
               let request = authorized(url, key: StockSageMassive.apiKey) else { throw Failure.unavailable }
         return try parseRegularQuoteConditions(await data(for: request))
+    }
+
+    /// Conservative simulation eligibility, resolved by reference names, never guessed numeric IDs.
+    /// Form T and odd lots can be timely observations even though they do not update official OHLC.
+    nonisolated static func parsePaperTradeConditions(_ data: Data) throws -> Set<Int64> {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["status"] as? String == "OK", root["next_url"] == nil,
+              let rows = root["results"] as? [[String: Any]], rows.count <= 1_000 else { throw Failure.invalidPayload }
+        let names: Set<String> = ["Regular Sale", "Automatic Execution", "Intermarket Sweep",
+            "Form T/Extended Hours", "Odd Lot Trade", "Trade Thru Exempt"]
+        var seen: Set<Int64> = [], allowed: Set<Int64> = []
+        for row in rows {
+            guard let id = StockSageMassive.int64(row["id"]), id >= 0,
+                  seen.insert(id).inserted else { throw Failure.invalidPayload }
+            guard row["asset_class"] as? String == "stocks",
+                  (row["data_types"] as? [String])?.contains("trade") == true,
+                  row["legacy"] == nil || row["legacy"] as? Bool == false, row["exchange"] == nil,
+                  let name = row["name"] as? String, names.contains(name) else { continue }
+            allowed.insert(id)
+        }
+        guard !allowed.isEmpty else { throw Failure.invalidPayload }
+        return allowed
+    }
+
+    static func paperQuote(_ trades: [Trade], symbol: String, allowed: Set<Int64>,
+                                      now: Date) -> StockSageQuoteService.LiveQuote? {
+        guard StockSageMassive.covers(symbol) else { return nil }
+        let eligible = trades.filter { trade in
+            guard let conditions = trade.conditions, !conditions.isEmpty,
+                  conditions.allSatisfy(allowed.contains), trade.correction == 0,
+                  let participant = trade.participantTime, participant <= trade.timestamp,
+                  (0...120).contains(now.timeIntervalSince(participant)),
+                  (0...120).contains(now.timeIntervalSince(trade.timestamp)),
+                  trade.price.isFinite, trade.price > 0, trade.size.isFinite, trade.size > 0 else { return false }
+            return true
+        }.max { $0.participantTime! < $1.participantTime! }
+        guard let trade = eligible else { return nil }
+        // No previous-close claim is supplied by a tick. Research retains its daily-bar inputs.
+        return .init(symbol: symbol, price: trade.price, previousClose: trade.price,
+                     marketTime: trade.participantTime, isNewListing: true,
+                     massiveTradeSequence: trade.sequence, priceSource: .massiveSIP)
+    }
+
+    static func freshPaperQuote(symbol: String, now: Date = Date()) async -> StockSageQuoteService.LiveQuote? {
+        do {
+            let allowed: Set<Int64>
+            if let cache = paperConditionsCache, (0..<86_400).contains(now.timeIntervalSince(cache.at)) {
+                allowed = cache.values
+            } else {
+                guard let url = URL(string: StockSageMassive.host + "/v3/reference/conditions?asset_class=stocks&data_type=trade&limit=1000"),
+                      let request = authorized(url, key: StockSageMassive.apiKey) else { return nil }
+                allowed = try parsePaperTradeConditions(await data(for: request))
+                paperConditionsCache = (now, allowed)
+            }
+            try Task.checkCancellation()
+            let from = now.addingTimeInterval(-120)
+            guard let request = request(kind: .trades, symbol: symbol, from: from, to: now,
+                                        key: StockSageMassive.apiKey) else { return nil }
+            let page = try parse(await data(for: request), kind: .trades, symbol: symbol, from: from, to: now)
+            // ponytail: one 100-row page; if none qualifies, wait rather than paging the full tape.
+            return paperQuote(page.trades, symbol: symbol, allowed: allowed, now: Date())
+        } catch { return nil } // No raw response, URL or credential-bearing error reaches UI/logs.
     }
 
     static func fetch(symbol: String, from: Date, to: Date) async -> Tape {

@@ -12,6 +12,8 @@ final class StockSagePaperAutomation: ObservableObject {
     nonisolated static let costRate = 0.001 // Assumed 10 bps on each side, not measured broker costs.
     nonisolated static let interval: TimeInterval = 900
     nonisolated static let discoveryLimit = 100
+    nonisolated static let researchConcurrency = 4
+    nonisolated static let researchInstructions = StockSageAIAssessment.instructions + "\nFor this paper scan, keep reason and risk to at most 20 words EACH. Retain the four-key JSON and all required evidence references."
 
     nonisolated struct Decision: Codable, Identifiable, Sendable {
         let id: UUID
@@ -183,6 +185,43 @@ final class StockSagePaperAutomation: ObservableObject {
         return (0...120).contains(now.timeIntervalSince(at))
     }
 
+    /// Shared by research, pending fills and position monitoring; stale snapshots are not final answers.
+    static func fetchPaperQuotes(for symbols: [String], after: [String: Date] = [:], at fixedTime: Date? = nil,
+        snapshots: @MainActor ([String]) async -> [String: StockSageQuoteService.LiveQuote] = { await StockSageMassive.fetchSnapshots(for: $0) },
+        tick: @MainActor (String, Date) async -> StockSageQuoteService.LiveQuote? = { await StockSageMassiveTicks.freshPaperQuote(symbol: $0, now: $1) }
+    ) async -> [String: StockSageQuoteService.LiveQuote] {
+        let snapshots = await snapshots(symbols)
+        var result: [String: StockSageQuoteService.LiveQuote] = [:]
+        func eligible(_ q: StockSageQuoteService.LiveQuote, symbol: String) -> Bool {
+            q.symbol == symbol && fresh(q, at: fixedTime ?? Date())
+                && (after[symbol].map { (q.marketTime ?? .distantPast) > $0 } ?? true)
+        }
+        for symbol in Set(symbols) {
+            guard !Task.isCancelled else { break }
+            if let q = snapshots[symbol], eligible(q, symbol: symbol) {
+                result[symbol] = q
+            } else if let q = await tick(symbol, fixedTime ?? Date()), eligible(q, symbol: symbol) {
+                result[symbol] = q
+            }
+        }
+        return result
+    }
+
+    /// Rolling task group overlaps I/O/inference, while each ledger mutation stays on MainActor.
+    static func forEachResearchTarget(_ symbols: [String],
+        operation: @escaping @MainActor @Sendable (String) async -> Void) async {
+        await withTaskGroup(of: Void.self) { group in
+            var remaining = symbols.makeIterator()
+            for _ in 0..<researchConcurrency {
+                if !Task.isCancelled, let symbol = remaining.next() { group.addTask { await operation(symbol) } }
+            }
+            for await _ in group {
+                if Task.isCancelled { group.cancelAll(); break }
+                if let symbol = remaining.next() { group.addTask { await operation(symbol) } }
+            }
+        }
+    }
+
     nonisolated static func mayResearch(_ symbol: String, marketSymbols: Set<String>, heldSymbols: Set<String>) -> Bool {
         validSymbol(symbol) && (marketSymbols.contains(symbol) || heldSymbols.contains(symbol))
     }
@@ -193,7 +232,7 @@ final class StockSagePaperAutomation: ObservableObject {
             || (book.lastResearch.map { now.timeIntervalSince($0) >= interval } ?? true)
     }
 
-    /// Full-market screening is cheap; serial model calls are bounded. Holdings never compete
+    /// Full-market screening is cheap; model calls have bounded concurrency. Holdings never compete
     /// for discovery slots. Least-recently attempted names rotate ahead of repeated opinions.
     nonisolated static func researchTargets(market: StockSageMassive.MarketSnapshot?, book: Book, at now: Date) -> [String] {
         let held = Set(book.open.map(\.symbol).filter(validSymbol))
@@ -311,7 +350,8 @@ final class StockSagePaperAutomation: ObservableObject {
         guard ToolPolicy.isExternalAllowed, !store.isSampleData else { status = "Waiting: web access or usable market data unavailable"; return }
         guard Self.paperSessionOpen(now) else { status = "Waiting for scheduled US sessions (04:00–20:00 New York time); holidays require fresh quotes"; return }
         let held = Array(Set(book.open.map(\.symbol) + book.pending.map(\.symbol))).sorted()
-        let latest = await StockSageQuoteService.fetchQuotes(for: held)
+        let after = Dictionary(uniqueKeysWithValues: book.pending.map { ($0.symbol, $0.at) })
+        let latest = await Self.fetchPaperQuotes(for: held, after: after)
         guard !Task.isCancelled, isRunning else { return }
         quotes = latest
         // Do not mis-account for a possible split as a giant profit/loss. No split-factor guessing.
@@ -365,66 +405,89 @@ final class StockSagePaperAutomation: ObservableObject {
         let probe = await StockSageLocalModelServer.probe(config)
         guard isRunning, !Task.isCancelled else { return }
         guard probe.reachable, probe.hasModel else { recordFailure("Local Qwen server is unavailable.", at: Date()); return }
-        for (index, symbol) in targets.enumerated() {
-            guard isRunning, !Task.isCancelled, ToolPolicy.isExternalAllowed, !store.isSampleData,
-                  StockSageAIAssessments.configuration == config else { return }
-            guard Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(book.open.map(\.symbol))) else { continue }
-            status = "Qwen research \(index + 1)/\(targets.count): \(symbol)"
-            let history = await StockSageQuoteService.fetchHistory(symbol, range: "1y")
-            let news = await StockSageNewsService.recentNews(for: symbol, limit: 3)
-            guard isRunning, !Task.isCancelled else { return }
-            guard let history, let historyAt = history.dates.last,
-                  (0...4 * 86_400).contains(Date().timeIntervalSince(historyAt)) else {
-                recordFailure("Recent dated price history unavailable; no paper decision.", symbol: symbol, at: Date()); continue
+        var finished = 0
+        let heldSymbols = Set(book.open.map(\.symbol))
+        for batch in [targets.filter { heldSymbols.contains($0) }, targets.filter { !heldSymbols.contains($0) }] {
+            await Self.forEachResearchTarget(batch) { [self] symbol in
+                await researchSymbol(symbol, store: store, config: config, isOllama: probe.isOllama,
+                                     marketSymbols: marketSymbols, run: run)
+                finished += 1
+                if generation == run, isRunning {
+                    status = "Qwen research \(finished)/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
+                }
             }
-            // Discovery must not require an existing board row or mutate the owner's watchlist.
-            let definitions = [store.symbols.first { $0.symbol == symbol }
-                ?? StockSageSymbol(symbol: symbol, market: "US · Massive")]
-            let ideas = await StockSageStore.buildIdeas(defs: definitions, histories: [symbol: history])
-            guard isRunning, !Task.isCancelled else { return }
-            guard let base = ideas.first else {
-                recordFailure("Price history or symbol definition unavailable; no paper decision.", symbol: symbol, at: Date()); continue
-            }
-            // History/news can take time. Capture the decision quote after those awaits.
-            let observed = await StockSageQuoteService.fetchQuotes(for: [symbol])
-            guard isRunning, !Task.isCancelled else { return }
-            guard let quote = observed[symbol], Self.fresh(quote, at: Date()) else {
-                recordFailure("Fresh Massive SIP observation unavailable; no paper decision.", symbol: symbol, at: Date()); continue
-            }
-            let idea = base.withLivePrice(quote.price, asOf: quote.marketTime, priceSource: quote.priceSource)
-            let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[symbol],
-                company: store.companyEventChecks[symbol] ?? [:], news: news, at: Date())
-            let held = book.open.first { $0.symbol == symbol }
-            let position = held.map { "Currently held in the paper account: \($0.shares) shares, simulated entry \($0.entry) USD. Sell/Reduce closes this holding; Hold keeps it." }
-                ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."
-            let facts = context.facts + ["Technical inputs use daily bars ending \(historyAt.ISO8601Format()); not intraday predictions.",
-                position, "Paper cash: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Do not invent a trade just to spend cash."]
-            guard context.canAssess(at: Date()), Self.fresh(quote, at: Date()) else {
-                recordFailure("Research context exceeded its freshness or size limit.", symbol: symbol, at: Date()); continue
-            }
-            let response = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
-                system: StockSageAIAssessment.instructions, user: StockSageAIAssessment.prompt(facts: facts), maxTokens: 512)
-            guard isRunning, !Task.isCancelled, ToolPolicy.isExternalAllowed, !store.isSampleData,
-                  StockSageAIAssessments.configuration == config else { return }
-            guard case .success(let text) = response, let verdict = StockSageAIAssessment.parse(text, facts: facts) else {
-                recordFailure("Qwen failed or returned an unverifiable response; no paper order.", symbol: symbol, at: Date()); continue
-            }
-            let decisionAt = Date()
-            next = book
-            next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
-                      risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: config.model)
-            if Self.paperSessionOpen(decisionAt), Self.fresh(quote, at: decisionAt),
-               Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(next.open.map(\.symbol))) {
-                next.propose(symbol: symbol, action: verdict.action, at: decisionAt)
-            } else {
-                next.note(symbol: symbol, action: "Skipped", reason: "Research finished after quote expiry, scheduled market close or loss of research eligibility.", at: decisionAt)
-            }
-            guard save(next) else { return }
         }
+        guard isRunning, !Task.isCancelled, generation == run else { return }
         next = book
+        guard ToolPolicy.isExternalAllowed, !store.isSampleData,
+              StockSageAIAssessments.configuration == config else {
+            next.note(action: "Research interrupted", reason: "Model configuration, web access or usable-data mode changed during the cycle.", at: Date())
+            _ = save(next)
+            status = "Research interrupted; will recheck configuration next cycle"
+            return
+        }
         next.note(action: "Research complete", reason: "Finished the selected symbols; unavailable and skipped decisions are retained above.", at: Date())
         guard save(next) else { return }
         status = "Research complete; monitoring paper positions"
+    }
+
+    private func researchSymbol(_ symbol: String, store: StockSageStore,
+        config: StockSageLocalModelServer.Config, isOllama: Bool, marketSymbols: Set<String>, run: UUID) async {
+        guard isRunning, !Task.isCancelled, ToolPolicy.isExternalAllowed, !store.isSampleData,
+              generation == run, StockSageAIAssessments.configuration == config else { return }
+        guard Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(book.open.map(\.symbol))) else { return }
+        async let historyFetch = StockSageQuoteService.fetchHistory(symbol, range: "1y")
+        async let newsFetch = StockSageNewsService.recentNews(for: symbol, limit: 3)
+        let (history, news) = await (historyFetch, newsFetch)
+        guard isRunning, !Task.isCancelled, generation == run else { return }
+        guard let history, let historyAt = history.dates.last,
+              (0...4 * 86_400).contains(Date().timeIntervalSince(historyAt)) else {
+            recordFailure("Recent dated price history unavailable; no paper decision.", symbol: symbol, at: Date()); return
+        }
+        // Discovery must not require an existing board row or mutate the owner's watchlist.
+        let definitions = [store.symbols.first { $0.symbol == symbol }
+            ?? StockSageSymbol(symbol: symbol, market: "US · Massive")]
+        let ideas = await StockSageStore.buildIdeas(defs: definitions, histories: [symbol: history])
+        guard isRunning, !Task.isCancelled, generation == run else { return }
+        guard let base = ideas.first else {
+            recordFailure("Price history or symbol definition unavailable; no paper decision.", symbol: symbol, at: Date()); return
+        }
+        // History/news can take time. Capture the decision quote after those awaits.
+        let observed = await Self.fetchPaperQuotes(for: [symbol])
+        guard isRunning, !Task.isCancelled, generation == run else { return }
+        guard let quote = observed[symbol], Self.fresh(quote, at: Date()) else {
+            recordFailure("No qualifying Massive trade within two minutes after checking snapshot and tick tape; no paper decision.", symbol: symbol, at: Date()); return
+        }
+        let idea = base.withLivePrice(quote.price, asOf: quote.marketTime, priceSource: quote.priceSource)
+        let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[symbol],
+            company: store.companyEventChecks[symbol] ?? [:], news: news, at: Date())
+        let held = book.open.first { $0.symbol == symbol }
+        let position = held.map { "Currently held in the paper account: \($0.shares) shares, simulated entry \($0.entry) USD. Sell/Reduce closes this holding; Hold keeps it." }
+            ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."
+        let facts = context.facts + ["Technical inputs use daily bars ending \(historyAt.ISO8601Format()); not intraday predictions.",
+            position, "Paper cash: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Do not invent a trade just to spend cash."]
+        guard context.canAssess(at: Date()), Self.fresh(quote, at: Date()) else {
+            recordFailure("Research context exceeded its freshness or size limit.", symbol: symbol, at: Date()); return
+        }
+        let response = await StockSageLocalModelServer.complete(config, isOllama: isOllama,
+            system: Self.researchInstructions, user: StockSageAIAssessment.prompt(facts: facts), maxTokens: 192)
+        guard isRunning, !Task.isCancelled, ToolPolicy.isExternalAllowed, !store.isSampleData,
+              generation == run, StockSageAIAssessments.configuration == config else { return }
+        guard case .success(let text) = response, let verdict = StockSageAIAssessment.parse(text, facts: facts) else {
+            recordFailure("Qwen failed or returned an unverifiable response; no paper order.", symbol: symbol, at: Date()); return
+        }
+        let decisionAt = Date()
+        var next = book
+        next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
+                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: config.model)
+        if Self.paperSessionOpen(decisionAt), Self.fresh(quote, at: decisionAt),
+           held?.id == next.open.first(where: { $0.symbol == symbol })?.id,
+           Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(next.open.map(\.symbol))) {
+            next.propose(symbol: symbol, action: verdict.action, at: decisionAt)
+        } else {
+            next.note(symbol: symbol, action: "Skipped", reason: "Research finished after quote expiry, scheduled market close, a holding change or loss of research eligibility.", at: decisionAt)
+        }
+        guard save(next) else { return }
     }
 
     private func recordFailure(_ reason: String, symbol: String = "", at: Date) {

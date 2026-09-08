@@ -11,6 +11,94 @@ struct StockSagePaperAutomationTests {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source)
     }
 
+    @Test func staleSnapshotFallsBackForResearchAndLaterPaperFill() async throws {
+        var calls: [String] = []
+        let stale = quote(at: now.addingTimeInterval(-360))
+        let later = quote(price: 101, at: now.addingTimeInterval(1))
+        let observed = await A.fetchPaperQuotes(for: ["AAPL"], at: now.addingTimeInterval(2),
+            snapshots: { _ in ["AAPL": stale] }, tick: { symbol, _ in calls.append(symbol); return later })
+        #expect(observed["AAPL"] == later && calls == ["AAPL"])
+        var book = A.Book()
+        book.propose(symbol: "AAPL", action: .buy, at: now)
+        book.settle(quotes: observed, at: now.addingTimeInterval(2))
+        #expect(book.open.count == 1 && book.valid)
+        calls = []
+        let fresh = await A.fetchPaperQuotes(for: ["AAPL"], at: now.addingTimeInterval(2),
+            snapshots: { _ in ["AAPL": later] }, tick: { symbol, _ in calls.append(symbol); return nil })
+        #expect(fresh["AAPL"] == later && calls.isEmpty)
+        let missing = await A.fetchPaperQuotes(for: ["AAPL"], at: now,
+            snapshots: { _ in ["AAPL": stale] }, tick: { _, _ in nil })
+        #expect(missing.isEmpty, "A failed tick fallback never relabels a stale snapshot")
+        let preDecision = quote(at: now)
+        let postDecision = await A.fetchPaperQuotes(for: ["AAPL"], after: ["AAPL": now], at: now.addingTimeInterval(2),
+            snapshots: { _ in ["AAPL": preDecision] }, tick: { _, _ in later })
+        #expect(postDecision["AAPL"] == later, "Fresh but pre-decision snapshots must also use the tick fallback")
+        let delayed = await A.fetchPaperQuotes(for: ["AAPL"], after: ["AAPL": now], at: now.addingTimeInterval(2),
+            snapshots: { _ in ["AAPL": preDecision] }, tick: { _, _ in preDecision })
+        #expect(delayed.isEmpty, "A pre-decision trade cannot become a later fill")
+    }
+
+    @Test func researchHasFourBoundedWorkersAndNoLostCompletions() async {
+        var active = 0, peak = 0
+        var finished: Set<String> = []
+        let symbols = (0..<13).map(String.init)
+        await A.forEachResearchTarget(symbols) { symbol in
+            active += 1; peak = max(peak, active)
+            try? await Task.sleep(for: .milliseconds(5))
+            finished.insert(symbol); active -= 1
+        }
+        #expect(peak == 4 && active == 0 && finished == Set(symbols))
+    }
+
+    @Test func cancellationDoesNotStartTheRestOfTheResearchQueue() async {
+        var started = 0
+        let task = Task {
+            await A.forEachResearchTarget((0..<100).map(String.init)) { _ in
+                started += 1
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        while started < 4 { await Task.yield() }
+        task.cancel()
+        await task.value
+        #expect(started == 4)
+    }
+
+    @Test func optedInLivePaperDiagnostics() async throws {
+        // Explicit local diagnostic only; ordinary gates never read credentials or call the network.
+        guard let directory = ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_DIAGNOSTICS"] else { return }
+        let defaults = UserDefaults.standard
+        let prior = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        var temporary = prior
+        temporary[StockSageMassive.keyDefaultsKey] = UserDefaults(suiteName: "SA.StockSage")?.string(forKey: StockSageMassive.keyDefaultsKey)
+        defaults.setVolatileDomain(temporary, forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(prior, forName: UserDefaults.argumentDomain) }
+        try #require(ToolPolicy.isExternalAllowed && StockSageMassive.isConfigured)
+        let names = ["AMGN", "STX", "LRCX", "SNOW", "DELL"]
+        let snapshots = await StockSageMassive.fetchSnapshots(for: names)
+        var recovered = 0
+        for symbol in names {
+            let quotes = await A.fetchPaperQuotes(for: [symbol], snapshots: { _ in snapshots })
+            let age = snapshots[symbol]?.marketTime.map { Date().timeIntervalSince($0) } ?? -1
+            if let q = quotes[symbol] {
+                #expect(A.fresh(q, at: Date()))
+                if age > 120 { recovered += 1 }
+                print("PAPER_LIVE \(symbol) snapshot_age=\(age) selected_age=\(Date().timeIntervalSince(q.marketTime!))")
+            } else { print("PAPER_LIVE \(symbol) snapshot_age=\(age) no_eligible_trade") }
+        }
+        print("PAPER_LIVE recovered=\(recovered)")
+        for name in ["baseline", "optimized", "batched", "batched512"] {
+            let file = URL(fileURLWithPath: directory).appendingPathComponent(name + ".json")
+            let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+            let results = try #require(root["results"] as? [[String: Any]])
+            let valid = results.filter { row in
+                guard let text = row["text"] as? String, let facts = row["facts"] as? [String] else { return false }
+                return StockSageAIAssessment.parse(text, facts: facts) != nil
+            }.count
+            print("PAPER_BENCHMARK \(name) valid=\(valid)/\(results.count) wall=\(root["wall_seconds"] ?? "unknown")")
+        }
+    }
+
     @Test func marketDiscoveryRequestsAllTickersWithoutChangingEmptyListSemantics() throws {
         let request = try #require(StockSageMassive.marketRequest(key: "fixture-key"))
         let url = try #require(request.url)

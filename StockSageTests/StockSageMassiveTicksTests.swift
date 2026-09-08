@@ -8,6 +8,34 @@ struct StockSageMassiveTicksTests {
     let from = Date(timeIntervalSince1970: 1_517_561_900)
     let to = Date(timeIntervalSince1970: 1_517_562_100)
 
+    @Test @MainActor func paperFallbackRejectsAveragesPriorReferencesAndLateReports() throws {
+        let reference = Data(#"{"status":"OK","results":[{"id":701,"name":"Form T/Extended Hours","asset_class":"stocks","data_types":["trade"]},{"id":702,"name":"Odd Lot Trade","asset_class":"stocks","data_types":["trade"]},{"id":703,"name":"Prior Reference Price","asset_class":"stocks","data_types":["trade"]},{"id":704,"name":"Average Price Trade","asset_class":"stocks","data_types":["trade"]}]}"#.utf8)
+        let allowed = try T.parsePaperTradeConditions(reference)
+        #expect(allowed == [701, 702], "Resolve live reference identities, not assumed production IDs")
+        let now = to
+        func row(_ conditions: Any, age: Int64 = 1, participantAge: Int64 = 2, correction: Any = 0) -> [String: Any] {
+            ["price": 100, "size": 10, "conditions": conditions, "correction": correction,
+             "sip_timestamp": (Int64(now.timeIntervalSince1970) - age) * 1_000_000_000,
+             "participant_timestamp": (Int64(now.timeIntervalSince1970) - participantAge) * 1_000_000_000]
+        }
+        let rows = [row([701,702]), row([701,703]), row([701,704]), row([701,true]),
+                    row([701,999]), row([]), row([701], participantAge: 300),
+                    row([701], participantAge: -1), row([701], correction: 1), row([701], correction: true)]
+        for (index, raw) in rows.enumerated() {
+            let data = try JSONSerialization.data(withJSONObject: ["status":"OK","results":[raw]])
+            let page = try T.parse(data, kind: .trades, symbol: "AAPL", from: from, to: now)
+            let quote = T.paperQuote(page.trades, symbol: "AAPL", allowed: allowed, now: now)
+            #expect((quote != nil) == (index == 0))
+            if let quote { #expect(quote.marketTime == now.addingTimeInterval(-2)) }
+        }
+        let data = try JSONSerialization.data(withJSONObject: ["status":"OK","results":[row([701,703]), row([701,702], age: 3, participantAge: 4)]])
+        let page = try T.parse(data, kind: .trades, symbol: "AAPL", from: from, to: now)
+        #expect(T.paperQuote(page.trades, symbol: "AAPL", allowed: allowed, now: now)?.marketTime == now.addingTimeInterval(-4))
+        #expect(T.paperQuote(page.trades, symbol: "AAPL", allowed: allowed, now: now.addingTimeInterval(121)) == nil)
+        #expect(T.paperQuote(page.trades, symbol: "AAPL", allowed: [], now: now) == nil)
+        #expect(throws: (any Error).self) { try T.parsePaperTradeConditions(Data(#"{"status":"OK","results":[],"next_url":"more"}"#.utf8)) }
+    }
+
     @Test("REST fixture uses SIP nanoseconds and fractional shares, never listing tape as venue")
     func tradeFixture() throws {
         // https://massive.com/docs/rest/stocks/trades-quotes/trades (fractional size variation).

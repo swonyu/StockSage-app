@@ -1,5 +1,50 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Fresh-price fallback and faster native research installed — 2026-09-09 00:57 +03
+
+Owner requested the stale Massive observation fix,4x faster research, and a full
+native automation review. Implemented shared snapshot→condition-checked tick
+fallback for research, marks and pending fills, including fresh-but-pre-decision
+snapshots. Actual participant time prevents late reports from manufacturing later
+fills. No stale-data relabelling, forced Buy or broker orders. Four bounded workers
+overlap history/news/inference; holdings complete before discovery, one cycle stays
+active, ledger saves remain MainActor-serial and generation/cancellation checks
+retire old work. A changed holding blocks an in-flight action. Full review, live
+evidence and remaining limitations: `agent-docs/PAPER_AUTOMATION_REVIEW_2026-09-09.md`.
+
+Focused38 tests passed. Final macOS1862 tests/192 suites56.661s and iPhone17Pro(gate)
+1859 tests/192 suites55.332s passed, both exit0 with the same three canonical
+exclusions. No post-gate source edits. Opt-in production-resolver checks recovered
+fresh trades for AMGN, STX, SNOW and DELL despite stale snapshots. Artifact root:
+`/private/tmp/stocksage-fresh-fast-20260909.9o4k2X/`.
+
+Measured eight fixed evidence sets:68.517s baseline→35.435s batched/short conclusions
+(1.93x raw throughput, NOT4x). Production validator accepted7/8 baseline and6/8
+optimized (1.66x valid-response throughput); stochastic small sample, no quality
+equivalence or100-stock timing guarantee. Full facts and validator retained.
+MLX service `com.swonyu.stocksage.qwen-local` now PID7192, same27B model and loopback
+8765; decode/prompt concurrency4, prefill512,20GiB MLX memory/512MiB cache limits,
+offline loading. One model resident. Previous flags were1/1/prefill128. Current
+service logs are `server512.log`/`server512.err` in the artifact root. The submitted
+launchd service is session-local, not a newly installed persistent launch agent.
+
+App was normally quit for controlled benchmarking, its ledger remained untouched.
+Exact macOS-tested bundle staged, strict/deep codesign and checksum-aware rsync
+including symlinks passed; installed `/Applications/StockSageX.app` reopened00:57
+asPID9355, native enabled1 and writer lease verified. Debug dylib SHA256:
+`63d5b2750684ca8d973ca1597b01392870583648c64d52303625cb80a547d84d`.
+Prior app remains recoverable at
+`/Users/saleh/.Trash/StockSageX-before-fresh-fast-20260909.app`.
+At00:58 the new real scan returned13145 tickers/12087 supported/346 fresh, selected
+100. Ledger still0 trades/0pending at that checkpoint; do not claim a fill from
+tests or an earlier expired SNOW Buy. IBKR relay remains OFF; no other worktree,
+frozen pilot, model weights, merge or push changes.
+
+Owner at00:57: “i dont want long term only short term”. Asked whether this means
+same-day positions or1–5 trading days. The current paper prompt still assesses the
+next trading week; no unapproved intraday strategy or mandatory exit horizon was
+silently substituted. Read the owner's answer before changing that policy.
+
 ## 100-candidate native paper research installed — 2026-09-09 00:33 +03
 
 Owner at00:27: “also it should research not just 12 i want like 100”. Increased
