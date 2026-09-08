@@ -11,7 +11,7 @@ final class StockSagePaperAutomation: ObservableObject {
     nonisolated static let positionCap = 2_000.0
     nonisolated static let costRate = 0.001 // Assumed 10 bps on each side, not measured broker costs.
     nonisolated static let interval: TimeInterval = 900
-    nonisolated static let discoveryLimit = 12
+    nonisolated static let discoveryLimit = 100
 
     nonisolated struct Decision: Codable, Identifiable, Sendable {
         let id: UUID
@@ -328,7 +328,7 @@ final class StockSagePaperAutomation: ObservableObject {
         if !isResearching, Self.researchDue(book: book, at: Date()) {
             research = Task { [weak self] in await self?.researchCycle(store: store) }
         }
-        if !isResearching { status = "Monitoring paper positions; research every fifteen minutes" }
+        if !isResearching { status = "Monitoring paper positions; waiting for the next research cycle" }
     }
 
     private func researchCycle(store: StockSageStore) async {

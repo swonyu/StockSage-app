@@ -50,20 +50,22 @@ struct StockSagePaperAutomationTests {
     }
 
     @Test func discoveryRotatesBeyondWatchlistAndAlwaysReviewsHoldingsFirst() {
-        let names = ["AAL", "ABBV", "ABT", "ADBE", "AMD", "AMGN", "AMZN", "APP", "BA", "BAC", "CAT", "COST", "CRM"]
+        let names = (0..<101).map { "ZX" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
         let rows = names.enumerated().map { index, symbol in
             StockSageMassive.MarketCandidate(quote: quote(symbol, at: now), dollarVolume: Double(1000 - index))
         }
         let market = StockSageMassive.MarketSnapshot(returnedCount: rows.count, rows: rows)
         var book = A.Book()
         let first = A.researchTargets(market: market, book: book, at: now)
-        #expect(first == Array(names.prefix(12)), "Discovery is market-scoped, not ORCL/watchlist-scoped")
+        #expect(first == Array(names.prefix(100)), "Research 100 candidates, not twelve or just the watchlist")
         for symbol in first { book.note(symbol: symbol, action: "Hold", reason: "Fixture", at: now) }
-        #expect(A.researchTargets(market: market, book: book, at: now).first == "CRM")
+        #expect(A.researchTargets(market: market, book: book, at: now).first == names.last)
         let held = ["MSFT", "NVDA", "ORCL", "TSLA", "V"]
         for symbol in held { book.propose(symbol: symbol, action: .buy, at: now.addingTimeInterval(-2)) }
         book.settle(quotes: Dictionary(uniqueKeysWithValues: held.map { ($0, quote($0, at: now.addingTimeInterval(-1))) }), at: now)
         #expect(Array(A.researchTargets(market: market, book: book, at: now).prefix(5)) == held)
+        #expect(A.researchTargets(market: market, book: book, at: now).count == 105,
+                "All five holdings are additional to the 100 discovery slots")
         #expect(A.researchTargets(market: nil, book: book, at: now) == held,
                 "Discovery failure must not suppress held-stock sell reviews")
     }

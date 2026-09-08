@@ -66,3 +66,21 @@ Files: agent-docs/QWEN_RESEARCH_PAPER_2026-09-08.md, HANDOFF.md, this plan.
   preserve old bundle recoverably, install/open, verify process/hash/lease and ledger.
 - [x] Record real discovery/decision evidence, not inferred trades. Stage explicit paths
   and commit with required heredoc Co-Authored-By line. No push.
+
+### Owner-approved100-candidate amendment
+
+Use the same production selection seam and serial loop. No new subsystem.
+
+- [x] Replace the13-symbol selection fixture with101 supported bare-letter symbols.
+  Assert exactly the first100 are selected, the101st rotates to the front after
+  those attempts, and five holdings add five slots instead of displacing candidates.
+  Run StockSagePaperAutomationTests before changing production; expect an assertion
+  failure at the100-count check while the existing Buy/later-fill/Sell check passes.
+- [x] Change `discoveryLimit = 12` to `discoveryLimit = 100`. Interpolate that constant
+  in panel policy copy; describe900s as minimum start cadence with no overlapping
+  cycles. Re-run the focused suite and final canonical macOS/iPhone gates above.
+- [x] Correct the first-cycle failure description: three generic Qwen failures
+  (NVDA/MU/SNDK), one missing fresh quote (META), five Hold and three Avoid.
+  Record only observed current outcomes; do not fabricate buys or weaken guards.
+- [x] Update operational docs, verify/install the exact tested bundle normally,
+  retain the old bundle recoverably, and commit explicit paths without pushing.

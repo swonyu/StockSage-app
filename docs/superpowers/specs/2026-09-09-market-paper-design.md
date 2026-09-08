@@ -6,12 +6,13 @@ discovery design. This task owns qwen-context from clean2face4d.
 
 ## Scope and contract
 
-- Fetch Massive's full US stock-market snapshot every fifteen minutes, with no
+- Fetch Massive's full US stock-market snapshot on a fifteen-minute minimum start
+  cadence, after any active cycle finishes, with no
   watchlist/curated-universe ticker filter and OTC explicitly excluded. This is
   the full provider-returned US listed market, not all global exchanges. Source:
   https://massive.com/docs/rest/stocks/snapshots/full-market-snapshot (verified
   September9). Publish returned, usable/fresh, and model-reviewed counts separately.
-- Screen all returned rows. Deep-research up to twelve fresh, affordable supported
+- Screen all returned rows. Deep-research up to100 fresh, affordable supported
   new symbols per cycle, least recently attempted first, then observed daily dollar
   activity descending and ticker ascending. This prioritizes research, not a return
   forecast. No required trade quota. Stale, malformed, missing-history and unsupported
@@ -35,6 +36,17 @@ discovery design. This task owns qwen-context from clean2face4d.
   of every stock and simulated fills do not prove broker execution or profitability.
 
 ## Verification and rollout
+
+### Owner amendment at00:27 Riyadh
+
+“also it should research not just 12 i want like 100”: increase new-candidate
+research from12 to100 per cycle, in addition to every open holding. Reuse the
+serial loop and single active-cycle guard; no concurrent model calls or overlap
+when research exceeds900s. The fifteen-minute cadence is a minimum start interval,
+not a promise to finish100 assessments in fifteen minutes. Recheck history and
+quote availability per symbol; fewer than100 eligible symbols is disclosed, never
+filled with stale inputs. All execution, risk, storage and no-broker rules above
+remain unchanged. Existing zero-trade output is not authorization to force Buy.
 
 Add deterministic tests before code: full-market request/parse, unsupported and stale
 exclusions, discovery beyond ORCL/curated list, holdings priority and rotation, and a

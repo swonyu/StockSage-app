@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## 100-candidate native paper research installed — 2026-09-09 00:33 +03
+
+Owner at00:27: “also it should research not just 12 i want like 100”. Increased
+the existing discoveryLimit from12 to100, plus all open paper holdings (maximum5).
+Reuse the full-market screen, least-recent-attempt/activity ordering, serial model
+loop and active-cycle guard.900s is a minimum start interval; a longer cycle delays
+the next one rather than overlapping. The panel now interpolates the actual limit
+and discloses timing. No strategy, validator, sizing, fill, broker or model changes.
+
+Actual red regression reached production researchTargets:12 selected instead of100,
+and17 including holdings instead of105 (three assertion failures, exit65).
+The existing off-board Buy→later-fill→Sell test passed even before this change.
+After the limit change:27 focused paper/AI tests passed in0.031s; final serial gates
+1857 macOS tests in56.948s and1854 iPhone17Pro(gate) tests in55.224s, both exit0,
+same three canonical exclusions. No post-gate source changes. Artifacts:
+`/private/tmp/stocksage-paper100-20260909.c4E4iG/`.
+
+Normal quit of95475 succeeded; process absence verified before replacement.
+Tested/staged/installed bundles match with checksum-aware comparison including
+symlinks, strict/deep codesign passed. `/Applications/StockSageX.app` reopened
+at00:33 asPID1598; native enabled flag1 and account writer lease verified.
+DylibSHA256: `1cc02cc12b55e20e7c8a82d5979cd5aba8187da248fb6ef281e2db71937dba4f`.
+Old build recoverable at
+`/Users/saleh/.Trash/StockSageX-before-paper100-20260909-0033.app`.
+Qwen61562 remains untouched; IBKR relay remains OFF. No new visual acceptance,
+frozen-pilot change, other-worktree edit, new dependency, merge or push.
+
+At00:33 the existing ledger still has37 decisions, zero trades/pending and its
+last cycle began00:20:40. Next cycle is due00:35:40 (approximately, while awake/open).
+No live100-candidate cycle or actual fill is claimed at this checkpoint. The
+prior12-target cycle produced no validated Buy:5 Hold,3 Avoid,3 generic model
+failures and1 missing fresh quote, corrected below. Their raw failed model
+completions were not retained, so specific parse/transport causes remain unknown;
+do not infer an evidence-omission bug or claim this shortlist change fixed it.
+Do not force trades, rewrite the ledger, or weaken validation to raise the counter.
+
 ## Market-wide native paper installed — 2026-09-09 00:20 +03
 
 Owner at00:10 requested the entire market and automatic buys/sells, approving the
@@ -49,13 +85,16 @@ Actual installed process95475 holds the account writer lease; native enabled fla
 First full-market app cycle started21:20:40 UTC September8 and persisted Research
 complete. It returned13,145 tickers, parsed12,087 supported trade observations,
 found385 fresh, and researchedSPY,NVDA,MU,QQQ,SNDK,TSLA,INTC,AMD,SPCX,META,AAPL,AVGO.
-Outcomes:5 Hold,3 Avoid,4 unavailable/unverifiable Qwen responses. Ledger now37
+Outcomes:5 Hold,3 Avoid,3 generic Qwen failures (NVDA/MU/SNDK), and1 missing fresh
+Massive SIP quote (META). The00:25 ledger audit corrected the earlier grouping
+of all four as model failures. Ledger now37
 decisions, zero trades/pending, unchanged simulated cash. No validated Buy was
 produced; no order or market-observed fill is claimed. Deterministic tests verify
 selected off-board Buy→later-fill→Sell; that is distinct from this actual cycle.
 Continue the existing15-minute automation; do not lower validation or manufacture
-trades to turn the counter positive. The four invalid responses are retained as
-failures; their individual causes were not inferred from the generic error message.
+trades to turn the counter positive. Three model failures and the quote failure
+are retained; the model failures' causes cannot be recovered from their generic
+error message because raw completions were not saved on this path.
 
 ## Extended-hours native paper installed — 2026-09-09 00:01 +03
 

@@ -14,7 +14,8 @@ after-hours sessions: weekdays04:00 inclusive to20:00 exclusive, New York time
 (DST-aware). It requires
 existing web permission, usable data and the configured local Qwen server.
 
-Every fifteen minutes it requests the **full Massive US listed-market snapshot**,
+At least fifteen minutes after the previous cycle started, and only once that
+cycle has finished, it requests the **full Massive US listed-market snapshot**,
 without a curated-universe/watchlist filter and with OTC excluded. Every returned
 row is screened; malformed, stale and unsupported symbols are excluded and the
 counts are disclosed. The existing Massive router supports bare-letter symbols;
@@ -22,12 +23,16 @@ share-class/preferred spellings it cannot route are not silently claimed as trad
 The snapshot may contain ETFs, not just common stocks. This is US coverage, not
 all global exchanges, and returned coverage depends on the provider's current data.
 
-Qwen reviews **all open paper holdings first**, then up to **twelve** fresh,
+Qwen reviews **all open paper holdings first**, then up to **100** fresh,
 affordable new candidates, ordered by least recent attempt, observed daily dollar
 activity, and ticker as the tie-break. Thus quotes for the whole market are screened,
 but a whole-market Qwen analysis is NOT performed every fifteen minutes. Activity
 is a research priority, not a predictive signal or a claim of executable liquidity.
 Discovery failure still allows held-stock reviews and sampled exits.
+The owner increased the shortlist from12 to100 on September9 at00:27 Riyadh.
+Model calls remain sequential; a long cycle delays the next one instead of
+overlapping it. Selection of100 candidates does not guarantee100 completions:
+per-symbol history, fresh quotes, model validation and cancellation still apply.
 
 The research path reuses price history, news, catalyst context, technical ideas and
 the evidence-checked AI opinion schema. Newly discovered symbols get local definitions
