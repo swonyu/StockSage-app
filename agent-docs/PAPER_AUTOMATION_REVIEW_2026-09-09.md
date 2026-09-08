@@ -63,6 +63,43 @@ Mac is asleep or eligible observations are unavailable. Intraday-specific stop,
 target and strategy calibration still require prospective net-of-cost research;
 the existing2%/4% simulation limits were not presented as optimized parameters.
 
+## Live follow-up: explicit session clock and numeric-summary errors
+
+The first same-day cycle exposed an accepted LLY Hold that incorrectly claimed
+the19:55 New York cutoff already applied around18:19 New York. The deterministic
+entry gate was open; the model received UTC observation times plus a local cutoff
+without an explicit local clock. A four-case replay reproduced the premature
+cutoff reasoning. Added one fact produced by the existing session helpers:
+New York ISO timestamp including offset, OPEN/CLOSED entry-window state and dated
+local cutoff. The model must not compare UTC wall-clock hours to New York hours.
+The live entry/exit guards remain authoritative after inference.
+
+Investigated token truncation separately rather than increasing the budget by
+guesswork. All four baseline responses finished with `stop` at95–118 tokens,
+below the unchanged192-token limit. Two nevertheless failed the actual production
+validator: the replies included rounded/uncited numerical claims. Added a prompt
+request for qualitative reason/risk, leaving the exact figures in saved, cited
+facts and retaining the existing numeric/citation checks. This is a wording request,
+not a guarantee of number-free prose or semantic correctness.
+
+Artifacts: `/private/tmp/stocksage-paper-response-20260909.aXyvOY/` contains a
+clearly isolated diagnostic replay script and private saved response/fact sets.
+`validator.log`: actual baseline replay failed2/4 production checks (test exit65).
+`clock.json`: explicit clock alone removed the reproduced "cutoff already passed"
+claim; no all-valid result is claimed for that intermediate variant.
+`clock-qualitative.json` plus `replay-green.log`:4/4 passed the unchanged production
+validator, no premature-cutoff claim in those four inspected replies. The new
+clock regression pins both summer/winter offsets and the cutoff boundary; focused
+48 tests passed. Ordinary gates do not read the private replay: the opt-in test
+requires `TEST_RUNNER_STOCKSAGE_PAPER_RESPONSE_REPLAY=<saved-json-path>`.
+
+Four stochastic cases cannot prove global improvement or explain every earlier
+unrecorded failure. Replay timings overlapped different live workloads and must
+not be used as a speed comparison. No model reload, token-limit increase, validator
+relaxation, trade-threshold change or trade quota. Final1872 macOS/1869 iPhone
+simulator tests passed and exact tested installation was verified at01:36. Details
+are in HANDOFF; verify the next live cycle rather than assuming all failures gone.
+
 ## Fixed in this review
 
 1. **Stale snapshot masks an available fresh trade.** Paper research and fills

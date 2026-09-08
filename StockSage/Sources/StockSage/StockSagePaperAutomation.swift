@@ -17,6 +17,7 @@ final class StockSagePaperAutomation: ObservableObject {
         .replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
             with: "Assess an entry or exit NOW for the REMAINDER OF TODAY'S New York session only. No overnight or multi-day thesis. Use the completed intraday bars or explicitly labelled qualified trades; daily technical rules are background, not intraday signals.")
         + "\nFor this paper scan, keep reason and risk to at most 20 words EACH. Retain the four-key JSON and all required evidence references."
+        + "\nKeep reason and risk qualitative, without repeating numbers, dates or clock times; exact figures remain in the cited facts."
 
     nonisolated struct Decision: Codable, Identifiable, Sendable {
         let id: UUID
@@ -221,6 +222,12 @@ final class StockSagePaperAutomation: ObservableObject {
     }
     nonisolated static func entryWindowOpen(_ now: Date) -> Bool {
         paperSessionOpen(now) && now < sessionTime(now, hour: 19, minute: 55)
+    }
+    nonisolated static func sessionClockFact(at now: Date) -> String {
+        let format = ISO8601DateFormatter()
+        format.timeZone = TimeZone(identifier: "America/New_York")!
+        let cutoff = sessionTime(now, hour: 19, minute: 55)
+        return "Authoritative decision-clock snapshot: \(format.string(from: now)) America/New_York. New entry window: \(entryWindowOpen(now) ? "OPEN" : "CLOSED"). Entry cutoff: \(format.string(from: cutoff)). Do not compare UTC timestamps to New York clock times. Window status does not override evidence, cash, holdings or freshness checks."
     }
     nonisolated static func dayExitDue(openedAt: Date, now: Date) -> Bool {
         var calendar = Calendar(identifier: .gregorian)
@@ -540,7 +547,7 @@ final class StockSagePaperAutomation: ObservableObject {
         let position = held.map { "Currently held in the paper account: \($0.shares) shares, simulated entry \($0.entry) USD. Sell/Reduce closes this holding; Hold keeps it." }
             ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."
         let facts = context.facts + intraday.facts + ["Daily background bars end \(historyAt.ISO8601Format()); daily indicators are not intraday predictions. Same-day policy: no new entries from 19:55 New York and no intended overnight holdings.",
-            position, "Paper cash: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Do not invent a trade just to spend cash."]
+            position, "Paper cash: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Do not invent a trade just to spend cash.", Self.sessionClockFact(at: Date())]
         // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
         let intradayIndices = (context.facts.count + 1)..<(context.facts.count + intraday.facts.count)
         let entryInstruction = "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "

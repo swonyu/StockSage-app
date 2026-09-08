@@ -1,5 +1,46 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Explicit New York decision clock installed — 2026-09-09 01:36 +03
+
+Autonomous follow-up reproduced a real reasoning bug: an accepted LLY opinion at
+approximately18:19 New York claimed the19:55 cutoff had already passed. Saved
+facts mixed UTC observation timestamps and a local cutoff without a local clock.
+Added one authoritative decision-clock fact using the existing entry/session
+helpers: dated New York timestamp with offset, OPEN/CLOSED entry window and dated
+local cutoff. Actual post-inference guards still decide entry eligibility.
+
+Also replayed four saved same-day inputs against the unchanged model and192-token
+ceiling. All four baseline replies finished below the cap, disproving truncation
+for that sample. Two failed the actual production validator on numerical/citation
+checks. Asking for qualitative short conclusions while preserving exact cited
+figures improved that replay from2/4 to4/4 accepted responses; no validator changes
+or token-budget increase. The original premature-cutoff statement did not recur
+in the inspected revised replies. Small stochastic sample, not a global accuracy
+or speed claim; do not infer the cause of all unrecorded failures. Diagnostic
+evidence and limitations are in `agent-docs/PAPER_AUTOMATION_REVIEW_2026-09-09.md`.
+
+Final macOS1872 tests/192 suites56.637s and iPhone17Pro(gate)1869 tests/192 suites
+73.686s passed, both exit0 with unchanged three exclusions. Focused48 passed;
+private response replay26-test suite passed with4/4 responses accepted. Artifact
+root: `/private/tmp/stocksage-paper-response-20260909.aXyvOY/`. No post-gate source
+edits. Exact Mac-tested bundle was preserved before iPhone testing; strict/deep
+codesign and checksum-aware rsync including symlinks passed. Normal quit of19766
+and lease release verified. `/Applications/StockSageX.app` reopened asPID23768,
+enabled1 with the exclusive paper-account lease. DylibSHA256:
+`699a1fe8f77958b6de1d8fb5756dfcdab26314ab1ccafb966dab9c42d9857ffd`.
+The previous bundle remains recoverable at
+`/Users/saleh/.Trash/StockSageX-before-clock-fix-20260909.app`.
+
+All prior trade and decision IDs remain present; one policy activation, USO/TSM
+holdings and0 pending orders at verification. No ledger hand-edit or second policy
+reset. The normal restart interrupted the in-progress01:34 cycle; no completion,
+missing work or fills were backfilled. Next research remains due01:49:11 Riyadh
+while awake/open/connected. A new live model reply with this clock fact is not yet
+claimed; inspect that next cycle. The19:55 New York close-out is still due02:55
+Riyadh and unobserved live. Model service/weights, caps, broker-OFF boundary, frozen
+pilot and other worktrees unchanged. Commit locally, no merge/push; continue the
+existing15-minute autonomous checks and later owner stop precedence.
+
 ## Same-day native automation installed — 2026-09-09 01:19 +03
 
 Owner chose same-day trades at00:58 and requested further autonomous improvement

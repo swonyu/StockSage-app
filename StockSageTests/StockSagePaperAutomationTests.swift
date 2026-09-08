@@ -28,6 +28,7 @@ struct StockSagePaperAutomationTests {
         held.propose(symbol: "MSFT", action: .buy, at: cutoff)
         #expect(held.pending.isEmpty)
         #expect(!A.researchInstructions.contains("next trading week"))
+        #expect(A.researchInstructions.contains("Keep reason and risk qualitative"))
     }
 
     @Test func entryCutoffUsesNewYorkDSTNotDeviceMidnight() throws {
@@ -35,6 +36,19 @@ struct StockSagePaperAutomationTests {
                                ("2026-11-03T00:54:59Z", true), ("2026-11-03T00:55:00Z", false),
                                ("2026-09-09T07:59:59Z", false), ("2026-09-09T08:00:00Z", true)] {
             #expect(A.entryWindowOpen(try Date(iso, strategy: .iso8601)) == allowed)
+        }
+    }
+
+    @Test func sessionClockFactLabelsNewYorkAndDoesNotTreatUTCAsLocalTime() throws {
+        for (instant, local, gate) in [
+            ("2026-09-08T22:19:00Z", "2026-09-08T18:19:00-04:00", "OPEN"),
+            ("2026-09-08T23:55:00Z", "2026-09-08T19:55:00-04:00", "CLOSED"),
+            ("2026-11-03T00:54:00Z", "2026-11-02T19:54:00-05:00", "OPEN"),
+            ("2026-11-03T00:55:00Z", "2026-11-02T19:55:00-05:00", "CLOSED")
+        ] {
+            let fact = A.sessionClockFact(at: try Date(instant, strategy: .iso8601))
+            #expect(fact.contains(local) && fact.contains("America/New_York"))
+            #expect(fact.contains("New entry window: \(gate)"))
         }
     }
 
@@ -144,6 +158,19 @@ struct StockSagePaperAutomationTests {
         task.cancel()
         await task.value
         #expect(started == 4)
+    }
+
+    @Test func optedInResponseReplay() throws {
+        guard let path = ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_RESPONSE_REPLAY"] else { return }
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
+        let results = try #require(root["results"] as? [[String: Any]])
+        for row in results {
+            let text = try #require(row["text"] as? String)
+            let facts = try #require(row["facts"] as? [String])
+            let valid = StockSageAIAssessment.parse(text, facts: facts) != nil
+            print("PAPER_RESPONSE \(row["symbol"] ?? "unknown") verified=\(valid) finish=\(row["finish_reason"] ?? "unknown")")
+            #expect(valid)
+        }
     }
 
     @Test func optedInLivePaperDiagnostics() async throws {
