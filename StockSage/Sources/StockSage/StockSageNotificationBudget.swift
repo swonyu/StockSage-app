@@ -54,13 +54,14 @@ struct StockSageNotificationBudget: Sendable {
 
     private static let defaultsKey = "stocksage.notify.budgetState.v1"
 
-    /// Restore from disk. Records older than the cooldown are dropped on load: they can no
-    /// longer refuse anything, and keeping them would grow the blob without bound.
+    /// Restore the same price anchors a continuing process uses: cooldown expiry does NOT
+    /// expire hysteresis. Only hourly timestamps have a time-only retention rule.
     init(loadingFrom defaults: UserDefaults = .standard, now: Date = Date()) {
         guard let raw = defaults.data(forKey: Self.defaultsKey),
               let decoded = try? JSONDecoder().decode(Persisted.self, from: raw) else { return }
+        // ponytail: one anchor per ever-alerted symbol, matching live memory; prune only if
+        // an explicit hysteresis-expiry policy is also applied to the running budget.
         perSymbol = decoded.perSymbol
-            .filter { now.timeIntervalSince($0.value.at) < Self.symbolCooldown }
         recentAlerts = decoded.recentAlerts.filter { now.timeIntervalSince($0) <= 3600 }
     }
 

@@ -17,6 +17,12 @@ import Foundation
 // `.auto` philosophy. It IS network, though, so every fetch is gated by
 // `ToolPolicy.isExternalAllowed` (Web Access on AND Offline Mode off) — exactly
 // the same gate the web/media tools honor.
+//
+// **Source order (pipeline-4 M1, 2026-09-06):** when a Massive key is set
+// (`StockSageMassive.isConfigured`), every US name goes to Massive's batched snapshot
+// first — ONE request per 250 tickers instead of one per symbol — then anything still
+// missing (and every non-US name) walks the explicit keyless Yahoo fallback below. Without a key,
+// all symbols use Yahoo, whose typically delayed quotes are labelled as such in the UI.
 enum StockSageQuoteService {
 
     /// A single live observation: the current market price and the prior session's
@@ -29,6 +35,9 @@ enum StockSageQuoteService {
         /// The quote's own MARKET timestamp (Yahoo `regularMarketTime`), not our fetch time — so the
         /// UI can tell "live" from a days-old weekend/holiday close. nil when the feed omits it.
         let marketTime: Date?
+        /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
+        let massiveTradeSequence: Int64?
+        let priceSource: StockSagePriceSource?
         /// True when Yahoo returned no real previousClose (a brand-new listing) and `previousClose`
         /// was set to `price` as a flat placeholder. WITHOUT this flag that placeholder reads as a
         /// genuine 0%-move "hold" signal — it's actually "unevaluated," not "no move." Set precisely
@@ -36,10 +45,13 @@ enum StockSageQuoteService {
         /// legitimately have previousClose == price on a truly flat session).
         let isNewListing: Bool
         init(symbol: String, price: Double, previousClose: Double, marketTime: Date? = nil,
-             isNewListing: Bool = false) {
+             isNewListing: Bool = false, massiveTradeSequence: Int64? = nil,
+             priceSource: StockSagePriceSource? = nil) {
             self.symbol = symbol; self.price = price
             self.previousClose = previousClose; self.marketTime = marketTime
             self.isNewListing = isNewListing
+            self.massiveTradeSequence = massiveTradeSequence
+            self.priceSource = priceSource
         }
     }
 
@@ -61,11 +73,19 @@ enum StockSageQuoteService {
         guard ToolPolicy.isExternalAllowed else { return [:] }
         guard !symbols.isEmpty else { return [:] }
 
-        var out: [String: LiveQuote] = [:]
+        // M1 routing: Massive snapshot for every covered symbol FIRST (chunked, one request per
+        // chunk), then the per-symbol chain for the rest plus any symbol the snapshot did not
+        // return — a failed/absent chunk falls through, it never drops a symbol. `partition`
+        // sends everything per-symbol when no key is present.
+        let route = StockSageMassive.partition(symbols, keyPresent: StockSageMassive.isConfigured)
+        var out: [String: LiveQuote] = await StockSageMassive.fetchSnapshots(for: route.snapshot)
+        let remaining = route.perSymbol + route.snapshot.filter { out[$0.uppercased()] == nil }
+        guard !remaining.isEmpty else { return out }
+
         // Process in fixed-size chunks; each chunk is a TaskGroup that resolves
         // before the next starts — caps concurrency without a semaphore.
-        let chunks = stride(from: 0, to: symbols.count, by: max(1, concurrency)).map {
-            Array(symbols[$0 ..< min($0 + concurrency, symbols.count)])
+        let chunks = stride(from: 0, to: remaining.count, by: max(1, concurrency)).map {
+            Array(remaining[$0 ..< min($0 + concurrency, remaining.count)])
         }
         for chunk in chunks {
             let results: [LiveQuote] = await withTaskGroup(of: LiveQuote?.self) { group in
@@ -83,14 +103,9 @@ enum StockSageQuoteService {
 
     // MARK: One symbol
 
+    /// Keyless Yahoo fallback. Reached only for symbols the Massive snapshot path in
+    /// `fetchQuotes` did not serve — non-US names, no Massive key, or a snapshot chunk that failed.
     private static func fetchOne(_ symbol: String) async -> LiveQuote? {
-        // HYBRID SOURCE (owner-provided EODHD key, 2026-07-28): US names go to the AUTHENTICATED
-        // feed first — Yahoo's keyless endpoint is the throttling that leaves symbols showing
-        // days-old prices during a 901-name scan. Tadawul (.SR) is NOT offered by EODHD at any
-        // tier (measured: no Saudi exchange in their list), so it stays on Yahoo below, and any
-        // EODHD miss falls through to Yahoo too — the board never loses a source.
-        if let viaEODHD = await StockSageEODHD.fetchOne(symbol) { return viaEODHD }
-
         // `^` (index marker) and other reserved chars must be percent-encoded.
         // Use .urlHostAllowed (stricter than .urlPathAllowed) so a symbol containing
         // '/' (e.g. a hypothetical BRK/B) doesn't silently rewrite the request path
@@ -109,7 +124,8 @@ enum StockSageQuoteService {
         // marketTime through — dropping it silently disabled ALL downstream staleness/banner
         // honesty (quoteAsOf, per-row isStale) since fetchQuotes is built on fetchOne.
         return LiveQuote(symbol: symbol, price: parsed.price, previousClose: parsed.previousClose,
-                         marketTime: parsed.marketTime, isNewListing: parsed.isNewListing)
+                         marketTime: parsed.marketTime, isNewListing: parsed.isNewListing,
+                         priceSource: parsed.priceSource)
     }
 
     /// GET a request, returning the 200 body. On a 429/503 (Yahoo's keyless endpoint
@@ -161,7 +177,7 @@ enum StockSageQuoteService {
         // The quote's market time (Unix seconds) — lets the UI distinguish live from a stale close.
         let marketTime = number(meta["regularMarketTime"]).map { Date(timeIntervalSince1970: $0) }
         return LiveQuote(symbol: symbol, price: price, previousClose: previousClose, marketTime: marketTime,
-                         isNewListing: realPreviousClose == nil)
+                         isNewListing: realPreviousClose == nil, priceSource: .yahoo)
     }
 
     // MARK: Candle history (for indicators / the advisor)
@@ -170,6 +186,12 @@ enum StockSageQuoteService {
     /// trend and every indicator. `nil` on failure / when external access is off.
     nonisolated static func fetchHistory(_ symbol: String, range: String = "1y", interval: String = "1d") async -> StockSagePriceHistory? {
         guard ToolPolicy.isExternalAllowed else { return nil }
+        // Paid Massive aggregates are split-adjusted daily bars for covered US equities. Its nil
+        // contract is intentional: Yahoo remains the fallback for every unsupported shape and
+        // every provider miss, so an HTTP-200 malformed payload never becomes an empty history.
+        if let massive = await StockSageMassive.fetchHistory(symbol: symbol, range: range, interval: interval) {
+            return massive
+        }
         // .urlHostAllowed for the same reason as fetchOne (F38 2026-07-02) — stricter set,
         // path-safe for all curated symbols, consistent with StockSageEarnings.fetchNextEarningsOutcome.
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
@@ -251,7 +273,8 @@ enum StockSageQuoteService {
             v.append(i < volumes.count ? (number(volumes[i]) ?? 0) : 0)
         }
         guard c.count >= 2 else { return nil }
-        return StockSagePriceHistory(symbol: symbol, dates: dt, opens: o, highs: h, lows: l, closes: c, volumes: v)
+        return StockSagePriceHistory(symbol: symbol, dates: dt, opens: o, highs: h, lows: l, closes: c, volumes: v,
+                                    priceSource: .yahooBars)
     }
 
     /// Coax a JSON numeric (Double / Int / NSNumber / numeric String) into a
@@ -278,7 +301,7 @@ enum StockSageQuoteService {
 // A daily OHLC candle history for one symbol (newest LAST) — the input the
 // indicators + advisor consume. Parallel arrays (kept equal-length by the parser)
 // make windows cheap to slice. Sendable so it crosses the fetch → main-actor hop.
-struct StockSagePriceHistory: Sendable, Equatable {
+nonisolated struct StockSagePriceHistory: Sendable, Equatable {
     let symbol: String
     let dates: [Date]
     let opens: [Double]
@@ -286,6 +309,7 @@ struct StockSagePriceHistory: Sendable, Equatable {
     let lows: [Double]
     let closes: [Double]
     let volumes: [Double]
+    var priceSource: StockSagePriceSource? = nil
 
     nonisolated var count: Int { closes.count }
     nonisolated var latestClose: Double? { closes.last }

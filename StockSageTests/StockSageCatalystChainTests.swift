@@ -11,6 +11,38 @@ import Foundation
 struct StockSageCatalystChainTests {
     private let now = Date(timeIntervalSince1970: 1_701_000_000)
 
+    @Test func parsedErrorsCannotBecomeAnsweredSourcesOrRefreshStamps() async {
+        let malformed = Data(#"{"error":"upstream unavailable"}"#.utf8)
+        let outcome = await StockSageCatalystChain.resolve(now: now, eodhdCalendar: {
+            guard let rows = StockSageEODHDCalendar.parseCalendar(malformed) else { return .unavailable }
+            return .answered(StockSageEODHDCalendar.nextRow(rows, now: now))
+        }, yahooCalendar: {
+            switch StockSageEarnings.parseCalendarOutcome(malformed) {
+            case .answered(let info): return .answered(info)
+            case .unavailable: return .unavailable
+            }
+        }, history: {
+            guard let dates = StockSageEarnings.parseEarningsHistory(malformed) else { return .unavailable }
+            return .answered(dates)
+        })
+        #expect(outcome.status == .unchecked)
+        #expect(!outcome.anySourceAnswered)
+        #expect(outcome.sourcesAsked.isEmpty)
+        #expect(outcome.earningsDate == nil)
+
+        let empty = Data(#"{"quoteSummary":{"result":[{"calendarEvents":{"earnings":{"earningsDate":[]}}}]}}"#.utf8)
+        for data in [malformed, empty] {
+            let refresh = await StockSageStore.earningsRefreshOutcome(checkedAt: nil, now: now) {
+                switch StockSageEarnings.parseCalendarOutcome(data) {
+                case .answered(let info): return .answered(info?.date)
+                case .unavailable: return .unavailable
+                }
+            }
+            #expect((refresh?.checkedAt == now) == (data == empty))
+            #expect(refresh?.earningsDate == nil)
+        }
+    }
+
     private func row(daysFromNow: Double) -> StockSageEODHDCalendar.Row {
         StockSageEODHDCalendar.Row(code: "AAPL.US", reportPeriod: nil,
                                    date: now.addingTimeInterval(daysFromNow * 86_400),

@@ -155,3 +155,412 @@ re-research it from scratch.
   scheduled report. `notApplicable` only changes the NO-OTHER-CATALYST fallback text (an index/fund
   can still show a volume-move/regime/seasonality catalyst); `unchecked` reuses the existing dated/
   undated "none known" copy unchanged.
+
+## Pipeline 4 — Massive migration (design)
+
+Owner decision (repo facts, 2026-09-06): vendor = Massive (massive.com, formerly Polygon.io,
+renamed 2025-10-30; `api.polygon.io`/`api.massive.com` both valid during transition), plan
+Advanced ($199/mo, non-professional, SIP consolidated tape, **unlimited REST calls**, WebSocket
+with **unlimited symbols and ONE connection** for the Stocks product) + Benzinga Earnings add-on
+($99/mo). Every endpoint below was fetched THIS session (WebFetch + the browser render for the two
+pages WebFetch's fetch cache returned as JS-shell-only) — URLs cited inline, full list in
+`docsCited`. Investigator: read-only pass at HEAD bdb1284 (pipelines 1-3 landed); every code
+citation below is file:line as of that commit.
+
+### REST endpoints
+
+| Purpose | Method + path | Key params | Doc |
+|---|---|---|---|
+| Full-market snapshot (ALL tickers, 1 call) | `GET /v2/snapshot/locale/us/markets/stocks/tickers` | `tickers` (comma list, omit for all 10,000+), `include_otc` | rest/stocks/snapshots/full-market-snapshot.md |
+| Single-ticker snapshot | `GET /v2/snapshot/locale/us/markets/stocks/tickers/{stocksTicker}` | — | rest/stocks/snapshots/single-ticker-snapshot.md |
+| Previous close (OHLC) | `GET /v2/aggs/ticker/{stocksTicker}/prev` | `adjusted` (default true) | rest/stocks/aggregates/previous-day-bar.md |
+| Benzinga earnings | `GET /benzinga/v1/earnings` | `ticker`, `date`, `date.gte`/`date.lte`, `importance` (0-5), `limit` (max 50,000) | rest/partners/benzinga/earnings.md |
+| Stocks news | `GET /v2/reference/news` | `ticker`, `limit` (max 1000), `published_utc` | rest/stocks/news.md |
+| Reference tickers | `GET /v3/reference/tickers` | `ticker`, `market`, `exchange`, `search`, `active`, `limit` (max 1000) | rest/stocks/tickers/all-tickers.md |
+| REST trades | `GET /v3/trades/{stockTicker}` | `timestamp[.gte/.gt/.lte/.lt]`, `order`, `limit`, `sort` | rest/stocks/trades-quotes/trades.md |
+| REST quotes | `GET /v3/quotes/{stockTicker}` | same shape as trades | rest/stocks/trades-quotes/quotes.md |
+| Reference exchanges | `GET /v3/reference/exchanges` | `asset_class`, `locale` | rest/stocks/market-operations/exchanges.md |
+
+Every path above is `https://massive.com/docs/<path>` (append `.md` for the raw-markdown AI
+mirror — confirmed live: "Markdown versions of every documentation page (just append .md to any
+URL)", websocket/quickstart page).
+
+**Full-market snapshot** response: `ticker`, `day`/`prevDay`/`min` (each an OHLCV object),
+`lastTrade` (price/size/timestamp), `lastQuote` (bid/ask), `updated` (int timestamp),
+`todaysChange`/`todaysChangePerc`, `fmv` (Business-plan only). This is the "1 call per sweep for
+all tickers" the budget below assumes — pass all 872 tracked US symbols in `tickers` (case-
+sensitive, comma-separated) rather than omitting the param (which would pull all 10,000+ and waste
+bandwidth on names we don't track).
+
+**Benzinga earnings** response carries `date_status: "projected" | "confirmed"` (exactly the field
+repo facts named), plus `estimated_eps`/`actual_eps`, `estimated_revenue`/`actual_revenue`,
+`eps_surprise_percent`/`revenue_surprise_percent`, `fiscal_period`/`fiscal_year`, `importance`.
+Real-time updates; historical data from 2010-04-30. Critically, `date.gte`/`date.lte` filter
+WITHOUT requiring `ticker` — one date-range call can return upcoming earnings across many
+companies at once (see budget below), not one call per symbol.
+
+**Stocks news** `results[].insights[]` carries `sentiment` + `sentiment_reasoning` PER TICKER
+(a multi-ticker article can have different sentiment per company) — exactly the shape repo facts
+named. Flagged as a FUTURE option for W4's retrieval-first narrator sources
+(`StockSageNewsService`, currently wired to EODHD `/api/news` per the W1 follow-up notes above) —
+NOT built this step, same "flagged so the next session doesn't re-research it" pattern used
+elsewhere in this doc.
+
+### WebSocket — connection, auth, subscribe, message shapes
+
+Source: `websocket/quickstart` + `websocket/stocks/overview` (WebFetch returned only nav/headers
+for these two — the docs site appears to lazy-render body content client-side for THESE pages
+specifically, unlike the channel-detail `.md` pages above which returned full bodies; confirmed
+full content via the browser tool's rendered DOM instead — quoted verbatim below).
+
+Connect (one connection per asset class by default — matches repo facts' "ONE connection for the
+Stocks product"):
+```
+wss://socket.massive.com/stocks       (real-time, Advanced plan)
+wss://delayed.massive.com/stocks      (15-min delayed)
+```
+Server→client on connect: `[{"ev":"status","status":"connected","message":"Connected Successfully"}]`
+
+Auth (client→server, separate message — NOT a query param like today's EODHD `?api_token=`):
+```json
+{"action":"auth","params":"YOUR_API_KEY"}
+```
+Server→client: `[{"ev":"status","status":"auth_success","message":"authenticated"}]`
+
+Subscribe (client→server, channel-prefixed ticker, comma-joined, `*` wildcard for "every ticker"
+on that channel — mixed channels in one message are fine):
+```json
+{"action":"subscribe","params":"T.AAPL,Q.AAPL,AM.AAPL,T.MSFT,Q.MSFT,AM.MSFT"}
+```
+Server bundles MULTIPLE events into one JSON-array frame during high-volume periods — e.g. two
+trades in one message:
+```json
+[{"ev":"T","sym":"MSFT","i":"50578","x":4,"p":215.9721,"s":100,"t":1611082428813,"z":3},
+ {"ev":"T","sym":"MSFT","i":"12856","x":4,"p":215.989,"s":1,"c":[37],"t":1611082428814,"z":3}]
+```
+
+Channels (`websocket/stocks/overview`, feed table) — path shown is the doc's own `WS /stocks/X`
+label, not a second host:
+- `/stocks/T` Trades — fields: `ev`,`sym`,`x`(exchange),`i`(trade id),`z`(tape),`p`(price),
+  `s`(size),`ds`(decimal size),`c`(conditions array),`t`(SIP ts, Unix ms),`pt`(participant ts),
+  `q`(sequence),`trfi`,`trft`. (websocket/stocks/trades.md)
+- `/stocks/Q` Quotes (NBBO) — `ev`("Q"),`sym`,`bp`/`bs`/`bx` (bid price/size/exchange),
+  `ap`/`as`/`ax` (ask price/size/exchange), `t` (SIP ts, Unix ms). Real-time only on Advanced/
+  Business+Expansion. (websocket/stocks/quotes.md)
+- `/stocks/A` Aggregates per-second — `ev`,`sym`,`v`/`dv`/`av`/`dav`(volume variants),
+  `op`/`o`/`h`/`l`/`c`/`vw`/`a`,`s`/`e` (start/end Unix ms),`otc` (bool, present only if true).
+  (websocket/stocks/aggregates-per-second.md)
+- `/stocks/AM` Aggregates per-minute — same field set as `/A`, one bar per minute; subscribe
+  token `AM.<ticker>`. (websocket/stocks/aggregates-per-minute.md)
+- `/stocks/LULD`, `/stocks/NOI`, `/business/stocks/FMV` also exist (limit-up/limit-down, NYSE net
+  order imbalance, Business-plan-only fair market value) — out of scope for this migration, not
+  fetched in detail.
+
+Timestamps are Unix (seconds-since-epoch UTC for the `t`-in-seconds convention the overview page
+states, though the trade/quote/aggregate examples above show millisecond `t`/`s`/`e` — the per-
+channel doc's own field table is the authority per field, not the overview's generic timestamp
+note; verify the exact unit against the live payload before wiring, same "measure, don't guess"
+rule as B5's EODHD cap was found under).
+
+**vs. today's EODHD protocol** (StockSageLiveStream.swift) — this is a rewrite, not a config
+change:
+- Auth: EODHD embeds the key in the connection URL query string (`?api_token=`, :219); Massive
+  sends a separate `{"action":"auth",...}` message after connecting and waits for `auth_success`.
+- Subscribe: EODHD sends `{"action":"subscribe","symbols":"AAPL,MSFT"}` (bare tickers, one
+  implicit trade channel, :229-234); Massive needs channel-prefixed tokens (`T.`/`Q.`/`AM.`) and
+  can multiplex channels in one message.
+- Frame shape: EODHD sends one JSON OBJECT per message (`authStatus`/`parseTick` each parse a
+  single object, :268-275); Massive sends a JSON ARRAY that can bundle several events — the
+  parser must iterate the array and switch on each element's `ev`.
+- Connection cap: EODHD caps at `maxSubscriptionsPerConnection = 50` (:59, forcing 872÷50 ≈ 18
+  chunked connections today, `StockSageLiveStreamConnection` × N, StockSageLiveStream.swift:148-
+  163); Massive Advanced is unlimited-symbols/one-connection — `connections` collapses to a
+  single always-one-element array, the chunking loop and `maxSubscriptionsPerConnection` delete
+  outright (not a config bump — the whole reason they exist goes away).
+
+### Symbol mapping
+
+Tracked base universe today (post 2026-07-16 restriction, StockSageQuoteService.swift:552-556):
+`StockSageUniverse.worldwide` = 872 bare US tickers (`nasdaqListed` allowlist, :443-534, counted
+this session: exactly 872) passing `isAllowedUniverseSymbol` (:535-538: `.SR` suffix OR in
+`nasdaqListed`) + 28 Tadawul `.SR` names + `^TASI.SR` = 901, matching the pipeline-1 doc's count
+above.
+
+- **The 872 bare US tickers already match Massive's ticker symbology 1:1** — no prefix, no
+  suffix, no translation layer. `AAPL` on the board is `AAPL` to Massive's REST and WS alike.
+- **Class-share tickers (BRK.B-style): verified ZERO exist in the current allowlist.** Checked
+  this session: `python3` regex over the `nasdaqListed` literal block found 0 tickers containing
+  a `.`; a whole-file regex for any US-looking dotted ticker (`"[A-Z]{1,5}\.[A-Z]{1,2}"` minus the
+  24 known Yahoo non-US exchange suffixes actually in use: `.SR .L .DE .PA .T .HK .SS .KS .NS .TW
+  .SI .AX .SA .MX .TO .SW .AS .MC .MI .ST .AE .QA .CA .JO`) also returned nothing. Every dotted
+  ticker in the file is a Yahoo *non-US exchange* suffix, none of which pass `isAllowedUniverseSymbol`
+  anyway (they don't end in `.SR` and aren't in `nasdaqListed`) — so they were never migration
+  candidates regardless. If a class-share name is added to the allowlist later, Massive/Polygon
+  uses the identical dot convention (`BRK.B`) — the same string works unchanged on both vendors,
+  no mapping code needed even then.
+- **Tadawul `.SR` + `^TASI.SR` (29 names) are OUT OF SCOPE for Massive.** Not verified against a
+  fetched Massive doc page this step (no page was found or fetched that enumerates supported
+  exchanges/markets by country), but consistent with the `/v3/reference/tickers` sample's `market`
+  enum (`stocks, crypto, fx, otc, indices` — no Saudi/GCC market type) and with Massive/Polygon's
+  known US-equities-plus-global-crypto/fx scope. These 29 stay on Yahoo exactly as today — never a
+  migration candidate, so "nothing may silently drop a symbol" is satisfied by construction, not
+  by a fallback path that has to fire.
+- The broader `groups`/`catalogExtra` international literals (London, Frankfurt, Tokyo, Hong Kong,
+  Shanghai, Seoul, Mumbai, Taipei, Singapore, Sydney, São Paulo, Mexico City, Toronto, Zurich,
+  Amsterdam, Madrid, Milan, Stockholm, Dubai, Doha, Cairo, Johannesburg, world indices, FX pairs —
+  the pre-2026-07-16 2,420-name catalog) are already filtered OUT of `worldwide`/tracked by
+  `isAllowedUniverseSymbol` and stay that way; this migration doesn't touch them, doesn't revive
+  them, and doesn't need to map them.
+
+### Original proposed budget — superseded by implemented-budget notes below
+
+Pre-migration (pipeline-3 doc, "Budget AFTER" above): EODHD REST 4×872 = 3,488/h (0 during US
+close) + Yahoo chart 60×29 = 1,740/h during Tadawul's 5h window (8,700/day) + quoteSummary
+≤872/24h for earnings.
+
+Post-migration, 872 US names on Massive:
+- **WebSocket**: 0 REST calls. One connection, one subscribe message, continuous push for trades
+  (+quotes if bid/ask is wanted) — replaces both the EODHD REST poll AND EODHD's 18-connection WS
+  chunk for these names.
+- **REST snapshot reconciliation**: 1 call per sweep for all 872 tickers (the endpoint takes the
+  full comma-joined list in one request regardless of count). Recommend keeping the existing
+  thermal-aware streamGap cadence (`refreshIntervals`, MarketsView.swift:321-323, currently 30s
+  normal / 60s thermally-stressed) as a WS-gap backstop rather than the primary live path — cost is
+  no longer the constraint (Advanced = unlimited REST), so the cadence choice is about staleness-
+  during-a-WS-drop, not budget. At 60s: 60 calls/hour flat, ANY tracked-symbol count (down from
+  3,488/h — a ~98.3% cut) — this also folds in `prevDay` (no separate previous-close call needed
+  per sweep; that endpoint is only needed for a single ad-hoc lookup outside a sweep).
+- **Benzinga earnings**: today's chain does up to 872 EODHD-calendar calls/24h under a per-symbol
+  TTL (A2/A4 above). Benzinga's `date.gte`/`date.lte` filters work WITHOUT a `ticker` — one call
+  covering "today → +180 days" returns upcoming earnings for every company Benzinga tracks in that
+  window (`limit` up to 50,000 — one page almost certainly covers 180 days), joined locally against
+  the 872-symbol allowlist. **≈1 call/24h** replaces ≈872/24h.
+- **Tadawul + `^TASI.SR` (29 names)**: unchanged, still Yahoo, still ~1,740/h during the 5h
+  Tadawul session — Massive doesn't touch this budget line at all.
+
+Total after migration (excluding on-demand `/v3/trades`, `/v3/quotes`, single-ticker snapshot, and
+news lookups, which are drill-down calls, not swept): **~60 Massive REST calls/hour + 1 Massive
+WS connection + ~1 Benzinga call/day**, vs. **~3,488 EODHD REST calls/hour** today for the same
+872 names — while gaining tick-level freshness (WS) the old 30s/900s poll never had for the
+streamGap remainder. Tadawul's 1,740/h Yahoo line is untouched either way.
+
+### Cutover plan
+
+- **M1 — Reference validation.** Pull `/v3/reference/tickers` (paginated, `limit` max 1000) and
+  confirm all 872 `nasdaqListed` symbols resolve `active: true`; log the (expected: 0) misses.
+  Read-only, no code change.
+- **M2 — REST snapshot cutover.** New `StockSageMassiveSnapshot.swift` calling `GET
+  /v2/snapshot/locale/us/markets/stocks/tickers?tickers=<872 names>` on the collapsed single
+  reconciliation timer (replaces the streamGap/full split for these 872 names only); map
+  `day`/`prevDay`/`lastTrade`/`updated` onto the existing `LiveQuote` shape (`marketTime` ←
+  `updated`, `previousClose` ← `prevDay.c`). EODHD/Yahoo untouched for the 29 Tadawul names.
+- **M3 — WebSocket cutover.** Rewrite `StockSageLiveStreamConnection` for Massive's protocol
+  (auth message → wait `auth_success` → one subscribe message covering the full 872-symbol union
+  → parse array-framed `T`/`Q`/`AM`/`status` events). Delete `maxSubscriptionsPerConnection` and
+  the chunking loop (StockSageLiveStream.swift:59,148-163) — Advanced's unlimited-symbols/one-
+  connection means `connections` is always length 1.
+- **M4 — Earnings cutover.** New `StockSageBenzingaEarnings.swift` (shape of
+  `StockSageEODHDCalendar.swift`) calling `GET /benzinga/v1/earnings?date.gte=...&date.lte=...`;
+  wire as the FIRST closure ahead of `eodhdCalendar` in `StockSageCatalystChain.resolve`
+  (StockSageCatalystChain.swift:44-51); `date_status` maps directly onto `Outcome.confirmed`
+  (`"confirmed"` → `true`, `"projected"` → `false`) instead of inferring confirmation from Yahoo's
+  `isEarningsDateEstimate` or EODHD's always-false-for-a-future-date rule. EODHD calendar → Yahoo →
+  projection stay as the fallback chain for anything Benzinga doesn't cover.
+- **M5 — Flip the default.** Once M2-M4 are gated + visually verified on `wt/coverage`, flip the
+  872 US names' default quote/stream/earnings source from EODHD/Yahoo to Massive. EODHD stays
+  wired (never deleted) as the fallback per repo facts; Tadawul + `^TASI.SR` remain on Yahoo
+  permanently — they were never Massive candidates, not a fallback path that "kicks in."
+
+Each of M2-M4 needs its own hand-derived fixture set (spec-fidelity: expected values come from the
+sample JSON quoted above or an independent hand derivation, never from the code under test) and its
+own gate + `tools/runtests.sh` pass before M5 — this section is the design brief, not the
+implementation; M2-M5 are future steps, explicitly not built in this pipeline-4 step.
+
+### Implemented earnings path — 2026-09-06 21:46 +03 (supersedes proposal budget)
+
+The current takeover checklist uses the workflow's stage numbering: M3 is
+earnings. `StockSageMassiveEarnings` now queries one due US symbol at a time,
+reusing the existing per-symbol24h answer TTL and4-wide sweep. It does NOT use
+the earlier all-market180-day bulk proposal, so the estimate of one Benzinga
+call/day above is NOT an implemented budget. Current cost is one status-only
+probe per eligible sweep plus one request per due US symbol when access remains
+available. A complete answer TTL-gates that symbol for24h.401/402/403 suppress
+this provider globally for24h; transient failures remain unobserved and may be
+retried on a later sweep. No claim of an exact account-wide rate limit is made.
+
+Each query is bounded to100 rows over UTC today through+400days, date ascending.
+Partial or malformed payloads fall through rather than claiming completeness;
+no speculative pagination/all-market cache was added. This follows the later M3
+workflow's per-symbol contract and needs live measurements before optimization.
+Fields and parameters verified against:
+https://massive.com/docs/rest/partners/benzinga/earnings
+https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/benzinga.py
+
+Confirmation comes only from date_status (projected stays estimated); duplicate
+same-day conflicts cannot upgrade it. Actual EPS/importance are not evidence of
+date confirmation. The visible source comes from the chain record. Future time
+within a calendar day is not asserted; time is deliberately unused. No live
+entitlement claim: the credential guard blocked the agent's presence check and
+was not bypassed. Canonical macOS1681/iPhone1680 selected tests passed; HANDOFF
+records exact result bundles and remaining full UI/live checks.
+
+### M4 implementation and news budget correction —22:27 +03
+
+The earlier "future option" news section is now implemented through the existing
+on-tap Explain source flow. Massive `/v2/reference/news` uses ticker,
+published_utc.gte/lte, descending publication time and limit5. Its feed updates
+hourly; it is not labelled live. One request per Explain, not five requests per
+symbol. At most one existing EODHD news fallback request when no usable Massive
+items remain (existing budget10 EODHD API credits). No polling or pagination.
+Five articles and a seven-day window are a bounded selection, not completeness.
+
+Provider/publisher attribution and only the requested ticker's optional sentiment
+travel together through the numbered source into both model backends and the UI.
+The sentiment is source commentary, not an app trading signal; unchanged numeric
+and citation-index fences do not prove semantic truth. The viewer can inspect the
+actual bounded excerpts/reasoning and UTC dates even when narration is withheld.
+Shared parsers reject future articles and unsafe/oversized links, constrain all
+supplied text at whole-word boundaries, and omit conflicting/malformed insights.
+Missing or denied feeds remain unavailable, not an invented no-news observation.
+
+### M5b split-basis comparison contract —2026-09-06
+
+Use the current [Massive splits endpoint](https://massive.com/docs/rest/stocks/corporate-actions/splits),
+`GET /stocks/v1/splits`, not the deprecated `/v3/reference/splits`. The official
+[Python SDK](https://github.com/massive-com/client-python/blob/master/massive/rest/reference.py)
+confirms `execution_date.gte/lte` and `sort=execution_date.asc`. Multiply each
+event's `split_to / split_from`, never its cumulative historical adjustment factor.
+Execution-day trading, including premarket, already uses adjusted units; compare
+New York calendar dates and apply only splits strictly after the entry's day.
+
+Fetch only open, covered US journal symbols, serially, over earliest entry through
+today. In-memory complete answers expire at New York day rollover or24h, whichever
+comes first; opening an earlier trade expands the range. Native view-task
+cancellation plus a generation guard rejects obsolete publication. No new timer,
+disk cache, dependency or persisted trade mutation. Completed failures retry no
+faster than60s;401/402/403 suppress this endpoint for24h in the current process.
+One complete page of at most100 events per symbol: any pagination, malformed
+ratio/date/identity, ambiguous same-day duplicate, failure or unsupported symbol
+leaves the basis unverified, not a fabricated no-split answer. Relaunch may fetch
+again; this is a process cache, not a cross-launch request cap.
+
+Rebase a disposable TradeRecord copy for BOTH urgent/open-actions and row P&L/R.
+Prices and shares move together; original serialized journal, recorded fill legs
+and realized calibration are untouched. Quotes must be real, finite, dated after
+entry, not future or materially stale under the shared quote-age rule, and not
+predate an executed split. Unknown basis withholds P&L/level verdict. A known
+factor appears in the row and its explicit VoiceOver label. Per-position action
+IDs distinguish two entries in the same symbol. Crossing a stop is not a fill.
+
+Closing is deliberately NOT corporate-action accounting: do not prefill a quote
+unless its verified factor is1. A known non-unit factor disables the original-
+basis close editor's confirmation and preview; explicit broker reconciliation is
+a required follow-up. With unknown basis, existing manually entered closes remain
+possible with a warning that prices must be in original logged units; no feed
+price is prefilled. Never silently rebase recorded fills or infer an action from
+a price jump. Cash-in-lieu, spinoffs, mergers and non-US actions remain outside this
+split-only check. Test evidence and live/UI limitations are recorded in HANDOFF.
+
+### M5 actual routing/provenance and implemented budget —2026-09-06
+
+The takeover M5 is source attribution/configuration, not the differently numbered
+old cutover proposal. Massive→Yahoo routing is already active. No EODHD quote
+picker is restored; EODHD calendar/news fallbacks still exist. The shared macOS/iOS
+settings field describes the actual routing and warns that the connection test
+only probes snapshots, not every purchased add-on. No new purchases or credential
+storage/access changes. No live account entitlement has been verified.
+
+Price-source metadata is attached by the parser/stream that supplied that price:
+Massive SIP, Massive daily bars, Yahoo, Yahoo bars, or the dormant EODHD parser.
+Samples are explicit. Metadata travels with price/time/sequence through accepted
+updates, scan publication and both caches; missing old-cache metadata is unknown,
+never inferred from key presence. It does not certify freshness or execution venue.
+The header/banner date one accepted observation, not the entire tracked universe.
+
+These are code-derived request budgets, NOT measured account usage. Work time,
+closed sessions, caches, failures, missed stream coverage and owner activity change
+the actual rate. The earlier flat60/h, one872-ticker request, oneearnings/day and
+fixed1,740/h Saudi figures do not describe this implementation:
+
+| Path | Implemented bound / cadence |
+| --- | --- |
+| Quotes for a requested set | With a key: ceil(covered US /250) snapshot calls, then one Yahoo chart lookup for each unsupported or missing ticker.872 US names need4 chunks, not1. Yahoo permits up to3 HTTP attempts on429/503; Massive snapshots have no retry loop. |
+| Stream gap | Only trading symbols without recent authenticated trade coverage; rotating cap20, foreground sleep30s (60s thermal), shared25s sweep-start floor with monitor. At most one snapshot chunk per gap sweep, plus≤20 Yahoo lookups if all fall back. Ideal foreground rate≤120 sweeps/hour; the shared floor bounds combined callers to≤144 starts/hour (steady-state), not a promise of refreshing every name every30s. |
+| Full board | Foreground sleep900s (1800s thermal), plus explicit launch/manual refreshes. An unchanged901-name curated set is872 US +29 Saudi/index:4 snapshots +29 Yahoo lookups per successful full sweep, before failures/healing/FX/user holdings. Four such sweeps/hour means16 snapshots +116 Yahoo lookups, NOT the whole app's total. |
+| Monitor | Separate180s sleep (360s thermal), plus cycle work. Core/watchlist/holdings requests and armed price-alert lookups remain; they are not eliminated by WebSockets. Stream-gap calls share the25s floor, but normal core refreshes do not. |
+| Heal / infrastructure | Full/core refresh may retry≤40 stale, open-venue candidates, with existing no-advance backoff; SAR conversion is another single-symbol Yahoo request per refresh. Both are additional to the table's base sweep counts. |
+| History / scans | One request per missing eligible US daily history to Massive; unsupported/failed histories fall back to one Yahoo lookup (up to3 attempts). Cache/chunk reuse remains. Non-daily intervals use Yahoo. This is not a single batched history request. |
+| Stream / references | One Stocks socket, authenticated T+Q subscription; event traffic has no fixed hourly count. Quote-condition reference once per stream start, exchange reference cached24h in process. No second Stocks socket added. |
+| Earnings / news / tape | Use the implemented M3/M4 and takeover M2b budgets: per-due-symbol earnings with24h answer TTL, on-tap≤5 news articles, on-tap≤3×100 pages per tape channel. No new M5 network calls. |
+
+The20-name gap cap is retained to protect the existing Yahoo fallback. In a
+complete872-name US stream outage, a single rotating gap pass needs44 sweeps:
+about22min at ideal30s cadence, plus work time (full/core sweeps may update names
+sooner). This is a known freshness ceiling, not "all names live every30s".
+Changing that cap requires a separately tested fallback/load policy, not merely
+an assumption that a paid Massive plan removes Yahoo's throttling.
+
+Source anchors: StockSageMassive.maxTickersPerRequest/fetchSnapshots,
+StockSageQuoteService.fetchQuotes/get/fetchHistory,
+StockSageStore.refreshStreamGap/healStaleQuotes/refreshInfraFX,
+MarketsView.refreshIntervals and StockSageMonitor.start/runCycle.
+
+Contract verified from https://massive.com/docs/rest/stocks/news and the official
+https://raw.githubusercontent.com/massive-com/client-python/master/massive/rest/reference.py
+(`list_ticker_news`). Final selected gates:1693 macOS,1691 iPhone, all passing;
+HANDOFF contains exact bundles, the initial red defects, the fixture compile
+correction, and conditional live/full-UI limitations. No authenticated request
+was made while the active credential guard continued denying the check.
+
+## M6 company-event feeds — 2026-09-07 implementation contract
+
+`StockSageMassiveEvents` uses the five verified endpoints in PIPELINE_TAKEOVER:
+ratings/guidance (owner-purchased Benzinga add-ons),8-K disclosures,dividends and
+Form4. These observations only change the Catalysts tab's attention order; they
+do not change advice, ranking, EV, targets, stops, positions or execution.
+
+Native Markets task identity is the sorted tracked-symbol union plus the full
+refresh clock, never trade/quote ticks. Each due feed gets one status-only probe
+before a four-wide,750ms-paced symbol sweep. Successful checks expire at the next
+UTC midnight or24h; transient unavailable observations retry after15min. Rejected
+401/402/403 feeds persist a24h gate in defaults; cancelled/policy-disabled work
+cannot publish. Up to5 probes +5N requests for N due US symbols on a full healthy
+pass, not one batched API call. Ordinary refreshes with fresh records add no calls.
+Cancellation saves completed progress; there is no promise that every feed is
+checked within one quote-refresh interval. No new timer, service or dependency.
+
+Each response must be complete, statusOK,≤100 rows and≤2MB. Pagination/malformed
+records remain unavailable, NOT checked-empty. Exactly one event per kind is
+selected: latest calendar date, or nearest upcoming ex-date, with deterministic
+same-day content tie-breaking (not a claim of intraday recency). A successful
+empty result explicitly means no qualifying record in the queried window.
+`company_events_v1.json` lives beside the existing earnings cache, with separate
+answered/unavailable outcomes, bounded16MB/10,000-record atomic persistence and
+freshness/provenance restored on launch. Save failure is visible in the header.
+This ceiling supports2,000 fully checked symbols; expand only with measured need.
+
+Precedence: urgent known/estimated earnings → urgent history-projected earnings
+→8-K≤7d →rating/PT change≤7d →guidance≤14d →volume →clear known/projected earnings
+→ex-dividend≤30d →Form4≤14d →extreme →regime →seasonality →none. Day windows are
+inclusive UTC calendar days, not invented event times. Past company reports get
+"Recently reported", not "Today"; legacy earnings bucketing remains unchanged.
+
+Guidance compares compatible original/previous min/max bounds and explicit
+method/currency. Equal bounds are unchanged, both rising/falling is raised/lowered,
+crossing bounds are mixed. Missing fields are unknown, never inferred withdrawal;
+free-text notes are not mined for that claim. EPS may be negative; revenue cannot.
+Analyst original and adjusted target pairs are never mixed; the displayed original
+target is explicitly an opinion, not StockSage's target. Form4 includes only known
+non-derivative P/S records, names transaction AND filing dates, preserves4/A and
+10b5-1 disclosures, and does not infer that a private purchase was open-market.
+8-K categories remain provider-classified; dividends do not imply cash receipt.
+
+Cards show per-feed check coverage and dated source records. Source links accept
+HTTPS only, no userinfo, normal443, and SEC/Benzinga hosts matching the feed.
+Calendar VoiceOver includes source/caveat. Optional model facts preserve these
+caveats and mark source text untrusted; an explanation is withheld from display
+when the current brief's facts differ from those it explained. Model output is
+still optional; all event selection and copy are deterministic.
+
+Verification is recorded in HANDOFF after executed gates, not inferred from this
+contract. Live entitlement/payload checks and full populated UI remain unverified.

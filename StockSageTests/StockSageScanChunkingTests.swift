@@ -137,9 +137,9 @@ struct StockSageScanChunkingTests {
 
     // MARK: 2a. Retry-chunking equivalence (review round-2 finding 3): retryFailedIdeas now
     // shares `runChunkedScan` with performRefreshIdeas instead of an un-chunked single-shot
-    // hammer over the whole missing-symbol subset. `runChunkedScan` (private, MainActor-bound)
-    // has no test seam, same as `performRefreshIdeas` (see the preScanBoard test's comment
-    // above) — so this pins the ARCHITECTURE invariant the shared loop relies on: chunking the
+    // hammer over the whole missing-symbol subset. The original loop had no test seam;
+    // StockSageRemovalDuringScanTests now exercise its actual publication/cancellation path.
+    // This test still pins the pure merge-equivalence invariant: chunking the
     // retry subset and merging chunk-by-chunk into the EXISTING board (retry's `startingRanked:
     // ideas`, not an empty board — the key difference vs the full-scan shape already covered
     // above) produces the SAME result as the OLD single-shot retry (one buildIdeas call over the

@@ -183,14 +183,22 @@ enum StockSageExpectedValue {
         return 1 + Swift.min(variance / (mu * mu), 3)
     }
 
+    /// Shared horizon for gross/net rates, ranking and their turnover disclosure. Reuses the
+    /// existing dispersion approximation; not a measured holding period or a financing change.
+    nonisolated static func velocityHoldDays(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults) -> Double? {
+        guard let base = expectedHoldDays(for: idea, holds: holds) else { return nil }
+        let hold = base * jensenHoldInflation(idea.spark)
+        return hold.isFinite && hold > 0 ? hold : nil
+    }
+
     /// Velocity = EV ÷ Jensen-adjusted expected hold = expected R PER DAY, so a fast-turnover
     /// setup beats a slow swing of equal EV (more compounding cycles). nil if no EV or no
     /// hold estimate. An estimate on an estimate — the UI says so.
     nonisolated static func velocity(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults,
                                      calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let e = ev(for: idea, calibration: calibration),
-              let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
-        return e.evR / (hold * jensenHoldInflation(idea.spark))
+              let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
+        return e.evR / hold
     }
 
     /// Ideas ranked by velocity (EV/day) desc; ideas without a velocity fall last (stable).
@@ -267,7 +275,7 @@ enum StockSageExpectedValue {
     private nonisolated static func clearsCostAfterFrictions(_ idea: StockSageIdea,
                                                              calibration: StockSageConvictionCalibration? = nil) -> Bool {
         guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return true }
-        let c = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+        let c = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
         let (rate, days) = financingCostInputs(for: idea)
         guard let ne = StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
                                                  spreadBps: c.spreadBps, slippageBps: c.slippageBps,
@@ -298,7 +306,7 @@ enum StockSageExpectedValue {
     nonisolated static let minNetEVPerDayFloor = 0.005
 
     /// [AUDIT] NET-of-cost expected R for an idea: round-trip frictions (spread+slippage+taker,
-    /// from StockSageNetEdge.defaultCosts) subtracted from the reward AND added to the risk via
+    /// from StockSageNetEdge.costs, with qualified NBBO when available) subtracted from the reward AND added to the risk via
     /// StockSageNetEdge.evaluate(...).netExpectancyR — the EXISTING net edge model, not a new one.
     /// Win prob is the SAME conviction-mapped (calibrated) estimate the gross EV uses, so net and
     /// gross are computed on one probability. nil when there's no defined R (no stop/target) OR the
@@ -306,7 +314,7 @@ enum StockSageExpectedValue {
     nonisolated static func netEVR(for idea: StockSageIdea,
                                    calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return nil }
-        let c = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+        let c = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
         let p = winProbEstimate(conviction: idea.advice.conviction, calibration: calibration)
         let (rate, days) = financingCostInputs(for: idea)
         return StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
@@ -315,13 +323,13 @@ enum StockSageExpectedValue {
                                          annualFinancingRate: rate, holdDays: days, winProb: p)?.netExpectancyR
     }
 
-    /// [AUDIT] NET EV/day = net-of-cost EV ÷ expected hold. The honest velocity rate after frictions.
+    /// [AUDIT] NET EV/day = net-of-cost EV ÷ the SAME adjusted hold as gross velocity.
     /// nil when there's no net EV or no hold estimate (index/FX). When cost data nets to nothing
     /// (cost == 0) this equals the gross velocity exactly (Guardrail 4: net==gross when cost=0).
     nonisolated static func netVelocity(for idea: StockSageIdea, holds: VelocityHoldDays = .defaults,
                                         calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard let ne = netEVR(for: idea, calibration: calibration),
-              let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }   // [AUDIT] hold→0 guarded
+              let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
         return ne / hold
     }
 
@@ -467,8 +475,9 @@ enum StockSageExpectedValue {
         guard let r = regime else { return base }                   // nil regime → IDENTICAL to today
         return bannedFromTopRank(side(idea), regime: r.state) ? base - 1_000_000 : base
     }
-    private nonisolated static func velocityRankKey(for idea: StockSageIdea, holds: VelocityHoldDays,
-                                                    calibration: StockSageConvictionCalibration? = nil) -> Double? {
+    nonisolated static func velocityRankKey(for idea: StockSageIdea, holds: VelocityHoldDays,
+                                           calibration: StockSageConvictionCalibration? = nil,
+                                           netEVOverride: Double? = nil) -> Double? {
         // Velocity is the BUY-side compounding lane (matches bestOpportunity / CapitalAllocator) —
         // a short does not compound the same way, so only buy-family ideas qualify. (Fixes a short
         // topping the Fast Lane while it is correctly barred from the best-opportunity card.)
@@ -477,15 +486,17 @@ enum StockSageExpectedValue {
         // compounder beats a high-variance lottery setup of equal raw EV. Displayed velocity is
         // still EV/day; this is only the ordering key.
         guard let e = ev(for: idea, calibration: calibration),
-              let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
+              let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
         // [AUDIT] NET-of-cost ordering (iter6): rank by per-day log-growth scaled by the NET/gross
         // EV ratio, so round-trip frictions (StockSageNetEdge) shrink the rate CONTINUOUSLY —
         // a churny flip whose gross EV survives but whose NET EV is thin now sorts BELOW a slower
         // high-net idea, instead of keeping its full gross velocity behind a binary pass/fail.
         // Log-growth stays the growth-rate-optimal core; the net ratio is the cost haircut.
         let grossLG = expectedLogGrowth(winProb: e.winProbEstimate, rewardR: e.rewardR)
+        // Sized plans reuse the SAME ranking formula, with their quantity-aware cost result.
+        let resolvedNetEV = netEVOverride ?? netEVR(for: idea, calibration: calibration)
         let netRatio: Double = {                                  // [AUDIT] net EV ÷ gross EV, clamped ≥ 0
-            guard let ne = netEVR(for: idea, calibration: calibration), e.evR > 0 else { return 1 }  // [AUDIT] no net data ⇒ ratio 1 (=gross)
+            guard let ne = resolvedNetEV, e.evR > 0 else { return 1 }  // [AUDIT] no net data ⇒ ratio 1 (=gross)
             return Swift.max(0, ne / e.evR)                       // [AUDIT] net≤0 ⇒ ratio 0 ⇒ key 0 (below every +rate peer)
         }()
         let v = grossLG * netRatio / hold                         // [AUDIT] PROXY for net per-day log-growth: gross log-growth scaled by netEV/grossEV arithmetic-cost haircut (not true net log-growth, but correct for ranking).
@@ -494,7 +505,7 @@ enum StockSageExpectedValue {
         // The old clearsCostAfterFrictions binary gate is SUBSUMED: anything net≤0 has ratio=0
         // ⇒ key=0, and the floor (< 0.005) then adds the −500_000 de-rank. Nothing previously
         // demoted is resurrected. Honest companion label via netCostFloorFlag(for:).
-        if belowNetCostFloor(for: idea, holds: holds, calibration: calibration) { return v - 500_000 }
+        if let ne = resolvedNetEV, ne / hold < minNetEVPerDayFloor { return v - 500_000 }
         return idea.advice.conviction >= minConvictionToRank ? v : v - 1000
     }
 
@@ -1032,7 +1043,7 @@ enum StockSageExpectedValue {
     /// How many ROUND TRIPS the weekly projection implicitly assumes. `expectedWeeklyR`
     /// multiplies each top-N idea's per-day velocity by `tradingDays` — i.e. it assumes each
     /// slot stays deployed all week, re-entering as its setups resolve: tradingDays ÷
-    /// expectedHold re-cycles per slot (a 3-day crypto hold ⇒ ~1.7 round trips in a 5-day
+    /// velocityHoldDays re-cycles per slot (a 3-day crypto hold ⇒ ~1.7 round trips in a 5-day
     /// week; a 12-day equity swing ⇒ ~0.4 — you pay its round trip roughly every 2.4 weeks).
     /// Each re-cycle pays the full round-trip frictions the GROSS weekly figure excludes —
     /// week-horizon research roadmap #1 (turnover awareness): turnover is the #1 documented
@@ -1045,7 +1056,7 @@ enum StockSageExpectedValue {
                                                     calibration: StockSageConvictionCalibration? = nil) -> Double? {
         let lane = fastLane(ideas, holds: holds, calibration: calibration).prefix(Swift.max(0, maxConcurrent))
         let cycles = lane.compactMap { idea -> Double? in
-            guard let hold = expectedHoldDays(for: idea, holds: holds), hold > 0 else { return nil }
+            guard let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
             return tradingDays / hold
         }
         guard !cycles.isEmpty else { return nil }
@@ -1067,7 +1078,7 @@ enum StockSageExpectedValue {
         // assumedWeeklyRoundTrips), so the label and the number describe the same setups.
         let laneCount = fastLane(ideas, holds: holds, calibration: calibration)
             .prefix(Swift.max(0, maxConcurrent))
-            .filter { (expectedHoldDays(for: $0, holds: holds) ?? 0) > 0 }
+            .filter { velocityHoldDays(for: $0, holds: holds) != nil }
             .count
         return String(format: "Assumes ≈%.1f round trips across the top %d this week — every re-entry pays the est. round-trip costs this gross figure excludes (turnover is the #1 documented edge-killer at this horizon).",
                       trips, laneCount)
@@ -1271,20 +1282,20 @@ enum StockSageExpectedValue {
     /// now" line already calls — no new sizing math, no rank change, and the header's own dollar
     /// figure is untouched by this: it only gates whether a qualifier renders beside it.
     /// false (never flags) when account/riskFraction is unusable, or a lane idea has no stop to
-    /// size against — only-real-data, matches this file's "unknown ⇒ no penalty" convention.
+    /// size against. A missing/invalid FX rate also prevents a sized order and must be flagged.
     nonisolated static func weeklyDollarsIncludesUnfundableRow(lane: [StockSageIdea], account: Double,
                                                                riskFraction: Double, maxConcurrent: Int = 3,
                                                                fxRatesToUSD: [String: Double] = [:]) -> Bool {
         // F3 wave-A (2026-07-16): fxRatesToUSD (ccy→USD) sizes non-USD rows FX-correctly —
         // the currency-mixed count over-flagged .SR rows as unfundable (~3.75× fewer shares).
-        // Empty map (the default) = prior behavior byte-identical.
+        // Missing foreign FX is not a USD-denominated quote.
         guard account > 0, riskFraction > 0, account.isFinite, riskFraction.isFinite else { return false }
         for idea in lane.prefix(Swift.max(0, maxConcurrent)) {
-            guard let stop = idea.advice.stopPrice,
-                  let ps = StockSagePositionSizer.size(account: account, riskFraction: riskFraction,
+            guard let stop = idea.advice.stopPrice else { continue }
+            guard let ps = StockSagePositionSizer.size(account: account, riskFraction: riskFraction,
                                                        entry: idea.price, stop: stop,
                                                        symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD)
-            else { continue }
+            else { return true }
             if ps.shares == 0 { return true }
         }
         return false

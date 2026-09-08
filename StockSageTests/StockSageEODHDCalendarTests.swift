@@ -18,14 +18,14 @@ struct StockSageEODHDCalendarTests {
 
     // MARK: parseCalendar
 
-    @Test func parsesTheWrappedEarningsShape() {
+    @Test func parsesTheWrappedEarningsShape() throws {
         let json = """
         {"earnings":[
           {"code":"AAPL.US","report_date":"2026-06-30","date":"2026-07-30",
            "before_after_market":"AfterMarket","estimate":1.5,"actual":null}
         ]}
         """
-        let rows = StockSageEODHDCalendar.parseCalendar(Data(json.utf8))
+        let rows = try #require(StockSageEODHDCalendar.parseCalendar(Data(json.utf8)))
         #expect(rows.count == 1)
         #expect(rows[0].code == "AAPL.US")
         #expect(rows[0].date == utcDate(2026, 7, 30))
@@ -35,18 +35,18 @@ struct StockSageEODHDCalendarTests {
         #expect(rows[0].actual == nil)
     }
 
-    @Test func parsesTheBareArrayShape() {
+    @Test func parsesTheBareArrayShape() throws {
         let json = """
         [{"code":"MSFT.US","date":"2026-08-15"}]
         """
-        let rows = StockSageEODHDCalendar.parseCalendar(Data(json.utf8))
+        let rows = try #require(StockSageEODHDCalendar.parseCalendar(Data(json.utf8)))
         #expect(rows.count == 1)
         #expect(rows[0].code == "MSFT.US")
         #expect(rows[0].date == utcDate(2026, 8, 15))
         #expect(rows[0].reportPeriod == nil)   // report_date absent — never fabricated
     }
 
-    @Test func malformedRowsAreSkippedNotFailingTheWholeBatch() {
+    @Test func partialCalendarCannotEstablishTheNextEarningsDate() {
         // n=4 input rows: 1 valid, 1 missing code, 1 with an unparseable date, 1 not an object.
         let json = """
         {"earnings":[
@@ -57,14 +57,23 @@ struct StockSageEODHDCalendarTests {
         ]}
         """
         let rows = StockSageEODHDCalendar.parseCalendar(Data(json.utf8))
-        #expect(rows.count == 1)
-        #expect(rows[0].code == "AAPL.US")
+        // The malformed row might be the earliest event; accepting a partial list would
+        // incorrectly establish both a next date and a complete "checked" observation.
+        #expect(rows == nil)
     }
 
-    @Test func malformedOrEmptyBodyParsesToEmpty() {
-        #expect(StockSageEODHDCalendar.parseCalendar(Data("{}".utf8)) == [])
-        #expect(StockSageEODHDCalendar.parseCalendar(Data("not json".utf8)) == [])
+    @Test func malformedIsUnavailableButExplicitEmptyIsAnswered() {
+        #expect(StockSageEODHDCalendar.parseCalendar(Data("{}".utf8)) == nil)
+        #expect(StockSageEODHDCalendar.parseCalendar(Data("not json".utf8)) == nil)
         #expect(StockSageEODHDCalendar.parseCalendar(Data(#"{"earnings":[]}"#.utf8)) == [])
+        #expect(StockSageEODHDCalendar.parseCalendar(Data("[]".utf8)) == [])
+        for json in [#"{"error":"unavailable","earnings":[]}"#,
+                     #"{"earnings":[{"code":"AAPL.US","date":"2026-02-30"}]}"#,
+                     #"{"earnings":[{"code":"","date":"2026-07-30"}]}"#] {
+            #expect(StockSageEODHDCalendar.parseCalendar(Data(json.utf8)) == nil)
+        }
+        let wrong = Data(#"{"earnings":[{"code":"MSFT.US","date":"2026-07-30"}]}"#.utf8)
+        #expect(StockSageEODHDCalendar.parseCalendar(wrong, symbol: "AAPL.US") == nil)
     }
 
     // MARK: nextRow — soonest at/after `now`
@@ -129,7 +138,7 @@ struct StockSageEODHDCalendarTests {
         #expect(dates == [utcDate(2026, 4, 25), utcDate(2026, 7, 30)])
     }
 
-    @Test func fundamentalsHistorySkipsEntriesMissingADate() {
+    @Test func partialFundamentalsHistoryIsUnavailable() {
         let json = """
         {"Earnings":{"History":{
           "2026-07-30":{"date":"2026-07-30"},
@@ -138,12 +147,14 @@ struct StockSageEODHDCalendarTests {
         }}}
         """
         let dates = StockSageEODHDCalendar.parseEarningsHistory(Data(json.utf8))
-        #expect(dates == [utcDate(2026, 7, 30)])
+        #expect(dates == nil)
     }
 
-    @Test func fundamentalsMissingEarningsHistoryParsesToEmpty() {
-        #expect(StockSageEODHDCalendar.parseEarningsHistory(Data("{}".utf8)) == [])
-        #expect(StockSageEODHDCalendar.parseEarningsHistory(Data(#"{"Earnings":{}}"#.utf8)) == [])
+    @Test func fundamentalsMissingHistoryIsNotAnEmptyAnswer() {
+        #expect(StockSageEODHDCalendar.parseEarningsHistory(Data("{}".utf8)) == nil)
+        #expect(StockSageEODHDCalendar.parseEarningsHistory(Data(#"{"Earnings":{}}"#.utf8)) == nil)
+        #expect(StockSageEODHDCalendar.parseEarningsHistory(Data(#"{"Earnings":{"History":{}}}"#.utf8)) == [])
+        #expect(StockSageEODHDCalendar.parseEarningsHistory(Data(#"{"error":"denied","Earnings":{"History":{}}}"#.utf8)) == nil)
     }
 
     // MARK: - Plan-tier availability gate

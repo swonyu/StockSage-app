@@ -34,6 +34,41 @@ struct StockSageCatalystNarratorTests {
         #expect(facts.contains("Target: none"))
     }
 
+    @Test("quote provenance reaches the prompt and invalidates equal-price explanations")
+    @MainActor func quoteProvenanceIsPartOfTheFactsSnapshot() {
+        let base = brief(symbol: "AAPL").idea.withLivePrice(100, asOf: Self.now, priceSource: .massiveSIP)
+        func facts(_ idea: StockSageIdea) -> [String] {
+            N.facts(for: StockSageCatalystWatch.brief(for: idea, inputs: .init(now: Self.now)))
+        }
+        let original = facts(base)
+        let settings = ["localServerOnly", "http://127.0.0.1:8765", "fixture-model"]
+        let provenance = original.first { $0.hasPrefix("Quote source:") } ?? ""
+        #expect(provenance.contains("Massive SIP") && provenance.contains("not a live execution quote"))
+        #expect(provenance.contains(Self.now.ISO8601Format(.init(includingFractionalSeconds: true))))
+        #expect(N.prompt(facts: original).contains(provenance) && !provenance.isEmpty)
+
+        let sources: [StockSagePriceSource?] = [.yahoo, .yahooBars, .massiveDaily, .eodhd, .sample, nil]
+        let changes = sources.map { base.withLivePrice(100, asOf: Self.now, priceSource: $0) }
+            + [Self.now.addingTimeInterval(0.125), Self.now.addingTimeInterval(-86_400), nil].map {
+                base.withLivePrice(100, asOf: $0, priceSource: .massiveSIP)
+            }
+        for changed in changes {
+            #expect(changed.price == base.price && changed.advice == base.advice)
+            let current = facts(changed)
+            #expect(current != original)
+            #expect(CatalystsSection.narrationRefreshReason(savedFacts: original, currentFacts: current,
+                savedSettings: settings, currentSettings: settings) != nil)
+        }
+        #expect(CatalystsSection.narrationRefreshReason(savedFacts: original, currentFacts: facts(base),
+            savedSettings: settings, currentSettings: settings) == nil)
+        // Missing/invalid market time is unknown, never replaced by the scan or wall clock.
+        let missing: [Date?] = [nil, Date(timeIntervalSince1970: .nan), Date(timeIntervalSince1970: .infinity)]
+        for at in missing {
+            let unknown = facts(base.withLivePrice(100, asOf: at, priceSource: nil))
+            #expect(unknown.contains { $0.hasPrefix("Quote source: unknown; market time: unknown.") })
+        }
+    }
+
     // MARK: prompt(facts:)
 
     @Test("prompt contains every fact line plus the closing instruction")
@@ -160,7 +195,7 @@ struct StockSageCatalystNarratorTests {
         #expect(N.facts(for: brief(symbol: "NOSRC")) == N.facts(for: brief(symbol: "NOSRC"), sources: []))
     }
 
-    @Test("a number reused from a numbered source line passes the fence; a foreign number is withheld")
+    @Test("a number reused from a numbered source line passes the fence; a foreign number fails it")
     func fenceExtensionAcceptsSourceNumbersRejectsForeign() {
         let facts = N.facts(for: brief(symbol: "FENCE"), sources: [oneSource()])
         // "2026" and "09" and "01" all appear in the source's own date line "[1] 2026-09-01 ...".
@@ -206,16 +241,24 @@ struct StockSageCatalystNarratorTests {
 
     // MARK: label(for:sourceCount:)
 
-    @Test("label(for:sourceCount:) names the count when N > 0")
+    @Test("evidence labels retain the generating backend, model, and caveats")
     func labelForSourceCountPositive() {
-        let text = N.label(for: .onDevice, sourceCount: 3)
-        #expect(text == "Model-written from the facts + 3 sources (listed) — a paraphrase, not analysis, unvalidated, not advice.")
+        let sources: [N.Source] = [.onDevice, .localServer(model: "qwen3.8"), .localServer(model: "salehman-qwen38-27b-4bit")]
+        for source in sources {
+            for count in [1, 3] {
+                let text = N.label(for: source, sourceCount: count)
+                #expect(text.hasPrefix(N.label(for: source)))
+                #expect(text.hasSuffix("Evidence: \(count) \(count == 1 ? "source" : "sources") (listed)."))
+            }
+        }
     }
 
-    @Test("label(for:sourceCount: 0) falls back to label(for:) unchanged")
+    @Test("nonpositive source counts leave the backend label unchanged")
     func labelForSourceCountZeroFallsBack() {
-        #expect(N.label(for: .onDevice, sourceCount: 0) == N.label(for: .onDevice))
-        #expect(N.label(for: .localServer(model: "qwen3.8"), sourceCount: 0) == N.label(for: .localServer(model: "qwen3.8")))
+        for count in [0, -1] {
+            #expect(N.label(for: .onDevice, sourceCount: count) == N.label(for: .onDevice))
+            #expect(N.label(for: .localServer(model: "qwen3.8"), sourceCount: count) == N.label(for: .localServer(model: "qwen3.8")))
+        }
     }
 
     // MARK: instructions gain the citation rule
@@ -229,6 +272,54 @@ struct StockSageCatalystNarratorTests {
 
     // MARK: Result equality
 
+    @Test("citation errors are diagnosed before numbers and oversized IDs cannot pass")
+    func citationDiagnosticsDoNotMasqueradeAsFinancialNumbers() {
+        let large = String(repeating: "9", count: 40)
+        for source in [N.Source.onDevice, .localServer(model: "captured-qwen")] {
+            for (text, facts, count) in [
+                ("Target 27 [1].", ["Target 27"], 0),
+                ("Target 27 [0].", ["Target 27"], 1),
+                ("Target 27 [2].", ["Target 27", "[1] Source"], 1),
+                ("Source [\(large)].", ["Reference value \(large)"], 1)
+            ] {
+                guard case .unverified(let draft, let actual, let reason) =
+                    N.checkedResponse(text, facts: facts, source: source, sourceCount: count) else {
+                    Issue.record("Unsupported citation was discarded or accepted: \(text)")
+                    continue
+                }
+                #expect(draft == text && actual == source && reason.contains("source number"))
+            }
+            #expect(N.checkedResponse("Target 27.", facts: ["Target 27"], source: source,
+                sourceCount: 0) == .text("Target 27.", source))
+            // Once a citation is valid, genuinely foreign financial numbers still fail.
+            guard case .unverified(_, _, let reason) = N.checkedResponse("Target 99 [1].",
+                facts: ["Target 27", "[1] Source"], source: source, sourceCount: 1) else {
+                Issue.record("Foreign financial number was accepted")
+                continue
+            }
+            #expect(reason.contains("number that is not in the supplied facts"))
+        }
+        #expect(!N.citationsValid("[\(large)]", sourceCount: 1))
+    }
+
+    @Test("failed number/citation checks preserve the draft and its generating model")
+    func failedChecksKeepVisibleDraftWithoutPromotingItToCheckedText() {
+        for source in [N.Source.onDevice, .localServer(model: "captured-qwen")] {
+            for text in ["AAPL reports 999 revenue.", "AAPL source [2]."] {
+                // 2 exists as a factual number but NOT a valid source ID, isolating citation failure.
+                let result = N.checkedResponse(text, facts: ["Price: 100", "Count: 2", "[1] A source"], source: source, sourceCount: 1)
+                guard case .unverified(let draft, let actual, let reason) = result else {
+                    Issue.record("Failed response was discarded or promoted: \(result)")
+                    continue
+                }
+                #expect(draft == text && actual == source && !reason.isEmpty)
+                #expect(result != .text(text, source))
+            }
+        }
+        #expect(N.checkedResponse("AAPL price 100 [1].", facts: ["Price: 100", "[1] Source"],
+                                  source: .onDevice, sourceCount: 1) == .text("AAPL price 100 [1].", .onDevice))
+    }
+
     @Test("Result compares by case and payload")
     func resultEqualityByValue() {
         #expect(N.Result.text("a", .onDevice) == .text("a", .onDevice))
@@ -236,8 +327,8 @@ struct StockSageCatalystNarratorTests {
         #expect(N.Result.text("a", .onDevice) != .text("a", .localServer(model: "qwen3.8")))
         #expect(N.Result.text("a", .localServer(model: "qwen3.8")) == .text("a", .localServer(model: "qwen3.8")))
         #expect(N.Result.text("a", .localServer(model: "qwen3.8")) != .text("a", .localServer(model: "llama3")))
-        #expect(N.Result.withheld("x") == .withheld("x"))
+        #expect(N.Result.unverified("x", .onDevice, reason: "check failed") == .unverified("x", .onDevice, reason: "check failed"))
         #expect(N.Result.unavailable("y") == .unavailable("y"))
-        #expect(N.Result.text("a", .onDevice) != .withheld("a"))
+        #expect(N.Result.text("a", .onDevice) != .unverified("a", .onDevice, reason: "check failed"))
     }
 }

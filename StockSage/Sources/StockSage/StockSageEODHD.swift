@@ -81,7 +81,7 @@ enum StockSageEODHD {
         return StockSageQuoteService.LiveQuote(symbol: requestedSymbol, price: close,
                                                previousClose: realPreviousClose ?? close,
                                                marketTime: marketTime,
-                                               isNewListing: realPreviousClose == nil)
+                                               isNewListing: realPreviousClose == nil, priceSource: .eodhd)
     }
 
     /// Fetch one US symbol. nil on any failure so the caller can fall back to Yahoo.

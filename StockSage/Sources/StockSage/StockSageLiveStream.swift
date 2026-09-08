@@ -1,200 +1,256 @@
 import Foundation
 import Combine
 
-/// Real-time price streaming over EODHD's WebSocket (owner directive 2026-07-28: "real live
-/// tracking, not a button to refresh").
-///
-/// WHAT THIS DOES: holds one WebSocket per chunk of `maxSubscriptionsPerConnection` symbols on
-/// EODHD's US feed and pushes every tick straight into the store, so prices move on their own
-/// while the app is open. Verified authorized on the owner's key (handshake returns
-/// `{"status_code":200,"message":"Authorized"}`).
-///
-/// HONEST LIMITS — these are platform/vendor facts, not missing effort:
-///   • US symbols ONLY. EODHD carries no Saudi exchange (measured — see StockSageEODHD), so
-///     Tadawul names keep using the polling refresh. There is no stream to subscribe them to.
-///   • FOREGROUND only on iOS. iOS suspends an app shortly after it leaves the screen and tears
-///     down its sockets; no background mode legitimately keeps a finance WebSocket alive. True
-///     24/7 tracking requires a server holding the socket and sending push notifications —
-///     infrastructure this app deliberately does not have. macOS can hold it open indefinitely.
-///   • Streams TRADES. Between trades the price does not change, so a thin name updates rarely;
-///     that is the market being quiet, not the stream being broken.
+/// Real-time price streaming over Massive's Stocks WebSocket. It subscribes only US equities
+/// that Massive covers; all other symbols keep the explicit, keyless Yahoo polling path.
+/// The socket is foreground-only on iOS; a server plus push notifications would be required for
+/// real background monitoring. A quiet trade stream means the market is quiet, not that the
+/// connection is broken.
 @MainActor
 final class StockSageLiveStream: ObservableObject {
     static let shared = StockSageLiveStream()
 
-    /// True while ANY chunk's socket is open AND authorized — the UI's "LIVE" indicator binds to
-    /// this and must never claim live when every connection has dropped.
+    /// True only while an authenticated connection is delivering recent trades.
     @Published private(set) var isStreaming = false
-    /// When the last tick of any symbol on any connection arrived. nil until the first one.
-    @Published private(set) var lastTickAt: Date?
-    /// Symbols currently subscribed across every open connection (uppercased, US only) — ONLY
-    /// those on a connection that is actually AUTHORIZED and streaming right now (blocker fix
-    /// 2026-09-06). Before this it was a STORED value assigned from the merely-REQUESTED union
-    /// the instant `start()` ran — before `connections.forEach { $0.open() }` even executed, let
-    /// alone before any handshake returned — so a symbol whose socket never authorized (missing
-    /// API key, non-200 handshake, every chunk dropped) still read as "covered": `isStreaming`
-    /// correctly went false, but `subscribed` kept claiming every requested symbol, so
-    /// `StockSageStore.streamGapCandidates` returned `[]` and those names were polled by NOTHING
-    /// except the far-slower `.full` sweep. Computed (not stored) so it can never go stale
-    /// relative to each connection's own `isStreaming`. Pulled through the pure
-    /// `subscribedSymbols(from:)` below so the "only authorized chunks count" rule is
-    /// unit-testable without opening a real socket.
+    /// Coalesced separately from trade prices. A quote must never advance trade freshness.
+    @Published private(set) var quotes: [String: StockSageNBBO] = [:]
+    /// Shared reference for compact cards; never fetch once per symbol/card.
+    @Published private(set) var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
+
+    /// Auth success is not subscription proof. Unseen or quiet symbols stay in the gap poll.
     var subscribed: Set<String> {
-        Self.subscribedSymbols(from: connections.map { (symbols: $0.symbols, isStreaming: $0.isStreaming) })
+        connections.reduce(into: Set<String>()) { $0.formUnion($1.state.coveredSymbols(at: Date())) }
     }
 
-    /// Pure: union of `symbols` for every entry whose `isStreaming` is true. Tuple-typed (not
-    /// `StockSageLiveStreamConnection`, which is `private` to this file and MainActor-bound) so
-    /// it can be pinned directly with plain fixtures.
-    nonisolated static func subscribedSymbols(from connections: [(symbols: Set<String>, isStreaming: Bool)]) -> Set<String> {
-        connections.filter(\.isStreaming).reduce(into: Set<String>()) { $0.formUnion($1.symbols) }
-    }
-
-    /// EODHD's per-connection ceiling. Source (fetched 2026-09-06):
-    /// https://eodhd.com/financial-apis/new-real-time-data-api-websockets — "Symbol Limits &
-    /// Usage Notes ... Concurrent subscriptions: up to 50 symbols per connection by default
-    /// (upgradeable in user dashboard for extra fee)." The same page separately caps the
-    /// account at "up to 64 concurrent connections per API token" (shared across every market),
-    /// which is why we chunk into additional connections rather than opening one per symbol.
-    static let maxSubscriptionsPerConnection = 50
+    /// Massive Stocks WebSocket. The API key is sent only in the post-connect auth message.
+    fileprivate static let massiveHost = "wss://socket.massive.com/stocks"
+    nonisolated fileprivate static let silenceTimeout: TimeInterval = 45
 
     private var connections: [StockSageLiveStreamConnection] = []
-    private var wantsConnection = false
+    private var freshnessTimer: Task<Void, Never>?
+    private var quoteFlush: Task<Void, Never>?
+    private var conditionTask: Task<Void, Never>?
+    private var regularConditions: Set<Int64> = []
+    private var conditionsAsOf: Date?
 
-    /// EODHD's US trade stream. Host is the legacy domain deliberately: ws.eodhd.com presents a
-    /// certificate that fails hostname validation (measured 2026-07-28), so using it would mean
-    /// either a TLS error or disabling verification — neither acceptable for a price feed.
-    fileprivate static let host = "wss://ws.eodhistoricaldata.com/ws/us"
-
-    // MARK: - Pure, testable pieces
-
-    struct Tick: Sendable, Equatable {
+    nonisolated struct Tick: Sendable, Equatable {
         let symbol: String
         let price: Double
-        let timestamp: Date?
+        let timestamp: Date
+        var sequence: Int64? = nil
     }
 
-    /// Parse one EODHD stream frame. Handles the trade payload, the auth acknowledgement, and
-    /// anything malformed — returning nil rather than a fabricated price in every non-trade case.
-    nonisolated static func parseTick(_ text: String) -> Tick? {
+    nonisolated enum Event: Sendable, Equatable {
+        case status(String)
+        case trade(Tick)
+        case quote(StockSageNBBO)
+    }
+
+    /// Decode EVERY event, including mixed status/trade frames. A malformed element must not
+    /// hide its valid siblings. https://massive.com/docs/websocket/quickstart
+    nonisolated static func events(in text: String) -> [Event] {
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        // Status frames ({"status_code":200,...}) carry no price — not a tick.
-        guard obj["status_code"] == nil else { return nil }
-        guard let symbol = (obj["s"] as? String)?.uppercased(), !symbol.isEmpty else { return nil }
-        // Price arrives as a number or a numeric string depending on the field.
-        let price: Double?
-        if let d = obj["p"] as? Double { price = d }
-        else if let i = obj["p"] as? Int { price = Double(i) }
-        else if let s = obj["p"] as? String { price = Double(s) }
-        else { price = nil }
-        guard let p = price, p > 0, p.isFinite else { return nil }
-        // `t` is milliseconds since epoch on this feed.
-        var when: Date?
-        if let ms = obj["t"] as? Double { when = Date(timeIntervalSince1970: ms / 1000) }
-        else if let ms = obj["t"] as? Int { when = Date(timeIntervalSince1970: Double(ms) / 1000) }
-        return Tick(symbol: symbol, price: p, timestamp: when)
-    }
-
-    /// Which of `symbols` this stream can actually carry. Reuses the EODHD coverage whitelist so
-    /// the two can never disagree about what US means.
-    nonisolated static func streamable(_ symbols: [String]) -> [String] {
-        symbols.filter { StockSageEODHD.covers($0) }.map { $0.uppercased() }.sorted()
-    }
-
-    /// Split `symbols` into contiguous chunks of at most `limit` (last chunk may be smaller).
-    /// Pure so the batching math — ceil(n/limit) chunks, none over cap, union equals input — can
-    /// be pinned without opening a socket. `limit <= 0` means "no cap" (one chunk).
-    nonisolated static func chunked(_ symbols: [String], limit: Int) -> [[String]] {
-        guard limit > 0, !symbols.isEmpty else { return symbols.isEmpty ? [] : [symbols] }
-        var result: [[String]] = []
-        var i = 0
-        while i < symbols.count {
-            let end = min(i + limit, symbols.count)
-            result.append(Array(symbols[i..<end]))
-            i = end
+              let raw = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        let rows = (raw as? [Any]) ?? [raw]
+        return rows.compactMap { element in
+            guard let row = element as? [String: Any] else { return nil }
+            if row["ev"] as? String == "status", let status = row["status"] as? String {
+                return .status(status)
+            }
+            guard let symbol = (row["sym"] as? String)?.uppercased(), StockSageMassive.covers(symbol),
+                  let milliseconds = number(row["t"]), milliseconds > 0 else { return nil }
+            let timestamp = Date(timeIntervalSince1970: milliseconds / 1_000)
+            switch row["ev"] as? String {
+            case "T":
+                guard let price = number(row["p"]), price > 0 else { return nil }
+                return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp, sequence: integer(row["q"])))
+            case "Q":
+                guard let bid = number(row["bp"]), bid >= 0, let ask = number(row["ap"]), ask >= 0,
+                      let bidSize = number(row["bs"]), bidSize >= 0,
+                      let askSize = number(row["as"]), askSize >= 0 else { return nil }
+                var quote = StockSageNBBO(symbol: symbol, bid: bid, ask: ask, bidSize: bidSize, askSize: askSize,
+                                    bidExchange: integer(row["bx"]), askExchange: integer(row["ax"]),
+                                    timestamp: timestamp, sequence: integer(row["q"]))
+                quote.condition = integer(row["c"])
+                if let raw = row["i"] {
+                    let values = (raw as? [Any])?.compactMap(integer)
+                    quote.indicators = values?.count == (raw as? [Any])?.count ? values : nil
+                }
+                return .quote(quote)
+            default: return nil
+            }
         }
-        return result
     }
 
-    /// Reconnect backoff in seconds: 1, 2, 4, 8, 16, capped at 30. Capped so a long outage still
-    /// retries at a sane cadence instead of drifting to hours.
+    /// The runtime and deterministic tests use the same protocol state, without a live socket.
+    nonisolated struct StreamState {
+        private(set) var isAuthorized = false
+        private var latestTrades: [String: Tick] = [:]
+        private(set) var latestQuotes: [String: StockSageNBBO] = [:]
+
+        mutating func consume(_ event: Event, requested: Set<String>, now: Date) -> Tick? {
+            switch event {
+            case .status("auth_success"):
+                isAuthorized = true
+            case .status("auth_failed"), .status("error"), .status("connected"):
+                self = StreamState()
+            case .status:
+                break // Informational/subscription messages do not revoke authentication.
+            case .quote(let quote):
+                guard isAuthorized, requested.contains(quote.symbol),
+                      quote.supersedes(latestQuotes[quote.symbol], now: now) else { return nil }
+                latestQuotes[quote.symbol] = quote
+            case .trade(let tick):
+                guard isAuthorized, requested.contains(tick.symbol), tick.price.isFinite, tick.price > 0,
+                      StockSageStore.acceptsLiveTick(tick.timestamp, after: latestTrades[tick.symbol]?.timestamp,
+                          massiveTradeSequence: tick.sequence,
+                          afterMassiveTradeSequence: latestTrades[tick.symbol]?.sequence, now: now)
+                else { return nil }
+                latestTrades[tick.symbol] = tick
+                return tick
+            }
+            return nil
+        }
+
+        func coveredSymbols(at now: Date) -> Set<String> {
+            guard isAuthorized else { return [] }
+            return Set(latestTrades.filter { now.timeIntervalSince($0.value.timestamp) <= silenceTimeout }.keys)
+        }
+
+        func hasRecentTrades(at now: Date) -> Bool {
+            isAuthorized && latestTrades.values.contains { now.timeIntervalSince($0.timestamp) <= silenceTimeout }
+        }
+    }
+
+    nonisolated static func massiveSubscription(symbols: Set<String>) -> String? {
+        guard !symbols.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: [
+                  "action": "subscribe",
+                  "params": symbols.sorted().flatMap { ["T.\($0)", "Q.\($0)"] }.joined(separator: ","),
+              ]) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private nonisolated static func number(_ any: Any?) -> Double? {
+        StockSageMassive.finite(any)
+    }
+
+    private nonisolated static func integer(_ any: Any?) -> Int64? {
+        guard let value = StockSageMassive.int64(any), value >= 0 else { return nil }
+        return value
+    }
+
+    nonisolated static func streamable(_ symbols: [String]) -> [String] {
+        Set(symbols.filter { StockSageMassive.covers($0) }.map { $0.uppercased() }).sorted()
+    }
+
+    /// Reconnect backoff: 1, 2, 4, 8, 16, capped at 30 seconds.
     nonisolated static func backoffSeconds(attempt: Int) -> Double {
         min(30, pow(2, Double(max(0, attempt))))
     }
 
-    /// Status-frame classifier. EODHD's control frames carry `status_code`; nil means this is not
-    /// a status frame. Kept separate from `parseTick` (which correctly rejects them) so the
-    /// connection layer can honour `isStreaming`'s "open AND AUTHORIZED" contract. (Review Q5,
-    /// 2026-07-28.)
-    nonisolated static func authStatus(_ text: String) -> Int? {
-        guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        if let c = obj["status_code"] as? Int { return c }
-        if let s = obj["status_code"] as? String { return Int(s) }
-        return nil
-    }
-
-    /// How long a connection may go without ANY frame before it stops claiming LIVE and
-    /// re-probes. A quiet market sends no trades and a NAT/Wi-Fi handover leaves a half-open
-    /// socket — in both cases `receive` simply never returns, so `.failure` (the only thing that
-    /// cleared `isStreaming`) never fires and the pulsing dot lies indefinitely. (Review Q5,
-    /// 2026-07-28.)
-    fileprivate static let silenceTimeout = 45
-
-    // MARK: - Connection lifecycle
-
-    /// Opens one connection per `maxSubscriptionsPerConnection`-sized chunk of `symbols` — a
-    /// single connection when the whole set fits, several (each with its own watchdog/backoff)
-    /// when it doesn't. Overall `isStreaming` is true when ANY chunk is live.
     func start(symbols: [String]) {
         let wanted = Self.streamable(symbols)
-        guard !wanted.isEmpty else { stop(); return }
-        wantsConnection = true
-        let chunks = Self.chunked(wanted, limit: Self.maxSubscriptionsPerConnection).map(Set.init)
-        guard Set(chunks) != Set(connections.map(\.symbols)) else { return }  // already exactly this
+        guard ToolPolicy.isExternalAllowed, StockSageMassive.isConfigured, !wanted.isEmpty else { stop(); return }
+        let set = Set(wanted)
+        guard connections.first?.symbols != set || connections.count != 1 || connections.first?.isActive != true else { return }
         connections.forEach { $0.close() }
-        connections = chunks.map { StockSageLiveStreamConnection(symbols: $0, owner: self) }
-        // `subscribed` is now DERIVED from each connection's own `isStreaming` (see its doc) —
-        // no assignment needed here; it reads correctly (empty) until a chunk actually authorizes.
-        connections.forEach { $0.open() }
+        let connection = StockSageLiveStreamConnection(symbols: set, owner: self)
+        connections = [connection]
+        connectionStatusChanged()
+        connection.open()
+        conditionTask?.cancel()
+        regularConditions = []
+        conditionsAsOf = nil
+        exchanges = [:]
+        conditionTask = Task { [weak self] in
+            // ponytail: one bounded reference request per start; on failure or after24h,
+            // retain default costs until restart. Add retries only with verified rate limits.
+            let regular = (try? await StockSageMassiveTicks.regularQuoteConditions()) ?? []
+            guard !Task.isCancelled, let self, ToolPolicy.isExternalAllowed else { return }
+            self.regularConditions = regular
+            self.conditionsAsOf = Date()
+            self.quotesChanged()
+            let exchanges = (try? await StockSageMassiveTicks.exchanges()) ?? [:]
+            guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
+            if self.exchanges != exchanges { self.exchanges = exchanges }
+        }
+        freshnessTimer?.cancel()
+        // ponytail: one-second UI/rank invalidation; money helpers check exact quote age.
+        freshnessTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self else { return }
+                guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+                self.connectionStatusChanged()
+                StockSageStore.shared.applyLiveNBBO(self.quotes)
+            }
+        }
     }
 
     func stop() {
-        wantsConnection = false
+        conditionTask?.cancel()
+        conditionTask = nil
+        regularConditions = []
+        conditionsAsOf = nil
+        freshnessTimer?.cancel()
+        freshnessTimer = nil
+        quoteFlush?.cancel()
+        quoteFlush = nil
         connections.forEach { $0.close() }
         connections = []
         isStreaming = false
-        // `subscribed` is derived from `connections`, which is now empty — no assignment needed.
+        quotes = [:]
+        exchanges = [:]
+        StockSageStore.shared.applyLiveNBBO([:])
     }
 
-    /// Called by a connection whenever its own `isStreaming` changes. Overall status is the union
-    /// across every chunk — one dead connection must not blank out an otherwise-live stream.
     fileprivate func connectionStatusChanged() {
-        isStreaming = connections.contains { $0.isStreaming }
+        let streaming = connections.contains { $0.state.hasRecentTrades(at: Date()) }
+        // @Published emits even for equal assignments: don't redraw Markets for every trade.
+        if isStreaming != streaming { isStreaming = streaming }
+        if !connections.contains(where: { $0.state.isAuthorized }), !quotes.isEmpty {
+            quotes = [:]
+            StockSageStore.shared.applyLiveNBBO([:])
+        }
     }
 
-    fileprivate func tickReceived(symbol: String, price: Double, at when: Date?) {
-        lastTickAt = Date()
-        StockSageStore.shared.applyLiveTick(symbol: symbol, price: price, at: when)
+    fileprivate func quotesChanged() {
+        guard quoteFlush == nil else { return }
+        quoteFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            self.quoteFlush = nil
+            guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+            let now = Date()
+            let regular = self.conditionsAsOf.map { (0..<86_400).contains(now.timeIntervalSince($0)) } == true
+                ? self.regularConditions : []
+            let latest = self.connections.reduce(into: [String: StockSageNBBO]()) {
+                if $1.state.isAuthorized { $0.merge($1.state.latestQuotes) { _, new in new } }
+            }.mapValues { $0.qualifyingCosts(regularConditions: regular) }
+            if self.quotes != latest { self.quotes = latest }
+            StockSageStore.shared.applyLiveNBBO(latest, now: now)
+        }
+    }
+
+    fileprivate func tickReceived(_ tick: Tick) {
+        StockSageStore.shared.applyLiveTick(symbol: tick.symbol, price: tick.price, at: tick.timestamp,
+                                            massiveTradeSequence: tick.sequence, priceSource: .massiveSIP)
     }
 }
 
-/// One EODHD WebSocket carrying at most `StockSageLiveStream.maxSubscriptionsPerConnection`
-/// symbols. Everything here is the original single-connection logic (subscribe, 45s silence
-/// watchdog, 1-2-4-8-16s-capped-30 backoff) unchanged — `StockSageLiveStream` just owns N of
-/// these instead of one once the requested set exceeds the vendor cap.
 @MainActor
 private final class StockSageLiveStreamConnection {
     let symbols: Set<String>
-    private(set) var isStreaming = false
+    private(set) var state = StockSageLiveStream.StreamState()
 
     private weak var owner: StockSageLiveStream?
     private var task: URLSessionWebSocketTask?
     private var reconnectAttempt = 0
     private var wantsConnection = false
+    var isActive: Bool { wantsConnection }
     private var watchdog: Task<Void, Never>?
+    private var reconnect: Task<Void, Never>?
 
     init(symbols: Set<String>, owner: StockSageLiveStream) {
         self.symbols = symbols
@@ -210,45 +266,87 @@ private final class StockSageLiveStreamConnection {
         wantsConnection = false
         watchdog?.cancel()
         watchdog = nil
+        reconnect?.cancel()
+        reconnect = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
-        isStreaming = false
+        state = .init()
+        owner?.connectionStatusChanged()
     }
 
     private func openSocket() {
+        guard wantsConnection, ToolPolicy.isExternalAllowed else { close(); return }
         watchdog?.cancel()
         watchdog = nil
+        reconnect?.cancel()
+        reconnect = nil
         task?.cancel(with: .goingAway, reason: nil)
-        let key = StockSageEODHD.apiKey
-        guard !key.isEmpty, let url = URL(string: "\(StockSageLiveStream.host)?api_token=\(key)") else { return }
-        let t = URLSession.shared.webSocketTask(with: url)
-        task = t
-        t.resume()
-        sendSubscription()
+        task = nil
+        state = .init()
+        owner?.connectionStatusChanged()
+        let key = StockSageMassive.apiKey
+        guard !key.isEmpty, let url = URL(string: StockSageLiveStream.massiveHost) else { return }
+        let socket = URLSession.shared.webSocketTask(with: url)
+        task = socket
+        socket.resume()
+        sendAuth(key)
         receiveLoop()
+        armWatchdog()
+    }
+
+    private func sendAuth(_ key: String) {
+        guard let task,
+              let data = try? JSONSerialization.data(withJSONObject: ["action": "auth", "params": key]),
+              let text = String(data: data, encoding: .utf8) else { return }
+        send(text, on: task)
     }
 
     private func sendSubscription() {
-        guard let t = task, !symbols.isEmpty else { return }
-        let payload = ["action": "subscribe", "symbols": symbols.sorted().joined(separator: ",")]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let text = String(data: data, encoding: .utf8) else { return }
-        t.send(.string(text)) { _ in }
+        guard let task, let text = StockSageLiveStream.massiveSubscription(symbols: symbols) else { return }
+        send(text, on: task)
+    }
+
+    private func send(_ text: String, on socket: URLSessionWebSocketTask) {
+        socket.send(.string(text)) { [weak self] error in
+            guard error != nil else { return }
+            Task { @MainActor in self?.connectionFailed(socket) }
+        }
+    }
+
+    /// Invalidate the socket before scheduling a retry. Late callbacks from it cannot reset
+    /// the replacement connection, and close() cancels a pending reconnect during scene exit.
+    private func connectionFailed(_ socket: URLSessionWebSocketTask) {
+        guard task === socket else { return }
+        task = nil
+        socket.cancel(with: .goingAway, reason: nil)
+        watchdog?.cancel()
+        watchdog = nil
+        state = .init()
+        owner?.connectionStatusChanged()
+        guard wantsConnection else { return }
+        let delay = StockSageLiveStream.backoffSeconds(attempt: reconnectAttempt)
+        reconnectAttempt = min(reconnectAttempt + 1, 5)
+        reconnect?.cancel()
+        reconnect = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, self.wantsConnection else { return }
+            self.openSocket()
+        }
     }
 
     private func armWatchdog() {
         watchdog?.cancel()
         watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(StockSageLiveStream.silenceTimeout))
-            guard !Task.isCancelled, let self, self.wantsConnection, let t = self.task else { return }
-            // A ping proves the socket is alive without claiming any price moved.
-            t.sendPing { [weak self] error in
+            guard !Task.isCancelled, let self, self.wantsConnection, let task = self.task else { return }
+            guard ToolPolicy.isExternalAllowed else { self.close(); return }
+            self.owner?.connectionStatusChanged()
+            guard self.state.isAuthorized else { self.connectionFailed(task); return }
+            task.sendPing { [weak self] error in
                 Task { @MainActor in
-                    guard let self, self.task === t else { return }
+                    guard let self, self.task === task else { return }
                     if error != nil {
-                        self.isStreaming = false
-                        self.owner?.connectionStatusChanged()
-                        self.openSocket()
+                        self.connectionFailed(task)
                     } else {
                         self.armWatchdog()
                     }
@@ -258,34 +356,36 @@ private final class StockSageLiveStreamConnection {
     }
 
     private func receiveLoop() {
-        guard let t = task else { return }
-        t.receive { [weak self] result in
+        guard let task else { return }
+        task.receive { [weak self] result in
             Task { @MainActor in
-                guard let self, self.task === t else { return }
+                guard let self, self.task === task else { return }
+                guard ToolPolicy.isExternalAllowed else { self.close(); return }
                 switch result {
                 case .success(let message):
-                    self.reconnectAttempt = 0
-                    if case .string(let text) = message {
-                        if let status = StockSageLiveStream.authStatus(text) {
-                            // ONLY an explicit 200 means authorized — the `isStreaming` contract.
-                            self.isStreaming = (status == 200)
-                            self.owner?.connectionStatusChanged()
-                        } else if let tick = StockSageLiveStream.parseTick(text) {
-                            self.isStreaming = true
-                            self.owner?.connectionStatusChanged()
-                            self.owner?.tickReceived(symbol: tick.symbol, price: tick.price, at: tick.timestamp)
+                    let text: String?
+                    switch message {
+                    case .string(let value): text = value
+                    case .data(let data): text = String(data: data, encoding: .utf8)
+                    @unknown default: text = nil
+                    }
+                    for event in StockSageLiveStream.events(in: text ?? "") {
+                        let wasAuthorized = self.state.isAuthorized
+                        if let tick = self.state.consume(event, requested: self.symbols, now: Date()) {
+                            self.reconnectAttempt = 0
+                            self.owner?.tickReceived(tick)
+                        }
+                        if case .quote = event { self.owner?.quotesChanged() }
+                        if !wasAuthorized, self.state.isAuthorized { self.sendSubscription() }
+                        if event == .status("auth_failed") || event == .status("error") {
+                            self.connectionFailed(task)
+                            return
                         }
                     }
-                    self.armWatchdog()
+                    self.owner?.connectionStatusChanged()
                     self.receiveLoop()
                 case .failure:
-                    self.isStreaming = false
-                    self.owner?.connectionStatusChanged()
-                    guard self.wantsConnection else { return }
-                    let delay = StockSageLiveStream.backoffSeconds(attempt: self.reconnectAttempt)
-                    self.reconnectAttempt += 1
-                    try? await Task.sleep(for: .seconds(delay))
-                    if self.wantsConnection { self.openSocket() }
+                    self.connectionFailed(task)
                 }
             }
         }

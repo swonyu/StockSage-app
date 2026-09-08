@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import StockSage
 
 // Swipe navigation between board sections (iPhone, 2026-07-28). The gesture itself is UI,
@@ -7,9 +8,24 @@ import Testing
 @Suite("Section swipe navigation")
 struct MarketSectionNavigationTests {
 
+    #if os(macOS)
+    @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
+        #expect(Set(StockSageDesktop.sections) == Set(MarketSection.allCases))
+        #expect(StockSageDesktop.sections.count == MarketSection.allCases.count)
+        #expect(StockSageDesktop.sections.first == .briefing)
+        #expect(StockSageDesktop.title(for: .briefing) == "Home")
+        #expect(StockSageDesktop.title(for: .all) == "Markets")
+        for (index, section) in MarketSection.allCases.enumerated() {
+            #expect(StockSageDesktop.shortcut(for: section) == index + 1)
+        }
+        #expect(StockSageDesktop.sidebarWidth(collapsed: true) == 64)
+        #expect(StockSageDesktop.sidebarWidth(collapsed: false) == 220)
+    }
+    #endif
+
     @Test("neighbours follow tab order exactly")
     func neighboursFollowTabOrder() {
-        // Tab order is watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, briefing
+        // Tab order is watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, chat, briefing
         // (Catalysts added 2026-09-06 beside Ideas — it shows the same ideas through a different lens).
         #expect(MarketSection.watchlist.neighbour(after: true) == .ideas)
         #expect(MarketSection.ideas.neighbour(after: true) == .catalysts)
@@ -17,9 +33,10 @@ struct MarketSectionNavigationTests {
         #expect(MarketSection.all.neighbour(after: true) == .heatmap)
         #expect(MarketSection.heatmap.neighbour(after: true) == .portfolio)
         #expect(MarketSection.portfolio.neighbour(after: true) == .alerts)
-        #expect(MarketSection.alerts.neighbour(after: true) == .briefing)
+        #expect(MarketSection.alerts.neighbour(after: true) == .chat)
+        #expect(MarketSection.chat.neighbour(after: true) == .briefing)
 
-        #expect(MarketSection.briefing.neighbour(after: false) == .alerts)
+        #expect(MarketSection.briefing.neighbour(after: false) == .chat)
         #expect(MarketSection.ideas.neighbour(after: false) == .watchlist)
         #expect(MarketSection.catalysts.neighbour(after: false) == .ideas)
     }

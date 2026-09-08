@@ -286,6 +286,8 @@ struct StockSageCatalystWatchPropertyTests {
                     // (`catalystProjectedDate`/`catalystProjectionBasis` stay nil for every case
                     // here) — StockSageCatalystWatchTests pins `.projectedEarnings` copy verbatim.
                     Issue.record("unreachable: this sweep never sets catalystProjectedDate")
+                case .filing8K, .ratingChange, .guidanceChange, .exDividend, .insiderTrade:
+                    Issue.record("unreachable: legacy grid has no company feeds; M6 grid covers every new axis")
                 }
             }
         }

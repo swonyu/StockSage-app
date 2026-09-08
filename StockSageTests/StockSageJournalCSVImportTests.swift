@@ -6,6 +6,107 @@ import Foundation
 
 struct StockSageJournalCSVImportTests {
 
+    @MainActor @Test(arguments: ["\n", "\r", "\r\n"])
+    func lineEndingsAndQuotedNotesRoundTripIntoIsolatedJournal(ending: String) throws {
+        let suite = "stocksage-csv-lines-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = TradeRecord(symbol: "LINES", side: .long, entry: 100, stop: 90,
+            target: nil, shares: 2, openedAt: Date(timeIntervalSince1970: 0),
+            note: "first\(ending)second, قال \"انتظر\"")
+        let row = String(StockSageJournalCSV.csv([original]).dropFirst(StockSageJournalCSV.header.count + 1))
+        let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + ending + row + ending)
+        #expect(preview.errors.isEmpty)
+        #expect(preview.imported == 1 && preview.skipped == 0)
+        #expect(preview.trades.first?.note == original.note)
+        let journal = StockSageJournalStore(defaults: defaults)
+        let result = journal.importNew(preview.trades)
+        #expect(result.added == 1 && result.rejected == 0)
+        #expect(StockSageJournalStore(defaults: defaults).trades.first?.note == original.note)
+    }
+
+    @Test(arguments: ["\n", "\r", "\r\n"])
+    func errorAfterMultilineNoteNamesThePhysicalFileLine(ending: String) {
+        let original = TradeRecord(symbol: "LINES", side: .long, entry: 100, stop: 90,
+            target: nil, shares: 2, openedAt: Date(timeIntervalSince1970: 0), note: "first\(ending)second")
+        let row = String(StockSageJournalCSV.csv([original]).dropFirst(StockSageJournalCSV.header.count + 1))
+        let bad = "BAD,Long,-100,90,,2,1970-01-01T00:00:00Z,,,,"
+        let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + ending + row + ending + bad)
+        #expect(preview.imported == 1)
+        #expect(preview.trades.first?.note == original.note)
+        #expect(preview.errors.map(\.line) == [4]) // header=1, quoted record spans2–3, BAD=4
+    }
+
+    @Test(arguments: [100.0, 1e-6, 1e20])
+    func exporterNumberNotationRoundTripsAllNumericFields(scale: Double) {
+        let original = TradeRecord(symbol: "NUMBERS", side: .long, entry: scale, stop: scale / 2,
+            target: scale * 2, shares: scale, openedAt: Date(timeIntervalSince1970: 0),
+            exitPrice: scale * 1.1, closedAt: Date(timeIntervalSince1970: 60))
+        let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.csv([original]))
+        #expect(preview.errors.isEmpty)
+        #expect(preview.imported == 1)
+        #expect(preview.trades.first?.entry == original.entry)
+        #expect(preview.trades.first?.stop == original.stop)
+        #expect(preview.trades.first?.target == original.target)
+        #expect(preview.trades.first?.shares == original.shares)
+        #expect(preview.trades.first?.exitPrice == original.exitPrice)
+    }
+
+    @Test func csvExponentSupportDoesNotWeakenNumericOrHumanInputGuards() {
+        let fields = ["GUARDS", "Long", "100", "90", "120", "1", "1970-01-01T00:00:00Z",
+                      "110", "1970-01-02T00:00:00Z", "", ""]
+        for index in [2, 3, 4, 5, 7] {
+            for value in ["NaN", "inf", "-1e2", "0e0", "1e309", "1e-999", "0x1p4", "1e2junk", "1e", "1,2e3"] {
+                var row = fields; row[index] = value
+                let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + "\n" + row.map(StockSageJournalCSV.escape).joined(separator: ","))
+                #expect(preview.imported == 0 && preview.skipped == 0, "field \(index), token \(value)")
+                #expect(preview.errors.count == 1)
+            }
+        }
+        for (text, expected) in [("2E+3", 2000.0), (".5e2", 50.0), ("1,234.5", 1234.5), ("2,5", 2.5)] {
+            var row = fields; row[2] = text
+            let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + "\n" + row.map(StockSageJournalCSV.escape).joined(separator: ","))
+            #expect(preview.trades.first?.entry == expected)
+            #expect(preview.errors.isEmpty)
+        }
+        #expect(StockSageInput.positiveAmount("1e-6") == nil)
+        #expect(StockSageInput.percent("1e1") == nil)
+    }
+
+    @MainActor @Test func inBatchDuplicatesDoNotCreateDuplicateJournalRecords() throws {
+        let suite = "stocksage-csv-duplicates-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let csv = StockSageJournalCSV.header + "\n" +
+            "AAPL,Long,100,90,,1,1970-01-01T00:00:00Z,110,,,invalid closure\n" +
+            "AAPL,Long,100,90,,1,1970-01-01T00:00:00Z,,,,first valid\n" +
+            "aapl,Long,100,90,,1,1970-01-01T00:00:45Z,,,,same minute\n" +
+            "AAPL,Long,100,90,,1,1970-01-01T00:01:00Z,,,,next minute"
+        let preview = StockSageJournalCSVImport.preview(csv)
+        #expect(preview.imported == 2 && preview.skipped == 1)
+        #expect(preview.errors.map(\.line) == [2]) // a rejected row must not reserve its dedup key
+        let journal = StockSageJournalStore(defaults: defaults)
+        let result = journal.importNew(preview.trades)
+        #expect(result.added == 2 && result.rejected == 0)
+        let reloaded = StockSageJournalStore(defaults: defaults)
+        #expect(reloaded.trades.count == 2)
+        let repeatPreview = StockSageJournalCSVImport.preview(csv, existing: reloaded.trades)
+        #expect(repeatPreview.imported == 0 && repeatPreview.skipped == 3)
+        #expect(repeatPreview.errors.map(\.line) == [2]) // invalid is not an intentional duplicate skip
+    }
+
+    @Test func incoherentClosureReportsRowErrorsAndKeepsTheValidRow() {
+        let csv = StockSageJournalCSV.header + "\n" +
+            "GOOD,Long,100,90,,1,1970-01-02T00:00:00Z,110,1970-01-03T00:00:00Z,,\n" +
+            "EXIT_ONLY,Long,100,90,,1,1970-01-02T00:00:00Z,110,,,\n" +
+            "CLOSE_ONLY,Long,100,90,,1,1970-01-02T00:00:00Z,,1970-01-03T00:00:00Z,,\n" +
+            "INVERTED,Long,100,90,,1,1970-01-02T00:00:00Z,110,1970-01-01T00:00:00Z,,"
+        let result = StockSageJournalCSVImport.preview(csv)
+        #expect(result.trades.map(\.symbol) == ["GOOD"])
+        #expect(result.imported == 1 && result.skipped == 0)
+        #expect(result.errors.map(\.line) == [3, 4, 5])
+    }
+
     @Test func roundTripsExportedTrades() {
         let trades = [
             TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: 124, shares: 10,

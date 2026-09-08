@@ -30,6 +30,8 @@ struct CatalystsSection: View {
     @AppStorage("marketsCatalystsMode") private var mode: Mode = .cards
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
+    @State private var narrationFacts: [String: [String]] = [:]
+    @State private var narrationSettings: [String: [String]] = [:]
     @State private var narrating: Set<String> = []
     /// The citable news/filing/insider sources fetched for the LAST "Explain" press on each
     /// symbol — kept so `narrationPanel` can render the numbered source list (and its count for
@@ -45,8 +47,40 @@ struct CatalystsSection: View {
     @AppStorage(StockSageLocalModelServer.backendKey) private var backendRaw: String = "auto"
     @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL: String = StockSageLocalModelServer.defaultURL
     @AppStorage(StockSageLocalModelServer.modelKey) private var serverModel: String = StockSageLocalModelServer.defaultModel
-    @State private var probe: StockSageLocalModelServer.Probe?
-    @State private var probing = false
+    @State private var probeState = ConnectionProbeState()
+    private var probe: StockSageLocalModelServer.Probe? { probeState.current(for: explanationSettings) }
+    private var probing: Bool { probeState.isProbing(for: explanationSettings) }
+
+    /// Shared state transitions for manual and automatic connection checks.
+    struct ConnectionProbeState {
+        private var result: StockSageLocalModelServer.Probe?
+        private var settings: [String]?
+        private var requestID: UUID?
+        private(set) var probing = false
+
+        mutating func begin(settings: [String]) -> UUID {
+            let id = UUID()
+            result = nil
+            self.settings = settings
+            requestID = id
+            probing = true
+            return id
+        }
+
+        mutating func finish(_ result: StockSageLocalModelServer.Probe?, request: UUID,
+                             currentSettings: [String], cancelled: Bool) {
+            // A superseded completion owns neither the displayed result nor the spinner.
+            guard requestID == request else { return }
+            defer { requestID = nil; probing = false }
+            self.result = !cancelled && settings == currentSettings ? result : nil
+        }
+
+        func current(for settings: [String]) -> StockSageLocalModelServer.Probe? {
+            self.settings == settings ? result : nil
+        }
+
+        func isProbing(for settings: [String]) -> Bool { self.settings == settings && probing }
+    }
 
     private var backendBinding: Binding<StockSageLocalModelServer.Backend> {
         Binding(get: { StockSageCatalystNarrator.selectedBackend(backendRaw) },
@@ -61,9 +95,8 @@ struct CatalystsSection: View {
         return (probe.reachable && probe.hasModel) ? DS.Palette.successSoft : DS.Palette.warningSoft
     }
 
-    /// The `.task(id:)` identity for the auto-probe below — re-probes only when a setting a
-    /// probe result actually depends on changes, never on an unrelated body rebuild.
-    private var probeTaskID: String { serverURL + "|" + serverModel + "|" + backendRaw }
+    /// Structured task identity: no delimiter collisions between URL/model settings.
+    private var explanationSettings: [String] { [backendRaw, serverURL, serverModel] }
 
     /// [network-safety-warn-first], fix pass 2026-09-06 (review blocker): true whenever the
     /// PERSISTED server settings parse to a non-loopback host, independent of which backend is
@@ -87,10 +120,12 @@ struct CatalystsSection: View {
 
     private func testConnection() {
         guard !probing else { return }
-        probing = true
+        let request = probeState.begin(settings: explanationSettings)
+        let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel)
         Task {
-            probe = await StockSageCatalystNarrator.probeServer()
-            probing = false
+            let result = await StockSageCatalystNarrator.probeServer(config: config)
+            probeState.finish(result, request: request, currentSettings: explanationSettings,
+                              cancelled: Task.isCancelled)
         }
     }
 
@@ -98,11 +133,17 @@ struct CatalystsSection: View {
     /// — `.onDeviceOnly`/`.off` never need one, so this no-ops there rather than pinging a server
     /// nobody asked for.
     private func probeIfBackendNeedsServer() async {
+        guard !Task.isCancelled else { return }
         let backend = StockSageCatalystNarrator.selectedBackend(backendRaw)
-        guard backend == .auto || backend == .localServerOnly else { return }
-        probing = true
-        probe = await StockSageCatalystNarrator.probeServer()
-        probing = false
+        guard backend == .auto || backend == .localServerOnly else {
+            probeState = .init()
+            return
+        }
+        let request = probeState.begin(settings: explanationSettings)
+        let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel)
+        let result = await StockSageCatalystNarrator.probeServer(config: config)
+        probeState.finish(result, request: request, currentSettings: explanationSettings,
+                          cancelled: Task.isCancelled)
     }
 
     @ScaledMetric(relativeTo: .caption2) private var font9: CGFloat = 9
@@ -136,7 +177,8 @@ struct CatalystsSection: View {
                 }
             }
         }
-        .task(id: probeTaskID) { await probeIfBackendNeedsServer() }
+        .task(id: explanationSettings) { await probeIfBackendNeedsServer() }
+        .onDisappear { probeState = .init() }
     }
 
     // MARK: - Data
@@ -163,10 +205,14 @@ struct CatalystsSection: View {
                 volumeMove: catalystsBySymbol[sym], regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
                 seasonality: store.seasonality[sym], now: now,
                 catalystConfirmed: record?.confirmed,
+                catalystSource: record?.source ?? "Source unavailable",
                 catalystNotApplicable: record?.status == .notApplicable,
                 catalystProjectedDate: isProjected ? record?.earningsDate : nil,
                 catalystProjectionBasis: isProjected ? record?.projectionBasis : nil,
-                catalystSourcesAsked: record?.sourcesAsked ?? []))
+                catalystSourcesAsked: record?.sourcesAsked ?? [],
+                companyEvents: (store.companyEventChecks[sym] ?? [:]).values.compactMap {
+                    $0.outcome == .answered && $0.fresh(at: now) ? $0.event : nil
+                }))
         }
     }
 
@@ -180,6 +226,9 @@ struct CatalystsSection: View {
                 .font(.system(size: font15, weight: .semibold)).foregroundStyle(.white)
             Text("The same ranked ideas as the Ideas tab, in the same order — viewed by what could move each one next.")
                 .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Primary badges are AI assessments; open Details for the reasoning or to assess a name with selected recent Massive/EODHD news. Failed checks leave a visible unverified draft. Rules action remains separate; AI does not change sizing or execution checks.")
+                .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
             DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }
                 .frame(maxWidth: 260)
@@ -210,13 +259,20 @@ struct CatalystsSection: View {
             // so it renders on first appearance of this tab — before the auto-probe below ever
             // fires and before any "Explain" press — regardless of whether the panel is expanded.
             if isNonLoopbackConfig { nonLoopbackWarning() }
+            Text("With external access enabled, daily company-event checks send tracked US symbols to api.massive.com for ratings, guidance, filings and dividends. These are observations, not trade signals. Missing events do not prove nothing occurred; Cards shows per-feed coverage.")
+                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !store.companyEventCacheSaved {
+                Text("Company-event cache could not be saved; checks may repeat after relaunch.")
+                    .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+            }
             // Privacy line (fix pass 2026-09-06, W4): "Explain" fetches CITABLE SOURCES itself —
             // separate from, and in addition to, whichever narrator backend answers the
-            // paragraph. Those fetches are the app's own EODHD/SEC calls, so this is true
+            // paragraph. Those fetches are the app's own Massive/EODHD/SEC calls, so this is true
             // regardless of the loopback/LAN warning above, which only covers the backend.
-            Text("Explain also sends the symbol to eodhd.com (news) and sec.gov (filings, insider "
-                + "trades) from this device, in addition to whichever narrator backend answers "
-                + "the paragraph.")
+            Text("When external access is enabled, Explain also sends the symbol to api.massive.com "
+                + "(news, updated hourly), eodhd.com if that news is unavailable, and sec.gov "
+                + "(filings, insider trades) from this device, in addition to the narrator backend.")
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             explanationModelSettings(availability: availability)
@@ -312,9 +368,13 @@ struct CatalystsSection: View {
             }
             Text("Source: \(primary.source)")
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+            if let url = primary.sourceURL {
+                Link("Read source record", destination: url).font(.system(size: font11)).touchHitArea()
+            }
+            companyFeedCoverage(idea.symbol)
             cardButtons(brief, availability: availability)
             if expanded.contains(idea.symbol) { filingsPanel(idea.symbol) }
-            narrationPanel(idea.symbol)
+            narrationPanel(brief)
         }
         .padding(DS.Space.lg)
         .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
@@ -386,8 +446,28 @@ struct CatalystsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 180, alignment: .leading)
             }
+            if let url = item.sourceURL {
+                Link("Read \(item.source)", destination: url).font(.system(size: font9)).touchHitArea()
+            }
         }
         .help(item.why.joined(separator: " "))
+    }
+
+    @ViewBuilder
+    private func companyFeedCoverage(_ symbol: String) -> some View {
+        if StockSageMassive.covers(symbol) {
+            let records = store.companyEventChecks[symbol.uppercased()] ?? [:]
+            let now = Date()
+            let checked = records.values.filter { $0.outcome == .answered && $0.fresh(at: now) }.count
+            DisclosureGroup("Company feeds: \(checked)/5 current checks") {
+                ForEach(StockSageMassiveEvents.Feed.allCases, id: \.rawValue) { feed in
+                    Text(StockSageMassiveEvents.statusLine(feed, observation: records[feed], now: now))
+                        .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+        }
     }
 
     @ViewBuilder
@@ -447,26 +527,62 @@ struct CatalystsSection: View {
     }
 
     @ViewBuilder
-    private func narrationPanel(_ symbol: String) -> some View {
+    private func narrationPanel(_ brief: StockSageCatalystWatch.Brief) -> some View {
+        let symbol = brief.idea.symbol
         if narrating.contains(symbol) {
             ProgressView().controlSize(.small)
         } else if let result = narrations[symbol] {
             let sources = narrationSources[symbol] ?? []
+            let refreshReason = Self.narrationRefreshReason(
+                savedFacts: narrationFacts[symbol], currentFacts: StockSageCatalystNarrator.facts(for: brief),
+                savedSettings: narrationSettings[symbol], currentSettings: explanationSettings)
+            if let refreshReason {
+                Text("Previous explanation — not current. " + refreshReason)
+                    .font(.system(size: font11, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             switch result {
-            case .text(let text, let source):
+            case .text(let text, let source), .unverified(let text, let source, _):
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
+                    if case .unverified(_, _, let reason) = result {
+                        Text("Unverified draft — \(reason)")
+                            .font(.system(size: font11, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(verbatim: text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
+                        .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(StockSageCatalystNarrator.label(for: source, sourceCount: sources.count))
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
-                    if !sources.isEmpty { sourceList(sources) }
                 }
-            case .withheld(let msg), .unavailable(let msg):
+            case .unavailable(let msg):
                 Text(msg).font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let facts = narrationFacts[symbol] {
+                DisclosureGroup("Original app facts for this explanation") {
+                    ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
+                        Text(verbatim: fact).font(.system(size: font9)).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+            }
+            if !sources.isEmpty { Self.sourceList(sources) }
         }
+    }
+
+    /// Shared display decision, separate from SwiftUI state so lifecycle changes are testable.
+    nonisolated static func narrationRefreshReason(savedFacts: [String]?, currentFacts: [String],
+                                                   savedSettings: [String]?, currentSettings: [String]) -> String? {
+        guard savedFacts == currentFacts else {
+            return "Facts changed since this explanation. Tap Explain to refresh it."
+        }
+        guard savedSettings == currentSettings else {
+            return "Model settings changed since this explanation. Tap Explain with your chosen settings to refresh it."
+        }
+        return nil
     }
 
     /// The numbered "[n] title · date · link" list the paragraph above may have cited — one row
@@ -474,22 +590,30 @@ struct CatalystsSection: View {
     /// always matches the 2nd row here. A source with no link renders its title/date only (never
     /// a dead tap target).
     @ViewBuilder
-    private func sourceList(_ sources: [StockSageCatalystNarrator.CitedSource]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+    static func sourceList(_ sources: [StockSageCatalystNarrator.CitedSource]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(sources.enumerated()), id: \.offset) { i, source in
-                let dateStr = source.date.formatted(date: .abbreviated, time: .omitted)
-                HStack(spacing: 4) {
-                    Text("[\(i + 1)]").foregroundStyle(DS.Palette.textSecondary)
-                    if let link = source.link {
-                        Link("\(source.title) · \(dateStr)", destination: link)
-                    } else {
-                        Text("\(source.title) · \(dateStr)").foregroundStyle(DS.Palette.textSecondary)
+                let dateStr = StockSageCatalystNarrator.sourceDay(source.date)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("[\(i + 1)]")
+                        if let link = source.link {
+                            Link(destination: link) {
+                                Text("\(source.title) · \(dateStr) UTC")
+                            }.buttonStyle(.plain)
+                        } else {
+                            Text("\(source.title) · \(dateStr) UTC")
+                        }
                     }
+                    Text(source.source)
+                    if !source.snippet.isEmpty { Text(source.snippet) }
+                    if let insight = source.insight { Text("Provider sentiment: \(insight)") }
                 }
-                .font(.system(size: font9))
                 .fixedSize(horizontal: false, vertical: true)
             }
+            Text(StockSageNewsService.caveat).fixedSize(horizontal: false, vertical: true)
         }
+        .font(.caption2).foregroundStyle(DS.Palette.textSecondary)
     }
 
     // MARK: - Cards mode: row actions
@@ -514,12 +638,21 @@ struct CatalystsSection: View {
         let symbol = brief.idea.symbol
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
+        let facts = StockSageCatalystNarrator.facts(for: brief)
+        let settings = explanationSettings
         Task {
+            defer { narrating.remove(symbol) }
             let sources = await Self.citedSources(for: symbol)
-            narrationSources[symbol] = sources
+            // Do not silently send a pending Explain request to newly selected settings.
+            guard !Task.isCancelled, settings == explanationSettings else { return }
             let result = await StockSageCatalystNarrator.explain(brief, sources: sources)
+            guard !Task.isCancelled else { return }
+            // Publish the response and its ORIGINAL context together, after the last await.
+            // A settings change during generation leaves a readable, explicitly stale snapshot.
+            narrationFacts[symbol] = facts
+            narrationSettings[symbol] = settings
+            narrationSources[symbol] = sources
             narrations[symbol] = result
-            narrating.remove(symbol)
         }
     }
 
@@ -535,7 +668,7 @@ struct CatalystsSection: View {
         let (news, filings, insider) = await (newsTask, filingTask, insiderTask)
 
         var sources: [StockSageCatalystNarrator.CitedSource] = news.map {
-            .init(date: $0.date, source: "EODHD news", title: $0.title, snippet: $0.snippet, link: $0.link)
+            .init(news: $0)
         }
         if let filing = filings.first {
             let title = filing.itemDescriptions.isEmpty ? "8-K filed" : filing.itemDescriptions.joined(separator: ", ")
@@ -644,7 +777,7 @@ struct CatalystsSection: View {
         .contentShape(Rectangle())
         .onTapGesture { onSelect(entry.idea) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline)")
+        .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
     }
 
     // MARK: - Shared small pieces
@@ -664,13 +797,7 @@ struct CatalystsSection: View {
 
     @ViewBuilder
     private func actionCapsule(_ idea: StockSageIdea) -> some View {
-        let action = idea.advice.action
-        let ink: Color = action == .avoid ? .white : Color(white: 0.06)
-        Text(action.rawValue)
-            .font(.system(size: font9, weight: .semibold))
-            .foregroundStyle(ink)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Self.actionFill(for: action), in: Capsule())
+        StockSageAIBadge(idea: idea, store: store)
     }
 
     // MARK: - Pure helpers (nonisolated, unit-tested — CatalystsSectionTests)
@@ -687,6 +814,11 @@ struct CatalystsSection: View {
         case .seasonality: return "calendar"
         case .none:        return "questionmark.circle"
         case .projectedEarnings: return "calendar.badge.clock"
+        case .filing8K: return "doc.text.magnifyingglass"
+        case .ratingChange: return "person.text.rectangle"
+        case .guidanceChange: return "text.bubble"
+        case .exDividend: return "calendar.badge.plus"
+        case .insiderTrade: return "person.crop.circle.badge.clock"
         }
     }
 

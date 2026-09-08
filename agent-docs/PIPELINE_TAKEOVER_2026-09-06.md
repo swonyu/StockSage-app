@@ -1,0 +1,752 @@
+# Pipelines 4/5 — single-session continuation
+
+Owner confirmed the other Codex task was stopped at 19:43 +03. Its app state was
+independently idle and no compiler/build process remained. All work is now inline
+in the original session, on the existing `wt/coverage` worktree. No new workers,
+pushes, actual trades, service purchases, or local model training.
+
+## Completed before takeover
+
+- `52205dc`: M1 Massive snapshots.
+- `6873f2b`: M1b adjusted daily history.
+- Seven uncommitted M2/provider-cutover files inherited and preserved.
+
+## Current checklist
+
+Latest03:06 +03,2026-09-08: installed tested80df123 after verified process exit;
+previous bundle recoverable at /Users/saleh/.Trash/StockSageX-before-a11y-20260908-0237.app.
+Signature/checksum verified. Native final spoken3/5 label, rail expansion, eight
+routes (Command1–7/9), four Portfolio tabs, Settings and Home briefing expansion/
+collapse now verified. Chat again crashed the native helper, not StockSage; no
+repeat probes. Chat/long transcript/fixed composer and minimum/wide sizing remain
+open. Fixed Paper's Mac-only "below" direction to "open the Journal tab", retaining
+iPhone's original wording. Final canonical1830 Mac/1827 iPhone pass, usual three
+exclusions;12 isolated Chat/performance tests also pass. HANDOFF records the earlier
+compile correction, low-power-sleep-interrupted run and zero-test filter mistake.
+Copy fix frozen/signed/checksum verified at /private/tmp/stocksage-desktop-copy-ready-20260908.app;
+NOT installed while80df123 runs and native control is unusable. Owner's "next time
+u close it" authorizes normal quit/install/reopen, no force termination. Qwen stays
+off; Serena removed/never reopen; heartbeat ACTIVE. No push, merge or record changes.
+Redesign acceptance remains incomplete; broader pipeline4/5 readiness is not implied.
+
+Latest heartbeat23:48 +03 (completed after midnight2026-09-08): Watchlist and
+collapsed right rail now visually/AX verified. Chat again broke the native helper;
+expansion/Settings/other routes remain pending. Found speech45 percent versus
+visible3/5; shared signal-card label now uses the existing ordinal band calculation,
+retains Hold/nil suppression and clarifies not a win probability. Red4 tests/one
+failure/four assertions ->8 focused green; canonical1830 Mac/1827 iPhone pass,
+usual exclusions. Frozen signed ready app at
+/private/tmp/stocksage-desktop-a11y-ready-20260907.app; NOT installed until normal
+closure of the running owner's app. No force-quit, model restart, orders or push.
+Heartbeat stays ACTIVE. HANDOFF records exact artifacts and pending native checks.
+
+Latest23:32 +03,2026-09-07: owner resumed "continue auto". Existing same-task
+15-minute heartbeat is ACTIVE again; Qwen stays disabled. Verified the installed
+app's compact Home briefing/quick links visually. Native control failed again
+during the collapse check; remaining acceptance checklist stays open. No app code
+changed, no new build or inference. See latest HANDOFF; this supersedes earlier
+automation-PAUSED notes, not the model shutdown or no-push restrictions.
+
+Latest2026-09-07 redesign continuation: owner resumed at18:07, UI only; Qwen
+LaunchAgent stays disabled and overnight automation PAUSED (supersedes old12:20
+automation/approval notes below). Approved spec/plan at5baad2a. Mac now has a
+right220/64pt collapsible sidebar, Home default, wide neutral workspace, fixed
+source banner, Portfolio subtabs, collapsed Ideas tools and fixed Chat composer.
+Existing nine routes/shortcuts, iPhone presentation and financial/data logic retained.
+Home briefing is an expandable preview; idea-to-journal navigation selects Journal.
+10 focused tests; canonical1829 Mac/1826 iPhone pass with usual opt-in exclusions.
+Native Home/sidebar/Holdings and Journal navigation checked; CUA helper crashed
+on Chat and recovery failed. Full visual acceptance is explicitly unfinished.
+Installed tested/signed Debug app at /Applications/StockSageX.app; prior copy in
+Trash, no data deleted. Earlier temp preview needs normal quit/reopen to load final
+fixes; native helper cannot perform it. No model restart, new automation, orders,
+push, merge or changes to main checkout's unrelated files. See latest HANDOFF entry.
+
+Latest12:28 +03: M11 stale-save deletion resurrection fixed for journal, holdings and
+paper records with per-ID deletion markers, preserved foreign additions and failed-save
+rollback. Corrected red selection62 total/3 failures/13 assertions ->102 focused green.
+Canonical macOS1828 / iPhone1826 pass, zero selected failures/skips, usual exclusions.
+Only successful explicit JSON restore revives old journal/holding IDs. Markers do not
+expire; this is not transactional storage or live-refresh of idle in-memory snapshots.
+No owner records, live calls, app/model restart or push; built/gated, not installed.
+Main artifacts and prior native CUA blocker unchanged. Exact evidence/limits in HANDOFF.
+NEW PRIMARY REQUEST at12:20: reconstruct/simplify the whole macOS interface with an
+Apple Music-inspired RIGHT-hand collapsible navigation sidebar. Inspect existing
+layout, present the design and obtain approval before redesign implementation. Keep
+iPhone UI, financial/data logic and model lifecycle intact. The existing15-minute
+automation is updated to this priority; earlier design approval does not approve this
+new visual design. Other review/pipeline tasks remain secondary, not complete.
+
+Latest12:01 +03: M10 CSV export/import now recognizes CRLF (including quoted
+notes), accepts finite positive decimal-exponent export values without loosening
+human-input rules, and deduplicates against previously accepted rows in the same
+batch. Bad closures remain failures, not duplicate skips. Error locations now name
+physical starting lines after multiline notes. Original22 pass/4 fail -> newline
+24/2 -> numeric36/1 -> dedup37/1 (new line-location repro) ->61 focused green.
+Canonical macOS1821 / iPhone1819 pass, usual three opt-in exclusions. Approximate minute-based
+CSV identity retained; use JSON for ID/metadata preservation. No claim of general
+malformed-quote hardening, native picker acceptance or live API/P5 readiness.
+No owner data, model/app restart or push; built/gated, not installed, prior CUA
+blocker unchanged. Next M11 stale-instance deletion resurrection in isolated stores.
+Exact commands/artifacts and scope are in HANDOFF.
+
+Latest 11:46 +03: full-review UI03 JSON restore now applies journal, portfolio lots
+and watchlist through one native-caller path. Red actual-store replay:7 pass/1 fail,
+eight missing-state/count assertions; codec-only tests had missed both ignored
+collections. Validate/prepare every collection before applying; existing IDs win,
+lot IDs survive repeats, foreign records/terminal closes are reconciled, watchlist
+normalizes without fetching prices.112 focused tests pass, including six bad-file
+and eight destination-failure cases with no partial writes. Canonical macOS1816
+and iPhone1814 pass, zero selected failures/skips, usual three opt-in exclusions.
+Scope labels no longer claim ALL app data. Crash-atomic multi-key
+writes/cross-process locking and deletion tombstones are not claimed; parent-app
+import remains journal-only. No owner data/model/app restart/push; built/gated,
+not installed, prior CUA blocker unchanged. Next M10 actual CSV CRLF/exponent and
+in-batch dedup repro. Native/live API/P5 and N15 remain separate. See HANDOFF.
+
+Latest 11:26 +03: full-review N16 removal now clears untracked quote/idea rows
+and badges immediately; intermediate full/retry scan publications recheck current
+membership, so late chunks cannot resurrect them. Held/curated coverage survives
+watchlist removal. A bare Store plus optional chunk callback enabled the actual
+loop replay without owner state or network: 9 pass / 1 fail (17 assertions),
+cleanup-only 9 pass / 1 fail (six late-publication assertions), then 58 focused
+green across seven replay cases and existing suites. Scan accumulation remains
+intact for cancelled-coverage bookkeeping, including an emptied published board.
+Canonical 1812 macOS / 1810 iPhone pass, usual three opt-in exclusions. No app/
+model restart or push; built/gated, not installed, prior CUA blocker unchanged.
+N15 inner fetch/build cancellation and actual native/live API/P5 acceptance are
+not claimed. Next UI03 full restore: inspect current history, then reproduce
+holdings/watchlist plus trades in isolated stores. Full evidence in HANDOFF.
+
+Latest 11:03 +03: full-review N07 offline restoration now intersects cached rows
+with current curated/watchlist/holding definitions before rebuilding the board
+and new-listing flags. Reuses Q11's save-side membership rule without rewriting
+cache files or restamping observations. Actual temp-file replay was 13 pass /
+1 fail; final 32 focused and 1811 macOS / 1809 iPhone canonical pass, usual three
+opt-in exclusions. Holding/watchlist retention, case normalization, empty set and
+byte-identical cache controls pass. Built/gated, not installed; CUA blocker and
+main checkout artifacts unchanged. No owner-file edits/deletions, model/app
+restart or push. N16 remains next: live ideas survive removal/intermediate scan
+publishes; existing cancel tests only cover metadata. Build its actual red replay
+before editing. Native phone/live API/P5 acceptance remains unclaimed. HANDOFF
+records precise scope, initial/final seam and artifacts.
+
+Latest 10:50 +03: full-review UI04 iPhone monitoring opt-out now persists separately
+from the live task. Background stop retains the choice; explicit toggles save it;
+initial/foreground resume reads it fresh. Mac launch opt-in remains separate.
+The real resume seam reproduced 14 pass / 2 fail despite correctly saved off;
+one guard made all 16 monitor tests pass. Native observation replaces the two
+view snapshots, and the duplicate permission-await start is removed. Final 48
+focused and 1810 macOS / 1808 iPhone canonical tests pass, usual three opt-in
+exclusions. New tests use isolated preferences/simulated starts, not actual OS
+permission/lifecycle events. Built/gated, not installed; prior CUA visual/normal-
+close blocker remains. No app/model restart or push; main checkout unchanged.
+Next verify N07/N16 custom-removal durability against history before editing;
+native phone/live API/P5 acceptance remains. Details and artifacts in HANDOFF.
+
+Latest10:30 +03: full-review N18 one-shot alerts revalidate current preference,
+task cancellation and exact armed definition/ID before every enqueue, including
+after earlier sends suspend. Actual callback-boundary races were4pass/2fail;
+guard-only verification exposed re-arm's reused identity (4pass/3fail). Re-arm
+now creates a fresh one-shot UUID through the Store's existing UI action, with
+unchanged symbol/target/direction and no persistence migration. Late old-arm
+completion IDs cannot latch the replacement; accepted dispatches remain accounted
+for after cancellation.53focused and1808macOS/1806iPhone canonical pass, usual
+3 opt-in exclusions. No real notifications/owner writes/model or installed-app
+changes/push. Built/gated, not installed; CUA visual/normal-close blocker remains.
+Native re-arm UI and actual OS receipt are not claimed; no cross-cycle delivery
+queue added. Next UI04 durable monitoring opt-out; phone/live API/P5 acceptance
+remains. Exact red/green artifacts and limitations in HANDOFF.
+
+Latest10:08 +03: full-review N17 failed watchlist enqueue no longer consumes
+dedupe. The production loop was first extracted with behavior preserved and
+isolated preferences/sender:9pass/1fail, then13pass/1fail controls reproduced
+failure→no retry. Same quote/budget succeeded in a fresh monitor, isolating the
+premature baseline update. Reused core runCycle's accepted/deliberately-suppressed
+versus failed-send rule; mute/cap/staleness/inspection/cancellation behavior stays
+covered.49focused,1804macOS/1802iPhone canonical pass, usual3 opt-in exclusions.
+No owner notifications/settings, model/app replacement or push. Built/gated,
+not installed; CUA remains the existing normal-close/visual blocker. Next N18
+one-shot price-alert post-await ID/armed-state/preference checks; the tested
+strong-signal mute behavior is NOT that fix. Native/phone/live API/P5 acceptance
+remains. Exact red/green artifacts and limitations are in HANDOFF.
+
+Latest09:53 +03: full-review N19 notification budget restore now preserves the
+last-alerted-price anchors used by a continuing process. Actual31minute and
+next-day replays previously allowed a0.1% wobble only after restart;1minute and
+real-move controls passed. Removing the restore-only cooldown pruning restores
+parity without changing cooldown, price threshold or hourly cap.49 boundary/
+price comparisons plus persisted-clear control:11pass/2fail red ->13pass;
+50focused and1798macOS/1796iPhone canonical pass, usual3 opt-in exclusions.
+All4 standalone replay modes green. No owner notifications/settings/model/app
+changes or push; built/gated, not installed. N08/N21 already fixed in4514e8b,
+confirmed by source/history and related green tests; no redundant fix added.
+Next N17 failed-enqueue retry and N18 post-await preference/armed-state checks;
+native/phone/live API/P5 acceptance remains. Exact artifacts/limits in HANDOFF.
+
+Latest09:38 +03: full-review M3 journal closure boundaries implemented. Single-
+record replay proved open status could coexist with realized10profit/1R;
+inverted close also entered aggregate results. Shared paired-field/finite/time-
+ordered closure validation now protects accounting, add/close, CSV and backup
+validation. Legacy fields remain retained/exportable and visibly flagged, not
+repaired/deleted; invalid records do not drive realized metrics. Imports report
+actual accepted/duplicate/rejected counts; editors retain failed drafts.
+Invalid concurrent disk-close conflicts reject the write rather than promote or
+erase it; encoding failure rolls back memory.85pass/5fail plus10pass/2fail red
+regressions ->175focused pass; all five production-module replay modes green;
+canonical1797macOS/1795iPhone pass with the usual three opt-in exclusions.
+No owner data/model/process changes or push. Built/gated, not installed; CUA
+still blocks normal reinstall/visual acceptance. Whole-book restore, transactional
+batch import, CSV interchange/tombstones remain separate. Next N08 final healed
+quote persistence; native/phone/live API/P5 acceptance remains. See HANDOFF.
+
+Latest09:15 +03: full-review M2 fixed at the shared calibration split. Actual
+overlap replay and minimized case failed before editing; row embargo/input-order
+controls isolated unavailable labels as the cause. Journal/manual/offline fits
+now retain prediction and availability times, preserve prediction groups, and
+purge training labels not strictly known before held-out predictions. Daily-bar
+starts are not exit timestamps: use the next observed boundary, omit missing
+boundaries/openAtEnd; exact intraday/vendor-revision timing remains outside scope.
+Old snapshots stay stored but cannot activate before a time-aware refit. Purged
+thin samples remain explicitly prior-capped even with50total observations.
+14pass/4fail and later bar-start20pass/1fail red regressions ->132focused pass;
+final canonical1788macOS/1786iPhone pass, zero selected failures/skips, usual
+three opt-in exclusions. All six production-module replay modes now pass.
+Built/gated, not installed; CUA still blocks normal reinstall/visual acceptance,
+original app/model untouched. Next M3 journal add/import/restore/accounting
+closure consistency; native/phone/live API/P5 acceptance remain. No push or
+owner calibration writes. Exact evidence and limits in HANDOFF.
+
+Latest08:32 +03: full-review M1 query ceiling corrected. Actual fit/EV replay
+confirmed midpoint-only clipping (0.5225 instead of0.465 at conviction0.50;
+0.5675R instead of0.395R at2R payoff). Shared selector-split predicate now
+identifies thin identity at lookup, including legacy snapshots; raw validated
+identity/learned maps/bins/provenance stay unchanged.17pass/2fail regression
+before fix ->124focused pass; original/minimal/control replays all green;
+canonical1780macOS/1778iPhone passed. No stored calibration edits or model reload.
+Built/gated, not installed: CUA remains unavailable and running app preserved.
+Next M2/M3 time-available/finalized labels, then remaining native/phone/API/P5
+acceptance. See HANDOFF for exact artifacts and unsuccessful first filter/build.
+
+Latest08:10 +03: Chat source integration built/gated: existing bounded news fetch
+plus private export selection for one explicitly named ticker. Sources stay quoted
+and unverified, separate from immutable observed facts; request-owned attachment
+and backward-compatible history.19focused,1778macOS/1776iPhone passed. Actual local
+Qwen smoke used3ORCL export leads and correctly described their evidential limits;
+no live news request in that smoke. CUA still fails, so source-card UI/reinstall
+remain pending; installed app is the first Chat build. No push/model reload/keys.
+Next code issue: full-review M1 thin-sample query envelope, then M2/M3 temporal
+calibration labels. Native acceptance, phone serving, live APIs and P5 remain.
+
+Latest07:51 +03: native Chat first vertical slice implemented on existing
+MarketSection/client: bounded typed app briefing, existing event log, specific Q&A,
+per-question source snapshots, local24-turn history/delete and stale-request guards.
+No new server, cloud fallback or execution path; prose remains interpretation/draft.
+Seven focused tests; first canonical1776macOS/1774iPhone passed. Real production
+client Arabic Qwen smoke passed. Final UI-shortcut re-gate also1776macOS/1774iPhone
+passed, zero selected failures/skips, same opt-in exclusions (see HANDOFF).
+Native navigation verified, but opening Chat crashed SkyComputerUseService's
+Array.remove(at:) (StockSage remained alive); populated UI acceptance and final
+settings-shortcut reinstall are pending CUA recovery. Existing installed build
+already contains Chat. No force-kill, settings mutation or Qwen reload.
+Next recover native acceptance, then source-bound news/WhatsApp retrieval; full
+Chat, semantic grounding, phone serving and P5 are NOT marked complete. See HANDOFF.
+
+Latest07:22 +03: Explain now reports invalid citations before numeric errors,
+and oversized source IDs fail instead of being ignored. Retains full draft/source;
+no prompt, model, primary badge or numeric-helper change. Captured PAA/minimal/
+overflow replays red->green;25pass/1fail->48focused; final1772macOS/1770iPhone
+passed. Tested app installed; one fresh native PAA reply rendered normally, without
+a bracket citation (invalid case verified by replay, not injected into UI).
+Next product slice: approved native Chat, reusing existing briefing/client/navigation
+with bounded history and fresh per-question context. Architecture fully reread.
+Semantic grounding, independent API acceptance, phone serving and P5 remain open.
+No push, settings edit or Qwen reload. See HANDOFF.
+
+Latest07:11 +03: connection status and Explain availability now belong to the
+captured settings AND newest request. Superseded/cancelled replies cannot overwrite
+the current result or clear a newer spinner; config is captured before scheduling.
+Auto off/on-device and disappearance invalidate probe state; manual tests remain
+available. Actual shared-state replay: four failure modes red->green, unchanged
+control green;10pass/1fail->46focused; final1771macOS/1769iPhone passed. Installed
+app's automatic/manual probes and populated settings panel verified with unchanged
+QwenPID23631/settings. No push/model reload. Next Explain citation/number diagnostics;
+semantic grounding, other API acceptance/full Chat/P5 remain. See HANDOFF.
+
+Latest06:57 +03: shared Explain facts now include quote source and millisecond
+market time, with unknown metadata explicit and no clock substitution. Equal-price
+provider/time changes now invalidate old explanations; original facts disclosure
+also available on fresh results. Production replay/controls red->green,
+24pass/1fail->48focused; final canonical1770macOS/1768iPhone passed. Tested app
+installed; actual PAA disclosure visibly shows Massive SIP and Sep4 market time,
+not a current execution quote. Full failed-citation draft stays readable. No
+settings mutation, push or model reload. Next connection-probe settings freshness;
+semantic grounding, other APIs/full Chat/P5 remain open. See HANDOFF.
+
+Latest06:42 +03: Explain freshness now includes captured backend/URL/model as well
+as facts. Old responses remain readable, explicitly stale, with original facts,
+sources and model; metadata publishes after generation. Pending source fetches
+cannot silently route to changed settings. Behavior-preserving diagnostic seam,
+red9pass/1fail→47focused; canonical1769macOS/1767iPhone passed. Tested app
+installed; real PAA failed-check draft and snapshot footer visibly verified.
+Settings changes tested with isolated inputs, NOT by mutating owner preferences.
+No push/new model. Next N10/N14: quote source/time missing from narrator facts;
+probe lifecycle, semantic grounding, independent APIs/full Chat/P5 remain open.
+Exact evidence and limits in HANDOFF.
+
+Latest06:26 +03: primary Qwen assessment now checks numerical claims against
+SELECTED fact IDs and requires inline F references to be selected. Previously
+uncited facts could whitelist unrelated figures. Missing-evidence repair remains
+one shot, never changes the opinion and cannot publish temporary citations.
+Failed output stays readable; rules/money/execution untouched. Production replay
+red→green,10pass/3fail→37focused; canonical1768macOS/1766iPhone passed.
+Tested app installed; actual PAA numeric assessment and its cited facts inspected
+in native AX+screenshot, no injected output/new model. No push. This is bounded
+numeric membership, NOT semantic subject/sign/unit grounding; N13, full Chat,
+independent API acceptance and contract-gated P5 remain. See HANDOFF.
+
+Latest06:08 +03: normal native refresh persisted all9 Form4 pagination recoveries
+at03:04:39–45Z; CRWD expanded disclosure visibly5/5 current checks. Only genuine
+SBLK/TEM direction conflicts remain. No cache manipulation. Explain parity now
+preserves failed numeric/citation responses as labelled unverified drafts with
+the generating source; both backends share the tested response boundary. Red
+23pass/1fail→33focused; full1765macOS/1763iPhone passed and tested app installed.
+Real PAA Explain then generated an unoffered[1] citation: failed-check draft,
+warning and exact Qwen model label remained visibly rendered (AX+screenshot).
+No injected output or model reload. Broader semantic grounding, proactive Chat,
+other API routes and contract-gated P5 remain. See HANDOFF.
+
+Latest05:54 +03: company-event bounded pagination implemented at shared fetch:
+10sequential pages/100rows/2MB TOTAL, same-host/path bearer/no redirects,
+per-page guards, no partial success. Real nine formerly truncated Form4 fetches
+all answered: eight2-page cases, CHYM8pages/706rows.24 captured pages replay
+to identical native observations, including a genuine qualifying-empty CRNX.
+Red18pass/1fail→focused21; full1764macOS/1762iPhone green; tested app installed.
+NEXT verify normal due refresh after06:03 and native Company feeds UI: nine
+05:48 cached warnings still fresh at05:54, not manually changed. SBLK/TEM source
+conflicts remain; broader API/Chat/P5 acceptance not complete. See HANDOFF.
+
+Latest05:34 +03: the last two Form4 invalidPayload failures are genuine S/A
+direction contradictions in SBLK/TEM's original filings, independently verified
+against SEC/issuer copies. Keep rejection, now explain the precise source conflict
+through the existing cache/UI. Red17pass/1fail→focused18/18; full1761macOS/
+1759iPhone passed. Installed native SBLK warning and both new persisted reasons
+verified, no cache edits or corrected trade invented. Nine pagination-limit
+failures remain next. No push/trade/extra model; main files preserved. See HANDOFF.
+
+Latest05:19 +03: Form4 live/docs spelling mismatch fixed in shared parser:
+non_derivative and non-derivative are exact aliases; unknowns/derivatives retain
+their guards. Original GILD HTTP200/11-row replay red→green, focused17/17,
+full serial1760macOS/1758iPhone passed. Tested app installed; native GILD5/5
+checks and September2 Form4 sale verified. App refresh recovered283 of285
+validation failures. Remaining SBLK/TEM invalidPayload and nine pagination-limit
+failures need separate diagnosis; API/P5 acceptance is not complete. Main worktree
+untouched, no push/trade/model reload. See HANDOFF and API_VERIFICATION.
+
+Latest05:01 +03: sample-header root fixed, not relabelled. Fresh demo clocks blocked
+older genuine market closes and survived into last-good cache. Shared ordering now
+distinguishes sample provenance; scan/header ignore it, cache extraction/load keep
+it out. Unit-test hosts no longer launch Markets; default quote-cache I/O isolated.
+Red replays/regressions→focused57, full macOS1759/iPhone1757 green. Real cache
+checksum unchanged across gates. Native provider refresh recovered all5 demo rows:
+902quotes,864MassiveSIP+38Yahoo,0sample; header correctly dated/not-live. Old app and
+cache preserved, main worktree untouched, no push/trade/model reload. Next live
+per-route acceptance/company-event Form4 diagnosis, then semantic quality/Chat/P5.
+
+Latest04:44 +03: full-review M4 gross/net horizon defect fixed through one shared
+velocity-hold helper, including real ranking, sized snapshots and turnover labels.
+Original replay red→green; regression4pass/2fail then focused140/140; full serial
+macOS1756/iPhone1754 gates passed, same3 opt-in exclusions. Native main weekly
+net6.8R/gross4.8R now net4.6R/gross4.8R, 1080.SR daily .221gross/.180net.
+Tested build installed, prior bundle recoverable in Trash, original sizing inputs
+untouched. No fee/probability/borrowing assumption change, model restart, push or
+trade. Next sample-header/test-cache isolation. API acceptance, semantic news
+quality, full Chat/iPhone serving and P5 remain open; no overall completion claim.
+
+Latest04:31 +03: M8 quantity/minimum-fee parity fixed in shared snapshots, both
+sized Today-plan ranking modes, board/detail/CTA net displays, copied plans and
+final-size allocation/add checks. Unknown minimums warn; zero-share or cost-losing
+tickets block. Original production replay red→green,101 focused tests, final
+macOS1755/iPhone1753 passed with the same3 opt-in exclusions. Native one-share
+1080.SR check confirmed the blocked gate and negative net ledger; sizing inputs
+restored. Final tested app installed, previous bundles recoverable in Trash.
+Existing tariff assumptions remain estimates. Next M4 weekly gross/net mismatch,
+then sample/test-cache isolation; APIs/P5/full Chat are not declared complete.
+No pushes, trades, model restart or private-data upload. All work stays inline.
+
+Latest03:57 +03: final QCOM native Hold badge verified with actual news and3
+private WhatsApp snapshot leads. AMZN/APP also returned Hold. Inline references
+now validate separately from financial numbers; regression red then broad1752/
+1750 green, final tested build installed. Semantic/relevance errors, sample-header
+inconsistency and older narrator draft parity remain followups, alongside M8/M4,
+live per-route API acceptance and P5. No overall completion claim or push.
+
+Latest03:45 +03: Qwen chooses primary assessment badges, separate from Rules
+money paths. Bounded existing-service news plus private local WhatsApp snapshot
+retrieval; failed output visible as an unverified draft. Missing-citation QCOM
+failure reproduced and repaired live without changing its Hold opinion. Final
+macOS1752/iPhone1750 passed; new tested app installed with old bundle recoverable
+in Trash. No training, new server, cloud upload, real orders or push. See HANDOFF
+and QWEN_RESEARCH. Native stock/source checks in progress; P4/P5 not complete.
+
+Latest02:31 +03: per-company feed failures now preserve safe typed diagnostics
+through request/parser, cache and existing UI. Focused16; macOS1741/iPhone1739
+all passed. Not installed yet; GILD Form4's actual cause still unverified.
+No provider caps/retries/credentials changed. Owner requested primary Qwen
+Buy/Strong Buy assessment; plan is separate from deterministic risk/execution
+and not implemented in this commit. ORCL's app cache and official Oracle IR
+both confirm September10 earnings; no manual cache edit needed. See HANDOFF.
+
+Latest02:05 +03: cited explanation footers retain the generating backend/model.
+Regression red then23/23 green; canonical1740macOS/1738iPhone passed. Installed
+the tested update, preserving the previous bundle in Trash and all user data.
+Owner02:02 reiterated all API acceptance; continue supported native per-route
+checks. Qwen server remains the existing single loopback process. See HANDOFF.
+
+Latest01:50 +03: owner-approved Qwen conversion/server connection completed.
+See `LOCAL_QWEN_2026-09-07.md` and HANDOFF. A single loopback server is running
+under launchctl; native SBLK explanation passed end-to-end, PAA was withheld by
+the unchanged guard. Chat/proactive model briefing and secured iPhone access
+remain pending. Do not start a second server or load the original BF16 copy.
+
+Latest01:36 +03: owner explicitly authorized replacing the installed July build.
+Old app quit and moved to Trash (recoverable); new tested d7c84a0 macOS build is
+installed at `/Applications/StockSageX.app`, process20169. Native Settings → Test
+connection PASSED: HTTP200 and AAPL snapshot parsed using the saved masked key.
+See HANDOFF/API ledger. Shell credential access is still denied; do not retry it.
+Remaining paid routes need their own native checks. Prior blanket live-blocked
+notes below are historical, not proof of a missing key or broken subscription.
+
+- [x] M2 finish the Massive stream and shared quote ordering; broad device gates.
+- [ ] M2b live NBBO, measured-spread cost input, bounded on-demand tape, exchange attribution.
+  - [x] Authenticated Q subscription on the existing socket; independent quote/trade clocks,
+    500 ms quote publication; detail bid/ask panel with five-second spread freshness.
+  - [x] On-demand trades/quotes tape (seven-day window, three pages ×100 per channel),
+    24-hour exchange reference, MIC-based Nasdaq filtering and explicit partial/error states.
+  - [x] Thread measured spreads through ALL current cost/ranking/gate/export consumers,
+    retaining conservative floors/slippage/fees; preserve historical backtest assumptions.
+  - [x] Same-millisecond TRADE sequence through StreamState, Store/coalescing, scan and cache.
+  - [x] Compact card presentation with shared visible/VoiceOver copy and component render.
+  - [ ] Full populated UI verification and authenticated endpoint smoke.
+    - 21:32 credential-presence check was blocked by the credential-access guard.
+      No key was read, no authenticated request sent, no guard bypass attempted.
+      Retried the same explicit, presence-only access after the owner's22:03
+      request to unblock verification; PreToolUse again denied it as protected
+      by default patterns. Chat authorization has not changed the tool guard.
+      At22:09 owner removed the file-guard registration; read-only inspection
+      confirmed valid hooks.json with no such entry, but the active guard still
+      denied the same check. No assistant security edits or alternate key access.
+      Keep live smoke pending; independent stages may proceed. Full-screen QA
+      must not overwrite the owner's running binary/state or open a second Stocks socket.
+- [x] M3 Benzinga earnings first in the source chain, confirmed/projected from provider status (code/tests; live verification pending).
+  - [x] Verify docs and official SDK range/sort parameters; add request/parser/gate/chain fixtures.
+  - [x] Red build demonstrates the missing provider and chain/input interfaces (no tests executed).
+  - [x] Implement provider first in chain; preserve 24h rejection gate and answer provenance.
+  - [x] Preserve confirmed/projected distinction and actual provider in rendered catalyst copy.
+  - [x] Focused then serialized canonical macOS/iPhone gates; record and commit explicit paths.
+- [x] M4 Massive news/insights with bounded, cited narration (code/tests; live pending).
+  - [x] Massive-first one-page selection; EODHD fallback; ≤5 articles, ≤7days,
+    ticker-matched optional sentiment, real provider/publisher labels.
+  - [x] Shared future-date/link/text budgets; regression red proved three old defects.
+  - [x] Actual source mapping and UI excerpts/insight; same citation and UTC day,
+    number/citation algorithms unchanged, no trading/ranking linkage.
+  - [x] Focused56/56; final macOS1693/1693, iPhone1691/1691. Exact bundles and
+    compile-failed fixture attempt recorded in HANDOFF.320pt component render
+    inspected, not a claim of full populated UI/live-model verification.
+- [x] M5 truthful per-observation provider labels and paid-plan configuration (code/tests; populated UI/live pending).
+  - [x] Actual source through parsers/stream, accepted quote/idea merges, history and caches;
+    old metadata stays unknown, rejected prices cannot change origin.
+  - [x] Visible/VoiceOver labels and dated source-aware banner/header; no whole-board live claim.
+  - [x] Shared settings explain existing Massive→Yahoo routing and snapshot-only probe;
+    implemented request budgets/rotating-gap freshness ceiling documented, no new calls.
+  - [x] Red8 executed/2failed; focused75/75; final macOS1702/1702 and iPhone1700/1700,
+    same3 explicit opt-in exclusions. Exact bundles/remaining limits in HANDOFF23:03.
+- [x] M5b split-aware journal comparisons without rewriting the journal (code/tests; live/UI pending).
+  - [x] Verified current split API, New York execution-day semantics and complete-result guard.
+  - [x] Copy-only rebase across BOTH action callers and row P&L/R; factor/source in visible/a11y copy.
+  - [x] No-split retains math; unknown/stale/ambiguous basis withholds comparison and quote prefill.
+  - [x] Red54/2failed; focused64/64; canonical macOS1714/1714 and iPhone1712/1712,
+    same3 explicit opt-in exclusions. See HANDOFF23:29 for exact bundles and compile correction.
+  - [ ] Separate follow-up: actual broker-basis reconciliation for realized closing. Known
+    non-unit factors cannot use the old raw-basis close editor; no silent journal rewrite.
+- [x] M6 ratings, guidance, 8-K, dividends and Form4 (code/tests; live/full UI pending).
+  - [x] Daily persisted per-feed answered/unavailable checks; four-wide bounded requests,
+   24h entitlement gates, UTC rollover and cancellation guards.
+  - [x] New precedence,7/14/30-day windows, source/caveat links, Recent calendar bucket,
+    paired guidance ranges (missing is unknown, not withdrawn), original target basis.
+  - [x]15 new tests; new3402-case exhaustive event grid plus retained157500-case legacy grid.
+    Focused92/92 before the final3 cases; final canonical macOS1729/1729 and iPhone1727/1727,
+    same3 opt-in exclusions. Exact bundles and compile correction in HANDOFF00:15.
+  - [x] Stale optional narration hidden when its input facts change; no model call/load.
+- [ ] P5 tickets, crossing alerts, separate paper automation/store, broker integration as below.
+- [ ] Proactive native Chat using the approved V3 design and existing transport.
+- [ ] Prioritized money/accounting corrections from FULL_REVIEW.
+  - [x] M9 first boundary: USD is explicitly1; missing/invalid foreign FX withholds
+    shares and blocks new-trade gates across snapshot/today/detail/copy. Allocator
+    excludes and names affected candidates before assigning heat; retained marginal
+    and optimizer helpers use the same conversion. No 1:1 fallback; minor units retained.
+  - [x] M9 dated-FX prerequisite: infraFX retains the accepted rate's market timestamp
+    and source. NEW sizing rejects stale/undated/future/sample observations; portfolio
+    valuation can use an explicitly labelled old/unknown rate. Final macOS1738/1738
+    and iPhone1736/1736; exact evidence in HANDOFF01:01. Next M8 minimum-fee gate
+    parity and P5 tickets, not a claim of broker-executable FX validation.
+- [ ] Canonical macOS + iPhone 17 Pro (gate) tests, populated UI checks, integration and HANDOFF.
+
+### M9 timestamp implementation (verified, 2026-09-07)
+
+Inline execution in the existing clean wt/coverage worktree. Baseline fd0ff0d:
+1733 macOS /1731 iPhone tests. No new worker/dependency/network request.
+
+- [x] Add regression in StockSageTests/StockSageCurrencyTests.swift: a fresh
+  inverse quote must supply BOTH its rate and clock despite an older direct quote.
+  Feed the selected rate into PositionSizer and verify USD100 risk /EUR10 /2 =5sh.
+- [x] Add StockSageCurrency.fxRateToUSD(currency:observations:forSizing:now:),
+  returning (rate:Double, marketTime:Date?, isFresh:Bool)?. Observations are ordered
+  (StockSageQuote?, inverse:Bool) pairs. Require positive finite price/conversion;
+  reject sample and invalid/future clocks. Prefer a known-source dated observation
+  within the existing72h planning ceiling, then the newest market time; source
+  order only breaks ties. Only forSizing:false may return an old
+  or undated fallback, with isFresh:false. This is NOT a broker executable FX quote.
+- [x] StockSageStore.infraFX stores StockSageQuote instead of Double. Add pure
+  mergedInfraFX(_:incoming:now:) using acceptsQuote ordering plus exact allowed-key,
+  symbol, finite-price, sample and future guards. refreshInfraFX publishes only
+  after cancellation/policy checks. Keep last good values on failure without
+  changing their dates. Add latestQuote(_:) as the shared O(1) price/clock accessor.
+- [x] Store.fxConversionToUSD(_:forSizing:now:) composes tracked direct/inverse,
+  then infra direct/inverse observations. MarketsView delegates its ordinary and
+  sizing rate maps to this same resolver, deletes the detached fxRateAge lookup,
+  and warns in the portfolio summary when the selected valuation has isFresh:false.
+  Keep native minor units. Rate-map and missing-currency keys now use the same
+  quote-leg accessor as portfolioTotals (not the FX pair's exposure leg).
+- [x] Test72h boundary, old/unknown/future/sample/source/NaN, inverse overflow,
+  last-good ingress on old/equal/undated/invalid responses and empty failure.
+  Run focused StockSageCurrencyTests + StockSagePositionSizerTests; then canonical
+  macOS and iPhone gates with the same3 opt-in exclusions documented in HANDOFF.
+- [x] Review every resolver caller, update HANDOFF with actual xcresulttool counts,
+  stage explicit implementation/test/doc paths, commit locally with no push.
+
+Caller audit: every shipped new-size/plan/allocator/detail/export currency map
+uses sizingFXRates and its forSizing:true resolver. Ordinary portfolio valuation
+may retain an old/unknown rate with the summary warning. The retained duplicate
+MarketsRiskAllocationSection has only a preview call, not a shipped caller; it
+was not changed or newly wired. Separate legacy journal-heat/valuation panels
+still need per-panel incomplete/stale-valuation disclosure before they can be
+treated as authoritative account risk. No broker funding authority is inferred
+from these client-side planning rates.
+
+### All-API acceptance requirement (owner, 2026-09-07 00:59 +03)
+
+Every active StockSage integration must work end-to-end. Do not use a passing
+snapshot probe, mocks, a retired provider path, or an HTTP200 alone as proof of
+all APIs. Inventory each reachable route, test its real response/entitlement,
+parse and provenance, freshness/pagination, failure handling and app consumer.
+Track VERIFIED, FAILING or BLOCKED with dated evidence, never a silent pass.
+This also includes the planned Derayah account/order integration; no invented
+contract, credential bypass or real development-time trade is authorized.
+
+Initial inventory (not yet exhaustive or live-verified): Massive snapshots,
+adjusted history, T/Q WebSocket delivery, REST trades/quotes, exchange and quote
+condition references, earnings, news, splits, dividends, ratings, guidance,
+8-K and Form4; reachable Yahoo/EODHD/SEC fallbacks and local-model discovery/chat.
+Next trace all14 URLSession/request-containing source files and their callers,
+including Insider and Disclosure, before closing the inventory. Broker
+portfolio/balance/BUY/SELL/CANCEL/MODIFY remain separate sandbox acceptance items.
+Live key access is still the previously documented guard blocker; API-wide
+verification must not be represented as complete while it remains blocked.
+
+01:06 follow-through: current reachable route ledger and actual transport probes
+are in API_VERIFICATION_2026-09-07.md. Six Yahoo requests returned429; the SEC
+Disclosure ticker-map request returned403. No retries, alternative access path
+or dependent SEC requests followed. Default local-model discovery also failed;
+actual configured server/generation remain unverified. These are HTTP-diagnostic
+results, not native parser/UI verification. M9 is committed as60c8d3d. Next safe
+API correction is the already-reviewed N09 malformed200/valid-empty distinction;
+then resume M8 fee/gate parity while live access dependencies remain pending.
+
+### N09 response classification (verified, 2026-09-07 01:24 +03)
+
+- [x] Fast red-capable replay compiles the actual EODHD source with only unused
+  network/config dependencies stubbed: an error object incorrectly returns[];
+  the same command after the fix returnsnil while preserving a real empty[].
+  Repro retained in `/private/tmp/stocksage-n09-repro.IskiBE/` as diagnostic-only.
+- [x] Reuse existing answered/unavailable enums and optional arrays. Yahoo legacy
+  fetch delegates to its richer fetch; both use one validated module/outcome
+  parser. Missing/error envelopes, partial ranges and invalid epochs cannot
+  establish a date or a checked-empty result. Only actual Boolean false confirms.
+- [x] EODHD calendar/history and Yahoo history returnnil for missing/malformed/
+  partial modules, not[]. Explicit empty containers remain valid. EODHD calendar
+  matches requested symbol and round-trips date text to reject normalized bad dates.
+- [x] Actual parser→chain→refresh-stamp regression plus existing calendar/history
+  fixtures:56/56 focused tests, no network/credentials/singleton state used.
+  Old tests treating malformed/partial data as complete answers were corrected
+  to the reviewed contract, with valid positive and empty controls retained.
+- [x] Serialized canonical macOS1740/1740 and iPhone1738/1738, zero selected
+  failures/skips, same three opt-in exclusions. Exact bundles/repro in HANDOFF01:24.
+  Caller review and explicit-path local commit; no push.
+
+This is independent of the live429/403/access blockers; do not promote any route
+to live VERIFIED because these unit/replay checks passed. Existing derived cache
+entries are not purged or retroactively declared valid; prior malformed writes
+cannot be identified without provider evidence and otherwise age through the
+existing TTL. No retry/poll/cost table/model/real-order behavior was changed.
+Next concrete money-safety issue: M8 quantity/minimum-fee parity across shared
+cost evaluation, snapshot, Today/detail gate and exported plans. Preserve the
+distinction between estimated planning costs and an actual broker fee contract.
+
+## Corrections to historical workflow scripts
+
+The scripts are implementation proposals, not authority to contradict the owner.
+Active quote routing is Massive then explicitly labelled Yahoo fallback; EODHD
+retirement is intentional. Analyst Ratings and Corporate Guidance are already
+purchased; entitlement failures still need honest handling, not new purchases.
+
+M2/M2b WebSocket `t` is **milliseconds**, not the nanoseconds stated in parts of
+the old workflow. REST trades/quotes use `sip_timestamp` in **nanoseconds**.
+Massive explicitly documents batched multi-event arrays. Auth success alone does
+not prove subscription delivery; quiet/unseen symbols remain eligible for polling.
+Snapshot, poll, single-symbol, stream and scan publication cannot rewind a dated
+price or replace it with an undated one. An undated seed stays unknown/stale.
+
+M2b will distinguish tape/listing from execution venue. Resolve Nasdaq using the
+reference response's `mic == "XNAS"`, never a guessed ID. A Nasdaq-filtered SIP
+quote is not a proprietary Nasdaq feed and is not necessarily a two-sided Nasdaq
+book. Two half-spreads (entry + exit) equal one full spread in the round-trip
+model; do not halve round-trip costs accidentally. Preserve existing conservative
+spread floors until separately validated, and preserve slippage/fees.
+
+P5 execution-assist is the newer script, but its hypothetical scopes, generic JSON
+portfolio decoding, old Sahm-only framing and permanent never-executes language
+are not the final design. The owner requires real Derayah buy/sell/cancel/modify,
+manual and explicitly enabled risk-bounded automation. OIDC discovery alone is
+not a verified brokerage contract. Do not invent endpoint schemas or claim that
+mock/read-only flows complete execution. Keep paper trades out of the real journal
+and calibration. No development test may place a real order.
+
+## Verified protocol references (2026-09-06)
+
+M6 documentation preflight (while M5b gates ran; NOT implemented or live-tested):
+
+| Feed | Verified endpoint / contract correction |
+| --- | --- |
+| [Ratings](https://massive.com/docs/rest/partners/benzinga/analyst-ratings) | `/benzinga/v1/ratings`; `ticker`, `date`, `sort=date.desc`; original and adjusted price targets are separate pairs. Never mix their bases. |
+| [Guidance](https://massive.com/docs/rest/partners/benzinga/corporate-guidance) | `/benzinga/v1/guidance`; min/max EPS and revenue plus `previous_*`, fiscal period/year and method. `release_type` distinguishes official/preliminary, NOT withdrawal. |
+| [8-K](https://massive.com/docs/rest/stocks/filings/8-k-disclosures?assetClass=stocks&license=personal&name=stocks_advanced) | `/stocks/filings/8-K/vX/disclosures`; plural `tickers` filter/array, dated source URL and supporting text. One filing may contain multiple tagged disclosures. |
+| [Dividends](https://massive.com/docs/rest/stocks/corporate-actions/dividends) | `/stocks/v1/dividends`; use the current endpoint, ex-date filters, amount and explicit currency. Do not synthesize entitlement or cash already received. |
+| [Form4](https://massive.com/docs/rest/stocks/filings/form-4) | `/stocks/filings/vX/form-4`; plural `tickers`, `transaction_shares` and `transaction_price_per_share` (not the script's shorthand `shares`/`price`); separate transaction/filing dates and amendments. |
+
+The published guidance schema contains no structured withdrawal flag. Missing
+ranges cannot prove withdrawal; keep unknown/partial distinct, classify changes
+only from compatible numeric ranges, and do not parse free-text notes as facts.
+Provider target opinions do not become StockSage targets or an established edge.
+Ratings/guidance are owner-purchased; do not ask to buy them again. Preserve
+runtime entitlement rejection handling. Form4/8-K endpoints are early-access
+contracts; do not treat their current availability as permanent. Next: finish
+reading engine/cache/view callers, implement dated source records and precedence,
+test boundaries and persist per-feed checked/unavailable states without erasing
+the distinction between an empty answer and a failed request.
+
+- https://massive.com/docs/websocket/quickstart — auth, one Stocks connection, event batches.
+- https://massive.com/docs/websocket/stocks/trades — `ev:T`, `sym`, `p`, `t` milliseconds, `q`, `x`.
+- https://massive.com/docs/websocket/stocks/quotes — `ev:Q`, bid/ask price, size and exchange; `t` milliseconds, sequence resets daily.
+- https://massive.com/docs/rest/stocks/trades-quotes/trades — trade records, nanosecond timestamps, `next_url`.
+- https://massive.com/docs/rest/stocks/trades-quotes/quotes — NBBO records, nanosecond timestamps, `next_url`.
+- https://massive.com/docs/rest/stocks/market-operations/exchanges — ID/MIC mapping; filter stocks/us.
+
+## Verification so far
+
+- M2 committed as `4514e8b` (no push).
+- macOS stream pass: 10/10, zero skipped/failed;
+  `/private/tmp/stocksage-m2-handoff-20260906-1945.xcresult`.
+- Expanded merge/snapshot/stream pass: 34/34, zero skipped/failed;
+  `/private/tmp/stocksage-m2-ingress-retry-20260906-1951.xcresult`.
+- Preceding expanded attempt did not execute tests: an extra parenthesis in a new
+  test fixture caused compilation failure (exit 65); corrected before the pass.
+- These are focused checks, not the full final gate or live endpoint smoke.
+- Final macOS broad suite (after stream-publication throttling): **1,649/1,649**,
+  zero failures and zero skips among selected tests. Explicitly excluded
+  `CalibrationPersistRunTests`, `LiveUniverseVerificationTests`, and
+  `StrategyBaselineMeasurementTests`: opt-in network/measurement jobs, not ordinary
+  unit tests. Result:
+  `/private/tmp/stocksage-m2-broad-macos-20260906-1956.xcresult`.
+- Final iPhone broad run: **1,649/1,649**, zero failures/skips among selected
+  tests, with the same three opt-in suites explicitly excluded. iPhone 17 Pro
+  (gate), iOS 26.5, arm64. Result:
+  `/private/tmp/stocksage-m2-broad-ios-20260906-1957.xcresult`.
+- M2b NBBO-focused: 15/15 macOS, 15/15 iOS. Quote-book locked/crossed/one-sided
+  states withhold the spread; the final conservative locked-book rule is in the iOS pass.
+- M2b tape + NBBO + stream + snapshots: **38/38 macOS**,
+  `/private/tmp/stocksage-m2b-tape-macos-20260906-2014.xcresult`.
+  Subsequent broad macOS: **1,660/1,660**, zero failures/skips among selected tests;
+  `/private/tmp/stocksage-m2b-broad-macos-20260906-2014.xcresult`.
+  The same three opt-in network/measurement suites were explicitly excluded.
+  Broad iOS: **1,660/1,660**, zero failures/skips among selected tests, same three
+  explicit exclusions; `/private/tmp/stocksage-m2b-broad-ios-20260906-2016.xcresult`.
+
+20:43 measured-cost checkpoint supersedes the earlier data/UI-only limitation.
+`StockSageExpectedValue`, `StockSageCapitalAllocator`, `StockSageDecisionSnapshot`,
+`StockSageTodayPlan` and all `MarketsView` net-RR/ledger/copy callers now use the
+same idea NBBO selector. Floors/other legs and historical defaults remain intact.
+Cost inputs survive scans/price updates, expire at5s, and clear on auth/policy loss.
+Detail/copy re-resolve the selected idea from the store. Shared netRR(for:) also
+fixes cards' previous omission of short financing. Focused macOS50/50; canonical
+broad macOS1664/1664 and iPhone1664/1664, same three explicit opt-in exclusions.
+Bundles and exact limitations are in HANDOFF's20:43 entry.
+
+Condition eligibility: `/v3/reference/conditions?asset_class=stocks&data_type=quote&limit=1000`,
+one request per stream start, header auth/no redirects. Accept only a complete,
+unambiguous mapping for non-legacy stock quote condition with UTP R (UQDF§7.5.2.2);
+unknown conditions or ANY indicators fall back to default costs. This narrow
+policy is intentional; verify indicator semantics and live payloads before
+expanding it. Reference validity24h, no automatic retry until restart. It is a
+cost-observation filter, not a halt detector or permission to execute an order.
+The live provider smoke and populated visual checks have NOT been done.
+
+Tape security: header auth only; next pages require HTTPS api.massive.com, the
+same exact endpoint/symbol, normal443 port, no userinfo/fragment/API-key query;
+redirects are disabled. Invalid/repeated cursors, invalid rows and cap truncation
+remain visible. Unknown venue IDs never resolve to Nasdaq by listing tape.
+Budget: at most6 tape pages per opening, plus one reference request per24hours
+while the process lives. Quotes add Q traffic to the SAME Stocks connection;
+message volume depends on the market, not a guaranteed exact doubling.
+
+21:13 trade-ordering checkpoint: equal timestamps now accept only a strictly
+larger exact Int64 Massive T sequence for the same symbol. Unknown/invalid
+sequences and other providers still cannot break ties; Q-channel ordering stays
+independent. The optional sequence survives Store buffering, scan publication,
+board/idea replacement and disk cache rebuild. A genuinely later unsequenced
+poll clears the old sequence; advice/analysis time are untouched. Checking every
+existing observation separately also prevents a corrupt future timestamp from
+masking another valid clock and permitting a rollback. Mismatched quote/key
+symbols are rejected at merge and full-refresh ingress.
+Two regressions were demonstrated red before implementation. Focused42/42,
+canonical macOS1670/1670 and iPhone1670/1670 passed; same3 explicit opt-in exclusions.
+Exact bundles, the corrected test compilation error and remaining limits are in
+HANDOFF's21:13 entry. No actual provider smoke or populated new-branch visual QA.
+
+Keep the one-second live-badge expiration timer and change-only publication:
+publishing a timestamp on every trade bypassed the Store's 500 ms coalescing.
+
+21:29 compact-card checkpoint: US cards reuse the coalesced Q book and a shared
+exchange reference. Bid/ask prices/share sizes, venues, SIP timestamp and observed
+spread are identically represented in pixels and the explicit VoiceOver label.
+Unknown IDs stay unknown. Static "last observed, not a fill quote" copy avoids
+per-card timers and false freshness; historical observed spread never replaces
+the existing fresh/qualified money input. Nil/invalid books remain explicit.
+Final broad macOS1672/1672 and iPhone1671/1671 passed, same3 opt-in exclusions.
+The one additional Mac test renders the real component at320pt; the resulting
+image was inspected. Full populated app UI/VoiceOver and live provider smoke
+remain unverified. Exact result bundles and limitations are in HANDOFF21:29.
+
+21:46 M3 code/test checkpoint: StockSageMassiveEarnings is first in the existing
+per-symbol chain, followed by unchanged EODHD/Yahoo/history fallbacks. Strict
+complete-page parser (100 rows,400 days), UTC today-inclusive selection,
+date_status-only confirmation and conservative duplicate status resolution.
+Real empty answers and unavailable/malformed responses remain distinct. Status
+probe before the sweep;401/402/403 cache24h; header auth/no redirects. Daily
+answer TTL and4-wide pacing remain. The real catalyst view passes the observed
+source; no longer falsely labels Benzinga dates as Yahoo. Provider-projected
+means estimated calendar date, not the app's history-derived .projected status.
+Focused103/103, final broad1681/1681 macOS and1680/1680 iOS; same3 opt-in
+exclusions. All build handles completed. Exact evidence/errors/limits in HANDOFF.
+Credential hook blocked the earlier live check; do not bypass or infer account
+entitlement from that denial. Continue M4 independently; full live/UI QA pending.

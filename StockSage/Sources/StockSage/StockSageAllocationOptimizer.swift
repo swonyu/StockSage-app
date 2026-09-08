@@ -94,7 +94,8 @@ enum StockSageAllocationOptimizer {
         heatCap: Double = 0.08,
         maxIterations: Int = 100,
         convergenceTol: Double = 1e-6,
-        calibration: StockSageConvictionCalibration? = nil
+        calibration: StockSageConvictionCalibration? = nil,
+        fxRatesToUSD: [String: Double] = [:]
     ) -> AllocationOptimizerResult? {
         guard account > 0, account.isFinite, lambda > 0, lambda.isFinite,
               heatCap > 0, heatCap.isFinite, maxIterations > 0, convergenceTol > 0 else { return nil }
@@ -115,7 +116,9 @@ enum StockSageAllocationOptimizer {
                   let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice,
                   idea.price > 0, stop > 0, stop != idea.price, target != idea.price,
                   let e = StockSageExpectedValue.ev(for: idea, calibration: calibration), e.evR > 0,
-                  idea.spark.count >= 3 else { continue }   // honest vol needs real history — never guessed
+                  idea.spark.count >= 3,
+                  StockSagePositionSizer.rawQuoteUnitToUSD(symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) != nil
+            else { continue }   // no guessed history or foreign FX in the optimized book
             let k = StockSageKelly.compute(winRate: e.winProbEstimate, payoffRatio: e.rewardR, accountSize: account)
             guard k.suggestedFraction > 0 else { continue }
             let boxCap = Swift.min(k.suggestedFraction, StockSageKelly.maxFraction)
@@ -193,7 +196,8 @@ enum StockSageAllocationOptimizer {
         var bindingConstraints: [String] = []
         for (idx, f) in fundable.enumerated() {
             guard w[idx] > 1e-9 else { continue }
-            guard let ps = StockSagePositionSizer.size(account: account, riskFraction: w[idx], entry: f.entry, stop: f.stop) else { continue }
+            guard let ps = StockSagePositionSizer.size(account: account, riskFraction: w[idx], entry: f.entry, stop: f.stop,
+                                                      symbol: f.symbol, fxRatesToUSD: fxRatesToUSD) else { continue }
             positions.append(AllocatedPosition(symbol: f.symbol, riskFraction: w[idx], shares: ps.shares,
                                                dollarsAtRisk: ps.dollarsAtRisk, notional: ps.notional,
                                                halfKelly: f.boxCap, evR: f.evR))

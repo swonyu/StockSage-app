@@ -26,7 +26,7 @@ struct StockSageCalibrationSnapshotTests {
     private static func identityFixture() -> Cal {
         Cal(bins: [Cal.Bin(upper: 0.5, winProb: 0.25, n: 15),
                    Cal.Bin(upper: 1.0, winProb: 0.5225, n: 15)],
-            sampleSize: 30, method: .identity)
+            sampleSize: 30, method: .identity, validation: .unvalidated)
     }
 
     private static func freshSuite() -> (UserDefaults, String) {
@@ -49,6 +49,24 @@ struct StockSageCalibrationSnapshotTests {
 
         let loaded = Cal.Snapshot.load(defaults: ud, key: Self.key)
         #expect(loaded == snap, "binary plist must round-trip the snapshot bit-exact (Doubles included)")
+    }
+
+    @Test func legacySnapshotIsRetainedButCannotDriveSizing() throws {
+        let (ud, name) = Self.freshSuite()
+        defer { ud.removePersistentDomain(forName: name) }
+        var legacy = Self.identityFixture()
+        legacy.validation = nil // synthesized Codable omits this key, matching the old schema
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let snap = Cal.Snapshot(calibration: legacy, source: "cache-offline-1y", fittedAt: now, oosBrier: nil)
+        snap.save(defaults: ud, key: Self.key)
+        let before = ud.data(forKey: Self.key)
+        let decoded = try #require(Cal.Snapshot.load(defaults: ud, key: Self.key))
+        #expect(decoded == snap && decoded.usableCalibration == nil)
+        #expect(StockSageStore.shouldAutoFit(snapshot: decoded, now: now), "Even fresh pre-purge fits need replacement")
+        #expect(ud.data(forKey: Self.key) == before, "Rejecting activation must not destroy legacy evidence")
+        let current = Cal.Snapshot(calibration: Self.identityFixture(), source: snap.source, fittedAt: now, oosBrier: nil)
+        #expect(current.usableCalibration == current.calibration)
+        #expect(!StockSageStore.shouldAutoFit(snapshot: current, now: now))
     }
 
     // MARK: 2. Decode failure ⇒ nil ⇒ caller keeps the conservative prior (never a crash/partial read)
@@ -181,7 +199,8 @@ struct StockSageCalibrationSnapshotTests {
         // fit, not silently fall back to the conservative identity floor — that would LOOK wired
         // (fit != nil) while actually masking the same no-op class of bug the selector's own
         // thin-sample fallback exists to catch honestly, not silently, in a REGRESSION test.
-        #expect(fit.method != .identity, "a 55-trade near-all-wins sample must earn a measured/fitted map, not the assumed floor")
+        #expect(fit.method != .identity, "the sufficiently time-separated near-all-wins fixture must earn a fitted map")
+        #expect(fit.validation == .timePurged)
     }
 
     // MARK: 5. Identity provenance survives persistence — never launders "assumed" into "measured"

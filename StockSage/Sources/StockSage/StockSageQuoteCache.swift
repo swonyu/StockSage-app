@@ -26,19 +26,32 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         /// every restored row hit the fail-closed `nil marketTime ⇒ STALE` rule (owner-signed
         /// 2026-07-27) and the whole board badged stale on launch even when the cache was seconds old.
         let marketTime: Date?
+        /// Optional for backward-compatible decode; preserves equal-time ordering on relaunch.
+        let massiveTradeSequence: Int64?
+        let priceSource: StockSagePriceSource?
 
         init(symbol: String, price: Double, previousClose: Double, time: Date,
-             isNewListing: Bool = false, marketTime: Date? = nil) {
+             isNewListing: Bool = false, marketTime: Date? = nil, massiveTradeSequence: Int64? = nil,
+             priceSource: StockSagePriceSource? = nil) {
             self.symbol = symbol
             self.price = price
             self.previousClose = previousClose
             self.time = time
             self.isNewListing = isNewListing
             self.marketTime = marketTime
+            self.massiveTradeSequence = massiveTradeSequence
+            self.priceSource = priceSource
         }
     }
     var entries: [Entry]
     var savedAt: Date
+
+    /// Restore membership from today's tracking, not the last successful refresh. Keep
+    /// retained observations and the cache clock unchanged; this never rewrites the file.
+    nonisolated func retaining(tracked: Set<String>) -> StockSageQuoteCache {
+        StockSageQuoteCache(entries: StockSageStore.retainedCacheEntries(
+            previous: entries, tracked: Set(tracked.map { $0.uppercased() })), savedAt: savedAt)
+    }
 
     /// Extract a cache from live symbol rows (the last quote per symbol). Touches the
     /// MainActor-isolated quote models, so it runs on the main actor. `newListings` is the
@@ -46,9 +59,10 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     /// the flag survives a relaunch instead of it being dropped entirely (Finding 4 fix).
     @MainActor static func from(symbols: [StockSageSymbol], savedAt: Date, newListings: Set<String> = []) -> StockSageQuoteCache {
         let entries = symbols.compactMap { s -> Entry? in
-            guard let q = s.latest else { return nil }
+            guard let q = s.latest, q.priceSource != .sample else { return nil }
             return Entry(symbol: s.symbol, price: q.price, previousClose: q.previousPrice, time: q.time,
-                        isNewListing: newListings.contains(s.symbol.uppercased()), marketTime: q.marketTime)
+                        isNewListing: newListings.contains(s.symbol.uppercased()), marketTime: q.marketTime,
+                        massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource)
         }
         return StockSageQuoteCache(entries: entries, savedAt: savedAt)
     }
@@ -60,7 +74,8 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
         entries.map { e in
             StockSageSymbol(symbol: e.symbol, market: marketFor(e.symbol), quotes: [
                 StockSageQuote(price: e.previousClose, previousPrice: e.previousClose, time: e.time.addingTimeInterval(-86_400)),
-                StockSageQuote(price: e.price, previousPrice: e.previousClose, time: e.time, marketTime: e.marketTime),
+                StockSageQuote(price: e.price, previousPrice: e.previousClose, time: e.time, marketTime: e.marketTime,
+                               massiveTradeSequence: e.massiveTradeSequence, priceSource: e.priceSource),
             ])
         }
     }
@@ -87,6 +102,7 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     // MARK: Thin file I/O (Application Support)
 
     nonisolated static func diskURL() -> URL? {
+        guard !StockSageStore.isRunningTests else { return nil }
         guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                      in: .userDomainMask, appropriateFor: nil, create: true) else { return nil }
         // STANDALONE DEVIATION (review HIGH, 2026-07-16): own filename — see
@@ -99,7 +115,11 @@ nonisolated struct StockSageQuoteCache: Codable, Sendable, Equatable {
     /// StockSageCatalystRecordCache's seam).
     nonisolated static func load(from url: URL? = nil) -> StockSageQuoteCache? {
         guard let url = url ?? diskURL(), let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(StockSageQuoteCache.self, from: data)
+        guard var cache = try? JSONDecoder().decode(StockSageQuoteCache.self, from: data) else { return nil }
+        // Recover files written when a demo's newer clock could beat a real market close.
+        // Ignore only explicitly synthetic entries; retain genuine/legacy data unchanged.
+        cache.entries.removeAll { $0.priceSource == .sample }
+        return cache
     }
 
     nonisolated func save(to url: URL? = nil) {

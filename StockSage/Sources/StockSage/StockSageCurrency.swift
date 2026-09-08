@@ -25,6 +25,37 @@ struct CurrencyBreakdown: Sendable, Equatable {
 }
 
 enum StockSageCurrency {
+    // Existing app planning tolerance for FX across a long weekend; NOT a broker fill quote.
+    nonisolated static let maxSizingFXAge: TimeInterval = 72 * 3600
+
+    /// Return the rate AND the clock of the selected observation. Fresh, known-source quotes
+    /// take precedence over old/undated ones; then latest market time wins, with source order
+    /// breaking ties. Only valuation may use an unverified fallback. Fetch time is unused.
+    nonisolated static func fxRateToUSD(currency: String,
+        observations: [(quote: StockSageQuote?, inverse: Bool)], forSizing: Bool, now: Date
+    ) -> (rate: Double, marketTime: Date?, isFresh: Bool)? {
+        if currency.uppercased() == "USD" { return (1, nil, true) }
+        guard now.timeIntervalSince1970.isFinite, now.timeIntervalSince1970 > 0 else { return nil }
+        var selected: (rate: Double, marketTime: Date?, isFresh: Bool)?
+        for (quote, inverse) in observations {
+            guard let quote, quote.price > 0, quote.price.isFinite, quote.priceSource != .sample else { continue }
+            let rate = inverse ? 1 / quote.price : quote.price
+            guard rate > 0, rate.isFinite else { continue }
+            if let time = quote.marketTime {
+                guard time.timeIntervalSince1970.isFinite, time.timeIntervalSince1970 > 0, time <= now else { continue }
+            }
+            let fresh = quote.priceSource != nil && (quote.marketTime.map { now.timeIntervalSince($0) <= maxSizingFXAge } ?? false)
+            if forSizing, !fresh { continue }
+            if let current = selected {
+                if current.isFresh != fresh {
+                    if current.isFresh { continue }
+                } else if (current.marketTime ?? .distantPast) >= (quote.marketTime ?? .distantPast) { continue }
+            }
+            selected = (rate, quote.marketTime, fresh)
+        }
+        return selected
+    }
+
     /// Roll holdings up by currency, converted to `base` via `ratesToBase` (units of base per
     /// 1 unit of the currency; base itself is implicitly 1). Flags the largest non-base
     /// currency when it exceeds `concentrationThreshold` of the book. nil if nothing convertible.

@@ -56,8 +56,8 @@ enum StockSageEarnings {
     /// returned `nil` identically for "asked, got a 200 with no date" AND for "never asked —
     /// external access off / non-equity / timeout / non-200 / parse failure", so the store
     /// stamped a dated "none known" record for cases where nothing was ever actually observed.
-    /// `.answered(date)` — the provider was asked and responded 200; `date` is nil when the body
-    /// carried no earnings date, non-nil otherwise. `.unavailable` — no observation was made at
+    /// `.answered(date)` — a valid complete calendar response; `date` is nil for an explicit
+    /// empty date array. `.unavailable` — no usable observation was made at
     /// all; the caller must NOT stamp anything (honesty floor: unknown stays unknown).
     enum EarningsFetch: Sendable { case answered(Date?), unavailable }
 
@@ -66,39 +66,21 @@ enum StockSageEarnings {
     /// "checked"); `.unavailable` when access is off or the request never got a 200 back — the
     /// warning simply doesn't appear, never blocks.
     static func fetchNextEarningsOutcome(for symbol: String) async -> EarningsFetch {
-        guard ToolPolicy.isExternalAllowed else { return .unavailable }
-        guard StockSageAllocation.assetClass(symbol) == "Equity" else { return .unavailable }
-        guard let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
-              let url = URL(string: "https://query1.finance.yahoo.com/v10/finance/quoteSummary/\(encoded)?modules=calendarEvents")
-        else { return .unavailable }
-        var req = URLRequest(url: url, timeoutInterval: 8)
-        req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        guard let data = await get(req) else { return .unavailable }
-        return .answered(parseEarningsDate(data))   // a 200 body IS an answer, date or not
+        switch await fetchEarningsCalendarOutcome(for: symbol) {
+        case .answered(let info): return .answered(info?.date)
+        case .unavailable: return .unavailable
+        }
     }
 
     /// Parse the soonest earnings epoch from a quoteSummary `calendarEvents` body.
     nonisolated static func parseEarningsDate(_ data: Data) -> Date? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let qs = root["quoteSummary"] as? [String: Any],
-              let results = qs["result"] as? [[String: Any]],
-              let first = results.first,
-              let cal = first["calendarEvents"] as? [String: Any],
-              let earnings = cal["earnings"] as? [String: Any],
-              let dates = earnings["earningsDate"] as? [[String: Any]] else { return nil }
-        // earningsDate is [{raw: epoch, fmt: "..."}] (sometimes a start/end range).
-        let epochs = dates.compactMap { $0["raw"] as? Double }.filter { $0 > 0 }
-        guard let soonest = epochs.min() else { return nil }
-        return Date(timeIntervalSince1970: soonest)
+        parseEarningsCalendar(data)?.date
     }
 
     // MARK: - W1 (2026-09-06): the date RANGE + the provider's own estimate flag
     //
-    // Pre-W1 `parseEarningsDate`/`fetchNextEarningsOutcome` above are UNCHANGED (min-epoch
-    // behaviour preserved, per the step's own instruction) — every existing caller/test keeps
-    // working. This is an ADDITIONAL, richer read of the exact same `calendarEvents` body for the
-    // new chain (StockSageCatalystChain), which needs the range end and the estimate flag to fill
-    // `Record.dateRangeEnd`/`confirmed`.
+    // Both legacy and richer fetches share the validated outcome. Optional convenience
+    // parsers remain for display/tests; they must not be re-wrapped as a successful fetch.
 
     /// One `calendarEvents` observation: the soonest date (same min-epoch as `parseEarningsDate`),
     /// the range's upper bound when Yahoo supplied two dates (nil for a single date), and whether
@@ -123,7 +105,7 @@ enum StockSageEarnings {
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
         guard let data = await get(req) else { return .unavailable }
-        return .answered(parseEarningsCalendar(data))
+        return parseCalendarOutcome(data)
     }
 
     /// Parses `earningsDate` (min = `date`, max = `dateRangeEnd` when a genuine 2-element range;
@@ -131,20 +113,39 @@ enum StockSageEarnings {
     /// `isEarningsDateEstimate` (defaults to `true` — Yahoo doesn't always populate the flag, and
     /// an unconfirmed date is the SAFER default than a false "confirmed").
     nonisolated static func parseEarningsCalendar(_ data: Data) -> EarningsCalendarInfo? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let qs = root["quoteSummary"] as? [String: Any],
-              let results = qs["result"] as? [[String: Any]],
-              let first = results.first,
-              let cal = first["calendarEvents"] as? [String: Any],
+        guard case .answered(let info) = parseCalendarOutcome(data) else { return nil }
+        return info
+    }
+
+    /// Only a complete valid module can establish "checked, no date". Dropping a malformed
+    /// range endpoint could hide an earlier event, so partial observations stay unavailable.
+    nonisolated static func parseCalendarOutcome(_ data: Data) -> CalendarFetch {
+        guard let cal = module(data, named: "calendarEvents"),
               let earnings = cal["earnings"] as? [String: Any],
-              let dates = earnings["earningsDate"] as? [[String: Any]] else { return nil }
-        let epochs = dates.compactMap { $0["raw"] as? Double }.filter { $0 > 0 }.sorted()
-        guard let soonest = epochs.first else { return nil }
-        let rangeEnd = epochs.count >= 2 ? epochs.last : nil
-        let isEstimate = (earnings["isEarningsDateEstimate"] as? Bool) ?? true
-        return EarningsCalendarInfo(date: Date(timeIntervalSince1970: soonest),
-                                    dateRangeEnd: rangeEnd.map { Date(timeIntervalSince1970: $0) },
-                                    isEstimate: isEstimate)
+              let dates = earnings["earningsDate"] as? [[String: Any]], dates.count <= 2 else { return .unavailable }
+        let parsed = dates.compactMap { epoch($0["raw"]) }.sorted()
+        guard parsed.count == dates.count else { return .unavailable }
+        guard let soonest = parsed.first else { return .answered(nil) }
+        let estimate = earnings["isEarningsDateEstimate"] as? NSNumber
+        let isEstimate = estimate.map { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : true } ?? true
+        return .answered(EarningsCalendarInfo(date: soonest,
+                                              dateRangeEnd: parsed.count == 2 ? parsed.last : nil,
+                                              isEstimate: isEstimate))
+    }
+
+    private nonisolated static func module(_ data: Data, named name: String) -> [String: Any]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["error"] == nil || root["error"] is NSNull,
+              let qs = root["quoteSummary"] as? [String: Any],
+              qs["error"] == nil || qs["error"] is NSNull,
+              let results = qs["result"] as? [[String: Any]], results.count == 1 else { return nil }
+        return results[0][name] as? [String: Any]
+    }
+
+    private nonisolated static func epoch(_ value: Any?) -> Date? {
+        guard let seconds = StockSageMassive.finite(value), seconds > 0,
+              seconds < Date.distantFuture.timeIntervalSince1970 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     // MARK: - Tadawul projection source: Yahoo `earningsHistory`
@@ -178,18 +179,13 @@ enum StockSageEarnings {
     /// these dates get labelled "reports" in its basis string — systematically early by the whole
     /// reporting lag, typically 3-6 weeks, while claiming to be projected from prior REPORTS. See
     /// `StockSageCatalystChain.resolve`'s `historyUnitLabel`, which the store sets to "quarter
-    /// ends" for exactly this source). Malformed/missing rows are skipped, never guessed.
-    nonisolated static func parseEarningsHistory(_ data: Data) -> [Date] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let qs = root["quoteSummary"] as? [String: Any],
-              let results = qs["result"] as? [[String: Any]],
-              let first = results.first,
-              let hist = first["earningsHistory"] as? [String: Any],
-              let rows = hist["history"] as? [[String: Any]] else { return [] }
-        let epochs = rows.compactMap { row -> Double? in
-            (row["quarter"] as? [String: Any])?["raw"] as? Double
-        }.filter { $0 > 0 }
-        return epochs.sorted().map { Date(timeIntervalSince1970: $0) }
+    /// ends" for exactly this source). Missing/malformed/partial modules are unavailable;
+    /// an explicit empty history array is a valid observation.
+    nonisolated static func parseEarningsHistory(_ data: Data) -> [Date]? {
+        guard let hist = module(data, named: "earningsHistory"),
+              let rows = hist["history"] as? [[String: Any]] else { return nil }
+        let dates = rows.compactMap { epoch(($0["quarter"] as? [String: Any])?["raw"]) }
+        return dates.count == rows.count ? dates.sorted() : nil
     }
 
     // MARK: - Pacing + exponential backoff (W1, 2026-09-06)

@@ -95,6 +95,24 @@ struct StockSageNewsServiceTests {
         #expect(items.isEmpty)
     }
 
+    @Test("future-dated fallback articles are not recent observations")
+    func futureNewsIsRejected() {
+        #expect(NS.parseNews([row(date: "2026-09-01T00:00:01Z")], now: Self.now).isEmpty)
+    }
+
+    @Test("a source link cannot launch a local file or app deep link")
+    func unsafeLinksHaveNoTapTarget() {
+        for link in ["file:///tmp/news", "stocksage://stage-order?symbol=AAPL", "https://user:pass@example.com/news"] {
+            #expect(NS.parseNews([row(link: link)], now: Self.now).first?.link == nil)
+        }
+    }
+
+    @Test("long unpunctuated content cannot flood the explanation prompt")
+    func snippetHasAHardBudget() {
+        let long = String(repeating: "word ", count: 2_000)
+        #expect(NS.snippet(from: long).count <= 501)
+    }
+
     @Test("limit caps the returned count, newest first")
     func limitCapsNewestFirst() {
         let raw = [row(date: "2026-08-30T00:00:00Z", title: "Older"),

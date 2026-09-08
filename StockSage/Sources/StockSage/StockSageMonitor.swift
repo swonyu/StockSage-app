@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import UserNotifications
 
 // MARK: - StockSageMonitor
@@ -16,17 +17,40 @@ import UserNotifications
 //   * Reads symbols from `StockSageStore` (in-memory; sample data until Chat A's
 //     live feed replaces it).
 @MainActor
-final class StockSageMonitor {
+final class StockSageMonitor: ObservableObject {
     static let shared = StockSageMonitor()
-    private init() {}
+    init(defaults: UserDefaults = .standard,
+         strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)? = nil) {
+        self.defaults = defaults
+        self.strongSignalSender = strongSignalSender
+        budget = StockSageNotificationBudget(loadingFrom: defaults)
+    }
+
+    private let defaults: UserDefaults
+    private let strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)?
 
     private var task: Task<Void, Never>?
-    private(set) var isRunning = false
+    @Published private(set) var isRunning = false
+    /// iOS foreground polling remains enabled until explicitly opted out. This is not
+    /// the Mac's separate launch opt-in, and a transient background stop must not edit it.
+    private static let foregroundMonitoringKey = "stocksage.monitor.iosEnabled"
+    var foregroundMonitoringEnabled: Bool {
+        get { defaults.object(forKey: Self.foregroundMonitoringKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Self.foregroundMonitoringKey) }
+    }
+
+    /// The iOS lifecycle entry point. A supplied starter tests resume decisions without
+    /// launching timers, requesting notification permission or touching the shared board.
+    func resumeForegroundMonitoring(start: (@MainActor () -> Void)? = nil) {
+        guard foregroundMonitoringEnabled else { return }
+        if let start { start() } else { try? self.start() }
+    }
+
     /// Rate control for every outbound push (owner report 2026-07-28: "it sends so much").
     /// Loaded from disk, not fresh — see StockSageNotificationBudget's persistence note: an
     /// in-memory-only budget is wiped by every OS app kill, which is exactly when the cold-start
     /// alert burst happens.
-    private var budget = StockSageNotificationBudget(loadingFrom: .standard)
+    private var budget: StockSageNotificationBudget
     /// Pushes the budget withheld since the last delivered one — surfaced so suppression is
     /// visible to the owner rather than silent.
     var suppressedAlertCount: Int { budget.suppressedSinceLastAllowed }
@@ -98,7 +122,7 @@ final class StockSageMonitor {
                 // Watchlist-only mode (opt-in, re-read each cycle so toggling takes effect):
                 // fetch + scan ONLY the user's watchlist instead of refreshing the whole core.
                 let watch = StockSageStore.shared.userSymbols
-                let scoped = UserDefaults.standard.bool(forKey: StockSageMonitor.watchlistOnlyKey) && !watch.isEmpty
+                let scoped = self?.defaults.bool(forKey: StockSageMonitor.watchlistOnlyKey) == true && !watch.isEmpty
                 if scoped {
                     await self?.runWatchlistCycle(watch)
                 } else {
@@ -186,7 +210,7 @@ final class StockSageMonitor {
             // (Strong Buy ⇄ Strong Sell) AND the quote is fresh — not the same alert on every
             // poll, and never off a stale close.
             var delivered = true
-            if liveNotify, StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.strongSignalsKey),
+            if liveNotify, StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.strongSignalsKey, defaults: defaults),
                Self.shouldPushStrongSignal(recommendation: signal.recommendation,
                                                         lastAlerted: lastAlerted[signal.symbol],
                                                         isFresh: fresh) {
@@ -194,7 +218,7 @@ final class StockSageMonitor {
                 let alertPrice = symbol.latest?.price ?? 0
                 if budget.allow(symbol: signal.symbol, price: alertPrice) {
                     delivered = await sendAlert(signal: signal, market: symbol.market)
-                    if delivered { budget.record(symbol: signal.symbol, price: alertPrice); budget.save() }
+                    if delivered { budget.record(symbol: signal.symbol, price: alertPrice); budget.save(to: defaults) }
                 }
                 // A budget REFUSAL is not a delivery failure: `delivered` stays true so the dedup
                 // state still advances. Otherwise the same alert re-queues every cycle and floods
@@ -230,13 +254,30 @@ final class StockSageMonitor {
     }
 
     /// Watchlist-only evaluation: fetch LIVE quotes for just the watchlist tickers and alert
-    /// on strong buy/sell — self-contained (doesn't touch the board `symbols` or its
-    /// sample/cache flags), so it stays honest (it fires only on quotes it just fetched) and
+    /// on strong buy/sell — independently of the board's sample/cache flags, then publishes
+    /// the fetched prices. It stays honest (it fires only on quotes it just fetched) and
     /// cheap (no 250-name pull). Same NEW-or-flipped dedup as runCycle via `lastAlerted`.
     /// Same examined-count contract as runCycle (review fix 2026-07-17).
     @discardableResult
     func runWatchlistCycle(_ watch: [String], notify: Bool = true) async -> (signals: [StockSageSignal], examined: Int) {
         let quotes = await StockSageQuoteService.fetchQuotes(for: watch)
+        let result = await evaluateWatchlistQuotes(watch, quotes: quotes, notify: notify)
+        // Publish the freshly-fetched watchlist prices to the board so it reflects live data
+        // for the names the user is focused on (watchlist-only stops the full auto-refresh).
+        StockSageStore.shared.mergeLiveQuotes(quotes)
+        if notify, !Task.isCancelled {
+            await checkPriceAlerts()
+            await checkIdeaAlerts(prices: result.freshPrices)
+        }
+        return (result.signals, result.examined)
+    }
+
+    /// The production watchlist loop, after fetching and before board publication. Keeping
+    /// delivery and its dedupe commit together makes failed-enqueue retries testable without
+    /// a live quote request, shared board mutations or real system notifications.
+    func evaluateWatchlistQuotes(_ watch: [String], quotes: [String: StockSageQuoteService.LiveQuote],
+                                notify: Bool = true) async
+        -> (signals: [StockSageSignal], examined: Int, freshPrices: [String: Double]) {
         var strong: [StockSageSignal] = []
         var nowStrong: [String: StockSageRecommendation] = [:]
         var freshPrices: [String: Double] = [:]
@@ -251,7 +292,8 @@ final class StockSageMonitor {
                                time: Date(timeIntervalSinceNow: -86_400)),
                 // Carry the real MARKET time (was omitted here) so this synthetic symbol's own
                 // `isStale()` can flag a days-old weekend/holiday close, same as the board path.
-                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime),
+                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
+                               massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource),
             ])
             // Collect the fresh price for the idea stop/target check below regardless of
             // whether THIS ticker's momentum signal is currently strong.
@@ -260,30 +302,26 @@ final class StockSageMonitor {
             guard let signal = StockSageSignalEngine.generateSignal(for: sym) else { continue }
             guard signal.recommendation == .strongBuy || signal.recommendation == .strongSell else { continue }
             strong.append(signal)
-            if fresh { nowStrong[signal.symbol] = signal.recommendation }
+            var delivered = true
             // FIX (second review, 2026-07-28): this path checked NEITHER the strong-signals
             // preference NOR the budget, so in watchlist-only mode the Settings switch did
             // nothing and every brake was bypassed. runCycle gated both; this one never did.
-            if notify, StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.strongSignalsKey),
+            if notify, StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.strongSignalsKey, defaults: defaults),
                Self.shouldPushStrongSignal(recommendation: signal.recommendation,
                                                     lastAlerted: lastAlerted[signal.symbol],
                                                     isFresh: fresh) {
                 let px = q.price
-                if budget.allow(symbol: signal.symbol, price: px),
-                   await sendAlert(signal: signal, market: sym.market) {
-                    budget.record(symbol: signal.symbol, price: px); budget.save()
+                if budget.allow(symbol: signal.symbol, price: px) {
+                    delivered = await sendAlert(signal: signal, market: sym.market)
+                    if delivered { budget.record(symbol: signal.symbol, price: px); budget.save(to: defaults) }
                 }
             }
+            // Match runCycle: failed enqueue keeps the previous recommendation retryable;
+            // deliberate mute/budget suppression still advances dedupe to prevent a burst.
+            if fresh, delivered { nowStrong[signal.symbol] = signal.recommendation }
         }
         if notify, !Task.isCancelled { for (s, r) in nowStrong { lastAlerted[s] = r } }
-        // Publish the freshly-fetched watchlist prices to the board so it reflects live data
-        // for the names the user is focused on (watchlist-only stops the full auto-refresh).
-        StockSageStore.shared.mergeLiveQuotes(quotes)
-        if notify, !Task.isCancelled {
-            await checkPriceAlerts()
-            await checkIdeaAlerts(prices: freshPrices)
-        }
-        return (strong, examined)
+        return (strong, examined, freshPrices)
     }
 
     /// Check user-set price alerts against FRESHLY-FETCHED live prices (never the board's
@@ -294,12 +332,26 @@ final class StockSageMonitor {
     /// drop any quote whose market timestamp is materially old — a level reached only at a stale
     /// close won't fire a push while the market is shut and the owner can't act.
     private func checkPriceAlerts() async {
+        await checkPriceAlerts(
+            currentAlerts: { StockSageStore.shared.priceAlerts },
+            fetchQuotes: { await StockSageQuoteService.fetchQuotes(for: $0) },
+            enqueue: { await self.sendPriceAlert($0, price: $1) },
+            markTriggered: { StockSageStore.shared.markPriceAlertsTriggered($0) })
+    }
+
+    /// The actual fetch/check/send path with live state read at call time. Closures keep the
+    /// asynchronous boundaries replayable without loading the shared board or sending pushes.
+    func checkPriceAlerts(
+        currentAlerts: @MainActor () -> [PriceAlert],
+        fetchQuotes: @MainActor ([String]) async -> [String: StockSageQuoteService.LiveQuote],
+        enqueue: @MainActor (PriceAlert, Double) async -> Bool,
+        markTriggered: @MainActor ([UUID]) -> Void
+    ) async {
         // Muted type: check nothing, consume nothing — the user's armed alerts stay armed.
-        guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey) else { return }
-        let store = StockSageStore.shared
-        let armed = store.priceAlerts.filter { $0.isArmed }
+        guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { return }
+        let armed = currentAlerts().filter { $0.isArmed }
         guard !armed.isEmpty else { return }
-        let q = await StockSageQuoteService.fetchQuotes(for: Array(Set(armed.map { $0.symbol })))
+        let q = await fetchQuotes(Array(Set(armed.map { $0.symbol })))
         // CONCURRENCY #2 (L3-09): a stop() during the fetch await above must not let this cycle
         // push a one-shot price alert — same idiom as runCycle's post-await guards. Without this,
         // a stop()→start() overlap could double-push the SAME alert: the cancelled cycle's fetch
@@ -331,18 +383,23 @@ final class StockSageMonitor {
         // actually went out.
         var delivered: [UUID] = []
         for a in fired {
+            guard !Task.isCancelled,
+                  StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { break }
+            // Fetching and every earlier enqueue can suspend this cycle. Require the same
+            // still-armed definition/identity, not just membership in the captured array.
+            guard currentAlerts().contains(a) else { continue }
             // A user-set price alert is a ONE-SHOT the owner explicitly armed and it disarms on
             // trigger, so it is exempt from hysteresis and cooldown. It still respects the GLOBAL
             // hourly cap so a market-wide move cannot produce a flood.
             let px = prices[a.symbol] ?? a.target
             guard StockSageNotificationBudget.countWithinHour(budget.recentAlerts, now: Date())
                     < StockSageNotificationBudget.hourlyCap else { break }
-            if await sendPriceAlert(a, price: px) {
+            if await enqueue(a, px) {
                 delivered.append(a.id)
-                budget.record(symbol: a.symbol, price: px); budget.save()
+                budget.record(symbol: a.symbol, price: px); budget.save(to: defaults)
             }
         }
-        if !delivered.isEmpty { store.markPriceAlertsTriggered(delivered) }
+        if !delivered.isEmpty { markTriggered(delivered) }
     }
 
     /// Drive stop-breach/target-hit pushes for TRACKED IDEAS via the tested
@@ -364,7 +421,7 @@ final class StockSageMonitor {
         // is the single most decision-relevant alert, so it should say whether the owner actually
         // has a position on. Idea alerts ONLY — sendPriceAlert (user-set price alerts) is untouched.
         let holdingBySymbol = StockSagePortfolio.holdingBySymbol(in: StockSagePortfolio.shared.positions)
-        let ideaAlertsOn = StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.ideaAlertsKey)
+        let ideaAlertsOn = StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.ideaAlertsKey, defaults: defaults)
         for idea in ideas {
             // CONCURRENCY #2 (review 2026-07-27): same cooperative-cancellation guard as the
             // strong-signal and price-alert loops — stop() must halt idea pushes mid-batch too.
@@ -395,7 +452,7 @@ final class StockSageMonitor {
             }
             if await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()]) {
                 lastIdeaPrice[idea.symbol] = price
-                budget.record(symbol: idea.symbol, price: price); budget.save()
+                budget.record(symbol: idea.symbol, price: price); budget.save(to: defaults)
             }
         }
     }
@@ -447,6 +504,7 @@ final class StockSageMonitor {
 
     /// Returns whether the push was ACCEPTED for delivery — runCycle latches dedup only on true.
     private func sendAlert(signal: StockSageSignal, market: String) async -> Bool {
+        if let strongSignalSender { return await strongSignalSender(signal, market) }
         let content = UNMutableNotificationContent()
         content.title = "\(signal.recommendation.rawValue): \(signal.symbol) (\(market))"
         content.body = signal.reason
@@ -458,7 +516,13 @@ final class StockSageMonitor {
     }
 
     private func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error {
+                print("⚠️ StockSage: Failed to request notification authorization: \(error)")
+            } else if !granted {
+                print("⚠️ StockSage: Notification permission denied - alerts will not appear")
+            }
+        }
     }
 
     // MARK: - Pure decision helpers (testable without the async I/O / @MainActor state above)
@@ -503,7 +567,7 @@ enum StockSageNotifyPrefs {
     static let ideaAlertsKey = "stocksage.notify.ideaAlerts"
     static let priceAlertsKey = "stocksage.notify.priceAlerts"
 
-    static func enabled(_ key: String) -> Bool {
-        UserDefaults.standard.object(forKey: key) == nil ? true : UserDefaults.standard.bool(forKey: key)
+    static func enabled(_ key: String, defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) == nil ? true : defaults.bool(forKey: key)
     }
 }

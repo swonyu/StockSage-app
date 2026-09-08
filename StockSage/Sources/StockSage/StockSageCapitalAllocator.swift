@@ -23,7 +23,7 @@ struct AllocatedPosition: Sendable, Equatable, Identifiable {
 
 struct CapitalAllocation: Sendable, Equatable {
     let positions: [AllocatedPosition]   // desc by riskFraction, tie-break asc symbol
-    let totalHeat: Double                // Σ USD-normalized dollarsAtRisk ÷ account — ≤ maxHeat (F3 wave-B: per-position native×rawQuoteUnitToUSD; ×1 when no tracked rate)
+    let totalHeat: Double                // Σ USD-normalized dollarsAtRisk ÷ account — ≤ maxHeat
     let requestedHeat: Double            // Σ of the fundable weights AFTER the correlation haircut, BEFORE heat-scaling
     let scaleApplied: Double             // ≤1 when the cap bound; 1 otherwise
     let account: Double
@@ -36,6 +36,7 @@ struct CapitalAllocation: Sendable, Equatable {
     /// shares at THIS account size — a DIFFERENT, more honest-to-disclose reason for an empty
     /// plan than "nothing qualified", which the view can now name instead of just vanishing.
     let fundableCandidateCount: Int
+    let unpricedSymbols: [String]        // qualified ideas excluded for missing/invalid FX
 }
 
 enum StockSageCapitalAllocator {
@@ -46,8 +47,8 @@ enum StockSageCapitalAllocator {
     /// summed risk fits `maxHeat`, then floor to whole shares. Empty plan on invalid inputs or
     /// when nothing is fundable.
     // F3 wave-B (2026-07-16): `fxRatesToUSD` (ccy→USD) sizes non-USD names FX-correctly and
-    // USD-normalizes the heat ledger (see step 4/5). Empty map (the default) keeps every
-    // existing caller and the test-lock byte-identical — never guess a rate.
+    // USD-normalizes the heat ledger (see step 4/5). Missing foreign FX excludes and names
+    // the candidate BEFORE assigning weights; it cannot consume another position's heat.
     /// Greedy-knapsack option (owner-signed 2026-07-28, external-report item 1): instead of
     /// shrinking EVERY position uniformly to fit the heat cap, allocate FULL size down the
     /// velocity-sorted list and truncate at the cap (boundary position gets the remainder).
@@ -61,16 +62,18 @@ enum StockSageCapitalAllocator {
                                      fxRatesToUSD: [String: Double] = [:],
                                      strategy: AllocationStrategy = .uniformScale) -> CapitalAllocation {
         let cap = Swift.min(Swift.max(0, maxHeat), 1)
+        var unpriced: Set<String> = []
         func empty() -> CapitalAllocation {
             CapitalAllocation(positions: [], totalHeat: 0, requestedHeat: 0, scaleApplied: 1,
-                              account: account, maxHeat: cap, caveat: caveat, fundableCandidateCount: 0)
+                              account: account, maxHeat: cap, caveat: caveat, fundableCandidateCount: 0,
+                              unpricedSymbols: unpriced.sorted())
         }
-        guard account > 0, cap > 0 else { return empty() }
+        guard account > 0, account.isFinite, cap > 0, maxHeat.isFinite else { return empty() }
 
         // Step 1+2: fund only buy-family ideas with a defined R and positive EV; the raw weight
         // IS half-Kelly (already a FRACTION in [0,0.5] — do NOT divide by account; it also
         // already encodes the edge, so no separate EV multiplier — that would double-count).
-        struct Fundable { let symbol: String; let entry: Double; let stop: Double; let weight: Double; let halfKelly: Double; let evR: Double; let velocity: Double }
+        struct Fundable { let idea: StockSageIdea; let symbol: String; let entry: Double; let stop: Double; let weight: Double; let halfKelly: Double; let evR: Double; let velocity: Double }
         var fundable: [Fundable] = []
         for idea in ideas {
             let a = idea.advice
@@ -83,7 +86,7 @@ enum StockSageCapitalAllocator {
             // clearsCostAfterFrictions, but the allocator — which emits the ACTUAL shares — did not,
             // so a thin high-cost crypto flip the boards hid could still be funded. (Sizing still uses
             // gross Kelly here; net-payoff sizing is a separate change to keep the verified test math.)
-            let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+            let costs = StockSageNetEdge.costs(forSymbol: idea.symbol, nbbo: idea.nbbo)
             guard let ne = StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
                                                      spreadBps: costs.spreadBps, slippageBps: costs.slippageBps,
                                                      takerFeeBps: costs.takerFeeBps, winProb: ev.winProbEstimate),
@@ -114,7 +117,11 @@ enum StockSageCapitalAllocator {
             let regimeBrake = idea.volRegime?.sizingMultiplier ?? 1
             weight *= Swift.min(scalerBrake, regimeBrake)
             guard weight > 0 else { continue }
-            fundable.append(Fundable(symbol: idea.symbol, entry: idea.price, stop: stop,
+            guard StockSagePositionSizer.rawQuoteUnitToUSD(symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) != nil else {
+                unpriced.insert(idea.symbol)
+                continue
+            }
+            fundable.append(Fundable(idea: idea, symbol: idea.symbol, entry: idea.price, stop: stop,
                                      weight: weight, halfKelly: k.halfKelly, evR: ev.evR,
                                      velocity: StockSageExpectedValue.velocity(for: idea, calibration: calibration) ?? 0))
         }
@@ -132,7 +139,7 @@ enum StockSageCapitalAllocator {
         let deweightedForCorrelation = zip(rawWeights, adjWeights).contains { $0 - $1 > 1e-12 }
         if deweightedForCorrelation {
             fundable = zip(fundable, adjWeights).map { f, w in
-                Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop, weight: w, halfKelly: f.halfKelly, evR: f.evR, velocity: f.velocity)
+                Fundable(idea: f.idea, symbol: f.symbol, entry: f.entry, stop: f.stop, weight: w, halfKelly: f.halfKelly, evR: f.evR, velocity: f.velocity)
             }
         }
 
@@ -149,7 +156,7 @@ enum StockSageCapitalAllocator {
                 if cum + f.weight <= cap + 1e-12 {
                     kept.append(f); cum += f.weight
                 } else if cap - cum > 1e-9 {
-                    kept.append(Fundable(symbol: f.symbol, entry: f.entry, stop: f.stop,
+                    kept.append(Fundable(idea: f.idea, symbol: f.symbol, entry: f.entry, stop: f.stop,
                                          weight: cap - cum, halfKelly: f.halfKelly, evR: f.evR,
                                          velocity: f.velocity))
                     cum = cap
@@ -165,18 +172,26 @@ enum StockSageCapitalAllocator {
         // ⇒ summed realized heat ≤ the cap. F3 wave-B: with a tracked FX rate the sizing runs in
         // the symbol's own currency (the F3 map overload — .SR was under-sized ~3.75× vs the
         // stated fraction), and the HEAT ledger converts each position's native dollarsAtRisk
-        // back to USD (`rawQuoteUnitToUSD`; untracked/USD → ×1 = prior behavior). Fields on
+        // back to USD (`rawQuoteUnitToUSD`; only an actual USD quote uses ×1). Fields on
         // AllocatedPosition stay RAW-NATIVE — every consumer already renders them through
         // `approxAmount(symbol:)` / converts via `majorUnitValue`×rate.
         var positions: [AllocatedPosition] = []
+        var rejectedForCosts: [String] = []
         var usdAtRisk = 0.0
         for f in fundable {
             let scaled = f.weight * scaleApplied
             guard let ps = StockSagePositionSizer.size(account: account, riskFraction: scaled,
                                                        entry: f.entry, stop: f.stop,
                                                        symbol: f.symbol, fxRatesToUSD: fxRatesToUSD),
-                  ps.shares > 0 else { continue }
-            let rawUnit = StockSagePositionSizer.rawQuoteUnitToUSD(symbol: f.symbol, fxRatesToUSD: fxRatesToUSD) ?? 1
+                  ps.shares > 0,
+                  let rawUnit = StockSagePositionSizer.rawQuoteUnitToUSD(symbol: f.symbol, fxRatesToUSD: fxRatesToUSD) else { continue }
+            let p = StockSageExpectedValue.winProbEstimate(conviction: f.idea.advice.conviction, calibration: calibration)
+            guard let edge = StockSageNetEdge.evaluate(for: f.idea, winProb: p, orderNotional: ps.notional),
+                  edge.clearsCost(estWinProb: p) else {
+                rejectedForCosts.append(f.symbol)
+                continue
+            }
+            // ponytail: leave rejected risk in cash; redistributing it requires a new sizing/cost pass.
             usdAtRisk += ps.dollarsAtRisk * rawUnit
             positions.append(AllocatedPosition(symbol: f.symbol, riskFraction: scaled, shares: ps.shares,
                                                dollarsAtRisk: ps.dollarsAtRisk, notional: ps.notional,
@@ -187,13 +202,16 @@ enum StockSageCapitalAllocator {
         let totalHeat = usdAtRisk / account
         let sorted = positions.sorted(by: positionOrder)
         var finalCaveat = caveat
+        if !rejectedForCosts.isEmpty {
+            finalCaveat += " Excluded after final-size cost check: " + rejectedForCosts.sorted().joined(separator: ", ") + ". Released risk stays in cash."
+        }
         if deweightedForCorrelation { finalCaveat += " A correlated cluster was de-weighted to count as ~one bet, not several." }
         if let regime, abs(regime.sizingBias - 1) > 0.01 {
             finalCaveat += String(format: " Sized ×%.2f for the %@ regime.", regime.sizingBias, regime.state.rawValue)
         }
         return CapitalAllocation(positions: sorted, totalHeat: totalHeat, requestedHeat: requestedHeat,
                                  scaleApplied: scaleApplied, account: account, maxHeat: cap, caveat: finalCaveat,
-                                 fundableCandidateCount: fundable.count)
+                                 fundableCandidateCount: fundable.count - rejectedForCosts.count, unpricedSymbols: unpriced.sorted())
     }
 
     /// #8 (BUGHUNT_NEWENGINES): the position sort is a TOTAL order, not just (risk desc, symbol
@@ -223,9 +241,12 @@ enum StockSageCapitalAllocator {
         account: Double,
         maxHeat: Double = 0.10,
         correlationThreshold: Double = 0.80,
-        calibration: StockSageConvictionCalibration? = nil
+        calibration: StockSageConvictionCalibration? = nil,
+        fxRatesToUSD: [String: Double] = [:]
     ) -> AddSuggestion? {
-        guard account > 0 else { return nil }
+        // Existing openTrades inputs are already USD-normalized (they carry no symbols).
+        // Candidate prices and returned dollar fields remain raw-native, like allocate().
+        guard account > 0, account.isFinite else { return nil }
         let a = idea.advice
         guard let stop = a.stopPrice, let target = a.targetPrice, idea.price > 0,
               let ev = StockSageExpectedValue.ev(conviction: a.conviction, entry: idea.price, stop: stop,
@@ -247,17 +268,25 @@ enum StockSageCapitalAllocator {
         // Concentration gate FIRST — a correlated name is a bad add regardless of edge.
         if let cluster, cluster.isConcentrating { return blocked(cluster.note) }
         guard ev.evR > 0 else { return blocked("No positive edge for \(idea.symbol) at the current stop/target.") }
+        guard StockSagePositionSizer.rawQuoteUnitToUSD(symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) != nil else {
+            return blocked(StockSagePositionSizer.unavailableFXMessage)
+        }
 
         let k = StockSageKelly.compute(winRate: ev.winProbEstimate, payoffRatio: ev.rewardR, accountSize: account)
         // Same per-position cap `allocate` uses (suggestedFraction, not raw halfKelly), further
         // capped by whatever heat headroom remains — never pushes total book risk past maxHeat.
         let suggested = Swift.min(k.suggestedFraction, headroom)
         guard suggested > 0,
-              let ps = StockSagePositionSizer.size(account: account, riskFraction: suggested, entry: idea.price, stop: stop),
+              let ps = StockSagePositionSizer.size(account: account, riskFraction: suggested, entry: idea.price, stop: stop,
+                                                  symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD),
               ps.shares > 0 else {
             return blocked(headroom <= 0
                 ? "No heat headroom left — the book is already at \(Int((heatBefore * 100).rounded()))% open risk."
                 : "Position size rounds to zero shares at this account size.")
+        }
+        guard let edge = StockSageNetEdge.evaluate(for: idea, winProb: ev.winProbEstimate, orderNotional: ps.notional),
+              edge.clearsCost(estWinProb: ev.winProbEstimate) else {
+            return blocked("Estimated costs exceed the edge at the final share size, including per-order broker minimums.")
         }
         let reason = suggested < k.suggestedFraction
             ? "Capped by remaining heat headroom (\(Int((headroom * 100).rounded()))% left of the \(Int((cap * 100).rounded()))% cap)."

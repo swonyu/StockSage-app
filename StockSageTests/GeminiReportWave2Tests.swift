@@ -103,6 +103,60 @@ struct GeminiReportWave2Tests {
             Issue.record("velocity should be computable for both fixtures"); return
         }
         #expect(vE > vU, "even-step \(vE) should out-rank uneven-step \(vU) at equal EV and mean speed")
+        // Exercise the actual ranking key, not only the gross display rate.
+        #expect(EV.rankByVelocity([uneven, even]).first?.symbol == "EVEN")
+        let keyE = EV.velocityRankKey(for: even, holds: .defaults)!
+        let keyU = EV.velocityRankKey(for: uneven, holds: .defaults)!
+        #expect(abs(keyE / keyU - 1.8) < 1e-12)
+        let sizedKeyE = EV.velocityRankKey(for: even, holds: .defaults, netEVOverride: 0.6)!
+        let sizedKeyU = EV.velocityRankKey(for: uneven, holds: .defaults, netEVOverride: 0.6)!
+        #expect(abs(sizedKeyE / sizedKeyU - 1.8) < 1e-12)
+    }
+
+    @Test("M4: gross, net, sized snapshots and weekly cadence share the inflated hold")
+    func costsCannotIncreaseVelocity() throws {
+        // p=.58, reward=2R → gross=.74R; US costs=.13/share on $10 risk → net=.727R.
+        // Both paths average $1/move. Uneven moves [1,0,2] have CV²=2/3.
+        for base in [12.0, 6.0] {
+            let holds = VelocityHoldDays(crypto: 3, equity: base)
+            for (spark, inflation) in [([100.0, 101, 102, 103], 1.0),
+                                       ([100.0, 101, 101, 103], 5.0 / 3.0),
+                                       ([], 1.0)] {
+                let stock = idea("AAPL", price: 100, stop: 90, target: 120,
+                                 conviction: 1, spark: spark)
+                let hold = (spark.isEmpty ? base : min(base * 3, 20)) * inflation
+                let gross = try #require(EV.velocity(for: stock, holds: holds))
+                let net = try #require(EV.netVelocity(for: stock, holds: holds))
+                #expect(abs(gross - 0.74 / hold) < 1e-12)
+                #expect(abs(net - 0.727 / hold) < 1e-12)
+                #expect(net <= gross)
+                let actualHold = try #require(EV.velocityHoldDays(for: stock, holds: holds))
+                #expect(abs(actualHold - hold) < 1e-12)
+                // No cost-free production tariff: use the existing cost primitive at zero,
+                // then the real shared horizon. Do not add an override to shipping rates.
+                let zeroCost = try #require(StockSageNetEdge.evaluate(entry: 100, stop: 90,
+                    target: 120, spreadBps: 0, slippageBps: 0, winProb: 0.58)?.netExpectancyR)
+                #expect(abs(zeroCost / actualHold - gross) < 1e-12)
+                for account in [nil, 1_000.0] as [Double?] {
+                    let snapshot = StockSageDecisionSnapshotBuilder.build(
+                        idea: stock, holds: holds, account: account, riskFraction: 0.01)
+                    #expect(snapshot.netVelocity.map { abs($0 - net) < 1e-12 } == true)
+                    #expect(snapshot.velocityGross == gross)
+                }
+                let summary = EV.summary([stock], holds: holds)
+                #expect(summary.weeklyRGrossSameBasket.map { abs($0 - 0.74 / hold * 5) < 1e-12 } == true)
+                #expect(summary.weeklyRNet.map { abs($0 - 0.727 / hold * 5) < 1e-12 } == true)
+                #expect(EV.assumedWeeklyRoundTrips([stock], holds: holds)
+                    .map { abs($0 - 5 / hold) < 1e-12 } == true)
+            }
+        }
+        let noHold = idea("^GSPC", price: 100, stop: 90, target: 120, conviction: 1)
+        #expect(EV.velocityHoldDays(for: noHold) == nil)
+        let stock = idea("AAPL", price: 100, stop: 90, target: 120, conviction: 1)
+        for invalid in [0.0, -1, Double.infinity, Double.nan] {
+            #expect(EV.velocityHoldDays(for: stock,
+                holds: VelocityHoldDays(crypto: 3, equity: invalid)) == nil)
+        }
     }
 
     // MARK: item 6 — SHIPPED single-tier brake (owner-forced after seeing the measurement)

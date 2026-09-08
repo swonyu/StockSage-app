@@ -51,7 +51,10 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
     }
     let bins: [Bin]           // ascending by `upper`, equal-width over [0,1]
     let sampleSize: Int       // total trades the fit was built from
-    let method: Method        // provenance of the winProb map (F01/F02) — metadata only, no numeric effect
+    let method: Method        // provenance; thin identity also enforces the F01 query ceiling
+    /// nil is a legacy/undated fit, not proof of time-separated validation.
+    enum Validation: String, Sendable, Codable { case timePurged, unvalidated }
+    var validation: Validation? = nil
 
     // MARK: - Persisted snapshot (calibration runtime activation)
     //
@@ -73,6 +76,10 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
         let oosBrier: Double?     // nil in v1 — see note above
         var sampleCount: Int { calibration.sampleSize }   // computed, no duplicated storage
         var methodLabel: String { calibration.method.rawValue }
+        /// Preserve old bytes for audit, but never activate a pre-purge fit in sizing.
+        nonisolated var usableCalibration: StockSageConvictionCalibration? {
+            calibration.validation == nil ? nil : calibration
+        }
 
         /// Binary plist round-trips Doubles bit-exactly, so a reloaded fit reproduces the
         /// in-memory original's ranking byte-for-byte. `defaults`/`key` injectable (mirrors
@@ -92,11 +99,19 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
     /// Calibrated win probability for a conviction in [0,1]: the band it falls into. Uses the SAME
     /// half-open index math as `fit()`'s bucketing, so a conviction on an exact internal edge is
     /// looked up in the band it was trained into (not the one below).
+    /// Thin, unvalidated identity is additionally capped at the QUERY's prior, not its midpoint's.
     nonisolated func winProb(_ conviction: Double) -> Double {
         guard !bins.isEmpty else { return 0.5 }
         let c = Swift.max(0, Swift.min(1, conviction))
         let idx = Swift.min(bins.count - 1, Int(c * Double(bins.count)))
-        return bins[idx].winProb
+        let probability = bins[idx].winProb
+        // Explicit status covers samples made too thin by time purging even at n>=44.
+        // Legacy thin maps retain the count-based ceiling; runtime snapshots also require status.
+        if method == .identity,
+           validation == .unvalidated || (validation == nil && Self.selectorSplit(sampleSize) == nil) {
+            return Swift.min(probability, StockSageExpectedValue.priorWinProb(c))
+        }
+        return probability
     }
 
     /// [AUDIT] Sample-count seam: isotonic regression is unreliable below ~1000–2000 realized
@@ -124,7 +139,8 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
     /// the byte-identical pre-iter7 Platt/isotonic seam (regression-locked by flagOffIsByteIdenticalToCurrent).
     nonisolated(unsafe) static var candidateSelectorEnabled = true
 
-    /// Fit from realized outcomes. Returns nil when too few samples to calibrate honestly.
+    /// Low-level ordered-outcome seam; does not certify timing. Production uses observations or
+    /// fromJournal, which retain prediction/label times. nil when the sample is below the floor.
     /// - binCount: MAX equal-width conviction bands over [0,1] (the effective count adapts down to
     ///   keep ~`minPerBin` samples/band on small samples — see below).
     /// - minSamples: total-trade floor below which we don't trust a calibration.
@@ -562,31 +578,36 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
         return sum / Double(test.count)
     }
 
+    private nonisolated static let selectorMinTrainSamples = 30
+
+    /// One split rule for selection and the persisted thin-identity query envelope.
+    /// 30% holdout, one-row embargo, at least 30 training rows: 43 is thin; 44 can split.
+    private nonisolated static func selectorSplit(_ count: Int) -> (trainEnd: Int, testStart: Int)? {
+        let testN = Int((Double(count) * 0.3).rounded())
+        let trainEnd = count - testN - 1
+        guard testN >= 1, trainEnd >= selectorMinTrainSamples else { return nil }
+        return (trainEnd, count - testN)
+    }
+
     /// OOS candidate-selector (iter7). Called from fit(_:) only when candidateSelectorEnabled == true.
-    /// Leak-free: candidates are fit on TRAIN only, scored on TEST only, then the winner is refit on ALL data.
+    /// Production passes a time-purged split; the low-level tuple seam retains its ordered-row split.
+    /// Candidates fit on TRAIN, score on TEST, then the winner is refit on ALL finalized data.
     /// Identity is the conservative floor — selected if nothing beats it by more than 1e-9.
     private nonisolated static func selectCalibration(
         _ outcomes: [(conviction: Double, won: Bool)],
-        binCount: Int, minPerBin: Int, z: Double, prior: Double
+        binCount: Int, minPerBin: Int, z: Double, prior: Double,
+        timeSplit: (train: [(conviction: Double, won: Bool)], test: [(conviction: Double, won: Bool)])? = nil
     ) -> StockSageConvictionCalibration? {
         let n = outcomes.count
-        // Need enough for a meaningful split. minTrainSamples mirrors the outer minSamples guard (30).
-        let testFraction = 0.3
-        let embargo = 1
-        let minTrainSamples = 30
-
-        let testN = Int((Double(n) * testFraction).rounded())
-        let gap = Swift.max(0, embargo)
-        guard testN >= 1, n - testN - gap >= minTrainSamples else {
+        let rows = timeSplit ?? selectorSplit(n).map {
+            (train: Array(outcomes[0..<$0.trainEnd]), test: Array(outcomes[$0.testStart..<n]))
+        }
+        guard let rows, rows.train.count >= selectorMinTrainSamples, !rows.test.isEmpty else {
             // Too thin to split honestly → prior-clamped identity (F01: conservative floor, not conviction-as-P(win)).
             return buildIdentity(outcomes, binCount: binCount, minPerBin: minPerBin, clampToPrior: true)
         }
-        let trainEnd = n - testN - gap
-        let train = Array(outcomes[0..<trainEnd])
-        let test  = Array(outcomes[(n - testN)..<n])
-        guard !train.isEmpty, !test.isEmpty else {
-            return buildIdentity(outcomes, binCount: binCount, minPerBin: minPerBin, clampToPrior: true)
-        }
+        let train = rows.train
+        let test = rows.test
 
         // Adaptive nBins (same rule as isotonic/Platt paths).
         let nBinsAll = Swift.max(2, Swift.min(binCount, Swift.max(1, n / Swift.max(1, minPerBin))))
@@ -614,13 +635,9 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
 
         // --- CANDIDATE 3: ISOTONIC (fit on TRAIN only) ---
         var isoTrainCal: StockSageConvictionCalibration? = nil
-        // INVARIANT (F35 2026-07-02): train.count >= minTrainSamples is ALWAYS true here —
-        // the guard at line 479 ensures n - testN - gap >= minTrainSamples, and
-        // train = outcomes[0..<trainEnd] where trainEnd = n - testN - gap, so
-        // train.count == n - testN - gap >= minTrainSamples by construction.
-        // The assert documents this invariant; it must never fire.
-        assert(train.count >= minTrainSamples,
-               "Invariant violated: train.count \(train.count) < minTrainSamples \(minTrainSamples); guard at selectCalibration entry should have prevented this path")
+        // F35: selectorSplit guarantees the training minimum before either candidate is fit.
+        assert(train.count >= selectorMinTrainSamples,
+               "Invariant violated: training rows below selector minimum after split guard")
         do {
             // Use same adaptive nBins but fit on train subset.
             let nBinsTrain = Swift.max(2, Swift.min(binCount, Swift.max(1, train.count / Swift.max(1, minPerBin))))
@@ -711,7 +728,9 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
         // is clamped to the conservative prior — winProb = min(conviction, prior) — so it is
         // GENUINELY "strictly more conservative" (never conviction-as-P(win) for c ≳ 0.45, the
         // exact defect F01 named). Low conviction (< ~0.4545, identity already below prior) is
-        // untouched, so no idea is ever promoted — the clamp only lowers. The OOS-floor scoring
+        // untouched, so no idea is ever promoted — the clamp only lowers. winProb(_:) also caps
+        // at the query's prior: the midpoint cap alone is too high on the lower half of a band.
+        // The OOS-floor scoring
         // and the OOS-VALIDATED identity winner pass clampToPrior:false → byte-identical (the
         // large-journal identity is empirically OOS-selected, not an unvalidated fallback).
         let mapFn: (Double) -> Double = clampToPrior
@@ -757,6 +776,9 @@ extension StockSageConvictionCalibration {
         case .platt:
             return "Win-rate fit from \(sampleSize) realized trades with Platt scaling — a central MLE estimate, NOT conservative (no sampling-uncertainty haircut)."
         case .identity:
+            if validation == .unvalidated {
+                return "There are not enough time-separated finalized outcomes to validate this map. Conviction is capped at the conservative prior — an ASSUMPTION, not a measured win rate. Overlapping outcomes and unfinished trades cannot establish out-of-sample skill."
+            }
             // "the N realized trades … (your journal when it has enough, else the
             // backtest)", NOT "your N outcomes": with a backtest-sourced fit the old
             // wording claimed the owner's fills existed when the journal was empty
@@ -767,71 +789,108 @@ extension StockSageConvictionCalibration {
     }
 }
 
-// MARK: - Build straight from backtest trades
+// MARK: - Time-aware production calibration
 extension StockSageConvictionCalibration {
-    /// Fit from walk-forward backtest trades (a win is a positive realized R). nil when too thin.
-    /// `dates`, when supplied 1:1-aligned with `trades` (e.g. the caller's own per-trade entry
-    /// dates), sorts trades chronologically first — required so selectCalibration's positional
-    /// train/test split (test = the most-recent slice) is a genuine "OOS = future" holdout, the
-    /// same guarantee `fit(fromJournal:)` already provides. `trades` is aggregated across MANY
-    /// symbols by callers (e.g. StockSageStore.refreshStrategyBacktest appends symbol-by-symbol),
-    /// so it is NOT already globally time-ordered on its own — without `dates`, a positional split
-    /// can silently mix an early trade from a later-processed symbol into "test" while a later
-    /// trade from an earlier symbol sits in "train". Omitting `dates` preserves prior behavior
-    /// exactly (trusts the caller's own order), for callers (tests) that already supply
-    /// chronologically-intentional fixtures.
-    nonisolated static func fit(fromBacktest trades: [BacktestTrade], dates: [Date] = [],
-                                binCount: Int = 5, minSamples: Int = 30,
-                                z: Double = 1.0, prior: Double = 0.5) -> StockSageConvictionCalibration? {
-        let ordered: [BacktestTrade]
-        if dates.count == trades.count {
-            ordered = zip(dates, trades).sorted { $0.0 < $1.0 }.map { $0.1 }
-        } else {
-            ordered = trades
+    struct Observation: Sendable, Equatable {
+        let conviction: Double
+        let won: Bool
+        let predictedAt: Date
+        let knownAt: Date
+
+        nonisolated var isValid: Bool {
+            conviction.isFinite && (0...1).contains(conviction)
+                && predictedAt.timeIntervalSinceReferenceDate.isFinite
+                && knownAt.timeIntervalSinceReferenceDate.isFinite && knownAt > predictedAt
         }
-        return fit(ordered.map { (conviction: $0.conviction, won: $0.r > 0) },
-                   binCount: binCount, minSamples: minSamples, z: z, prior: prior)
+        nonisolated var outcome: (conviction: Double, won: Bool) { (conviction, won) }
     }
 
-    /// Fit from the owner's JOURNAL — their OWN realized executions (fills, slippage, discipline),
-    /// which the sample-universe backtest can't capture. Only CLOSED trades that carry a conviction
-    /// contribute (a win = realized R > 0); manual trades without a conviction are excluded. nil when
-    /// too thin — the caller keeps the backtest fit / conservative prior.
+    /// Both production fit paths retain timing through candidate selection. Only after selecting
+    /// on a purged holdout may the winner be refit on all finalized observations for future use.
+    nonisolated static func fit(observations: [Observation], binCount: Int = 5,
+                                minSamples: Int = 30, z: Double = 1.0,
+                                prior: Double = 0.5) -> StockSageConvictionCalibration? {
+        let valid = observations.filter(\.isValid).sorted {
+            if $0.predictedAt != $1.predictedAt { return $0.predictedAt < $1.predictedAt }
+            if $0.knownAt != $1.knownAt { return $0.knownAt < $1.knownAt }
+            if $0.conviction != $1.conviction { return $0.conviction < $1.conviction }
+            return !$0.won && $1.won
+        }
+        guard valid.count >= minSamples, binCount > 0 else { return nil }
+        let split = temporalSplit(valid, predictedAt: { $0.predictedAt }, knownAt: { $0.knownAt })
+        let outcomes = valid.map(\.outcome)
+        let usesSelector = candidateSelectorEnabled
+        var cal = usesSelector
+            ? selectCalibration(outcomes, binCount: binCount, minPerBin: 20, z: z, prior: prior,
+                                timeSplit: (split.train.map(\.outcome), split.test.map(\.outcome)))
+            : fit(outcomes, binCount: binCount, minSamples: minSamples, z: z, prior: prior)
+        cal?.validation = usesSelector && split.train.count >= selectorMinTrainSamples && !split.test.isEmpty
+            ? .timePurged : .unvalidated
+        return cal
+    }
+
+    /// `dates` is the daily BAR timeline, not pooled entry dates. Massive's t marks a window's
+    /// START. Use the next observed boundary as a conservative bound on exit-bar completion;
+    /// without it the last bar cannot supply a timed label. Never equate a bar start with a fill.
+    /// ponytail: daily-bar bounds, not exact intraday fill/publication times; replace with verified
+    /// event timestamps if those become available. Prediction uses the earlier decision-bar bound.
+    nonisolated static func observations(fromBacktest trades: [BacktestTrade], dates: [Date]) -> [Observation] {
+        trades.compactMap { t in
+            guard t.outcome != .openAtEnd, t.r.isFinite, t.entryIndex > 0,
+                  t.exitIndex >= t.entryIndex, t.exitIndex < dates.count - 1,
+                  dates.indices.contains(t.entryIndex - 1),
+                  dates[t.exitIndex] > dates[t.entryIndex - 1],
+                  dates[t.exitIndex + 1] > dates[t.exitIndex] else { return nil }
+            let row = Observation(conviction: t.conviction, won: t.r > 0,
+                                  predictedAt: dates[t.entryIndex - 1], knownAt: dates[t.exitIndex + 1])
+            return row.isValid ? row : nil
+        }
+    }
+
+    private nonisolated static func journalObservation(_ t: TradeRecord) -> Observation? {
+        guard let c = t.conviction, let close = t.closedAt, let r = t.realizedR, r.isFinite else { return nil }
+        let row = Observation(conviction: c, won: r > 0, predictedAt: t.openedAt, knownAt: close)
+        return row.isValid ? row : nil
+    }
+
+    /// Only coherent CLOSED journal records with defined conviction/R become finalized labels.
     nonisolated static func fit(fromJournal trades: [TradeRecord],
                                 binCount: Int = 5, minSamples: Int = 30,
                                 z: Double = 1.0, prior: Double = 0.5) -> StockSageConvictionCalibration? {
-        // Sort by CLOSE time before the conviction/outcome projection so the positional train/test
-        // split inside selectCalibration (test = the most-recent slice) is a genuine "OOS = future"
-        // holdout, not merely disjoint. The journal store can hand trades back in insertion/edit order;
-        // this pins chronology so the OOS selection honors its intended semantics. Leak-free either way.
-        let outcomes = trades
-            .sorted { ($0.closedAt ?? .distantPast) < ($1.closedAt ?? .distantPast) }
-            .compactMap { t -> (conviction: Double, won: Bool)? in
-                guard let c = t.conviction, let r = t.realizedR else { return nil }
-                return (conviction: c, won: r > 0)
-            }
-        return fit(outcomes, binCount: binCount, minSamples: minSamples, z: z, prior: prior)
+        fit(observations: trades.compactMap(journalObservation), binCount: binCount,
+            minSamples: minSamples, z: z, prior: prior)
     }
 
-    /// Chronological train/test split of CLOSED journal trades for OUT-OF-SAMPLE calibration validation:
-    /// fit the conviction→win-prob map on `train`, then score it on `test` — trades it never saw. Trades
-    /// are ordered by CLOSE time; the most recent `testFraction` become the test set, and `embargo`
-    /// trades straddling the boundary are DROPPED (purge) so a position whose window spans the split can't
-    /// leak its outcome across. Returns empty sets when too few closed trades to split honestly.
-    /// (The backtest's headline R/Sharpe/t carry no such leakage — those rules don't use the calibration;
-    /// the calibration is the only FITTED component, so it's the one that needs OOS validation.)
+    /// Shared journal/backtest split. Keep prediction-time groups intact at both boundaries,
+    /// then purge every training label not STRICTLY known before the first test prediction.
+    private nonisolated static func temporalSplit<T>(_ rows: [T], predictedAt: (T) -> Date,
+                                                      knownAt: (T) -> Date, testFraction: Double = 0.3,
+                                                      embargo: Int = 1) -> (train: [T], test: [T]) {
+        guard testFraction.isFinite, !rows.isEmpty else { return ([], []) }
+        let ordered = rows.sorted {
+            let a = predictedAt($0), b = predictedAt($1)
+            return a == b ? knownAt($0) < knownAt($1) : a < b
+        }
+        let testN = Int((Double(ordered.count) * Swift.max(0, Swift.min(1, testFraction))).rounded())
+        guard testN > 0, testN < ordered.count else { return ([], []) }
+        var testStart = ordered.count - testN
+        let cutoff = predictedAt(ordered[testStart])
+        while testStart > 0 && predictedAt(ordered[testStart - 1]) == cutoff { testStart -= 1 }
+        let gap = Swift.min(testStart, Swift.max(0, embargo))
+        var trainEnd = testStart - gap
+        while trainEnd > 0 && predictedAt(ordered[trainEnd - 1]) == predictedAt(ordered[trainEnd]) { trainEnd -= 1 }
+        let train = ordered[..<trainEnd].filter { knownAt($0) < cutoff }
+        guard !train.isEmpty else { return ([], []) }
+        return (train, Array(ordered[testStart...]))
+    }
+
+    /// Only finalized, usable journal observations participate. A row-count embargo alone does
+    /// not remove overlapping positions; temporalSplit also checks actual label availability.
     nonisolated static func chronologicalSplit(_ trades: [TradeRecord],
                                                testFraction: Double = 0.3,
                                                embargo: Int = 1) -> (train: [TradeRecord], test: [TradeRecord]) {
-        let closed = trades.filter { $0.closedAt != nil }
-            .sorted { ($0.closedAt ?? .distantPast) < ($1.closedAt ?? .distantPast) }
-        let f = Swift.max(0, Swift.min(1, testFraction))
-        let n = closed.count
-        let testN = Int((Double(n) * f).rounded())
-        let gap = Swift.max(0, embargo)
-        guard testN >= 1, n - testN - gap >= 1 else { return (train: [], test: []) }
-        let trainEnd = n - testN - gap   // [0, trainEnd) train · [trainEnd, n-testN) embargoed · [n-testN, n) test
-        return (train: Array(closed[0..<trainEnd]), test: Array(closed[(n - testN)..<n]))
+        temporalSplit(trades.filter { journalObservation($0) != nil }, predictedAt: { $0.openedAt },
+                      knownAt: { $0.closedAt! }, testFraction: testFraction, embargo: embargo)
     }
 
     /// Out-of-sample quality of the conviction→win-prob map: fit on the chronological TRAIN slice, then

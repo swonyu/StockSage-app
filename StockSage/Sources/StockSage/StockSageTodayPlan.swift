@@ -25,8 +25,7 @@ enum StockSageTodayPlan {
     /// board card's `Self.cardIsStale`/detail sheet's `utcDayKey` staleness check so the ONE
     /// artifact that gets pasted into a broker can't present a stale close as a live quote.
     // F3 wave-A (2026-07-16): `fxRatesToUSD` (ccy→USD) makes the share count FX-correct for
-    // non-USD names (.SR was under-sized ~3.75× vs the stated risk%); empty map (the default)
-    // keeps every existing caller byte-identical — never guess a rate.
+    // non-USD names. Missing foreign FX blocks a sized order plan, never guesses 1:1.
     nonisolated static func build(idea: StockSageIdea, ev: ExpectedValue?,
                                   account: Double?, riskFraction: Double?,
                                   daysToEarnings: Int? = nil, isSample: Bool = false,
@@ -37,36 +36,16 @@ enum StockSageTodayPlan {
                                   // (cardIsStale's analysis axis); the caller passes that same bool so
                                   // the copied plan carries it too. Defaulted false ⇒ callers/tests
                                   // that don't pass it are byte-unchanged (like isSample/priceAsOf).
-                                  analysisStale: Bool = false) -> String {
+                                  analysisStale: Bool = false,
+                                  calibration: StockSageConvictionCalibration? = nil) -> String {
         let a = idea.advice
         let entry = idea.price
-        let rf = Swift.max(0, riskFraction ?? 0)
-        // Capture resolvedNetRR BEFORE the ?? gross collapse so rrIsNet can be set accurately:
-        // pass true ONLY when netRR actually resolved (non-nil), never for the ?? gross fallback
-        // which must stay labeled gross to avoid mislabeling a gross value as "Net reward:risk".
-        let resolvedNetRR: Double? = {
-            guard let s = a.stopPrice, let t = a.targetPrice else { return nil }
-            return StockSageNetEdge.netRR(symbol: idea.symbol, entry: entry, stop: s, target: t)
-        }()
-        let rr: Double? = {
-            guard let s = a.stopPrice, let t = a.targetPrice else { return nil }
-            let risk = abs(entry - s)
-            guard risk > 0 else { return nil }
-            let gross = abs(t - entry) / risk
-            // Gate on NET reward:risk (after asset-class round-trip costs) — same source of truth as
-            // the on-screen gate, so the copied plan can't disagree. Falls back to gross.
-            // (No financing threading here: `idea` reaching `build` always came from
-            // `bestOpportunity`, which is buy-family only — financing would always be 0.)
-            return resolvedNetRR ?? gross
-        }()
-        // F04-parity (2nd-read hunt, 2026-07-08): was `rf > 0 ? rf : 0.01` — a blank risk % silently
-        // evaluated the gate at a fabricated 1%, printing a "Clear to trade"/etc. verdict the user
-        // never asked for. Honest-nil: no gate at all when risk % wasn't supplied.
-        let gate: TradeGateVerdict? = {
-            guard rf > 0 else { return nil }
-            return StockSageTradeGate.evaluate(hasStop: a.stopPrice != nil, rewardToRisk: rr, riskFraction: rf,
-                                               daysToEarnings: daysToEarnings, rrIsNet: resolvedNetRR != nil)
-        }()
+        let earnings = daysToEarnings.map {
+            [idea.symbol.uppercased(): EarningsProximity(daysUntil: $0, severity: StockSageEarnings.severity(daysUntil: $0))]
+        } ?? [:]
+        let snapshot = StockSageDecisionSnapshotBuilder.build(idea: idea, calibration: calibration,
+            earnings: earnings, account: account, riskFraction: riskFraction, fxRatesToUSD: fxRatesToUSD)
+        let gate = snapshot.gate
 
         // EXPORT-W4-1 parity (blocked-fixture QA, 2026-07-09): the detail sheet's copy
         // auto-skips a BLOCKED setup ("a blocked idea is never exported as an actionable
@@ -93,6 +72,9 @@ enum StockSageTodayPlan {
         }
 
         var lines = ["Today's plan — estimates, not advice. Size with a stop; risk control > signal."]
+        if let nbbo = idea.nbbo, nbbo.costConditionVerified, nbbo.spreadBps(at: Date()) != nil {
+            lines.append("Costs: " + StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: nil, nbbo: nbbo))
+        }
         // The copied plan is the one artifact pasted into a broker — it MUST carry the
         // SAMPLE-data warning the on-screen banner shows, so a seed price isn't acted on as real.
         if isSample {
@@ -121,12 +103,15 @@ enum StockSageTodayPlan {
             lines.append("\(n). Pre-trade gate: not evaluated — enter risk % to see the verdict.")
         }
         n += 1
+        if let net = snapshot.netEdge, let netR = net.netExpectancyR {
+            lines.append(String(format: "Net R:R %.2f:1; estimated net expectancy %+.2fR.",
+                                net.netRR, netR))
+        }
+        if let note = snapshot.costSizeNote { lines.append(note) }
 
         if let s = a.stopPrice {
             var size = ""
-            if let acct = account, acct > 0, rf > 0,
-               let ps = StockSagePositionSizer.size(account: acct, riskFraction: rf, entry: entry, stop: s,
-                                                    symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) {
+            if let ps = snapshot.positionSize {
                 // Audit 2026-07-12 (wave-2 #1): currency-correct at-risk (native currency + pence ÷100).
                 size = " — \(ps.shares) shares \(StockSageCurrency.approxAmount(ps.dollarsAtRisk, symbol: idea.symbol)) at risk (\(Int(ps.pctOfAccount.rounded()))% of acct)"
                 // F-review export-parity fix (2026-07-10, wave-7 rule): the on-screen row already
@@ -183,14 +168,11 @@ enum StockSageTodayPlan {
         let rf = Swift.max(0, riskFraction ?? 0)
         let maxCount = Swift.max(0, max)
         let lane = StockSageExpectedValue.fastLane(ideas, holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity)
-        let laneInputs: [StockSageIdea] = {
-            if case .fastestCompounding = mode { return Array(lane.prefix(maxCount)) }
-            return lane
-        }()
         let holdingsBySymbol = StockSagePortfolio.holdingBySymbol(in: positions)
         let historyBySymbol = StockSageJournal.historyBySymbol(in: journalTrades)
         var out: [TodayActionPlan] = []
-        for idea in laneInputs {
+        var fastKeys: [Double] = []
+        for idea in lane {
             // fastLane() already guarantees a defined stop+target (it requires `ev(for:)` != nil,
             // which itself requires both) — re-guarded here so this composer never force-unwraps
             // an assumption about another engine's internals.
@@ -230,7 +212,12 @@ enum StockSageTodayPlan {
             let heldShares = holdingsBySymbol[idea.symbol.uppercased()]?.shares
             let closedTradeCount = historyBySymbol[idea.symbol.uppercased()]?.count
             let daysToEarnings = earnings[idea.symbol.uppercased()]?.daysUntil
-            let netV = StockSageExpectedValue.netVelocity(for: idea, holds: holds, calibration: calibration)
+            let netV = snap.netVelocity
+            let sizedKey = StockSageExpectedValue.velocityRankKey(for: idea, holds: holds,
+                calibration: calibration, netEVOverride: snap.netEVR) ?? -.infinity
+            fastKeys.append(sizedKey
+                - StockSageExpectedValue.earningsRankPenalty(for: idea, earnings: earnings)
+                - StockSageExpectedValue.liquidityRankPenalty(for: idea, liquidity: liquidity))
             out.append(TodayActionPlan(symbol: idea.symbol, velocity: v, netVelocityRank: netV, entry: entry, stop: stop, target: target,
                                        shares: shares, dollarsAtRisk: dollarsAtRisk, gate: snap.gate,
                                        isCrypto: idea.symbol.uppercased().hasSuffix("-USD"),
@@ -240,7 +227,8 @@ enum StockSageTodayPlan {
                                        action: idea.advice.action, regime: idea.advice.regime,
                                        daysToEarnings: daysToEarnings,
                                        scaledRiskFraction: scaledRiskFraction,
-                                       regimeBias: marketRegime?.sizingBias))
+                                       regimeBias: marketRegime?.sizingBias,
+                                       costSizeNote: snap.costSizeNote))
         }
         if case .equityExecutableFirst = mode {
             out.sort { a, b in
@@ -249,9 +237,13 @@ enum StockSageTodayPlan {
                 if aKey != bKey { return aKey < bKey }
                 return a.symbol < b.symbol
             }
-            if out.count > maxCount { return Array(out.prefix(maxCount)) }
+            return Array(out.prefix(maxCount))
         }
-        return out
+        // Truncate only AFTER applying sized costs; otherwise an expensive one-share
+        // ticket can occupy the only slot before a cost-clearing candidate is examined.
+        return zip(out, fastKeys).enumerated().sorted { a, b in
+            a.element.1 == b.element.1 ? a.offset < b.offset : a.element.1 > b.element.1
+        }.prefix(maxCount).map { $0.element.0 }
     }
 
     private nonisolated static func executablePriorityKey(for plan: TodayActionPlan)
@@ -297,9 +289,16 @@ enum StockSageTodayPlan {
             lines.insert("⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.", at: 0)
         }
         for (i, p) in plans.enumerated() {
+            if let gate = p.gate, gate.decision == .blocked {
+                let failures = gate.checks.filter { $0.level == .fail }.map(\.label).joined(separator: "; ")
+                lines.append("#\(i + 1). \(p.symbol) — BLOCKED — DO NOT TRADE. FAIL: \(failures). No order plan exported.")
+                continue
+            }
             var line = "#\(i + 1). \(p.symbol)\(p.isCrypto ? " (24/7 crypto)" : "")"
                 + " — \(String(format: "%+.3fR/day gross", p.velocity))"
                 + " | entry \(fmt(p.entry)) stop \(fmt(p.stop)) target \(fmt(p.target))"
+            if let net = p.netVelocityRank { line += String(format: " | %+.3fR/day net", net) }
+            if let note = p.costSizeNote { line += " | " + note }
             if let sh = p.shares, let dr = p.dollarsAtRisk {
                 line += " | \(sh) sh (\(StockSageCurrency.approxAmount(dr, symbol: p.symbol)) at risk)"   // wave-2 #1: currency-correct
                 // F-review export-parity fix (2026-07-10, wave-7 rule): mirrors row(_:_:)'s visible
@@ -331,6 +330,8 @@ enum StockSageTodayPlan {
             // surfaces must agree on the exact same honest phrasing.
             if let gate = p.gate {
                 line += " | \(gate.decision.rawValue)" + (gate.decision == .blocked ? " — DO NOT TRADE" : "")
+                let failures = gate.checks.filter { $0.level == .fail }.map(\.label)
+                if !failures.isEmpty { line += " | FAIL: " + failures.joined(separator: "; ") }
             } else {
                 line += " | Pre-trade gate: not evaluated — enter risk % to see the verdict."
             }
@@ -415,5 +416,6 @@ struct TodayActionPlan: Sendable, Equatable, Identifiable {
     /// Regime sizing bias used in scaled-risk computation (display-only). nil when no
     /// market regime is available.
     var regimeBias: Double? = nil
+    var costSizeNote: String? = nil
     nonisolated var id: String { symbol }
 }

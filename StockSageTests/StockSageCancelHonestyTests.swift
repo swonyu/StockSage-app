@@ -2,6 +2,86 @@ import Testing
 import Foundation
 @testable import StockSage
 
+@MainActor
+struct StockSageRemovalDuringScanTests {
+    @Test(arguments: ["full-before", "retry-before", "full-after", "retry-after", "only-removed", "holding", "unchanged"])
+    func removalWinsAcrossPublishedChunksAndCancellation(mode: String) async throws {
+        let name = "scan.removal.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["TESTGONE", "TESTKEEP"], forKey: "stocksage_user_symbols")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { mode == "holding" ? ["TESTGONE"] : [] })
+        #expect(store.symbols.isEmpty && store.ideas.isEmpty && store.priceAlerts.isEmpty)
+        let rows = ["TESTGONE", "TESTKEEP"].map { StockSageSymbol(symbol: $0, market: "TEST") }
+        store.replaceAll(rows, isSample: true)
+        func idea(_ symbol: String) -> StockSageIdea {
+            StockSageIdea(symbol: symbol, market: "TEST", price: 100,
+                advice: TradeAdvice(action: .hold, conviction: 0.1, regime: .range,
+                    rationale: [], stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: "fixture"), spark: [])
+        }
+        func history(_ symbol: String) -> StockSagePriceHistory {
+            StockSagePriceHistory(symbol: symbol, dates: [Date(timeIntervalSince1970: 0)],
+                opens: [100], highs: [100], lows: [100], closes: [100], volumes: [1])
+        }
+        let built = rows.map { idea($0.symbol) }
+        let histories = Dictionary(uniqueKeysWithValues: rows.map { ($0.symbol, history($0.symbol)) })
+        _ = await store.runChunkedScan(defs: rows, total: rows.count, startingRanked: [],
+            cache: nil, cachePriceHistories: [:], benchmark: nil, calibration: nil, journalTrades: [],
+            fetchAndBuild: { _ in (histories, built) })
+        #expect(store.ideas.count == 2) // actual loop publication, not a manually assigned board
+
+        let defs = rows + (0..<(StockSageScanChunking.chunkSize - 1)).map {
+            StockSageSymbol(symbol: "FILLER\($0)", market: "TEST")
+        }
+        let shouldRemain = mode == "holding" || mode == "unchanged"
+        let removeBefore = mode.hasSuffix("before") || mode == "holding"
+        let starting = mode.hasPrefix("retry") ? store.ideas : []
+        var chunks = 0
+        var scanTask: Task<StockSageStore.ChunkedScanResult, Never>?
+        scanTask = Task {
+            await store.runChunkedScan(defs: defs, total: defs.count, startingRanked: starting,
+                cache: nil, cachePriceHistories: [:], benchmark: nil, calibration: nil, journalTrades: [],
+                fetchAndBuild: { chunkDefs in
+                    chunks += 1
+                    if (chunks == 1 && removeBefore) || (chunks == 2 && (mode.hasSuffix("after") || mode == "only-removed")) {
+                        store.removeSymbol("testgone")
+                        #expect(store.ideas.contains { $0.symbol == "TESTGONE" } == shouldRemain)
+                    }
+                    if chunks == 2 {
+                        #expect(store.ideas.contains { $0.symbol == "TESTGONE" } == shouldRemain)
+                        scanTask?.cancel() // cancel the real parent while its second chunk is suspended
+                    }
+                    await Task.yield()
+                    if chunks == 2 {
+                        let late = chunkDefs[0].symbol
+                        return ([late: history(late)], [idea(late)]) // cancelled result must never publish
+                    }
+                    return (histories, mode == "only-removed" ? Array(built.prefix(1)) : built)
+                })
+        }
+        let result = await scanTask!.value
+        scanTask = nil
+        #expect(chunks == 2 && result.wasCancelled)
+        #expect(store.ideas.contains { $0.symbol == "TESTGONE" } == shouldRemain)
+        #expect(store.isOnBoard("TESTGONE") == shouldRemain)
+        #expect(store.trackedSymbolsUnion.contains("TESTGONE") == shouldRemain)
+        #expect(store.ideas.contains { $0.symbol == "TESTKEEP" } == (mode != "only-removed"))
+        #expect(!store.ideas.contains { $0.symbol.hasPrefix("FILLER") })
+        #expect(store.isOnBoard("TESTKEEP"))
+        #expect((defaults.array(forKey: "stocksage_user_symbols") as? [String]) ==
+            (mode == "unchanged" ? ["TESTGONE", "TESTKEEP"] : ["TESTKEEP"]))
+        let reloaded = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(reloaded.userSymbols == store.userSymbols)
+        if mode == "only-removed" {
+            // The returned accumulation records that a chunk DID publish, even if its only
+            // idea was then removed; cancelledScanCommit must still name the unscanned rest.
+            let commit = StockSageStore.cancelledScanCommit(universe: ["TESTGONE", "TESTKEEP"],
+                publishedBoardSymbols: Set(result.ranked.map(\.symbol)), stillTracked: ["TESTKEEP"])
+            #expect(commit?.ideasMissing == ["TESTKEEP"])
+        }
+    }
+}
+
 // MARK: - cancelledScanCommit — the reduced, honest commit a cancelled scan runs when at least
 // one chunk already published (post-ship critique fleet, orchestrator-confirmed cluster).
 // Mirrors StockSageIdeasMissingTests' hand-derived-fixture idiom; this helper wraps

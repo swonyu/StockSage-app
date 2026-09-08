@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Unified decision snapshot (Slice A)
 //
 // A single immutable payload that composes ranking, gate, sizing, costs, and event/liquidity
-// flags for one idea under one input state. This is ENGINE-ONLY in Slice A: no view wiring yet.
+// flags for one idea under one input state, shared by board, sheet and copied plans.
 //
 // Purpose:
 // - Prevent silent drift across board/sheet/today/export by centralizing the computed facts.
@@ -28,6 +28,7 @@ struct StockSageDecisionSnapshot: Sendable, Equatable {
     let netEVR: Double?
     let netVelocity: Double?
     let netRR: Double?
+    let netEdge: NetEdge?
 
     // Flags / provenance
     let calibrationMethod: StockSageConvictionCalibration.Method?
@@ -47,6 +48,15 @@ struct StockSageDecisionSnapshot: Sendable, Equatable {
 
     // Explainability summary
     let rankReasons: [RankReason]
+
+    nonisolated var costSizeNote: String? {
+        guard StockSageNetEdge.defaultCosts(forSymbol: idea.symbol).perOrderMinimum > 0 else { return nil }
+        guard let size = positionSize, size.shares > 0, let netEdge else {
+            return "No fundable order size — net figures exclude per-order broker minimums."
+        }
+        return String(format: "At your %ld-share order, estimated per-order broker minimums are included: ~%.0fbps total costs. Broker tariff and currency assumptions need confirmation.",
+                      size.shares, netEdge.costPerShare / idea.price * 10_000)
+    }
 
     nonisolated var hasMeasuredCalibration: Bool {
         guard let m = calibrationMethod else { return false }
@@ -170,7 +180,7 @@ struct IdeaDetailViewModel: Sendable, Equatable {
 
 enum StockSageDecisionSnapshotBuilder {
     /// Build a deterministic decision snapshot for one idea using the SAME engine seams already
-    /// used by ranking/today-plan/card surfaces. Slice A keeps this engine-only (no UI wiring).
+    /// used by ranking/today-plan/card surfaces. Size FIRST so every net field shares the fees.
     nonisolated static func build(
         idea: StockSageIdea,
         holds: VelocityHoldDays = .defaults,
@@ -182,20 +192,24 @@ enum StockSageDecisionSnapshotBuilder {
         regime: MarketRegime? = nil,
         maxRiskFraction: Double = 0.02,
         // F3 wave-A (2026-07-16): ccy→USD map for an FX-correct share count in the journaled
-        // snapshot (.SR was under-sized ~3.75×); empty default = byte-identical.
+        // snapshot. Missing foreign FX withholds size and blocks the new-trade gate.
         fxRatesToUSD: [String: Double] = [:]
     ) -> StockSageDecisionSnapshot {
         let ev = StockSageExpectedValue.ev(for: idea, calibration: calibration)
         let velocityGross = StockSageExpectedValue.velocity(for: idea, holds: holds, calibration: calibration)
-        let netEVR = StockSageExpectedValue.netEVR(for: idea, calibration: calibration)
-        let netVelocity = StockSageExpectedValue.netVelocity(for: idea, holds: holds, calibration: calibration)
-
-        let netRR: Double? = {
-            guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return nil }
-            let (rate, days) = StockSageExpectedValue.financingCostInputs(for: idea)
-            return StockSageNetEdge.netRR(symbol: idea.symbol, entry: idea.price, stop: stop, target: target,
-                                          annualFinancingRate: rate, holdDays: days)
+        let size: PositionSize? = {
+            guard let account, account > 0, let rf = riskFraction, rf > 0,
+                  let stop = idea.advice.stopPrice else { return nil }
+            return StockSagePositionSizer.size(account: account, riskFraction: rf,
+                entry: idea.price, stop: stop, symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD)
         }()
+        let netEdge = StockSageNetEdge.evaluate(for: idea, winProb: ev?.winProbEstimate,
+                                               orderNotional: size?.notional)
+        let netEVR = netEdge?.netExpectancyR
+        let netVelocity = netEVR.flatMap { net in
+            StockSageExpectedValue.velocityHoldDays(for: idea, holds: holds).map { net / $0 }
+        }
+        let netRR = netEdge?.netRR
 
         let rrForGate: Double? = {
             if let netRR { return netRR }
@@ -206,7 +220,10 @@ enum StockSageDecisionSnapshotBuilder {
         }()
 
         let earningsFlag = StockSageExpectedValue.earningsRankFlag(for: idea, earnings: earnings)
-        let floorFlag = StockSageExpectedValue.netCostFloorFlag(for: idea, holds: holds, calibration: calibration)
+        let floorFlag: StockSageExpectedValue.NetCostFloorFlag = {
+            guard let netVelocity, netVelocity < StockSageExpectedValue.minNetEVPerDayFloor else { return .clears }
+            return .belowFloor(netVelocity: netVelocity)
+        }()
         let liq = liquidity[idea.symbol.uppercased()]
 
         // F04-parity (2nd-read hunt, 2026-07-08): the detail sheet/copy-plan already refuse to
@@ -224,16 +241,14 @@ enum StockSageDecisionSnapshotBuilder {
                 maxRiskFraction: maxRiskFraction,
                 maxCorrelation: nil,
                 daysToEarnings: earnings[idea.symbol.uppercased()]?.daysUntil,
-                rrIsNet: netRR != nil
+                rrIsNet: netRR != nil,
+                sizingFXAvailable: StockSagePositionSizer.rawQuoteUnitToUSD(
+                    symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD) != nil,
+                sizedShares: size?.shares,
+                sizedNetEVR: size.flatMap { $0.shares > 0 ? netEVR : nil },
+                perOrderMinimumUnpriced: StockSageNetEdge.defaultCosts(forSymbol: idea.symbol).perOrderMinimum > 0
+                    && (size?.shares ?? 0) == 0
             )
-        }()
-
-        let size: PositionSize? = {
-            guard let account, account > 0,
-                  let rf = riskFraction, rf > 0,
-                  let stop = idea.advice.stopPrice else { return nil }
-            return StockSagePositionSizer.size(account: account, riskFraction: rf, entry: idea.price, stop: stop,
-                                                symbol: idea.symbol, fxRatesToUSD: fxRatesToUSD)
         }()
 
         var reasons: [StockSageDecisionSnapshot.RankReason] = []
@@ -241,11 +256,7 @@ enum StockSageDecisionSnapshotBuilder {
         if floorFlag.isDeranked { reasons.append(.belowNetCostFloor) }
         if case .demoted = earningsFlag { reasons.append(.earningsImminent) }
         if liq?.tier == .thin { reasons.append(.liquidityThin) }
-        // F2 (owner-signed 2026-07-10): the sized gate path passes the order notional so flat
-        // per-order minimums (intl tiers) can bite; unsized calls (account/risk unset, or a
-        // 0-share floor) stay byte-identical (the cost fn guards notional greater than 0).
-        let f2Notional: Double? = size.map { Double($0.shares) * idea.price }
-        if !clearsCostAfterFrictions(idea, calibration: calibration, orderNotional: f2Notional) { reasons.append(.costFails) }
+        if let netEdge, let ev, !netEdge.clearsCost(estWinProb: ev.winProbEstimate) { reasons.append(.costFails) }
         if let regime {
             if bannedFromTopRank(idea: idea, regime: regime) { reasons.append(.regimeBanned) }
         }
@@ -261,6 +272,7 @@ enum StockSageDecisionSnapshotBuilder {
             netEVR: netEVR,
             netVelocity: netVelocity,
             netRR: netRR,
+            netEdge: netEdge,
             calibrationMethod: calibration?.method,
             calibrationTitle: calTitle,
             calibrationHelp: calHelp,
@@ -285,24 +297,4 @@ enum StockSageDecisionSnapshotBuilder {
         }
     }
 
-    // Mirrors StockSageExpectedValue's internal cost-gate semantics (private there).
-    private nonisolated static func clearsCostAfterFrictions(
-        _ idea: StockSageIdea,
-        calibration: StockSageConvictionCalibration?,
-        orderNotional: Double? = nil
-    ) -> Bool {
-        guard let stop = idea.advice.stopPrice, let target = idea.advice.targetPrice else { return true }
-        let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
-        let (rate, days) = StockSageExpectedValue.financingCostInputs(for: idea)
-        guard let ne = StockSageNetEdge.evaluate(entry: idea.price, stop: stop, target: target,
-                                                 spreadBps: costs.spreadBps,
-                                                 slippageBps: costs.slippageBps,
-                                                 takerFeeBps: costs.takerFeeBps,
-                                                 annualFinancingRate: rate,
-                                                 holdDays: days,
-                                                 perOrderMinimum: costs.perOrderMinimum,
-                                                 orderNotional: orderNotional) else { return true }
-        let p = StockSageExpectedValue.winProbEstimate(conviction: idea.advice.conviction, calibration: calibration)
-        return ne.clearsCost(estWinProb: p)
-    }
 }

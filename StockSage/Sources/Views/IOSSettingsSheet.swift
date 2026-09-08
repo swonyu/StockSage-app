@@ -33,6 +33,12 @@ struct StockSageIOSSettingsSheet: View {
                 }
 
                 Section {
+                    StockSageMassiveKeyField()
+                } header: {
+                    Text("Data sources")
+                }
+
+                Section {
                     Picker("Horizon", selection: $horizon) {
                         Text("Short term").tag("short")
                         Text("Long term").tag("long")

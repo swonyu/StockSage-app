@@ -3,6 +3,41 @@ import Testing
 
 struct StockSageDecisionSnapshotTests {
 
+    @Test func sizedMinimumFeesReachGateMetricsAndCopiedPlan() throws {
+        let idea = SageFix.idea("SAP.DE", conviction: 0.9, action: .strongBuy,
+                                rr: 3, price: 100, riskDistance: 1)
+        let fx = ["EUR": 1.1]
+        let snap = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 120,
+                                                         riskFraction: 0.01, fxRatesToUSD: fx)
+        let size = try #require(snap.positionSize)
+        #expect(size.shares == 1)
+        let costs = StockSageNetEdge.defaultCosts(forSymbol: idea.symbol)
+        let edge = try #require(StockSageNetEdge.evaluate(entry: 100, stop: 99, target: 103,
+            spreadBps: costs.spreadBps, slippageBps: costs.slippageBps,
+            takerFeeBps: costs.takerFeeBps,
+            winProb: StockSageExpectedValue.winProbEstimate(conviction: 0.9),
+            perOrderMinimum: costs.perOrderMinimum, orderNotional: size.notional))
+        #expect(snap.netRR == edge.netRR)
+        #expect(snap.netEVR == edge.netExpectancyR)
+        let hold = try #require(StockSageExpectedValue.expectedHoldDays(for: idea))
+        #expect(snap.netVelocity == edge.netExpectancyR.map { $0 / hold })
+        #expect(snap.floorFlag.isDeranked)
+        #expect(snap.rankReasons.contains(.costFails))
+        #expect(snap.gate?.decision == .blocked)
+        let copied = StockSageTodayPlan.build(idea: idea, ev: snap.ev, account: 120,
+            riskFraction: 0.01, fxRatesToUSD: fx)
+        #expect(copied.contains("No order plan exported"))
+        #expect(!copied.contains("Entry ~"))
+        let plan = try #require(StockSageTodayPlan.rankedActions([idea], account: 120,
+            riskFraction: 0.01, fxRatesToUSD: fx).first)
+        #expect(plan.gate == snap.gate)
+        #expect(plan.netVelocityRank == snap.netVelocity)
+        #expect(plan.netCostFloorFlag == snap.floorFlag)
+        let copiedAll = StockSageTodayPlan.copyAllText([plan])
+        #expect(copiedAll.contains("No order plan exported"))
+        #expect(!copiedAll.contains("entry "))
+    }
+
     @Test func snapshotMirrorsCoreExpectedValueFields() {
         let idea = SageFix.idea("AAPL", conviction: 0.82, action: .strongBuy, rr: 2.0, price: 100, riskDistance: 10)
 
@@ -14,6 +49,55 @@ struct StockSageDecisionSnapshotTests {
         #expect(snap.netVelocity == StockSageExpectedValue.netVelocity(for: idea))
         #expect(snap.floorFlag == StockSageExpectedValue.netCostFloorFlag(for: idea))
         #expect(snap.earningsFlag == .unknown)
+    }
+
+    @Test func sizedCostsRecalculateForFXSizeAndMissingInputs() throws {
+        for action in [TradeAdvice.Action.buy, .sell] {
+            let idea = SageFix.idea("SAP.DE", conviction: 0.9, action: action, rr: 3, price: 100, riskDistance: 1)
+            let small = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 120, riskFraction: 0.01, fxRatesToUSD: ["EUR": 1.1])
+            let large = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 12_000, riskFraction: 0.01, fxRatesToUSD: ["EUR": 1.1])
+            let differentFX = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 120, riskFraction: 0.01, fxRatesToUSD: ["EUR": 0.5])
+            #expect(small.positionSize?.shares == 1)
+            #expect(differentFX.positionSize?.shares == 2)
+            #expect(try #require(small.netEVR) < #require(differentFX.netEVR))
+            #expect(try #require(differentFX.netEVR) < #require(large.netEVR))
+            // Short financing is still priced: a large short can be CAUTION, not CLEAR.
+            #expect(large.gate?.decision == (action == .sell ? .caution : .clear))
+            #expect(small.costSizeNote?.contains("1-share order") == true)
+            let noFX = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 120, riskFraction: 0.01)
+            #expect(noFX.positionSize == nil)
+            #expect(noFX.gate?.decision == .blocked)
+            let zero = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 10, riskFraction: 0.01, fxRatesToUSD: ["EUR": 1.1])
+            #expect(zero.positionSize?.shares == 0)
+            #expect(zero.gate?.decision == .blocked)
+            let unsized = StockSageDecisionSnapshotBuilder.build(idea: idea, riskFraction: 0.01, fxRatesToUSD: ["EUR": 1.1])
+            #expect(unsized.gate?.decision == .caution)
+            #expect(unsized.netRR == StockSageNetEdge.netRR(for: idea))
+            #expect(unsized.costSizeNote?.contains("exclude per-order") == true)
+            let huge = StockSageDecisionSnapshotBuilder.build(idea: idea, account: 1e12, riskFraction: 0.01, fxRatesToUSD: ["EUR": 1.1])
+            let hugeShares = try #require(huge.positionSize?.shares)
+            #expect(huge.costSizeNote?.contains("\(hugeShares)-share order") == true)
+        }
+    }
+
+    @Test func sizedRankingAndAllocationRejectMinimumFeeLosers() throws {
+        let feeLoser = SageFix.idea("SAP.DE", conviction: 1, action: .strongBuy, rr: 3, price: 100, riskDistance: 1)
+        let clean = SageFix.idea("MSFT", conviction: 0.8, action: .buy, rr: 3, price: 100, riskDistance: 1)
+        for mode in [StockSageTodayPlan.RankedMode.fastestCompounding, .equityExecutableFirst] {
+            let first = StockSageTodayPlan.rankedActions([feeLoser, clean], account: 120, riskFraction: 0.01,
+                mode: mode, max: 1, fxRatesToUSD: ["EUR": 1.1]).first
+            #expect(first?.symbol == "MSFT")
+        }
+        let allocation = StockSageCapitalAllocator.allocate(ideas: [feeLoser], account: 120,
+            maxHeat: 0.01, fxRatesToUSD: ["EUR": 1.1])
+        #expect(allocation.positions.isEmpty)
+        #expect(allocation.totalHeat == 0)
+        #expect(allocation.fundableCandidateCount == 0)
+        #expect(allocation.caveat.contains("Excluded after final-size cost check: SAP.DE"))
+        let add = try #require(StockSageCapitalAllocator.suggestAdd(idea: feeLoser, openTrades: [],
+            holdings: [], candidateReturns: [], account: 120, maxHeat: 0.01, fxRatesToUSD: ["EUR": 1.1]))
+        #expect(!add.approved)
+        #expect(add.reason.contains("per-order broker minimums"))
     }
 
     @Test func snapshotCapturesDemotionReasonsFromInputs() {

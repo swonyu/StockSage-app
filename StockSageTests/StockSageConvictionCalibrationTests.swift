@@ -71,64 +71,61 @@ struct StockSageConvictionCalibrationTests {
     @Test func fitFromBacktestUsesPositiveRAsWin() {
         // Build trades: high-conviction winners (r>0), low-conviction losers (r<0).
         var trades: [BacktestTrade] = []
-        for _ in 0..<20 { trades.append(BacktestTrade(entryIndex: 0, exitIndex: 1, entry: 100, exit: 110,
+        for _ in 0..<20 { trades.append(BacktestTrade(entryIndex: 1, exitIndex: 2, entry: 100, exit: 110,
                                                       r: 2.0, outcome: .target, conviction: 0.9)) }
-        for _ in 0..<20 { trades.append(BacktestTrade(entryIndex: 0, exitIndex: 1, entry: 100, exit: 95,
+        for _ in 0..<20 { trades.append(BacktestTrade(entryIndex: 1, exitIndex: 2, entry: 100, exit: 95,
                                                       r: -1.0, outcome: .stop, conviction: 0.1)) }
-        let cal = Cal.fit(fromBacktest: trades, minSamples: 30)
+        let dates = (0..<4).map { Date(timeIntervalSince1970: Double($0) * 86_400) }
+        let cal = Cal.fit(observations: Cal.observations(fromBacktest: trades, dates: dates))
         #expect(cal != nil)
         #expect((cal?.winProb(0.9) ?? 0) > (cal?.winProb(0.1) ?? 1))
     }
 
-    @Test func fitFromBacktestWithDatesSortsChronologicallyBeforeFitting() {
-        // Simulate StockSageStore.refreshStrategyBacktest's real aggregation: trades appended
-        // symbol-by-symbol (chronological WITHIN a symbol, but the array as a whole is grouped by
-        // symbol, not globally time-ordered) — e.g. symbol A's 10 trades (days 0-9), then symbol
-        // B's 10 trades (days 0-9 again, a different symbol backtested over the SAME calendar).
-        func trade(_ day: Int, conv: Double, r: Double) -> BacktestTrade {
-            BacktestTrade(entryIndex: day, exitIndex: day + 1, entry: 100,
-                         exit: r > 0 ? 110 : 95, r: r, outcome: r > 0 ? .target : .stop, conviction: conv)
+    @Test func pooledBacktestKeepsPredictionAndLabelTimesAcrossSymbols() throws {
+        let dates = (0..<43).map { Date(timeIntervalSince1970: Double($0) * 86_400) }
+        let trades: [BacktestTrade] = (0..<40).map { day -> BacktestTrade in
+            let won = day >= 20
+            return BacktestTrade(entryIndex: day + 1, exitIndex: day + 2, entry: 100,
+                                 exit: won ? 110.0 : 95.0, r: won ? 2.0 : -1.0,
+                                 outcome: won ? .target : .stop, conviction: Double(day) / 40)
         }
-        func date(_ day: Int) -> Date { Date(timeIntervalSince1970: Double(day) * 86_400) }
-
-        var symbolA: [(BacktestTrade, Date)] = []
-        var symbolB: [(BacktestTrade, Date)] = []
-        for day in 0..<20 {
-            let conv = Double(day) / 20
-            let won = day >= 10   // later days win more (a real time trend to detect)
-            symbolA.append((trade(day, conv: conv, r: won ? 2.0 : -1.0), date(day)))
-            symbolB.append((trade(day, conv: conv, r: won ? 2.0 : -1.0), date(day)))
-        }
-        // Grouped-by-symbol order (the real StockSageStore aggregation shape): A's 20 (days 0-19)
-        // THEN B's 20 (days 0-19 again) — NOT globally time-ordered.
-        let grouped = symbolA + symbolB
-        let groupedTrades = grouped.map(\.0)
-        let groupedDates = grouped.map(\.1)
-
-        // Feeding `dates:` must produce EXACTLY the same fit as pre-sorting the trades ourselves
-        // (the caller trusting raw array order, as the old code implicitly did) — proving the
-        // internal sort-before-fit works, regardless of the selector's internal mechanics.
-        let preSorted = grouped.sorted { $0.1 < $1.1 }.map(\.0)
-        let withDates = Cal.fit(fromBacktest: groupedTrades, dates: groupedDates, minSamples: 30)
-        let withPreSortedInput = Cal.fit(fromBacktest: preSorted, minSamples: 30)
-        #expect(withDates != nil && withPreSortedInput != nil)
-        #expect(withDates?.sampleSize == withPreSortedInput?.sampleSize)
-        for c in stride(from: 0.0, through: 1.0, by: 0.1) {
-            #expect(abs((withDates?.winProb(c) ?? -1) - (withPreSortedInput?.winProb(c) ?? -2)) < 1e-9)
-        }
+        // Two symbols share a calendar, but arrive in symbol-grouped order.
+        let oneSymbol = Cal.observations(fromBacktest: trades, dates: dates)
+        let pooled = oneSymbol + oneSymbol
+        #expect(oneSymbol.first?.predictedAt == dates[0], "The conviction precedes the next-open fill")
+        #expect(oneSymbol.first?.knownAt == dates[3])
+        let fitted = try #require(Cal.fit(observations: pooled))
+        let reversed = try #require(Cal.fit(observations: Array(pooled.reversed())))
+        #expect(fitted == reversed)
+        #expect(fitted.sampleSize == 80 && fitted.validation == .timePurged)
     }
 
-    @Test func fitFromBacktestMismatchedDatesCountFallsBackToInputOrder() {
-        var trades: [BacktestTrade] = []
-        for _ in 0..<20 { trades.append(BacktestTrade(entryIndex: 0, exitIndex: 1, entry: 100, exit: 110,
-                                                      r: 2.0, outcome: .target, conviction: 0.9)) }
-        for _ in 0..<20 { trades.append(BacktestTrade(entryIndex: 0, exitIndex: 1, entry: 100, exit: 95,
-                                                      r: -1.0, outcome: .stop, conviction: 0.1)) }
-        // Wrong-length dates array (caller bug) — must not crash, just falls back to trusting the
-        // input order, byte-identical to omitting `dates` entirely.
-        let mismatched = Cal.fit(fromBacktest: trades, dates: [Date()], minSamples: 30)
-        let omitted = Cal.fit(fromBacktest: trades, minSamples: 30)
-        #expect(mismatched?.sampleSize == omitted?.sampleSize)
+    @Test func backtestCalibrationRejectsMissingTimesAndCensoredLabels() {
+        let dates = (0..<4).map { Date(timeIntervalSince1970: Double($0) * 86_400) }
+        let valid = BacktestTrade(entryIndex: 1, exitIndex: 2, entry: 100, exit: 110,
+                                  r: 1, outcome: .target, conviction: 0.5)
+        let open = BacktestTrade(entryIndex: 1, exitIndex: 2, entry: 100, exit: 110,
+                                 r: 1, outcome: .openAtEnd, conviction: 0.5)
+        let invalidIndex = BacktestTrade(entryIndex: 1, exitIndex: 100, entry: 100, exit: 110,
+                                         r: 1, outcome: .target, conviction: 0.5)
+        let noPrediction = BacktestTrade(entryIndex: 0, exitIndex: 2, entry: 100, exit: 110,
+                                         r: 1, outcome: .target, conviction: 0.5)
+        let rows = Cal.observations(fromBacktest: [valid, open, invalidIndex, noPrediction], dates: dates)
+        #expect(rows.count == 1 && rows.first?.won == true)
+        #expect(Cal.observations(fromBacktest: [valid], dates: []).isEmpty,
+                "Missing chronology must never fall back to input order")
+    }
+
+    @Test func backtestOutcomeIsNotKnownAtBarStart() throws {
+        let dates = (0..<4).map { Date(timeIntervalSince1970: Double($0) * 86_400) }
+        let trade = BacktestTrade(entryIndex: 1, exitIndex: 2, entry: 100, exit: 110,
+                                  r: 1, outcome: .target, conviction: 0.5)
+        let observed = try #require(Cal.observations(fromBacktest: [trade], dates: dates).first)
+        #expect(observed.predictedAt == dates[0])
+        #expect(observed.knownAt == dates[3], "A daily bar's start timestamp does not establish when its outcome was available")
+        #expect(Cal.observations(fromBacktest: [trade], dates: Array(dates.prefix(3))).isEmpty,
+                "No following boundary: do not invent an availability time for the final bar")
+        #expect(Cal.observations(fromBacktest: [trade], dates: [dates[0], dates[1], dates[0], dates[3]]).isEmpty)
     }
 
     @Test func fitFromJournalUsesClosedTradesWithConviction() {
@@ -165,6 +162,90 @@ struct StockSageConvictionCalibrationTests {
         #expect(!s.train.contains { $0.openedAt == s.test.first!.openedAt })
         // Too few closed trades to split honestly → empty.
         #expect(StockSageConvictionCalibration.chronologicalSplit(Array(trades.prefix(2))).test.isEmpty)
+    }
+
+    private static func timedTrade(_ open: Double, _ close: Double, symbol: String = "TEST") -> TradeRecord {
+        TradeRecord(symbol: symbol, side: .long, entry: 100, stop: 90, target: 120, shares: 1,
+                    openedAt: Date(timeIntervalSince1970: open * 86_400), exitPrice: 110,
+                    closedAt: Date(timeIntervalSince1970: close * 86_400), conviction: 0.5)
+    }
+
+    @Test func journalHoldoutPurgesOverlappingLabels() {
+        let overlap = (0..<3).map { Self.timedTrade(Double($0), Double($0 + 10), symbol: "TEST\($0)") }
+        for input in [overlap, Array(overlap.reversed())] {
+            let split = Cal.chronologicalSplit(input)
+            #expect(split.train.allSatisfy { train in
+                split.test.allSatisfy { train.closedAt! < $0.openedAt }
+            }, "No training label may become known at or after a held-out prediction")
+            #expect(split.train.isEmpty, "Every available training label overlaps this holdout")
+        }
+        let control = (0..<6).map { Self.timedTrade(Double($0), Double($0) + 0.25) }
+        let clean = Cal.chronologicalSplit(control)
+        #expect(clean.train.count == 3 && clean.test.count == 2)
+    }
+
+    @Test func unavailableLabelsCannotEarnAnOOSCalibration() throws {
+        let trades = (0..<50).map { Self.timedTrade(Double($0), Double($0 + 100), symbol: "TEST\($0)") }
+        let fitted = try #require(Cal.fit(fromJournal: trades))
+        #expect(fitted.method == .identity, "Too little time-separated training evidence must remain assumed")
+        #expect(fitted.validation == .unvalidated)
+        #expect(fitted.winProb(0.5) <= 0.465 + 1e-12, "The prior ceiling must also hold at n>=44 after purging")
+        let reloaded = try PropertyListDecoder().decode(Cal.self, from: PropertyListEncoder().encode(fitted))
+        #expect(reloaded == fitted && reloaded.winProb(0.5) <= 0.465 + 1e-12)
+        #expect(Cal.validateOutOfSample(trades) == nil, "An overlapping sample cannot report an OOS score")
+    }
+
+    @Test func simultaneousPredictionGroupsStayTogether() {
+        let testEdge = (0..<6).map(Double.init) + [6, 6, 6, 6]
+        let rows = testEdge.enumerated().map { Self.timedTrade($0.element, $0.element + 0.1 + Double($0.offset) / 1000) }
+        let split = Cal.chronologicalSplit(rows)
+        #expect(split.test.count == 4, "Move the test boundary to the beginning of its prediction group")
+        let embargoEdge: [Double] = [0, 1, 2, 3, 4, 5, 5, 6, 7, 8]
+        let embargoRows = embargoEdge.map { Self.timedTrade($0, $0 + 0.1) }
+        let embargoSplit = Cal.chronologicalSplit(embargoRows)
+        #expect(embargoSplit.train.count == 5, "Embargo the entire boundary prediction group")
+        #expect(embargoSplit.test.count == 3)
+    }
+
+    @Test func purgedTrainingMinimumUsesAvailableLabelsNotTotalRows() throws {
+        for delayed in [1, 4, 5] {
+            let trades = (0..<50).map { i in
+                Self.timedTrade(Double(i), i < delayed ? 1_000 : Double(i) + 0.1, symbol: "TEST\(i)")
+            }
+            let split = Cal.chronologicalSplit(trades)
+            #expect(split.train.count == 34 - delayed && split.test.count == 15)
+            #expect(split.train.allSatisfy { $0.closedAt! < split.test[0].openedAt })
+            let fit = try #require(Cal.fit(fromJournal: trades))
+            #expect(fit.sampleSize == 50)
+            if delayed <= 4 {
+                #expect(fit.validation == .timePurged && fit.method != .identity)
+            } else {
+                #expect(fit.validation == .unvalidated && fit.method == .identity)
+                #expect(fit.winProb(0.5) <= 0.465 + 1e-12)
+            }
+        }
+    }
+
+    @Test func sameTimeLabelsAndInvalidSplitParametersFailClosed() {
+        let equalBoundary = [Self.timedTrade(0, 2), Self.timedTrade(1, 1.1), Self.timedTrade(2, 2.1)]
+        #expect(Cal.chronologicalSplit(equalBoundary).train.isEmpty, "A same-time label is not known before prediction")
+        let control = (0..<6).map { Self.timedTrade(Double($0), Double($0) + 0.25) }
+        for fraction in [0, 1, -1, 2, Double.nan, Double.infinity] {
+            let split = Cal.chronologicalSplit(control, testFraction: fraction)
+            #expect(split.train.isEmpty && split.test.isEmpty)
+        }
+        #expect(Cal.chronologicalSplit(control, embargo: Int.max).train.isEmpty)
+        #expect(Cal.chronologicalSplit(control, embargo: -1).train.count == 4)
+    }
+
+    @Test func journalCalibrationExcludesUnfinalizedAndIncoherentLabels() throws {
+        let valid = (0..<30).map { Self.timedTrade(Double($0), Double($0) + 0.1) }
+        var exitWithoutClose = Self.timedTrade(40, 41); exitWithoutClose.closedAt = nil
+        let invertedClose = Self.timedTrade(40, 39)
+        var noExit = Self.timedTrade(40, 41); noExit.exitPrice = nil
+        var nonfiniteR = Self.timedTrade(40, 41); nonfiniteR.exitPrice = .infinity
+        let fit = try #require(Cal.fit(fromJournal: valid + [exitWithoutClose, invertedClose, noExit, nonfiniteR]))
+        #expect(fit.sampleSize == 30, "Only coherent finalized outcomes can train the calibration")
     }
 
     @Test func validateOutOfSampleBeatsBaselineOnSeparableJournal() {

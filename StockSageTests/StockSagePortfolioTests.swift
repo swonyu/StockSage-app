@@ -215,4 +215,21 @@ struct StockSagePortfolioAggregationTests {
         a.clear()
         #expect(StockSagePortfolio(userDefaults: defaults).positions.isEmpty)
     }
+
+    @Test(arguments: [false, true]) func deletionSurvivesStalePortfolioSave(clearAll: Bool) throws {
+        let suite = "portfolio.deletion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let a = StockSagePortfolio(userDefaults: defaults)
+        a.add(symbol: "GONE", shares: 1, costBasis: 100)
+        let gone = try #require(a.positions.first)
+        let b = StockSagePortfolio(userDefaults: defaults)
+        b.add(symbol: "FOREIGN", shares: 2, costBasis: 200)
+        if clearAll { a.clear() } else { a.remove(gone.id) }
+        let kept: Set<String> = clearAll ? [] : ["FOREIGN"]
+        #expect(Set(StockSagePortfolio(userDefaults: defaults).positions.map(\.symbol)) == kept)
+        b.add(symbol: "NEXT", shares: 3, costBasis: 300)
+        #expect(Set(b.positions.map(\.symbol)) == kept.union(["NEXT"]))
+        #expect(Set(StockSagePortfolio(userDefaults: defaults).positions.map(\.symbol)) == kept.union(["NEXT"]))
+    }
 }

@@ -2,181 +2,157 @@ import Testing
 import Foundation
 @testable import StockSage
 
-// Real-time streaming (owner directive 2026-07-28). The socket itself needs a network, but
-// every DECISION the stream makes is pure — parsing, routing, and backoff are pinned here.
-
-@Suite("Live stream (EODHD WebSocket)")
+@Suite("Massive live stream")
 struct StockSageLiveStreamTests {
-
     typealias L = StockSageLiveStream
 
-    @Test("a real trade frame parses to symbol, price and millisecond timestamp")
-    func parsesTradeFrame() throws {
-        // EODHD US stream shape: s=symbol, p=price, t=epoch MILLISECONDS.
-        let f = #"{"s":"AAPL","p":336.91,"t":1785184080000,"v":100}"#
-        let tick = try #require(L.parseTick(f))
-        #expect(tick.symbol == "AAPL")
-        #expect(abs(tick.price - 336.91) < 1e-9)
-        // 1785184080000 ms == 1785184080 s — a millisecond/second mix-up here would date the
-        // tick to 1970 and make every quote look infinitely stale.
-        #expect(tick.timestamp == Date(timeIntervalSince1970: 1785184080))
+    @Test("distinct same-millisecond trades retain exact sequence ordering")
+    func sameMillisecondTradesAreNotDropped() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let events = L.events(in: #"[{"ev":"status","status":"auth_success"},{"ev":"T","sym":"AAPL","p":100,"t":1700000000000,"q":9007199254740992},{"ev":"T","sym":"AAPL","p":101,"t":1700000000000,"q":9007199254740993},{"ev":"T","sym":"AAPL","p":99,"t":1700000000000,"q":9007199254740992}]"#)
+        var state = L.StreamState()
+        let trades = events.compactMap { state.consume($0, requested: ["AAPL"], now: now) }
+        #expect(trades.map(\.price) == [100, 101])
     }
 
-    @Test("price arriving as a numeric STRING still parses")
-    func parsesStringPrice() throws {
-        let tick = try #require(L.parseTick(#"{"s":"msft","p":"389.10","t":1785184080000}"#))
-        #expect(tick.symbol == "MSFT")            // normalised upper
-        #expect(abs(tick.price - 389.10) < 1e-9)
+    @Test("unknown trade sequences never break ties and quote sequences stay independent")
+    func sequenceScopeAndMissingMetadata() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for value in ["null", "true", "-1", "1.5", "9223372036854775808", #""bad""#] {
+            let events = L.events(in: "{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":100,\"t\":1700000000000,\"q\":\(value)}")
+            guard case .trade(let tick) = try #require(events.first) else { Issue.record("missing trade"); continue }
+            #expect(tick.sequence == nil)
+            #expect(!StockSageStore.acceptsLiveTick(now, after: now,
+                massiveTradeSequence: tick.sequence, afterMassiveTradeSequence: 0, now: now))
+        }
+        let rejected: [(Int64?, Int64?)] = [(nil, 1), (2, nil), (-1, 0), (1, -1), (1, 1), (0, 1)]
+        for (incoming, old) in rejected {
+            #expect(!StockSageStore.acceptsLiveTick(now, after: now,
+                massiveTradeSequence: incoming, afterMassiveTradeSequence: old, now: now))
+        }
+        #expect(StockSageStore.acceptsLiveTick(now, after: now,
+            massiveTradeSequence: 2, afterMassiveTradeSequence: 1, now: now))
+        #expect(StockSageStore.acceptsLiveTick(now.addingTimeInterval(86_400), after: now,
+            massiveTradeSequence: 0, afterMassiveTradeSequence: 9_000, now: now.addingTimeInterval(86_400)))
+        var state = L.StreamState()
+        let events = L.events(in: #"[{"ev":"status","status":"auth_success"},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"t":1700000000000,"q":999},{"ev":"T","sym":"AAPL","p":100,"t":1700000000000,"q":1},{"ev":"T","sym":"MSFT","p":200,"t":1700000000000,"q":0}]"#)
+        let trades = events.compactMap { state.consume($0, requested: ["AAPL", "MSFT"], now: now) }
+        #expect(trades.map(\.symbol) == ["AAPL", "MSFT"])
+        #expect(state.latestQuotes["AAPL"]?.sequence == 999)
     }
 
-    @Test("the authorization frame is NOT a tick")
-    func authFrameIsNotATick() {
-        // This is the literal first frame the server sends. Treating it as a tick would push a
-        // nil/zero price onto the board.
-        #expect(L.parseTick(#"{"status_code":200,"message":"Authorized"}"#) == nil)
-        #expect(L.parseTick(#"{"status_code":401,"message":"Unauthorized"}"#) == nil)
+    @Test("Massive trade frames require ev:T and preserve millisecond SIP timestamps")
+    func parsesMassiveTradeFrame() throws {
+        #expect(L.events(in: #"[{"ev":"T","sym":"msft","p":114.125,"t":1536036818784}]"#) == [
+            .trade(.init(symbol: "MSFT", price: 114.125, timestamp: Date(timeIntervalSince1970: 1_536_036_818.784))),
+        ])
+        #expect(L.events(in: #"[{"ev":"Q","sym":"MSFT","bp":114.12,"t":1536036818784}]"#).isEmpty)
+        #expect(L.events(in: #"[{"ev":"T","sym":"MSFT","p":114.125}]"#).isEmpty)
     }
 
-    @Test func statusFramesClassifyAndTradeFramesDoNot() {
-        #expect(L.authStatus(#"{"status_code":200,"message":"Authorized"}"#) == 200)
-        #expect(L.authStatus(#"{"status_code":401,"message":"Unauthorized"}"#) == 401)
-        #expect(L.authStatus(#"{"s":"AAPL","p":336.91,"t":1785184080000}"#) == nil)
+    @Test("Massive subscribes only after auth_success")
+    func massiveAuthThenSubscription() throws {
+        #expect(L.events(in: #"[{"ev":"status","status":"connected"}]"#) == [.status("connected")])
+        #expect(L.events(in: #"[{"ev":"status","status":"auth_success"}]"#) == [.status("auth_success")])
+        let subscription = try #require(L.massiveSubscription(symbols: ["MSFT", "AAPL"]))
+        let data = try #require(subscription.data(using: .utf8))
+        let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(payload["action"] == "subscribe")
+        #expect(payload["params"] == "T.AAPL,Q.AAPL,T.MSFT,Q.MSFT")
+        #expect(L.massiveSubscription(symbols: []) == nil)
     }
 
-    @Test("malformed, empty, zero and non-finite prices are all rejected")
-    func rejectsGarbage() {
-        #expect(L.parseTick("") == nil)
-        #expect(L.parseTick("not json") == nil)
-        #expect(L.parseTick("{}") == nil)
-        #expect(L.parseTick(#"{"s":"AAPL"}"#) == nil)                 // no price
-        #expect(L.parseTick(#"{"p":100,"t":1}"#) == nil)              // no symbol
-        #expect(L.parseTick(#"{"s":"","p":100}"#) == nil)             // empty symbol
-        #expect(L.parseTick(#"{"s":"AAPL","p":0}"#) == nil)           // zero price
-        #expect(L.parseTick(#"{"s":"AAPL","p":-5}"#) == nil)          // negative
-        #expect(L.parseTick(#"{"s":"AAPL","p":"abc"}"#) == nil)       // unparseable string
-    }
-
-    @Test("a tick with no timestamp still parses, with nil time rather than a fake one")
-    func missingTimestampIsNil() throws {
-        let tick = try #require(L.parseTick(#"{"s":"NVDA","p":196.51}"#))
-        #expect(tick.timestamp == nil)
-    }
-
-    @Test("only US-coverable symbols are streamable — Saudi/FX/crypto are excluded")
+    @Test("only Massive-covered US symbols are streamable")
     func streamableMatchesCoverage() {
-        // EODHD has no Saudi exchange, so subscribing 2222.SR would be a silent no-op forever.
-        let out = L.streamable(["AAPL", "2222.SR", "BTC-USD", "EURUSD=X", "^VIX", "msft"])
-        #expect(out == ["AAPL", "MSFT"])
+        #expect(L.streamable(["AAPL", "2222.SR", "BTC-USD", "EURUSD=X", "^VIX", "msft", "MSFT"]) == ["AAPL", "MSFT"])
     }
 
-    @Test("reconnect backoff doubles then caps at 30s")
+    @Test("reconnect backoff doubles then caps at 30 seconds")
     func backoffDoublesAndCaps() {
         #expect(L.backoffSeconds(attempt: 0) == 1)
-        #expect(L.backoffSeconds(attempt: 1) == 2)
-        #expect(L.backoffSeconds(attempt: 2) == 4)
-        #expect(L.backoffSeconds(attempt: 3) == 8)
         #expect(L.backoffSeconds(attempt: 4) == 16)
-        #expect(L.backoffSeconds(attempt: 5) == 30)     // 32 clamped
-        #expect(L.backoffSeconds(attempt: 99) == 30)    // never drifts to hours
-        #expect(L.backoffSeconds(attempt: -3) == 1)     // defensive
+        #expect(L.backoffSeconds(attempt: 5) == 30)
+        #expect(L.backoffSeconds(attempt: 99) == 30)
+        #expect(L.backoffSeconds(attempt: -3) == 1)
     }
 
-    // B5: EODHD caps a single connection at 50 symbols ("Concurrent subscriptions: up to 50
-    // symbols per connection by default" — eodhd.com/financial-apis/new-real-time-data-api-websockets,
-    // fetched 2026-09-06). `chunked` is the pure batching math behind opening N connections
-    // instead of silently over-subscribing one.
-
-    @Test("the vendor-cited per-connection cap is 50, per the fetched docs sentence")
-    func vendorCapIsFifty() {
-        #expect(StockSageLiveStream.maxSubscriptionsPerConnection == 50)
+    @Test("auth alone does not suppress polling; delivered coverage expires per symbol")
+    func coverageRequiresRecentDelivery() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = L.StreamState()
+        let tick = L.Tick(symbol: "AAPL", price: 100, timestamp: now)
+        #expect(state.consume(.trade(tick), requested: ["AAPL", "MSFT"], now: now) == nil)
+        _ = state.consume(.status("auth_success"), requested: ["AAPL", "MSFT"], now: now)
+        #expect(state.coveredSymbols(at: now).isEmpty)
+        #expect(state.consume(.trade(tick), requested: ["AAPL", "MSFT"], now: now) == tick)
+        #expect(state.coveredSymbols(at: now) == ["AAPL"])
+        #expect(state.hasRecentTrades(at: now))
+        #expect(state.coveredSymbols(at: now.addingTimeInterval(45)) == ["AAPL"])
+        #expect(state.coveredSymbols(at: now.addingTimeInterval(45.001)).isEmpty)
+        #expect(!state.hasRecentTrades(at: now.addingTimeInterval(45.001)))
     }
 
-    @Test("chunking below the cap yields exactly one chunk holding everything")
-    func chunkedUnderCapIsOneChunk() {
-        let symbols = (1...49).map { "S\($0)" }
-        let chunks = L.chunked(symbols, limit: 50)
-        #expect(chunks.count == 1)
-        #expect(chunks[0] == symbols)
+    @Test("missing, equal and older ticks cannot rewind a quote")
+    func liveTicksRequireStrictlyNewerMarketTime() {
+        let current = Date(timeIntervalSince1970: 1_000)
+        #expect(!StockSageStore.acceptsLiveTick(nil, after: current))
+        #expect(!StockSageStore.acceptsLiveTick(current, after: current))
+        #expect(!StockSageStore.acceptsLiveTick(Date(timeIntervalSince1970: 999), after: current))
+        #expect(StockSageStore.acceptsLiveTick(Date(timeIntervalSince1970: 1_001), after: current))
+        #expect(StockSageStore.acceptsLiveTick(current.addingTimeInterval(60), after: current, now: current))
+        #expect(!StockSageStore.acceptsLiveTick(current.addingTimeInterval(60.001), after: current, now: current))
+        #expect(!StockSageStore.acceptsLiveTick(Date(timeIntervalSince1970: .nan), after: nil))
     }
 
-    @Test("n == c: exactly the cap still fits in one chunk (straddle low side)")
-    func chunkedAtExactlyCapIsOneChunk() {
-        let symbols = (1...50).map { "S\($0)" }
-        let chunks = L.chunked(symbols, limit: 50)
-        #expect(chunks.count == 1)                 // ceil(50/50) == 1
-        #expect(chunks[0].count == 50)
-        #expect(chunks.allSatisfy { $0.count <= 50 })
-        #expect(Set(chunks.flatMap { $0 }) == Set(symbols))
+    @Test("mixed multi-event batches preserve all valid trades and event order")
+    func mixedBatchesKeepEveryValidTrade() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let events = L.events(in: #"[{"ev":"status","status":"auth_success"},{"ev":"T","sym":"AAPL","p":100,"t":1700000000000},null,{"ev":"T","sym":"BAD","p":true,"t":1700000000000},{"ev":"status","status":"success"},{"ev":"T","sym":"MSFT","p":"200.5","t":1700000000001},{"ev":"T","sym":"AAPL","p":101,"t":1700000000002}]"#)
+        #expect(events.count == 5)
+        var state = L.StreamState()
+        let trades = events.compactMap { state.consume($0, requested: ["AAPL", "MSFT"], now: now) }
+        #expect(trades.map(\.symbol) == ["AAPL", "MSFT", "AAPL"])
+        #expect(trades.map(\.price) == [100, 200.5, 101])
+        #expect(state.isAuthorized)
+        #expect(state.coveredSymbols(at: now) == ["AAPL", "MSFT"])
     }
 
-    @Test("n == c+1: one symbol over the cap spills into a second, smaller chunk (straddle high side)")
-    func chunkedOneOverCapSpillsToSecondChunk() {
-        let symbols = (1...51).map { "S\($0)" }
-        let chunks = L.chunked(symbols, limit: 50)
-        #expect(chunks.count == 2)                  // ceil(51/50) == 2
-        #expect(chunks[0].count == 50)
-        #expect(chunks[1].count == 1)
-        #expect(chunks.allSatisfy { $0.count <= 50 })
-        #expect(Set(chunks.flatMap { $0 }) == Set(symbols))
+    @Test("informational status preserves auth; auth failure clears delivery proof")
+    func statusTransitions() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = L.StreamState()
+        _ = state.consume(.status("auth_success"), requested: ["AAPL"], now: now)
+        _ = state.consume(.trade(.init(symbol: "AAPL", price: 100, timestamp: now)), requested: ["AAPL"], now: now)
+        _ = state.consume(.status("success"), requested: ["AAPL"], now: now)
+        #expect(state.isAuthorized)
+        #expect(state.coveredSymbols(at: now) == ["AAPL"])
+        _ = state.consume(.status("auth_failed"), requested: ["AAPL"], now: now)
+        #expect(!state.isAuthorized)
+        #expect(state.coveredSymbols(at: now).isEmpty)
+        #expect(state.consume(.trade(.init(symbol: "AAPL", price: 101, timestamp: now.addingTimeInterval(1))),
+                              requested: ["AAPL"], now: now) == nil)
     }
 
-    @Test("chunking never drops or duplicates a symbol, for a set well above the cap")
-    func chunkedCoversEverySymbolExactlyOnceAboveCap() {
-        // 872 mirrors the actual streamable-US universe size — the real n this ships with.
-        let symbols = (1...872).map { "S\($0)" }
-        let limit = 50
-        let chunks = L.chunked(symbols, limit: limit)
-        #expect(chunks.count == Int(ceil(Double(symbols.count) / Double(limit))))  // ceil(872/50) == 18
-        #expect(chunks.allSatisfy { !$0.isEmpty && $0.count <= limit })
-        #expect(chunks.flatMap { $0 } == symbols)          // order-preserving, no duplicates
-        #expect(Set(chunks.flatMap { $0 }) == Set(symbols))
+    @Test("unsolicited, duplicate, old and future trades do not establish coverage")
+    func rejectsUntrustedTrades() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = L.StreamState()
+        _ = state.consume(.status("auth_success"), requested: ["AAPL"], now: now)
+        #expect(state.consume(.trade(.init(symbol: "MSFT", price: 100, timestamp: now)), requested: ["AAPL"], now: now) == nil)
+        #expect(state.consume(.trade(.init(symbol: "AAPL", price: 100, timestamp: now.addingTimeInterval(61))), requested: ["AAPL"], now: now) == nil)
+        let tick = L.Tick(symbol: "AAPL", price: 100, timestamp: now)
+        #expect(state.consume(.trade(tick), requested: ["AAPL"], now: now) == tick)
+        #expect(state.consume(.trade(tick), requested: ["AAPL"], now: now) == nil)
+        #expect(state.consume(.trade(.init(symbol: "AAPL", price: 99, timestamp: now.addingTimeInterval(-1))), requested: ["AAPL"], now: now) == nil)
     }
 
-    @Test("empty input chunks to no chunks at all")
-    func chunkedEmptyInputIsEmpty() {
-        #expect(L.chunked([], limit: 50).isEmpty)
-    }
-
-    @Test("a non-positive limit is treated as \"no cap\" — one chunk holding everything")
-    func chunkedNonPositiveLimitIsOneChunk() {
-        let symbols = ["AAPL", "MSFT", "NVDA"]
-        #expect(L.chunked(symbols, limit: 0) == [symbols])
-        #expect(L.chunked(symbols, limit: -1) == [symbols])
-    }
-
-    // MARK: subscribedSymbols — blocker fix 2026-09-06: `subscribed` must reflect only
-    // AUTHORIZED-and-streaming connections, never a merely-requested chunk that hasn't (or never
-    // will) come up — or StockSageStore.streamGapCandidates wrongly treats it as covered.
-
-    @Test("a streaming connection's symbols are included; a non-streaming one's are not")
-    func subscribedSymbolsOnlyCountsStreamingConnections() {
-        let result = L.subscribedSymbols(from: [
-            (symbols: ["AAPL", "MSFT"], isStreaming: true),
-            (symbols: ["TSLA"], isStreaming: false),   // still connecting, or dropped/backing off
-        ])
-        #expect(result == ["AAPL", "MSFT"])
-    }
-
-    @Test("no connection streaming yields an empty subscribed set")
-    func subscribedSymbolsEmptyWhenNothingStreaming() {
-        let result = L.subscribedSymbols(from: [
-            (symbols: ["AAPL"], isStreaming: false),
-            (symbols: ["MSFT"], isStreaming: false),
-        ])
-        #expect(result.isEmpty)
-    }
-
-    @Test("every connection streaming unions all their symbols")
-    func subscribedSymbolsUnionsAllStreamingChunks() {
-        let result = L.subscribedSymbols(from: [
-            (symbols: ["AAPL"], isStreaming: true),
-            (symbols: ["MSFT", "NVDA"], isStreaming: true),
-        ])
-        #expect(result == ["AAPL", "MSFT", "NVDA"])
-    }
-
-    @Test("no connections at all yields an empty subscribed set")
-    func subscribedSymbolsEmptyWhenNoConnections() {
-        #expect(L.subscribedSymbols(from: []).isEmpty)
+    @Test("malformed frames, boolean numbers and nonfinite values never become trades")
+    func rejectsMalformedFrames() {
+        for text in ["not json", "[]", "null", #"{"ev":"T","sym":"AAPL","p":true,"t":1700000000000}"#,
+                     #"{"ev":"T","sym":"AAPL","p":100,"t":true}"#,
+                     #"{"ev":"T","sym":"AAPL","p":"nan","t":1700000000000}"#,
+                     #"{"ev":"T","sym":"AAPL","p":100,"t":0}"#] {
+            #expect(L.events(in: text).isEmpty)
+        }
     }
 }

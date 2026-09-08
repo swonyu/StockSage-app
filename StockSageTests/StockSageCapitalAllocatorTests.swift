@@ -413,18 +413,46 @@ struct StockSageCapitalAllocatorTests {
         // × each symbol's rawQuoteUnitToUSD (×1 for USD) must equal the reported totalHeat.
         let rederived = a.positions.reduce(0.0) { acc, p in
             acc + p.dollarsAtRisk * (StockSagePositionSizer.rawQuoteUnitToUSD(symbol: p.symbol,
-                                                                              fxRatesToUSD: ["SAR": 1.0 / 3.75]) ?? 1)
+                                                                              fxRatesToUSD: ["SAR": 1.0 / 3.75])!)
         } / 10_000
         #expect(abs(a.totalHeat - rederived) < 1e-12)
     }
 
-    @Test func emptyMapKeepsAllocateByteIdenticalIncludingTheOldMixedSRBehavior() {
+    @Test func emptyMapExcludesAndNamesForeignFXInsteadOfMixingCurrencies() {
         let ideas = [idea("AAPL", price: 100, stop: 90, target: 130, conviction: 0.5),
                      idea("2222.SR", price: 100, stop: 90, target: 130, conviction: 0.5)]
         let bare = Alloc.allocate(ideas: ideas, account: 10_000, maxHeat: 0.50)
         let empt = Alloc.allocate(ideas: ideas, account: 10_000, maxHeat: 0.50, fxRatesToUSD: [:])
         #expect(bare == empt)
-        // Prior (currency-mixed) behavior preserved by default: .SR sizes like a USD name.
-        #expect(bare.positions.first { $0.symbol == "2222.SR" }?.shares == 143)
+        #expect(bare.positions.map(\.symbol) == ["AAPL"])
+        #expect(bare.unpricedSymbols == ["2222.SR"])
+        #expect(bare.fundableCandidateCount == 1)
+        #expect(bare.positions.first?.shares == 143)
+        #expect(abs(bare.totalHeat - 0.143) < 1e-9)
+        // Missing FX is excluded BEFORE either allocation strategy consumes the heat cap.
+        for strategy in [Alloc.AllocationStrategy.uniformScale, .greedyKnapsack] {
+            let mixed = Alloc.allocate(ideas: ideas, account: 10_000, fxRatesToUSD: ["SAR": .nan], strategy: strategy)
+            let usdOnly = Alloc.allocate(ideas: [ideas[0]], account: 10_000, strategy: strategy)
+            #expect(mixed.positions == usdOnly.positions)
+            #expect(mixed.totalHeat == usdOnly.totalHeat)
+            #expect(mixed.unpricedSymbols == ["2222.SR"])
+        }
+        let missingOnly = Alloc.allocate(ideas: [ideas[1]], account: 10_000)
+        #expect(missingOnly.positions.isEmpty)
+        #expect(missingOnly.unpricedSymbols == ["2222.SR"])
+        #expect(missingOnly.fundableCandidateCount == 0) // not a false "below one share" claim
+    }
+
+    @Test func suggestAddConvertsTheCandidateWithoutChangingUSDOpenBookHeat() {
+        let candidate = idea("SAP.DE", price: 100, stop: 90, target: 130, conviction: 0.5)
+        let result = Alloc.suggestAdd(idea: candidate,
+                                      openTrades: [(shares: 50, entry: 100, stop: 90)],
+                                      holdings: [], candidateReturns: [], account: 10_000,
+                                      fxRatesToUSD: ["EUR": 2])
+        // Existing USD risk 500, cap 1000 -> USD 500 headroom / EUR 10 × USD 2 = 25 shares.
+        #expect(result?.approved == true)
+        #expect(result?.shares == 25)
+        #expect(result?.dollarsAtRisk == 250) // native EUR, not USD
+        #expect(result?.heatBefore == 0.05)
     }
 }
