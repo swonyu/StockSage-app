@@ -1,5 +1,22 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Sleep interrupted prospective timing — 2026-09-08 19:41 +03
+
+Power log confirms Maintenance Sleep/DarkWake cycles from18:31 through19:35
+Riyadh. The delayed heartbeat and a long interruption during this turn missed
+18:40,18:55,19:10 and19:25 signals. All four are preserved as `missed_deadline`,
+not retried/backfilled. This is an availability limitation, not a provider error.
+
+The19:40 batch resumed with ten valid100-minute causal contexts. Baselines ready
+42.272s andKronos56.831s after signal:eligible at both delays. Chronos68.778s:
+INELIGIBLE at1minute, eligible at6minutes. Totals now:three captured batches,
+four missed; the first two captured batches remain eligible for all candidates
+at both delays. Seven scheduled batches/70 symbol-events remain in the denominator.
+Private latest record:`.research/prospective/20260908-five-session-v1/1788885600000/`.
+Workers exited. Frozen code/recipe, cadence, sleep settings, Qwen and app are
+unchanged; no outcome scores, source edits, app promotion, real orders or push.
+No new code gate claimed for this documentation-only operational update.
+
 ## First prospective batch recorded — 2026-09-08 18:10 +03
 
 Frozen pilot's first15:10 UTC/11:10 ET batch completed on time for all six
