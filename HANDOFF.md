@@ -1,5 +1,12 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Codex — 2026-09-08 23:41 +03 — waiting-period verification
+
+- Standalone feature branch advanced to **2467069** in private `Salman-bot/tradier-lab`. Added a cached offline installed-wheel verifier; final evidence passes **167 tests and eight loopback API assertions**, with two dependency warnings and zero failed/skipped tests. Private report: `/Users/salman/Workspace/Codespace/tradier-lab/reports/verification-233c0280-d392-4b9c-a9fd-af7306e232e9/report.json`. Missing-uv negative check correctly exits 1/FAIL. Source/revision/wheel hashes and private logs are retained.
+- Focused review plus six pre-fix failing/post-fix passing interruption cases found/fixed cancellation uncertainty disappearing from public responses after restart/OPEN. API/CLI now expose an unconfirmed outcome and broker-review action. No schema change or automatic cancellation retry; crash delivery ambiguity stays explicit. This is standalone tool work only.
+- Safari inspection confirmed Tradier application Verified/document receipt, while expanded instructions still require account-open email confirmation. Account opening/API access and G1 external acceptance remain unconfirmed. Keep broker credentials out of chat. No VPS, real orders or StockSage integration; no main merge. The original four brief files are preserved, and this checkout still has planning/handoff changes only.
+- User asks always to verify and test; heartbeat now carries that instruction and the installed-wheel command. Use fresh evidence after relevant changes, handle concrete failures/gaps, and avoid speculative additions or unchanged repeat loops while access is missing. Same deadline 2026-09-09 21:48 +03. One focused Terra worker completed; no test server left running, no paid API/infrastructure charge, actual Codex dollars unknown. Read standalone HANDOFF.md for the next gate.
+
 ## Codex — 2026-09-08 23:01 +03 — offline broker acceptance
 
 - Standalone safety/recovery continuation pushed as **ef08135** to private `Salman-bot/tradier-lab`, `codex/phase-1-standalone`. The local tool's docs/OFFLINE_ACCEPTANCE.md maps D01–D20 evidence/dispositions. **161 offline tests PASS**, zero failed/skipped, two dependency warnings; the explicit offline loopback smoke passes eight assertions and stops its server.
