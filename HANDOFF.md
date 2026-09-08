@@ -1,5 +1,14 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Codex — 2026-09-08 22:32 +03 — independent trading tool checkpoint
+
+- Latest owner rule: commits, pushes and tests allowed; **never merge main without separate final permission**. Earlier historical merge authorizations below do not authorize this task's merge. One VPS up to $20/month total is approved after G1, within $200/month overall. No real orders authorized.
+- Planning commit `8ab7e2f` is on `codex/tradier-plan-only`. Independent tool implementation `d1666285437d5a73a55673b1908ac4e47392640d` is pushed to private [Salman-bot/tradier-lab](https://github.com/Salman-bot/tradier-lab), branch `codex/phase-1-standalone`; GitHub privacy and SHA verified. Local root `/Users/salman/Workspace/Codespace/tradier-lab`. No app integration/source/test/project changes.
+- Standalone CLI, local hidden-input setup, authenticated loopback offline/sandbox API, durable paper coordinator and separate production read-only observer exist. **101 synthetic tests pass**, zero failed/skipped, two dependency warnings. Earlier real loopback offline HTTP smoke passed six assertions and stopped. No authenticated broker request, account signup, fill, live observation or VPS deployment occurred.
+- G1/G2/G3 remain BLOCKED. Full deterministic fault/coverage gaps are listed in standalone `docs/VALIDATION.md`; actual sandbox lifecycle and 30-minute production observation require approved access. G2 then requires two complete regular market sessions. Never infer external acceptance from test counts.
+- Owner asked about IBKR; standalone `docs/BROKER_DECISION.md` records the official auth/gateway comparison. Tradier was brief-based, no switch has been requested and no account has been created. Follow later owner steering.
+- Hourly heartbeat `tradier-api-implementation-follow-up` remains active with latest spend/no-main rules until 2026-09-09 21:48 +03. Three workers completed. good-spender report closed the active run at 46.50 minutes; task Codex dollars unknown, no paid model API calls. Resume via standalone HANDOFF.md; keep this application untouched until G2. At deadline save final status and pause the heartbeat.
+
 ## Main integration and publication gate — 2026-09-08 13:36 +03
 
 Owner explicitly requested "merge everything to main and fix issues and push to
