@@ -45,6 +45,14 @@ acceptance. The installed80df123 app was left running; Qwen stays OFF. The nativ
 helper failure and remaining Chat/window-size visual checks below remain open.
 No broker orders, model startup, credential changes, or native-control retries.
 
+## Codex — 2026-09-08 21:58 +03 — Tradier standalone planning and continuation
+
+- Fetched/pulled main safely at fc455ccf67415a9e45493a6471e4c6d28da52f00; created `codex/tradier-plan-only`. Added PLAN.md, ROADMAP.md, TEST_MATRIX.md and docs/SOURCES.md. All four original supplied brief/roadmap files remain unchanged and untracked. No application source/test/project change.
+- G0 document review, relative-link/fence/whitespace checks and application-diff check passed. Public official broker/library/hosting docs checked; no authenticated broker request, order, signup, funding or VPS purchase. Historical app tests were not rerun.
+- Later owner messages supersede PLAN_ONLY: implement and progress when gates pass, keep reporting for 24 hours. Tradier Lite selected; owner has no approved brokerage/API account yet and is willing to sign up. One VPS up to $20/month total approved within overall $200/month. Commits, pushes and tests authorized; **never merge to main without separate owner permission as final step**. Real orders remain unapproved.
+- Next: create independent `/Users/salman/Workspace/Codespace/tradier-lab` (checked absent), build/test Phase 1 offline core then private API/CLI, and save evidence. G1 remains blocked on actual sandbox/live access; G2 requires G1 plus two complete regular-market sessions; StockStage integration deferred until G2 and target confirmation.
+- Hourly heartbeat `tradier-api-implementation-follow-up` active until 2026-09-09 21:48 +03; save final report and pause it at deadline. good-spender monitor activated from `/tmp/stocksage-tradier-plan-monitor` to avoid writing harness settings into StockSage. No paid model APIs; one bounded Luna requirements-review worker completed.
+
 ## Desktop installation, route acceptance and Journal-tab copy — 2026-09-08 03:06 +03
 
 Continued the02:37 native checkpoint through the03:02 heartbeat, inline on
