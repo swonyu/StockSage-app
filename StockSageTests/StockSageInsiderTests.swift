@@ -156,6 +156,98 @@ struct StockSageInsiderTests {
         #expect(t.date == nil)
     }
 
+    @Test("missing transaction fields never borrow values from the next row",
+          arguments: ["price", "date", "flag", "shares", "code", "mechanical"])
+    func missingFieldsStayWithTheirTransaction(_ missing: String) throws {
+        let code = missing == "mechanical" ? "M" : "P"
+        let first = """
+        <nonDerivativeTransaction>
+          \(missing == "code" ? "" : "<transactionCoding><transactionCode>\(code)</transactionCode></transactionCoding>")
+          \(missing == "date" ? "" : "<transactionDate><value>2026-08-14</value></transactionDate>")
+          <transactionAmounts>
+            \(missing == "shares" ? "" : "<transactionShares><value>100</value></transactionShares>")
+            \(["price", "mechanical"].contains(missing) ? "" : "<transactionPricePerShare><value>10</value></transactionPricePerShare>")
+            \(missing == "flag" ? "" : "<transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>")
+          </transactionAmounts>
+        </nonDerivativeTransaction>
+        """
+        let xml = """
+        <ownershipDocument><issuer><issuerTradingSymbol>NVDA</issuerTradingSymbol></issuer>
+          <nonDerivativeTable>\(first)
+            <nonDerivativeTransaction>
+              <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+              <transactionDate><value>2026-08-15</value></transactionDate>
+              <transactionAmounts>
+                <transactionShares><value>5000</value></transactionShares>
+                <transactionPricePerShare><value>196.51</value></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+              </transactionAmounts>
+            </nonDerivativeTransaction>
+          </nonDerivativeTable>
+        </ownershipDocument>
+        """
+        let summary = try #require(I.parseForm4(xml))
+        let second = try #require(summary.discretionary.last)
+        #expect(second.code == .openMarketSale)
+        #expect(second.shares == 5000)
+        #expect(second.pricePerShare == 196.51)
+        #expect(!second.acquired)
+        let day = ISO8601DateFormatter()
+        day.formatOptions = [.withFullDate]
+        #expect(second.date == day.date(from: "2026-08-15"))
+        #expect(summary.nonDiscretionaryCount == (missing == "mechanical" ? 1 : 0))
+        if ["shares", "code", "mechanical"].contains(missing) {
+            #expect(summary.discretionary.count == 1)
+        } else {
+            #expect(summary.discretionary.count == 2)
+            let first = try #require(summary.discretionary.first)
+            #expect(first.shares == 100)
+            #expect(first.acquired)
+            if missing == "price" {
+                #expect(first.pricePerShare == nil)
+                #expect(summary.netBuyValue == nil, "a partial subtotal is not the net of all trades")
+            }
+            if missing == "date" { #expect(first.date == nil) }
+        }
+    }
+
+    @Test("derivative contracts do not masquerade as Table I share trades")
+    func derivativeTransactionsAreNotShares() throws {
+        let xml = purchaseFiling.replacingOccurrences(of: "nonDerivative", with: "derivative")
+        let summary = try #require(I.parseForm4(xml))
+        #expect(summary.discretionary.isEmpty)
+        #expect(summary.netBuyValue == nil)
+    }
+
+    @Test("invalid prices stay unknown and invalid share quantities are dropped",
+          arguments: ["NaN", "inf", "-1"])
+    func invalidAmountsAreNotMoney(_ invalid: String) throws {
+        let badPrice = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "196.51", with: invalid)))
+        #expect(badPrice.discretionary.count == 1)
+        #expect(badPrice.discretionary.first?.pricePerShare == nil)
+        #expect(badPrice.netBuyValue == nil)
+        let badShares = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "5000", with: invalid)))
+        #expect(badShares.discretionary.isEmpty)
+    }
+
+    @Test("overflow cannot produce an infinite transaction or net dollar value")
+    func overflowingValueIsUnknown() throws {
+        let summary = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "196.51", with: "1e308")))
+        #expect(summary.discretionary.first?.dollarValue == nil)
+        #expect(summary.netBuyValue == nil)
+    }
+
+    @Test("zero price is known, but zero or unrenderable share quantities are not trades")
+    func zeroPriceAndShareBounds() throws {
+        let free = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "196.51", with: "0")))
+        #expect(free.discretionary.first?.pricePerShare == 0)
+        #expect(free.netBuyValue == 0)
+        for qty in ["0", "1e308", String(Double(Int.max))] {
+            let summary = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "5000", with: qty)))
+            #expect(summary.discretionary.isEmpty)
+        }
+    }
+
     // MARK: ToolPolicy gating (W4 — this feed hit the network unconditionally before)
 
     // `NSLock.lock()`/`.unlock()` are `noasync` — calling them directly inside an `async` test

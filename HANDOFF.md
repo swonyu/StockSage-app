@@ -1,5 +1,49 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Form 4 isolation fixed and installed — 2026-09-08 23:09 +03
+
+Owner's "continue" at23:01 approved the parser-first R2 slice and aligning the
+existing15-minute heartbeat. Shared parser now reads fields inside each Table I
+transaction: absent price/date cannot shift a later trade's values; missing
+code/invalid shares skip only that row. Derivative contracts are not share rows.
+Missing A/D retains the existing code-derived fallback. Prices/amounts must be
+finite; shares must fit the Int conversion used by catalyst citations. The UI's
+net dollar amount is nil when any surfaced trade is unpriced, rather than a
+misleading partial subtotal. No caller, model, freshness or trading-gate changes.
+Design/plan:`docs/superpowers/specs/2026-09-08-form4-parser.md`.
+
+Actual-parser red regression: six missing-field cases,15 issues, exit65. Then
+focused14-test suite passed; final source adds the zero/share-bound test and
+passes1835 macOS tests and1832 iPhone17Pro(gate) tests, exit0, serial, with the
+established CalibrationPersistRunTests/LiveUniverseVerificationTests/
+StrategyBaselineMeasurementTests exclusions. Full suites include15 insider tests.
+Logs/xcresults:`/private/tmp/stocksage-form4-20260908.tqHZxS/`.
+Self-review traced both MarketsView and catalyst citation consumers; diff check
+passed. Parser remains limited to the existing unprefixed SEC element format.
+
+Normal quit confirmed oldPID46019 exited. Tested bundle staged, installed and
+reopened asPID58089; strict deep codesign verification passed and checksum-aware
+dry-run comparison found no differences. Debug dylibSHA256:
+ff45c5e89da2074a6ea9dafc998dc8dd120a8d4a7d1aee13f3460ec178c3608e.
+Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-before-form4-20260908-2310.app`.
+Qwen61562 remains on. No native visual acceptance or live-API certification is
+claimed. Other worktrees preserved; no merge/push or new agents/tasks.
+
+Day1 prospective outcomes scored once after close at20:02UTC, exit0. Six of18
+batches captured,12 missed. Of2160 model/symbol/delay records:590 scored,
+130 late,1440 missing forecasts. Scored counts:230 at1min,360 at6min; common
+six-candidate panel90 symbol/delay events (30 at1min,60 at6min). Missing/late
+records stay in the denominator; no backfill or early model promotion. These are
+forecast errors, NOT fills or portfolio returns; four sessions remain. Private
+scores:`.research/prospective/20260908-five-session-v1/outcomes-2026-09-08/scores.json`.
+46 research tests freshly passed in2.320s; frozen source files unchanged and
+recipeSHA remains46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+Existing heartbeat successfully updated/verified ACTIVE at :10/:25/:40/:55,
+same15-minute frequency. This improves alignment, not sleep/busy-time guarantees.
+Both review peers remain idle. R1/R3–R7 and the four feature proposals are NOT
+implemented; new behavioral designs still require approval.
+
 ## Three-session review consolidated — 2026-09-08 21:35 +03
 
 Owner-authorized three-session local review completed at source7e6e7aa. Report:
