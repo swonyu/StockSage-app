@@ -512,3 +512,83 @@ Bundle SHA256:`b514c3a2971c637fc3d02198bf1ae95953470cd2af48d34a6a9f4cc5317d0e5b`
 Report SHA256:`53bcf5f0ff47adc5ead5e432dba41fc2178888dcfa6146889c7997c78891052c`.
 All private files0600 and ignored. Qwen and StockSage remain running unchanged;
 no new dependencies/downloads, app/Swift change, real orders, merge or push.
+
+## Prospective forecast recorder — frozen 2026-09-08
+
+`intraday_prospective.py` is a finite research recorder, not a paper broker. It
+reuses the historical seven-feature math and CPU forecast worker. It never
+changes app badges, the journal, portfolio capital or real orders.
+
+Frozen private pilot: `.research/prospective/20260908-five-session-v1/`.
+Recipe SHA256:`46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a`.
+Frozen at2026-09-08 13:26:30.492 UTC, before the first15:10 UTC signal.
+Ten existing symbols, September8/9/10/11/14,11:10–15:25 New York every15min:
+90 batches/900 symbol-events. First signal18:10 Riyadh; after-close scoring is
+eligible from23:01 Riyadh. The scheduled sessions use the existing verified2026
+[US calendar](https://www.nasdaq.com/market-activity/stock-market-holiday-schedule);
+unscheduled closures and halts remain a limitation, never synthesized as bars.
+
+Each due batch requires100 consecutive completed minutes for every symbol.
+Current-day aggregate snapshots are separately archived with receipt times and
+hashes; worker inputs contain only past context/features. Delayed/missing/invalid
+or future-dated provider rows fail closed. Inputs do not depend on future labels.
+The June29 LightGBM fit and existing pinned small checkpoints are unchanged.
+Workers run serially on CPU, one thread, with a120s subprocess timeout additionally
+bounded by remaining time to the6-minute deadline; peakRSS checks remain2GB.
+
+Predictions are validated, hashed and fsynced before recording ready time.
+Readiness must be strictly before the hypothetical1/6-minute entry; equality is
+late. A15-minute heartbeat cannot guarantee either deadline. Missed slots and
+interrupted reservations are never replayed. Missing candidates, late forecasts,
+and missing outcome prices remain explicit in the denominator; no silently
+selected winner. One failed batch does not overwrite earlier records. The
+nonblocking pilot-wide lock prevents simultaneous ticks.
+
+After16:01 ET, one daily outcome collection can score15-minute-open returns.
+Only eligible forecasts get error scores; each day retains2160 model/delay rows
+and reports the common eligible six-model panel count. These are forecast errors,
+NOT actual fills, trading profits or portfolio returns. A failed/interrupted
+outcome collection is preserved without automatic retry. No outcome snapshot is
+fetched when there are no eligible forecasts. Maximum950 snapshot requests for this
+entire pilot; most waiting wakeups perform no network or model work.
+
+Files are application-level append-only/exclusive,0700 directories/0600 files;
+they are not externally timestamped or tamper-proof. Local wall/monotonic clock
+discontinuities over2s and backwards time fail closed. No provider correction
+history, NBBO/spread measurement, execution proof or independent market edge is
+established. Account simulation using this evidence is a separate later step.
+
+The existing same-task15-minute heartbeat now runs:
+
+```sh
+cd /Users/saleh/StockSage-wt/coverage
+.research/venv/bin/python tools/intraday_prospective.py tick \
+  --root .research/prospective/20260908-five-session-v1
+```
+
+Do not rerun `init`, edit frozen source/recipe files, or backfill forecasts. A
+source mismatch pauses this pilot. The first actual tick returned `waiting`,
+actions empty, zero forecast attempts; genuine market results are still pending.
+Qwen is deliberately left ON. No new daemon, dependency or model download.
+
+Verification:46 research tests pass (11 prospective cases), including a red/green
+empty-reservation regression, exact-deadline exclusion, no-network waiting,
+future-provider rejection, clock jumps, interruption, immutable/hash guards,
+causal feature parity, and one-shot after-close scoring with complete denominator.
+Six fixture panels exactly match `ebf95be` examples AND quality counts. Two fresh
+process runs of each model match all six previous candidates on ten fixed events
+and both delays, including quality fields; elapsed seconds are excluded from
+numerical comparison. Checks:`.research/checks/20260908-prospective-workers-v1/`
+and`-v2/`. Final replay:baselines0.184s/74,465,280-byte peakRSS;Kronos4.135s/
+542,818,304 bytes;Chronos4.032s/1,326,923,776 bytes. All workers exited.
+Final parity SHA256:`a6d3dda512e8e1c1bf1543384bd37dbd79e36cb108ec81f62e80f2efbed570da`.
+
+Separate one-request live feed preflight at13:31:30.551 UTC:Massive AAPL current
+day snapshot validated,296 raw minutes, one completed RTH minute(09:30 ET),
+30.551s since that bar ended. Existing header credential worked; no value logged.
+Private evidence:`.research/checks/20260908-current-feed-preflight-v1/`. This is
+outside the pilot, not a forecast or proof that every other provider works.
+
+Extraction changes the research/comparison source hashes. Earlier reports remain
+valid evidence for their pinned `ebf95be` source, not freshly replayable under
+this changed HEAD. No old archives, recipes or reports were rewritten to hide it.

@@ -231,6 +231,18 @@ def load_archive(path):
     return manifest, bars
 
 
+def feature_vector(window, signal):
+    """Existing seven features from twenty completed five-minute bars; no labels."""
+    closes=[b["c"] for b in window]
+    returns=[b/a-1 for a,b in zip(closes,closes[1:])]
+    mean_volume=statistics.fmean(b["v"] for b in window)
+    local=datetime.fromtimestamp(signal/1000,NY)
+    return [closes[-1]/closes[-2]-1,closes[-1]/closes[-4]-1,closes[-1]/closes[-13]-1,
+            statistics.pstdev(returns),(window[-1]["h"]-window[-1]["l"])/closes[-1],
+            window[-1]["v"]/mean_volume if mean_volume else 0,
+            (local.hour*60+local.minute-570)/390]
+
+
 def examples(bars, horizon=15, delay=1):
     if type(horizon) is not int or horizon <= 0 or type(delay) is not int or delay < 1:
         raise ResearchError("Horizon must be positive; entry delay must be at least one minute.")
@@ -265,14 +277,7 @@ def examples(bars, horizon=15, delay=1):
             if entry["v"] <= 0 or exit_bar["v"] <= 0:
                 quality["zero_volume_labels"]+=1
                 continue
-            closes=[b["c"] for b in window]
-            returns=[b/a-1 for a,b in zip(closes,closes[1:])]
-            mean_volume=statistics.fmean(b["v"] for b in window)
-            local=datetime.fromtimestamp(signal/1000,NY)
-            x=[closes[-1]/closes[-2]-1,closes[-1]/closes[-4]-1,closes[-1]/closes[-13]-1,
-               statistics.pstdev(returns),(window[-1]["h"]-window[-1]["l"])/closes[-1],
-               window[-1]["v"]/mean_volume if mean_volume else 0,
-               (local.hour*60+local.minute-570)/390]
+            x=feature_vector(window,signal)
             samples.append({"symbol":symbol,"date":day,"signal_t":signal,"entry_t":entry_t,
                             "exit_t":exit_t,"entry":entry["o"],"exit":exit_bar["o"],"x":x,
                             "y":exit_bar["o"]/entry["o"]-1})

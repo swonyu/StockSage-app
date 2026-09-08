@@ -118,14 +118,34 @@ def load_bundle(root,filename):
 
 
 def predict(root,candidate,assets,output):
+    return predict_events(load_bundle(root,'inputs.json')['events'],candidate,assets,output,
+                          r.digest(Path(root)/'bundle.json'))
+
+
+def validate_events(events):
+    """Validate the shared historical/prospective worker boundary before imports."""
+    try:
+        if not 1<=len(events)<=250 or len({e['id'] for e in events})!=len(events): raise ValueError()
+        for event in events:
+            s,t,ctx=event['symbol'],event['signal_t'],event['context']
+            if s not in SYMBOLS or event['id']!=f'{s}:{t}': raise ValueError()
+            if len(ctx['ohlc'])!=100 or any(len(v)!=4 for v in ctx['ohlc']): raise ValueError()
+            bars=[{'symbol':s,'t':x,**dict(zip(('o','h','l','c'),v,strict=True))}
+                  for x,v in zip(ctx['x_t'],ctx['ohlc'],strict=True)]
+            if k.context(bars,s,t)!=ctx: raise ValueError()
+    except (KeyError,TypeError,ValueError,OverflowError):
+        raise r.ResearchError('Invalid past-only forecast context or event identity.') from None
+
+
+def predict_events(events,candidate,assets,output,bundle_sha256):
     if candidate not in ('kronos','chronos'): raise r.ResearchError('Unknown fixed model.')
-    events=load_bundle(root,'inputs.json')['events']; assets=Path(assets).resolve()
+    validate_events(events); assets=Path(assets).resolve()
     (k.verify_assets if candidate=='kronos' else c.verify_assets)(assets)
     versions=(c.VERSIONS if candidate=='chronos' else {'torch':'2.14.0','numpy':'2.2.6',
         'pandas':'2.2.2','einops':'0.8.1','huggingface-hub':'0.33.1','safetensors':'0.6.2'})
     if any(metadata.version(n)!=v for n,v in versions.items()): raise r.ResearchError('Wrong forecast environment.')
     output=r.private_directory(output)
-    run={'schema':1,'candidate':candidate,'bundle_sha256':r.digest(Path(root)/'bundle.json'),
+    run={'schema':1,'candidate':candidate,'bundle_sha256':bundle_sha256,
          'sources':source_hashes(),'versions':versions,'created_at':r.utc_now(),'promotable':False}
     r.write_json(output/'run.json',run); start=time.perf_counter()
     def timeout(*_): raise r.ResearchError('Five-minute forecast ceiling exceeded.')

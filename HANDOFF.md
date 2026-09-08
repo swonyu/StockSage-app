@@ -1,5 +1,65 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Prospective recorder frozen — 2026-09-08
+
+Owner-approved research continued inline fromebf95be. New finite recorder and
+tests; shared feature math/model worker extracted without numerical changes.
+No app/Swift/model-server/settings/broker writes, downloads, training, push,
+merge, tasks or subagents. Qwen61562 and StockSage26453 remain on; peer still
+inactive; mainfc455cc clean and parent pbxproj/review files preserved.
+
+Pilot root `.research/prospective/20260908-five-session-v1/`; frozen2026-09-08
+13:26:30.492 UTC. RecipeSHA:
+46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+September8/9/10/11/14;10 symbols;11:10–15:25ET every15min=90 batches/900 events.
+First signal TODAY18:10 Riyadh. Existing same-session automation updated ACTIVE,
+same15-minute cadence, to invoke this before other research work:
+
+```sh
+cd /Users/saleh/StockSage-wt/coverage
+.research/venv/bin/python tools/intraday_prospective.py tick \
+  --root .research/prospective/20260908-five-session-v1
+```
+
+It returns quickly/no network while waiting; handles one current attempt, records
+missed/interrupted slots without retry, and never backdates a forecast. All10
+contexts must contain100 completed minutes. Snapshot/body/input/prediction hashes
+and receipt times retained privately. Three serial CPU jobs produce six models;
+120s each and remaining6-minute deadline, existing2GB peak checks. Eligibility is
+strictly ready BEFORE1/6-minute entry; equality is late. Existing heartbeat timing
+does NOT guarantee these deadlines. Clock jumps/backwards time fail closed.
+
+After16:01ET/23:01 Riyadh, one daily read-only outcome collection records forecast
+errors with all2160 candidate/delay rows and common-six-model eligibility counts.
+No paper broker/portfolio P&L implemented yet. Late/missing/failed records never
+become zero-return successes; no winner/promotion/weekly-profit conclusion.
+One-shot outcome failures remain explicit, not silently retried. Application-level
+exclusive/fsynced files are NOT external timestamping or tamper-proof storage.
+
+First real preflight:waiting/actions=[];zero forecast attempts, no live prospective
+results yet.46 research tests passed (11 new); initial missing-module red, plus
+red/green crash-empty-slot and future-provider regressions. Six historicalfixture
+panels exactly match ebf95be examples/quality. Two fresh model runs match ten prior
+events across allsix candidates/both delays and quality fields exactly. Final
+baselines0.184s/74,465,280 bytes;Kronos4.135s/542,818,304;Chronos4.032s/
+1,326,923,776;all processes exited. Privatechecks20260908-prospective-workers-v1/v2;
+finalparitySHA:a6d3dda512e8e1c1bf1543384bd37dbd79e36cb108ec81f62e80f2efbed570da.
+Python-only gate; prior macOS/iPhone gates remain historical, not newly rerun.
+
+Separate AAPL current-day Massive preflight at13:31:30.551UTC succeeded with
+296 raw minutes and one completed09:30ET RTH minute,30.551s after its close.
+No credential value exposed; private20260908-current-feed-preflight-v1 evidence.
+This single aggregate endpoint check is NOT proof that all APIs work, and is not
+a prospective forecast. Second tick stillwaiting/actions=[]/zero attempts.
+
+Next: use the frozen tick, inspect sanitized result/receipts on failures, and
+preserve all eligible/missed counts. Do not change frozen runner sources or
+reinitialize/backfill this pilot. Source hash mismatch intentionally pauses it.
+Earlier retrospective reports remain pinned to ebf95be: extraction changedr/p
+hashes, no old recipe rewritten. Once actual prospective observations mature,
+analyze missingness/common panels before any separate account simulation. Read
+tools/intraday_research.md for full commands and limitations. No new push authority.
+
 ## Fixed forecaster comparison — 2026-09-08 15:56 +03
 
 Continued inline from18394aa, owner-approved bounded research; peer still inactive.
