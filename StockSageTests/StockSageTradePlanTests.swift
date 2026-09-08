@@ -6,6 +6,16 @@ import Foundation
 
 struct StockSageTradePlanTests {
 
+    @Test("detail export without a quote timestamp is draft-only")
+    func unknownQuoteDoesNotExportDetailTicket() {
+        let text = StockSageTradePlan.text(symbol: "AAPL", market: "NASDAQ", price: 100,
+                                           advice: advice(), rewardRisk: nil, size: nil, flags: [])
+        #expect(text.contains("Draft only — refresh price"))
+        #expect(!text.contains("Entry:"))
+        #expect(!text.contains("Stop:"))
+        #expect(!text.contains("Target:"))
+    }
+
     private func advice() -> TradeAdvice {
         TradeAdvice(action: .buy, conviction: 0.72, regime: .bullTrend,
                     rationale: ["50DMA rising", "RSI not overbought"],
@@ -18,7 +28,7 @@ struct StockSageTradePlanTests {
         let size = StockSagePositionSizer.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 95)
         let flags = [RiskFlag(label: "Earnings ≤3d", level: .high)]
         let plan = StockSageTradePlan.text(symbol: "AAPL", market: "NASDAQ", price: 100,
-                                           advice: advice(), rewardRisk: rr, size: size, flags: flags)
+                                           advice: advice(), rewardRisk: rr, size: size, flags: flags, priceAsOf: Date())
         #expect(plan.contains("TRADE PLAN — AAPL (NASDAQ)"))
         #expect(plan.contains("Action: Buy"))
         #expect(plan.contains("Entry: 100.00"))
@@ -41,12 +51,12 @@ struct StockSageTradePlanTests {
         let size = StockSagePositionSizer.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 95)
         // A Saudi symbol → SAR, not "$".
         let sr = StockSageTradePlan.text(symbol: "1120.SR", market: "Tadawul", price: 100,
-                                         advice: advice(), rewardRisk: nil, size: size, flags: [])
+                                         advice: advice(), rewardRisk: nil, size: size, flags: [], priceAsOf: Date())
         #expect(sr.contains("20 shares · ≈100 SAR at risk"))
         #expect(!sr.contains("$100 at risk"))
         // A USD symbol → still "$" (approxAmount keeps the dollar prefix for USD).
         let us = StockSageTradePlan.text(symbol: "AAPL", market: "NASDAQ", price: 100,
-                                         advice: advice(), rewardRisk: nil, size: size, flags: [])
+                                         advice: advice(), rewardRisk: nil, size: size, flags: [], priceAsOf: Date())
         #expect(us.contains("≈$100 at risk"))
     }
 
@@ -54,12 +64,12 @@ struct StockSageTradePlanTests {
         // entry 400, stop 399 → risk/share 1; $100 budget → 100 sh, notional $40k = 400% → leveraged.
         let lev = StockSagePositionSizer.size(account: 10_000, riskFraction: 0.01, entry: 400, stop: 399)
         let plan = StockSageTradePlan.text(symbol: "X", market: "M", price: 400,
-                                           advice: advice(), rewardRisk: nil, size: lev, flags: [])
+                                           advice: advice(), rewardRisk: nil, size: lev, flags: [], priceAsOf: Date())
         #expect(plan.contains("margin/leverage"))
         // Normal sizing (20 sh, 20% of account) → no warning.
         let normal = StockSagePositionSizer.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 95)
         let plan2 = StockSageTradePlan.text(symbol: "X", market: "M", price: 100,
-                                            advice: advice(), rewardRisk: nil, size: normal, flags: [])
+                                            advice: advice(), rewardRisk: nil, size: normal, flags: [], priceAsOf: Date())
         #expect(!plan2.contains("margin/leverage"))
     }
 
@@ -68,7 +78,7 @@ struct StockSageTradePlanTests {
         a = TradeAdvice(action: .hold, conviction: 0.3, regime: .range, rationale: [],
                         stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: "Stand aside.")
         let plan = StockSageTradePlan.text(symbol: "X", market: "M", price: 50,
-                                           advice: a, rewardRisk: nil, size: nil, flags: [])
+                                           advice: a, rewardRisk: nil, size: nil, flags: [], priceAsOf: Date())
         #expect(!plan.contains("Stop:"))
         #expect(!plan.contains("R:R:"))
         #expect(!plan.contains("Risk flags:"))
@@ -83,7 +93,7 @@ struct StockSageTradePlanTests {
     /// Fix G partial: the relabeled action line is self-contained — no double disclaimer.
     @Test func actionLineUsesSignalStrengthLabel() {
         let plan = StockSageTradePlan.text(symbol: "AAPL", market: "NASDAQ", price: 100,
-                                           advice: advice(), rewardRisk: nil, size: nil, flags: [])
+                                           advice: advice(), rewardRisk: nil, size: nil, flags: [], priceAsOf: Date())
         // New intentional contract: "signal strength X/100" replaces "conviction X%"
         #expect(plan.contains("signal strength 72/100"))
         #expect(plan.contains("rules-based score, not a win probability"))
@@ -102,7 +112,7 @@ struct StockSageTradePlanTests {
         let rr = StockSageRewardRisk.assess(entry: 100, stop: 95, target: 115)
         let plan = StockSageTradePlan.text(symbol: "XYZ", market: "TSX", price: 100,
                                            advice: advice(), rewardRisk: rr, size: nil, flags: [],
-                                           ladder: ladder)
+                                           ladder: ladder, priceAsOf: Date())
 
         // Rung price strings: all ≥ $1 so adaptivePrice → "%.2f"
         #expect(plan.contains("105.00 (+1.0R)"))
@@ -132,7 +142,7 @@ struct StockSageTradePlanTests {
         let subDollarLevel = 0.0062
         let plan = StockSageTradePlan.text(symbol: "SHIB-USD", market: "Crypto", price: 0.0062,
                                            advice: advice(), rewardRisk: nil, size: nil, flags: [],
-                                           chandelierLevel: subDollarLevel)
+                                           chandelierLevel: subDollarLevel, priceAsOf: Date())
 
         // %.6f path for sub-cent values
         #expect(plan.contains("~0.006200"))

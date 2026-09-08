@@ -8,6 +8,36 @@ import Foundation
 // Pure + tested. It restates the app's numbers and its caveat; it promises nothing.
 
 enum StockSageTradePlan {
+    /// Export-time quote check, independent of the research badge's overnight tolerance.
+    /// nil means this check passed, NOT that risk/broker/execution checks passed.
+    nonisolated static func draftOnlyStatus(symbol: String, priceAsOf: Date?,
+                                            isSample: Bool = false, now: Date = Date()) -> String? {
+        let reason: String
+        if isSample {
+            reason = "SAMPLE DATA — illustrative prices, not verified market quotes"
+        } else if let priceAsOf {
+            let age = now.timeIntervalSince(priceAsOf)
+            if age.isFinite, age >= 0, age <= 60 { return nil }
+            if !age.isFinite { reason = "quote time is invalid" }
+            else if age < 0 { reason = "quote time is in the future" }
+            else { reason = "quote is older than 60 seconds" }
+        } else {
+            reason = "quote time is unknown"
+        }
+        return "Draft only — refresh price\n\(symbol): PRICE NOT LIVE — \(reason)."
+            + "\nNo order plan exported. Re-price from a current source quote and reconfirm before copying."
+    }
+
+    /// The allocation copy path uses the same rule; its on-screen research is unchanged.
+    nonisolated static func allocationLine(_ position: AllocatedPosition, priceAsOf: Date?,
+                                          isSample: Bool = false, now: Date = Date()) -> String {
+        if let draft = draftOnlyStatus(symbol: position.symbol, priceAsOf: priceAsOf, isSample: isSample, now: now) {
+            return draft
+        }
+        let p = position
+        return "\(p.symbol): \(p.shares) sh · \(String(format: "%.2f%%", p.riskFraction * 100)) risk · \(StockSageCurrency.approxAmount(p.dollarsAtRisk, symbol: p.symbol)) at risk · \(StockSageCurrency.approxAmount(p.notional, symbol: p.symbol)) notional · Est. EV \(String(format: "%+.2fR (gross)", p.evR))"
+    }
+
     // aa#4: ladder and chandelierLevel added so Copy Plan exports the scale-out rungs
     // and chandelier exit level that the sheet displays — the pasted broker note now
     // matches what the trader read on screen. Both parameters are optional; nil callers
@@ -24,7 +54,12 @@ enum StockSageTradePlan {
                                  advice: TradeAdvice, rewardRisk: RewardRisk?,
                                  size: PositionSize?, flags: [RiskFlag],
                                  ladder: PartialLadder? = nil,
-                                 chandelierLevel: Double? = nil) -> String {
+                                 chandelierLevel: Double? = nil,
+                                 priceAsOf: Date? = nil, isSample: Bool = false,
+                                 now: Date = Date()) -> String {
+        if let draft = draftOnlyStatus(symbol: symbol, priceAsOf: priceAsOf, isSample: isSample, now: now) {
+            return draft
+        }
         var lines: [String] = []
         lines.append("TRADE PLAN — \(symbol) (\(market))")
         // Wave-8 relabeled: "signal strength X/100" replaces "conviction X%".

@@ -11,7 +11,7 @@ struct StockSageTodayPlanRankedTests {
         StockSageIdea(symbol: symbol, market: "M", price: price,
                       advice: TradeAdvice(action: action, conviction: conviction, regime: .bullTrend, rationale: [],
                                           stopPrice: stop, targetPrice: target, suggestedWeight: 0.05, caveat: "x"),
-                      spark: [])
+                      spark: [], priceAsOf: Date())
     }
 
     // A comfortably-clear setup: normal stop distance ⇒ costs barely register ⇒ net R:R ≥ 2.

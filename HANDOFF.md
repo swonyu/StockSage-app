@@ -1,5 +1,35 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Combined app installed; paper automation ON — 2026-09-08
+
+Owner explicitly requested all preparation before account approval and then
+"stocksage paper automation turn it on do it". A concurrent app installation
+had omitted 6536e6b's paper feature. Coordinated an installation hold with task
+01a0772c-d7ba-7c50-906c-0a3a3e9baef1, and preserved its committed Form 4 fix
+377a447 and copied-plan freshness fix c6c65b7 in this combined tree. Imported
+source files match those commits byte-for-byte; other worktrees were not edited.
+IBKR relay is committed as 274aee4. Do not reinstall a coverage-only app that
+omits the Qwen paper feature. The other task has acknowledged this hold.
+
+Final combined gates:1848 macOS tests and1845 iPhone17Pro(gate) tests passed,
+both exit0, with the existing three exclusions. Relay:14 offline checks passed,
+Python compile, shell syntax and dependency checks passed. Logs/results:
+`/private/tmp/stocksage-ibkr-ready-20260908/` (macos-final/ios-final).
+Native helper failed again, so no visual acceptance claim. Normal quit used
+the previously authorized AppleEvent route; process absence confirmed before
+recoverable replacement. Backup:
+`/Users/saleh/.Trash/StockSageX-before-combined-paper-20260908.app`.
+
+Installed `/Applications/StockSageX.app` runs asPID79003. Strict/deep codesign
+passed; checksum-aware dry-run comparison found no differences from the tested
+Mac product. Debug dylibSHA256:
+86dffdb335fa559264c6f980c167199ff538e2716fa6e494a25748be5e840afa.
+Native paper enabled flag is1 and its active exclusive ledger lease is verified.
+Valid source ledger has zero trade events; US regular hours have ended.
+Original Qwen61562 is unchanged. IBKR relay remains OFF: free-trial account
+diagnostic connects, but trading requires the approved-account paper login.
+There are zero broker-order records. No live orders, broker fills or push.
+
 ## IBKR automatic paper relay — 2026-09-08
 
 Added an isolated Python relay and Mac launcher in tools/ibkr-paper.command,

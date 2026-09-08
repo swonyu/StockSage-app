@@ -20,7 +20,13 @@ the ChatGPT connector, which prepares orders for user review.
   account checks, Gateway's $LEDGER- prefix, protocol serialization and recovery
   from the actual client's completed-order callback format.
 - Actual broker order acceptance, fills, cancellation and reconnect recovery
-  remain unverified. No Swift changes or app replacement in this integration.
+  remain unverified.
+- The combined Mac app is installed with native Qwen paper automation **ON**;
+  its enabled flag and active writer lease were verified. It preserves the
+  separately approved Form 4 and copied-plan freshness fixes. Final combined
+  suites passed 1,848 Mac and 1,845 iPhone tests with the existing three exclusions.
+  Original Qwen runtime is unchanged. Native automation waits for eligible
+  regular-session data; the IBKR relay remains off until an eligible paper login.
 
 ## Start, inspect and stop
 

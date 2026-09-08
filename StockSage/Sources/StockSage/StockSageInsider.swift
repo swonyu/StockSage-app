@@ -57,7 +57,12 @@ enum StockSageInsider {
         /// omits it. Added so a discretionary transaction can be offered to the catalyst narrator
         /// as a DATED citable source; never fabricated when absent (honesty floor).
         let date: Date?
-        nonisolated var dollarValue: Double? { pricePerShare.map { $0 * shares } }
+        nonisolated var dollarValue: Double? {
+            guard let price = pricePerShare, price.isFinite, price >= 0,
+                  shares.isFinite, shares > 0 else { return nil }
+            let value = price * shares
+            return value.isFinite ? value : nil
+        }
     }
 
     /// What a symbol's recent filings actually contained — including what was excluded, so the
@@ -73,7 +78,10 @@ enum StockSageInsider {
                 guard let v = t.dollarValue else { return nil }
                 return t.code == .openMarketPurchase ? v : -v
             }
-            return vals.isEmpty ? nil : vals.reduce(0, +)
+            // The UI labels this as NET, not a subtotal of the priced rows.
+            guard !vals.isEmpty, vals.count == discretionary.count else { return nil }
+            let net = vals.reduce(0, +)
+            return net.isFinite ? net : nil
         }
         nonisolated var isEmpty: Bool { discretionary.isEmpty && nonDiscretionaryCount == 0 }
     }
@@ -97,10 +105,10 @@ enum StockSageInsider {
                 .replacingOccurrences(of: "</\(t)>", with: "", options: .caseInsensitive)
             return inner.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        func all(_ pattern: String) -> [String] {
-            guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
-            let ns = xml as NSString
-            return re.matches(in: xml, range: NSRange(location: 0, length: ns.length)).map {
+        func all(_ pattern: String, in text: String) -> [String] {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else { return [] }
+            let ns = text as NSString
+            return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
                 ns.substring(with: $0.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
@@ -108,26 +116,30 @@ enum StockSageInsider {
         let name = tag("rptOwnerName") ?? "Unknown"
         let title = tag("officerTitle")
 
-        let codes = all("<transactionCode>(.*?)</transactionCode>")
-        let ad = all("<transactionAcquiredDisposedCode>\\s*<value>(.*?)</value>")
-        let shares = all("<transactionShares>\\s*<value>(.*?)</value>")
-        let prices = all("<transactionPricePerShare>\\s*<value>(.*?)</value>")
-        let dates = all("<transactionDate>\\s*<value>(.*?)</value>")
         let day = ISO8601DateFormatter()
         day.formatOptions = [.withFullDate]
 
         var discretionary: [Transaction] = []
         var excluded = 0
-        for (i, rawCode) in codes.enumerated() {
+        // Table I only: a derivative contract is not a share trade. Keep optional fields
+        // inside their transaction; independent document-wide arrays shift when a value is absent.
+        // ponytail: unprefixed SEC Table I only; use XMLParser if namespaced vocabularies are added.
+        for row in all("<nonDerivativeTransaction\\b[^>]*>(.*?)</nonDerivativeTransaction>", in: xml) {
+            func value(_ field: String) -> String? {
+                all("<\(field)>\\s*<value>(.*?)</value>", in: row).first
+            }
+            guard let rawCode = all("<transactionCode>(.*?)</transactionCode>", in: row).first else { continue }
             let code = Code(rawCode: rawCode)
             guard code.isDiscretionary else { excluded += 1; continue }
-            guard i < shares.count, let qty = Double(shares[i]), qty > 0 else { continue }
-            // Price/date arrays can be SHORTER than the code array (rows that omit them are
-            // absent, not misaligned), so a positional read past the end must yield nil rather
-            // than another row's value.
-            let price = i < prices.count ? Double(prices[i]) : nil
-            let date = i < dates.count ? day.date(from: dates[i]) : nil
-            let acquired = i < ad.count ? ad[i].uppercased() == "A" : (code == .openMarketPurchase)
+            // Catalyst citations render shares as Int; reject values that would trap there.
+            guard let qty = value("transactionShares").flatMap(Double.init), qty.isFinite,
+                  qty > 0, qty < Double(Int.max) else { continue }
+            let price = value("transactionPricePerShare").flatMap(Double.init).flatMap {
+                $0.isFinite && $0 >= 0 ? $0 : nil
+            }
+            let date = value("transactionDate").flatMap { day.date(from: $0) }
+            let acquired = value("transactionAcquiredDisposedCode")
+                .map { $0.uppercased() == "A" } ?? (code == .openMarketPurchase)
             discretionary.append(Transaction(symbol: symbol.uppercased(), insiderName: name,
                                              officerTitle: title, code: code, acquired: acquired,
                                              shares: qty, pricePerShare: price, date: date))

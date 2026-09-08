@@ -19,11 +19,8 @@ enum StockSageTodayPlan {
     /// held-position context via `StockSagePortfolio.holding(for:in:)` — the same "you already
     /// hold N sh" awareness the ranked list (`rankedActions`) and the ideas board's Held chip
     /// already carry. Display-only: never affects the gate, size, or EV math.
-    /// `priceAsOf` (Round-H, defaulted nil — existing callers/tests byte-unchanged): the price
-    /// bar's own date (`idea.priceAsOf`), independent of `isSample` — a live-but-cache-served
-    /// scan has `isSample == false` yet can still carry a prior-UTC-day price. Mirrors the
-    /// board card's `Self.cardIsStale`/detail sheet's `utcDayKey` staleness check so the ONE
-    /// artifact that gets pasted into a broker can't present a stale close as a live quote.
+    /// `priceAsOf` overrides the idea's own price timestamp when explicitly supplied.
+    /// Missing/future/older-than-60s quotes export a draft status, never a ticket.
     // F3 wave-A (2026-07-16): `fxRatesToUSD` (ccy→USD) makes the share count FX-correct for
     // non-USD names. Missing foreign FX blocks a sized order plan, never guesses 1:1.
     nonisolated static func build(idea: StockSageIdea, ev: ExpectedValue?,
@@ -34,12 +31,14 @@ enum StockSageTodayPlan {
                                   fxRatesToUSD: [String: Double] = [:],
                                   // A3 (2026-07-16): the card's own pixels show "Analysis over 4h old"
                                   // (cardIsStale's analysis axis); the caller passes that same bool so
-                                  // the copied plan carries it too. Defaulted false ⇒ callers/tests
-                                  // that don't pass it are byte-unchanged (like isSample/priceAsOf).
+                                  // a quote-verified copied plan carries the analysis warning too.
                                   analysisStale: Bool = false,
-                                  calibration: StockSageConvictionCalibration? = nil) -> String {
+                                  calibration: StockSageConvictionCalibration? = nil,
+                                  now: Date = Date()) -> String {
         let a = idea.advice
         let entry = idea.price
+        let draft = StockSageTradePlan.draftOnlyStatus(symbol: idea.symbol,
+            priceAsOf: priceAsOf ?? idea.priceAsOf, isSample: isSample, now: now)
         let earnings = daysToEarnings.map {
             [idea.symbol.uppercased(): EarningsProximity(daysUntil: $0, severity: StockSageEarnings.severity(daysUntil: $0))]
         } ?? [:]
@@ -59,33 +58,17 @@ enum StockSageTodayPlan {
             if !failLabels.isEmpty { blocked += "\nFAIL: " + failLabels.joined(separator: "; ") }
             if !warnLabels.isEmpty { blocked += "\nWARN: " + warnLabels.joined(separator: "; ") }
             blocked += "\nNo order plan exported. Fix the gate failures, then copy again."
-            if isSample {
-                blocked = "⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.\n" + blocked
-            }
-            if let priceAsOf, StockSageScanChunking.utcDayKey(priceAsOf) != StockSageScanChunking.utcDayKey(Date()) {
-                blocked = "⚠ PRICE NOT LIVE — as of \(fmtDate(priceAsOf)); re-price before any order.\n" + blocked
-            }
+            if let draft { blocked = draft + "\n" + blocked }
             if analysisStale {
                 blocked = "⚠ ANALYSIS OVER 4H OLD — re-scan before ordering.\n" + blocked
             }
             return blocked
         }
+        if let draft { return draft }
 
         var lines = ["Today's plan — estimates, not advice. Size with a stop; risk control > signal."]
         if let nbbo = idea.nbbo, nbbo.costConditionVerified, nbbo.spreadBps(at: Date()) != nil {
             lines.append("Costs: " + StockSageNetEdge.costsDisplayLabel(forSymbol: idea.symbol, advDollar: nil, nbbo: nbbo))
-        }
-        // The copied plan is the one artifact pasted into a broker — it MUST carry the
-        // SAMPLE-data warning the on-screen banner shows, so a seed price isn't acted on as real.
-        if isSample {
-            lines.insert("⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.", at: 0)
-        }
-        // Round-H: independent of isSample — a live scan (isSample == false) served off the
-        // same-UTC-day cache can still carry a prior-trading-day price bar. Same utcDayKey
-        // mismatch the board card/detail sheet already flag; nil priceAsOf ⇒ unknown, never a
-        // false warning.
-        if let priceAsOf, StockSageScanChunking.utcDayKey(priceAsOf) != StockSageScanChunking.utcDayKey(Date()) {
-            lines.insert("⚠ PRICE NOT LIVE — as of \(fmtDate(priceAsOf)); re-price before any order.", at: 0)
         }
         // A3: the analysis (advice/EV) can be >4h stale even when the price bar is today's — the
         // card shows this; the exported plan must too. Caller passes the same cardIsStale bool.
@@ -277,7 +260,8 @@ enum StockSageTodayPlan {
     /// before blocked, THEN growth rate) — exporting that list under a "by velocity" header
     /// misdescribed the ranking. Defaulted so existing callers/tests stay source-compatible.
     nonisolated static func copyAllText(_ plans: [TodayActionPlan], isSample: Bool = false,
-                                        mode: RankedMode = .fastestCompounding) -> String {
+                                        mode: RankedMode = .fastestCompounding,
+                                        now: Date = Date()) -> String {
         let orderDesc: String = {
             switch mode {
             case .fastestCompounding:    return "by velocity (EV/day)"
@@ -289,11 +273,15 @@ enum StockSageTodayPlan {
             lines.insert("⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.", at: 0)
         }
         for (i, p) in plans.enumerated() {
+            let draft = StockSageTradePlan.draftOnlyStatus(symbol: p.symbol,
+                priceAsOf: p.priceAsOf, isSample: isSample, now: now)
+            if let draft { lines.append("#\(i + 1). " + draft) }
             if let gate = p.gate, gate.decision == .blocked {
                 let failures = gate.checks.filter { $0.level == .fail }.map(\.label).joined(separator: "; ")
                 lines.append("#\(i + 1). \(p.symbol) — BLOCKED — DO NOT TRADE. FAIL: \(failures). No order plan exported.")
                 continue
             }
+            if draft != nil { continue }
             var line = "#\(i + 1). \(p.symbol)\(p.isCrypto ? " (24/7 crypto)" : "")"
                 + " — \(String(format: "%+.3fR/day gross", p.velocity))"
                 + " | entry \(fmt(p.entry)) stop \(fmt(p.stop)) target \(fmt(p.target))"
@@ -305,11 +293,6 @@ enum StockSageTodayPlan {
                 // unfundableSuffix (MarketsTodayActionsCard.swift) — the on-screen row already
                 // discloses a floored-to-0 setup; the export must too, or it reads as placeable.
                 if sh == 0 { line += " — below the 1-share minimum at your account size" }
-            }
-            // Round-H: same cache-stale price flag as build() — independent of isSample.
-            if let priceAsOf = p.priceAsOf,
-               StockSageScanChunking.utcDayKey(priceAsOf) != StockSageScanChunking.utcDayKey(Date()) {
-                line += " | ⚠ PRICE NOT LIVE — as of \(fmtDate(priceAsOf))"
             }
             // Wave-7 export parity: the on-screen row shows a conviction/regime-scaled risk
             // line — the export must carry the same size-discipline fact, or a pasted plan
@@ -346,10 +329,6 @@ enum StockSageTodayPlan {
     /// ALERT-FMT-1: thin alias onto the single shared formatter (`StockSageCurrency.adaptivePrice`,
     /// pure, tested there) — keeps call sites below unchanged in shape.
     private nonisolated static func fmt(_ v: Double) -> String { StockSageCurrency.adaptivePrice(v) }
-
-    /// Round-H: same relative-date wording the detail sheet's "not live" cue uses
-    /// (MarketsView.swift ~5408), so the copied plan and the on-screen sheet agree.
-    private nonisolated static func fmtDate(_ d: Date) -> String { d.formatted(.relative(presentation: .named)) }
 
     /// Share-count formatter matching `MarketsView.numString` — %.0f, not `String(Int(d))`,
     /// because `Int(Double)` TRAPS past `Int.max` and a persisted pathological share count
@@ -400,9 +379,7 @@ struct TodayActionPlan: Sendable, Equatable, Identifiable {
     /// (`StockSageJournal.historyBySymbol`) — same display-only awareness as `heldShares`.
     /// nil when `rankedActions` wasn't given `journalTrades`.
     var closedTradeCount: Int? = nil
-    /// Round-H: the price bar's own date (`idea.priceAsOf`) carried through so `copyAllText`
-    /// can flag a cache-stale price independent of `isSample` — same rationale as `build`'s
-    /// `priceAsOf` param. nil ⇒ unknown, never a false warning.
+    /// The price's own timestamp, rechecked at export time. nil ⇒ draft only.
     var priceAsOf: Date? = nil
     /// Execution-timing input carried from the ranked idea (display-only for recommendations).
     var action: TradeAdvice.Action = .hold
