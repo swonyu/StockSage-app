@@ -1,5 +1,13 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Codex — 2026-09-08 23:01 +03 — offline broker acceptance
+
+- Standalone safety/recovery continuation pushed as **ef08135** to private `Salman-bot/tradier-lab`, `codex/phase-1-standalone`. The local tool's docs/OFFLINE_ACCEPTANCE.md maps D01–D20 evidence/dispositions. **161 offline tests PASS**, zero failed/skipped, two dependency warnings; the explicit offline loopback smoke passes eight assertions and stops its server.
+- Added active account/group/completeness and clock/calendar gates, rate-reset tests, bounded stream failure handling, separate-process crash/recovery and SQLite FULL cases, protected restore/schema validation and private rotating logs. Independent schema review found a recovery-trigger risk; the fix rejects altered objects/constraints before recovery. No known critical defect remains in the scoped offline checks; this does not claim bug-free or real broker acceptance.
+- Fresh sandbox/live presence-only doctor checks confirm no account/token/API key configured. **G1 external, G2 and G3 remain BLOCKED on broker onboarding/access**. No account, order, host purchase or integration occurred. No source/test/project file in this StockSage checkout changed. The original four user brief files remain untracked and unchanged.
+- Current next step is owner signup and local credential configuration, then required real S01–S04 and L01–L03. Do not keep expanding the offline application or rerunning unchanged tests while access is absent. Honor later IBKR/Tradier steering. One VPS up to $20/month is authorized after G1; never merge main without separate final permission.
+- good-spender continuation: $4 API-equivalent raw planning allowance, actual Codex dollars UNKNOWN; 26.30 minutes against a 25-minute estimate. Two existing workers reused, all completed; three unique workers total across this task. Report's agent actual3 reflects the thread scope. Context snapshot196,175/256,000, headroom59,825. No paid model API calls. Heartbeat continues meaningful progress checks until 2026-09-09 21:48 +03; quiet while this access blocker is unchanged.
+
 ## Codex — 2026-09-08 22:32 +03 — independent trading tool checkpoint
 
 - Latest owner rule: commits, pushes and tests allowed; **never merge main without separate final permission**. Earlier historical merge authorizations below do not authorize this task's merge. One VPS up to $20/month total is approved after G1, within $200/month overall. No real orders authorized.
