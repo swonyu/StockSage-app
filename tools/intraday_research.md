@@ -16,7 +16,7 @@ HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install libomp
 .research/venv/bin/python -m pip install --only-binary=:all: \
   lightgbm==4.6.0 numpy==2.2.6 scipy==1.18.1
 
-.research/venv/bin/python -m unittest discover -s tools -p test_intraday_research.py -v
+.research/venv/bin/python -m unittest discover -s tools -p 'test_intraday*.py' -v
 ```
 
 macOS27 rejected the old SciPy1.15.3 wheel's `_spropack` Mach-O zero-fill section;
@@ -105,6 +105,96 @@ All validation-selected thresholds were20bps. LightGBM not trading is neither a
 profitable-model finding nor a reason to retune against the observed test day.
 These results test plumbing only. Do not annualize them or infer weekly returns.
 
+## Predeclared multi-archive walk-forward pilot
+
+`intraday_walkforward.py` reuses the same collector, features, fixed models and
+simulator. It adds a sourced2026 exchange calendar and rolls20 training sessions,
+5 validation sessions and up to5 disjoint test sessions. June1–August31 has64
+scheduled sessions:8 folds,39 test sessions,4 days in the last test block.
+The ten-symbol universe is unchanged and still NOT point-in-time.
+
+```sh
+.research/venv/bin/python tools/intraday_walkforward.py collect \
+  --output .research/studies/20260908-jun-aug-v1 \
+  --start 2026-06-01 --end 2026-08-31 \
+  --symbols AAPL MSFT NVDA AMZN GOOGL META TSLA ORCL QCOM APP
+
+.research/venv/bin/python tools/intraday_walkforward.py check \
+  --study .research/studies/20260908-jun-aug-v1
+
+.research/venv/bin/python tools/intraday_walkforward.py run \
+  --study .research/studies/20260908-jun-aug-v1 \
+  --output .research/runs/20260908-jun-aug-v1
+```
+
+The immutable `study.json` is written before network access, naming symbols,
+dates, thresholds, costs, delays and both runner hashes. Collection is bounded
+to95 calendar days/10 tickers, in14-day chunks (70 requests for this study).
+An explicit `--resume` reuses verified complete chunks, preserves failed attempts,
+and refuses changed specifications/code. It never automatically retries an auth
+failure or replaces a corrupt complete archive. At most three attempts per chunk.
+
+Quality requires every scheduled minute of every symbol/session:249,600 expected
+minutes for this study. No dropping bad stocks/days, forward filling, or scoring
+through a gap. `run` preserves `quality.json` and stops before performance/model
+output on a coverage failure. A missing aggregate is not automatically a vendor
+defect: a halt or absence of qualifying trades also needs investigation.
+
+Each model refits on training only; threshold selection stays validation-only at
+the same assumed5bps cost. All128 validation policies and32 aggregate cost/delay
+scenarios remain visible. Each scenario carries its own capital and high-water
+mark across test folds; no reset toUSD10k and no double-counted test dates. Daily
+equity, losing days, fees, turnover, fold boundaries/model hashes and feature/label
+exclusions are retained. Earlier test dates may enter later training after those
+dates have elapsed. No overall winner is selected on test results.
+
+This report omits duplicate per-fill logs and prediction MAE; fills are reproducible
+from the archived bars and saved fold models. The first smoke report retains both.
+No new dependency, app integration, Qwen inference or real-order capability.
+
+Calendar: [Nasdaq2026 schedule](https://www.nasdaq.com/market-activity/stock-market-holiday-schedule),
+[July3 closure notice](https://www.nasdaqtrader.com/TraderNews.aspx?id=ETA2026-31),
+[NYSE2026 calendar](https://www.nyse.com/publicdocs/nyse/ICE_NYSE_2026_Yearly_Trading_Calendar.pdf).
+June19/July3 are closed; July2 is a full equity session. Nov27/Dec24 close at13:00ET.
+Dates outside2026 are refused until a new authoritative calendar is verified.
+This is a scheduled calendar, not historical halt or publication-availability data.
+
+### Executed walk-forward result — 2026-09-08
+
+All70 requests succeeded on the first attempt:516,031 raw observations and
+249,600 scheduled minutes across64 sessions/640 stock-sessions. Zero missing
+minutes, five-minute bucket gaps, feature-window gaps or zero-volume label
+exclusions. The1/6-minute variants exclude2,560/3,200 end-of-day labels respectively.
+Held-out test dates are **July8–August31** (39 sessions), not the full collection
+period. Earlier June dates supply the initial training and validation partitions.
+
+At the predeclared1-minute delay/5bps **assumed** round-trip cost:
+
+| Candidate | Trades | Simulated net return | Minute-open drawdown | Losing days |
+|---|---:|---:|---:|---:|
+| No-trade | 0 | 0.000% | 0.000% | 0 |
+| Momentum | 2056 | -17.878% | 18.184% | 33 |
+| Reversal | 1942 | -17.347% | 18.678% | 28 |
+| LightGBM | 127 | -1.646% | 2.128% | 9 |
+
+Every active candidate also loses in every other tested cost/delay scenario,
+including1bps round trip. Lower loss from less trading is not a profitable edge,
+superior predictive-skill proof, or evidence for5% weekly returns. These dates
+are now observed research data; do not retune against them and call the next run
+an untouched test. No strategy was promoted to StockSage/Qwen or real orders.
+
+Independent checks verified all70 raw response hashes/counts, active-credential
+absence and0600 DB permissions. Two offline executions reproduce all8 fitted
+model files,128 validation policies,32 scenarios and report markdown exactly.
+Per-fold capital/cash/caps and39 unique daily equity entries checked independently.
+26 regression tests pass, including an actual two-fold fit/replay and changed-code
+refusal. Benchmark7.91s wall,324,141,056-byte maxRSS,306,791,096-byte peak footprint,
+zero swaps; no local GPU inference or Qwen environment changes.
+
+Private reports: `.research/runs/20260908-jun-aug-v1{,-recheck}/report.{md,json}`.
+Study SHA256: `7e549e6e820a505e5b0c04809ae881116813805d832b9a8485e1c279f14b7858`.
+Collection SHA256: `325244f569b45ac614e2565b5826119ffbdd2492074a6dba7595506dd07777c2`.
+
 ## Required before investment conclusions
 
 Larger prespecified walk-forward evaluation; point-in-time universe/delisting and
@@ -115,8 +205,8 @@ record. Missing future-label exclusion can introduce tradability selection bias.
 Minute-open drawdown misses intrabar risk; the baseline has no protective stop.
 Shorts/borrow, overnight holds and real orders are intentionally unsupported.
 
-Kronos/Chronos comparison, multi-archive longer studies and app integration are
-subsequent milestones, not implemented or validated here. Do not replace the
+Kronos/Chronos comparison and app integration are subsequent milestones, not
+implemented or validated here. Do not replace the
 existing app's price-history or money paths with this smoke runner.
 
 Sources checked2026-09-08:

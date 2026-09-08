@@ -36,7 +36,9 @@ Requires full Xcode (macOS 26.5 deploy target, Swift 6, MainActor default isolat
 The bounded minute-data collector and offline baseline/LightGBM benchmark are
 documented in [tools/intraday_research.md](tools/intraday_research.md). This is an
 engineering research lane, not an intraday predictor wired into badges or orders.
-Raw feeds, fitted model and reports remain private in ignored `.research/`.
+Raw feeds, fitted models and reports remain private in ignored `.research/`.
+The separate walk-forward CLI adds calendar-complete multi-archive checks and
+continuous-capital rolling tests; research results never automatically change app decisions.
 
 ## Provenance
 

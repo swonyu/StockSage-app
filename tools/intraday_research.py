@@ -296,16 +296,20 @@ def partition(samples, train_through, valid_through):
     return groups
 
 
-def simulate(samples, predictions, bars, threshold, cost_bps):
+def simulate(samples, predictions, bars, threshold, cost_bps, *, initial_equity=INITIAL_EQUITY, prior_peak=None):
     if len(samples)!=len(predictions) or any(not math.isfinite(p) for p in predictions):
         raise ResearchError("Missing/nonfinite predictions.")
     if not samples or not math.isfinite(cost_bps) or not 0<=cost_bps<=1000 or not math.isfinite(threshold) or threshold<0:
         raise ResearchError("Invalid simulation inputs.")
+    if not math.isfinite(initial_equity) or initial_equity<=0 or (prior_peak is not None and
+            (not math.isfinite(prior_peak) or prior_peak<initial_equity)):
+        raise ResearchError("Invalid starting capital or historical high-water equity.")
     prices={(b["symbol"],b["t"]):b["o"] for b in bars}
     events=defaultdict(list)
     for sample,prediction in zip(samples,predictions):
         if prediction>threshold: events[sample["entry_t"]].append((prediction,sample))
-    cash=peak=INITIAL_EQUITY; minimum_cash=cash; drawdown=turnover=fees=0.0
+    cash=initial_equity; peak=prior_peak if prior_peak is not None else initial_equity
+    minimum_cash=cash; drawdown=turnover=fees=0.0
     max_positions=0; max_fraction=0.0; positions={}; trades=[]; daily={}
     half_cost=cost_bps/20_000
     dates={s["date"] for s in samples}
@@ -344,8 +348,8 @@ def simulate(samples, predictions, bars, threshold, cost_bps):
         if ny_date(t) in dates: daily[ny_date(t)]=equity
         if cash < -1e-7: raise ResearchError("Cash conservation failed: simulation would borrow.")
     if positions: raise ResearchError("Simulation ended with unclosed positions.")
-    return {"ending_equity":cash,"net_return":cash/INITIAL_EQUITY-1,"max_drawdown":drawdown,
-            "trades":len(trades),"turnover":turnover/INITIAL_EQUITY,"fees":fees,
+    return {"ending_equity":cash,"net_return":cash/initial_equity-1,"max_drawdown":drawdown,"peak_equity":peak,
+            "trades":len(trades),"turnover":turnover/initial_equity,"fees":fees,
             "minimum_cash":minimum_cash,"max_positions":max_positions,
             "max_entry_equity_fraction":max_fraction,"daily_equity":daily,"trade_log":trades}
 

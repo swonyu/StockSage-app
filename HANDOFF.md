@@ -1,5 +1,61 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Intraday walk-forward pilot — 2026-09-08 14:53 +03
+
+Continued the owner-approved research sequence inline fromfd410d0 onwt/coverage.
+No new tasks/subagents, app/Swift/settings/journal/broker changes, push or merge.
+Qwen61562 and installed app26453 remain running; Qwen's environment untouched.
+Main integration remains clean atfc455cc; the review-followups checkout's unrelated
+pbxproj/AGENTS/review documents remain untouched. Existing15-minute heartbeat was
+updated through the automation tool to prioritize this approved research and keep
+Qwen ON, superseding stale OFF instructions. Native Chat/window acceptance remains
+pending on the unchanged native-helper fault; no new Xcode/native claims.
+
+Added tools/intraday_walkforward.py and regression checks, reusing the first
+collector/features/fixed LightGBM recipe/simulator. Only shared-simulator change:
+optional starting capital/prior high-water plus returned peak, preserving defaults.
+The pre-network immutable study pins dates, universe, costs, thresholds and both
+source hashes; changed code/specification is refused. Calendar is sourced2026
+Nasdaq/NYSE scheduled equities, including June19/July3 closures and full July2.
+Every symbol/session/minute is required before scoring. No data-gap exclusions or
+new dependencies. Explicit resume preserves failed attempts; no automatic retries.
+
+Predeclared June1–August31/same10 names. Completed70/70 requests first attempt:
+516,031 raw observations,249,600/249,600 scheduled minutes,64 sessions/640 stock-
+sessions. Zero missing minutes, unexpected trims, feature gaps or zero-volume
+label exclusions. Private archive: `.research/studies/20260908-jun-aug-v1/`.
+Study SHA256:7e549e6e820a505e5b0c04809ae881116813805d832b9a8485e1c279f14b7858.
+Collection SHA256:325244f569b45ac614e2565b5826119ffbdd2492074a6dba7595506dd07777c2.
+All70 raw hashes/counts/0600 DB permissions and active-credential absence verified.
+
+Eight rolling20-train/5-validation/up-to5-test folds:39 unique held-out sessions,
+July8–August31, last fold4 days. Training only fits; validation only thresholds;
+128 policy evaluations,32 cost/delay scenarios. Capital and high-water carried
+between test blocks, all positions flat daily, fixed whole-share/no-borrow/five-
+position/20%-entry caps. End-of-day label exclusions1/6-minute delay:2560/3200.
+
+At predeclared1-minute delay/5bps assumed RT costs, simulated net portfolio returns:
+no-trade0%/0 trades; momentum-17.878%/2056; reversal-17.347%/1942;
+LightGBM-1.646%/127 (2.128% sampled drawdown,9 losing days). Every active candidate
+loses in every other tested cost/delay scenario too, including1bps. This is a
+negative pilot, not a reason to retune the now-seen test dates. Research remains
+NOT promotable; lower loss from fewer trades is not proof of skill or durable edge.
+Current hand-selected universe, hypothetical fills, unverified broker/FX/settlement/
+NBBO/impact/halts/publication and no protective stops remain material limitations.
+
+Two offline runs reproduce all8 saved models,128 policies,32 scenarios and markdown
+exactly. Independent account checks confirm continuous capital/caps/cash and39
+date-indexed equity values per scenario.26 Python tests pass, including two-fold
+actual LightGBM replay and changed-recipe refusal; WhatsApp demo and pip check pass.
+Timed run7.91s,324,141,056-byte maxRSS,306,791,096-byte peak footprint,zero swaps.
+Reports: `.research/runs/20260908-jun-aug-v1{,-recheck}/report.{md,json}`.
+Main report SHA256:0e2dc63afbee6dfb4b8fc2110b6534e5149bcb5b31d9c58544a208258a69270b.
+Commands/evidence in tools/intraday_research.md; completed plan in
+docs/superpowers/plans/2026-09-08-intraday-walkforward.md. Private data/models/results
+stay ignored. Subsequent work must predeclare a genuinely new comparison and retain
+this negative result; Kronos/Chronos downloads, app promotion and prospective paper
+performance are not accomplished by this milestone. No weekly-return guarantee.
+
 ## Intraday research foundation — 2026-09-08 14:23 +03
 
 Owner14:12 "ok do it" approved combining current StockSage/Qwen with the case
