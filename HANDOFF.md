@@ -1,5 +1,80 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Desktop installation, route acceptance and Journal-tab copy — 2026-09-08 03:06 +03
+
+Continued the02:37 native checkpoint through the03:02 heartbeat, inline on
+wt/coverage at80df123; peer independently inactive and main checkout's unrelated
+pbxproj/AGENTS/review artifacts preserved. Owner's02:25 "next time u close it"
+authorizes normal StockSage quit for tested updates, not force termination or
+discarding work. No new permission is needed. Serena was removed separately per
+the02:26 request; never reinstall/start it or open its browser dashboard. Qwen
+remains OFF, no8765 listener; same-task15-minute automation stays ACTIVE.
+
+At02:37 the previous installed app had already exited (process absence verified).
+Rechecked the1830 Mac/1827 iPhone results for80df123 and signature/checksum of
+/private/tmp/stocksage-desktop-a11y-ready-20260907.app. Installed through a verified
+temporary bundle, preserving the previous installed copy at
+/Users/saleh/.Trash/StockSageX-before-a11y-20260908-0237.app. The older
+/Users/saleh/.Trash/StockSageX-pre-redesign-20260907-1817.app remains recoverable too.
+/Applications/StockSageX.app passes deep/strict codesign and checksum/link-aware
+rsync dry-run comparison against the frozen80df123 source (zero differences).
+Opened that installed app, not a temporary preview; it remains running as PID26453.
+
+Native screenshots/AX verified Home with persisted collapsed rail, expansion to
+the full labelled RIGHT sidebar, and Watchlist's final spoken "strength level 3
+of 5, not a win probability" matching its visible3/5. Command1–7 and9 reached
+Watchlist, Ideas, Catalysts, Markets, Heatmap, Portfolio, Alerts and Home: eight of
+nine main routes. All four Portfolio tabs (Holdings/Paper/Analytics/Journal)
+rendered and selected correctly. Sidebar Settings opened the native dark scene;
+secure entry was neither revealed nor edited, and its normal close returned to
+the app. Home's Read full briefing/Show less both worked, with full strength and
+weakness text present. Ideas' planning/backtest disclosures remain collapsed and
+the list reachable; Catalysts retains Cards/Calendar controls. Monitoring stayed
+off. These checks used normal app data/normal refresh, NOT offline fixtures or a
+live-provider/model readiness certification; no owner financial records changed.
+
+Command8 Chat followed by screenshot-only again closed the native pipe. Stopped
+native attempts immediately. StockSage survived; the crash report is specifically
+SkyComputerUseService-2026-09-08-024407.ips under ~/Library/Logs/DiagnosticReports:
+EXC_BREAKPOINT/SIGTRAP, thread13, Array.remove(at:) assertion in compactMap. This
+does not establish an app crash. Chat/long transcript/fixed composer, minimum and
+wide window sizing remain visually unverified. Native control currently lacks a
+fresh usable state for normal quit; this is a technical limitation, not missing
+owner permission. No forced quit, repeated probe loop or alternate UI bypass.
+
+Concrete Paper-tab defect: its empty-journal text still directed Mac users to
+log trades "below", although Journal is now a sibling tab. Traced both callers:
+Mac uses separate tabs, iPhone still stacks the journal below the scoreboard.
+Five inserted lines in MarketsView change only the Mac sentence to "open the
+Journal tab"; the iPhone Text/modifier expression is unchanged. No new helper,
+dependency, record mutation or financial/provenance calculation was introduced.
+
+Verification history, all artifacts below are /private/tmp/*.log and *.xcresult:
+
+- stocksage-desktop-copy-macos-20260908: initial compile exit65; moving the shared
+  font chain inside each conditional Text branch corrected SwiftUI attachment.
+- stocksage-desktop-copy-macos-fixed-20260908:1830 selected,1828 pass/2 failures,
+  exit65. During this run pmset records Low Power Sleep at02:48:48 (1% battery)
+  for63seconds, then wake on AC at02:49:51. This accounts for the63.75s timing
+  spike; the coincident protected-history save failure's root cause is not proven.
+- stocksage-desktop-copy-recheck-20260908 selected ZERO tests because method
+  filters did not match Swift Testing; its exit0 is NOT verification.
+- stocksage-desktop-copy-recheck-suites-20260908: all12 Chat/performance tests
+  pass with no source change or weakened test/privacy policy (cold render2.88s).
+- stocksage-desktop-copy-macos-final-20260908:1830/1830 pass, zero failures/skips,
+  exit0 on AC. stocksage-desktop-copy-ios-20260908:1827/1827 pass, zero failures/
+  skips, exit0. Canonical gates were serial, same derived data/destination and
+  three opt-in exclusions as the plan; no Swift edits during compilation.
+
+The copy fix is frozen at /private/tmp/stocksage-desktop-copy-ready-20260908.app,
+CFBundleIdentifier SA.StockSage, deep/strict signature verified, checksum/link-aware
+rsync dry-run identical to the tested Mac product. NOT installed over the running
+app. Installed80df123 has the verified spoken-strength fix, but still the old Paper
+sentence. Next: with genuinely usable native control, normally quit, verify exit,
+install this frozen copy recoverably and reopen; complete remaining visual checks.
+Keep the redesign acceptance checkbox open. No push, merge, orders, model startup
+or unrelated checkout changes; broader pipeline4/5 readiness remains unclaimed.
+
 ## Desktop acceptance and spoken-strength parity — 2026-09-07 23:48 +03
 
 Started clean at aaf66d4, peer independently inactive, Qwen disabled/no8765 listener,

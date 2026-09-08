@@ -2770,8 +2770,13 @@ struct MarketsView: View {
                 Text("Your own realized track: \(rTxt(ownEdge.expectancyR)) over \(ownEdge.closedWithR) closed — \(paperStore.scoreboard.map { ownEdge.expectancyR > $0.realizedAvgR ? "ahead of the engine so far" : "behind the engine so far" } ?? "logged"). Both small; read at ~100 each.")
                     .font(.caption2).foregroundStyle(DS.Palette.accent).fixedSize(horizontal: false, vertical: true)
             } else {
+                #if os(macOS)
+                Text("Your own journal is empty — open the Journal tab to log the trades you actually take and measure YOUR edge against the engine's track. That's the one experiment no dataset can run for you.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                #else
                 Text("Your own journal is empty — log the trades you actually take (below) to measure YOUR edge against the engine's track. That's the one experiment no dataset can run for you.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                #endif
             }
 
             Text(StockSagePaperTrader.caveat)

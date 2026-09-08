@@ -153,6 +153,21 @@ Repeat with destination
   tests. It is frozen as /private/tmp/stocksage-desktop-a11y-ready-20260907.app,
   signature/checksum verified, but NOT installed while the owner's app remains open
   and native control cannot safely close it. Full evidence and next step in HANDOFF.
+  At02:37–03:06 +03 on2026-09-08, installed the tested80df123 app after confirming
+  the prior process had exited, with its bundle recoverable in Trash. Verified the
+  final spoken3/5 label, rail expansion, eight routes via Command1–7/9, all four
+  Portfolio tabs, native Settings and full Home briefing expand/collapse. Chat's
+  screenshot again crashed SkyComputerUseService (not StockSage); no repeated
+  retries. Chat/long transcript/fixed composer and minimum/wide sizing remain open.
+  Fixed the Mac Paper sentence from "below" to "open the Journal tab", preserving
+  the original iPhone sentence/layout. After a compile correction and a documented
+  low-power-sleep-interrupted test run,12 isolated Chat/performance tests and final
+  canonical1830 Mac/1827 iPhone tests pass. All artifacts/history are in HANDOFF.
+  New signed/checksum-verified copy: /private/tmp/stocksage-desktop-copy-ready-20260908.app,
+  NOT installed; installed80df123 is running. Owner authorizes normal quit for
+  updates; remaining installation blocker is unusable native control, not consent.
+  Do not force quit or treat these tests as complete visual acceptance. Qwen stays
+  off, Serena remains removed, and no push or owner-data changes were performed.
 - [x] Self-review diff, record exact test counts/artifacts and UI evidence, explicitly
   stage only this task's files, commit with required heredoc/coauthor, do not push.
   Keep previous app recoverable if installing; leave Qwen off and follow the latest

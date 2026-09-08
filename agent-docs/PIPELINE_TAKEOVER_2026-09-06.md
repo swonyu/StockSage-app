@@ -13,6 +13,22 @@ pushes, actual trades, service purchases, or local model training.
 
 ## Current checklist
 
+Latest03:06 +03,2026-09-08: installed tested80df123 after verified process exit;
+previous bundle recoverable at /Users/saleh/.Trash/StockSageX-before-a11y-20260908-0237.app.
+Signature/checksum verified. Native final spoken3/5 label, rail expansion, eight
+routes (Command1–7/9), four Portfolio tabs, Settings and Home briefing expansion/
+collapse now verified. Chat again crashed the native helper, not StockSage; no
+repeat probes. Chat/long transcript/fixed composer and minimum/wide sizing remain
+open. Fixed Paper's Mac-only "below" direction to "open the Journal tab", retaining
+iPhone's original wording. Final canonical1830 Mac/1827 iPhone pass, usual three
+exclusions;12 isolated Chat/performance tests also pass. HANDOFF records the earlier
+compile correction, low-power-sleep-interrupted run and zero-test filter mistake.
+Copy fix frozen/signed/checksum verified at /private/tmp/stocksage-desktop-copy-ready-20260908.app;
+NOT installed while80df123 runs and native control is unusable. Owner's "next time
+u close it" authorizes normal quit/install/reopen, no force termination. Qwen stays
+off; Serena removed/never reopen; heartbeat ACTIVE. No push, merge or record changes.
+Redesign acceptance remains incomplete; broader pipeline4/5 readiness is not implied.
+
 Latest heartbeat23:48 +03 (completed after midnight2026-09-08): Watchlist and
 collapsed right rail now visually/AX verified. Chat again broke the native helper;
 expansion/Settings/other routes remain pending. Found speech45 percent versus
