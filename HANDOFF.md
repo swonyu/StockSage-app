@@ -1,5 +1,27 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## First prospective batch recorded — 2026-09-08 18:10 +03
+
+Frozen pilot's first15:10 UTC/11:10 ET batch completed on time for all six
+candidates and all ten symbols, eligible at BOTH1/6-minute hypothetical entries.
+Private record:`.research/prospective/20260908-five-session-v1/1788880200000/`.
+The15:09 heartbeat initially returned waiting; one bounded38-second wait then a
+due tick captured this first attempt. Cadence/protocol unchanged, no retry or
+backfill. On future early wakeups, if the next signal is within60seconds, a
+bounded wait followed by the due tick avoids postponing it an entire heartbeat.
+
+Independent checks:ten unique expected symbols,100 exact consecutive past-minute
+timestamps each; input/three prediction hashes match saved receipts; frozen recipe
+SHA remains46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+Baselines ready35.779s after signal;Kronos39.970s;Chronos44.363s (all before60s).
+Worker peakRSS:74,416,128/542,474,240/1,327,185,920 bytes respectively. All three
+workers exited; StockSage99055/Qwen61562 remain on.46 research tests freshly passed
+in2.243s. No source/recipe changes, app promotion, live orders, downloads or push.
+
+This is timely forecast capture only, not accuracy, profit or a trading edge.
+No outcomes scored yet; one daily collection is due after23:01 Riyadh. Next
+signal18:25 Riyadh; all future missed/late records must remain in the denominator.
+
 ## Left sidebar installed — 2026-09-08 17:21 +03
 
 Owner requested left-side tabs. Moved the existing macOS navigation before the
