@@ -1,5 +1,31 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## IBKR automatic paper relay — 2026-09-08
+
+Added an isolated Python relay and Mac launcher in tools/ibkr-paper.command,
+with operation/limitations in tools/ibkr_paper_relay.md. It follows new native
+Qwen simulation trade events, with durable intents, broker execution receipts,
+IOC limits, cash/position caps, account checks, no duplicate replay and fail-stop
+handling of uncertain submissions/partial exits. No live mode. No Swift, model
+runtime, prospective recorder or other worktree changes. No push.
+
+Gateway 10.50.1e was installed by the owner through the official installer;
+API on localhost:4002 works. Gateway UI confirms Simulated Trading, and the
+owner confirmed this is a FREE-TRIAL login. Read-only diagnostic: connected,
+zero positions/open orders, api_trading_supported=false. Trial cash was returned
+with the $LEDGER- prefix, but SettledCash was absent. Both cases are now handled
+explicitly, without substituting total cash for settled cash. DUT accounts can
+be inspected but cannot submit/cancel. An approved-account paper login is needed.
+There are zero relay order records and no bound trading account. Relay is OFF;
+actual IBKR acceptance/fill/cancellation/reconnect recovery remain unverified.
+
+14 offline checks cover round trips, partial fills, recovery/unknown outcomes,
+SDK serialization, cash variants, account denial, caps, paused/stale events and
+writer lock/stop-marker preservation. Recovery also tests the actual client
+completed-order callback shape, using filledQuantity and matching executions
+instead of absent client/status fields. Python environment is .research/ibkr-venv,
+separate from Qwen. Native Qwen simulation can continue independently.
+
 ## Qwen context and separate paper automation — 2026-09-08
 
 Current Codex task built this in isolated `codex/qwen-chat-context` from7e6e7aa.

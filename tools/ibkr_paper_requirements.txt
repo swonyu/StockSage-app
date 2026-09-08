@@ -1,0 +1,7 @@
+# Community client, independently implements the wire protocol (BSD-2-Clause).
+# Isolated from the Qwen/model runtime. Verified on Python 3.14.6.
+ib_async==2.1.0
+aeventkit==2.1.0
+nest-asyncio==1.6.0
+numpy==2.5.3
+tzdata==2025.3
