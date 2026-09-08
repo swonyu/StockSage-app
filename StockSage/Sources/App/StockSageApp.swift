@@ -71,6 +71,7 @@ struct StockSageApp: App {
                         // Autostart is a Settings opt-in (default OFF): the monitor's own honesty
                         // gates (no sample/cached/stale pushes) still apply to every cycle.
                         if monitorAutostart { try? StockSageMonitor.shared.start() }
+                        StockSagePaperAutomation.shared.resumeIfEnabled()
                         #endif
                     }
                     // Settings' "Show the welcome checklist again" flips onboardingDone to

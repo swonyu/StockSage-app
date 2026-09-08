@@ -153,17 +153,17 @@ enum StockSageLocalModelServer {
     /// Builds the POST request for one chat turn — Ollama's native `/api/chat` (with
     /// `"think": false`, matching the owner's smoke test: Ollama defaults qwen3.8 to emitting a
     /// `<think>` block first, which both wastes the 90 s budget and is not the paragraph we want)
-    /// or an OpenAI-compatible `/v1/chat/completions`. `num_ctx: 4096` on the Ollama path: this
-    /// call's whole prompt (fixed instructions + one idea's facts) never approaches 300 tokens,
-    /// so the model's default 32k context window would only inflate the KV cache Ollama
-    /// allocates on load for no benefit.
+    /// or an OpenAI-compatible `/v1/chat/completions`. Short explanations keep the 4k/90s
+    /// defaults; conversational Chat supplies its larger context and timeout. OpenAI-compatible
+    /// servers receive an output limit only; the caller bounds input before sending it.
     nonisolated static func chatRequest(_ c: Config, system: String, user: String, isOllama: Bool,
-                                        maxTokens: Int) -> URLRequest {
+                                        maxTokens: Int, contextTokens: Int = 4096,
+                                        timeout: TimeInterval = 90) -> URLRequest {
         let path = isOllama ? "api/chat" : "v1/chat/completions"
         var request = URLRequest(url: c.baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 90
+        request.timeoutInterval = timeout
         let messages: [[String: String]] = [
             ["role": "system", "content": system],
             ["role": "user", "content": user],
@@ -171,7 +171,7 @@ enum StockSageLocalModelServer {
         var body: [String: Any] = ["model": c.model, "stream": false, "messages": messages]
         if isOllama {
             body["think"] = false
-            body["options"] = ["temperature": 0.2, "num_predict": maxTokens, "num_ctx": 4096]
+            body["options"] = ["temperature": 0.2, "num_predict": maxTokens, "num_ctx": contextTokens]
         } else {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
@@ -208,8 +208,10 @@ enum StockSageLocalModelServer {
     /// mode (a dropped connection, a non-2xx status, a body that doesn't parse) comes back as a
     /// `.failure(ServerError)` the caller renders as a human sentence.
     static func complete(_ c: Config, isOllama: Bool, system: String, user: String,
-                         maxTokens: Int = 170) async -> Swift.Result<String, ServerError> {
-        let request = chatRequest(c, system: system, user: user, isOllama: isOllama, maxTokens: maxTokens)
+                         maxTokens: Int = 170, contextTokens: Int = 4096,
+                         timeout: TimeInterval = 90) async -> Swift.Result<String, ServerError> {
+        let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
+                                  maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {

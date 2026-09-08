@@ -106,6 +106,25 @@ struct StockSageLocalModelServerTests {
 
     // MARK: parseChatResponse
 
+    @Test("Conversational Chat sends its own context, output and timeout budgets")
+    func conversationalChatBudgets() throws {
+        let c = S.config(url: "http://127.0.0.1:8765", model: "qwen")!
+        for ollama in [true, false] {
+            let request = S.chatRequest(c, system: StockSageChat.instructions, user: "history",
+                isOllama: ollama, maxTokens: StockSageChat.outputTokens,
+                contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout)
+            #expect(request.timeoutInterval == 300)
+            let body = try #require(request.httpBody)
+            let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            if ollama {
+                let options = try #require(json["options"] as? [String: Any])
+                #expect(options["num_ctx"] as? Int == 32_768 && options["num_predict"] as? Int == 2_048)
+            } else {
+                #expect(json["max_tokens"] as? Int == 2_048 && json["options"] == nil)
+            }
+        }
+    }
+
     @Test("parseChatResponse reads Ollama's message.content, trimmed")
     func parseChatResponseOllama() {
         let data = Data(#"{"message":{"role":"assistant","content":" hi "}}"#.utf8)

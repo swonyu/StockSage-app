@@ -69,6 +69,9 @@ struct StockSageChatSection: View {
                     .disabled(chat.turns.isEmpty && chat.storageError == nil)
             }
             Text("Your briefing first. Ask Qwen when you want to go deeper.").foregroundStyle(.secondary)
+            #if os(macOS)
+            StockSagePaperAutomationPanel()
+            #endif
             if let opening {
                 GroupBox("App briefing · no model call") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -199,10 +202,7 @@ struct StockSageChatSection: View {
                     leads: StockSageResearchLeads.load(symbol: ticker, now: facts.at), webAllowed: webAllowed)
                 guard chat.attachResearch(id: id, snapshot: enriched) else { return }
             }
-            var prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: history)
-            // Prefer current evidence over old conversation when the bounded request is full.
-            if prompt.utf8.count > 16_000 { prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: []) }
-            guard prompt.utf8.count <= 16_000 else {
+            guard let prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: history) else {
                 chat.finish(id: id, text: nil, unavailable: "This context is too large for the local request. Ask a shorter question or use fewer tickers. Source snapshots remain available.")
                 return
             }
@@ -213,7 +213,8 @@ struct StockSageChatSection: View {
             }
             guard probe.reachable && probe.hasModel else { chat.finish(id: id, text: nil); return }
             let result = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
-                system: StockSageChat.instructions, user: prompt, maxTokens: 500)
+                system: StockSageChat.instructions, user: prompt, maxTokens: StockSageChat.outputTokens,
+                contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout)
             guard !Task.isCancelled, StockSageAIAssessments.configuration == config else {
                 // Identity ownership makes clear/cancel/newer requests immune to late completions.
                 if chat.pending == id { chat.cancel() }

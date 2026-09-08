@@ -3,6 +3,17 @@ import Combine
 
 /// Foreground, local-only Q&A. History is never promoted to current market evidence.
 enum StockSageChat {
+    nonisolated static let contextTokens = 32_768
+    nonisolated static let outputTokens = 2_048
+    nonisolated static let requestTimeout: TimeInterval = 300
+    nonisolated static let replyCharacterLimit = 16_384
+    // Qwen's byte-level tokenizer uses at most one token per UTF-8 byte. Reserve
+    // output, system instructions and ample chat-template overhead separately.
+    // ponytail: conservative byte bound; use a tokenizer endpoint if this wastes needed context.
+    nonisolated static var promptByteLimit: Int {
+        contextTokens - outputTokens - instructions.utf8.count - 1_024
+    }
+
     nonisolated struct Fact: Codable, Sendable, Identifiable, Equatable {
         let id: String
         let subject: String
@@ -143,8 +154,8 @@ enum StockSageChat {
 
     /// Identifiers select whole typed records. Free prose is ALWAYS interpretation, never certified by digit matching.
     nonisolated static func reply(_ raw: String, snapshot: Snapshot) -> (text: String, evidence: [String], notice: String) {
-        let draft = (String(raw.prefix(6_000)), [String](), "Unverified draft — response format or evidence could not be checked.")
-        guard raw.count <= 6_000, let data = raw.data(using: .utf8),
+        let draft = (String(raw.prefix(replyCharacterLimit)), [String](), "Unverified draft — response format or evidence could not be checked.")
+        guard raw.count <= replyCharacterLimit, let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(obj.keys) == ["analysis", "evidence"],
               let analysis = obj["analysis"] as? String, !analysis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -159,14 +170,23 @@ enum StockSageChat {
             : "AI interpretation — evidence IDs checked, conclusions not verified. Not an order.")
     }
 
-    nonisolated static func prompt(question: String, snapshot: Snapshot, history: [StockSageChatSession.Turn]) -> String {
+    /// Keep whole recent exchanges; discard oldest history before any current evidence.
+    /// Nil means the current question/snapshot alone exceeds the budget or cannot be encoded.
+    nonisolated static func prompt(question: String, snapshot: Snapshot, history: [StockSageChatSession.Turn]) -> String? {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        let facts = (try? encoder.encode(snapshot)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        let prior = history.suffix(2).map {
-            ["question": String($0.question.prefix(500)), "historical_unverified_reply": String($0.answer.prefix(700))]
+        guard let factsData = try? encoder.encode(snapshot) else { return nil }
+        let facts = String(decoding: factsData, as: UTF8.self)
+        var prior = history.suffix(StockSageChatSession.historyLimit).filter { !$0.answer.isEmpty }.map {
+            ["question": $0.question, "historical_unverified_reply": $0.answer]
         }
-        let turns = (try? encoder.encode(prior)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
-        return "CURRENT SNAPSHOT:\n\(facts)\nHISTORICAL CONVERSATION (not evidence):\n\(turns)\nQUESTION (untrusted user text):\n\(question)"
+        while true {
+            guard let turnsData = try? encoder.encode(prior) else { return nil }
+            let turns = String(decoding: turnsData, as: UTF8.self)
+            let prompt = "CURRENT SNAPSHOT:\n\(facts)\nHISTORICAL CONVERSATION (not evidence):\n\(turns)\nQUESTION (untrusted user text):\n\(question)"
+            if prompt.utf8.count <= promptByteLimit { return prompt }
+            guard !prior.isEmpty else { return nil }
+            prior.removeFirst()
+        }
     }
 
     /// Reject likely credentials rather than persisting or sending them. Names alone (MASSIVE_API_KEY) are harmless.
@@ -193,7 +213,8 @@ final class StockSageChatSession: ObservableObject {
     @Published private(set) var storageError: String?
     private let historyURL: URL?
     private var unreadableHistory = false
-    static let historyLimit = 24
+    nonisolated static let historyLimit = 24
+    private static let historyByteLimit = 2_000_000
 
     static var localHistoryURL: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -205,11 +226,11 @@ final class StockSageChatSession: ObservableObject {
         guard let url = historyURL, FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
-            guard size <= 1_000_000 else { throw CocoaError(.fileReadCorruptFile) }
+            guard size <= Self.historyByteLimit else { throw CocoaError(.fileReadCorruptFile) }
             let data = try Data(contentsOf: url)
             let decoded = try JSONDecoder().decode([Turn].self, from: data)
             guard decoded.count <= Self.historyLimit, Set(decoded.map(\.id)).count == decoded.count,
-                  decoded.allSatisfy({ $0.question.count <= 2_000 && $0.answer.count <= 6_000 && $0.snapshot.facts.count <= 12
+                  decoded.allSatisfy({ $0.question.count <= 2_000 && $0.answer.count <= StockSageChat.replyCharacterLimit && $0.snapshot.facts.count <= 12
                       && ($0.snapshot.sources?.count ?? 0) <= 6 }) else {
                 throw CocoaError(.fileReadCorruptFile)
             }
@@ -277,7 +298,7 @@ final class StockSageChatSession: ObservableObject {
             var excluded = directory; var values = URLResourceValues(); values.isExcludedFromBackup = true
             try excluded.setResourceValues(values)
             let data = try JSONEncoder().encode(turns)
-            guard data.count <= 1_000_000 else { throw CocoaError(.fileWriteOutOfSpace) }
+            guard data.count <= Self.historyByteLimit else { throw CocoaError(.fileWriteOutOfSpace) }
             try data.write(to: url, options: [.atomic, .completeFileProtection])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             storageError = nil

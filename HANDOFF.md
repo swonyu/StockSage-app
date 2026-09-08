@@ -1,5 +1,27 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Qwen context and separate paper automation — 2026-09-08
+
+Current Codex task built this in isolated `codex/qwen-chat-context` from7e6e7aa.
+Chat retains complete recent turns within a conservative32K total-token ceiling,
+reserves2048 output tokens and allows300s. Existing Qwen61562 passed actual4K,
+16K and32K checkpoint benchmarks; final30,720-token input took66.89s total with
+18.9GB physical footprint. Model runtime unchanged; no second model loaded.
+
+New macOS Chat panel runs local Qwen research every15minutes and a separate10K
+cash-funded paper ledger, with later-only fresh Massive fills, costs, caps,
+writer locking, atomic saves, duplicate prevention and explicit failure records.
+Enabled only through its own Start/Pause setting, with app-launch resume.
+Frozen prospective research, real journal, broker flows and other worktrees untouched.
+
+Verification:24 focused tests,1838macOS and1835iPhone17Pro(gate) tests passed;
+same three canonical exclusions. Logs/xcresults/benchmark receipts and signed
+staged Mac app: `/private/tmp/stocksage-qwen-context-20260908/`.
+Native helper failed "pipe closed before response"; normal app closure requested
+before replacing installed StockSageX. Not yet installed or enabled; no first-cycle
+result claimed. See `agent-docs/QWEN_RESEARCH_PAPER_2026-09-08.md` for operation,
+policy, limitations and exact account/artifact paths. No push.
+
 ## Sleep interrupted prospective timing — 2026-09-08 19:41 +03
 
 Power log confirms Maintenance Sleep/DarkWake cycles from18:31 through19:35
