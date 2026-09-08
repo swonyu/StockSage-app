@@ -122,6 +122,55 @@ struct StockSageMassiveTicksTests {
         #expect(singleton[91]?.label == "XNAS")
     }
 
+    @Test func restQuoteConditionsAndIndicatorsSurviveParsing() throws {
+        let data = Data(#"{"status":"OK","results":[{"bid_price":100,"ask_price":101,"bid_size":10,"ask_size":20,"conditions":[801],"indicators":[9],"participant_timestamp":1517562000000000000,"sip_timestamp":1517562000065700400}]}"#.utf8)
+        let page = try T.parse(data, kind: .quotes, symbol: "AAPL", from: from, to: to)
+        let quote = try #require(page.quotes.first)
+        #expect(quote.condition == 801)
+        #expect(quote.conditions == [801])
+        #expect(quote.indicators == [9])
+        #expect(quote.participantTime == StockSageMassive.date(fromNanoseconds: 1_517_562_000_000_000_000))
+        #expect(quote.participantTime != quote.timestamp)
+        #expect(!quote.qualifyingCosts(regularConditions: [801]).costConditionVerified)
+    }
+
+    @Test func restQuoteMetadataUnknownsAreNotSilentlyQualified() throws {
+        func parse(_ extra: [String: Any]) throws -> StockSageNBBO {
+            var row: [String: Any] = ["bid_price":100, "ask_price":101, "bid_size":10, "ask_size":20,
+                "sip_timestamp": Int64(1_517_562_000_000_000_000)]
+            row.merge(extra) { _, new in new }
+            return try #require(T.parse(JSONSerialization.data(withJSONObject: ["status":"OK", "results":[row]]),
+                                        kind: .quotes, symbol: "AAPL", from: from, to: to).quotes.first)
+        }
+        for conditions: Any in [NSNull(), [801, true], [801, -1], "801", [801, 802], []] {
+            let quote = try parse(["conditions": conditions])
+            #expect(quote.condition == nil && !quote.qualifyingCosts(regularConditions: [801, 802]).costConditionVerified)
+        }
+        #expect(try parse(["conditions":[801,802]]).conditions == [801,802])
+        #expect(try parse([:]).conditions == nil)
+        #expect(try parse([:]).indicators == [])
+        #expect(try parse(["conditions":[]]).conditions == [])
+        for indicators: Any in [NSNull(), [true], [-1], "9"] {
+            let quote = try parse(["conditions":[801], "indicators":indicators])
+            #expect(quote.indicators == nil && !quote.qualifyingCosts(regularConditions: [801]).costConditionVerified)
+        }
+        let ordinary = try parse(["conditions":[801], "indicators":[]])
+        #expect(ordinary.qualifyingCosts(regularConditions: [801]).costConditionVerified)
+        #expect(!ordinary.qualifyingCosts(regularConditions: []).costConditionVerified)
+        for value: Any in [true, -1, 0, 1.5, NSNull(), "bad"] {
+            #expect(try parse(["participant_timestamp":value]).participantTime == nil)
+        }
+        let old = try parse(["participant_timestamp":Int64(1_517_561_000_000_000_000)])
+        let future = try parse(["participant_timestamp":Int64(1_517_563_000_000_000_000)])
+        #expect(old.participantTime! < old.timestamp && future.participantTime! > future.timestamp,
+                "Preserve exchange clock evidence; a later consumer must reject old/future event times for fills")
+        var scalar = ordinary
+        scalar.condition = 802
+        #expect(scalar.conditions == [802])
+        scalar.condition = nil
+        #expect(scalar.conditions == nil)
+    }
+
     @Test("tape request pins symbol, window and page size; bearer key never rides in URL")
     func requestContract() throws {
         let request = try #require(T.request(kind: .trades, symbol: "aapl", from: from, to: to, key: "test-only"))

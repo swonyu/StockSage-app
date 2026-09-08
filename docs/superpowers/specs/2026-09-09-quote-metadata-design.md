@@ -31,3 +31,14 @@ Source: [Massive REST quotes](https://massive.com/docs/rest/stocks/trades-quotes
 and [WebSocket quotes](https://massive.com/docs/websocket/stocks/quotes), verified
 September 9, 2026. REST sizes are shares; `participant_timestamp` and `sip_timestamp`
 are separate clocks. The array of conditions must not be silently discarded.
+
+## Executed evidence — September 9, 02:56 Riyadh
+
+Actual parser regression:10 tests,2 expected issues, exit65. Focused53 passed;
+canonical macOS1879 and iPhone1876 passed, exit0. Logs/xcresults and the exact
+tested Mac bundle: `/private/tmp/stocksage-quote-metadata-20260909.TOIoUz/`.
+Installed only after the native USO/TSM close-out actually completed at02:55:36.
+Strict codesign and whole-bundle checksum comparison passed; installed dylibSHA256
+`b9cb247620be106b4ca0c68ce8849623b6f624512e0054e302121b5b2e7e7c8b`.
+All prior account IDs retained and exactly one T+1 activation recorded at startup.
+No quote-based fill consumer or trading-policy change was added in this slice.

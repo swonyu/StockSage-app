@@ -1,5 +1,45 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Same-day exits observed; settlement and quote metadata installed — 2026-09-09 02:56 +03
+
+The running clock-fix app requested exits for USO13/TSM4 at23:55:06 UTC and
+recorded both Paper Sell events at23:55:36 UTC (02:55:36 Riyadh,19:55:36 New York).
+USO's observation was23:55:14 UTC, TSM's23:55:10 UTC: both genuinely later than
+the requests. Simulated exit prices147.04281/437.74182 include the existing10bps
+adverse assumption. Zero open/pending,2 closed. These are actual native paper
+ledger events, NOT broker executions or evidence of profitable strategy skill.
+
+The next bounded quote repair preserves REST conditions, indicators and separate
+participant/exchange time in the existing NBBO type. The scalar WebSocket setter
+remains compatible; multiple/unknown conditions never gain cost qualification.
+Prices, sizes and sequence are unchanged. Actual red:10 tests/2 expected issues,
+exit65 (condition dropped to nil, indicators dropped to empty). Focused53 tests
+passed0.108s; canonical macOS1879/192 suites65.829s and iPhone17Pro(gate)1876/192
+suites55.034s passed, exit0 with the unchanged three exclusions. No post-gate
+source edits. Evidence: `/private/tmp/stocksage-quote-metadata-20260909.TOIoUz/`.
+Metadata preservation is groundwork, NOT bid/ask fills or dual-clock fill validation.
+
+After the live exits, normally quitPID23768 and verified process/lease release.
+Installed the exact combined Mac-tested `verified-mac/StockSageX.app` from that
+artifact root, superseding the earlier settlement-only candidate. Strict/deep
+codesign and checksum-aware rsync with symlinks passed. Installed debug dylibSHA256:
+`b9cb247620be106b4ca0c68ce8849623b6f624512e0054e302121b5b2e7e7c8b`.
+Reopened asPID39416, enabled1, exclusive account.json.lock lease. Previous bundle
+is recoverable at `/Users/saleh/.Trash/StockSageX-before-settlement-20260909.app`.
+Every pre-closeout trade/decision ID retained; schema1; exactly1 same-day and1 T+1
+activation. No ledger hand-edit. Readback arithmetic: total cash$9999.36, unsettled
+net proceeds$3662.53, settled spending capacity$6336.83. The two September8 sales
+release September9 midnight New York (07:00 Riyadh) by the disclosed simulation
+calendar, not a broker confirmation. No native visual acceptance claim.
+
+QwenPID7192 remains the only model, loopback8765; broker relay remainsOFF. Frozen
+pilot unchanged, next signalSeptember9 18:10 Riyadh. Continue the existing15-minute
+heartbeat and bounded execution-realism recommendations: bid/ask qualification,
+session/exit consistency and honest fill-rejection reasons. Preserve history, risk
+limits, validators and sole-writer ownership. No new agents, real orders, merge/push,
+forced Buy, model changes or frozen-experiment edits. Earlier installation-deferred
+instructions below are historical and superseded by this verified installation.
+
 ## Settlement-aware paper cash tested; installation deferred — 2026-09-09 02:43 +03
 
 First approved recommendation implemented in qwen-context, NOT yet installed.

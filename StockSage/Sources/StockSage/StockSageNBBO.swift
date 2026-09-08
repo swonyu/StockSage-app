@@ -13,7 +13,14 @@ nonisolated struct StockSageNBBO: Sendable, Equatable {
     let askExchange: Int64?
     let timestamp: Date
     let sequence: Int64?
-    var condition: Int64? = nil
+    /// REST carries a list; WebSocket c is a scalar. Never drop additional conditions.
+    var conditions: [Int64]? = nil
+    var condition: Int64? {
+        get { conditions?.count == 1 ? conditions?.first : nil }
+        set { conditions = newValue.map { [$0] } }
+    }
+    /// REST exchange event time, distinct from SIP receipt time; nil is not a substitute clock.
+    var participantTime: Date? = nil
     /// nil means malformed metadata, [] means no indicators supplied.
     var indicators: [Int64]? = []
     private(set) var costConditionVerified = false

@@ -130,10 +130,20 @@ enum StockSageMassiveTicks {
                 guard let bid, bid >= 0, let ask, ask >= 0, let bs, bs >= 0, let az, az >= 0 else {
                     page.rejected += 1; continue
                 }
-                page.quotes.append(.init(symbol: symbol.uppercased(), bid: bid, ask: ask, bidSize: bs, askSize: az,
+                var quote = StockSageNBBO(symbol: symbol.uppercased(), bid: bid, ask: ask, bidSize: bs, askSize: az,
                                          bidExchange: StockSageMassive.int64(row["bid_exchange"]),
                                          askExchange: StockSageMassive.int64(row["ask_exchange"]),
-                                         timestamp: at, sequence: sequence))
+                                         timestamp: at, sequence: sequence)
+                func codes(_ raw: Any?) -> [Int64]? {
+                    guard let raw = raw as? [Any] else { return nil }
+                    let values = raw.compactMap { StockSageMassive.int64($0) }
+                    return values.count == raw.count && values.allSatisfy { $0 >= 0 } ? values : nil
+                }
+                quote.conditions = codes(row["conditions"])
+                quote.indicators = row["indicators"] == nil ? [] : codes(row["indicators"])
+                quote.participantTime = StockSageMassive.int64(row["participant_timestamp"])
+                    .flatMap { $0 > 0 ? StockSageMassive.date(fromNanoseconds: $0) : nil }
+                page.quotes.append(quote)
             }
         }
         page.rejected += max(0, rows.count - rowsPerPage)
