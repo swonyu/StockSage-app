@@ -1,5 +1,52 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Copied-plan freshness fixed; installation handed off — 2026-09-08 23:38 +03
+
+Owner approved R3 at23:15: one shared rule for copied order plans. Missing,
+future, nonfinite or older-than60second quote timestamps yield "Draft only —
+refresh price" instead of entry/stop/target/size ticket text. Exactly60seconds
+passes this check only, not all risk/broker checks. Sample data is draft-only.
+Today, detail, ranked and allocation exports use the same pure status helper;
+ranked/allocation checks are per row. Existing copy risk-block reasons remain.
+Native Share uses a String proxy that checks at transfer time; Save checks after
+the modal panel closes. Expired shared/saved text becomes draft status. External
+clipboard strings cannot be revoked later. Research summaries are labelled as
+research, while on-screen Qwen analysis, badges, sizing/ranking and journal/CSV
+data remain unchanged. No automatic orders, repricing or new dependencies.
+Spec/plan: `docs/superpowers/specs/2026-09-08-plan-freshness-design.md`.
+
+Actual red run:21 tests,22 issues, exit65. The earlier method-filter command
+selected ZERO tests and is not counted as a pass. Focused six-suite regression
+passed100 tests. Final unchanged Swift source passed1840 macOS tests in56.534s
+and1837 iPhone17Pro(gate) tests in55.592s, exit0, serial, using the established
+CalibrationPersistRunTests/LiveUniverseVerificationTests/
+StrategyBaselineMeasurementTests exclusions. Boundaries cover nil, future,
+NaN/infinite, exactly60seconds,60.001seconds, mixed rows, sample and delayed
+share/save data. Logs/xcresults:
+`/private/tmp/stocksage-plan-freshness-20260908.XPKRvp/`.
+Self-review traced all scoped clipboard/share consumers; diff check passed.
+
+INSTALL HOLD: task01a0822f-6195-7f81-b4dc-6a0402fcaa4b is preparing the owner's
+combined Qwen/paper build in `/Users/saleh/StockSage-wt/qwen-context`. It reported
+that the Form4 installation omitted its earlier6536e6b changes. Do not replace
+`/Applications/StockSageX.app` with this coverage-only artifact. Send this isolated
+commit and results to that task; the combined source needs independent gates.
+Private staged Mac artifact (not installed):
+`/private/tmp/stocksage-plan-freshness-20260908.XPKRvp/verified-mac/StockSageX.app`.
+Strict deep codesign passed; checksum-aware dry-run comparison matched the tested
+product. Staged debug dylibSHA256:
+d6c2e2ad390bd9a0179f279eea7d748ab0b2ccaac8d61571b9417f6b2aeb7f03.
+Installed app58089 and Qwen61562 were left untouched. No native visual acceptance,
+live-API certification, model-quality improvement or integrated-build pass claimed.
+Other worktrees preserved; explicit local commit only, no merge/push/new agents.
+
+46 research tests freshly passed in2.522s; frozen sources/recipe unchanged, SHA
+46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+The finite tick returned waiting/no actions, next signal Sep9 at18:10 Riyadh.
+Day1 remains6 captured/12 missed batches with no backfill or early promotion;
+four sessions remain. Existing15-minute heartbeat retains :10/:25/:40/:55.
+R1/R4–R7 and the four feature proposals remain separate and approval-gated.
+
 ## Form 4 isolation fixed and installed — 2026-09-08 23:09 +03
 
 Owner's "continue" at23:01 approved the parser-first R2 slice and aligning the

@@ -221,6 +221,7 @@ struct StockSageNBBOTests {
         let copy = StockSageTodayPlan.build(idea: idea, ev: nil, account: 10_000, riskFraction: 0.01)
         #expect(copy.contains("BLOCKED") && copy.contains("No order plan exported"))
         let safe = SageFix.idea("AAPL", conviction: 0.85, action: .strongBuy, rr: 2, price: 100, riskDistance: 10)
+            .withLivePrice(100, asOf: Date())
             .withNBBO(costQuote(at: Date()))
         #expect(StockSageTodayPlan.build(idea: safe, ev: nil, account: 10_000, riskFraction: 0.01).contains("Massive SIP spread"))
     }

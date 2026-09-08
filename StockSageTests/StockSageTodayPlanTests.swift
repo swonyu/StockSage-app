@@ -6,12 +6,85 @@ import Foundation
 
 struct StockSageTodayPlanTests {
 
+    @Test("unverified quote age never exports an order checklist",
+          arguments: [Optional<Double>.none, 600, -3600])
+    func unverifiedQuoteExportsDraft(_ age: Double?) {
+        let asOf = age.map { Date().addingTimeInterval(-$0) }
+        let i = idea("BTC-USD", conviction: 0.9, stop: 90, target: 130)
+            .withLivePrice(100, asOf: asOf)
+        let one = StockSageTodayPlan.build(idea: i, ev: nil, account: 10_000,
+                                          riskFraction: 0.01, priceAsOf: asOf)
+        let ranked = StockSageTodayPlan.rankedActions([i], account: 10_000, riskFraction: 0.01)
+        #expect(ranked.count == 1)
+        for text in [one, StockSageTodayPlan.copyAllText(ranked)] {
+            #expect(text.contains("Draft only — refresh price"))
+            #expect(!text.contains("Entry ~"))
+            #expect(!text.contains(" | entry "))
+            #expect(!text.contains("Clear to trade"))
+        }
+    }
+
+    @Test("all three export builders agree at the 60-second boundary")
+    func exportFreshnessBoundaries() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let cases: [(Double?, Bool)] = [(nil, false), (-0.001, false), (0, true),
+            (59.999, true), (60, true), (60.001, false), (600, false), (.nan, false), (.infinity, false)]
+        for (age, ready) in cases {
+            let asOf = age.map { now.addingTimeInterval(-$0) }
+            let i = idea("BTC-USD", conviction: 0.9, stop: 90, target: 130)
+                .withLivePrice(100, asOf: asOf)
+            let today = StockSageTodayPlan.build(idea: i, ev: nil, account: 10_000,
+                                                 riskFraction: 0.01, now: now)
+            let ranked = StockSageTodayPlan.copyAllText(
+                StockSageTodayPlan.rankedActions([i], account: 10_000, riskFraction: 0.01), now: now)
+            let detail = StockSageTradePlan.text(symbol: i.symbol, market: i.market, price: i.price,
+                advice: i.advice, rewardRisk: nil, size: nil, flags: [], priceAsOf: asOf, now: now)
+            for text in [today, ranked, detail] {
+                #expect(text.contains("Draft only — refresh price") == !ready)
+            }
+            #expect(today.contains("Entry ~") == ready)
+            #expect(ranked.contains(" | entry ") == ready)
+            #expect(detail.contains("Entry:") == ready)
+            let allocation = AllocatedPosition(symbol: i.symbol, riskFraction: 0.01, shares: 10,
+                dollarsAtRisk: 100, notional: 1000, halfKelly: 0.1, evR: 0.2)
+            let allocationText = StockSageTradePlan.allocationLine(allocation, priceAsOf: asOf, now: now)
+            #expect(allocationText.contains("Draft only — refresh price") == !ready)
+            #expect(allocationText.contains("10 sh") == ready)
+        }
+    }
+
+    @Test("ranked export suppresses only the unverified row; sample never supplies a live ticket")
+    func mixedFreshnessAndSampleExports() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let fresh = idea("BTC-USD", conviction: 0.9, stop: 90, target: 130).withLivePrice(100, asOf: now)
+        let unknown = idea("ETH-USD", conviction: 0.9, stop: 90, target: 130).withLivePrice(100, asOf: nil)
+        let plans = StockSageTodayPlan.rankedActions([fresh, unknown], account: 10_000, riskFraction: 0.01)
+        let text = StockSageTodayPlan.copyAllText(plans, now: now)
+        #expect(text.components(separatedBy: " | entry ").count == 2)
+        #expect(text.contains("ETH-USD: PRICE NOT LIVE — quote time is unknown"))
+        let sample = StockSageTodayPlan.copyAllText(plans, isSample: true, now: now)
+        #expect(sample.contains("SAMPLE DATA"))
+        #expect(!sample.contains(" | entry "))
+        #expect(fresh.advice == unknown.advice, "export status does not alter the underlying analysis")
+    }
+
+    @Test("a retained share/save payload expires even without a new view render")
+    func delayedShareCannotExportOldTicket() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let document = PlanShareDocument(planText: "Entry: 100\nStop: 90\nSize: 10 shares",
+                                         symbol: "AAPL", priceAsOf: now, isSample: false)
+        #expect(document.text(at: now.addingTimeInterval(60)).contains("Entry:"))
+        let late = document.text(at: now.addingTimeInterval(60.001))
+        #expect(late.contains("Draft only — refresh price"))
+        #expect(!late.contains("Entry:") && !late.contains("Size:"))
+    }
+
     private func idea(_ symbol: String, action: TradeAdvice.Action = .strongBuy, conviction: Double,
                       stop: Double?, target: Double?) -> StockSageIdea {
         StockSageIdea(symbol: symbol, market: "M", price: 100,
                       advice: TradeAdvice(action: action, conviction: conviction, regime: .bullTrend, rationale: [],
                                           stopPrice: stop, targetPrice: target, suggestedWeight: 0.05, caveat: "x"),
-                      spark: [])
+                      spark: [], priceAsOf: Date())
     }
 
     @Test func composesBestGateSizeAndCaveat() {
@@ -78,10 +151,11 @@ struct StockSageTodayPlanTests {
                                                isSample: false, priceAsOf: Date())
         #expect(!sameDay.uppercased().contains("PRICE NOT LIVE"))
 
-        // nil priceAsOf (default, existing callers) → no warning, never a false badge.
-        let nilAsOf = StockSageTodayPlan.build(idea: i, ev: StockSageExpectedValue.ev(for: i),
+        // Missing source time is unknown, not evidence of freshness.
+        let nilAsOf = StockSageTodayPlan.build(idea: i.withLivePrice(i.price, asOf: nil), ev: StockSageExpectedValue.ev(for: i),
                                                account: 10_000, riskFraction: 0.01)
-        #expect(!nilAsOf.uppercased().contains("PRICE NOT LIVE"))
+        #expect(nilAsOf.contains("Draft only — refresh price"))
+        #expect(!nilAsOf.contains("Entry ~"))
     }
 
     // A3: the analysis (advice/EV) can be >4h stale even when the price bar is today's — the
@@ -167,7 +241,7 @@ struct StockSageTodayPlanTests {
             symbol: "BLK", market: "M", price: 100,
             advice: TradeAdvice(action: .buy, conviction: 0.8, regime: .bullTrend, rationale: [],
                                 stopPrice: 90, targetPrice: 120, suggestedWeight: 0.05, caveat: "x"),
-            spark: [])
+            spark: [], priceAsOf: Date())
         let text = StockSageTodayPlan.build(idea: idea, ev: nil, account: 10_000, riskFraction: 0.03)
         #expect(text.contains("BLOCKED by the pre-trade gate"))
         #expect(text.contains("No order plan exported"))

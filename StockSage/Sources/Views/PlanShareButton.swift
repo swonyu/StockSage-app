@@ -12,21 +12,25 @@ import AppKit   // NSSavePanel for the "Save as file…" fallback — iOS's shar
 /// has no long-press; a context menu is the platform-idiomatic substitute) that
 /// writes `NSSavePanel`-chosen `<symbol>-plan.txt`.
 ///
-/// HONESTY: this view never composes plan content — it only transports the exact
-/// `planText` string its caller (an existing tested builder, e.g. `fullPlanText`)
-/// already produced. The shared/saved artifact is byte-identical to what "Copy plan"
-/// puts on the clipboard; there is exactly one plan-text source in the app.
+/// Rechecks the captured quote at transfer/save time, not merely when the view renders.
+/// Plan content still comes from the existing builder; expired content becomes a draft status.
 struct PlanShareButton: View {
     let planText: String
     let symbol: String
+    let priceAsOf: Date?
+    let isSample: Bool
     /// Icon glyph point size — pass the caller's own scaled-metric font so this
     /// button visually matches its sibling icon buttons (no font tokens of its own).
     var iconSize: CGFloat = 11
 
     @State private var saveError: String?
 
+    private var document: PlanShareDocument {
+        PlanShareDocument(planText: planText, symbol: symbol, priceAsOf: priceAsOf, isSample: isSample)
+    }
+
     var body: some View {
-        ShareLink(item: planText) {
+        ShareLink(item: document, preview: SharePreview("\(symbol) plan")) {
             Image(systemName: "square.and.arrow.up")
                 .font(.system(size: iconSize, weight: .semibold))
                 .foregroundStyle(.white)
@@ -35,6 +39,7 @@ struct PlanShareButton: View {
                 .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
         }
         .buttonStyle(LuxPressStyle())
+        .accessibilityLabel("Share plan")
         .help("Share this trade plan (Mail, Messages, AirDrop, and more). Right-click for \"Save as file…\".")
         #if os(macOS)
         .contextMenu {
@@ -49,9 +54,7 @@ struct PlanShareButton: View {
     }
 
     #if os(macOS)
-    /// NSSavePanel writing the identical `planText` string as UTF-8, suggested
-    /// filename "<symbol>-plan.txt". No fabrication: whatever save fails, the
-    /// error is surfaced (never silently swallowed) per the app's honesty floor.
+    /// Recheck AFTER the modal panel closes: the quote may expire while choosing a file.
     private func saveToFile() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(symbol)-plan.txt"
@@ -59,10 +62,27 @@ struct PlanShareButton: View {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try planText.write(to: url, atomically: true, encoding: .utf8)
+            try document.text().write(to: url, atomically: true, encoding: .utf8)
         } catch {
             saveError = error.localizedDescription
         }
     }
     #endif
+}
+
+/// Immutable share payload. Native transfer requests can arrive after the sheet was opened.
+struct PlanShareDocument: Transferable, Sendable {
+    let planText: String
+    let symbol: String
+    let priceAsOf: Date?
+    let isSample: Bool
+
+    nonisolated func text(at now: Date = Date()) -> String {
+        StockSageTradePlan.draftOnlyStatus(symbol: symbol, priceAsOf: priceAsOf,
+                                          isSample: isSample, now: now) ?? planText
+    }
+
+    nonisolated static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation(exporting: { document in document.text() })
+    }
 }

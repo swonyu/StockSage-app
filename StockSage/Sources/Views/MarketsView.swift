@@ -6364,18 +6364,11 @@ struct MarketsView: View {
                     HStack(spacing: 6) {
                         Spacer()
                         Button {
+                            let now = Date()
                             var lines = ["Capital allocation — \(String(format: "$%.0f", plan.account)) account, heat \(String(format: "%.1f%%", plan.totalHeat * 100)) (cap \(String(format: "%.0f%%", plan.maxHeat * 100)))."]
                                 + plan.positions.map { p in
-                                    // Audit 2026-07-12 (export-parity): at-risk/notional are native
-                                    // currency — label each in its own currency (approxAmount), matching
-                                    // the on-screen deploy row and never a false "$" for a .SR/.L name.
-                                    var line = "\(p.symbol): \(p.shares) sh · \(String(format: "%.2f%%", p.riskFraction * 100)) risk · \(StockSageCurrency.approxAmount(p.dollarsAtRisk, symbol: p.symbol)) at risk · \(StockSageCurrency.approxAmount(p.notional, symbol: p.symbol)) notional · Est. EV \(String(format: "%+.2fR (gross)", p.evR))"
-                                    // D2: mirror StockSageTodayPlan.copyAllText's per-line stale-price
-                                    // suffix verbatim — same utcDayKey check, same wording.
-                                    if let staleAsOf = MarketsView.staleAsOfPrice(ideaBySymbol[p.symbol]?.priceAsOf, now: Date()) {
-                                        line += " | ⚠ PRICE NOT LIVE — as of \(staleAsOf.formatted(.relative(presentation: .named)))"
-                                    }
-                                    return line
+                                    StockSageTradePlan.allocationLine(p, priceAsOf: ideaBySymbol[p.symbol]?.priceAsOf,
+                                                                     isSample: store.isSampleData, now: now)
                                 }
                                 + (eb.map { [Self.effectiveBetsCaption($0)] } ?? [])
                                 + [plan.caveat]
@@ -7124,14 +7117,15 @@ struct MarketsView: View {
             HStack(spacing: 6) {
                 Spacer()
                 Button {
-                    var plan = StockSageExpectedValue.playbook(s)
+                    var plan = "Research summary — not an order checklist. Refresh prices before any order.\n"
+                        + StockSageExpectedValue.playbook(s)
                     if store.isSampleData {
                         // Parity with every sibling export: a sample-data playbook must carry the flag.
                         plan = "⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.\n" + plan
                     }
                                         PlatformClipboard.copy(plan)
                 } label: {
-                    Label("Copy plan", systemImage: "doc.on.doc").font(.system(size: mvFont9, weight: .medium))
+                    Label("Copy research summary", systemImage: "doc.on.doc").font(.system(size: mvFont9, weight: .medium))
                 }
                 .buttonStyle(.plain).foregroundStyle(DS.Palette.accent)
                 .help("Copy a short, caveated money-velocity action list to the clipboard.")
@@ -8228,10 +8222,17 @@ struct MarketsView: View {
             fxRatesToUSD: sizingFXRates(for: [idea.symbol]))
     }
 
-    private func fullPlanText(for selected: StockSageIdea) -> String {
+    private func currentPlanIdea(for selected: StockSageIdea) -> StockSageIdea {
         // A sheet/context menu holds a value snapshot. Re-resolve before copying so
         // disconnects, newer quotes and quote withdrawals cannot leave stale cost inputs.
-        let idea = store.ideas.first { $0.id == selected.id } ?? selected.withNBBO(nil)
+        store.ideas.first { $0.id == selected.id } ?? selected.withNBBO(nil)
+    }
+
+    private func fullPlanText(for selected: StockSageIdea) -> String {
+        let idea = currentPlanIdea(for: selected)
+        let now = Date()
+        let draft = StockSageTradePlan.draftOnlyStatus(symbol: idea.symbol,
+            priceAsOf: idea.priceAsOf, isSample: store.isSampleData, now: now)
         let a = idea.advice
         let snapshot = decisionSnapshot(for: idea)
         let copyGate: TradeGateVerdict? = {
@@ -8247,11 +8248,10 @@ struct MarketsView: View {
             if !failLabels.isEmpty { blocked += "\nFAIL: " + failLabels.joined(separator: "; ") }
             if !warnLabels.isEmpty { blocked += "\nWARN: " + warnLabels.joined(separator: "; ") }
             blocked += "\nNo order plan exported. Fix the gate failures, then copy again."
-            if store.isSampleData {
-                blocked = "⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.\n" + blocked
-            }
+            if let draft { blocked = draft + "\n" + blocked }
             return blocked
         }
+        if let draft { return draft }
         let riskFlags = StockSageRiskFlags.flags(
             action: a.action, conviction: a.conviction, symbol: idea.symbol,
             earnings: store.earnings[idea.symbol.uppercased()],
@@ -8269,7 +8269,8 @@ struct MarketsView: View {
         let planChandelier: Double? = store.trailingStop[idea.symbol.uppercased()]?.level
         var plan = StockSageTradePlan.text(symbol: idea.symbol, market: idea.market, price: idea.price,
                                            advice: a, rewardRisk: rr, size: size, flags: riskFlags,
-                                           ladder: planLadder, chandelierLevel: planChandelier)
+                                           ladder: planLadder, chandelierLevel: planChandelier,
+                                           priceAsOf: idea.priceAsOf, isSample: store.isSampleData, now: now)
         plan = "Rules-based trade plan — not the AI badge or an AI-generated order.\n" + plan
         // First-real-trade review (2026-07-16): Tadawul rejects off-grid prices — the exported
         // plan (the broker ticket source) carries the placeable equivalents for .SR orders.
@@ -8362,19 +8363,6 @@ struct MarketsView: View {
             let sectorImpact = StockSageWhatIf.addingHolding(symbol: idea.symbol, addedValue: addValue,
                                                              to: exportHoldings, classify: StockSageSector.sector)
             if sectorImpact.isWarning { plan += "\nBy sector — " + sectorImpact.note }
-        }
-        // EXPORT-02: mirror StockSageTodayPlan.copyAllText's SAMPLE-data warning — this is
-        // the OTHER artifact that gets pasted into a broker; a seed price must not be acted
-        // on as real just because this export path skipped the on-screen banner's caveat.
-        if store.isSampleData {
-            plan = "⚠ SAMPLE DATA — illustrative prices, NOT live quotes. Re-price before any order.\n" + plan
-        }
-        // ROUND-H PARITY (sheet-lens MED, 2026-07-09): the sheet's copy is the OTHER
-        // broker-paste artifact — it must carry the same stale-price flag copyAllText/build
-        // already do. nil priceAsOf ⇒ unknown ⇒ no line, never a false warning.
-        if let asOf = idea.priceAsOf,
-           StockSageScanChunking.utcDayKey(asOf) != StockSageScanChunking.utcDayKey(Date()) {
-            plan = "⚠ PRICE NOT LIVE — as of \(asOf.formatted(.relative(presentation: .named))); re-price before any order.\n" + plan
         }
         // EXPORT-01: mirror the sheet's Held/Journal context lines (same formats, same call sites)
         // so a pasted plan doesn't invite doubling a position the owner already holds. Only append
@@ -9296,14 +9284,16 @@ struct MarketsView: View {
                             .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                         }
                         .buttonStyle(LuxPressStyle())
-                        .help("Copy a clean text trade plan (entry/stop/target/R:R/size/flags/scale-out) to the clipboard. Blocked setups are auto-skipped and exported as gate-status only.")
+                        .help("Copy a trade plan only with a verified quote no more than 60 seconds old. Otherwise copy a draft status; blocked setups remain gate-status only.")
                         // Explicit label: on iPhone this button is icon-only, so the Text no
                         // longer supplies VoiceOver's name (it would fall back to the symbol).
                         .accessibilityLabel(planCopied ? "Plan copied" : "Copy plan")
 
                         // Extension batch (2026-07-16): share/save the SAME plan text the Copy
                         // button produces (identical honesty flags — one source, no drift).
-                        PlanShareButton(planText: fullPlanText(for: idea), symbol: idea.symbol, iconSize: mvFont11)
+                        PlanShareButton(planText: fullPlanText(for: idea), symbol: idea.symbol,
+                                        priceAsOf: currentPlanIdea(for: idea).priceAsOf,
+                                        isSample: store.isSampleData, iconSize: mvFont11)
 
                         Button { Task { await store.runBacktest(symbol: idea.symbol) } } label: {
                             HStack(spacing: 6) {
