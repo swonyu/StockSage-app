@@ -34,9 +34,25 @@ struct StockSagePaperAutomationPanel: View {
                 }
                 Text("\(automation.book.open.count) paper positions · \(automation.book.pending.count) pending · \(automation.book.trades.filter { !$0.isOpen }.count) closed")
                     .font(.caption)
+                if let scan = automation.book.decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
+                    Text("Market coverage · \(scan.at.formatted(date: .omitted, time: .shortened))").font(.caption.bold())
+                    Text(scan.reason).font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Full US market discovery begins on the next research cycle; your watchlist is not the scan limit.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
+                    Text("Latest decision: \(decision.symbol) · \(decision.action)").font(.callout.bold())
+                    Text(decision.reason).font(.caption).foregroundStyle(.secondary)
+                }
+                if automation.isRunning, !automation.isResearching, let last = automation.book.lastResearch {
+                    Text("Next research due \(last.addingTimeInterval(StockSagePaperAutomation.interval).formatted(date: .omitted, time: .shortened)) · while awake, connected and in session")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
                 DisclosureGroup("Simulation policy and limitations") {
-                    Text("Separate $10,000 account. Qwen researches up to four US watchlist or held stocks every fifteen minutes, rotating through the list. Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy can open; Sell/Reduce closes the entire simulated holding. Hold/Avoid creates no order.")
+                    Text("Separate $10,000 account. Full Massive US listed-market snapshots every fifteen minutes, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Qwen reviews all paper holdings first, then up to twelve affordable new candidates, least recently attempted first and daily dollar activity next. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
+                    Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy can automatically open; Sell/Reduce automatically closes the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
                     Text("Simulated fills require a Massive SIP observation after the decision, received within two minutes. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts. Exits use a subsequent observed price; gaps and missed crossings can worsen outcomes.")
                     Text("Runs while this Mac is awake and StockSage is open. Weekday session hours do not include a holiday calendar; stale or missing data blocks fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
                 }.font(.caption).foregroundStyle(.secondary)

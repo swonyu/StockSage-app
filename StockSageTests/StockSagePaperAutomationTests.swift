@@ -11,6 +11,106 @@ struct StockSagePaperAutomationTests {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source)
     }
 
+    @Test func marketDiscoveryRequestsAllTickersWithoutChangingEmptyListSemantics() throws {
+        let request = try #require(StockSageMassive.marketRequest(key: "fixture-key"))
+        let url = try #require(request.url)
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(!query.contains { $0.name == "tickers" })
+        #expect(query.contains { $0.name == "include_otc" && $0.value == "false" })
+        #expect(!url.absoluteString.contains("fixture-key"))
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key")
+        #expect(StockSageMassive.marketRequest(key: "") == nil)
+        #expect(StockSageMassive.request(for: [], key: "fixture-key") == nil)
+    }
+
+    @Test func marketParserPreservesCoverageAndRejectsErrorOrPartialPayload() throws {
+        let ns = Int64(now.timeIntervalSince1970) * 1_000_000_000
+        let rows: [[String: Any]] = [
+            ["ticker": "IBM", "lastTrade": ["p": 100, "t": ns], "day": ["v": 1000, "vw": 99]],
+            ["ticker": "ORCL", "day": ["c": 100]], // No last trade is not a live observation.
+            ["ticker": "BRK.B", "lastTrade": ["p": 500, "t": ns]], // Existing router does not support this spelling.
+            ["ticker": "BAD/URL", "lastTrade": ["p": 100, "t": ns]]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: ["status": "OK", "count": 4, "tickers": rows])
+        let snapshot = try #require(StockSageMassive.parseMarketSnapshot(data))
+        #expect(snapshot.returnedCount == 4)
+        #expect(snapshot.rows.count == 1 && snapshot.rows.first?.quote.symbol == "IBM")
+        #expect(snapshot.rows.first?.dollarVolume == 99_000)
+        #expect(snapshot.rows.first?.quote.marketTime == now)
+        for root: [String: Any] in [
+            ["status": "ERROR", "tickers": rows],
+            ["status": "OK", "count": 5, "tickers": rows],
+            ["status": "OK", "tickers": "invalid"],
+            ["status": "OK", "tickers": ["invalid"]]
+        ] {
+            #expect(StockSageMassive.parseMarketSnapshot(try JSONSerialization.data(withJSONObject: root)) == nil)
+        }
+        let empty = try JSONSerialization.data(withJSONObject: ["status": "OK", "count": 0, "tickers": []])
+        #expect(StockSageMassive.parseMarketSnapshot(empty)?.returnedCount == 0)
+    }
+
+    @Test func discoveryRotatesBeyondWatchlistAndAlwaysReviewsHoldingsFirst() {
+        let names = ["AAL", "ABBV", "ABT", "ADBE", "AMD", "AMGN", "AMZN", "APP", "BA", "BAC", "CAT", "COST", "CRM"]
+        let rows = names.enumerated().map { index, symbol in
+            StockSageMassive.MarketCandidate(quote: quote(symbol, at: now), dollarVolume: Double(1000 - index))
+        }
+        let market = StockSageMassive.MarketSnapshot(returnedCount: rows.count, rows: rows)
+        var book = A.Book()
+        let first = A.researchTargets(market: market, book: book, at: now)
+        #expect(first == Array(names.prefix(12)), "Discovery is market-scoped, not ORCL/watchlist-scoped")
+        for symbol in first { book.note(symbol: symbol, action: "Hold", reason: "Fixture", at: now) }
+        #expect(A.researchTargets(market: market, book: book, at: now).first == "CRM")
+        let held = ["MSFT", "NVDA", "ORCL", "TSLA", "V"]
+        for symbol in held { book.propose(symbol: symbol, action: .buy, at: now.addingTimeInterval(-2)) }
+        book.settle(quotes: Dictionary(uniqueKeysWithValues: held.map { ($0, quote($0, at: now.addingTimeInterval(-1))) }), at: now)
+        #expect(Array(A.researchTargets(market: market, book: book, at: now).prefix(5)) == held)
+        #expect(A.researchTargets(market: nil, book: book, at: now) == held,
+                "Discovery failure must not suppress held-stock sell reviews")
+    }
+
+    @Test func discoveryExcludesBadQuotesPendingAndUnaffordableEntries() {
+        let rows = [quote("AAPL", at: now), quote("MSFT", at: now.addingTimeInterval(-121)),
+                    quote("NVDA", at: now.addingTimeInterval(1)), quote("ORCL", at: now, source: .yahoo),
+                    quote("COST", price: 3000, at: now), quote("AMZN", price: .nan, at: now),
+                    quote("2222.SR", at: now), quote("IBM", at: now)]
+            .map { StockSageMassive.MarketCandidate(quote: $0, dollarVolume: 1_000_000) }
+        var book = A.Book()
+        book.propose(symbol: "IBM", action: .buy, at: now)
+        #expect(A.researchTargets(market: .init(returnedCount: rows.count, rows: rows), book: book, at: now) == ["AAPL"])
+        #expect(!A.mayResearch("ORCL", marketSymbols: ["AAPL"], heldSymbols: []))
+        #expect(A.mayResearch("ORCL", marketSymbols: [], heldSymbols: ["ORCL"]))
+    }
+
+    @Test func discoveredOffBoardStockCanAutomaticallyBuyThenSell() throws {
+        var book = A.Book()
+        let market = StockSageMassive.MarketSnapshot(returnedCount: 1, rows: [
+            .init(quote: quote("IBM", at: now), dollarVolume: 1_000_000)
+        ])
+        let symbol = try #require(A.researchTargets(market: market, book: book, at: now).first)
+        let permitted = Set([symbol])
+        try #require(A.mayResearch(symbol, marketSymbols: permitted, heldSymbols: []))
+        book.propose(symbol: symbol, action: .buy, at: now)
+        book.settle(quotes: [symbol: quote(symbol, at: now)], at: now.addingTimeInterval(1))
+        #expect(book.open.isEmpty, "No decision-time fabricated fill")
+        book.settle(quotes: [symbol: quote(symbol, at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        try #require(book.open.count == 1)
+        try #require(A.mayResearch(symbol, marketSymbols: [], heldSymbols: Set(book.open.map(\.symbol))))
+        book.propose(symbol: symbol, action: .sell, at: now.addingTimeInterval(3))
+        book.settle(quotes: [symbol: quote(symbol, price: 105, at: now.addingTimeInterval(4))], at: now.addingTimeInterval(5))
+        #expect(book.open.isEmpty && book.trades.count == 1 && book.trades[0].exitPrice != nil)
+        #expect(book.cash == 10_091.11 && book.valid)
+    }
+
+    @Test func upgradingWatchlistOnlyBookStartsMarketScanImmediatelyThenKeepsCadence() {
+        var book = A.Book()
+        book.lastResearch = now
+        book.note(symbol: "ORCL", action: "Hold", reason: "Legacy watchlist-only cycle", at: now)
+        #expect(A.researchDue(book: book, at: now))
+        book.note(action: "Market scan unavailable", reason: "Fixture outage", at: now)
+        #expect(!A.researchDue(book: book, at: now.addingTimeInterval(899)))
+        #expect(A.researchDue(book: book, at: now.addingTimeInterval(900)))
+    }
+
     @Test func scheduledPaperWindowIncludesPreAndAfterHours() throws {
         let cases: [(String, Bool)] = [
             ("2026-09-08T07:59:59Z", false), ("2026-09-08T08:00:00Z", true),

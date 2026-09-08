@@ -14,11 +14,29 @@ after-hours sessions: weekdays04:00 inclusive to20:00 exclusive, New York time
 (DST-aware). It requires
 existing web permission, usable data and the configured local Qwen server.
 
-Every fifteen minutes it researches up to four US watchlist/held stocks, rotating
-through the list. It reuses the app's price history, news, catalyst context,
-technical ideas and evidence-checked AI opinion schema. Unavailable data and
-unverifiable model responses are retained as failures, never substituted with
-invented facts or successful trades. The existing watchlist currently contains ORCL.
+Every fifteen minutes it requests the **full Massive US listed-market snapshot**,
+without a curated-universe/watchlist filter and with OTC excluded. Every returned
+row is screened; malformed, stale and unsupported symbols are excluded and the
+counts are disclosed. The existing Massive router supports bare-letter symbols;
+share-class/preferred spellings it cannot route are not silently claimed as traded.
+The snapshot may contain ETFs, not just common stocks. This is US coverage, not
+all global exchanges, and returned coverage depends on the provider's current data.
+
+Qwen reviews **all open paper holdings first**, then up to **twelve** fresh,
+affordable new candidates, ordered by least recent attempt, observed daily dollar
+activity, and ticker as the tie-break. Thus quotes for the whole market are screened,
+but a whole-market Qwen analysis is NOT performed every fifteen minutes. Activity
+is a research priority, not a predictive signal or a claim of executable liquidity.
+Discovery failure still allows held-stock reviews and sampled exits.
+
+The research path reuses price history, news, catalyst context, technical ideas and
+the evidence-checked AI opinion schema. Newly discovered symbols get local definitions
+without being added to the user's watchlist or board. The model sees whether the
+paper account already holds the stock and what its cash/position limit is.
+Unavailable data and unverifiable model responses remain failures, never invented
+facts or successful trades. The visible panel shows market coverage, the latest
+saved decision and the next scheduled cycle rather than hiding the reason for zero
+orders inside a disclosure group.
 
 The new account starts with $10,000 of simulated cash. It permits whole shares,
 long positions only, no margin, five positions maximum and $2,000 per new position.

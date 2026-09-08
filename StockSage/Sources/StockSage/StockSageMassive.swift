@@ -209,6 +209,62 @@ enum StockSageMassive {
         return out
     }
 
+    // MARK: - Explicit full-market discovery (not an empty watchlist request)
+
+    nonisolated struct MarketCandidate: Sendable {
+        let quote: StockSageQuoteService.LiveQuote
+        /// Observed daily volume × daily VWAP; research priority only, not a liquidity guarantee.
+        let dollarVolume: Double?
+    }
+    nonisolated struct MarketSnapshot: Sendable {
+        let returnedCount: Int
+        let rows: [MarketCandidate]
+    }
+
+    /// Omit tickers to request the entire provider-returned US listed market. Explicitly no OTC.
+    /// Separate from request(for:) so an empty watchlist never accidentally triggers a market sweep.
+    nonisolated static func marketRequest(key: String) -> URLRequest? {
+        guard !key.isEmpty, var components = URLComponents(string: host + snapshotPath) else { return nil }
+        components.queryItems = [URLQueryItem(name: "include_otc", value: "false")]
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    static func parseMarketSnapshot(_ data: Data) -> MarketSnapshot? {
+        guard data.count <= 50_000_000,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["status"] as? String == "OK", let rows = root["tickers"] as? [[String: Any]],
+              rows.count <= 50_000 else { return nil }
+        if let count = root["count"], int64(count) != Int64(rows.count) { return nil }
+        var parsed: [String: MarketCandidate] = [:]
+        for row in rows {
+            guard let symbol = row["ticker"] as? String, (1...12).contains(symbol.utf8.count),
+                  symbol.utf8.allSatisfy({ (65...90).contains($0) }), covers(symbol),
+                  let quote = parseTicker(row, requestedSymbol: symbol) else { continue }
+            let day = row["day"] as? [String: Any]
+            var activity: Double?
+            if let volume = finite(day?["v"]), volume >= 0,
+               let vwap = finite(day?["vw"]), vwap > 0, (volume * vwap).isFinite {
+                activity = volume * vwap
+            }
+            if let previous = parsed[symbol],
+               (previous.quote.marketTime ?? .distantPast) >= (quote.marketTime ?? .distantPast) { continue }
+            parsed[symbol] = MarketCandidate(quote: quote, dollarVolume: activity)
+        }
+        return MarketSnapshot(returnedCount: rows.count, rows: parsed.values.sorted { $0.quote.symbol < $1.quote.symbol })
+    }
+
+    static func fetchMarketSnapshot() async -> MarketSnapshot? {
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
+              let request = marketRequest(key: apiKey),
+              let (data, response) = try? await URLSession.shared.data(for: request),
+              !Task.isCancelled, ToolPolicy.isExternalAllowed,
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return parseMarketSnapshot(data)
+    }
+
     // MARK: - Split-adjusted daily history (M1b)
 
     /// Massive's documented custom-bars endpoint is the history source for covered US equities.

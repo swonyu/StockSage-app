@@ -1,5 +1,62 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Market-wide native paper installed — 2026-09-09 00:20 +03
+
+Owner at00:10 requested the entire market and automatic buys/sells, approving the
+previously proposed market-discovery expansion. Design/plan76af387 records the
+native-only scope. This task remains the sole writer/installer in qwen-context;
+the integration peer is holding. The extended-hours build2face4d is superseded
+by this tested installation, not by a coverage-only artifact.
+
+The old loop only selected watchlist/held names and repeated ORCL Hold. New
+StockSageMassive.marketRequest explicitly omits the tickers filter and sets
+include_otc=false. Every returned US listed-market row is screened; supported
+fresh affordable names rotate by least recent attempt, daily dollar activity,
+then ticker. Qwen reviews all open holdings first, then up to twelve new names.
+All pre-inference/post-inference watchlist gates now use the same market/held
+eligibility helper. Unknown board symbols receive local definitions without
+watchlist mutation. The first scan after upgrading a watchlist-only ledger runs
+immediately, then resumes900s cadence. UI shows market coverage and latest decision.
+
+Full-market snapshots do not mean full Qwen analysis of every returned stock.
+OTC is excluded; existing routing accepts bare-letter symbols, not every share-
+class/preferred spelling; ETF rows can be present. Stale/missing/unsupported rows
+are disclosed. Discovery failure does not prevent held-stock reviews or sampled
+exits. Paper risk/cost/freshness/expiry/persistence rules remain unchanged; Hold
+and Avoid do not create an order. No profitable-result or broker-fill claim.
+
+Verification: initial new-feature red failed compilation on missing production
+discovery seams (exit65), not claimed as an executed assertion failure. Focused
+paper/Massive tests:30 passed in0.034s. Additional upgrade scheduling test went
+red on its missing seam before implementation. Final canonical serial gates:
+1857 macOS tests in57.161s and1854 iPhone17Pro(gate) tests in57.658s, exit0,
+with the same three established exclusions.46 frozen research regressions passed
+in2.489s. Self-review/diff checks passed. Logs and result bundles:
+`/private/tmp/stocksage-market-paper-20260909.INLXzU/`.
+
+Read-only live full-market HTTP probe:200, statusOK,7,728,595bytes,13,145rows,
+371 trade rows within120s at that probe instant. No credentials were logged.
+Normal AppleEvent quit succeeded and app process absence was confirmed. Old app
+recoverable at `/Users/saleh/.Trash/StockSageX-before-market-paper-20260909-0020.app`.
+Tested/staged/installed bundles match by checksum-aware dry run including symlinks;
+strict/deep codesign passed. Installed `/Applications/StockSageX.app` debug dylib:
+`6a9f015864ac46a2f29d08018a7f48f8b92e27fc6453ace9c0c34f99deb180c1`.
+Existing Qwen61562 was not restarted. No new native visual acceptance claimed.
+IBKR relay remains OFF and outsideRth=false; no broker orders, new dependencies,
+other-worktree source changes, frozen-recipe changes, merge or push.
+
+Actual installed process95475 holds the account writer lease; native enabled flag1.
+First full-market app cycle started21:20:40 UTC September8 and persisted Research
+complete. It returned13,145 tickers, parsed12,087 supported trade observations,
+found385 fresh, and researchedSPY,NVDA,MU,QQQ,SNDK,TSLA,INTC,AMD,SPCX,META,AAPL,AVGO.
+Outcomes:5 Hold,3 Avoid,4 unavailable/unverifiable Qwen responses. Ledger now37
+decisions, zero trades/pending, unchanged simulated cash. No validated Buy was
+produced; no order or market-observed fill is claimed. Deterministic tests verify
+selected off-board Buy→later-fill→Sell; that is distinct from this actual cycle.
+Continue the existing15-minute automation; do not lower validation or manufacture
+trades to turn the counter positive. The four invalid responses are retained as
+failures; their individual causes were not inferred from the generic error message.
+
 ## Extended-hours native paper installed — 2026-09-09 00:01 +03
 
 Owner approved at23:54 on September8: native Qwen research, entries and exits
