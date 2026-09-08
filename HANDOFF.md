@@ -1,5 +1,68 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Intraday research foundation — 2026-09-08 14:23 +03
+
+Owner14:12 "ok do it" approved combining current StockSage/Qwen with the case
+study's research sequence. Completed the first bounded milestone inline in clean
+wt/coverage fromc5af104; peer remains inactive. No Swift, app settings, record,
+broker, UI or Qwen-server changes. Owner13:45 explicitly turned Qwen ON; it is
+running as61562 and must not be stopped by older OFF notes. Installed StockSage
+PID26453 unchanged. Earlier owner-authorized main merge/push completed atfc455cc;
+this new research work is NOT merged or pushed. Other checkout changes preserved.
+
+New tools/intraday_research.py collects header-authenticated Massive1-minute
+unadjusted aggregates into private immutable SQLite/raw-response archives, then
+runs chronological completed5-minute-feature/15-minute-target comparisons. No
+redirects, credential argv/logs, forward filling, same-close fills or automatic
+model promotion. At most10 symbols/14 past calendar days per archive; metadata
+and source/runner hashes bind each report. .research/ is ignored; data0600/dirs0700.
+
+Executed collector: AAPL MSFT NVDA AMZN GOOGL META TSLA ORCL QCOM APP,
+2026-08-31 through09-04. Ten successful provider responses,38,899 raw observations,
+19,500 RTH minutes,390 minutes in every50 stock-sessions. Output:
+`.research/archives/20260908-five-session-smoke-v1/`.
+Archive SHA256:0b852a767f6a8c993103263de790a67680c71e3a692f5afe60dda23e4b1153dc.
+
+Predeclared train through09-02/validation09-03/test09-04:1650/550/550 examples;
+6-minute delay stress has540 test examples. Features use only20 completed5-minute
+bars; gaps reset windows; entries strictly after signal completion; no overnight
+targets. No missing feature buckets/gaps,200 end-of-day candidate labels excluded.
+No-trade/momentum/reversal plus one fixed LightGBM fit;16 validation-only entry
+threshold policies, frozen before test,32 delay/cost scenarios, no selected winner.
+USD10k simulated account, long-only whole shares, max5 positions/20% each, no
+borrowing, fees on both legs, every-minute-open marks and sampled drawdown.
+
+At1-minute delay/5bps **assumed** round-trip costs on one test day: momentum36
+trades/-0.311%; reversal32/-0.410%; LightGBM0 trades/0.000%; no-trade0/0.000%.
+These are not return expectations or evidence that one model is best. Report is
+always engineering-only/not-promotable. Actual broker minimums,FX,spread/impact,
+historical-publication latency, point-in-time universe and authoritative calendars
+are explicitly unvalidated; no stops modeled; no durable-edge/weekly-return claim.
+
+Research-only Python3.12 venv under.research/venv: LightGBM4.6.0,NumPy2.2.6,
+SciPy1.18.1. Added Homebrew libomp23.1.0 (1.8MB); no auto-update/cleanup or global
+Python changes. Initial LightGBM import failed without libomp; then the old
+SciPy1.15.3 wheel failed the macOS27 loader's zero-fill-section check. Replaced
+that wheel only; imports succeed. No binary patch or security bypass. Qwen's
+venv remains untouched and no second language model was loaded.
+
+Checks: initial red import failure before implementation; final17/17 unittest
+checks pass including real LightGBM repeatability and training-only labels.
+Existing WhatsApp importer self-check passes. Independent raw-hash/count/credential
+audit passes; two complete offline runs reproduce all32 scenarios, threshold choices
+and model bytes exactly. Measured0.43s wall,79,822,848-byte maxRSS,zero swaps.
+Reports `.research/runs/20260908-five-session-smoke-v1{,-recheck}/report.{md,json}`;
+model text retained alongside. Exact reproducible commands and limitations in
+tools/intraday_research.md, approved spec/plan in docs/superpowers/*/2026-09-08-intraday-research*.
+
+Python-only milestone: no Xcode gates rerun or newly claimed. Historical1830/1827
+Mac/iPhone results remain valid only for their prior source build; native Chat/
+window acceptance still blocked by the unchanged native helper, not an app crash.
+Next research milestone: larger predeclared multi-archive walk-forward experiment
+with point-in-time/calendar/actual-cost controls; then Kronos/Chronos comparisons
+and prospective paper evaluation. This delivery does NOT add those models to the
+app or certify broker execution. Do not optimize this already-seen test day.
+
 ## Desktop installation, route acceptance and Journal-tab copy — 2026-09-08 03:06 +03
 
 Continued the02:37 native checkpoint through the03:02 heartbeat, inline on

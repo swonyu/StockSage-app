@@ -31,6 +31,13 @@ type-checks the whole test target. It proves the code compiles; it does NOT run 
 
 Requires full Xcode (macOS 26.5 deploy target, Swift 6, MainActor default isolation). New `.swift` files under `StockSage/Sources/` auto-compile (synchronized file groups — no `project.pbxproj` edits). Live quote/history fetches need network access.
 
+## Intraday research (separate from the app)
+
+The bounded minute-data collector and offline baseline/LightGBM benchmark are
+documented in [tools/intraday_research.md](tools/intraday_research.md). This is an
+engineering research lane, not an intraday predictor wired into badges or orders.
+Raw feeds, fitted model and reports remain private in ignored `.research/`.
+
 ## Provenance
 
 Extracted from the `Salehman AI` repo at commit `fc8f383` (2026-07-16). The extraction is source-clean: the engine and Markets views depend only on the DesignSystem, `ToolPolicy`, and the `AppSettings` shim — verified by dependency trace before the copy. This repo is a copy-out (not a submodule/package), so future engine fixes made in the parent app are **not** automatically reflected here.

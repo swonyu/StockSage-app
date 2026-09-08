@@ -12,3 +12,7 @@ xcuserdata/
 
 # App-generated caches (StockSage writes these at runtime to Application Support)
 *.log
+
+# Private research data, reports and isolated Python runtime (never publish feeds).
+.research/
+__pycache__/
