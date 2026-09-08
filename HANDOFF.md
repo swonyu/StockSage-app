@@ -1,5 +1,29 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Combined integration verified — 2026-09-08 23:44 +03
+
+Installation owner task01a0822f-6195-7f81-b4dc-6a0402fcaa4b completed the combined
+app in commit d13ab2b on `codex/qwen-chat-context`, clean worktree at
+`/Users/saleh/StockSage-wt/qwen-context`. Independently compared: Form4 parser/tests
+match377a447 and all eight R3 Swift/test files (including MarketsView) match
+c6c65b7 byte-for-byte. Inspected its final gate logs:1848 macOS tests in56.356s
+and1845 iPhone tests in65.856s, both TEST SUCCEEDED. These are that task's fresh
+combined runs, not additional reruns here. Artifacts:
+`/private/tmp/stocksage-ibkr-ready-20260908/{macos-final,ios-final}.log`.
+
+Independently verified installedPID79003, strict/deep codesign and debug dylibSHA:
+86dffdb335fa559264c6f980c167199ff538e2716fa6e494a25748be5e840afa.
+The integration task reports its native paper flag/ledger lease active and14
+offline relay checks passed; Qwen61562 unchanged. The IBKR relay remains OFF:
+the owner's free-trial login is diagnostic-only; approved-account paper access
+and actual broker acceptance remain pending. No real-order readiness is claimed.
+
+KEEP THE INSTALL HOLD. Future app builds must preserve d13ab2b's combined Qwen
+paper/chat changes and274aee4's paper relay; coverage-only output omits them.
+Do not reinstall this branch's staged artifact. Coordinate future integration
+with that existing task. This entry records evidence only: no source merge,
+model/settings changes, app replacement, new test run or push from this task.
+
 ## Copied-plan freshness fixed; installation handed off — 2026-09-08 23:38 +03
 
 Owner approved R3 at23:15: one shared rule for copied order plans. Missing,
