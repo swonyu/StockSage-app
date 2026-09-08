@@ -1,5 +1,32 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Three-session review consolidated — 2026-09-08 21:35 +03
+
+Owner-authorized three-session local review completed at source7e6e7aa. Report:
+`agent-docs/FULL_REVIEW_2026-09-08.md`. Both read-only reviewers are idle; this
+task remains the only shared-worktree writer. Findings include Form4 optional-field
+misalignment, unknown-age copied plans, date-misaligned/indefinitely cached
+correlation evidence, and the compiled legacy EODHD credential fallback (value
+not printed). Reviewer overclaims were corrected: the owner's saved MLX settings
+work; blindly wiring current precheck data into the gate is unsafe; credential
+validity/misuse is unverified, not an established universal outage.
+
+Fresh checks:exact local model ID found by /v1/models; tiny synthetic JSON
+generation returned status ok/finish_reason stop/six tokens; existing server
+arguments disable thinking and retain concurrency1. No stock-quality benchmark,
+new Xcode gate, visual acceptance or live broker/API certification claimed.
+No app/source/model settings changed. Focused parser-fix design approval was
+requested; do not implement new behavior until the owner answers. The report
+covers proposals for all four requested areas, not four shipped features.
+
+Prospective18:10UTC batch:all six candidates eligible at both delays.18:25UTC
+slot missed because the next heartbeat arrived18:33; this new miss is not
+attributed to sleep without evidence. Current14-slot totals:six captured/eight
+missed. Misses remain in denominator; no backfill. Existing15-minute heartbeat
+has no fixed clock-minute alignment. Scheduling alignment needs owner direction;
+no cadence, scheduler, frozen recipe/source or sleep setting changed. Qwen61562
+and StockSage99055 remain on. This is documentation-only; no merge or push.
+
 ## Sleep interrupted prospective timing — 2026-09-08 19:41 +03
 
 Power log confirms Maintenance Sleep/DarkWake cycles from18:31 through19:35
