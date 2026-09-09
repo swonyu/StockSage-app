@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Catalyst Today / Week / Month — September 9, verified candidate; not installed
+
+macOS Catalysts now offers Today, This Week and This Month over retained engine
+events, with shared Cards/Calendar membership and explicit UTC ranges. Monday-start
+weeks and calendar months use Foundation intervals. Existing saved layout choices,
+full stock context, source links, Details actions and explanation inputs remain.
+Other dates / coverage keeps otherwise omitted stock cards and their failed or
+unchecked feed statuses accessible. Provider-dated events and history projections
+(not announced) have separate counts. Periods re-evaluate at UTC midnight and on
+foreground/wake/clock change; these UI events do not trigger provider refreshes.
+
+Parent reproduced and fixed two source-review defects: off-period dated-only
+briefs losing their coverage access, and projections counted as provider events.
+Red:20 tests/1 suite/5 issues/0.025s, exit65. Both regressions then passed in the
+full Mac run: **2,037 tests/200 suites/136.117s, exit0**. Strict Mac emit146s and
+test typecheck197s passed, aggregateexit0: `macos=OK ios=SKIP tests=OK`.
+Final bounded Astra source review closed with no remaining must-fix. Existing
+three canonical exclusions retained; no iOS or opt-in live/model/replay tests.
+
+Frozen catalyst-period-source.sha256 rechecked after gates; manifestSHA256
+6f7c4303b42b9c600659491356a27edca3df9d934daf09e8d027c0fc89b9548c.
+Retained bundle matches all64 tested file/link entries and passes deep/strict
+codesign. Candidate dylibSHA256
+6889500846fec52a7968a0ce8d1ac17753c1ad0108ca45232995394df3ddaf37.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-catalyst-period/StockSageX.app`.
+Receipt/commands: same root, `CATALYST_PERIODS.md`. Includes the preceding verified
+manual-research UI batch. No provider/model/financial/history changes or push.
+
+**Not installed:** preserve the owner's session-only manual500 scan/results;
+await the existing restart/clear choice even after scan completion. Installed
+27a4727/PID40101 remains intact, paper paused0, Qwen2120 unchanged. Native layout,
+keyboard/VoiceOver and actual clock-transition mounting are not yet inspected.
+This view uses displayed Ideas and retained observations, not all US listings or
+a complete month archive. Broader provider date-range/refresh work is not part of
+this presentation batch. Smaller paper-panel candidate remains unintegrated.
+
 ## Manual research UI clarity — September 9, verified candidate; not installed
 
 Parent-only changes to the macOS ResearchModesPanel and existing HorizonResearch
@@ -34,8 +70,8 @@ running app/results; do NOT auto-install on scan completion (completed results
 are also temporary). No replacement, quit, new backup or new-UI inspection yet.
 Installed app remains27a4727/PID40101, dylib84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef;
 paper remains paused0, Qwen2120 unchanged. No history edits, pushes, real orders,
-IBKR relay or paid resources. Paper-panel and Catalyst external candidates are
-unintegrated and require separate parent review/gates, including platform scope.
+IBKR relay or paid resources. The Catalyst candidate is now integrated/verified
+in the newer receipt above; the paper-panel candidate remains unintegrated.
 
 ## 500-listing manual scans and per-arrival paper exits — September 9, Mac installed
 

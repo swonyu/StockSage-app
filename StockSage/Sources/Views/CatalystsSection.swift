@@ -1,10 +1,13 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 // MARK: - CatalystsSection
 //
 // Owner request (2026-09-06): "a new tab that shows, for the same ideas as the Ideas tab, the
 // key catalyst to watch and explains why" — build step C3-view. This file adds ZERO new
-// catalyst logic: it is pure display over the pure brief engine (StockSageCatalystWatch,
+// catalyst priority/trading logic: it is display over the pure brief engine (StockSageCatalystWatch,
 // build step C1) plus the optional on-device narrator (StockSageCatalystNarrator, build step
 // C2). `ideas` is the SAME projected, ordered list the Ideas tab renders — this view never
 // re-ranks it, it only asks "what could move each one next, and why".
@@ -27,7 +30,30 @@ struct CatalystsSection: View {
         }
     }
 
+    #if os(macOS)
+    nonisolated enum Period: String, CaseIterable {
+        case today, thisWeek, thisMonth
+        nonisolated var title: String {
+            switch self {
+            case .today: return "Today"
+            case .thisWeek: return "This Week"
+            case .thisMonth: return "This Month"
+            }
+        }
+    }
+    #endif
+
+    #if os(macOS)
+    // Keep the existing preference key, but make the approved agenda the first-run Mac view.
+    @AppStorage("marketsCatalystsMode") private var mode: Mode = .calendar
+    @AppStorage("marketsCatalystsPeriod") private var period: Period = .thisWeek
+    // Re-arms the one-shot UTC-boundary task after a boundary, wake or clock change. Each render
+    // still captures a fresh Date below, so catalyst freshness never freezes at an old tick.
+    @State private var periodClockRevision = 0
+    @Environment(\.scenePhase) private var scenePhase
+    #else
     @AppStorage("marketsCatalystsMode") private var mode: Mode = .cards
+    #endif
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
     @State private var narrationFacts: [String: [String]] = [:]
@@ -175,9 +201,20 @@ struct CatalystsSection: View {
         let now = Date()
         let briefs = buildBriefs(now: now)
         let availability = StockSageCatalystNarrator.availability
+        #if os(macOS)
+        let entries = Self.periodEntries(
+            StockSageCatalystWatch.calendar(briefs, now: now), period: period, now: now)
+        #endif
         VStack(alignment: .leading, spacing: DS.Space.md) {
+            #if os(macOS)
+            headerCard(briefs: briefs, availability: availability, now: now, entries: entries)
+            #else
             headerCard(briefs: briefs, availability: availability)
+            #endif
             if !ideas.isEmpty {
+                #if os(macOS)
+                periodContent(briefs: briefs, entries: entries, now: now, availability: availability)
+                #else
                 switch mode {
                 case .cards:
                     // LazyVStack, not VStack — up to ~450 briefs (see `buildBriefs`), and the
@@ -190,11 +227,35 @@ struct CatalystsSection: View {
                 case .calendar:
                     calendarBody(briefs: briefs, now: now)
                 }
+                #endif
             }
         }
         .task(id: explanationRequestSettings) { await probeIfBackendNeedsServer() }
+        #if os(macOS)
+        .task(id: periodClockRevision) { await waitForNextUTCMidnight() }
+        .onChange(of: scenePhase, initial: true) {
+            if scenePhase == .active { periodClockRevision &+= 1 }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name.NSSystemClockDidChange)) { _ in
+            periodClockRevision &+= 1
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            periodClockRevision &+= 1
+        }
+        #endif
         .onDisappear { probeState = .init() }
     }
+
+    #if os(macOS)
+    private func waitForNextUTCMidnight() async {
+        let now = Date()
+        let seconds = max(1, Self.periodInterval(.today, now: now).end.timeIntervalSince(now) + 0.1)
+        do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+        catch { return }
+        guard !Task.isCancelled else { return }
+        periodClockRevision &+= 1
+    }
+    #endif
 
     // MARK: - Data
 
@@ -235,7 +296,8 @@ struct CatalystsSection: View {
 
     @ViewBuilder
     private func headerCard(briefs: [StockSageCatalystWatch.Brief],
-                            availability: StockSageCatalystNarrator.Availability) -> some View {
+                            availability: StockSageCatalystNarrator.Availability,
+                            now: Date? = nil, entries: [StockSageCatalystWatch.CalendarEntry]? = nil) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Text("Catalysts to watch")
                 .font(.system(size: font15, weight: .semibold)).foregroundStyle(.white)
@@ -245,8 +307,36 @@ struct CatalystsSection: View {
             Text("Primary badges are AI assessments; open Details for the reasoning or to assess a name with selected recent Massive news. EODHD is disabled. Failed checks leave a visible unverified draft. Rules action remains separate; AI does not change sizing or execution checks.")
                 .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
-            DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }
-                .frame(maxWidth: 260)
+            #if os(macOS)
+            if let now, let entries {
+                Picker("Catalyst period", selection: $period) {
+                    ForEach(Period.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 420)
+                HStack {
+                    Text("\(Self.periodRangeLabel(period, now: now)) · UTC · Mon–Sun")
+                    Spacer()
+                    Picker("View", selection: $mode) {
+                        ForEach(Mode.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.menu).fixedSize()
+                }
+                .font(.system(size: font11, weight: .medium))
+                Text(Self.periodCountLabel(entries))
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Selected events for your current Ideas filters; recent coverage is limited.")
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if period == .thisMonth {
+                    Text("This Month filters retained observations; it is not a complete monthly event archive.")
+                        .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                }
+            }
+            #else
+            DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
+            #endif
             if let regime = store.regime {
                 let gaugedStr = store.regimeGaugedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "not yet"
                 Text("Regime: \(regime.state.rawValue) · sizing bias ×\(String(format: "%.2f", regime.sizingBias)) · gauged \(gaugedStr)")
@@ -402,7 +492,7 @@ struct CatalystsSection: View {
     private func cardHeader(_ brief: StockSageCatalystWatch.Brief) -> some View {
         let idea = brief.idea
         let primary = brief.primary
-        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+        let content = VStack(alignment: .leading, spacing: DS.Space.xxs) {
             HStack(spacing: DS.Space.xs) {
                 Text(idea.symbol).font(.system(size: font13, weight: .bold, design: .rounded)).foregroundStyle(.white)
                 actionCapsule(idea)
@@ -421,10 +511,17 @@ struct CatalystsSection: View {
                 }
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onSelect(idea) }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(idea.symbol): \(primary.headline)")
+        #if os(macOS)
+        Button { onSelect(idea) } label: { content.contentShape(Rectangle()) }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(idea.symbol): \(primary.headline)")
+            .accessibilityHint("Open stock details")
+        #else
+        content.contentShape(Rectangle())
+            .onTapGesture { onSelect(idea) }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("\(idea.symbol): \(primary.headline)")
+        #endif
     }
 
     @ViewBuilder
@@ -728,6 +825,102 @@ struct CatalystsSection: View {
         return Self.iconName(for: brief.primary.kind)
     }
 
+    #if os(macOS)
+    // MARK: - macOS period-first navigation
+
+    @ViewBuilder
+    private func periodContent(briefs: [StockSageCatalystWatch.Brief],
+                               entries: [StockSageCatalystWatch.CalendarEntry], now: Date,
+                               availability: StockSageCatalystNarrator.Availability) -> some View {
+        let matching = Self.matchingBriefs(briefs, entries: entries)
+        let matchingIDs = Set(matching.map(\.id))
+        let entriesBySymbol = Dictionary(grouping: entries) { $0.idea.symbol }
+
+        if entries.isEmpty {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Text("No dated events found for \(Self.periodRangeLabel(period, now: now)) in the available records.")
+                    .font(.system(size: font12, weight: .semibold))
+                Text("Undated context and checked-empty coverage remain available below when present; absence here does not prove no catalyst occurred.")
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+            }
+            .padding(DS.Space.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+        }
+
+        switch mode {
+        case .cards:
+            LazyVStack(alignment: .leading, spacing: DS.Space.md) {
+                ForEach(matching) { brief in
+                    VStack(alignment: .leading, spacing: DS.Space.xs) {
+                        VStack(alignment: .leading, spacing: DS.Space.xs) {
+                            Text("Matches \(period.title)")
+                                .font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
+                            ForEach(entriesBySymbol[brief.idea.symbol] ?? []) {
+                                calendarRow($0, now: now)
+                            }
+                        }
+                        .padding(DS.Space.md)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+                        DisclosureGroup("Full stock context — all dates") {
+                            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                                Text("Explain uses the unchanged full stock brief below, not the period-match row.")
+                                    .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                                catalystCard(brief, availability: availability)
+                            }
+                            .padding(.top, DS.Space.xs)
+                        }
+                    }
+                }
+            }
+        case .calendar:
+            ForEach(Self.periodDayGroups(entries)) { group in
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text(StockSageCatalystWatch.dateStr(group.day))
+                        .font(.system(size: font12, weight: .semibold))
+                    if !group.scheduled.isEmpty {
+                        Text("Scheduled / estimated").font(.system(size: font9, weight: .medium))
+                            .foregroundStyle(DS.Palette.warningSoft)
+                        ForEach(group.scheduled) { calendarRow($0, now: now) }
+                    }
+                    if !group.reported.isEmpty {
+                        Text("Reported").font(.system(size: font9, weight: .medium))
+                            .foregroundStyle(DS.Palette.textSecondary)
+                        ForEach(group.reported) { calendarRow($0, now: now) }
+                    }
+                }
+                .padding(DS.Space.lg)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+            }
+            if !matching.isEmpty {
+                Text("Choose Cards from View for each matching stock's unchanged full context and optional explanation.")
+                    .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+            }
+        }
+
+        let disclosedIDs = mode == .cards ? matchingIDs : Set<String>()
+        let undated = Self.briefsWithUndatedContext(briefs, excluding: disclosedIDs)
+        if !undated.isEmpty {
+            DisclosureGroup("Undated context") {
+                LazyVStack(alignment: .leading, spacing: DS.Space.md) {
+                    ForEach(undated) { catalystCard($0, availability: availability) }
+                }.padding(.top, DS.Space.xs)
+            }
+        }
+        let coverage = Self.briefsNeedingCoverage(briefs, excluding: disclosedIDs.union(undated.map(\.id)))
+        if !coverage.isEmpty {
+            DisclosureGroup("Other dates / coverage") {
+                LazyVStack(alignment: .leading, spacing: DS.Space.md) {
+                    ForEach(coverage) { catalystCard($0, availability: availability) }
+                }.padding(.top, DS.Space.xs)
+            }
+        }
+    }
+    #endif
+
     // MARK: - Calendar mode
 
     @ViewBuilder
@@ -762,7 +955,7 @@ struct CatalystsSection: View {
     }
 
     @ViewBuilder
-    private func calendarRow(_ entry: StockSageCatalystWatch.CalendarEntry) -> some View {
+    private func calendarRow(_ entry: StockSageCatalystWatch.CalendarEntry, now: Date? = nil) -> some View {
         // A5: a dated "none known as of <date>" record (`isNegativeRecord`) is not a catalyst —
         // it renders dimmer and swaps the headline sentence for a small "No known catalyst" tag
         // (the date column already carries the same `checkedAt` date, so repeating "as of <date>"
@@ -771,7 +964,7 @@ struct CatalystsSection: View {
         // ONLY on the engine's flag (CatalystsSectionTests), never re-derived from `headline`.
         let badge = Self.negativeRecordBadge(isNegativeRecord: entry.isNegativeRecord)
         let rowColor = Self.calendarRowColor(isNegativeRecord: entry.isNegativeRecord)
-        HStack(alignment: .top, spacing: DS.Space.xs) {
+        let content = HStack(alignment: .top, spacing: DS.Space.xs) {
             Text(entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "—")
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                 .frame(minWidth: 64, alignment: .leading)
@@ -783,12 +976,21 @@ struct CatalystsSection: View {
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                     } else {
-                        Text(entry.item.headline).font(.system(size: font11)).foregroundStyle(rowColor)
+                        Text(Self.cardHeadline(entry.item, displayNow: now))
+                            .font(.system(size: font11)).foregroundStyle(rowColor)
                     }
                 }
                 if let firstWhy = entry.item.why.first {
                     Text(firstWhy).font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
                 }
+                #if os(macOS)
+                if let now, !entry.isNegativeRecord {
+                    Text(Self.eventStatus(entry, now: now))
+                        .font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
+                    Text("Source: \(entry.item.source)")
+                        .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                }
+                #endif
                 // Honesty floor: the RVOL detector is "unvalidated" and regime/seasonality carry
                 // their own caveats — the primary card already shows this (line ~165); the
                 // calendar row was the one path that dropped it (fix pass 2026-09-06). Stays
@@ -802,12 +1004,30 @@ struct CatalystsSection: View {
             Spacer()
             weightDot(entry.item.weight)
         }
-        .opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
-        .touchHitArea()
-        .contentShape(Rectangle())
-        .onTapGesture { onSelect(entry.idea) }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
+        #if os(macOS)
+        if let now {
+            VStack(alignment: .leading, spacing: 2) {
+                Button { onSelect(entry.idea) } label: { content.contentShape(Rectangle()) }
+                    .buttonStyle(.plain)
+                    .opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
+                    .accessibilityLabel(Self.periodAccessibilityLabel(entry, now: now))
+                    .accessibilityHint("Open stock details")
+                if let url = entry.item.sourceURL {
+                    Link("Read source record", destination: url).font(.system(size: font9))
+                }
+            }
+        } else {
+            content.opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
+                .contentShape(Rectangle()).onTapGesture { onSelect(entry.idea) }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
+        }
+        #else
+        content.opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
+            .touchHitArea().contentShape(Rectangle()).onTapGesture { onSelect(entry.idea) }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
+        #endif
     }
 
     // MARK: - Shared small pieces
@@ -831,6 +1051,150 @@ struct CatalystsSection: View {
     }
 
     // MARK: - Pure helpers (nonisolated, unit-tested — CatalystsSectionTests)
+
+    #if os(macOS)
+    nonisolated static func periodCountLabel(_ entries: [StockSageCatalystWatch.CalendarEntry]) -> String {
+        let projected = entries.filter(\.isProjected).count
+        return "\(entries.count - projected) provider-dated · \(projected) projected (not announced)"
+    }
+
+    nonisolated struct PeriodDayGroup: Identifiable {
+        let day: Date
+        var scheduled: [StockSageCatalystWatch.CalendarEntry]
+        var reported: [StockSageCatalystWatch.CalendarEntry]
+        nonisolated var id: Date { day }
+    }
+
+    nonisolated static var catalystCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        return calendar
+    }
+
+    nonisolated static func periodInterval(_ period: Period, now: Date) -> DateInterval {
+        let calendar = catalystCalendar
+        switch period {
+        case .today: return calendar.dateInterval(of: .day, for: now)!
+        case .thisWeek: return calendar.dateInterval(of: .weekOfYear, for: now)!
+        case .thisMonth: return calendar.dateInterval(of: .month, for: now)!
+        }
+    }
+
+    nonisolated static func contains(_ date: Date, in period: Period, now: Date) -> Bool {
+        let day = catalystCalendar.startOfDay(for: date)
+        let interval = periodInterval(period, now: now)
+        return interval.start <= day && day < interval.end
+    }
+
+    nonisolated static func periodRangeLabel(_ period: Period, now: Date) -> String {
+        let interval = periodInterval(period, now: now)
+        guard period != .today else { return StockSageCatalystWatch.dateStr(interval.start) }
+        let last = catalystCalendar.date(byAdding: .day, value: -1, to: interval.end)!
+        return "\(StockSageCatalystWatch.dateStr(interval.start)) – \(StockSageCatalystWatch.dateStr(last))"
+    }
+
+    /// Real dated events only; checked-empty and undated records remain separate disclosures.
+    nonisolated static func periodEntries(_ entries: [StockSageCatalystWatch.CalendarEntry],
+                                          period: Period, now: Date)
+        -> [StockSageCatalystWatch.CalendarEntry] {
+        let calendar = catalystCalendar
+        let today = calendar.startOfDay(for: now)
+        return entries.filter {
+            guard let date = $0.item.date else { return false }
+            return !$0.isNegativeRecord && $0.item.kind != .none && contains(date, in: period, now: now)
+        }.sorted {
+            let lhs = calendar.startOfDay(for: $0.item.date!)
+            let rhs = calendar.startOfDay(for: $1.item.date!)
+            let lhsUpcoming = lhs >= today, rhsUpcoming = rhs >= today
+            if lhsUpcoming != rhsUpcoming { return lhsUpcoming }
+            if lhs != rhs { return lhsUpcoming ? lhs < rhs : lhs > rhs }
+            if $0.idea.symbol != $1.idea.symbol { return $0.idea.symbol < $1.idea.symbol }
+            return $0.item.id < $1.item.id
+        }
+    }
+
+    nonisolated static func matchingBriefs(_ briefs: [StockSageCatalystWatch.Brief],
+                                           entries: [StockSageCatalystWatch.CalendarEntry])
+        -> [StockSageCatalystWatch.Brief] {
+        let ids = Set(entries.map { $0.idea.symbol })
+        return briefs.filter { ids.contains($0.idea.symbol) }
+    }
+
+    nonisolated static func briefsWithUndatedContext(_ briefs: [StockSageCatalystWatch.Brief],
+                                                     excluding ids: Set<String>)
+        -> [StockSageCatalystWatch.Brief] {
+        briefs.filter { brief in
+            !ids.contains(brief.id) && brief.all.contains { $0.date == nil && $0.kind != .none }
+        }
+    }
+
+    nonisolated static func briefsNeedingCoverage(_ briefs: [StockSageCatalystWatch.Brief],
+                                                  excluding ids: Set<String>)
+        -> [StockSageCatalystWatch.Brief] {
+        // A dated catalyst outside this period can still have failed/unchecked company feeds.
+        // Keep every otherwise omitted full card, not only the engine's .none fallback.
+        briefs.filter { !ids.contains($0.id) }
+    }
+
+    nonisolated static func periodDayGroups(_ entries: [StockSageCatalystWatch.CalendarEntry])
+        -> [PeriodDayGroup] {
+        var groups: [PeriodDayGroup] = []
+        for entry in entries {
+            guard let date = entry.item.date else { continue }
+            let day = catalystCalendar.startOfDay(for: date)
+            if groups.last?.day != day { groups.append(.init(day: day, scheduled: [], reported: [])) }
+            if isReported(entry.item.kind) { groups[groups.count - 1].reported.append(entry) }
+            else { groups[groups.count - 1].scheduled.append(entry) }
+        }
+        return groups
+    }
+
+    private nonisolated static func isReported(_ kind: StockSageCatalystWatch.Kind) -> Bool {
+        [.filing8K, .ratingChange, .guidanceChange, .insiderTrade].contains(kind)
+    }
+
+    private nonisolated static func isPastDay(_ date: Date, now: Date) -> Bool {
+        catalystCalendar.startOfDay(for: date) < catalystCalendar.startOfDay(for: now)
+    }
+
+    nonisolated static func eventStatus(_ entry: StockSageCatalystWatch.CalendarEntry,
+                                        now: Date) -> String {
+        if isReported(entry.item.kind) { return "Reported" }
+        if entry.isProjected {
+            return entry.item.date.map { isPastDay($0, now: now) } == true
+                ? "Projected from history — not announced · Date passed — outcome unverified"
+                : "Projected from history — not announced"
+        }
+        if entry.item.date.map({ isPastDay($0, now: now) }) == true {
+            return "Date passed — outcome unverified"
+        }
+        return "Scheduled / estimated"
+    }
+
+    nonisolated static func periodHeadline(_ item: StockSageCatalystWatch.Item, now: Date) -> String {
+        guard let date = item.date, isPastDay(date, now: now) else { return item.headline }
+        if item.kind == .earnings { return "Earnings date" }
+        if item.kind == .projectedEarnings { return "Projected earnings date" }
+        return item.headline
+    }
+
+    private nonisolated static func periodAccessibilityLabel(
+        _ entry: StockSageCatalystWatch.CalendarEntry, now: Date) -> String {
+        [entry.idea.symbol, entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "No date",
+         eventStatus(entry, now: now), periodHeadline(entry.item, now: now),
+         "Source: \(entry.item.source)", entry.item.caveat].compactMap { $0 }.joined(separator: ". ")
+    }
+    #endif
+
+    nonisolated static func cardHeadline(_ item: StockSageCatalystWatch.Item,
+                                         displayNow: Date?) -> String {
+        #if os(macOS)
+        if let displayNow { return periodHeadline(item, now: displayNow) }
+        #endif
+        return item.headline
+    }
 
     /// One icon per `Kind` (all six cases) — the `.extreme` up/down split needs the idea's own
     /// high/low direction, which lives one level up in `rowIconName(for:)`, so this returns the
