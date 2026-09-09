@@ -38,10 +38,10 @@ struct StockSageResearchModesPanel: View {
         let scan = research.scans[horizon] ?? .init()
         let rows = scan.listings.filter { item in
             (search.isEmpty || item.ticker.localizedCaseInsensitiveContains(search) || item.name.localizedCaseInsensitiveContains(search))
-                && (!buysOnly || isBuy(scan.results[item.ticker]?.verdict?.action))
+                && (!buysOnly || Self.isBuy(scan.results[item.ticker]?.verdict?.action))
         }
         let isRunning = research.running == horizon
-        let buys = scan.results.values.filter { isBuy($0.verdict?.action) }.count
+        let buys = scan.results.values.filter { Self.isBuy($0.verdict?.action) }.count
         let incomplete = scan.results.values.filter { $0.verdict == nil }.count
         return GroupBox {
             VStack(alignment: .leading, spacing: DS.Space.md) {
@@ -79,11 +79,7 @@ struct StockSageResearchModesPanel: View {
                     }.frame(maxWidth: .infinity, minHeight: 180)
                 }
                 if !scan.listings.isEmpty {
-                    HStack {
-                        TextField("Find a symbol or company", text: $search).textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Filter research by symbol or company")
-                        Toggle("Buy / Strong Buy only", isOn: $buysOnly).toggleStyle(.checkbox)
-                    }
+                    Self.filters(search: $search, buysOnly: $buysOnly)
                     Text("\(rows.count) shown · select a stock for evidence and price levels")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -97,26 +93,26 @@ struct StockSageResearchModesPanel: View {
                         }.width(min: 100, ideal: 160)
                         TableColumn("Check / opinion") { item in
                             Text(resultLabel(item.ticker, scan: scan, horizon: horizon))
-                                .foregroundStyle(isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.success : .secondary)
+                                .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.success : .secondary)
                                 .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
                         }.width(min: 100, ideal: 130)
                         TableColumn("Entry ref.") { item in
-                            Text(price(scan.results[item.ticker]?.levels?.entry)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Entry reference \(price($0.entry))" } ?? "Entry reference not available")
+                            Text(Self.price(scan.results[item.ticker]?.levels?.entry)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Entry reference \(Self.price($0.entry))" } ?? "Entry reference not available")
                         }.width(min: 72, ideal: 92, max: 110)
                         TableColumn("Stop-loss") { item in
-                            Text(price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Stop-loss \(price($0.stop))" } ?? "Stop-loss not available")
+                            Text(Self.price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Stop-loss \(Self.price($0.stop))" } ?? "Stop-loss not available")
                         }.width(min: 72, ideal: 92, max: 110)
                         TableColumn("Target") { item in
-                            Text(price(scan.results[item.ticker]?.levels?.target)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Target \(price($0.target))" } ?? "Target not available")
+                            Text(Self.price(scan.results[item.ticker]?.levels?.target)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Target \(Self.price($0.target))" } ?? "Target not available")
                         }.width(min: 72, ideal: 92, max: 110)
                     }.frame(height: 320)
                 }
                 if let selected, let item = rows.first(where: { $0.ticker == selected }) {
                     Divider()
-                    resultDetail(item, result: scan.results[selected])
+                    Self.resultDetail(item, result: scan.results[selected])
                 }
                 Divider()
                 Text(StockSagePaperAutomationPanel.monitoringLabel(running: automation.isRunning, at: Date())
@@ -208,7 +204,15 @@ struct StockSageResearchModesPanel: View {
         return research.running == horizon ? "Queued" : "Not checked"
     }
 
-    private func resultDetail(_ item: StockSageHorizonResearch.Listing,
+    static func filters(search: Binding<String>, buysOnly: Binding<Bool>) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            TextField("Find a symbol or company", text: search).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Filter research by symbol or company")
+            Toggle("Buy / Strong Buy only", isOn: buysOnly).toggleStyle(.checkbox)
+        }
+    }
+
+    static func resultDetail(_ item: StockSageHorizonResearch.Listing,
                               result: StockSageHorizonResearch.Result?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("\(item.ticker) · \(item.name)").font(.headline)
@@ -239,15 +243,16 @@ struct StockSageResearchModesPanel: View {
                 }
             } else { Text("This listing has not been checked. No opinion or price levels are assumed.") }
         }.textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func level(_ title: String, value: Double) -> some View {
+    private static func level(_ title: String, value: Double) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(price(value)).font(.headline).monospacedDigit()
         }
     }
-    private func price(_ value: Double?) -> String { value.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "—" }
-    private func isBuy(_ action: TradeAdvice.Action?) -> Bool { action == .buy || action == .strongBuy }
+    private static func price(_ value: Double?) -> String { value.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "—" }
+    private static func isBuy(_ action: TradeAdvice.Action?) -> Bool { action == .buy || action == .strongBuy }
 }
 #endif

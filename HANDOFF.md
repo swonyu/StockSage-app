@@ -1,5 +1,40 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac research filters and explanations — September 9, verified; not installed
+
+Search and the Buy/Strong Buy checkbox have separate native rows. Selected
+detail uses vertical-only fixed sizing to expose clipped explanation/risk/basis,
+missing-plan and unchecked text. Values, price formatting, filtering predicates,
+bindings, selection, dates, source and warning branches are unchanged. Actual
+static renderers allow native capture without owner Store/singletons. No price
+row redesign: tested750000.25 values already fit at360. Day101/manual500 unchanged.
+
+Baseline38/2/1.881s0; initialRED38/2/2.596s6issues65. Firstfix38/2/2.244s2issues65
+revealed bad minimum-height guesses despite complete text. Replaced those with
+same-content narrow/wide comparisons; removed only detailfix and reproduced
+RED38/2/2.180s2issues65. Restoredfix finalGREEN38/2/2.176s0. All16 final native
+360/760 filter/detail images inspected; render binding-setter count0. Source
+Sol/Astra reviews no must-fix, closed. Native activation, typing, physical keys,
+VoiceOver, expanded evidence and installed-window acceptance remain unverified.
+
+FullMac **2,054 tests/200 suites/83.998s**, exit0. StrictMac emit84s/testtypecheck
+115s, exec52870 aggregate0: macos=OK ios=SKIP tests=OK. Same3opt-in exclusions.
+Frozen372 source manifest e0eb07eab2836b04ab9477278fe0831d98485a7d442d3dd80d508b83c0538467;
+exact64-entry testedcandidate and deepstrictsignature verified0, dylib SHA256
+9ee69cc3fdaa8e0ca7511dcaa87e9960d7416e784885acf6ca89e91e2d895591.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/RESEARCH_DETAIL.md`;
+same root has plan, images, logs/xcresults, manifest/check and
+candidate-research-detail/StockSageX.app. Parent sole writer/tester/installer.
+
+No quit/install/reopen/probes/push/paidresources/realorders/relay/history changes.
+Installed app absent for unverified reason; existing ownerrestart/clear hold
+remains, no claim session-only500 results retained. Qwen2120 existed; paper0.
+Next SolMendel read-only lifecycle review complete/closed: failed async preflight
+may clear old same-horizon results before reporting no scan started. SOURCE-ONLY,
+not reproduced or fixed. research-retry-retention-intake.md records contract and
+offline reproduction; verify against the older failed-prerequisite retention claim.
+Do not mix it into this batch without reproducing and regating.
+
 ## Mac Research Run/Stop layout — September 9, verified; not installed
 
 Actual manual header and other-running notice now use native horizontal/stacked

@@ -19,6 +19,59 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [360, 760], [false, true])
+    func renderResearchFiltersWithoutChangingBindings(width: Int, filled: Bool) async throws {
+        let original = filled ? "Synthetic company · بحث تجريبي طويل" : ""
+        var search = original
+        var buysOnly = filled
+        var changes = 0
+        let view = GroupBox {
+            StockSageResearchModesPanel.filters(
+                search: Binding(get: { search }, set: { search = $0; changes += 1 }),
+                buysOnly: Binding(get: { buysOnly }, set: { buysOnly = $0; changes += 1 }))
+                .padding(DS.Space.xs)
+        }.padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-research-filters-\(width)-\(filled)")
+        #expect(size.width == CGFloat(width) && size.height > 40)
+        #expect(size.height > 90, "Search and its filter label need separate readable rows")
+        #expect(search == original && buysOnly == filled, "Layout cannot change the owner's filters")
+        #expect(changes == 0)
+    }
+
+    @Test(arguments: [360, 760], ["ordinary", "large", "missing-plan", "hold", "incomplete", "unchecked"])
+    func renderResearchDetailsWithoutOwnerState(width: Int, state: String) async throws {
+        typealias R = StockSageHorizonResearch
+        let listing = R.Listing(ticker: "FIXTURE", name: "Synthetic display fixture", market: "stocks",
+            locale: "us", active: true, type: state == "unchecked" ? nil : "CS", currency_name: "usd",
+            primary_exchange: state == "unchecked" ? nil : "XNAS")
+        let large = state == "large"
+        let levels = R.Levels(entry: large ? 750_000.25 : 159.70,
+            stop: large ? 700_000.25 : 150, target: large ? 850_000.25 : 179.10, at: now,
+            basis: "Synthetic daily ATR reference plan. Re-price before considering a trade; overnight gaps can pass the stop. These are scenarios, not forecasts.")
+        let result = R.Result(verdict: state == "incomplete" ? nil : .init(
+            action: large ? .strongBuy : state == "hold" ? .hold : .buy, reason: "Synthetic interpretation, not a verified trading edge.",
+            risk: "Future news and overnight gaps remain unknown.", evidence: ["F1"]),
+            levels: state == "ordinary" || large ? levels : nil,
+            facts: ["Synthetic fixture only; no live quote or order."],
+            note: "Synthetic display values, not market observations.", at: now.addingTimeInterval(3600),
+            model: state == "incomplete" ? "" : "fixture")
+        let content = GroupBox {
+            StockSageResearchModesPanel.resultDetail(listing, result: state == "unchecked" ? nil : result)
+                .padding(DS.Space.xs)
+        }.padding(16)
+        let view = content.frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-research-detail-\(width)-\(state)")
+        #expect(size.width == CGFloat(width) && size.height > 40)
+        if width == 360 && (state == "missing-plan" || state == "unchecked") {
+            let wide = content.frame(width: 760)
+                .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+            let wideSize = try await capture(wide, name: "stocksage-research-detail-wide-reference-\(state)")
+            #expect(size.height > wideSize.height, "Narrow warnings must wrap, not stay at their truncated one-line height")
+        }
+    }
+
     @Test(arguments: [360, 760], ["fresh", "rerun", "running", "other-running"])
     func renderResearchControlsWithoutStartingScans(width: Int, state: String) async throws {
         typealias R = StockSageHorizonResearch
