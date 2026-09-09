@@ -1,5 +1,44 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Restored paper cash replay — September 10, verified; not installed
+
+Extended the existing two-symbol cash-recheck test by net7 lines. The same META/
+AMD300 quotes at the existing fixed now+1 are replayed at now+2 after Book JSON
+restoration. Sorted whole-Book bytes, trades/decision IDs, empty pending, valid,
+cash9699.70 and settled199.70 must remain unchanged. Single-fill/protective replay
+coverage already existed; this adds the mixed fill/insufficient-cash boundary.
+No production, UI, schema, engine, policy, risk, model or historical change.
+This is passing characterization of existing behavior, not a reproduced bug/RED.
+
+Focused64 tests/1suite/2.968s, exec20522 exit0. FullMac2074/200/71.125s,
+TEST SUCCEEDED; strict Mac emission60s and test-source typecheck86s passed,
+exec19566 aggregate exit0: macos=OK ios=SKIP tests=OK. Same3opt-in exclusions; no iOS execution
+in this Mac-only batch. Frozen372-source manifest
+f93f1f94f1029114158c4672dc8cc5e253b458649650d81d35b45a4789613f37.
+Exact64-entry retained tested candidate/deepstrictsignature passed; dylib
+cae40a94d06c0ceac161490f566bce496bdfe5b4316f2d7621440c031f18f0e2.
+Receipt `/Users/saleh/StockSage-verification-20260909.M0MISy/CASH_REPLAY.md`;
+same root holds plan, patch/report/review, focused/full/strict logs and xcresults,
+source manifest/checker and candidate-cash-replay/StockSageX.app.
+
+Sol task and Astra final reviews clear, all five Sol intake lanes completed and
+all workers closed. Parent sole shared writer/tester/installer. No install,
+restart, probes, account/ledger access, paidresources, pushes, orders or relay.
+Keep prior restart/clear hold. No new UI acceptance or claim of actual process
+restart, disk/power-loss durability, NBBO/partial-size fills or profitability.
+Installed dylib unchanged84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef;
+no owner app/compiler process observed after gate. Qwen2120present is not health
+proof; paper flag0. No claim session-only manual results survived.
+
+Current-source next queue: cancellation/revocation already guards actual callback
+settlement, with a cancellation-ignoring I/O regression; do not duplicate it.
+4097/32768 selected-publication rotation coverage already landed; mixed-state
+arrivals between slices remain unexecuted, not a reproduced defect. Next prioritize
+the existing external sol-paper-process-death-fixture.md (unexecuted, old base):
+reconcile against current save/audit/runner, isolate a synthetic child at actual
+beforeAccountCommit and verify lease/state/replay. Parent read all211 lines;
+no child launched. Existing thrown-fault tests do not prove process death.
+
 ## Mac paper summary and clock labels — September 9, verified; not installed
 
 Remaining approved paper-panel items 1/3: errors now precede actions and money;

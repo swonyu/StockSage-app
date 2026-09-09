@@ -1307,12 +1307,19 @@ struct StockSagePaperAutomationTests {
         book.activateSettlement(at: now.addingTimeInterval(1))
         #expect(book.pending.map(\.id) == orders && book.trades == trades && book.lastResearch == now)
         #expect(book.decisions.filter { $0.action == "T+1 cash policy activated" }.count == 1)
-        book.settle(quotes: ["META": quote("META", price: 300, at: now.addingTimeInterval(1)),
-                             "AMD": quote("AMD", price: 300, at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        let quotes = ["META": quote("META", price: 300, at: now.addingTimeInterval(1)),
+                      "AMD": quote("AMD", price: 300, at: now.addingTimeInterval(1))]
+        book.settle(quotes: quotes, at: now.addingTimeInterval(2))
         #expect(book.open.count == 1 && book.open.first?.shares == 1 && book.pending.isEmpty)
         #expect(book.settledCash(at: now.addingTimeInterval(2)) == 199.7 && book.cash == 9699.7 && book.valid)
-        let restored = try JSONDecoder().decode(A.Book.self, from: JSONEncoder().encode(book))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let snapshot = try encoder.encode(book)
+        var restored = try JSONDecoder().decode(A.Book.self, from: snapshot)
+        restored.settle(quotes: quotes, at: now.addingTimeInterval(2))
         #expect(restored.decisions.map(\.id) == book.decisions.map(\.id) && restored.trades == book.trades)
+        #expect(restored.pending.isEmpty && restored.cash == 9699.7)
+        #expect(restored.settledCash(at: now.addingTimeInterval(2)) == 199.7 && restored.valid)
+        #expect(try encoder.encode(restored) == snapshot)
     }
 
     @Test func accountLeasePersistenceAndCorruptionProtection() throws {
