@@ -19,6 +19,36 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test func transcriptScrollIdentityChangesOnlyForANewQuestionOrClear() throws {
+        let chat = StockSageChatSession(historyURL: nil)
+        #expect(StockSageChatSection.latestTurnID(in: chat) == nil)
+        let first = try #require(chat.begin(question: "Explain uncertainty", snapshot: snapshot(), model: "fixture"))
+        #expect(StockSageChatSection.latestTurnID(in: chat) == first)
+        let enriched = StockSageChat.addingResearch(to: snapshot(), symbol: "ORCL", news: [], leads: nil, webAllowed: false)
+        #expect(chat.attachResearch(id: first, snapshot: enriched))
+        #expect(StockSageChatSection.latestTurnID(in: chat) == first)
+        chat.finish(id: first, text: "Synthetic answer")
+        #expect(StockSageChatSection.latestTurnID(in: chat) == first, "Completion must not trigger a scroll change")
+        let second = try #require(chat.begin(question: "Explain the source", snapshot: snapshot(), model: "fixture"))
+        #expect(StockSageChatSection.latestTurnID(in: chat) == second && second != first)
+        chat.cancel()
+        #expect(StockSageChatSection.latestTurnID(in: chat) == second, "Cancellation must not trigger a scroll change")
+        chat.finish(id: first, text: "Late completion")
+        #expect(StockSageChatSection.latestTurnID(in: chat) == second)
+        chat.clear()
+        #expect(StockSageChatSection.latestTurnID(in: chat) == nil)
+    }
+
+    @Test func fastCompletionStillExposesTheNewQuestionToScrolling() throws {
+        let chat = StockSageChatSession(historyURL: nil)
+        let before = StockSageChatSection.latestTurnID(in: chat)
+        let id = try #require(chat.begin(question: "Explain risk", snapshot: snapshot(), model: "fixture"))
+        chat.finish(id: id, text: "Synthetic immediate answer")
+        #expect(chat.pending == nil)
+        let after = StockSageChatSection.latestTurnID(in: chat)
+        #expect(after == id && after != before, "A coalesced send/completion must still expose the new turn")
+    }
+
     @Test func editingQuestionClearsOnlyTheObsoleteInputIssue() {
         var question = String(repeating: "x", count: 2_001)
         var issue: String? = "Use 1–2000 characters."

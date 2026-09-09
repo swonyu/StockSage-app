@@ -34,14 +34,28 @@ struct StockSageChatSection: View {
         #if os(macOS)
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
-                ScrollView {
-                    conversation.padding(24).frame(maxWidth: 860, alignment: .leading)
-                        .frame(maxWidth: .infinity)
-                    Color.clear.frame(height: 1).id("chat-bottom")
-                }
-                .onChange(of: chat.pending) { _, _ in
-                    // Only a send/completion moves the transcript, never market ticks.
-                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+                VStack(spacing: 0) {
+                    ScrollView {
+                        conversation.padding(24).frame(maxWidth: 860, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                        Color.clear.frame(height: 1).id("chat-bottom")
+                    }
+                    .onChange(of: Self.latestTurnID(in: chat)) { _, newID in
+                        // Follow new questions, not completion, cancellation or market updates.
+                        guard newID != nil else { return }
+                        proxy.scrollTo("chat-bottom", anchor: .bottom)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Latest reply", systemImage: "arrow.down") {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        }
+                        .controlSize(.small)
+                        .disabled(chat.turns.isEmpty)
+                        .help("Jump to the newest question and reply without sending a request.")
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 8)
+                    .frame(maxWidth: 860).frame(maxWidth: .infinity)
                 }
             }
             Divider()
@@ -231,6 +245,10 @@ struct StockSageChatSection: View {
     }
 
     #if os(macOS)
+    static func latestTurnID(in chat: StockSageChatSession) -> UUID? {
+        chat.turns.last?.id
+    }
+
     struct QuestionField: View {
         @Binding var question: String
         @Binding var issue: String?

@@ -1,5 +1,38 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Chat reading position — September 9, verified candidate; not installed
+
+Mac autoscroll now observes the retained newest question ID, not pending request
+state. Completion/cancellation/research attachment keep that ID and no longer
+request a bottom jump; clear is guarded. Fast begin+finish still exposes a new
+question ID. Native Latest reply button stays outside scrolling content in the
+same reader, disabled when empty, aligned with the860pt composer, with no-send
+help. Existing bottom anchor reused; no scroll/focus state or animation added.
+Requests, composer/history, sources, trading and nonMac UI remain unchanged.
+
+Actual memory-only session/observer seam red16tests/1suite/4issues/0.236s, exit65;
+green16/0.209s, exit0. Sol external candidate reviewed/refined by parent; source
+and base hashes verified. Sol test critique and final Astra review closed with
+no must-fix. Tests prove observer identity, NOT actual native scroll offsets.
+Growing answers can extend below the viewport; Latest reply is the explicit path.
+
+Full canonical Mac **2,044tests/200suites/72.018s, exit0**. Strict Mac emit64s,
+test typecheck101s passed, aggregate0: `macos=OK ios=SKIP tests=OK`. Three original
+opt-in exclusions retained; no iOS today. All372 frozen source entries rechecked
+after gates; chat-scroll-source.sha256 hash:
+099cac67f0228c039e8008033d3cfc82cf93838edab48e752605efc4c97e1eaa.
+Retained candidate matches all64 tested file/link entries; deep/strict codesign0.
+DylibSHA256:715f9509b1c8bf96e717e3833440fedd30ef21597e5dc0fec01efd46ff19d357.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-chat-scroll/StockSageX.app`.
+Same root: CHAT_SCROLL.md, chat-scroll-red/green and macos-chat-scroll-final
+logs/xcresults, strict-chat-scroll-final and preserved strict detailed logs.
+
+**Not installed:** preserve installed27a4727/PID40101 and session-only manual500
+results pending owner restart/clear choice. Qwen2120 and paused paper preference0
+unchanged. Native integrated scrolling/layout timing/keyboard/VoiceOver remain
+unverified; no shallow new AX harness used to imply acceptance. No owner history,
+model/provider/real-order/relay action, push, paid resource or research-policy change.
+
 ## Chat input recovery — September 9, verified candidate; not installed
 
 Mac edits now synchronously clear the obsolete input warning; same-value writes
