@@ -70,6 +70,45 @@ struct StockSageChatTests {
         }
     }
 
+    @Test(arguments: [360, 760], ["draft", "record", "draft-and-previous", "empty", "assessing"])
+    func renderAssessmentSnapshotsWithoutOwnerState(width: Int, state: String) async throws {
+        typealias A = StockSageAIAssessment
+        func context(at time: Date) -> A.Context {
+            let idea = StockSageIdea(symbol: "ORCL", market: "US", price: 159.70,
+                advice: TradeAdvice(action: .avoid, conviction: 0.03, regime: .range,
+                    rationale: ["Synthetic rules fixture."], stopPrice: nil, targetPrice: nil,
+                    suggestedWeight: 0, caveat: "Fixture, not trading advice."),
+                spark: [155, 158], realizedVol: 0.65, generatedAt: time,
+                priceAsOf: time, priceSource: .massiveSIP)
+            return A.Context(idea: idea, earnings: nil, company: [:], at: time)
+        }
+        let config = StockSageLocalModelServer.Config(baseURL: URL(string: "http://127.0.0.1:8765")!,
+            model: "fixture-qwen-with-a-deliberately-long-local-model-name")
+        let recordTime = state == "draft-and-previous" ? now.addingTimeInterval(-3600) : now
+        let record = A.Record(context: context(at: recordTime),
+            verdict: .init(action: .buy, reason: "Synthetic recorded interpretation, not a prediction or validated edge.",
+                           risk: "The next outcome remains unknown; this old snapshot is not an execution quote.", evidence: ["F1"]),
+            config: config, at: recordTime)
+        let draft = A.Draft(context: context(at: now), config: config,
+            text: #"{"action":"Buy","reason":"Synthetic unverified draft · تحقق من المصدر والتاريخ.","risk":"Evidence is incomplete; this is not a validated badge."}"#)
+        let view = VStack(alignment: .leading, spacing: 8) {
+            StockSageAIAssessmentPanel.snapshots(draft: state.contains("draft") ? draft : nil,
+                record: state == "record" || state == "draft-and-previous" ? record : nil,
+                recordIsCurrent: state == "record", isAssessing: state == "assessing")
+        }.padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-assessment-snapshots-\(width)-\(state)")
+        #expect(size.width == CGFloat(width))
+        if state == "assessing" {
+            #expect(size.height == 32, "Only the fixture padding remains while assessing without a snapshot")
+        } else {
+            #expect(size.height > 32, "An empty idle snapshot must still explain that no assessment was accepted")
+        }
+        if state == "empty" && width == 360 {
+            #expect(size.height > 50, "The narrow empty-state warning must wrap, not truncate to one line")
+        }
+    }
+
     @Test(arguments: ["", "My unsent draft", " \n"], [false, true])
     func reusingAQuestionNeverOverwritesADraftOrRunsDuringARequest(draft: String, pending: Bool) {
         var question = draft

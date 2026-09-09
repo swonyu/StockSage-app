@@ -62,7 +62,20 @@ struct StockSageAIAssessmentPanel: View {
             } else if let error = ai.errors[idea.symbol] {
                 Text(error).font(.callout).foregroundStyle(DS.Palette.warningSoft)
             }
-            if let draft = ai.drafts[idea.symbol] {
+            Self.snapshots(draft: ai.drafts[idea.symbol], record: ai.records[idea.symbol],
+                           recordIsCurrent: ai.record(for: idea, store: store) != nil,
+                           isAssessing: ai.activeSymbol == idea.symbol)
+        }
+        .padding(12)
+        .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: DS.Radius.card))
+    }
+
+    /// Render captured values without owning request or Store state.
+    @ViewBuilder static func snapshots(draft: StockSageAIAssessment.Draft?,
+                                       record: StockSageAIAssessment.Record?,
+                                       recordIsCurrent: Bool, isAssessing: Bool) -> some View {
+        if let draft {
+            let content = Group {
                 Text("Unverified Qwen draft — not a validated badge").font(.subheadline.bold())
                     .foregroundStyle(DS.Palette.warningSoft)
                 Text(verbatim: draft.displayText).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -78,8 +91,20 @@ struct StockSageAIAssessmentPanel: View {
                     }
                 }
             }
-            if let record = ai.records[idea.symbol] {
-                if ai.record(for: idea, store: store) == nil {
+            #if os(macOS)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    content.fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #else
+            content
+            #endif
+        }
+        if let record {
+            let content = Group {
+                if !recordIsCurrent {
                     Text("Previous assessment — stale or unavailable; not the current badge.")
                         .font(.caption.bold()).foregroundStyle(DS.Palette.warningSoft)
                 }
@@ -112,13 +137,24 @@ struct StockSageAIAssessmentPanel: View {
                 }
                 Text("The quote above is the original snapshot, not a refreshed execution price.")
                     .font(.caption).foregroundStyle(.secondary)
-            } else if ai.activeSymbol != idea.symbol {
-                Text("No accepted AI assessment yet. The badge will not fall back to a rules verdict.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
+            #if os(macOS)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    content.fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #else
+            content
+            #endif
+        } else if !isAssessing {
+            Text("No accepted AI assessment yet. The badge will not fall back to a rules verdict.")
+                .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                .fixedSize(horizontal: false, vertical: true)
+                #endif
         }
-        .padding(12)
-        .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: DS.Radius.card))
     }
 
     #if os(macOS)

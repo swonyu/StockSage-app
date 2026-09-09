@@ -1,5 +1,39 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac assessment snapshot groups — September 9, verified; not installed
+
+Native Mac groups distinguish unverified draft from dated assessment without
+duplicating headings. Original warnings, dates, facts, disclosures, selection,
+Rules disclaimer and independent draft/record branches remain. Existing
+record(for:) and symbol-specific activity still decide currentness/fallback.
+Production captured-value renderer owns no Store, singleton or request state.
+Mac vertical sizing fixes clipped stale and no-record warnings/disclaimers.
+Non-Mac remains unboxed; shared extraction is unverified on iOS today.
+
+Baseline43tests/2suites/0.891s; expanded baseline43/2/1.068s, both exit0.
+Narrow idle warning reproduced at46pt: RED43/2/1issue/1.164s exit65; final
+GREEN43/2/1.038s exit0. Earlier zero-test method filter discarded. Parent inspected
+all10 final native captures: draft/current/draft+older/empty/assessing at360/760.
+No owner Store or model call. Source-only Sol/Astra reviews closed, no must-fix.
+Expanded disclosures, keyboard, VoiceOver and installed-window interaction remain
+unverified; currentness comes from existing producer tests, not geometry checks.
+
+Full Mac **2,050 tests/200 suites/91.324s**, exit0. Strict Mac emit72s/tests95s,
+aggregate exec72081 exit0: macos=OK ios=SKIP tests=OK; same3opt-in exclusions.
+All372 source entries rechecked after both gates. Manifest SHA256
+c8ca69cc7c0e7067a6a877f422b5cc02144189dee575b8c1ab04206cce4ec0c7.
+Exact64-entry retained candidate matches tested bundle, deep/strict codesign0;
+dylib SHA256d20e3e26f5b0f9594ada48a1c5d6e59668614c5f2bfd0e415d14526e193a2c9e.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/ASSESSMENT_GROUPS.md`;
+same root holds candidate-assessment-groups/StockSageX.app, before/final images,
+focused/full xcresults, strict logs and source manifest/check.
+
+**Not installed:** preserve app40101/Qwen2120/pausedpaper0 and session-only500
+results pending the existing owner restart/clear choice. No iOS, push, paid
+resources, provider/model probes, relay, real orders or historical edits. Parent
+sole writer/tester/installer. Next interaction/focus work needs isolated native
+acceptance; do not infer it from component images or repeat completed grouping.
+
 ## Mac Chat pending status — September 9, verified; not installed
 
 Mac pending turns now show one small native ProgressView with the exact request
