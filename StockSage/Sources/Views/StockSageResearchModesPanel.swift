@@ -32,7 +32,9 @@ struct StockSageResearchModesPanel: View {
                     Text("\(running.rawValue) scan is still running. Switching tabs does not stop it.").font(.caption)
                     Spacer()
                     Button("Show scan") { mode = running.rawValue }
+                        .accessibilityLabel("Show \(running.rawValue) research scan")
                     Button("Stop scan") { research.stop() }
+                        .accessibilityLabel("Stop \(running.rawValue) research scan")
                 }
             }
         }
@@ -44,64 +46,132 @@ struct StockSageResearchModesPanel: View {
             (search.isEmpty || item.ticker.localizedCaseInsensitiveContains(search) || item.name.localizedCaseInsensitiveContains(search))
                 && (!buysOnly || isBuy(scan.results[item.ticker]?.verdict?.action))
         }
+        let isRunning = research.running == horizon
+        let buys = scan.results.values.filter { isBuy($0.verdict?.action) }.count
+        let incomplete = scan.results.values.filter { $0.verdict == nil }.count
         return GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
+            VStack(alignment: .leading, spacing: DS.Space.md) {
+                HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(horizon.rawValue) · research only").font(.headline)
-                        Text("Up to \(StockSageHorizonResearch.scanLimit) US listings · one pass. No paper positions or real orders.").font(.callout).foregroundStyle(.secondary)
+                        Text(horizon.rawValue).font(.headline)
+                        Text("Research only · up to \(StockSageHorizonResearch.scanLimit) US listings · one-time scan")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if research.running == horizon {
+                    if isRunning {
                         Button("Stop scan", systemImage: "stop.fill") { research.stop() }
+                            .accessibilityLabel("Stop \(horizon.rawValue) research scan")
+                            .help("Stop this research scan. Day trading is controlled separately.")
                     } else {
                         Button(scan.at == nil ? "Run \(StockSageHorizonResearch.scanLimit)-stock scan" : "Run again", systemImage: "play.fill") {
                             selected = nil
                             research.start(horizon, store: store)
-                        }.buttonStyle(.borderedProminent).disabled(research.running != nil)
+                        }.buttonStyle(.borderedProminent).tint(DS.Palette.accent)
+                            .accessibilityLabel("Run \(horizon.rawValue) research scan")
+                            .disabled(research.running != nil)
+                            .help("Research once; no orders. A new run replaces this horizon’s temporary results.")
                     }
                 }
-                Text(StockSagePaperAutomationPanel.monitoringLabel(running: automation.isRunning, at: Date())
-                    + " · Day trading is controlled separately.").font(.caption).foregroundStyle(.secondary)
-                Text(scan.status).font(.callout).accessibilityLabel("Scan status: \(scan.status)")
-                if research.running == horizon, let symbol = research.activeSymbol {
-                    Text("\(symbol) · checking daily history, news and Qwen…").font(.caption).monospaced()
-                    ProgressView().progressViewStyle(.linear).accessibilityLabel("\(symbol) research in progress")
-                }
-                if let at = scan.at {
-                    Text("Started \(at.formatted(date: .abbreviated, time: .shortened)) · \(scan.results.count)/\(scan.listings.count) listings checked")
-                        .font(.caption).monospacedDigit()
-                }
-                Text("First \(StockSageHorizonResearch.scanLimit) active US listings in Massive’s alphabetical directory, including ETFs and other listed stock-market instruments; no OTC. This is a size limit, not a best-stock ranking or the S&P 500. One manual worker checks them in order. Results stay in this app session; a new run replaces this horizon’s results.")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    TextField("Find a symbol or company", text: $search).textFieldStyle(.roundedBorder)
-                    Toggle("Buy / Strong Buy only", isOn: $buysOnly).toggleStyle(.checkbox)
-                }
-                Text("\(rows.count) listings shown · select a row for evidence and entry / stop / target details")
-                    .font(.caption).foregroundStyle(.secondary)
-                Table(rows, selection: $selected) {
-                    TableColumn("Stock") { item in
-                        VStack(alignment: .leading) {
-                            Text(item.ticker).fontWeight(.semibold)
-                            Text(item.name).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Label(scan.status, systemImage: isRunning ? "arrow.triangle.2.circlepath" : "info.circle")
+                        .font(.callout).accessibilityLabel("Scan status: \(scan.status)")
+                    if isRunning, let symbol = research.activeSymbol {
+                        Text("\(symbol) · daily history, news and Qwen").font(.caption).monospaced()
+                        ProgressView().progressViewStyle(.linear).accessibilityLabel("\(symbol) research in progress")
+                    }
+                    if !scan.listings.isEmpty {
+                        HStack(spacing: DS.Space.lg) {
+                            Text("\(scan.results.count)/\(scan.listings.count) checked")
+                            Text("\(buys) Buy / Strong Buy")
+                            Text("\(incomplete) incomplete").foregroundStyle(incomplete > 0 ? DS.Palette.warningSoft : .secondary)
+                        }.font(.caption).monospacedDigit()
+                    }
+                }.padding(DS.Space.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small))
+                if rows.isEmpty {
+                    let empty = Self.emptyState(for: scan, isRunning: isRunning)
+                    ContentUnavailableView {
+                        Label(empty.title, systemImage: scan.listings.isEmpty ? "doc.text.magnifyingglass" : "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text(empty.detail)
+                    } actions: {
+                        if !scan.listings.isEmpty {
+                            Button("Clear filters") { search = ""; buysOnly = false; selected = nil }
+                        } else if isRunning {
+                            ProgressView().controlSize(.small).accessibilityLabel("Research scan in progress")
                         }
-                    }.width(min: 100, ideal: 160)
-                    TableColumn("Check / opinion") { item in
-                        Text(resultLabel(item.ticker, scan: scan, horizon: horizon))
-                            .foregroundStyle(isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.success : .secondary)
-                    }.width(min: 100, ideal: 130)
-                    TableColumn("Entry ref.") { item in Text(price(scan.results[item.ticker]?.levels?.entry)).monospacedDigit() }.width(min: 72, ideal: 92, max: 110)
-                    TableColumn("Stop-loss") { item in Text(price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit() }.width(min: 72, ideal: 92, max: 110)
-                    TableColumn("Target") { item in Text(price(scan.results[item.ticker]?.levels?.target)).monospacedDigit() }.width(min: 72, ideal: 92, max: 110)
-                }.frame(height: 320)
-                if let selected, let item = scan.listings.first(where: { $0.ticker == selected }) {
+                    }.frame(maxWidth: .infinity, minHeight: 180)
+                }
+                if !scan.listings.isEmpty {
+                    HStack {
+                        TextField("Find a symbol or company", text: $search).textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Filter research by symbol or company")
+                        Toggle("Buy / Strong Buy only", isOn: $buysOnly).toggleStyle(.checkbox)
+                    }
+                    Text("\(rows.count) shown · select a stock for evidence and price levels")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !rows.isEmpty {
+                    Table(rows, selection: $selected) {
+                        TableColumn("Stock") { item in
+                            VStack(alignment: .leading) {
+                                Text(item.ticker).fontWeight(.semibold)
+                                Text(item.name).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+                            }.help("\(item.name) · \(item.type ?? "instrument type unconfirmed")")
+                        }.width(min: 100, ideal: 160)
+                        TableColumn("Check / opinion") { item in
+                            Text(resultLabel(item.ticker, scan: scan, horizon: horizon))
+                                .foregroundStyle(isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.success : .secondary)
+                                .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
+                        }.width(min: 100, ideal: 130)
+                        TableColumn("Entry ref.") { item in
+                            Text(price(scan.results[item.ticker]?.levels?.entry)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Entry reference \(price($0.entry))" } ?? "Entry reference not available")
+                        }.width(min: 72, ideal: 92, max: 110)
+                        TableColumn("Stop-loss") { item in
+                            Text(price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Stop-loss \(price($0.stop))" } ?? "Stop-loss not available")
+                        }.width(min: 72, ideal: 92, max: 110)
+                        TableColumn("Target") { item in
+                            Text(price(scan.results[item.ticker]?.levels?.target)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Target \(price($0.target))" } ?? "Target not available")
+                        }.width(min: 72, ideal: 92, max: 110)
+                    }.frame(height: 320)
+                }
+                if let selected, let item = rows.first(where: { $0.ticker == selected }) {
+                    Divider()
                     resultDetail(item, result: scan.results[selected])
                 }
-                Text("Reference prices are completed split-adjusted daily closes, not current executable quotes. Stops and targets are calculated scenarios, not forecasts. Neither horizon has an independently validated profitable strategy.")
+                Divider()
+                Text(StockSagePaperAutomationPanel.monitoringLabel(running: automation.isRunning, at: Date())
+                    + " · Day trading is controlled separately.").font(.caption).foregroundStyle(.secondary)
+                Text("Reference prices, not executable orders. Stops and targets are scenarios, not forecasts.")
                     .font(.caption).foregroundStyle(.secondary)
-            }.padding(4)
+                DisclosureGroup("Coverage & price assumptions") {
+                    VStack(alignment: .leading, spacing: DS.Space.xs) {
+                        Text("First \(StockSageHorizonResearch.scanLimit) active US listings in Massive’s alphabetical directory, including ETFs and other listed stock-market instruments; no OTC. This is a size limit, not a best-stock ranking or the S&P 500. One manual worker checks them in order.")
+                        Text("Results stay in this app session. A new run replaces this horizon’s results; quitting clears them. No paper positions or real orders are created.")
+                        Text("Reference prices are completed split-adjusted daily closes, not current executable quotes. Neither horizon has an independently validated profitable strategy.")
+                        if let at = scan.at { Text("Run requested \(at.formatted(date: .abbreviated, time: .shortened))") }
+                    }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }.font(.caption).foregroundStyle(.secondary)
+            }.padding(DS.Space.xs)
         }
+    }
+
+    /// Called only when no rows are visible; a filter is not a failed scan.
+    static func emptyState(for scan: StockSageHorizonResearch.Scan, isRunning: Bool) -> (title: String, detail: String) {
+        if !scan.listings.isEmpty {
+            return ("No matching stocks", "Change your search or clear the Buy / Strong Buy filter. Unchecked stocks and incomplete opinions stay available in the full list.")
+        }
+        if isRunning {
+            return ("Waiting for scan results", "The current status is shown above.")
+        }
+        if scan.at != nil {
+            return ("No results collected", "See the scan status above for details. You can run again when ready; no orders were created.")
+        }
+        return ("Your research starts here", "Choose Run \(StockSageHorizonResearch.scanLimit)-stock scan to check daily history, news and Qwen opinions once. Select a result to see its evidence and any entry, stop-loss and target levels.")
     }
 
     private func resultLabel(_ symbol: String, scan: StockSageHorizonResearch.Scan,

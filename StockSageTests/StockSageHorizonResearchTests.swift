@@ -93,6 +93,28 @@ import Testing
         #expect(R.Horizon.week.instructions.contains("research only"))
         #expect(!R.Horizon.fortnight.instructions.contains("next trading week"))
     }
+    #if os(macOS)
+    @Test func emptyResearchPresentationSeparatesWaitingFailureAndFilters() {
+        typealias Panel = StockSageResearchModesPanel
+        var scan = R.Scan()
+        #expect(Panel.emptyState(for: scan, isRunning: false).title == "Your research starts here")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Waiting for scan results")
+        scan.at = now
+        scan.status = "Scan incomplete: listing directory could not be verified."
+        #expect(Panel.emptyState(for: scan, isRunning: false).title == "No results collected")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Waiting for scan results")
+        scan.status = "Stopping scan…"
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Waiting for scan results")
+        #expect(Panel.emptyState(for: scan, isRunning: true).detail == "The current status is shown above.")
+        #expect(scan.status == "Stopping scan…")
+        scan.status = "Scan incomplete: listing directory could not be verified."
+        scan.listings = [listing()]
+        for running in [true, false] {
+            #expect(Panel.emptyState(for: scan, isRunning: running).title == "No matching stocks")
+        }
+        #expect(scan.status == "Scan incomplete: listing directory could not be verified.")
+    }
+    #endif
     @Test func confirmedUSShareClassPricesAreNeitherForeignCurrenciesNorMinorUnits() {
         for symbol in ["BRK.B", "TEST.L"] {
             let idea = StockSageIdea(symbol: symbol, market: "US", price: 100,

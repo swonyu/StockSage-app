@@ -1,5 +1,42 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Manual research UI clarity — September 9, verified candidate; not installed
+
+Parent-only changes to the macOS ResearchModesPanel and existing HorizonResearch
+tests: one clear Run/Stop header, checked/Buy/incomplete counts, native pre-run,
+waiting, no-results and filter-empty views, Clear filters, retained evidence and
+entry/stop/target table, and collapsed coverage assumptions. Research-only and
+non-executable price warnings remain visible. Cancelling does not promise results;
+failed prerequisite retries retain any old result rows. Run-request date and
+accessibility labels are accurate. No service/model/policy/financial changes;
+manual500 and Day101 remain unchanged.
+
+Focused12/1suite passed in0.317s then0.086s (exit0). New projection API's initial
+red was a compile failure, not executed tests. Final source review closed with no
+must-fix. First full run deliberately interrupted for a copy correction (exit73,
+NOT a pass). Final v2 canonical Mac: **2,028 tests/200 suites/96.960s, exit0**;
+strict Mac emit109s + test typecheck157s, aggregate0 and iOSSKIP. Existing three
+exclusions retained; no iOS work or opt-in live/model/replay verification.
+
+Frozen source manifest research-ui-v2-source.sha256 was rechecked after gates:
+a6aa0ec1f0696bc730d36b337e4d9fac0a1094a04ad7eb09dd396804b8b26226.
+Retained candidate matches all64 files/links in the Mac-tested bundle manifest
+and passes deep/strict codesign. Candidate dylib:
+b1ebe2310a59c165833f1268a4c05ec246f7d70efc5c6166ac9e47010e507016.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-research-ui/StockSageX.app`.
+Receipt/commands: same verification root, `RESEARCH_UI.md`.
+
+**Installation deliberately pending:** native pre-install inspection found the
+owner's 1–7-day scan actively at87/500, requested16:23Riyadh. Results are session-only;
+normal quit would erase them. An asynchronous choice asks whether to retain the
+scan/results or restart and clear temporary research. Default is preserve the
+running app/results; do NOT auto-install on scan completion (completed results
+are also temporary). No replacement, quit, new backup or new-UI inspection yet.
+Installed app remains27a4727/PID40101, dylib84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef;
+paper remains paused0, Qwen2120 unchanged. No history edits, pushes, real orders,
+IBKR relay or paid resources. Paper-panel and Catalyst external candidates are
+unintegrated and require separate parent review/gates, including platform scope.
+
 ## 500-listing manual scans and per-arrival paper exits — September 9, Mac installed
 
 Owner reduced both manual research horizons from the full directory to at most
