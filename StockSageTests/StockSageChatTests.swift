@@ -19,6 +19,18 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test func researchRetryStatusWrapsTheRetainedDataExplanation() async throws {
+        let message = "Scan incomplete: listing directory could not be verified. Check Massive settings and retry. Earlier scan data retained; no new listings checked."
+        let content = GroupBox {
+            StockSageResearchModesPanel.scanStatus(message, isRunning: false).padding(DS.Space.sm)
+        }.padding(16)
+        let narrow = try await capture(content.frame(width: 360)
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark), name: "stocksage-research-retry-status-360")
+        let wide = try await capture(content.frame(width: 760)
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark), name: "stocksage-research-retry-status-760")
+        #expect(narrow.height > wide.height, "Both the cause and retained-data qualification must wrap at narrow widths")
+    }
+
     @Test(arguments: [360, 760], [false, true])
     func renderResearchFiltersWithoutChangingBindings(width: Int, filled: Bool) async throws {
         let original = filled ? "Synthetic company · بحث تجريبي طويل" : ""

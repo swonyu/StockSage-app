@@ -48,8 +48,7 @@ struct StockSageResearchModesPanel: View {
                 Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: research.running,
                     run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Label(scan.status, systemImage: isRunning ? "arrow.triangle.2.circlepath" : "info.circle")
-                        .font(.callout).accessibilityLabel("Scan status: \(scan.status)")
+                    Self.scanStatus(scan.status, isRunning: isRunning)
                     if isRunning, let symbol = research.activeSymbol {
                         Text("\(symbol) · daily history, news and Qwen").font(.caption).monospaced()
                         ProgressView().progressViewStyle(.linear).accessibilityLabel("\(symbol) research in progress")
@@ -129,6 +128,12 @@ struct StockSageResearchModesPanel: View {
                 }.font(.caption).foregroundStyle(.secondary)
             }.padding(DS.Space.xs)
         }
+    }
+
+    static func scanStatus(_ status: String, isRunning: Bool) -> some View {
+        Label(status, systemImage: isRunning ? "arrow.triangle.2.circlepath" : "info.circle")
+            .font(.callout).accessibilityLabel("Scan status: \(status)")
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     static func manualControls(horizon: StockSageHorizonResearch.Horizon, hasRun: Bool,

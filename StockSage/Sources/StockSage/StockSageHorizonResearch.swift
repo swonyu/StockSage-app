@@ -168,15 +168,18 @@ final class StockSageHorizonResearch: ObservableObject {
                universe: @escaping @MainActor () async throws -> [Listing],
                analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
         guard task == nil, allowed() else { return false }
+        let previousScan = scans[horizon]
         running = horizon
         scans[horizon] = Scan(status: "Loading US directory · research capped at \(Self.scanLimit)…", at: Date())
         task = Task {
+            var didStart = false
             defer { activeSymbol = nil; running = nil; task = nil }
             @MainActor func valid() -> Bool { !Task.isCancelled && allowed() }
             do {
                 let directory = try await universe()
                 guard valid() else { throw CancellationError() }
                 guard Set(directory.map(\.ticker)).count == directory.count, directory.count <= 50_000 else { throw URLError(.cannotParseResponse) }
+                didStart = true
                 // Preserve directory order; this cap is not an investment ranking or an index.
                 let names = Array(directory.prefix(Self.scanLimit))
                 scans[horizon]?.listings = names
@@ -193,12 +196,17 @@ final class StockSageHorizonResearch: ObservableObject {
                 }
                 scans[horizon]?.status = "Scan finished · \(names.count) listings checked once. No orders created."
             } catch {
+                // A failed preflight is not a replacement run; restore captured data and its dates.
+                if !didStart, let previousScan { scans[horizon] = previousScan }
                 if !valid() {
                     scans[horizon]?.status = "Scan stopped · completed results retained; remaining listings were not checked."
                 } else if error is ScanFailure {
                     scans[horizon]?.status = "Local Qwen could not be reached or the selected model is missing. Check Model settings and retry; no scan started."
                 } else {
                     scans[horizon]?.status = "Scan incomplete: listing directory could not be verified. Check Massive settings and retry."
+                }
+                if !didStart, previousScan != nil {
+                    scans[horizon]?.status += " Earlier scan data retained; no new listings checked."
                 }
             }
         }

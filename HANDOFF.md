@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Failed manual-research retries — September 9, verified; not installed
+
+Reproduced loss of prior same-horizon results when asynchronous model/directory
+preflight failed. The coordinator now restores its previous Scan only before a
+valid directory is accepted, preserving original data and dates. Failure status
+explicitly says earlier data was retained and no new listings checked. Accepted
+runs still replace old data, including the injected valid-empty case; stop or
+settings changes after acceptance retain only new partial results. No new phase,
+controller, persistence, financial/risk/model change. Day101/manual500 unchanged.
+
+The actual status Label also wraps vertically: native360 baseline cut off before
+the retention explanation. Text/icon/font/AX label are unchanged. Final360/760
+captures show complete explanation; no live Store or model calls were used.
+
+Logic RED13/1/0.150s4issues65, expandedRED16/1/0.255s24issues65; logicGREEN
+16/1/0.292s0. UIRED43/2/2.686s1issue65 (79pt ==79pt); finalfocused43/2/2.363s0.
+Initial test-macro and missing-renderer compile failures were not behavioral REDs.
+Sol/Astra source reviews found no must-fix and are closed. The private model-probe
+failure branch is source-traced, not directly injected by the new tests.
+
+FullMac **2,059 tests/200 suites/88.565s**, exit0. StrictMac emit87s/testtypecheck
+119s, exec42542 aggregate0: macos=OK ios=SKIP tests=OK. Same3opt-in exclusions.
+Frozen372-source manifest1369c70e93d0384ac2e24125b02b63b3451d8c9697a13aaff63a8056a5632a70.
+Exact64-entry candidate/deepstrictsignature verified, dylib
+ce2c142b99f09951cbe0b5190155f71e09dfdf782ab5e0cd1514ef8afc2d2d21.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/RESEARCH_RETENTION.md`;
+same root has logs/xcresults, before/after images, source manifest and
+candidate-research-retention/StockSageX.app. Parent sole writer/tester/installer.
+
+No quit/install/reopen/probes/push/paidresources/orders/relay/history changes.
+Existing restart/clear hold remains; no claim session-only results survived the
+old app's disappearance. Installed dylib unchanged; Qwen2120 present, paper0.
+Whole installed window, native input/VoiceOver and iOS acceptance not verified.
+Next: recheck remaining approved navigation/status plan against current code;
+batch related confirmed issues before further gates, not speculative UI additions.
+
 ## Mac research filters and explanations — September 9, verified; not installed
 
 Search and the Buy/Strong Buy checkbox have separate native rows. Selected
@@ -29,10 +65,8 @@ candidate-research-detail/StockSageX.app. Parent sole writer/tester/installer.
 No quit/install/reopen/probes/push/paidresources/realorders/relay/history changes.
 Installed app absent for unverified reason; existing ownerrestart/clear hold
 remains, no claim session-only500 results retained. Qwen2120 existed; paper0.
-Next SolMendel read-only lifecycle review complete/closed: failed async preflight
-may clear old same-horizon results before reporting no scan started. SOURCE-ONLY,
-not reproduced or fixed. research-retry-retention-intake.md records contract and
-offline reproduction; verify against the older failed-prerequisite retention claim.
+The subsequent SolMendel retention finding is now reproduced and fixed by the
+newer failed-manual-research-retry entry above; its original intake is preserved.
 Do not mix it into this batch without reproducing and regating.
 
 ## Mac Research Run/Stop layout — September 9, verified; not installed

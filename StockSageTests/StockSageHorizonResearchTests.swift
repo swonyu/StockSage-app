@@ -172,6 +172,112 @@ import Testing
         try await Task.sleep(for: .milliseconds(10))
         #expect(seen.count == count) // no timer or automatic repeat
     }
+    @Test(arguments: ["unreachable", "invalid", "cancel", "settings"])
+    func failedPreflightRetryRetainsCompletedResearch(outcome: String) async throws {
+        let r = R()
+        let levels = R.Levels(entry: 100, stop: 90, target: 120, at: now, basis: "Synthetic fixture")
+        let first = r.start(.week, allowed: { true }, universe: { [listing()] },
+            analyze: { _ in .init(levels: levels, facts: ["Synthetic retained evidence"],
+                note: "Earlier result", at: now, model: "synthetic-model") })
+        #expect(first)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil)
+        let previous = try #require(r.scans[.week])
+        try #require(previous.results["AAPL"]?.note == "Earlier result")
+        var analyzed = false
+        var permitted = true
+        var resume: CheckedContinuation<Void, Never>?
+        let retry = r.start(.week, allowed: { permitted }, universe: {
+            if outcome == "cancel" || outcome == "settings" {
+                await withCheckedContinuation { resume = $0 }
+                return [listing("NEW")]
+            }
+            if outcome == "invalid" { return [listing(), listing()] }
+            throw URLError(.cannotConnectToHost)
+        }, analyze: { _ in analyzed = true; return .init(note: "Must not run") })
+        #expect(retry)
+        if outcome == "cancel" || outcome == "settings" {
+            for _ in 0..<100 where resume == nil { try await Task.sleep(for: .milliseconds(5)) }
+            let continuation = try #require(resume)
+            if outcome == "cancel" { r.stop() } else { permitted = false }
+            continuation.resume()
+        }
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil)
+        let retained = try #require(r.scans[.week])
+        #expect(!analyzed)
+        #expect(retained.listings == previous.listings)
+        #expect(retained.at == previous.at)
+        #expect(retained.results["AAPL"]?.note == "Earlier result")
+        #expect(retained.results["AAPL"]?.facts == ["Synthetic retained evidence"])
+        #expect(retained.results["AAPL"]?.at == now)
+        #expect(retained.results["AAPL"]?.levels == levels && retained.results["AAPL"]?.model == "synthetic-model")
+        #expect(retained.status.contains("Earlier scan data retained; no new listings checked."))
+        #expect(retained.status.contains(outcome == "cancel" || outcome == "settings" ? "Scan stopped" : "directory could not be verified"))
+    }
+
+    @Test func firstPreflightFailureDoesNotInventPreviousResults() async throws {
+        let r = R()
+        var analyzed = false
+        let started = r.start(.week, allowed: { true }, universe: { throw URLError(.cannotConnectToHost) },
+            analyze: { _ in analyzed = true; return .init(note: "Must not run") })
+        #expect(started)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil)
+        let scan = try #require(r.scans[.week])
+        #expect(scan.at != nil && scan.listings.isEmpty && scan.results.isEmpty && !analyzed)
+        #expect(scan.status.contains("directory could not be verified") && !scan.status.contains("Earlier"))
+    }
+
+    @Test(arguments: [false, true])
+    func acceptedDirectoryReplacesPreviousScan(empty: Bool) async throws {
+        let r = R()
+        let first = r.start(.week, allowed: { true }, universe: { [listing("OLD")] },
+            analyze: { _ in .init(note: "Earlier") })
+        #expect(first)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil && r.scans[.week]?.results["OLD"] != nil)
+        let requestedAfter = Date()
+        let names = empty ? [] : [listing("NEW")]
+        let second = r.start(.week, allowed: { true }, universe: { names },
+            analyze: { _ in .init(note: "New") })
+        #expect(second)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil)
+        let scan = try #require(r.scans[.week])
+        let requested = try #require(scan.at)
+        #expect(requested >= requestedAfter && scan.listings == names)
+        #expect(scan.results["OLD"] == nil && scan.results.count == names.count)
+        #expect(scan.status.contains("Scan finished") && !scan.status.contains("Earlier"))
+    }
+
+    @Test(arguments: [true, false], [true, false])
+    func stoppedAcceptedRetryKeepsNewPartialResultsNotOldScan(cancel: Bool, completedFirst: Bool) async throws {
+        let r = R()
+        let first = r.start(.week, allowed: { true }, universe: { [listing("OLD")] },
+            analyze: { _ in .init(note: "Earlier") })
+        #expect(first)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil && r.scans[.week]?.results["OLD"] != nil)
+        var permitted = true
+        var resume: CheckedContinuation<Void, Never>?
+        let names = completedFirst ? [listing("NEW"), listing("LATE")] : [listing("LATE")]
+        let retry = r.start(.week, allowed: { permitted }, universe: { names }, analyze: { item in
+            if item.ticker == "LATE" { await withCheckedContinuation { resume = $0 } }
+            return .init(note: item.ticker)
+        })
+        #expect(retry)
+        for _ in 0..<100 where resume == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let continuation = try #require(resume)
+        #expect(r.scans[.week]?.results["NEW"]?.note == (completedFirst ? "NEW" : nil))
+        if cancel { r.stop() } else { permitted = false }
+        continuation.resume()
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(r.running == nil && r.activeSymbol == nil)
+        let scan = try #require(r.scans[.week])
+        #expect(scan.listings == names && Set(scan.results.keys) == (completedFirst ? ["NEW"] : []))
+        #expect(scan.status.contains("Scan stopped") && !scan.status.contains("Earlier"))
+    }
     @Test(arguments: R.Horizon.allCases)
     func manualRunCapsDirectoryAt500BeforeResearch(_ horizon: R.Horizon) async throws {
         let r = R()
