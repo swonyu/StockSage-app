@@ -19,6 +19,55 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: ["empty", "ordinary", "protective", "global-failure", "opinion-after-fill", "long-no-fill"])
+    func renderPaperActivityWithoutAccountAccess(state: String) async throws {
+        typealias A = StockSagePaperAutomation
+        let at = try Date("2026-09-09T10:00:00-04:00", strategy: .iso8601)
+        var book = A.Book()
+        func record(_ action: String, _ reason: String, symbol: String = "AAPL", seconds: Double = 0) -> A.Decision {
+            .init(id: UUID(), at: at.addingTimeInterval(seconds), symbol: symbol, action: action,
+                  reason: reason, risk: "", facts: ["Synthetic saved evidence"], evidence: [], model: "fixture")
+        }
+        let holding = TradeRecord(symbol: state == "ordinary" ? "MSFT" : "AAPL", side: .long,
+            entry: 100, stop: 98, target: 104, shares: 1, openedAt: at.addingTimeInterval(-300))
+        if ["ordinary", "protective", "opinion-after-fill"].contains(state) { book.trades = [holding] }
+        switch state {
+        case "ordinary":
+            book.pending = [.init(id: UUID(), symbol: "AAPL", buy: true, at: at),
+                            .init(id: UUID(), symbol: "MSFT", buy: false, at: at)]
+        case "protective":
+            book.pending = [.init(id: UUID(), symbol: "AAPL", buy: false, at: at.addingTimeInterval(-120), protectiveTradeID: holding.id)]
+        case "global-failure":
+            book.decisions = [record("Buy", "Earlier opinion", seconds: -60), record("Unavailable", "Synthetic global Qwen failure.", symbol: "")]
+        case "opinion-after-fill":
+            book.decisions = [record("Paper Buy", "Earlier simulated fill.", seconds: -60), record("Strong Buy", "Later opinion, not another fill.")]
+            book.decisions[1].plan = .init(entry: 100.1, at: at)
+        case "long-no-fill":
+            book.decisions = [record("Cancelled", String(repeating: "Saved historical reason · ليس تشخيصاً للحالة الحالية. ", count: 8), seconds: -60),
+                              record("Paper Sell", "Later simulated exit does not resolve earlier evidence.")]
+        default: break
+        }
+        var rearmed = book.pending
+        if state == "protective" { rearmed[0].at = at } // Value fixture only; no simulated rearm execution.
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(book), retryBefore = try encoder.encode(rearmed)
+        var heights: [CGFloat] = []
+        for width in [360, 760] {
+            let content = GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    StockSagePaperAutomationPanel.pendingRequests(book.pending, running: state != "protective", at: at)
+                    if state == "protective" { StockSagePaperAutomationPanel.pendingRequests(rearmed, running: true, at: at) }
+                    StockSagePaperAutomationPanel.recordedActivity(book.decisions)
+                }.padding(12)
+            }.padding(16).frame(width: CGFloat(width)).background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+            let size = try await capture(content, name: "stocksage-paper-activity-\(state)-\(width)")
+            #expect(size.width == CGFloat(width) && size.height > 40)
+            heights.append(size.height)
+            #expect(try encoder.encode(book) == before && encoder.encode(rearmed) == retryBefore)
+        }
+        if state == "long-no-fill" { #expect(heights[0] > heights[1], "The complete saved reason must wrap at narrow width") }
+    }
+
     @Test(arguments: [false, true])
     func renderDesktopSidebarWithIsolatedPreferences(collapsed: Bool) async throws {
         let suite = "stocksage.sidebar.fixture.\(UUID().uuidString)"

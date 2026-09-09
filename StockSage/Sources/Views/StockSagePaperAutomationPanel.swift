@@ -70,6 +70,9 @@ struct StockSagePaperAutomationPanel: View {
                     .font(.callout.bold())
                 Text("While StockSage is open and this Mac is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
                     .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                Self.pendingRequests(automation.book.pending, running: automation.isRunning, at: at)
+                #endif
                 HStack(spacing: 20) {
                     VStack(alignment: .leading) {
                         Text("Total paper cash").font(.caption)
@@ -117,11 +120,15 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Full US market discovery begins on the next research cycle; your watchlist is not the scan limit.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                #if os(macOS)
+                Self.recordedActivity(automation.book.decisions)
+                #else
                 if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
                     Text("Latest decision: \(decision.symbol) · \(Self.actionLabel(decision.action))").font(.callout.bold())
                     Text(decision.reason).font(.caption).foregroundStyle(.secondary)
-                    if let plan = decision.plan { entryPlan(plan) }
+                    if let plan = decision.plan { Self.entryPlan(plan) }
                 }
+                #endif
                 if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
                     Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(Self.reasonLabel(action: cycle.action, reason: cycle.reason))")
                         .font(.caption).foregroundStyle(.secondary)
@@ -167,9 +174,14 @@ struct StockSagePaperAutomationPanel: View {
                 DisclosureGroup("Research and decisions · latest \(min(100, automation.book.decisions.count))") {
                     ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(decision.at.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
+                            #if os(macOS)
+                            let recordedAt = "\(Self.activityDateLabel(decision.at)) New York"
+                            #else
+                            let recordedAt = decision.at.formatted(date: .abbreviated, time: .shortened)
+                            #endif
+                            Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(recordedAt)").font(.caption.bold())
                             Text(Self.reasonLabel(action: decision.action, reason: decision.reason)).font(.callout)
-                            if let plan = decision.plan { entryPlan(plan) }
+                            if let plan = decision.plan { Self.entryPlan(plan) }
                             if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
                             if !decision.facts.isEmpty {
                                 DisclosureGroup(decision.action == "Unavailable" ? "Available source evidence · incomplete research" : "Saved evidence and model") {
@@ -193,6 +205,101 @@ struct StockSagePaperAutomationPanel: View {
     }
 
     #if os(macOS)
+    static func latestActivity(in decisions: [StockSagePaperAutomation.Decision]) -> StockSagePaperAutomation.Decision? {
+        decisions.last
+    }
+
+    static func latestNoFillEvidence(in decisions: [StockSagePaperAutomation.Decision]) -> StockSagePaperAutomation.Decision? {
+        decisions.last { ["Unavailable", "Skipped", "Expired", "Cancelled"].contains($0.action) }
+    }
+
+    static func pendingStatus(_ request: StockSagePaperAutomation.Pending, running: Bool, at now: Date) -> String {
+        if !running { return "Monitoring paused; no attempts run." }
+        if request.buy && !StockSagePaperAutomation.entryWindowOpen(now) {
+            return "Entry window closed; awaiting monitor processing."
+        }
+        if now < request.at { return "Current clock precedes the saved attempt; awaiting monitor processing." }
+        if now.timeIntervalSince(request.at) >= 120 {
+            return "Attempt window elapsed; awaiting monitor processing."
+        }
+        if !StockSagePaperAutomation.paperSessionOpen(now) {
+            return "No fills outside a supported paper session."
+        }
+        return "Awaiting a later eligible observation; detailed cause not recorded."
+    }
+
+    @ViewBuilder static func pendingRequests(_ requests: [StockSagePaperAutomation.Pending], running: Bool, at now: Date) -> some View {
+        if !requests.isEmpty {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Text("Pending paper requests").font(.callout.bold())
+                ForEach(requests) { request in
+                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                        Text("\(request.symbol) · \(request.buy ? "Buy requested" : "Exit requested") · Not filled")
+                            .font(.caption.bold())
+                        Text("Current attempt: \(activityDateLabel(request.at)) New York")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if request.protectiveTradeID != nil {
+                            Text("Protective intent retained").font(.caption.bold())
+                                .foregroundStyle(DS.Palette.warningSoft)
+                        }
+                        Text(pendingStatus(request, running: running, at: now))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder static func recordedActivity(_ decisions: [StockSagePaperAutomation.Decision]) -> some View {
+        let latest = latestActivity(in: decisions)
+        let noFill = latestNoFillEvidence(in: decisions)
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            if let latest {
+                VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                    activityRow(latest, title: "Latest recorded activity")
+                    if let plan = latest.plan { entryPlan(plan) }
+                }
+            } else {
+                Text("No recorded activity in recent history.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let noFill {
+                if noFill.id != latest?.id {
+                    activityRow(noFill, title: "Latest recorded no-fill evidence")
+                }
+            } else {
+                Text("No matching no-fill record in recent history.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static func activityRow(_ decision: StockSagePaperAutomation.Decision, title: String) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xxs) {
+            Text(title).font(.callout.bold())
+            Text("\(activityDateLabel(decision.at)) New York · \(decision.symbol.isEmpty ? "General activity" : decision.symbol) · \(actionLabel(decision.action))")
+                .font(.caption.bold())
+            Text(verbatim: decision.reason).font(.caption).foregroundStyle(.secondary)
+            Text("Historical record; does not establish current state or why a request is pending.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(decision.action == "Paper Buy" || decision.action == "Paper Sell"
+                 ? "Simulated fill · not a broker execution." : "This record is not a fill.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private static func activityDateLabel(_ date: Date) -> String {
+        var style = Date.FormatStyle(date: .abbreviated, time: .shortened)
+        style.timeZone = TimeZone(identifier: "America/New_York")!
+        return style.format(date)
+    }
+
     private func exportResearch() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
@@ -224,11 +331,16 @@ struct StockSagePaperAutomationPanel: View {
             : "Monitoring enabled · waiting for the next supported session"
     }
 
-    private func entryPlan(_ plan: StockSagePaperAutomation.EntryPlan) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private static func entryPlan(_ plan: StockSagePaperAutomation.EntryPlan) -> some View {
+        #if os(macOS)
+        let observedAt = "\(activityDateLabel(plan.at)) New York"
+        #else
+        let observedAt = plan.at.formatted(date: .abbreviated, time: .shortened)
+        #endif
+        return VStack(alignment: .leading, spacing: 4) {
             Text("Entry reference: $\(StockSageCurrency.adaptivePrice(plan.entry)) · Stop-loss: $\(StockSageCurrency.adaptivePrice(plan.stop)) · Target: $\(StockSageCurrency.adaptivePrice(plan.target))")
                 .font(.callout.bold()).monospacedDigit()
-            Text("Preview from Massive observation \(plan.at.formatted(date: .abbreviated, time: .shortened)): entry includes the assumed 10bps buy cost, stop 2% below and target 4% above. Not a fill or prediction. Actual paper levels use the later simulated fill, shown under Paper positions.")
+            Text("Preview from Massive observation \(observedAt): entry includes the assumed 10bps buy cost, stop 2% below and target 4% above. Not a fill or prediction. Actual paper levels use the later simulated fill, shown under Paper positions.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

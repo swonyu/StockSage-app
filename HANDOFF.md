@@ -1,5 +1,45 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac paper requests and dated activity — September 9, verified; not installed
+
+Reproduced actual latest-decision selector hiding a newer ticker-less Qwen failure
+behind an older stock opinion. Mac now shows last committed activity, plus latest
+exact no-fill evidence without duplicate rows. Explicit New York dates, original
+reasons and historical qualifiers distinguish current status, opinions, requests
+and simulated fills. Shared Mac entry previews/expanded history use the same zone;
+stored dates, amounts, commit order and original non-Mac formatting unchanged.
+
+Existing-clock pending rows show requested side, Not filled, current attempt and
+retained protective intent. Paused/cutoff/clock/elapsed/session states are explicit;
+no inferred quantity/price/liquidity/network cause or UI-created expiration.
+No engine/schema/risk/model changes, new controller/timer/dependency or real order.
+
+RED87/2/6.359s1issue; exec exit unavailable after lost tool output, not inferred.
+GREEN90/2/6.772s0; preview refinement GREEN2 90/2/6.761s0. Twelve native360/760
+value captures inspected, both revised previews reinspected; synthetic encoded
+Book/retry values unchanged. Existing real Book tests cover protective expiry,
+restart, closed-session rearming and strictly later observations. Sol/Astra final
+source reviews clear; history timezone finding fixed/rereviewed. All reviewers closed.
+
+Final-source fullMac **2,069 tests/200 suites/89.193s**; strictMac emit87s and
+test-source typecheck163s, exec66370 aggregate0: macos=OK ios=SKIP tests=OK.
+Same3opt-in exclusions. Frozen372-source manifest
+51dffb74e7d9ae428500880b450639eec122e1b22b1c2dce29155fa77c8d2c3d;
+exact64-entry candidate/deepstrictsignature verified, dylib
+a840dd30e4025489354f06b9ccc7705cf9b8d4fd9290fd30fe979f8199acc40a.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/PAPER_ACTIVITY.md`;
+same root has plan/logs/xcresults/captures/manifest/checker and
+candidate-paper-activity/StockSageX.app. Parent sole writer/tester/installer.
+
+No install/quit/reopen/probes/push/paidresources/history/orders/relay changes.
+Installed dylib unchanged, no StockSageX process observed (cause unknown), Qwen2120
+present but not health-tested, paper flag0. Preserve restart/clear hold and do not
+claim session-only500 results survived. Day101/manual500 and iOS pause unchanged.
+Integrated/expanded-history UI activation, keyboard/VoiceOver, alternate AX modes,
+installed behavior and iOS unverified. Remaining approved panel items1/3: errors
+before money, clearer settled/equity summary and dated coverage/clock-sensitive
+labels. Recheck current callers; do not change financial calculations or policy.
+
 ## Mac outline navigation — September 9, verified; not installed
 
 Approved visual cleanup, not a navigation defect. One existing desktop icon helper

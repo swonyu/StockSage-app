@@ -7,6 +7,16 @@ struct StockSagePaperAutomationTests {
     typealias A = StockSagePaperAutomation
     private let now = Date(timeIntervalSince1970: 1_788_886_800) // 2026-09-08, US regular session.
     #if os(macOS)
+    @Test func paperLatestActivityIncludesGlobalFailure() throws {
+        var book = A.Book()
+        book.note(symbol: "AAPL", action: "Buy", reason: "Synthetic opinion", at: now)
+        book.note(action: "Unavailable", reason: "Synthetic Qwen failure", at: now.addingTimeInterval(1))
+        let original = try JSONEncoder().encode(book)
+        #expect(StockSagePaperAutomationPanel.latestActivity(in: book.decisions) == book.decisions.last)
+        #expect(StockSagePaperAutomationPanel.latestActivity(in: []) == nil)
+        #expect(try JSONDecoder().decode(A.Book.self, from: original).decisions == book.decisions)
+    }
+
     @Test func panelModeDescribesEnabledStateNotContinuousActivity() {
         #expect(StockSagePaperAutomationPanel.modeLabel(running: true) == "Day trading enabled · simulation only")
         #expect(StockSagePaperAutomationPanel.modeLabel(running: false) == "Day trading paused · simulation only")
@@ -18,6 +28,50 @@ struct StockSagePaperAutomationTests {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source,
               paperTradeQualified: true) // Explicit synthetic qualified-tape fixture.
     }
+
+    #if os(macOS)
+    @Test func paperActivityCommitOrderAndExactNoFillActions() throws {
+        let at = try Date("2026-09-09T10:00:00-04:00", strategy: .iso8601)
+        let actions = ["Unavailable", "Skipped", "Expired", "Cancelled", "Buy", "Strong Buy", "Paper Buy",
+                       "Paper Sell", "Exit requested", "Market scan unavailable", "unavailable", "Unavailable "]
+        let records = actions.enumerated().map { index, action in
+            A.Decision(id: UUID(), at: at.addingTimeInterval(-Double(index)), symbol: index == 0 ? "" : "AAPL", action: action,
+                reason: "Saved reason \(index)", risk: "", facts: ["Saved evidence"], evidence: [], model: "")
+        }
+        #expect(StockSagePaperAutomationPanel.latestActivity(in: records) == records.last)
+        for end in 1...records.count {
+            #expect(StockSagePaperAutomationPanel.latestNoFillEvidence(in: Array(records.prefix(end))) == records[min(end, 4) - 1])
+        }
+        #expect(StockSagePaperAutomationPanel.latestNoFillEvidence(in: Array(records.dropFirst(4))) == nil)
+        #expect(StockSagePaperAutomationPanel.latestNoFillEvidence(in: []) == nil)
+    }
+
+    @Test func paperPendingStatusPrecedenceAndAttemptBoundaries() throws {
+        let at = try Date("2026-09-09T10:00:00-04:00", strategy: .iso8601)
+        let cutoff = try Date("2026-09-09T19:55:00-04:00", strategy: .iso8601)
+        let closed = try Date("2026-09-09T20:00:00-04:00", strategy: .iso8601)
+        let unsupported = try Date("2027-09-09T10:00:00-04:00", strategy: .iso8601)
+        let paused = "Monitoring paused; no attempts run."
+        let entry = "Entry window closed; awaiting monitor processing."
+        let future = "Current clock precedes the saved attempt; awaiting monitor processing."
+        let elapsed = "Attempt window elapsed; awaiting monitor processing."
+        let session = "No fills outside a supported paper session."
+        let waiting = "Awaiting a later eligible observation; detailed cause not recorded."
+        let cases: [(Date, Double, Bool, Bool, String)] = [
+            (at, -0.001, false, true, future), (at, 0, false, true, waiting), (at, 0, true, true, waiting),
+            (at, 119.999, false, true, waiting), (at, 120, false, true, elapsed),
+            (cutoff, -1, true, false, paused), (at, 120, false, false, paused),
+            (cutoff, -1, true, true, entry), (cutoff, 120, true, true, entry),
+            (cutoff, 0, false, true, waiting), (closed, 0, false, true, session),
+            (closed, 120, false, true, elapsed), (closed, -1, false, true, future),
+            (unsupported, 0, false, true, session)
+        ]
+        for (now, age, buy, running, expected) in cases {
+            let request = A.Pending(id: UUID(), symbol: "AAPL", buy: buy, at: now.addingTimeInterval(-age))
+            #expect(StockSagePaperAutomationPanel.pendingStatus(request, running: running, at: now) == expected)
+        }
+    }
+    #endif
 
     @Test func tenSecondPriceBoundaryControlsActualPaperFills() {
         for age in [0.0, 10, 10.001, -0.001] {
