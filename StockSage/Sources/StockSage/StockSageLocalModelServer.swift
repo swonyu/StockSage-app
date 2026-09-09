@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // MARK: - StockSageLocalModelServer
 //
@@ -180,21 +181,103 @@ enum StockSageLocalModelServer {
         return request
     }
 
-    /// Ollama's shape is `{"message":{"content":...}}`; OpenAI's is
-    /// `{"choices":[{"message":{"content":...}}]}`. `nil` on any shape mismatch (including
-    /// garbage that isn't even JSON) or a content string that's empty once trimmed.
-    nonisolated static func parseChatResponse(_ data: Data, isOllama: Bool) -> String? {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        let content: String?
-        if isOllama {
-            content = (obj["message"] as? [String: Any])?["content"] as? String
-        } else {
-            let firstChoice = (obj["choices"] as? [[String: Any]])?.first
-            content = (firstChoice?["message"] as? [String: Any])?["content"] as? String
+    /// Metadata is observational: unknown/invalid fields never change text acceptance.
+    nonisolated enum Finish: String, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
+    nonisolated enum FailureCategory: String, Sendable {
+        case invalidConfig, unavailable, modelMissing, unsupportedModel, nonHTTP, http, malformedJSON, responseShape, missingContent, emptyContent
+        case timeout, cancelled, network
+    }
+    nonisolated struct Diagnostic: Sendable, Equatable {
+        var category: FailureCategory? = nil
+        var httpStatus: Int? = nil
+        var bodyBytes: Int? = nil
+        var oversizedBody = false
+        var textBytes: Int? = nil
+        var finish: Finish = .absent
+        var promptTokens: Int? = nil
+        var completionTokens: Int? = nil
+        var malformedUsage = false
+
+        // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
+        var summary: String {
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage)"
         }
-        guard let content else { return nil }
+    }
+    nonisolated struct Completion: Sendable, Equatable {
+        let text: String
+        let diagnostic: Diagnostic
+    }
+    nonisolated struct CompletionFailure: Error, Sendable, Equatable {
+        let diagnostic: Diagnostic
+        var legacyError: ServerError {
+            switch diagnostic.category {
+            case .invalidConfig: return .invalidConfig
+            case .modelMissing: return .modelMissing(diagnostic.summary)
+            case .timeout, .cancelled, .network, .unavailable: return .unreachable(diagnostic.summary)
+            default: return .badResponse(diagnostic.summary)
+            }
+        }
+    }
+    typealias CompletionResult = Swift.Result<Completion, CompletionFailure>
+    nonisolated static func boundedCount(_ value: Int) -> Int { min(max(value, 0), 16_777_216) }
+
+    private nonisolated static func tokenCount(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue >= 0,
+              number.doubleValue <= 16_777_216,
+              number.doubleValue.rounded(.towardZero) == number.doubleValue else { return nil }
+        return number.intValue
+    }
+
+    nonisolated static func parseCompletion(_ data: Data, isOllama: Bool) -> CompletionResult {
+        var diagnostic = Diagnostic(bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)
+        guard let json = try? JSONSerialization.jsonObject(with: data) else {
+            diagnostic.category = .malformedJSON
+            return .failure(.init(diagnostic: diagnostic))
+        }
+        guard let obj = json as? [String: Any] else {
+            diagnostic.category = .responseShape
+            return .failure(.init(diagnostic: diagnostic))
+        }
+        let choice = (obj["choices"] as? [[String: Any]])?.first
+        let rawFinish = isOllama ? obj["done_reason"] : choice?["finish_reason"]
+        if let rawFinish, !(rawFinish is NSNull) {
+            if let finish = rawFinish as? String {
+                switch finish {
+                case "stop": diagnostic.finish = .stop
+                case "length": diagnostic.finish = .tokenLimit
+                case "tool_calls", "function_call": diagnostic.finish = .toolCall
+                case "content_filter": diagnostic.finish = .filtered
+                default: diagnostic.finish = .unknown
+                }
+            } else { diagnostic.finish = .malformed }
+        }
+        let usage = obj["usage"] as? [String: Any]
+        let prompt = isOllama ? obj["prompt_eval_count"] : usage?["prompt_tokens"]
+        let completion = isOllama ? obj["eval_count"] : usage?["completion_tokens"]
+        diagnostic.promptTokens = tokenCount(prompt)
+        diagnostic.completionTokens = tokenCount(completion)
+        diagnostic.malformedUsage = (prompt != nil && !(prompt is NSNull) && diagnostic.promptTokens == nil)
+            || (completion != nil && !(completion is NSNull) && diagnostic.completionTokens == nil)
+            || (!isOllama && obj["usage"] != nil && !(obj["usage"] is NSNull) && usage == nil)
+        let content = (isOllama ? obj["message"] as? [String: Any] : choice?["message"] as? [String: Any])?["content"] as? String
+        guard let content else {
+            diagnostic.category = .missingContent
+            return .failure(.init(diagnostic: diagnostic))
+        }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        diagnostic.textBytes = boundedCount(trimmed.utf8.count)
+        guard !trimmed.isEmpty else {
+            diagnostic.category = .emptyContent
+            return .failure(.init(diagnostic: diagnostic))
+        }
+        return .success(.init(text: trimmed, diagnostic: diagnostic))
+    }
+
+    /// Compatibility wrapper: exactly the existing trimmed content, regardless of metadata.
+    nonisolated static func parseChatResponse(_ data: Data, isOllama: Bool) -> String? {
+        try? parseCompletion(data, isOllama: isOllama).get().text
     }
 
     enum ServerError: Error, Equatable, Sendable {
@@ -204,32 +287,63 @@ enum StockSageLocalModelServer {
         case badResponse(String)
     }
 
-    /// One chat turn against the local server. Ephemeral/no redirects, never throws — every failure
-    /// mode (a dropped connection, a non-2xx status, a body that doesn't parse) comes back as a
-    /// `.failure(ServerError)` the caller renders as a human sentence.
-    static func complete(_ c: Config, isOllama: Bool, system: String, user: String,
-                         maxTokens: Int = 170, contextTokens: Int = 4096,
-                         timeout: TimeInterval = 90) async -> Swift.Result<String, ServerError> {
+    nonisolated static func transportFailure(_ error: Error) -> CompletionFailure {
+        let category: FailureCategory
+        if error is CancellationError { category = .cancelled }
+        else if let error = error as? URLError {
+            switch error.code {
+            case .cancelled: category = .cancelled
+            case .timedOut: category = .timeout
+            default: category = .network
+            }
+        } else { category = .network }
+        return .init(diagnostic: .init(category: category))
+    }
+
+    /// Shared transport seam; injected transport is for deterministic offline tests only.
+    static func completeDetailed(_ c: Config, isOllama: Bool, system: String, user: String,
+                                 maxTokens: Int = 170, contextTokens: Int = 4096,
+                                 timeout: TimeInterval = 90,
+                                 transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> CompletionResult {
         let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
                                   maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response): (Data, URLResponse)
+            if let transport { (data, response) = try await transport(request) }
+            else { (data, response) = try await session.data(for: request) }
             guard let http = response as? HTTPURLResponse else {
-                return .failure(.badResponse("No HTTP response from the server"))
+                return .failure(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
+                                                        oversizedBody: data.count > 1_048_576)))
             }
             guard (200..<300).contains(http.statusCode) else {
-                let bodyText = String(data: data, encoding: .utf8) ?? ""
-                if bodyText.lowercased().contains("not found") {
-                    return .failure(.modelMissing("Server reports model \(c.model) not found (HTTP \(http.statusCode))"))
-                }
-                return .failure(.badResponse("HTTP \(http.statusCode)"))
+                // Preserve the legacy model-missing detection; never retain/emit the body.
+                let missing = (String(data: data, encoding: .utf8) ?? "").lowercased().contains("not found")
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let code = (object?["error"] as? [String: Any])?["code"] as? String
+                let category: FailureCategory = (missing || code == "model_not_found") ? .modelMissing
+                    : (code == "unsupported_model" ? .unsupportedModel : .http)
+                return .failure(.init(diagnostic: .init(category: category,
+                    httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
+                    bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
             }
-            guard let text = parseChatResponse(data, isOllama: isOllama) else {
-                return .failure(.badResponse("Could not parse a response from the server"))
+            switch parseCompletion(data, isOllama: isOllama) {
+            case .success(let reply):
+                var diagnostic = reply.diagnostic
+                diagnostic.httpStatus = http.statusCode
+                return .success(.init(text: reply.text, diagnostic: diagnostic))
+            case .failure(let failure):
+                var diagnostic = failure.diagnostic
+                diagnostic.httpStatus = http.statusCode
+                return .failure(.init(diagnostic: diagnostic))
             }
-            return .success(text)
-        } catch {
-            return .failure(.unreachable(error.localizedDescription))
-        }
+        } catch { return .failure(transportFailure(error)) }
+    }
+
+    static func complete(_ c: Config, isOllama: Bool, system: String, user: String,
+                         maxTokens: Int = 170, contextTokens: Int = 4096,
+                         timeout: TimeInterval = 90) async -> Swift.Result<String, ServerError> {
+        await completeDetailed(c, isOllama: isOllama, system: system, user: user,
+            maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
+            .map(\.text).mapError(\.legacyError)
     }
 }

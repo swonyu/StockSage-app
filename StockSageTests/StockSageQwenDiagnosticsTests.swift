@@ -1,0 +1,218 @@
+import Foundation
+import Testing
+@testable import StockSage
+
+@Suite("Qwen bounded diagnostics", .serialized)
+@MainActor
+struct StockSageQwenDiagnosticsTests {
+    private typealias S = StockSageLocalModelServer
+    private typealias A = StockSageAIAssessment
+    private let facts = ["Observed price 2000.0 USD; exact value 1125.4624. Date 2026-11-04.", "Revenue 100 USD."]
+    private let text = #"{"action":"Hold","reason":"Outlook uncertain (F1).","risk":"A loss remains possible.","evidence":["F1"]}"#
+    private let config = S.Config(baseURL: URL(string: "http://127.0.0.1:8765")!, model: "fixture-model")
+
+    private func body(_ text: String, ollama: Bool, finish: Any? = nil, usage: Any? = nil) throws -> Data {
+        var object: [String: Any]
+        if ollama {
+            object = ["message": ["content": text]]
+            object["done_reason"] = finish
+            if let usage = usage as? [String: Any] { object.merge(usage) { _, new in new } }
+        } else {
+            var choice: [String: Any] = ["message": ["content": text]]
+            choice["finish_reason"] = finish
+            object = ["choices": [choice]]
+            object["usage"] = usage
+        }
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    @Test func metadataNeverChangesReturnedTextOrVerdict() throws {
+        let expected = A.Verdict(action: .hold, reason: "Outlook uncertain (F1).", risk: "A loss remains possible.", evidence: ["F1"])
+        for ollama in [true, false] {
+            let usage = ollama ? ["prompt_eval_count": 57, "eval_count": 24] : ["prompt_tokens": 57, "completion_tokens": 24]
+            for (finish, classification): (Any?, S.Finish) in [(nil, .absent), (NSNull(), .absent), ("stop", .stop),
+                ("length", .tokenLimit), ("tool_calls", .toolCall), ("content_filter", .filtered),
+                ("https://private.invalid/SECRET", .unknown), (42, .malformed)] {
+                let data = try body(" \n" + text + "\t ", ollama: ollama, finish: finish, usage: usage)
+                let result = try S.parseCompletion(data, isOllama: ollama).get()
+                #expect(result.text == text && S.parseChatResponse(data, isOllama: ollama) == text)
+                #expect(result.diagnostic.finish == classification)
+                #expect(result.diagnostic.promptTokens == 57 && result.diagnostic.completionTokens == 24)
+                #expect(result.diagnostic.bodyBytes == data.count && result.diagnostic.textBytes == text.utf8.count)
+                #expect(!result.diagnostic.malformedUsage)
+                #expect(A.parse(result.text, facts: facts) == expected)
+                #expect(!result.diagnostic.summary.contains("SECRET") && result.diagnostic.summary.utf8.count < 300)
+            }
+        }
+    }
+
+    @Test func malformedUsageIsDiscardedWithoutRejectingContent() throws {
+        let invalid: [Any] = [true, -1, 1.5, "123", [1], ["secret": "fixture"], 16_777_217]
+        for ollama in [true, false] {
+            for value in invalid {
+                let usage = ollama ? ["prompt_eval_count": value, "eval_count": value] : ["prompt_tokens": value, "completion_tokens": value]
+                let reply = try S.parseCompletion(body(text, ollama: ollama, usage: usage), isOllama: ollama).get()
+                #expect(reply.text == text)
+                #expect(reply.diagnostic.promptTokens == nil && reply.diagnostic.completionTokens == nil)
+                #expect(reply.diagnostic.malformedUsage)
+            }
+            let nulls: [String: Any] = ollama ? ["prompt_eval_count": NSNull(), "eval_count": NSNull()]
+                : ["prompt_tokens": NSNull(), "completion_tokens": NSNull()]
+            let reply = try S.parseCompletion(body(text, ollama: ollama, usage: nulls), isOllama: ollama).get()
+            #expect(reply.diagnostic.promptTokens == nil && !reply.diagnostic.malformedUsage)
+        }
+        for usage: Any in [true, "SECRET", [1]] {
+            let reply = try S.parseCompletion(body(text, ollama: false, usage: usage), isOllama: false).get()
+            #expect(reply.diagnostic.malformedUsage && reply.text == text)
+        }
+    }
+
+    @Test func malformedEmptyAndOversizedEnvelopesRemainCompatible() throws {
+        for ollama in [true, false] {
+            for (raw, expected): (String, S.FailureCategory) in [("not json", .malformedJSON), ("[]", .responseShape),
+                ("{}", .missingContent), (#"{"choices":[]}"#, .missingContent)] {
+                let data = Data(raw.utf8)
+                guard case .failure(let failure) = S.parseCompletion(data, isOllama: ollama) else {
+                    Issue.record("Malformed envelope accepted"); continue
+                }
+                #expect(failure.diagnostic.category == expected && S.parseChatResponse(data, isOllama: ollama) == nil)
+            }
+            guard case .failure(let empty) = S.parseCompletion(try body(" \n\t", ollama: ollama), isOllama: ollama) else {
+                Issue.record("Empty reply accepted"); continue
+            }
+            #expect(empty.diagnostic.category == .emptyContent)
+            // The old transport had no size rejection. Flag size, preserving acceptance.
+            let large = String(repeating: "a", count: 1_048_577)
+            let data = try body(large, ollama: ollama)
+            let reply = try S.parseCompletion(data, isOllama: ollama).get()
+            #expect(reply.text == large && reply.diagnostic.oversizedBody)
+            #expect(S.parseChatResponse(data, isOllama: ollama) == large)
+            #expect(A.validate(reply.text, facts: facts) == .failure(.oversizedText))
+        }
+        #expect(S.boundedCount(Int.max) == 16_777_216 && S.boundedCount(-1) == 0)
+    }
+
+    @Test func wrongContentShapesNeverUseLaterChoices() {
+        for raw in [#"{"choices":[{"message":{"content":null}}]}"#,
+                    #"{"choices":[{"message":{"content":42}}]}"#,
+                    #"{"choices":[{"message":{"content":["hello"]}}]}"#,
+                    #"{"choices":[{}, {"message":{"content":"hello"}}]}"#,
+                    #"{"choices":[{"message":{"content":"hello"}},42]}"#] {
+            #expect(S.parseChatResponse(Data(raw.utf8), isOllama: false) == nil)
+            guard case .failure(let failure) = S.parseCompletion(Data(raw.utf8), isOllama: false) else {
+                Issue.record("Wrong content shape accepted"); continue
+            }
+            #expect(failure.diagnostic.category == .missingContent)
+        }
+        for raw in [#"{"message":{"content":null}}"#, #"{"message":{"content":42}}"#,
+                    #"{"message":{"content":["hello"]}}"#] {
+            #expect(S.parseChatResponse(Data(raw.utf8), isOllama: true) == nil)
+        }
+    }
+
+    @Test func transportFailuresExposeOnlyAllowlistedMetadata() async throws {
+        let cases: [(Error, S.FailureCategory)] = [
+            (URLError(.timedOut, userInfo: [NSLocalizedDescriptionKey: "SECRET https://private.invalid"]), .timeout),
+            (URLError(.cancelled), .cancelled), (CancellationError(), .cancelled),
+            (URLError(.cannotConnectToHost), .network),
+            (NSError(domain: "SECRET", code: 42, userInfo: [NSLocalizedDescriptionKey: "SECRET"]), .network)]
+        for (error, category) in cases {
+            let result = await S.completeDetailed(config, isOllama: false, system: "SECRET", user: "SECRET",
+                transport: { _ in throw error })
+            guard case .failure(let failure) = result else { Issue.record("Transport error accepted"); continue }
+            #expect(failure.diagnostic.category == category)
+            #expect(!failure.diagnostic.summary.contains("SECRET") && !failure.diagnostic.summary.contains("https:"))
+            #expect(!String(describing: failure.legacyError).contains("SECRET"))
+        }
+        let nonHTTP = await S.completeDetailed(config, isOllama: true, system: "", user: "", transport: { _ in
+            (Data(), URLResponse(url: config.baseURL, mimeType: nil, expectedContentLength: 0, textEncodingName: nil))
+        })
+        guard case .failure(let failure) = nonHTTP else { Issue.record("Non-HTTP accepted"); return }
+        #expect(failure.diagnostic.category == .nonHTTP)
+    }
+
+    @Test func realTransportSeamPreservesRequestAndStatus() async throws {
+        for ollama in [true, false] {
+            let data = try body(text, ollama: ollama, finish: "length")
+            let result = await S.completeDetailed(config, isOllama: ollama, system: "system", user: "user",
+                maxTokens: 240, contextTokens: 4096, timeout: 90, transport: { request in
+                    #expect(request == S.chatRequest(config, system: "system", user: "user", isOllama: ollama, maxTokens: 240))
+                    return (data, HTTPURLResponse(url: config.baseURL, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+            let reply = try result.get()
+            #expect(reply.text == text && reply.diagnostic.httpStatus == 200 && reply.diagnostic.finish == .tokenLimit)
+        }
+        for (status, raw, expected): (Int, String, S.FailureCategory) in [
+            (404, "model SECRET not found", .modelMissing), (401, "SECRET", .http),
+            (404, #"{"error":{"code":"model_not_found","message":"SECRET"}}"#, .modelMissing),
+            (400, #"{"error":{"code":"unsupported_model","message":"SECRET"}}"#, .unsupportedModel),
+            (500, "SECRET", .http), (307, "SECRET", .http), (200, "SECRET", .malformedJSON)] {
+            let result = await S.completeDetailed(config, isOllama: false, system: "", user: "", transport: { _ in
+                (Data(raw.utf8), HTTPURLResponse(url: config.baseURL, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            })
+            guard case .failure(let failure) = result else { Issue.record("Failure accepted"); continue }
+            #expect(failure.diagnostic.category == expected && failure.diagnostic.httpStatus == status)
+            #expect(!failure.diagnostic.summary.contains("SECRET"))
+        }
+    }
+
+    @Test func rejectionClassesPreserveEveryGuard() throws {
+        let cases: [(String, A.ValidationFailure)] = [
+            (String(repeating: "x", count: 4001), .oversizedText), ("Hold", .malformedJSON), ("[]", .schema),
+            ("```json\n" + text + "\n```", .malformedJSON), (text + text, .malformedJSON),
+            (text.replacingOccurrences(of: "\"action\":", with: "\"extra\":0,\"action\":"), .schema),
+            (text.replacingOccurrences(of: "Hold", with: "Guaranteed Win"), .action),
+            (text.replacingOccurrences(of: "\"evidence\":[\"F1\"]", with: "\"evidence\":true"), .fieldType),
+            (text.replacingOccurrences(of: "[\"F1\"]", with: "[]"), .emptyEvidence),
+            (text.replacingOccurrences(of: "[\"F1\"]", with: "[\"F1\",\"F1\"]"), .duplicateEvidence),
+            (text.replacingOccurrences(of: "[\"F1\"]", with: "[\"F1\",\"F2\",\"F3\"]"), .tooManyEvidence),
+            (text.replacingOccurrences(of: "F1", with: "F9999"), .unknownEvidence),
+            (text.replacingOccurrences(of: "F1", with: "F01"), .unknownEvidence),
+            (text.replacingOccurrences(of: "F1", with: "W1"), .unknownEvidence),
+            (text.replacingOccurrences(of: "Outlook uncertain (F1).", with: " "), .emptyProse),
+            (text.replacingOccurrences(of: "Outlook uncertain (F1).", with: String(repeating: "x", count: 601)), .oversizedProse),
+            (text.replacingOccurrences(of: "(F1)", with: "[F1]"), .bracketContent),
+            (text.replacingOccurrences(of: "(F1)", with: "<F1>"), .bracketContent),
+            (text.replacingOccurrences(of: "(F1)", with: "٩٩"), .nonASCIINumber),
+            (text.replacingOccurrences(of: "(F1)", with: "²"), .nonASCIINumber),
+            (text.replacingOccurrences(of: "(F1)", with: "(F2)"), .unknownReference),
+            (text.replacingOccurrences(of: "(F1)", with: "(W2)"), .unknownReference),
+            (text.replacingOccurrences(of: "(F1)", with: "99999"), .foreignNumber)]
+        for (input, failure) in cases {
+            #expect(A.validate(input, facts: facts) == .failure(failure))
+            #expect(A.parse(input, facts: facts) == nil)
+        }
+        #expect(A.validate(text, facts: []) == .failure(.emptyFacts))
+        for count in [-1, 4] { #expect(A.validate(text, facts: facts, leadCount: count) == .failure(.invalidLeadCount)) }
+        for number in ["2000", "2,000", "2001", "1125", "1125.46", "FY26", "Nov 4", "Nov 5", "100"] {
+            // Formatting fixes are explicitly NOT approved; even value-identical variants still reject.
+            let input = text.replacingOccurrences(of: "(F1)", with: number)
+            #expect(A.validate(input, facts: facts) == .failure(.foreignNumber))
+            #expect(A.parse(input, facts: facts) == nil)
+        }
+    }
+
+    @Test func acceptedVerdictsRetainAllFieldsAndEvidenceOrder() throws {
+        for action in ["Strong Buy", "Buy", "Hold", "Avoid", "Reduce", "Sell"] {
+            for evidence in [["F1"], ["F2", "F1"]] {
+                let reason = "Observed 2000.0 USD (F1); W1 is unverified."
+                let risk = "A loss remains possible."
+                let data = try JSONSerialization.data(withJSONObject: ["action": action, "reason": reason, "risk": risk, "evidence": evidence])
+                let input = String(decoding: data, as: UTF8.self)
+                let expected = A.Verdict(action: TradeAdvice.Action(rawValue: action)!, reason: reason, risk: risk, evidence: evidence)
+                #expect(A.validate(input, facts: facts, leadCount: 1) == .success(expected))
+                #expect(A.parse(input, facts: facts, leadCount: 1) == expected)
+            }
+        }
+    }
+
+    @Test func tokenLimitAndMalformedContentAreIndependent() throws {
+        let badText = #"{"action":"Hold""#
+        let reply = S.parseCompletion(try body(badText, ollama: false, finish: "length"), isOllama: false)
+        let summary = StockSageAIAssessments.failureSummary(reply, facts: facts, leadCount: 0)
+        #expect(summary.contains("validation=malformedJSON") && summary.contains("finish=tokenLimit"))
+        #expect(!summary.contains(badText))
+        let valid = S.parseCompletion(try body(text, ollama: false, finish: "length"), isOllama: false)
+        #expect(StockSageAIAssessments.failureSummary(valid, facts: facts, leadCount: 0).contains("validation=accepted"))
+    }
+}
