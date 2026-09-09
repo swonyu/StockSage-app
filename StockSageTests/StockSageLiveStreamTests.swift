@@ -6,6 +6,22 @@ import Foundation
 struct StockSageLiveStreamTests {
     typealias L = StockSageLiveStream
 
+    @Test("whole-market subscription and suffix observations do not depend on the board")
+    func wholeMarketRegression() throws {
+        let payload = try #require(L.massiveSubscription(symbols: ["AAPL"]))
+        #expect(payload.contains("T.*,Q.*"))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var state = L.StreamState()
+        _ = state.consume(.status("auth_success"), requested: ["AAPL"], now: now)
+        let offBoard = L.Tick(symbol: "MSFT", price: 100, timestamp: now)
+        #expect(state.consume(.trade(offBoard), requested: ["AAPL"], now: now) == offBoard)
+        let events = L.events(in: #"[{"ev":"T","sym":"BRK.B","p":100,"t":1700000000000},{"ev":"T","sym":"APTVpA","p":25,"t":1700000000000}]"#)
+        #expect(events.count == 2)
+        #expect(events.contains(.trade(.init(symbol: "APTVpA", price: 25, timestamp: now))))
+        #expect(!StockSagePaperAutomation.fresh(.init(symbol: "AAPL", price: 100, previousClose: 99,
+            marketTime: now.addingTimeInterval(-10.001), priceSource: .massiveSIP), at: now))
+    }
+
     @Test("distinct same-millisecond trades retain exact sequence ordering")
     func sameMillisecondTradesAreNotDropped() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -58,8 +74,8 @@ struct StockSageLiveStreamTests {
         let data = try #require(subscription.data(using: .utf8))
         let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: String])
         #expect(payload["action"] == "subscribe")
-        #expect(payload["params"] == "T.AAPL,Q.AAPL,T.MSFT,Q.MSFT")
-        #expect(L.massiveSubscription(symbols: []) == nil)
+        #expect(payload["params"] == "T.*,Q.*")
+        #expect(L.massiveSubscription(symbols: []) != nil)
     }
 
     @Test("only Massive-covered US symbols are streamable")
@@ -87,9 +103,9 @@ struct StockSageLiveStreamTests {
         #expect(state.consume(.trade(tick), requested: ["AAPL", "MSFT"], now: now) == tick)
         #expect(state.coveredSymbols(at: now) == ["AAPL"])
         #expect(state.hasRecentTrades(at: now))
-        #expect(state.coveredSymbols(at: now.addingTimeInterval(45)) == ["AAPL"])
-        #expect(state.coveredSymbols(at: now.addingTimeInterval(45.001)).isEmpty)
-        #expect(!state.hasRecentTrades(at: now.addingTimeInterval(45.001)))
+        #expect(state.coveredSymbols(at: now.addingTimeInterval(10)) == ["AAPL"])
+        #expect(state.coveredSymbols(at: now.addingTimeInterval(10.001)).isEmpty)
+        #expect(!state.hasRecentTrades(at: now.addingTimeInterval(10.001)))
     }
 
     @Test("missing, equal and older ticks cannot rewind a quote")
@@ -114,7 +130,7 @@ struct StockSageLiveStreamTests {
         #expect(trades.map(\.symbol) == ["AAPL", "MSFT", "AAPL"])
         #expect(trades.map(\.price) == [100, 200.5, 101])
         #expect(state.isAuthorized)
-        #expect(state.coveredSymbols(at: now) == ["AAPL", "MSFT"])
+        #expect(state.coveredSymbols(at: now).isEmpty, "Future observations cannot claim live coverage")
     }
 
     @Test("informational status preserves auth; auth failure clears delivery proof")
@@ -138,7 +154,7 @@ struct StockSageLiveStreamTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         var state = L.StreamState()
         _ = state.consume(.status("auth_success"), requested: ["AAPL"], now: now)
-        #expect(state.consume(.trade(.init(symbol: "MSFT", price: 100, timestamp: now)), requested: ["AAPL"], now: now) == nil)
+        #expect(state.consume(.trade(.init(symbol: "MSFT", price: 100, timestamp: now)), requested: ["AAPL"], now: now) != nil)
         #expect(state.consume(.trade(.init(symbol: "AAPL", price: 100, timestamp: now.addingTimeInterval(61))), requested: ["AAPL"], now: now) == nil)
         let tick = L.Tick(symbol: "AAPL", price: 100, timestamp: now)
         #expect(state.consume(.trade(tick), requested: ["AAPL"], now: now) == tick)

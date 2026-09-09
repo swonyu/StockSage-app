@@ -19,7 +19,7 @@ struct StockSageNBBOView: View {
     @State private var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
 
     var body: some View {
-        if StockSageMassive.covers(symbol) {
+        if StockSageLiveStream.stockSymbol(symbol) != nil {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -28,7 +28,7 @@ struct StockSageNBBOView: View {
                         Button("Tape") { showTape = true }.buttonStyle(.bordered)
                     }
                     Toggle("Nasdaq only", isOn: $nasdaqOnly).font(.caption)
-                    if let quote = live.quotes[symbol.uppercased()] {
+                    if let quote = StockSageLiveStream.displayQuote(for: symbol, in: live.quotes) {
                         ViewThatFits(in: .horizontal) {
                             HStack { side("Bid", price: quote.bid, size: quote.bidSize, exchange: quote.bidExchange); Spacer(); side("Ask", price: quote.ask, size: quote.askSize, exchange: quote.askExchange) }
                             VStack(alignment: .leading, spacing: 4) {

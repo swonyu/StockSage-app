@@ -104,7 +104,7 @@ enum StockSageNetEdge {
     /// Symbol-only historical backtests deliberately keep using defaultCosts (no lookahead).
     nonisolated static func costs(forSymbol symbol: String, nbbo: StockSageNBBO?, now: Date = Date()) -> CostAssumption {
         let base = defaultCosts(forSymbol: symbol)
-        guard StockSageMassive.covers(symbol), let nbbo, nbbo.symbol.uppercased() == symbol.uppercased(),
+        guard StockSageMassive.covers(symbol), let nbbo, nbbo.matches(symbol),
               nbbo.costConditionVerified, let spread = nbbo.spreadBps(at: now) else { return base }
         return CostAssumption(spreadBps: max(base.spreadBps, spread), slippageBps: base.slippageBps,
                               assetClass: base.assetClass, takerFeeBps: base.takerFeeBps,
@@ -302,7 +302,7 @@ extension StockSageNetEdge {
     nonisolated static func costsDisplayLabel(forSymbol symbol: String, advDollar: Double?,
                                              nbbo: StockSageNBBO? = nil, now: Date = Date()) -> String {
         let costs = costs(forSymbol: symbol, nbbo: nbbo, now: now)
-        if StockSageMassive.covers(symbol), let nbbo, nbbo.symbol.uppercased() == symbol.uppercased(),
+        if StockSageMassive.covers(symbol), let nbbo, nbbo.matches(symbol),
            nbbo.costConditionVerified, let spread = nbbo.spreadBps(at: now) {
             return String(format: "~%.2fbps est. total; Massive SIP spread %.2fbps (%.2fbps floor); slippage/fees estimated",
                           costs.roundTripBps, spread, defaultCosts(forSymbol: symbol).spreadBps)

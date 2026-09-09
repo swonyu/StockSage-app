@@ -17,6 +17,40 @@ struct StockSageNBBOTests {
               bidExchange: 4, askExchange: 7, timestamp: now.addingTimeInterval(offset), sequence: sequence)
     }
 
+    @Test("provider-native preferred identity survives store costs and scan preservation")
+    func providerIdentityCannotAliasDownstream() throws {
+        let preferred = SageFix.idea("APTVpA", conviction: 0.8)
+        let common = SageFix.idea("APTVPA", conviction: 0.8)
+        var p = quote(bid: 24, ask: 26, symbol: "APTVpA"); p.condition = 801
+        var c = quote(bid: 99, ask: 101, symbol: "APTVPA"); c.condition = 801
+        p = p.qualifyingCosts(regularConditions: [801]); c = c.qualifyingCosts(regularConditions: [801])
+        #expect(common.withNBBO(p).nbbo == nil)
+        #expect(preferred.withNBBO(c).nbbo == nil)
+        let updated = StockSageStore.ideasWithNBBO([preferred, common], quotes: ["APTVpA": p, "APTVPA": c], now: now)
+        #expect(updated[0].nbbo == p && updated[1].nbbo == c)
+        let preserved = StockSageStore.ideasWithLatestPrices([preferred, common], symbols: [],
+            previous: [preferred.withNBBO(p), common.withNBBO(c)], now: now)
+        #expect(preserved[0].nbbo == p && preserved[1].nbbo == c)
+        #expect(StockSageNetEdge.costs(forSymbol: "APTVPA", nbbo: p, now: now).spreadBps
+                == StockSageNetEdge.defaultCosts(forSymbol: "APTVPA").spreadBps)
+        #expect(!StockSageNetEdge.costsDisplayLabel(forSymbol: "APTVPA", advDollar: nil, nbbo: p, now: now).contains("Massive SIP spread"))
+    }
+
+    @Test("native display lookup and legacy store projection cannot fold distinct symbols")
+    func nativeDisplayAndLegacyProjection() {
+        let p = quote(bid: 24, ask: 26, symbol: "APTVpA")
+        let c = quote(bid: 99, ask: 101, symbol: "APTVPA")
+        let quotes = ["APTVpA": p, "APTVPA": c]
+        #expect(L.displayQuote(for: "APTVpA", in: quotes) == p)
+        #expect(L.displayQuote(for: "APTVPA", in: quotes) == c)
+        #expect(L.displayQuote(for: "APTVPA", in: ["APTVPA": p]) == nil)
+        let pTick = L.Tick(symbol: "APTVpA", price: 25, timestamp: now)
+        let cTick = L.Tick(symbol: "APTVPA", price: 100, timestamp: now)
+        let projected = StockSageStore.liveTicksForStore(["APTVpA": pTick, "APTVPA": cTick])
+        #expect(projected == ["APTVPA": cTick])
+        #expect(StockSageStore.liveTicksForStore(["APTVPA": pTick]).isEmpty)
+    }
+
     @Test("compact quote copy is dated, observational and keeps invalid sides explicit")
     func compactCopy() throws {
         let q = quote()
@@ -108,7 +142,7 @@ struct StockSageNBBOTests {
         #expect(state.latestQuotes.isEmpty)
         _ = state.consume(.status("auth_success"), requested: ["AAPL"], now: now)
         _ = state.consume(.quote(quote(symbol: "MSFT")), requested: ["AAPL"], now: now)
-        #expect(state.latestQuotes.isEmpty)
+        #expect(state.latestQuotes["MSFT"] != nil)
         _ = state.consume(.quote(q), requested: ["AAPL"], now: now)
         #expect(state.latestQuotes["AAPL"] == q)
         #expect(state.coveredSymbols(at: now).isEmpty)
@@ -119,7 +153,7 @@ struct StockSageNBBOTests {
         #expect(state.latestQuotes["AAPL"] == withdrawal)
         #expect(state.latestQuotes["AAPL"]?.spreadBps(at: now) == nil)
         _ = state.consume(.status("success"), requested: ["AAPL"], now: now)
-        #expect(state.latestQuotes.count == 1)
+        #expect(state.latestQuotes.count == 2)
         _ = state.consume(.status("auth_failed"), requested: ["AAPL"], now: now)
         #expect(state.latestQuotes.isEmpty)
     }
