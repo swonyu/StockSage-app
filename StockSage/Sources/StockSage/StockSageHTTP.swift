@@ -2,6 +2,12 @@ import Foundation
 
 /// Shared bounded body reader for model/evidence clients. Callers own host/policy checks.
 enum StockSageHTTP {
+    nonisolated final class NoRedirect: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+    }
+
     @concurrent nonisolated static func data(for request: URLRequest, session: URLSession,
                                            maximumBytes: Int) async throws -> (Data, URLResponse) {
         try Task.checkCancellation()

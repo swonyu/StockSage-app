@@ -24,9 +24,36 @@ import Foundation
 // `ToolPolicy.isExternalAllowed`, like every other feed in this subsystem.
 //
 // SEC's access policy requires a declared User-Agent identifying the client; we
-// send one. Requests are serialized with a small delay — the published fair-access
-// limit is 10 requests/second and we stay far under it.
+// send one. Fetches are on demand and bounded; this client does not implement a
+// process-wide SEC rate limiter and must not claim that it does.
 enum StockSageDisclosureService {
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    nonisolated static let maximumResponseBytes = 4 * 1_024 * 1_024
+    nonisolated static let session = URLSession(configuration: .ephemeral,
+        delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+    nonisolated static func transport(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumResponseBytes)
+    }
+
+    /// Shared by both SEC consumers, including every Form 4 index/document hop.
+    nonisolated static func get(_ url: URL, transport: Transport = Self.transport,
+        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Data? {
+        guard !Task.isCancelled, allowed(), validURL(url) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await transport(request),
+              !Task.isCancelled, allowed(), data.count <= maximumResponseBytes,
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              http.url == url else { return nil }
+        return data
+    }
+
+    nonisolated private static func validURL(_ url: URL) -> Bool {
+        url.scheme == "https" && ["www.sec.gov", "data.sec.gov"].contains(url.host?.lowercased() ?? "")
+            && url.user == nil && url.password == nil && url.port == nil
+            && url.query == nil && url.fragment == nil
+    }
 
     /// One public filing. `acceptedAt` is the moment it became public — the field
     /// that matters — which is NOT the same as `filingDate` (a filing accepted at
@@ -79,35 +106,44 @@ enum StockSageDisclosureService {
     /// politeness — undeclared clients get blocked.
     /// `nonisolated` so the nested `CIKMap` actor can read it off the main actor —
     /// same reason `StockSageQuoteService.ua` is nonisolated.
-    nonisolated static let ua = "StockSageX/1.0 (github.com/Salman-bot; contact via app)"
+    nonisolated static let ua = "StockSageX/1.0 (personal research; contact via GitHub swonyu)"
 
     // MARK: CIK lookup
 
-    /// ticker (uppercased) -> zero-padded 10-digit CIK. Fetched once per process:
-    /// the file is ~1 MB and changes at most daily, so re-fetching per lookup would
-    /// be pure waste.
-    private actor CIKMap {
+    /// ticker (uppercased) -> zero-padded 10-digit CIK. Retain successful maps for
+    /// this process; failures are retryable, never cached as an authoritative absence.
+    /// ponytail: overlapping cold lookups may each load; coalesce if request volume warrants it.
+    actor CIKMap {
         static let shared = CIKMap()
         private var map: [String: String]?
+        private let transport: Transport
+        init(transport: @escaping Transport = StockSageDisclosureService.transport) {
+            self.transport = transport
+        }
 
-        func cik(for symbol: String) async -> String? {
-            if map == nil { map = await Self.load() }
+        func cik(for symbol: String, allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> String? {
+            guard !Task.isCancelled, allowed(), !symbol.isEmpty, symbol.utf8.count <= 32 else { return nil }
+            if map == nil {
+                guard let loaded = await Self.load(transport: transport, allowed: allowed),
+                      !Task.isCancelled, allowed() else { return nil }
+                map = loaded
+            }
             return map?[symbol.uppercased()]
         }
 
-        private static func load() async -> [String: String] {
-            guard let url = URL(string: "https://www.sec.gov/files/company_tickers.json") else { return [:] }
-            var req = URLRequest(url: url)
-            req.setValue(ua, forHTTPHeaderField: "User-Agent")
-            guard let (data, _) = try? await URLSession.shared.data(for: req),
+        private static func load(transport: Transport, allowed: @Sendable () -> Bool) async -> [String: String]? {
+            guard let url = URL(string: "https://www.sec.gov/files/company_tickers.json"),
+                  let data = await StockSageDisclosureService.get(url, transport: transport, allowed: allowed),
                   // The file is a JSON object keyed by row index, not an array.
-                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { return [:] }
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]],
+                  !raw.isEmpty else { return nil }
             var out: [String: String] = [:]
-            for case let row as [String: Any] in raw.values {
-                guard let ticker = row["ticker"] as? String,
-                      let cik = row["cik_str"] as? Int else { continue }
-                out[ticker.uppercased()] = String(format: "%010d", cik)
+            for row in raw.values {
+                guard let ticker = row["ticker"] as? String, !ticker.isEmpty, ticker.utf8.count <= 32,
+                      let number = row["cik_str"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      let cik = row["cik_str"] as? Int, cik > 0, cik < 10_000_000_000 else { return nil }
+                let digits = String(cik)
+                out[ticker.uppercased()] = String(repeating: "0", count: 10 - digits.count) + digits
             }
             return out
         }
@@ -123,15 +159,16 @@ enum StockSageDisclosureService {
     /// not render absence as evidence that a company has disclosed nothing.
     static func recentFilings(for symbol: String,
                               forms: Set<String> = ["8-K"],
-                              limit: Int = 20) async -> [Filing] {
-        guard ToolPolicy.isExternalAllowed else { return [] }
-        guard let cik = await CIKMap.shared.cik(for: symbol),
+                              limit: Int = 20,
+                              map: CIKMap = .shared,
+                              transport: @escaping Transport = Self.transport,
+                              allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> [Filing] {
+        guard !Task.isCancelled, allowed(), limit > 0, !forms.isEmpty else { return [] }
+        guard let cik = await map.cik(for: symbol, allowed: allowed),
               let url = URL(string: "https://data.sec.gov/submissions/CIK\(cik).json")
         else { return [] }
 
-        var req = URLRequest(url: url)
-        req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let data = await get(url, transport: transport, allowed: allowed),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [] }
         return parseFilings(root, cik: cik, forms: forms, limit: limit)
@@ -144,7 +181,7 @@ enum StockSageDisclosureService {
                                          cik: String,
                                          forms: Set<String> = ["8-K"],
                                          limit: Int = 20) -> [Filing] {
-        guard let filings = root["filings"] as? [String: Any],
+        guard limit > 0, let filings = root["filings"] as? [String: Any],
               let recent = filings["recent"] as? [String: Any]
         else { return [] }
 

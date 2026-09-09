@@ -27,11 +27,7 @@ enum StockSageLocalModelServer {
     /// Facts go only to the configured endpoint, never to a redirect target; no shared cookies.
     private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
 
-    final class NoRedirect: NSObject, URLSessionTaskDelegate {
-        nonisolated func urlSession(_ session: URLSession, task: URLSessionTask,
-                                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-                                    completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-    }
+    typealias NoRedirect = StockSageHTTP.NoRedirect
 
     // MARK: Backend selection
 

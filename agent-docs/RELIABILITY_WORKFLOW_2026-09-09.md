@@ -268,3 +268,52 @@ unique decisionIDs and0pending; automation remains enabled1. No migration or arc
 rotation was needed. User navigation then invalidated the attempted Chat click and
 CUA disconnected again,so the new Chat panel was not visually reverified. No live
 API/model performance or original screenshot-to-PID conclusion is inferred.
+
+### Shared SEC boundaries — subsequent parent follow-up
+
+Actual red/green artifacts in the same root:
+- `red-sec-boundaries` failed compilation in test fixture isolation; not behavioral proof.
+- `red-sec-boundaries-2`:7tests/1suite,28issues,0.008s,exit65.
+- `red-sec-boundaries-3`:9/1,31issues,0.015s,exit65 (adds body/issuer cases).
+- `green-sec-boundaries`:89/6,0.068s,exit0.
+- `red-sec-partial-window`:15/1,3issues,0.010s,exit65.
+- `red-sec-redirect-identity`:16/1,5issues,0.013s,exit65.
+- `green-sec-final`:96/6,0.072s,exit0.
+
+Root fixes reuse the existing CIK actor and bounded HTTP reader. The old unsafe
+insider dictionary is gone; only successful nonempty valid maps are cached,
+not HTTP errors,failed downloads,empty/malformed data or obsolete requests.
+Before/after checks cover each CIK/submissions/index/XML hop,including cancellation
+and current external policy. SEC bodies cap at4MiB,including injected responses;
+actual transport uses StockSageHTTP accumulation bounds. SEC now shares the existing
+no-redirect delegate with Qwen and requires final response URL==requested URL.
+The redirect fixture inspects/calls the actual session's delegate on an unresumed
+task:it proves wiring/refusal,not a live redirect/HTTP-server exchange.
+
+Form4 required columns must align. An unreadable/unparseable/wrong-issuer selected
+filing returns unavailable instead of a normal partial Summary whose net/empty
+claim would be misleading. Full-width decimal CIK padding preserves the entire
+accepted range. Nonpositive filing limits produce no rows. Positive control runs
+both real consumers with one shared warm map and verifies successful results,
+User-Agent,timeouts and request counts. No owner defaults/records/live APIs touched.
+
+Read-only review:`/private/tmp/stocksage-sec-boundary-review-m0icv6nj/REVIEW.md`.
+Parent independently reproduced its material findings; simultaneous cold map
+loads remain a documented lower-severity limitation,not coalesced or globally
+rate-limited. Actual market share-class aliases/live SEC availability not sampled.
+Known MarketsView card/detail task placement remains unfixed; its real SwiftUI
+hosting test needs the separate safe plan at
+`/private/tmp/stocksage-detail-lifecycle-seam.Pou3cx/PLAN.md` rather than a shallow
+loader-only test. Full Mac/iPhone/strict gates are pending for this SEC checkpoint;
+the previously installed app remains intact meanwhile.
+
+Final source follow-up review found all three material groups closed:
+`/private/tmp/stocksage-sec-final-verify-a23l6rpb/REVIEW.md` (source-only verification).
+Executed full checkpoint results:macOS1,965tests/197suites/63.364s,exit0
+(`full-macos-sec-checkpoint`); iPhone17Pro(gate)1,961/197/62.218s,exit0
+(`full-ios-sec-checkpoint`). Same three canonical exclusions. The339-file
+`sec-source.sha256` manifest rechecks cleanly. Exact Mac-tested signed bundle
+preserved before iOS at`checkpoint-macos-sec/StockSageX.app`; dylibSHA256
+`ce11c16b6aa8e22b6cffe9a1e640211f386f894b1c1b155e0aca27b6e2a174bd`.
+Strict gate passed in`strict-sec.v9C1OV`:macOS65s,iOS57s,tests83s,allrc0,
+aggregate exit0. Replacement not yet installed.

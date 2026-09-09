@@ -1,5 +1,43 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## SEC reliability follow-up — September9, parent-only
+
+Installed reliability source`b0b757f` and install-evidence HEAD`b34c8e4` remain
+intact. Parent now owns a focused SEC client diff; no other writer/build owner.
+Actual source trace confirmed the separate MarketsView task-placement lead, but
+that UI root still needs its own hosting regression and is NOT fixed here.
+Safe harness proposal:`/private/tmp/stocksage-detail-lifecycle-seam.Pou3cx/PLAN.md`.
+
+SEC failures reproduced with fake leaf transports through the real clients:
+`red-sec-boundaries-2`:7tests/1suite,28issues,0.008s,exit65;
+`red-sec-boundaries-3`:9/1,31issues,0.015s,exit65. The first run had fixture
+actor-isolation compiler errors, not a behavioral failure. Initial repair passed
+89/6,0.068s,exit0. Follow-up red partial/ragged/large-CIK:15/1,3issues,0.010s;
+red redirect/resource identity:16/1,5issues,0.013s; both exit65.
+Final focused`green-sec-final`:96tests/6suites,0.072s,exit0.
+
+Both SEC consumers now share the existing actor-owned successful-only CIK cache;
+failed/empty/malformed/denied/cancelled maps remain retryable. Every HTTP hop checks
+policy/cancellation,HTTP200,4MiB body bound and exact response resource. Reused
+Qwen's no-redirect delegate in StockSageHTTP, with an ephemeral SEC session; the
+Qwen alias preserves its existing behavior. Form4 summaries reject incomplete
+selected windows,ragged required columns and wrong issuer symbols. Accepted
+10-digit company IDs retain full decimal identity. Filing limit<=0 yields no rows.
+Existing caller signatures remain compatible. No live SEC probes/credential calls.
+
+Full Mac→iPhone execution passed serially against339-file`sec-source.sha256`:
+macOS1,965tests/197suites/63.364s,exit0; iPhone17Pro(gate)1,961/197/62.218s,exit0.
+Exact Mac-tested app saved before iOS at`checkpoint-macos-sec/StockSageX.app`,
+dylibSHA256`ce11c16b6aa8e22b6cffe9a1e640211f386f894b1c1b155e0aca27b6e2a174bd`.
+Source manifest recheck exit0. Strict gate passed in`strict-sec.v9C1OV`:
+macOS65s,iOS57s,tests83s; each rc0, aggregate exit0.
+Use the existing artifact root`/private/tmp/stocksage-reliability-20260909.v6DO1E`.
+Replacement installation is pending for this newer SEC diff; all required gates passed.
+Remaining limits:concurrent cold map loads can duplicate (no data-race claim),
+no process-wide SEC rate limiter,existing issuer/share-class coverage unchanged,
+no live redirect or live publication-latency verification. Do not claim the
+misplaced board/detail task or complete app review is solved by this client fix.
+
 ## Parent reliability checkpoint; test-window mitigation — 2026-09-09
 
 Parent01a0772c-d7ba-7c50-906c-0a3a3e9baef1 remains sole writer, installer and

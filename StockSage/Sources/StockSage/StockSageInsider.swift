@@ -151,39 +151,15 @@ enum StockSageInsider {
     // MARK: - Fetch (SEC EDGAR — free, public, no key)
 
     /// SEC requires a descriptive User-Agent on every request; unidentified traffic is blocked.
-    nonisolated static let userAgent = "StockSageX/1.0 (personal research; contact via GitHub swonyu)"
+    nonisolated static let userAgent = StockSageDisclosureService.ua
     /// SEC asks for <= 10 requests/second. One symbol costs 3 hops, so this is fetched ON DEMAND
     /// (opening an idea), never swept across the 901-name board.
     nonisolated static let maxFilingsPerSymbol = 6
 
-    private nonisolated static func get(_ url: URL) async -> Data? {
-        var req = URLRequest(url: url)
-        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return data
-    }
-
-    /// ticker -> zero-padded CIK. The map is ~10k entries and changes rarely, so it is fetched
-    /// once per launch and held.
-    private nonisolated(unsafe) static var cikCache: [String: String] = [:]
-
+    /// Both SEC screens share the actor-owned, successful-only ticker cache.
     nonisolated static func cik(for symbol: String) async -> String? {
-        let key = symbol.uppercased()
-        if let hit = cikCache[key] { return hit }
-        guard !symbol.contains("."),                     // .SR and other foreign listings: not SEC
-              let url = URL(string: "https://www.sec.gov/files/company_tickers.json"),
-              let data = await get(url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]]
-        else { return nil }
-        var map: [String: String] = [:]
-        for (_, row) in obj {
-            guard let t = row["ticker"] as? String, let c = row["cik_str"] as? Int else { continue }
-            map[t.uppercased()] = String(format: "%010d", c)
-        }
-        cikCache = map
-        return map[key]
+        guard !symbol.contains(".") else { return nil } // Preserve existing foreign-listing exclusion.
+        return await StockSageDisclosureService.CIKMap.shared.cik(for: symbol)
     }
 
     /// Recent open-market insider activity for one US symbol. nil when external access is off
@@ -192,16 +168,19 @@ enum StockSageInsider {
     /// SEC-listed, or the filings cannot be read — never an empty summary standing in for
     /// "unknown". The gate is the FIRST line, before any `await`/network call — a pure,
     /// synchronous seam a test can exercise without ever reaching the network.
-    nonisolated static func recentActivity(for symbol: String) async -> Summary? {
-        guard ToolPolicy.isExternalAllowed else { return nil }
-        guard let cik = await cik(for: symbol),
+    nonisolated static func recentActivity(for symbol: String,
+        lookup: @Sendable (String) async -> String? = { await cik(for: $0) },
+        transport: StockSageDisclosureService.Transport = StockSageDisclosureService.transport,
+        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Summary? {
+        guard !Task.isCancelled, allowed() else { return nil }
+        guard let cik = await lookup(symbol),
               let subsURL = URL(string: "https://data.sec.gov/submissions/CIK\(cik).json"),
-              let data = await get(subsURL),
+              let data = await StockSageDisclosureService.get(subsURL, transport: transport, allowed: allowed),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let filings = obj["filings"] as? [String: Any],
               let recent = filings["recent"] as? [String: Any],
               let forms = recent["form"] as? [String],
-              let accessions = recent["accessionNumber"] as? [String]
+              let accessions = recent["accessionNumber"] as? [String], forms.count == accessions.count
         else { return nil }
 
         let form4Accessions = zip(forms, accessions)
@@ -217,20 +196,22 @@ enum StockSageInsider {
         for acc in form4Accessions {
             let bare = acc.replacingOccurrences(of: "-", with: "")
             guard let idxURL = URL(string: "https://www.sec.gov/Archives/edgar/data/\(numericCIK)/\(bare)/index.json"),
-                  let idxData = await get(idxURL),
+                  let idxData = await StockSageDisclosureService.get(idxURL, transport: transport, allowed: allowed),
                   let idx = try? JSONSerialization.jsonObject(with: idxData) as? [String: Any],
                   let dir = idx["directory"] as? [String: Any],
                   let items = dir["item"] as? [[String: Any]],
                   let xmlName = items.compactMap({ $0["name"] as? String })
                       .first(where: { $0.hasSuffix(".xml") && !$0.contains("index") }),
                   let docURL = URL(string: "https://www.sec.gov/Archives/edgar/data/\(numericCIK)/\(bare)/\(xmlName)"),
-                  let docData = await get(docURL),
+                  let docData = await StockSageDisclosureService.get(docURL, transport: transport, allowed: allowed),
                   let xml = String(data: docData, encoding: .utf8),
-                  let parsed = parseForm4(xml)
-            else { continue }
+                  let parsed = parseForm4(xml), parsed.symbol == symbol.uppercased()
+            // Summary has no partial-coverage field: an unreadable selected filing
+            // could reverse the net or invalidate a "no activity" claim.
+            else { return nil }
             summaries.append(parsed)
         }
-        guard !summaries.isEmpty else { return nil }
+        guard !Task.isCancelled, allowed(), !summaries.isEmpty else { return nil }
         return merge(summaries, symbol: symbol)
     }
 
