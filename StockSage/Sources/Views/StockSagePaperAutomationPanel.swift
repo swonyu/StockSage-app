@@ -27,9 +27,26 @@ struct StockSagePaperAutomationPanel: View {
                 if let progress = automation.researchProgress {
                     Text(progress.isIndeterminate ? "Preparing market data and Qwen…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
                         .font(.callout).monospacedDigit()
+                    #if os(macOS)
+                    ForEach(automation.researchingSymbols.sorted(), id: \.self) { symbol in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(symbol) · Checking sources and Qwen…")
+                                .font(.caption).monospaced()
+                            ProgressView()
+                                .progressViewStyle(.linear)
+                                .accessibilityLabel("\(symbol) research in progress")
+                        }
+                    }
+                    let queued = max(0, progress.totalUnitCount - progress.completedUnitCount - Int64(automation.researchingSymbols.count))
+                    if queued > 0 {
+                        Text("\(queued) checks queued · waiting for a free worker")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    #else
                     ProgressView(progress)
                         .progressViewStyle(.linear)
                         .accessibilityLabel("Research checks completed")
+                    #endif
                     Text("Ready results appear as they finish; other workers continue while a request is loading. Checks completed, not trades. Position and exit checks run separately from research.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -120,7 +137,7 @@ struct StockSagePaperAutomationPanel: View {
                 }
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
                 DisclosureGroup("Simulation policy and limitations") {
-                    Text("Research screening accepts Massive observations up to twenty seconds old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
+                    Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
                     Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
                     Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Qwen reviews all paper holdings first, then up to \(StockSagePaperAutomation.discoveryLimit) affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
                     Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")

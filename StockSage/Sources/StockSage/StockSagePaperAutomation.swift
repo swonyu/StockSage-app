@@ -13,7 +13,7 @@ final class StockSagePaperAutomation: ObservableObject {
     nonisolated static let interval: TimeInterval = 900
     nonisolated static let discoveryLimit = 100
     nonisolated static let researchConcurrency = 4
-    nonisolated static let researchMaximumAge: TimeInterval = 20
+    nonisolated static let researchMaximumAge: TimeInterval = 60
     nonisolated static let researchInstructions = StockSageAIAssessment.instructions
         .replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
             with: "Assess an entry or exit NOW for the REMAINDER OF TODAY'S New York session only. No overnight or multi-day thesis. Use the completed intraday bars or explicitly labelled qualified trades; daily technical rules are background, not intraday signals.")
@@ -248,6 +248,7 @@ final class StockSagePaperAutomation: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var isResearching = false
     @Published private(set) var researchProgress: Progress?
+    @Published private(set) var researchingSymbols: Set<String> = []
     @Published private(set) var status = "Paused"
     @Published private(set) var error: String?
     @Published private(set) var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
@@ -556,6 +557,8 @@ final class StockSagePaperAutomation: ObservableObject {
             self.error = "Paper account save failed or ledger limit reached. Automation paused; previous data preserved."
             defaults.set(false, forKey: Self.enabledKey)
             loop?.cancel(); research?.cancel(); isRunning = false; status = "Paused after storage failure"
+            researchProgress = nil
+            researchingSymbols.removeAll()
             return false
         }
     }
@@ -573,6 +576,7 @@ final class StockSagePaperAutomation: ObservableObject {
         generation = UUID()
         isResearching = false
         researchProgress = nil
+        researchingSymbols.removeAll()
         isRunning = true; status = "Waiting for fresh market observations"
         loop = Task { [weak self] in
             while !Task.isCancelled {
@@ -588,6 +592,7 @@ final class StockSagePaperAutomation: ObservableObject {
         loop?.cancel(); research?.cancel(); loop = nil; research = nil
         isRunning = false; isResearching = false; status = "Paused; paper positions retained"
         researchProgress = nil
+        researchingSymbols.removeAll()
         if lease >= 0 {
             var next = book
             next.pending.removeAll { $0.protectiveTradeID == nil }
@@ -600,6 +605,8 @@ final class StockSagePaperAutomation: ObservableObject {
     /// A model edit retires research, never the independent position/exit monitor.
     func cancelResearchForSettingsChange() {
         research?.cancel()
+        researchProgress = nil
+        researchingSymbols.removeAll()
         if isResearching { status = "Research cancelled after model settings changed; exits remain monitored" }
     }
 
@@ -608,16 +615,28 @@ final class StockSagePaperAutomation: ObservableObject {
         let run = generation
         isResearching = true
         researchProgress = Progress(totalUnitCount: 0)
+        researchingSymbols.removeAll()
         research = Task { [weak self] in
             defer {
                 if let self, self.generation == run {
                     self.isResearching = false
                     self.researchProgress = nil
+                    self.researchingSymbols.removeAll()
                 }
             }
             guard !Task.isCancelled else { return }
             await operation()
         }
+    }
+
+    func withResearchCheck(_ symbol: String, operation: @MainActor () async -> Void) async {
+        guard isResearching, !Task.isCancelled else { return }
+        let run = generation
+        researchingSymbols.insert(symbol)
+        defer {
+            if generation == run { researchingSymbols.remove(symbol) }
+        }
+        await operation()
     }
 
     private func tick(store: StockSageStore) async {
@@ -708,8 +727,10 @@ final class StockSagePaperAutomation: ObservableObject {
         // researchTargets queues holdings first; a slow holding must not idle free workers.
         guard active() else { return }
         await Self.forEachResearchTarget(targets, allowed: active) { [self] symbol in
-            await researchSymbol(symbol, store: store, config: config, isOllama: probe.isOllama,
-                                 marketSymbols: marketSymbols, run: run, revision: revision)
+            await withResearchCheck(symbol) {
+                await researchSymbol(symbol, store: store, config: config, isOllama: probe.isOllama,
+                                     marketSymbols: marketSymbols, run: run, revision: revision)
+            }
             guard active() else { return }
             finished += 1
             if generation == run, isRunning {
@@ -776,7 +797,7 @@ final class StockSagePaperAutomation: ObservableObject {
         let observed = await Self.fetchPaperQuotes(for: [symbol], maximumAge: Self.researchMaximumAge)
         guard active() else { return }
         guard let quote = observed[symbol], Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
-            recordFailure("No qualifying Massive trade within twenty seconds in the bounded tick tape; no paper decision.", symbol: symbol, at: Date(), facts: partialFacts); return
+            recordFailure("No qualifying Massive trade within one minute in the bounded tick tape; no paper decision.", symbol: symbol, at: Date(), facts: partialFacts); return
         }
         let idea = base.withLivePrice(quote.price, asOf: quote.marketTime, priceSource: quote.priceSource)
         let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[symbol],

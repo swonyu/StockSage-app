@@ -27,12 +27,12 @@ struct StockSagePaperAutomationTests {
         #expect(!A.fresh(quote(at: now, source: .yahoo), at: now))
     }
 
-    @Test func researchAllowsTwentySecondObservationsButExecutionStaysAtTen() async throws {
-        let decisionAt = now.addingTimeInterval(45)
+    @Test func researchAllowsOneMinuteObservationsButExecutionStaysAtTen() async throws {
+        let decisionAt = now.addingTimeInterval(90)
         let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
-        for age in [0.0, 10, 10.001, 20, 20.001, -0.001] {
+        for age in [0.0, 10, 10.001, 20, 20.001, 59.999, 60, 60.001, -0.001] {
             let observation = quote(at: decisionAt.addingTimeInterval(-age))
-            let researchEligible = (0...20).contains(age)
+            let researchEligible = (0...60).contains(age)
             for fromSnapshot in [false, true] {
                 let quotes = await A.fetchPaperQuotes(for: ["AAPL"], at: decisionAt, maximumAge: A.researchMaximumAge,
                     externalAllowed: { true }, snapshots: { _ in fromSnapshot ? ["AAPL": observation] : [:] },
@@ -142,9 +142,9 @@ struct StockSagePaperAutomationTests {
 
     @Test func postInferenceFailureCancellationAndHoldingChangeFailClosed() async throws {
         let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
-        let at = now.addingTimeInterval(45)
+        let at = now.addingTimeInterval(90)
         let observationReason = "No valid qualified observation later than the research observation; no paper order created."
-        for response in [nil, quote(at: at.addingTimeInterval(-20.001)), quote(at: now.addingTimeInterval(-1)),
+        for response in [nil, quote(at: at.addingTimeInterval(-60.001)), quote(at: now.addingTimeInterval(-1)),
                          quote(at: at.addingTimeInterval(0.001)), quote("MSFT", at: at)] {
             let book = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: ["Original"], model: "test",
                 researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: at,
@@ -381,7 +381,8 @@ struct StockSagePaperAutomationTests {
         #expect(finished.count == symbols.count && Set(finished) == Set(symbols))
     }
 
-    @Test func modelEditCancellationPreservesBookAndClearsResearchOnUnwind() async throws {
+    @Test(arguments: [false, true])
+    func modelEditCancellationPreservesBookAndClearsResearchOnUnwind(storageFailure: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "research-cancel-\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: name))
@@ -392,19 +393,32 @@ struct StockSagePaperAutomationTests {
         var cancelled = false
         let original = try JSONEncoder().encode(state.book)
         state.scheduleResearch {
-            await withCheckedContinuation { resumed = $0 }
+            await state.withResearchCheck("AAPL") {
+                await withCheckedContinuation { resumed = $0 }
+            }
             cancelled = Task.isCancelled
         }
         while resumed == nil { await Task.yield() }
         #expect(state.isResearching)
+        #expect(state.researchingSymbols == ["AAPL"])
         let progress = try #require(state.researchProgress)
         #expect(progress.totalUnitCount == 0 && progress.isIndeterminate)
-        state.cancelResearchForSettingsChange()
+        if storageFailure {
+            try #require(state.acquire())
+            #expect(!state.save(state.book, beforeAccountCommit: { throw CocoaError(.fileWriteUnknown) }))
+            #expect(state.status == "Paused after storage failure")
+            #expect(state.researchingSymbols.isEmpty, "Paused after storage failure must not keep active bars")
+        } else {
+            state.cancelResearchForSettingsChange()
+        }
+        #expect(state.researchProgress == nil, "Cancelled checks must not remain queued on screen")
+        #expect(state.researchingSymbols.isEmpty, "Retire loading bars while cancelled requests unwind")
         #expect(state.isResearching, "Do not allow a new cycle before the cancelled cycle unwinds")
         resumed?.resume()
         resumed = nil
         while state.isResearching { await Task.yield() }
         #expect(state.researchProgress == nil)
+        #expect(state.researchingSymbols.isEmpty)
         #expect(cancelled && !state.isRunning)
         #expect(try JSONDecoder().decode(A.Book.self, from: original).decisions == state.book.decisions)
         #expect(state.book.trades.isEmpty && state.book.pending.isEmpty && state.book.lastResearch == nil)
@@ -443,23 +457,65 @@ struct StockSagePaperAutomationTests {
         }
         var oldFinished = false
         state.scheduleResearch {
-            await withCheckedContinuation { old = $0 }
+            await state.withResearchCheck("AAPL") {
+                await withCheckedContinuation { old = $0 }
+            }
             oldFinished = true
         }
         while old == nil { await Task.yield() }
         let first = try #require(state.researchProgress)
         state.stop()
         #expect(state.researchProgress == nil)
-        state.scheduleResearch { await withCheckedContinuation { new = $0 } }
+        #expect(state.researchingSymbols.isEmpty)
+        state.scheduleResearch {
+            await state.withResearchCheck("AAPL") {
+                await withCheckedContinuation { new = $0 }
+            }
+        }
         while new == nil { await Task.yield() }
         let second = try #require(state.researchProgress)
         #expect(first !== second)
         old?.resume(); old = nil
         while !oldFinished { await Task.yield() }
         #expect(state.isResearching && state.researchProgress === second)
+        #expect(state.researchingSymbols == ["AAPL"], "Old completion cannot clear the new check for the same ticker")
         new?.resume(); new = nil
         while state.isResearching { await Task.yield() }
         #expect(state.researchProgress == nil)
+        #expect(state.researchingSymbols.isEmpty)
+    }
+
+    @Test func perCheckLoadingTracksOnlyRunningWorkersAndRemovesReadyResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "per-check-progress-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let state = A(url: root.appendingPathComponent("account.json"), defaults: defaults)
+        let symbols = ["AAPL", "AMZN", "GOOG", "MSFT", "NVDA"]
+        var waiting: [String: CheckedContinuation<Void, Never>] = [:]
+        defer {
+            for continuation in waiting.values { continuation.resume() }
+            state.stop(); try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: name)
+        }
+        state.scheduleResearch {
+            await A.forEachResearchTarget(symbols) { symbol in
+                await state.withResearchCheck(symbol) {
+                    await withCheckedContinuation { waiting[symbol] = $0 }
+                }
+            }
+        }
+        while waiting.count < 4 { await Task.yield() }
+        #expect(state.researchingSymbols == Set(symbols.prefix(4)))
+        #expect(!state.researchingSymbols.contains("NVDA"), "Queued work must not pretend it is loading")
+        waiting.removeValue(forKey: "AMZN")?.resume()
+        while waiting["NVDA"] == nil { await Task.yield() }
+        #expect(state.researchingSymbols == ["AAPL", "GOOG", "MSFT", "NVDA"],
+                "A slow AAPL keeps its own bar while AMZN finishes and NVDA starts")
+        for continuation in waiting.values { continuation.resume() }
+        waiting.removeAll()
+        while state.isResearching { await Task.yield() }
+        #expect(state.researchingSymbols.isEmpty)
+        #expect(state.book.decisions.isEmpty && state.book.trades.isEmpty && state.book.pending.isEmpty)
     }
 
     @Test func positionQuoteFallbackIsBoundedAndConcurrent() async {

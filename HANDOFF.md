@@ -1,5 +1,38 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Per-check loading and one-minute research — September 9, Mac installed
+
+Owner requested one loading bar per active research check (not one aggregate bar),
+and accepts Massive observations up to60seconds for research. Existing rolling
+four-worker queue now publishes its actual active symbols; queued checks have no
+fake percentage. Completion/cancel/settings/storage failure clears presentation;
+old-generation unwind cannot clear a replacement run. Source requests and the
+position loop are unchanged. Research screening/pre-model/post-model accept0...60s;
+actual fills/LIVE remain10s, NBBO5s. No conditions, risk, history or model changes.
+
+Meaningful red regressions observed for missing active state, failure cleanup,
+immediate cancellation presentation and60s boundaries. Final canonical Mac:
+**2012tests/199suites/123.845s exit0**; strict Mac emit121s/tests typecheck164s,
+aggregate0/iOSSKIP. Earlier cancelled per-check-only strict run is not a pass.
+Three canonical exclusions retained; no opt-in live/model/replay tests executed.
+Bounded Astra source review closed. Source manifest per-check-60s-source.sha256
+rechecked before copying the tested bundle. Native in-flight bar UI verification
+is still pending; do not confuse source/test coverage with observed live rendering.
+
+Normal quit/install/reopen completed,64bundlefiles+links exact and deep/strict
+signature verified. Dylib f43f8284a29378ba6e003838a22192819259db580e1909de70e32a2b3fd07b56.
+Retired app: release-root retired-per-check-60s/StockSageX.app; paper backup:
+paper-before-per-check-60s. Paper bytes unchanged during installation; afterlaunch
+all3prior trades/1973prior decisions unchanged and ordered. PID34661 owns the
+paper lease, enabled1. Qwen2120 still127.0.0.1:8765, not restarted. Artifacts:
+/Users/saleh/StockSage-verification-20260909.M0MISy (per-check-60s-install.json,
+macos-per-check-60s-final.log/xcresult, strict-per-check-60s-final.log).
+
+New owner-approved work: three selectable horizons. Day trading continuous with
+101-check cap;1–7/7–14 trading-day manual whole-US-market research-only scans.
+No multiday paper positions. Show reference entry, deterministic stop and target
+for Buy/Strong Buy. Plan: verification-root research-modes-plan.md. Not yet shipped.
+
 ## Rolling research queue — September 9, Mac installed
 
 Owner: leave a slow request in flight and continue other symbols. researchCycle
