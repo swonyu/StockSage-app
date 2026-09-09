@@ -101,6 +101,7 @@ struct StockSagePaperAutomationPanel: View {
                 }
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
                 DisclosureGroup("Simulation policy and limitations") {
+                    Text("Research screening accepts Massive observations up to twenty seconds old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
                     Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
                     Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Qwen reviews all paper holdings first, then up to \(StockSagePaperAutomation.discoveryLimit) affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
                     Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
@@ -130,8 +131,12 @@ struct StockSagePaperAutomationPanel: View {
                             Text(decision.reason).font(.callout)
                             if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
                             if !decision.facts.isEmpty {
-                                DisclosureGroup("Saved evidence and model") {
-                                    Text("Model: \(decision.model.isEmpty ? "Simulation rules" : decision.model). References: \(decision.evidence.joined(separator: ", "))")
+                                DisclosureGroup(decision.action == "Unavailable" ? "Available source evidence · incomplete research" : "Saved evidence and model") {
+                                    if decision.action == "Unavailable" {
+                                        Text("Captured source observations only. No verified model opinion or paper order was created; these historical observations are not current fill prices.")
+                                    } else {
+                                        Text("Model: \(decision.model.isEmpty ? "Simulation rules" : decision.model). References: \(decision.evidence.joined(separator: ", "))")
+                                    }
                                     ForEach(Array(decision.facts.enumerated()), id: \.offset) { index, fact in
                                         Text("F\(index + 1): \(fact)")
                                     }

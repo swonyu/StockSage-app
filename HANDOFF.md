@@ -1,5 +1,55 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Chat4K and research availability — September9, macOS installed
+
+Owner requested Chat32K->4K and research quote age10->20seconds. Chat now4096
+context/512reply, retains24 saved turns and removes whole old prompt turns first.
+Current question/evidence is never silently truncated. OpenAI/MLX input is bounded
+by the caller; max_tokens512 is an output limit, not a server-wide context setting.
+
+Research discovery, pre-model observation and post-model revalidation now use20s.
+Monitor, actual paper fills, stops/targets, equity marks and LIVE remain10s; NBBO
+retains its5s rule. Qualified conditions, original timestamps, later-fill rules,
+settings/cancellation, session/cutoff, cash and all risk parameters are unchanged.
+REST tape already selected qualified trades within120s; no extra provider calls.
+
+Unavailable research now preserves already captured, dated source facts in the
+existing Decision.facts field. The panel labels these incomplete historical
+observations, not a verified opinion or current executable price. No rejected
+model text is retained. Future Qwen failures use existing bounded transport/
+validation metadata. Post-inference skips distinguish observation, context,
+session and holding failures without changing guard order or creating orders.
+Old records are not rewritten or backfilled with guessed evidence/reasons.
+
+Executed: research20 red46tests/4issues/1.555s exit65, green46/1.536s exit0;
+retained-evidence red47tests/1issue/1.574s exit65 (after correcting a fixture's
+missing synthetic lease), green47/1.572s exit0; reasons red47/10issues/1.569s
+exit65, focused final58tests/2suites/1.612s exit0. Full canonical Mac
+**2,007tests/199suites/65.620s exit0**. Three standard exclusions unchanged;
+opt-in live/replay cases not exercised. All iOS intentionally skipped today.
+Strict Mac emit59s/tests typecheck83s, aggregateexit0. Source-only Astra/Sol
+reviews found no must-fix in the final diff. Parent remains sole writer/installer;
+no pushes. Live improved rejection rate has not yet been measured.
+
+Receipt root: /Users/saleh/StockSage-verification-20260909.M0MISy.
+research-20s-source.sha256 SHA1efb2d9f1ec03a54540d5eeb94ab7a38cd885fff14dbeb5b5e9971e932c60b63
+rechecked exit0. candidate-research-20s/StockSageX.app matches43files/21links
+and strict/deep signature verification; debug dylib SHA
+def4c835850b1f64d5fb418c9b0e077883d3958024be7f1ac0d61e471c9f0b0a.
+This combined candidate also includes the previously tested feed-pacing change.
+
+Normal AppleEvent Quit succeeded after the native window controller failed with
+closed pipe; no forced termination. Exclusive paper lease covered byte-identical
+backup and installation; previous bundle retained under release-root
+retired-research-20s/StockSageX.app, paper-before-research-20s beside it.
+Installed signature and43files/21links matched candidate; source manifest rechecked.
+Reopened exact /Applications/StockSageX.app, PID24132 owns paper lease, enabled1.
+Postlaunch3prior trades and1,673prior decisions remain unchanged/in order;
+0pending at capture. Qwen2120 continues listening on loopback8765, not restarted.
+UI inspection attempt failed: System Events denied assistive access(-1728).
+No alternate UI inspection attempted after denial; disclosure rendering and live
+model response improvements remain unverified. See RESEARCH_AVAILABILITY.md.
+
 ## Feed receive pacing — September9, macOS verified; installation pending
 
 Base270cbb7. Native WebSocket receive now rearms only after the exact original

@@ -192,7 +192,7 @@ enum StockSageLocalModelServer {
     /// `"think": false`, matching the owner's smoke test: Ollama defaults qwen3.8 to emitting a
     /// `<think>` block first, which both wastes the 90 s budget and is not the paragraph we want)
     /// or an OpenAI-compatible `/v1/chat/completions`. Short explanations keep the 4k/90s
-    /// defaults; conversational Chat supplies its larger context and timeout. OpenAI-compatible
+    /// defaults; conversational Chat supplies its own output budget and timeout. OpenAI-compatible
     /// servers receive an output limit only; the caller bounds input before sending it.
     nonisolated static func chatRequest(_ c: Config, system: String, user: String, isOllama: Bool,
                                         maxTokens: Int, contextTokens: Int = 4096,

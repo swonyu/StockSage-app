@@ -27,6 +27,51 @@ struct StockSagePaperAutomationTests {
         #expect(!A.fresh(quote(at: now, source: .yahoo), at: now))
     }
 
+    @Test func researchAllowsTwentySecondObservationsButExecutionStaysAtTen() async throws {
+        let decisionAt = now.addingTimeInterval(45)
+        let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
+        for age in [0.0, 10, 10.001, 20, 20.001, -0.001] {
+            let observation = quote(at: decisionAt.addingTimeInterval(-age))
+            let researchEligible = (0...20).contains(age)
+            for fromSnapshot in [false, true] {
+                let quotes = await A.fetchPaperQuotes(for: ["AAPL"], at: decisionAt, maximumAge: A.researchMaximumAge,
+                    externalAllowed: { true }, snapshots: { _ in fromSnapshot ? ["AAPL": observation] : [:] },
+                    tick: { _, _ in fromSnapshot ? nil : observation })
+                #expect((quotes["AAPL"] != nil) == researchEligible)
+            }
+            let market = StockSageMassive.MarketSnapshot(returnedCount: 1, rows: [
+                .init(quote: observation, dollarVolume: 1000)
+            ])
+            #expect(!A.researchTargets(market: market, book: A.Book(), at: decisionAt).isEmpty == researchEligible)
+            let researched = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: ["Dated observation"],
+                model: "test", researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: decisionAt,
+                allowed: { true }, contextFresh: { _ in true }, currentBook: { A.Book() }, fetch: { _, _ in observation }))
+            #expect(!researched.pending.isEmpty == researchEligible)
+            var filling = A.Book()
+            filling.propose(symbol: "AAPL", action: .buy, at: now)
+            filling.settle(quotes: ["AAPL": observation], at: decisionAt)
+            #expect(!filling.open.isEmpty == (0...10).contains(age))
+            #expect(StockSageLiveStream.isLiveObservation(observation.marketTime, at: decisionAt) == (0...10).contains(age))
+        }
+    }
+
+    @Test func failedResearchRetainsSourceEvidenceWithoutAnOpinionOrOrder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "failed-research-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let url = root.appendingPathComponent("account.json")
+        let state = A(url: url, defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        let facts = ["Synthetic completed Massive minute at \(now.ISO8601Format()): close 100 USD."]
+        try #require(state.acquire())
+        state.recordFailure("No verified model opinion; source evidence retained.", symbol: "AAPL", at: now, facts: facts)
+        let decision = try #require(state.book.decisions.last)
+        #expect(decision.action == "Unavailable" && decision.facts == facts && decision.at == now)
+        #expect(decision.model.isEmpty && decision.evidence.isEmpty && state.book.pending.isEmpty && state.book.trades.isEmpty)
+        let saved = try JSONDecoder().decode(A.Book.self, from: Data(contentsOf: url))
+        #expect(saved.decisions == state.book.decisions && saved.valid)
+    }
+
     @Test func mixedPaperCandidatesCannotBorrowPeerFreshness() async {
         let fillAt = now.addingTimeInterval(30)
         let candidates = ["AAPL": quote("AAPL", at: fillAt.addingTimeInterval(-11)),
@@ -98,13 +143,24 @@ struct StockSagePaperAutomationTests {
     @Test func postInferenceFailureCancellationAndHoldingChangeFailClosed() async throws {
         let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
         let at = now.addingTimeInterval(45)
-        for response in [nil, quote(at: at.addingTimeInterval(-10.001)), quote(at: now.addingTimeInterval(-1)),
+        let observationReason = "No valid qualified observation later than the research observation; no paper order created."
+        for response in [nil, quote(at: at.addingTimeInterval(-20.001)), quote(at: now.addingTimeInterval(-1)),
                          quote(at: at.addingTimeInterval(0.001)), quote("MSFT", at: at)] {
             let book = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: ["Original"], model: "test",
                 researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: at,
                 allowed: { true }, contextFresh: { _ in true }, currentBook: { A.Book() }, fetch: { _, _ in response }))
-            #expect(book.pending.isEmpty && book.decisions.contains { $0.action == "Skipped" })
+            #expect(book.pending.isEmpty && book.decisions.contains { $0.action == "Skipped" && $0.reason == observationReason })
         }
+        let closedAt = try Date("2026-09-09T00:00:00Z", strategy: .iso8601)
+        var closedFetches = 0, closedContextChecks = 0
+        let closed = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
+            researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: closedAt,
+            allowed: { true }, contextFresh: { _ in closedContextChecks += 1; return true },
+            currentBook: { A.Book() }, fetch: { _, _ in closedFetches += 1; return self.quote(at: closedAt) }))
+        #expect(closedFetches == 0 && closedContextChecks == 1 && closed.pending.isEmpty)
+        #expect(closed.decisions.contains {
+            $0.action == "Skipped" && $0.reason == "Paper session closed after inference; no paper order created."
+        })
         var allowed = true, bookReads = 0
         let denied = await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
             researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: at,
@@ -127,21 +183,37 @@ struct StockSagePaperAutomationTests {
                 return self.quote(at: at)
             }))
         #expect(changed.open.count == 1 && changed.pending.isEmpty)
-        #expect(changed.decisions.contains { $0.action == "Skipped" })
+        #expect(changed.decisions.contains {
+            $0.action == "Skipped" && $0.reason == "Paper holding changed after inference; no paper order created."
+        })
     }
 
     @Test func revalidationCannotUseOlderResearchPriceOrBypassNewExpiry() async throws {
         let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
+        var initialFetches = 0, initialContextChecks = 0
+        let initiallyExpired = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
+            researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: now.addingTimeInterval(1),
+            allowed: { true }, contextFresh: { _ in initialContextChecks += 1; return false },
+            currentBook: { A.Book() }, fetch: { _, _ in initialFetches += 1; return self.quote(at: self.now.addingTimeInterval(1)) }))
+        #expect(initialFetches == 0 && initialContextChecks == 1 && initiallyExpired.pending.isEmpty)
+        #expect(initiallyExpired.decisions.contains {
+            $0.action == "Skipped" && $0.reason == "Research context expired after inference; no paper order created."
+        })
         var contextValid = true
         for changedContext in [false, true] {
             contextValid = true
+            var contextChecks = 0
             let book = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
                 researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: now.addingTimeInterval(1),
-                allowed: { true }, contextFresh: { _ in contextValid }, currentBook: { A.Book() }, fetch: { _, _ in
+                allowed: { true }, contextFresh: { _ in contextChecks += 1; return contextValid }, currentBook: { A.Book() }, fetch: { _, _ in
                     contextValid = !changedContext
                     return self.quote(at: self.now.addingTimeInterval(changedContext ? 1 : -0.1))
                 }))
-            #expect(book.pending.isEmpty && book.decisions.contains { $0.action == "Skipped" })
+            let reason = changedContext
+                ? "Research context expired after inference; no paper order created."
+                : "No valid qualified observation later than the research observation; no paper order created."
+            #expect(contextChecks == (changedContext ? 2 : 1) && book.pending.isEmpty)
+            #expect(book.decisions.contains { $0.action == "Skipped" && $0.reason == reason })
         }
     }
 

@@ -142,9 +142,9 @@ struct StockSageLocalModelServerTests {
             let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
             if ollama {
                 let options = try #require(json["options"] as? [String: Any])
-                #expect(options["num_ctx"] as? Int == 32_768 && options["num_predict"] as? Int == 2_048)
+                #expect(options["num_ctx"] as? Int == 4_096 && options["num_predict"] as? Int == 512)
             } else {
-                #expect(json["max_tokens"] as? Int == 2_048 && json["options"] == nil)
+                #expect(json["max_tokens"] as? Int == 512 && json["options"] == nil)
             }
         }
     }

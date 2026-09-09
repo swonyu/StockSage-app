@@ -3,8 +3,8 @@ import Combine
 
 /// Foreground, local-only Q&A. History is never promoted to current market evidence.
 enum StockSageChat {
-    nonisolated static let contextTokens = 32_768
-    nonisolated static let outputTokens = 2_048
+    nonisolated static let contextTokens = 4_096
+    nonisolated static let outputTokens = 512
     nonisolated static let requestTimeout: TimeInterval = 300
     nonisolated static let replyCharacterLimit = 16_384
     // Qwen's byte-level tokenizer uses at most one token per UTF-8 byte. Reserve
