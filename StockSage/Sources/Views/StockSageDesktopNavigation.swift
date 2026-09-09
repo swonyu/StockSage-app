@@ -33,7 +33,17 @@ enum StockSageDesktop {
         }
     }
     static func icon(for section: MarketSection) -> String {
-        section == .briefing ? "house" : section.icon
+        switch section {
+        case .briefing: "house"
+        case .watchlist: "star"
+        case .ideas: "lightbulb"
+        case .all: "chart.bar"
+        case .catalysts: "calendar"
+        case .heatmap: "square.grid.3x3"
+        case .portfolio: "briefcase"
+        case .alerts: "bell"
+        case .chat: section.icon
+        }
     }
     enum PortfolioPage: String, CaseIterable, Identifiable {
         case holdings = "Holdings", journal = "Journal", paper = "Paper", analytics = "Analytics"

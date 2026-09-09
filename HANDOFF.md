@@ -1,5 +1,36 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac outline navigation — September 9, verified; not installed
+
+Approved visual cleanup, not a navigation defect. One existing desktop icon helper
+now supplies native outlines to sidebar and Mac Home links. Chat/shared phone icons,
+routes/order/shortcuts, selection styling, labels/help/accessibility and 220/64pt
+widths unchanged. No new abstraction, dependency, trading or model behavior.
+
+Native expanded/collapsed sidebar fixtures use UUID-scoped preferences and synthetic
+selection only: all preference contents unchanged and zero selection callbacks.
+Four before/after captures inspected; exact nine glyphs resolve through NSImage.
+Explicit route order and keyboard assignments pinned. Initial fixture-only compiler
+failure used read-only accessibility keypaths; removed those overrides, not system
+settings. Baseline34/2/2.008s0; mappingRED35/2/2.052s7issues65; GREEN35/2/2.051s0.
+Both Sol reviewers and Astra found no must-fix in final source; all closed.
+
+FullMac **2,065 tests/200 suites/68.930s**, strictMac emit69s/testtypecheck105s;
+exec14077 aggregate0: macos=OK ios=SKIP tests=OK. Same3opt-in exclusions.
+Frozen372-source manifest7359d268c15de5e407e1ee8cb847def5dba483cc61e98ec31cf6441f953baae2.
+Exact64-entry candidate/deepstrictsignature verified; dylib
+7b5c95a24766512aca97200191d67db83d6bcffb9dad9fe44908d4aa300c3efd.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/SIDEBAR_OUTLINE.md`;
+same root contains logs/xcresults, images, manifest/checker and
+candidate-sidebar-outline/StockSageX.app. Parent sole writer/tester/installer.
+
+Physical activation/keyboard/VoiceOver, alternate accessibility settings and active
+integrated-window appearance unverified. No install/quit/reopen/probes/push/paid
+resources/history/orders/relay changes. Day101/manual500 unchanged; iOS paused.
+Existing restart/clear hold remains; no claim session-only results survived.
+Navigation plan items1–3 addressed/source-rechecked. Next recheck remaining approved
+paper-panel presentation against current callers before assuming old findings persist.
+
 ## Mac Catalyst recovery — September 9, verified; not installed
 
 Reproduced misleading no-ideas/run-scan guidance when current Ideas filters hide

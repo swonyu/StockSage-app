@@ -22,14 +22,33 @@ struct MarketSectionNavigationTests {
     @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
         #expect(Set(StockSageDesktop.sections) == Set(MarketSection.allCases))
         #expect(StockSageDesktop.sections.count == MarketSection.allCases.count)
-        #expect(StockSageDesktop.sections.first == .briefing)
+        #expect(StockSageDesktop.sections == [
+            .briefing, .watchlist, .ideas, .all, .catalysts, .heatmap, .portfolio, .alerts, .chat
+        ])
         #expect(StockSageDesktop.title(for: .briefing) == "Home")
         #expect(StockSageDesktop.title(for: .all) == "Markets")
-        for (index, section) in MarketSection.allCases.enumerated() {
-            #expect(StockSageDesktop.shortcut(for: section) == index + 1)
+        let shortcuts: [(MarketSection, Int)] = [
+            (.watchlist, 1), (.ideas, 2), (.catalysts, 3), (.all, 4), (.heatmap, 5),
+            (.portfolio, 6), (.alerts, 7), (.chat, 8), (.briefing, 9)
+        ]
+        for (section, key) in shortcuts {
+            #expect(StockSageDesktop.shortcut(for: section) == key)
         }
         #expect(StockSageDesktop.sidebarWidth(collapsed: true) == 64)
         #expect(StockSageDesktop.sidebarWidth(collapsed: false) == 220)
+    }
+
+    @Test @MainActor func desktopGlyphsUseOutlinesAndPreserveChat() {
+        let glyphs: [(MarketSection, String)] = [
+            (.briefing, "house"), (.watchlist, "star"), (.ideas, "lightbulb"),
+            (.all, "chart.bar"), (.catalysts, "calendar"), (.heatmap, "square.grid.3x3"),
+            (.portfolio, "briefcase"), (.alerts, "bell"), (.chat, "bubble.left.and.bubble.right.fill")
+        ]
+        for (section, glyph) in glyphs {
+            #expect(StockSageDesktop.icon(for: section) == glyph)
+            #expect(NSImage(systemSymbolName: glyph, accessibilityDescription: nil) != nil)
+        }
+        #expect(StockSageDesktop.icon(for: .chat) == MarketSection.chat.icon)
     }
     #endif
 

@@ -19,6 +19,27 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [false, true])
+    func renderDesktopSidebarWithIsolatedPreferences(collapsed: Bool) async throws {
+        let suite = "stocksage.sidebar.fixture.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(collapsed, forKey: "stocksage.mac.sidebar.collapsed")
+        let initialPreferences = preferences.persistentDomain(forName: suite) ?? [:]
+        var selection: MarketSection = .catalysts
+        var changes = 0
+        let sidebar = StockSageDesktopNavigation(selection: Binding(get: { selection },
+            set: { selection = $0; changes += 1 }))
+            .defaultAppStorage(preferences)
+            .environment(\.colorScheme, .dark)
+            .frame(height: 700)
+        let size = try await capture(sidebar, name: "stocksage-sidebar-\(collapsed)")
+        #expect(size.width == StockSageDesktop.sidebarWidth(collapsed: collapsed) && size.height == 700)
+        #expect(selection == .catalysts && changes == 0)
+        #expect(NSDictionary(dictionary: preferences.persistentDomain(forName: suite) ?? [:])
+            .isEqual(to: initialPreferences))
+    }
+
     @Test(arguments: [360, 760], ["filtered", "loading", "empty", "failed-empty", "failed-retained", "sort"])
     func renderCatalystRecoveryWithoutStartingOrChangingAnything(width: Int, state: String) async throws {
         var navigations = 0
