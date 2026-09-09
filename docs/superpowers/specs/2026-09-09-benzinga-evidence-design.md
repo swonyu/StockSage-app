@@ -1,16 +1,18 @@
-# Benzinga evidence and separate direct API key
+# Benzinga shared evidence through Massive
 
-Status: shared-evidence approach approved by the owner on 2026-09-09;
-owner subsequently confirmed a key issued directly by Benzinga. This written
-spec awaits owner review before implementation planning. No key has been collected,
-saved or tested for the direct service; no application behavior changed by this document.
+Status: shared-evidence approach approved by the owner on 2026-09-09. At 04:37
+the owner cancelled direct Benzinga integration: the existing Massive key is enough.
+No direct key was collected, saved or tested. Direct-key source was removed from
+the parent checkout with a recoverable private scratch copy; it was never installed.
+The 04:40 reliability workflow keeps this session as sole repository writer and
+installer; six supporting tasks now review read-only.
 
 ## Goal and boundaries
 
 Connect the nine purchased Massive/Benzinga products to existing StockSage views
-and local Qwen through one bounded evidence snapshot. Add a separate, secure place
-to enter the owner's direct Benzinga key, starting with a real news connection test
-and direct-news consumption. Keep the working Massive credential and quote stream.
+and local Qwen through one bounded evidence snapshot using the existing Massive
+credential. Do not add a direct Benzinga key, settings field or transport. Keep
+the working Massive quote stream.
 
 Reuse Settings, stock details, Catalysts and Chat. Do not add nine dashboards, a
 backend, dependencies, training, broker execution or a second model server. Do not
@@ -48,44 +50,13 @@ The catalog is [Massive's partner overview](https://massive.com/docs/rest/partne
 Analyst/firm joins must use documented IDs, not name matching or invented filters.
 The plan must pin each product's documented request/response contract before coding it.
 
-## First delivery: direct Benzinga key
+## Credential and transport boundary
 
-Add a shared row to **Settings → Data sources** on macOS and iPhone, separate
-from Massive. Label it **Benzinga API key (direct)**. Reuse the existing settings
-layout, but not its UserDefaults secret storage.
-
-- Use native Security/Keychain storage: a single app-owned, device-local item;
-  no iCloud synchronization, generic credential framework or new dependency.
-- A blank SecureField accepts a replacement. Explicit Save validates a nonempty,
-  bounded value with no embedded whitespace/control characters. Never load the saved
-  secret into the visible form. Clear the draft after a successful save or dismissal.
-- Show saved/not configured/storage unavailable without showing any part of the key.
-  A failed replacement must preserve the previous working item. Remove deletes only
-  this provider's item. Keychain access failure is visible, never a plaintext fallback.
-- Saving alone makes no network request. **Test Benzinga news** makes one read-only
-  `GET https://api.benzinga.com/api/v2/news?pageSize=1&displayOutput=headline`.
-  Show checked time and news-only outcome; success is not permission for all products.
-- Distinguish HTTP 401, 403, 429, transport failure, malformed response, empty valid
-  response, policy denial and cancellation without echoing server bodies or raw errors.
-- Apply ToolPolicy before request and after await. Credential changes invalidate
-  direct-provider cached authorization/results and suppress old-generation completions.
-- Never send this key to Massive, Qwen, chat history, telemetry, backups or source
-  control. Do not inspect the user's clipboard or ask them to paste it in chat.
-
-### Authentication contract and verification
-
-The [authentication page](https://docs.benzinga.com/api-reference/authentication)
-recommends a header and includes `Authorization: token <key>`, while the
-[news endpoint schema](https://docs.benzinga.com/api-reference/news-api/get-news-items)
-marks a query token required. The official documentation is inconsistent; header-only
-support must therefore be verified with the owner-entered key, not assumed.
-
-Use header-only authentication initially, with a fixed HTTPS origin, no redirects,
-ephemeral URLSession, no URL cache/cookies and bounded response handling. Do not
-silently retry using a credential-bearing URL. If the service rejects header-only
-authentication, retain the key securely and report the unresolved transport contract;
-seek a documented resolution before exposing the token in any URL. A test failure
-must not disable or replace the working Massive integration.
+Reuse Massive's existing bearer-header, fixed HTTPS origin and no-redirect policy.
+Never place credentials in URLs, Qwen context, chat history, reports or logs.
+Recheck ToolPolicy, cancellation and credential generation before dispatch and
+after every await. Distinguish authorization, entitlement, throttling, transport,
+malformed, partial and successful-empty outcomes without echoing server bodies.
 
 ## Shared evidence and provider routing
 
@@ -100,16 +71,12 @@ selection independent from reported earnings. Metadata products do not become ne
 scheduled Catalyst kinds. A consumer receives the same captured snapshot, not a
 second independent fetch that changes evidence while Qwen is answering.
 
-For news, try configured direct Benzinga first, then Massive's dedicated Benzinga
-news, then the existing generic Massive/EODHD fallback chain. Retain ordered attempt
-outcomes with explicit product identity; at most four attempts, no retries. Stop on
-usable data; cancellation or policy denial stops the chain. An absent optional direct
-key is not an authentication failure. All other eight product integrations use the
-already-verified Massive entitlement in this delivery; buying a direct key does not
-prove its other product entitlements or authorize speculative downloads.
+For news, try Massive's dedicated Benzinga news, then the existing generic Massive
+news and EODHD fallback chain. Retain ordered attempt outcomes with explicit product
+identity; at most three attempts, no retries. Stop on usable data; cancellation or
+policy denial stops the chain. All nine products use the existing Massive credential.
 
-Direct news has a different response schema/date format from Massive news. Implement
-and test a separate parser, normalizing into the existing NewsItem contract. Preserve
+Normalize dedicated Massive/Benzinga news into the existing NewsItem contract. Preserve
 original publication offset and precision; retain material revisions. Do not deduplicate
 different text solely by headline, date or ticker. A missing full body is legitimate;
 the [Massive news contract](https://massive.com/docs/rest/partners/benzinga/news)
@@ -162,10 +129,9 @@ available evidence but cannot become an invented fact or forced Buy/Sell decisio
 1. Review/integrate the completed feed and Qwen diagnostics plus the independently
    tested news-outcome work before touching overlapping consumers. Parent is the
    integration writer; heavy tests stay serial with isolated DerivedData and two jobs.
-2. Add offline tests for credential isolation, storage failure, replacement/removal,
-   configuration races, request host/header/redirect policy, secret-safe diagnostics,
-   response caps and direct-news parsing. Automated gates use synthetic keys and
-   disposable test identities only, never the owner's Keychain item.
+2. Add offline tests for configuration races, request host/header/redirect policy,
+   secret-safe diagnostics, streaming response caps and dedicated-news parsing.
+   Automated gates use synthetic keys, never the owner's credential.
 3. Cover all nine parsers/adapters, missing versus empty/partial, timestamps/revisions,
    cache/single-flight bounds, fallback provenance, metadata joins and Qwen projections.
    Prove analyst targets cannot enter quote/settlement fields and policy revocation
@@ -174,17 +140,14 @@ available evidence but cannot become an invented fact or forced Buy/Sell decisio
    all, keeping the three existing exclusions unchanged. Record real runner exits,
    counts and tested-source hashes. No simultaneous heavy builds.
 5. Install through the normal parent-controlled replacement flow after combined gates.
-   The owner enters the direct key in the app, then performs the bounded connection
-   test. Verify direct/news provenance and the existing local Qwen connection without
+   Verify Massive/Benzinga provenance and the existing local Qwen connection without
    changing model settings or launching a second model. Report access separately from
    completed consumer integration. No push or real orders.
 
 ## Self-review
 
-The direct key is separate from already-working Massive access. Initial direct use
-is news, not an unsupported promise of every Benzinga SKU. All nine previously
-verified purchased products still have a consumer path through Massive. Routing
-explicitly expands the news worker's two-attempt limit to four in the parent integration.
-Numeric-format approval, live quote freshness and paper rules are untouched. The
-authentication documentation conflict remains a named live-verification condition,
-not silently guessed or bypassed. No secret or vendor response body is in this spec.
+All nine previously verified products use Massive; direct Benzinga is cancelled.
+Routing expands the news worker's two-attempt limit to three in parent integration.
+Numeric-format approval, live quote freshness and paper rules are untouched.
+No secret or vendor response body is in this spec. Access checks are not a claim
+that the nine-product consumer integration is already implemented or verified.
