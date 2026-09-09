@@ -1,5 +1,46 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Chat bubbles — September 9, verified candidate; not installed
+
+Mac transcript now separates trailing You, leading Qwen and cited evidence/full
+original snapshot. Native speaker-heading traits, existing DS tokens and vertical
+wrapping retain the notice and complete dated quote warning at narrow widths.
+Composer, callbacks, send/cancel/settings, source policy, persistence, model and
+trading behavior are unchanged. Legacy nonMac rendering retained; no iOS work.
+
+Actual ForEach uses a pure static turn renderer; isolated synthetic native-window
+captures do not initialize live Chat/store. Baseline11tests/fourrendercases passed
+0.228s and candidate11tests/fourrendercases passed0.662s. Parent and independent
+Sol inspected all eight baseline/candidate PNGs (360/760, pending/settled), with
+no must-fix. These are render/geometry smoke tests and visual comparisons, NOT
+automated semantic/AX assertions or live-window acceptance. Earlier AX and
+ImageRenderer harness failures were discarded, not counted as feature red.
+
+Full canonical Mac **2,039tests/200suites/205.187s, exit0**; three existing
+exclusions retained, no opt-in live/model/replay work. New four-case render check
+passed0.439s in that run. Final Astra source review closed with no must-fix.
+Strict Mac emit191s and test typecheck232s passed, aggregateexit0:
+`GATE repo=qwen-context macos=OK ios=SKIP tests=OK`. Source entries and the
+retained bundle were rechecked after both gates; detailed strict logs preserved.
+
+Frozen chat-bubbles-source.sha256 rechecked after Mac tests; manifestSHA256
+e74f5e280f52339e527ebd6ebb916c97d18943d570fc1357f17cd27eacc4e91e.
+Retained candidate matches all64 tested file/link entries and deep/strict
+codesign passed; dylibSHA256
+b681e3686c1f5ed284f42a41aaac53e8698e5bd2cd49562e3209192aa44550c7.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-chat-bubbles/StockSageX.app`.
+Same artifact root: CHAT_BUBBLES.md, chat-baseline-images, chat-candidate-images,
+macos-chat-bubbles-final.log/xcresult and strict-chat-bubbles-final.log.
+
+**Not installed:** preserve owner session-only manual500 scan/results pending the
+existing restart/clear choice, even if the scan finishes. Installed27a4727/PID40101,
+Qwen2120 and owner-paused paper state remain. No push, new scan, real orders,
+relay, paid resources or historical-record edits. Live integrated layout,
+keyboard/VoiceOver/links/disclosure interaction remain unverified. Transient
+composer warning remains a separate source finding, not reproduced or fixed;
+one normal open reused PID40101 but AX window visibility was unstable before
+any text entry or action. No message was sent/saved, no history cleared/quit.
+
 ## Paper panel clarity — September 9, verified candidate; not installed
 
 Small presentation-only batch: Day trading enabled/paused labels, native Pause

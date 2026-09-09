@@ -1,6 +1,10 @@
 import Foundation
 import Testing
 @testable import StockSage
+#if os(macOS)
+import SwiftUI
+import AppKit
+#endif
 
 @Suite("Native local Chat")
 @MainActor
@@ -13,6 +17,42 @@ struct StockSageChatTests {
     private func snapshot(_ symbols: [StockSageSymbol]? = nil, sample: Bool = false) -> StockSageChat.Snapshot {
         StockSageChat.snapshot(symbols: symbols ?? [symbol()], ideas: [], earnings: [:], sample: sample, now: now)
     }
+
+    #if os(macOS)
+    @Test(arguments: [360, 760], [false, true])
+    func renderCapturedTurnWithoutLiveChat(width: Int, pending: Bool) async throws {
+        let captured = snapshot()
+        let fact = try #require(captured.facts.first)
+        let turn = StockSageChatSession.Turn(id: UUID(),
+            question: "What does this dated observation tell me, and what remains unknown?",
+            snapshot: captured, model: "fixture",
+            answer: "Synthetic answer: a recorded observation is not a prediction. Check the captured source and its timestamp below.",
+            evidence: [fact.id], notice: "Unverified draft · fixture")
+        let view = StockSageChatSection.turnContent(turn, pending: pending)
+            .padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        var appeared = false
+        let host = NSHostingController(rootView: view.onAppear { appeared = true })
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
+            width: width, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !appeared, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(appeared)
+        host.view.layoutSubtreeIfNeeded()
+        // GroupBox's native backing is omitted by ImageRenderer; capture the actual hosted view.
+        let bitmap = try #require(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+        host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        // Matches the existing offline component-render checks; inspect these for copy/wrapping.
+        try png.write(to: FileManager.default.temporaryDirectory
+            .appendingPathComponent("stocksage-chat-turn-\(width)-\(pending).png"), options: .atomic)
+        #expect(host.view.bounds.width == CGFloat(width) && host.view.bounds.height > 100)
+    }
+    #endif
 
     @Test func earningsConfirmationRequiresCurrentCheck() throws {
         for age in [-1.0, 0, StockSageStore.earningsCheckTTL - 1, StockSageStore.earningsCheckTTL] {
@@ -203,3 +243,10 @@ struct StockSageChatTests {
         #expect(!chat.attachResearch(id: second, snapshot: enriched) && chat.turns.count == 1)
     }
 }
+
+#if os(macOS)
+@MainActor private final class ChatTranscriptFixtureWindow: NSWindow {
+    override var canBecomeMain: Bool { false }
+    override var canBecomeKey: Bool { false }
+}
+#endif

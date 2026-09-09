@@ -95,31 +95,102 @@ struct StockSageChatSection: View {
                      : "Event logging is off. Chat does not enable alerts or background monitoring.").font(.caption).foregroundStyle(.secondary)
             }
             ForEach(chat.turns) { turn in
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(turn.question).font(.headline).textSelection(.enabled)
-                        Text(turn.notice).font(.caption).foregroundStyle(.secondary)
-                        if chat.pending == turn.id { ProgressView("Preparing sources / asking the local model…") }
-                        else { Text(turn.answer).textSelection(.enabled) }
-                        ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
-                            Text(fact.text).font(.callout).padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
-                        }
-                        ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
-                            sourceCard(source)
-                        }
-                        DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Historical snapshot, not current evidence. Model: \(turn.model)")
-                                Text(turn.snapshot.context)
-                                Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
-                                ForEach(turn.snapshot.facts) { Text($0.text) }
-                                ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
-                            }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
+                Self.turnContent(turn, pending: chat.pending == turn.id)
             }
         }
+    }
+
+    /// Pure rendering keeps captured evidence separate from the live Chat session.
+    @ViewBuilder static func turnContent(_ turn: StockSageChatSession.Turn, pending: Bool) -> some View {
+        #if os(macOS)
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Label("You", systemImage: "person.crop.circle")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(DS.Palette.textPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                Text(turn.question).font(.body).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(DS.Space.md)
+            .frame(maxWidth: 620, alignment: .leading)
+            .background(DS.Palette.accent.opacity(0.16), in: .rect(cornerRadius: DS.Radius.bubble))
+            .overlay {
+                RoundedRectangle(cornerRadius: DS.Radius.bubble, style: .continuous)
+                    .stroke(DS.Palette.accent.opacity(0.30), lineWidth: 1)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Label("Qwen", systemImage: "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .accessibilityAddTraits(.isHeader)
+                Text(turn.notice).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if pending {
+                    ProgressView("Preparing sources / asking the local model…")
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(turn.answer).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(DS.Space.md)
+            .frame(maxWidth: 760, alignment: .leading)
+            .background(DS.Palette.surface, in: .rect(cornerRadius: DS.Radius.bubble))
+            .overlay {
+                RoundedRectangle(cornerRadius: DS.Radius.bubble, style: .continuous)
+                    .stroke(DS.Palette.surfaceStroke, lineWidth: 1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            GroupBox("Evidence and original snapshot") {
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
+                        Text(fact.text).font(.callout).fixedSize(horizontal: false, vertical: true)
+                            .padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
+                    }
+                    ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
+                        sourceCard(source).fixedSize(horizontal: false, vertical: true)
+                    }
+                    DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Historical snapshot, not current evidence. Model: \(turn.model)")
+                            Text(turn.snapshot.context)
+                            Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
+                            ForEach(turn.snapshot.facts) { Text($0.text) }
+                            ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
+                        }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        #else
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(turn.question).font(.headline).textSelection(.enabled)
+                Text(turn.notice).font(.caption).foregroundStyle(.secondary)
+                if pending { ProgressView("Preparing sources / asking the local model…") }
+                else { Text(turn.answer).textSelection(.enabled) }
+                ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
+                    Text(fact.text).font(.callout).padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
+                }
+                ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
+                    sourceCard(source)
+                }
+                DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Historical snapshot, not current evidence. Model: \(turn.model)")
+                        Text(turn.snapshot.context)
+                        Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
+                        ForEach(turn.snapshot.facts) { Text($0.text) }
+                        ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
+                    }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        #endif
     }
 
     private var composer: some View {
@@ -158,7 +229,7 @@ struct StockSageChatSection: View {
                     .font(.caption).foregroundStyle(.secondary)
     }
 
-    private func sourceCard(_ source: StockSageChat.Source) -> some View {
+    private static func sourceCard(_ source: StockSageChat.Source) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("\(source.subject) · \(source.attribution) · \(source.publicationTime ?? StockSageNewsService.instant(source.date))").font(.caption.bold())
             Text(source.warning).font(.caption).foregroundStyle(.secondary)
