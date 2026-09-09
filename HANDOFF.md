@@ -1,5 +1,39 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac explicit Chat focus — September 9, verified; not installed
+
+Composer focus returns after successful guarded Edit, accepted Send (before its
+Task) and explicit Cancel. Native FocusState only; shared cancel(), settings,
+disappearance and completions remain focus-neutral. No delayed task, controller,
+initial autofocus or Escape change; existing Command-Return preserved. Edit's
+existing guarded copy now returns acceptance so rejected stale actions cannot
+request focus. Non-Mac behavior retained, iOS unverified today.
+
+Native actual QuestionField probe23/1/2.469s passed. New Bool API compile-REDexit65
+against oldVoid return, NOT an executed assertion RED. Final GREEN44/2/2.773s,
+exit0. Actual NSTextView acquisition/release and local insertion verified in
+offscreen fixture; unrelated local-text redraw does not reacquire focus. No
+activation/makeKey/makeFirstResponder calls; ending window is non-key. This is
+not live Send/Cancel/Edit, physical keyboard, background/settings integration or
+VoiceOver proof. Sol/Astra source reviews closed, no must-fix; parent tested.
+
+Full Mac **2,051 tests/200 suites/163.704s**, exit0; strict Mac185s/tests211s,
+exec87485 aggregate0, macos=OK ios=SKIP tests=OK; same3opt-in exclusions.
+Frozen372 entries and exact64-entry signedcandidate rechecked after both gates.
+Manifest a5a8f2057fc8275b7ba963b0c25a779f6f2a2048c1d847bd4525c8b23ad60075;
+candidate dylib78d0161465a754296a39cef69763d21049797fa910a725a84273730869f9b190.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/CHAT_FOCUS.md`;
+same root holds candidate-chat-focus/StockSageX.app, plan, focused/full xcresults,
+strict detailed logs and manifest/check.
+
+**No install/quit/reopen:** old installed app40101 observed absent during this
+batch, cause unverified by bounded diagnostics. Installed files unchanged;
+Qwen2120 and pausedpaper0 rechecked. Do not claim session-only500 results retained
+or automatically restart/restore. Existing owner restart/clear choice remains.
+No iOS, push, paid resources, probes, relay, realorders or historical edits.
+Parent sole writer/tester/installer. Next Research controls candidate is being
+prepared by SolMendel OUTSIDE repo; no shared writes or heavy tests permitted.
+
 ## Mac assessment snapshot groups — September 9, verified; not installed
 
 Native Mac groups distinguish unverified draft from dated assessment without

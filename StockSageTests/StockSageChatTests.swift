@@ -19,6 +19,59 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test func nativeQuestionFocusUsesActualFieldWithoutOwnerState() async throws {
+        var focus: FocusState<Bool>.Binding?
+        var text: Binding<String>?
+        var edited = ""
+        let host = NSHostingController(rootView: ChatFocusFixture(ready: { focus = $0; text = $1 },
+                                                                 edited: { edited = $0 }))
+        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 150),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        for _ in 0..<100 {
+            if focus != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let binding = try #require(focus)
+        binding.wrappedValue = false
+        for _ in 0..<100 {
+            if !(window.firstResponder is NSTextView) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(!(window.firstResponder is NSTextView))
+        binding.wrappedValue = true
+        for _ in 0..<100 {
+            if window.firstResponder is NSTextView { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let editor = try #require(window.firstResponder as? NSTextView)
+        #expect(editor.string == "Focus fixture")
+        editor.insertText("Edited ", replacementRange: NSRange(location: 0, length: 0))
+        for _ in 0..<100 {
+            if edited == "Edited Focus fixture" { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(edited == "Edited Focus fixture")
+        binding.wrappedValue = false
+        for _ in 0..<100 {
+            if !(window.firstResponder is NSTextView) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(!(window.firstResponder is NSTextView))
+        let textBinding = try #require(text)
+        textBinding.wrappedValue = "Unrelated fixture update"
+        for _ in 0..<100 {
+            if edited == "Unrelated fixture update" { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(edited == "Unrelated fixture update")
+        #expect(!(window.firstResponder is NSTextView), "A state redraw must not request focus")
+        #expect(!window.isKeyWindow, "The isolated focus check must not activate a window")
+    }
+
     @Test func assessmentControlsExplainRetriesAndUnavailableActions() {
         for hasRecord in [false, true] {
             for hasDraft in [false, true] {
@@ -116,13 +169,14 @@ struct StockSageChatTests {
         let questionBinding = Binding(get: { question }, set: { question = $0 })
         let issueBinding = Binding(get: { issue }, set: { issue = $0 })
         let original = "Explain the source · اشرح المخاطر"
-        StockSageChatSection.reuseQuestion(original, question: questionBinding, issue: issueBinding, pending: pending)
+        let copied = StockSageChatSection.reuseQuestion(original, question: questionBinding, issue: issueBinding, pending: pending)
         let shouldCopy = draft.isEmpty && !pending
+        #expect(copied == shouldCopy, "Only an accepted Edit may request composer focus")
         #expect(question == (shouldCopy ? original : draft))
         #expect(issue == (shouldCopy ? nil : "Previous input warning"))
         if shouldCopy {
             issue = "New input warning"
-            StockSageChatSection.reuseQuestion("A different old question", question: questionBinding, issue: issueBinding, pending: false)
+            #expect(!StockSageChatSection.reuseQuestion("A different old question", question: questionBinding, issue: issueBinding, pending: false))
             #expect(question == original, "A stale enabled action must not overwrite the now-filled draft")
             #expect(issue == "New input warning")
         }
@@ -460,6 +514,22 @@ struct StockSageChatTests {
 }
 
 #if os(macOS)
+@MainActor private struct ChatFocusFixture: View {
+    @State private var question = "Focus fixture"
+    @State private var issue: String?
+    @FocusState private var fieldFocused: Bool
+    let ready: (FocusState<Bool>.Binding, Binding<String>) -> Void
+    let edited: (String) -> Void
+
+    var body: some View {
+        StockSageChatSection.QuestionField(question: $question, issue: $issue)
+            .focused($fieldFocused)
+            .padding(16).frame(width: 400)
+            .onAppear { ready($fieldFocused, $question) }
+            .onChange(of: question) { _, value in edited(value) }
+    }
+}
+
 @MainActor private final class ChatTranscriptFixtureWindow: NSWindow {
     override var canBecomeMain: Bool { false }
     override var canBecomeKey: Bool { false }

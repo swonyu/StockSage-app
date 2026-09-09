@@ -10,6 +10,9 @@ struct StockSageChatSection: View {
     @State private var request: Task<Void, Never>?
     @State private var opening: StockSageChat.Snapshot?
     @State private var confirmClear = false
+    #if os(macOS)
+    @FocusState private var questionFocused: Bool
+    #endif
     @AppStorage(StockSageLocalModelServer.backendKey) private var backend = "auto"
     @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL = StockSageLocalModelServer.defaultURL
     @AppStorage(StockSageLocalModelServer.modelKey) private var model = StockSageLocalModelServer.defaultModel
@@ -115,7 +118,9 @@ struct StockSageChatSection: View {
             ForEach(chat.turns) { turn in
                 #if os(macOS)
                 let edit: (() -> Void)? = chat.pending == nil && question.isEmpty ? {
-                    Self.reuseQuestion(turn.question, question: $question, issue: $issue, pending: chat.pending != nil)
+                    if Self.reuseQuestion(turn.question, question: $question, issue: $issue, pending: chat.pending != nil) {
+                        questionFocused = true
+                    }
                 } : nil
                 Self.turnContent(turn, pending: chat.pending == turn.id, editQuestion: edit)
                 #else
@@ -232,6 +237,7 @@ struct StockSageChatSection: View {
         VStack(alignment: .leading, spacing: 8) {
             #if os(macOS)
             QuestionField(question: $question, issue: $issue)
+                .focused($questionFocused)
             #else
             TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $question, axis: .vertical)
                 .lineLimit(2...5).textFieldStyle(.roundedBorder)
@@ -244,7 +250,14 @@ struct StockSageChatSection: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .help("Send your question with Command-Return.")
                     #endif
-                if chat.pending != nil { Button("Cancel") { cancel() } }
+                if chat.pending != nil {
+                    Button("Cancel") {
+                        cancel()
+                        #if os(macOS)
+                        questionFocused = true
+                        #endif
+                    }
+                }
                 Spacer()
                 Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
                     #if os(macOS)
@@ -290,10 +303,11 @@ struct StockSageChatSection: View {
         "\(question.count) of 2,000 characters"
     }
 
-    static func reuseQuestion(_ original: String, question: Binding<String>, issue: Binding<String?>, pending: Bool) {
-        guard !pending, question.wrappedValue.isEmpty else { return }
+    static func reuseQuestion(_ original: String, question: Binding<String>, issue: Binding<String?>, pending: Bool) -> Bool {
+        guard !pending, question.wrappedValue.isEmpty else { return false }
         question.wrappedValue = original
         issue.wrappedValue = nil
+        return true
     }
 
     static func latestTurnID(in chat: StockSageChatSession) -> UUID? {
@@ -387,6 +401,9 @@ struct StockSageChatSection: View {
                 && StockSageLocalModelServer.settingsRevision() == revision
         }
         question = ""; issue = nil
+        #if os(macOS)
+        questionFocused = true
+        #endif
         request = Task {
             var enriched = facts
             if let ticker = researchTicker {
