@@ -25,6 +25,9 @@ final class StockSageLiveStream: ObservableObject {
     private var conditionTask: Task<Void, Never>?
     private var regularConditions: Set<Int64> = []
     private var conditionsAsOf: Date?
+    private var referenceAttemptAt: Date?
+    private var referenceGeneration = UUID()
+    private static let referenceLifetime: TimeInterval = 86_400
     private var publicationCursor = 0
 
     nonisolated struct Tick: Sendable, Equatable {
@@ -193,19 +196,13 @@ final class StockSageLiveStream: ObservableObject {
         let current = StockSageLiveStreamConnection()
         connection = current
         current.open()
-        conditionTask = Task { [weak self] in
-            let regular = (try? await StockSageMassiveTicks.regularQuoteConditions()) ?? []
-            guard !Task.isCancelled, let self, self.connection === current, ToolPolicy.isExternalAllowed else { return }
-            self.regularConditions = regular
-            self.conditionsAsOf = Date()
-            let exchanges = (try? await StockSageMassiveTicks.exchanges()) ?? [:]
-            guard !Task.isCancelled, self.connection === current, ToolPolicy.isExternalAllowed else { return }
-            self.exchanges = exchanges
-        }
         publication = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.connection === current else { return }
                 guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+                self.refreshReferences(stillValid: { [weak self, weak current] in
+                    current != nil && self?.connection === current && ToolPolicy.isExternalAllowed
+                })
                 if let ingress = current.ingress {
                     let store = StockSageStore.shared
                     let all = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).sorted()
@@ -225,6 +222,43 @@ final class StockSageLiveStream: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
+    }
+
+    /// Shared runtime/test seam: tests replace only the reference transports and session check.
+    @discardableResult
+    func refreshReferences(now: Date = Date(), stillValid: @escaping @MainActor () -> Bool,
+        conditions: @escaping @MainActor () async throws -> Set<Int64> = {
+            try await StockSageMassiveTicks.regularQuoteConditions()
+        },
+        exchangeList: @escaping @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange] = {
+            try await StockSageMassiveTicks.exchanges()
+        }
+    ) -> Task<Void, Never>? {
+        guard now.timeIntervalSince1970.isFinite, stillValid(), conditionTask == nil else { return nil }
+        if let at = conditionsAsOf, (0..<Self.referenceLifetime).contains(now.timeIntervalSince(at)) { return nil }
+        // One retry per minute after failure/empty data; the 250ms publisher never fans out requests.
+        if let at = referenceAttemptAt, (0..<60).contains(now.timeIntervalSince(at)) { return nil }
+        referenceAttemptAt = now
+        let run = UUID()
+        referenceGeneration = run
+        let task = Task { [weak self] in
+            defer {
+                if self?.referenceGeneration == run { self?.conditionTask = nil }
+            }
+            guard !Task.isCancelled, stillValid() else { return }
+            do {
+                let regular = try await conditions()
+                guard !Task.isCancelled, stillValid(), let self,
+                      self.referenceGeneration == run, !regular.isEmpty else { return }
+                self.regularConditions = regular
+                self.conditionsAsOf = now // Request-start time conservatively bounds reference age.
+                let exchanges = try await exchangeList()
+                guard !Task.isCancelled, stillValid(), self.referenceGeneration == run else { return }
+                self.exchanges = exchanges
+            } catch { /* Keep the previous reference timestamp; no failed fetch becomes fresh. */ }
+        }
+        conditionTask = task
+        return task
     }
 
     /// The runtime and replay use the same @Published update. The clock ends after the store
@@ -253,7 +287,7 @@ final class StockSageLiveStream: ObservableObject {
         if isStreaming != recent { isStreaming = recent }
         connectionLabel = !snapshot.authorized ? "Feed authenticating" : recent ? "US trades + quotes" : "Feed connected · no recent observation"
         delivered = snapshot.authorized ? snapshot.trades : [:]
-        let regular = conditionsAsOf.map { (0..<86_400).contains(now.timeIntervalSince($0)) } == true ? regularConditions : []
+        let regular = conditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true ? regularConditions : []
         let latest = snapshot.authorized ? snapshot.quotes.mapValues { $0.qualifyingCosts(regularConditions: regular) } : [:]
         if quotes != latest { quotes = latest }
         apply(delivered, latest, now)
@@ -298,12 +332,13 @@ final class StockSageLiveStream: ObservableObject {
             + "LIVE requires a nonfuture observation ≤10s old; quiet symbols and closed markets need not print. Publication timing excludes compositor/render delay."
     }
 
-    func stop() {
+    func stop(clearNBBO: @MainActor () -> Void = { StockSageStore.shared.applyLiveNBBO([:]) }) {
         publication?.cancel(); publication = nil
         conditionTask?.cancel(); conditionTask = nil
+        referenceGeneration = UUID(); referenceAttemptAt = nil
         connection?.close(); connection = nil
         regularConditions = []; conditionsAsOf = nil; exchanges = [:]
-        clearPrices()
+        clearPrices(clearNBBO: clearNBBO)
         connectionLabel = "Feed stopped"
     }
 }

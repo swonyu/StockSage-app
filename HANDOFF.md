@@ -1,5 +1,73 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Quote-condition reference recovery — September9, parent follow-up
+
+Parent remains sole writer/installer/heavy tester on `codex/qwen-chat-context`,
+base8972836. Good-spender OFF; EODHD disabled and relay OFF. No strategy, risk,
+model, quote-age, historical-record or subscription changes.
+
+Confirmed caller chain: MarketsView starts one LiveStream connection; its existing
+250ms publication loop qualifies NBBO before `StockSageStore.applyLiveNBBO`.
+NetEdge/TodayPlan require both verified conditions and a fresh quote. The prior
+one-shot reference task never retried an initial failure/empty result and never
+renewed its24-hour reference. Cost qualification stayed unavailable until restart.
+
+The existing publication owner now refreshes expired/missing conditions, permits
+one batch at a time and retries failed/empty results after60seconds. Request-start
+time conservatively bounds reference age; failure does not stamp a successful
+reference. Cancellation/session checks fence each hop, and generation-checked
+cleanup prevents an old stopped request clearing a replacement's in-flight guard.
+Quote timestamps and freshness rules remain unchanged. Four regression tests use
+the real refresh/publication paths with injected transports and isolated store
+effects, including expiry, failed/empty fetches, stop/replacement and policy loss.
+
+Artifacts: `/private/tmp/stocksage-reliability-20260909.v6DO1E`.
+First red attempt had Swift Testing macro closure-isolation compile errors and
+is NOT behavioral evidence. Actual `red-feed-reference-expiry-2`:
+17tests/1suite,9issues,3.012s,exit65. Focused `green-feed-reference-expiry`:
+43tests/3suites,3.079s,exit0. Full macOS `full-macos-feed-reference`:
+1,976tests/197suites,63.035s,exit0, unchanged canonical exclusions.
+Full iPhone17Pro(gate) `full-ios-feed-reference`:1,972tests/197suites,
+62.180s,exit0, UUID3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA, same exclusions.
+Canonical exclusions remain CalibrationPersistRunTests,
+LiveUniverseVerificationTests and StrategyBaselineMeasurementTests;
+no frozen/live measurement was rerun.
+Initial strict gate `/private/tmp/stocksage-strict-reference-20260909.RpE1qW`
+passed macOS61s/iOS56s/tests80s, allrc0, aggregateexit0. A bounded read-only
+Codex review then found a test-only scheduler-yield race: a missing continuation
+could leave the test waiting indefinitely. Parent replaced fixed-yield polling
+with an explicit AsyncStream readiness signal; production is unchanged.
+Repeated full macOS `full-macos-feed-reference-2` passed1,976tests/197suites,
+62.825s,exit0. The same read-only reviewer checked the on-disk signal correction
+and confirmed the reported P2 resolved, with no blocking introduced runtime defects.
+Repeated full iPhone `full-ios-feed-reference-2` passed1,972tests/197suites,
+61.650s,exit0. Final strict gate
+`/private/tmp/stocksage-strict-reference-final-20260909.jmlkVO` passed
+macOS60s/iOS56s/tests80s, eachrc0; aggregate macos=OK ios=OK tests=OK,exit0.
+Latest source manifest `feed-reference-source-2.sha256` covers343files.
+All343entries rechecked after the final gates; `git diff --check` passed.
+Exact latest Mac-tested bundle preserved at `checkpoint-macos-feed-reference-2/StockSageX.app`;
+strict/deep signature passed, dylibSHA256
+`15bb614a368e09d28c901281651c09f3afc6d93de40f63a196793d79c362e2bb`.
+
+Installed app is still source8972836, PID22077 last verified, enabled1 and owning
+the account lease; installed dylib remains09a422ac…9eb2. Native control still fails
+with "Sky Computer Use native pipe closed before response", including after a
+CUA binding reset. Leave the running app intact; no force-quit or unsafe replacement.
+Owner08:33 challenged "blocked": clarified this is ONLY an app-control connection
+failure, not an app/API/trading restriction or a halt to repository work. Latest
+native retry returned the same error; PID22077 remains running. Parent did not
+install this source batch. At08:35, paper account SHA256 still exactly matches
+the backup hash3a95a78b…e7f recorded below; no historical records changed.
+All gates are now passed. Installation is pending normal Quit/process-and-lease
+release, whole-account backup, recoverable installed bundle, exact candidate copy,
+signature/hash checks, reopen and state verification. Owner was told they can
+quit with Cmd-Q because native control is unavailable. Do not assume they did.
+No changed UI or live-provider recovery has been verified for this batch.
+Exchange-list failure remains observational (unknown venue); it does not prevent
+condition qualification and has no independent minute retry in this narrow fix.
+Native paper bid/ask/size fills are still pending, not supplied by this change.
+
 ## Owner disables EODHD — September9, 07:35 Riyadh
 
 Latest owner direction: "Remove EODHD entirely", clarified immediately as

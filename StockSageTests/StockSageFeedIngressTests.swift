@@ -11,6 +11,136 @@ struct StockSageFeedIngressTests {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     let auth = Data(#"[{"ev":"status","status":"auth_success"}]"#.utf8)
 
+    @Test @MainActor func expiredReferenceRefreshesButOldQuoteNeverBecomesFresh() async throws {
+        let live = L()
+        var requests = 0
+        let load: @MainActor () async throws -> Set<Int64> = { requests += 1; return [801] }
+        let initial = live.refreshReferences(now: now, stillValid: { true },
+            conditions: load, exchangeList: { [:] })
+        let first = try #require(initial)
+        await first.value
+        let early = live.refreshReferences(now: now.addingTimeInterval(86_399), stillValid: { true },
+            conditions: load, exchangeList: { [:] })
+        #expect(early == nil)
+        let expired = now.addingTimeInterval(86_400)
+        let second = live.refreshReferences(now: expired, stillValid: { true },
+            conditions: load, exchangeList: { [:] })
+        #expect(second != nil, "Expired references must refresh without restarting the feed")
+        await second?.value
+        #expect(requests == 2)
+
+        let ingress = I()
+        ingress.offer(Data(#"[{"ev":"status","status":"auth_success"},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"c":801,"t":1700000000000}]"#.utf8), at: now)
+        let snapshot = try await drained(ingress, symbols: ["AAPL"])
+        let published = live.publish(snapshot, from: ingress, now: expired, apply: { _, _, _ in })
+        #expect(published)
+        let quote = try #require(live.quotes["AAPL"])
+        #expect(quote.costConditionVerified)
+        #expect(quote.timestamp == now && !quote.isFresh(at: expired))
+        #expect(!live.isStreaming)
+        ingress.invalidate()
+    }
+
+    @Test @MainActor func failedReferenceRetriesAfterBackoffAndRequalifiesFreshQuotes() async throws {
+        for empty in [false, true] {
+            let live = L()
+            var requests = 0
+            let load: @MainActor () async throws -> Set<Int64> = {
+                requests += 1
+                if requests == 1 {
+                    if empty { return [] }
+                    throw URLError(.notConnectedToInternet)
+                }
+                return [801]
+            }
+            let initial = live.refreshReferences(now: now, stillValid: { true },
+                conditions: load, exchangeList: { [:] })
+            let first = try #require(initial)
+            await first.value
+            let early = live.refreshReferences(now: now.addingTimeInterval(59), stillValid: { true },
+                conditions: load, exchangeList: { [:] })
+            #expect(early == nil)
+            let retryAt = now.addingTimeInterval(60)
+            let retry = live.refreshReferences(now: retryAt, stillValid: { true },
+                conditions: load, exchangeList: { [:] })
+            #expect(retry != nil, "Unavailable or empty references must remain retryable")
+            await retry?.value
+            #expect(requests == 2)
+
+            let ingress = I()
+            ingress.offer(Data(#"[{"ev":"status","status":"auth_success"},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"c":801,"t":1700000060000}]"#.utf8), at: retryAt)
+            let snapshot = try await drained(ingress, symbols: ["AAPL"])
+            let published = live.publish(snapshot, from: ingress, now: retryAt, apply: { _, _, _ in })
+            #expect(published)
+            #expect(live.quotes["AAPL"]?.costConditionVerified == true)
+            ingress.invalidate()
+        }
+    }
+
+    @Test @MainActor func stoppedReferenceCannotPublishOrClearReplacementTask() async throws {
+        let live = L()
+        var oldResume: CheckedContinuation<Set<Int64>, Never>?
+        var nextResume: CheckedContinuation<Set<Int64>, Never>?
+        let ready = AsyncStream<Void>.makeStream()
+        var starts = ready.stream.makeAsyncIterator()
+        defer {
+            oldResume?.resume(returning: []); nextResume?.resume(returning: [])
+            ready.continuation.finish()
+        }
+        var oldExchangeCalls = 0
+        let first = live.refreshReferences(now: now, stillValid: { true }, conditions: {
+            await withCheckedContinuation { oldResume = $0; ready.continuation.yield() }
+        }, exchangeList: { oldExchangeCalls += 1; return [:] })
+        let firstTask = try #require(first)
+        _ = await starts.next()
+        live.stop(clearNBBO: {})
+        let next = live.refreshReferences(now: now, stillValid: { true }, conditions: {
+            await withCheckedContinuation { nextResume = $0; ready.continuation.yield() }
+        }, exchangeList: { [1: .init(id: 1, mic: "XNAS", acronym: "TEST")] })
+        let nextTask = try #require(next)
+        _ = await starts.next()
+        oldResume?.resume(returning: [801]); oldResume = nil
+        await firstTask.value
+        #expect(oldExchangeCalls == 0 && live.exchanges.isEmpty)
+        var duplicateCalls = 0
+        let duplicate = live.refreshReferences(now: now.addingTimeInterval(120), stillValid: { true },
+            conditions: { duplicateCalls += 1; return [801] }, exchangeList: { [:] })
+        #expect(duplicate == nil, "An old completion must not clear the replacement's in-flight guard")
+        nextResume?.resume(returning: [999]); nextResume = nil
+        await nextTask.value
+        #expect(duplicateCalls == 0 && live.exchanges[1]?.acronym == "TEST")
+
+        let ingress = I()
+        ingress.offer(Data(#"[{"ev":"status","status":"auth_success"},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"c":999,"t":1700000000000}]"#.utf8), at: now)
+        let snapshot = try await drained(ingress, symbols: ["AAPL"])
+        let published = live.publish(snapshot, from: ingress, now: now, apply: { _, _, _ in })
+        #expect(published && live.quotes["AAPL"]?.costConditionVerified == true)
+        ingress.invalidate()
+    }
+
+    @Test @MainActor func revokedReferenceAccessStopsBetweenHopsAndAllowsLaterRecovery() async throws {
+        let live = L()
+        var allowed = false
+        var conditionsCalls = 0, exchangeCalls = 0
+        let load: @MainActor () async throws -> Set<Int64> = {
+            conditionsCalls += 1; allowed = false; return [801]
+        }
+        let denied = live.refreshReferences(now: now, stillValid: { allowed }, conditions: load,
+            exchangeList: { exchangeCalls += 1; return [:] })
+        #expect(denied == nil && conditionsCalls == 0)
+        allowed = true
+        let revoked = live.refreshReferences(now: now, stillValid: { allowed }, conditions: load,
+            exchangeList: { exchangeCalls += 1; return [:] })
+        await revoked?.value
+        #expect(conditionsCalls == 1 && exchangeCalls == 0)
+        allowed = true
+        let recovered = live.refreshReferences(now: now.addingTimeInterval(60), stillValid: { allowed },
+            conditions: { [801] }, exchangeList: { exchangeCalls += 1; return [:] })
+        #expect(recovered != nil, "Revoked access cannot stamp a successful reference")
+        await recovered?.value
+        #expect(exchangeCalls == 1)
+    }
+
     func drained(_ ingress: I, symbols: [String] = []) async throws -> I.Snapshot {
         for _ in 0..<10_000 {
             let snapshot = await ingress.snapshot(symbols: symbols)

@@ -43,14 +43,14 @@ These are parent source findings, not assertions about verified broker behavior.
 | Protective exits | `Book.settle` retains triggered STOP intent across attempt expiry, recovery and restart; `enforceDayLimit` requests overdue exits. | Preserve urgency independent of new-entry screening. Never satisfy an exit using stale or invented data. |
 | Fill realism | `fetchPaperQuotes` and `qualified` require eligible, fresh Massive observations after the saved decision. | `Book.settle` still uses trade price plus assumed 10 bps adverse cost; it does not consume bid/ask or displayed size. Reuse existing `StockSageNBBO` for the approved quote-side/size fill work, including stale/crossed/zero-size and partial-fill fixtures. |
 | Cost accounting | Native cost assumption is explicit. Relay receipt records missing commission as null and deduplicates executions by `execId`. | Late commission reports are not backfilled after terminal relay receipts. Future fee handling must be idempotent and preserve fills; do not copy a universal dollar fee or overwrite old simulated costs. |
-| Data recovery | Stream has connection/gap/backlog diagnostics and session generations. | Quote-condition reference data expires after 24 hours but is only loaded at start. Refresh via the existing owner with bounded retry and generation checks; no extra socket or force-LIVE fallback. |
+| Data recovery | Stream has connection/gap/backlog diagnostics and session generations. Parent follow-up now renews expired quote-condition references through the existing publisher, with single-flight minute retry after failure/empty data and generation checks. | Original first-fetch/24-hour loss was reproduced and repaired; see HANDOFF for gates/install status. Metadata renewal never changes a quote timestamp. Exchange-list failure still lacks an independent retry. No extra socket or force-LIVE fallback. |
 | Research throughput | `researchCycle` screens US snapshots, prioritizes holdings, selects up to 100 new candidates and runs four workers. | Keep this bounded pipeline; do not replace Massive coverage with an IBKR subscription-per-symbol design or conflate screening with completed Qwen analysis. |
 
 Source paths: `StockSage/Sources/StockSage/StockSagePaperAutomation.swift`,
 `StockSagePaperAudit.swift`, `StockSageLiveStream.swift`, and
 `tools/ibkr_paper_relay.py` / `tools/ibkr_paper_relay.md`.
 
-Priority: approved native quote-side/size realism and condition-reference recovery,
+Priority: safely install the full-gated condition-reference repair, then approved native quote-side/size realism,
 then deterministic restart/duplicate/late-receipt tests. Broker-specific changes
 remain offline-only; relay OFF. No new strategy, adaptive exits, model-weight
 changes, market-data purchase or real orders are authorized by this note.
