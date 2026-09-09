@@ -5,7 +5,7 @@
 Parent01a0772c-d7ba-7c50-906c-0a3a3e9baef1 remains sole writer, installer and
 serial heavy tester in `/Users/saleh/StockSage-wt/qwen-context`, branch
 `codex/qwen-chat-context`. HEAD16f5d6f includes earlier feed/diagnostics/news;
-the parent-owned reliability diff is not yet installed. Good-spender OFF;
+reliability commit `b0b757f` is now installed and reopened. Good-spender OFF;
 no pushes, paid resources, model changes or real orders; IBKR relay OFF.
 
 Implemented with actual red/green checks: qualified paper observations instead
@@ -40,7 +40,7 @@ Artifacts `/private/tmp/stocksage-reliability-20260909.v6DO1E/` include logs,
 xcresults,338-file `checkpoint-callers-source.sha256`, and the exact tested Mac
 app at `checkpoint-macos-callers/StockSageX.app` (dylibSHA256
 `89d02032dd06b02f1be23ad1304346103cabe6d1a1922dbb30b6b65f96874cf4`).
-Installed `/Applications/StockSageX.app` remains source18d3070. PreviousPID84844
+Before the update, `/Applications/StockSageX.app` was source18d3070. PreviousPID84844
 was already absent when checked; exact-path CUA selection relaunchedPID94289 at
 05:24:09. Actual AX and screenshot verified full Home/Catalysts rendering, and
 PID94289 survived the subsequent full Mac test. No forced quit/reset/installation
@@ -51,9 +51,23 @@ PID94289 holds its adjacent lock. These are pre-install observations, not restar
 verification. At05:43–05:46 native CUA lost its connection ("native pipe closed before
 response") before a normal quit could succeed. PID94289 remains alive. Installation
 is pending; do not force-quit, bypass the UI control failure or overwrite the running
-app. No consistent post-quit ledger backup exists yet. First restore normal control
-or have the owner quit, then verify lease release and back up the full ledger/archive
-directory and previous bundle before installing the exact tested signed checkpoint.
+app. At the next check PID94289 was absent, no StockSageX process was running and
+the account lock had no holder. Exit cause was not established; the parent did not
+force-quit it. After that verified release, the full account directory was backed
+up byte-identically at `/private/tmp/stocksage-install-20260909.Q2f1ml/StockSageQwenPaper`.
+The old bundle is recoverable at the same root's `StockSageX.previous.app`.
+
+Installed the exact `checkpoint-macos-callers/StockSageX.app` at the normal
+`/Applications/StockSageX.app` path, after staging/signature/checksum checks.
+Strict deep signature verification and checksum-aware recursive rsync dry-run
+showed an exact match after installation; installed dylib hash matches above.
+CUA recovered and exact-path reopen producedPID14962 with full Home/navigation
+AX content. That process owns the paper lock. Restart comparison:both original
+trades unchanged,all1,026prior decisions unchanged and IDs unique,0pending;
+automation preference remains1. No account migration/archive rotation was required.
+Subsequent Chat inspection was interrupted by user navigation/native CUA disconnect;
+the new Chat panel was not visually reverified. Home rendering and account restart
+were verified, not live provider/model performance or the original screenshot's PID.
 
 Owner authorized a seventh read-only supporting task for Catalyst Today/Week/Month
 navigation:01a083fa-97d6-70a0-8720-a22ea1450eea. Its completed design is at
@@ -67,8 +81,8 @@ latest bid/ask/size paper fills, small corporate actions, legacy new-open duplic
 prevention, QA automatic-work isolation, remaining settings/UI and shared bounded
 Massive/Benzinga evidence integration. No source lead is a proven fix without a
 real caller trace and regression. Frozen prospective research remains untouched;
-next scheduled observationSept9 18:10 Riyadh. Keep installed app intact until
-full gates, recoverable bundle/ledger-plus-archive backup and normal-quit workflow.
+next scheduled observationSept9 18:10 Riyadh. Preserve the installed checkpoint
+until any later replacement passes the same gates and recoverable update workflow.
 
 
 ## Whole-market bounded T/Q feed ready for parent integration — 2026-09-09

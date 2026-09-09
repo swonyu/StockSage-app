@@ -247,3 +247,24 @@ Read-only actual account state:version1,2trades,0pending,1,026decisions,noarchiv
 preserve the previous app, then compare historical records and automation state
 after reopening the tested replacement. Live provider/model inference and restart
 behavior are not verified by the offline gates above.
+
+Subsequent installation of commit`b0b757f`:the next read found94289absent,
+no StockSageX process and no account-lock holder. Cause of exit is unknown;
+the parent did not force-quit it. Full account directory copied after that release
+to private`/private/tmp/stocksage-install-20260909.Q2f1ml/StockSageQwenPaper`,
+account byte comparison exit0. Previous app moved recoverably to
+`/private/tmp/stocksage-install-20260909.Q2f1ml/StockSageX.previous.app`.
+Exact tested app staged,deep strict signature checked,checksum rsync dry-run
+compared,then moved to`/Applications/StockSageX.app`. A trailing diagnostic
+initially named the wrong dylib basename; corrected`StockSageX.debug.dylib`
+matches the recorded89d02032...hash. Signature and recursive file comparison
+repeated successfully after the move. No source rebuild substituted for the
+Mac-tested bundle.
+
+CUA recovered and reopened the installed checkpoint asPID14962,showing full
+Home/navigation AX content. It holds the actual account lock. Restart comparison
+against the private backup found both2trades unchanged,all1,026decisions unchanged,
+unique decisionIDs and0pending; automation remains enabled1. No migration or archive
+rotation was needed. User navigation then invalidated the attempted Chat click and
+CUA disconnected again,so the new Chat panel was not visually reverified. No live
+API/model performance or original screenshot-to-PID conclusion is inferred.
