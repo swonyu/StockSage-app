@@ -347,6 +347,40 @@ struct StockSagePaperAutomationTests {
         #expect(started.count <= A.researchConcurrency && !started.isEmpty)
     }
 
+    @Test(arguments: [false, true])
+    func slowHoldingLeavesFreeWorkersForDiscovery(legacyBarrier: Bool) async {
+        let symbols = ["AAPL", "AMZN", "GOOG", "MSFT", "NVDA", "META"]
+        var suspended: CheckedContinuation<Void, Never>?
+        var finished: [String] = []
+        var active = 0, peak = 0
+        let task = Task { @MainActor in
+            // Control replays the old caller composition; production now uses one ordered queue.
+            let batches = legacyBarrier ? [Array(symbols.prefix(4)), Array(symbols.dropFirst(4))] : [symbols]
+            for batch in batches {
+                await A.forEachResearchTarget(batch) { symbol in
+                    active += 1; peak = max(peak, active)
+                    if symbol == "AAPL" { await withCheckedContinuation { suspended = $0 } }
+                    else { await Task.yield() }
+                    active -= 1
+                    finished.append(symbol)
+                }
+            }
+        }
+        while suspended == nil { await Task.yield() }
+        for _ in 0..<100 {
+            if finished.contains("META") { break }
+            // Yielding alone can immediately reschedule this test ahead of the worker group.
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(finished.contains("NVDA") == !legacyBarrier && finished.contains("META") == !legacyBarrier,
+                "Only the legacy barrier should block discovery; completed: \(finished)")
+        #expect(!finished.contains("AAPL"))
+        suspended?.resume(); suspended = nil
+        await task.value
+        #expect(active == 0 && peak <= A.researchConcurrency)
+        #expect(finished.count == symbols.count && Set(finished) == Set(symbols))
+    }
+
     @Test func modelEditCancellationPreservesBookAndClearsResearchOnUnwind() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "research-cancel-\(UUID())"
@@ -388,6 +422,12 @@ struct StockSagePaperAutomationTests {
         for action in ["Paper Buy", "Paper Sell", "Paused", "Hold", "Research complete"] {
             #expect(StockSagePaperAutomationPanel.actionLabel(action) == action)
         }
+        let original = "Visited 94/94: 61 verified opinions, 33 unavailable checks."
+        #expect(StockSagePaperAutomationPanel.reasonLabel(action: "Research complete", reason: original)
+                == "Visited 94/94: 61 verified opinions, 33 incomplete checks.")
+        #expect(StockSagePaperAutomationPanel.reasonLabel(action: "Unavailable", reason: original) == original)
+        #expect(StockSagePaperAutomationPanel.reasonLabel(action: "Unavailable", reason: "Source unavailable; no paper order.")
+                == "Source unavailable; no paper order.")
     }
 
     @Test func oldResearchUnwindCannotClearRestartedProgress() async throws {

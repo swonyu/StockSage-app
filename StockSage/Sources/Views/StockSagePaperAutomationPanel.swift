@@ -30,7 +30,7 @@ struct StockSagePaperAutomationPanel: View {
                     ProgressView(progress)
                         .progressViewStyle(.linear)
                         .accessibilityLabel("Research checks completed")
-                    Text("Checks completed, not trades. Position and exit checks run separately from research.")
+                    Text("Ready results appear as they finish; other workers continue while a request is loading. Checks completed, not trades. Position and exit checks run separately from research.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text(automation.status).font(.callout)
@@ -103,7 +103,7 @@ struct StockSagePaperAutomationPanel: View {
                     Text(decision.reason).font(.caption).foregroundStyle(.secondary)
                 }
                 if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
-                    Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(cycle.reason)")
+                    Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(Self.reasonLabel(action: cycle.action, reason: cycle.reason))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if automation.isRunning, !automation.isResearching, StockSagePaperAutomation.entryWindowOpen(Date()), let last = automation.book.lastResearch {
@@ -147,7 +147,7 @@ struct StockSagePaperAutomationPanel: View {
                     ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(decision.at.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
-                            Text(decision.reason).font(.callout)
+                            Text(Self.reasonLabel(action: decision.action, reason: decision.reason)).font(.callout)
                             if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
                             if !decision.facts.isEmpty {
                                 DisclosureGroup(decision.action == "Unavailable" ? "Available source evidence · incomplete research" : "Saved evidence and model") {
@@ -204,6 +204,11 @@ struct StockSagePaperAutomationPanel: View {
         case "Market scan unavailable": "Market scan incomplete"
         default: action
         }
+    }
+
+    static func reasonLabel(action: String, reason: String) -> String {
+        guard action == "Research complete" else { return reason }
+        return reason.replacingOccurrences(of: " unavailable checks.", with: " incomplete checks.")
     }
 
     private func settlementDateLabel(_ date: Date) -> String {

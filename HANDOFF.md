@@ -1,5 +1,49 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Rolling research queue — September 9, Mac installed
+
+Owner: leave a slow request in flight and continue other symbols. researchCycle
+now calls the existing rolling pool once with researchTargets' holdings-first
+ordered list. The redundant all-holdings-finish-before-discovery barrier is gone.
+Four workers remain the cap; ready per-symbol results already commit immediately.
+Four occupied/slow workers still wait; no unbounded concurrency, timeout change,
+duplicate retries, relaxed freshness or promised trade activity. Position/exit
+monitoring remains its independent loop. Late inference still revalidates current
+context, quote, holding, settings, session and cash before proposing any order.
+
+Only the UI's Researchcomplete summary substitutes incomplete checks for the exact
+historical unavailable-check phrase. Original saved actions/reasons/facts and
+exports remain intact, and real individual failure explanations stay visible.
+
+Verification: fair-suspension focused51tests/1.585s exit0; final controlled
+comparison proves old two-batch composition blocks discovery while single queue
+finishes it before releasing a suspended holding. Both cases use the actual pool,
+check the four-worker bound and exactly one eventual completion per symbol;
+passed1.089s in full Mac **2,011tests/199suites/67.206s exit0**. Private-cycle
+wiring is source-traced, not a live transport replay. Initial yield-only red and
+green both failed due test polling starvation and are excluded as causal proof.
+Strict Mac emit59s/tests typecheck82s, aggregate0/iOSSKIP. Canonical exclusions
+unchanged, no opt-in provider/model/replay cases. Bounded Astra review closed.
+
+Source manifest rolling-research-source.sha256 verified; SHA256
+0772f54bddefb55756084c8ddac336b2b33660f1ef8fe008c631a9e40a4f76e1.
+Normal quit, exclusive-lease backup, install and reopen succeeded. Exact tested
+candidate matches43files/21internal links and strict/deep signatures. Dylib
+697e0ead1b6f2594ea457fab43a349a77d6623a0b6dd6091de5553b40ebdb384.
+Recoverable app: release-root retired-rolling-research/StockSageX.app; consistent
+paper backup: paper-before-rolling-research. Paper bytes unchanged during install.
+Postlaunch all3prior trades/1,771prior decisions unchanged/in order; PID29970
+owns lease, enabled1. Qwen2120 still listens only on127.0.0.1:8765, not restarted.
+Chat AX inspection confirmed independent monitoring and33 incomplete checks in
+the preserved previous cycle summary. No cycle was active; dynamic bar rendering
+still not directly observed (next research shown2:17PM). See ROLLING_RESEARCH.md.
+No push.
+
+Separate limitation: position quote fetching still awaits its bounded aggregate
+before settlement; Pascal's reported slow-peer latency path has only source
+evidence and no implemented candidate. Keep that financial-path follow-up separate
+from the completed research-queue change. No claim of nonstop/zero-latency fills.
+
 ## Research progress and monitoring status — September 9, Mac installed
 
 Native Foundation.Progress now starts indeterminate during market/model setup,

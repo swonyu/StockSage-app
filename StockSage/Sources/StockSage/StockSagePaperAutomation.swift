@@ -705,18 +705,16 @@ final class StockSagePaperAutomation: ObservableObject {
         researchProgress?.totalUnitCount = Int64(targets.count)
         status = "Qwen research 0/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
         var finished = 0
-        let heldSymbols = Set(book.open.map(\.symbol))
-        for batch in [targets.filter { heldSymbols.contains($0) }, targets.filter { !heldSymbols.contains($0) }] {
+        // researchTargets queues holdings first; a slow holding must not idle free workers.
+        guard active() else { return }
+        await Self.forEachResearchTarget(targets, allowed: active) { [self] symbol in
+            await researchSymbol(symbol, store: store, config: config, isOllama: probe.isOllama,
+                                 marketSymbols: marketSymbols, run: run, revision: revision)
             guard active() else { return }
-            await Self.forEachResearchTarget(batch, allowed: active) { [self] symbol in
-                await researchSymbol(symbol, store: store, config: config, isOllama: probe.isOllama,
-                                     marketSymbols: marketSymbols, run: run, revision: revision)
-                guard active() else { return }
-                finished += 1
-                if generation == run, isRunning {
-                    researchProgress?.completedUnitCount = Int64(finished)
-                    status = "Qwen research \(finished)/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
-                }
+            finished += 1
+            if generation == run, isRunning {
+                researchProgress?.completedUnitCount = Int64(finished)
+                status = "Qwen research \(finished)/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
             }
         }
         guard isRunning, !Task.isCancelled, generation == run else { return }
