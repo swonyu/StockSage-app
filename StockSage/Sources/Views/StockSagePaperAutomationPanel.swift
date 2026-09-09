@@ -14,6 +14,9 @@ struct StockSagePaperAutomationPanel: View {
     var body: some View {
         GroupBox("Qwen research and paper trading") {
             VStack(alignment: .leading, spacing: 10) {
+                #if os(macOS)
+                Self.attention(automation.error)
+                #endif
                 HStack {
                     Label(Self.modeLabel(running: automation.isRunning),
                           systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
@@ -53,15 +56,19 @@ struct StockSagePaperAutomationPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text(automation.status).font(.callout)
+                #if !os(macOS)
                 Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
                     .font(.caption).foregroundStyle(.secondary)
+                #endif
                 if automation.hasLoadedBook {
+                #if !os(macOS)
                 if automation.book.open.contains(where: { StockSagePaperAutomation.dayExitDue(openedAt: $0.openedAt, now: Date()) }) {
                     Text("Close-out required: awaiting fresh later prices. No overnight or closing fill is assumed.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
+                #endif
                 TimelineView(.periodic(from: .now, by: 30)) { _ in
                 // A scheduled TimelineView entry can be older than a newly received quote.
                 let at = Date()
@@ -71,8 +78,15 @@ struct StockSagePaperAutomationPanel: View {
                 Text("While StockSage is open and this Mac is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
                     .font(.caption).foregroundStyle(.secondary)
                 #if os(macOS)
+                if let warning = Self.closeOutWarning(book: automation.book, at: at, running: automation.isRunning) {
+                    Text(warning).font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                }
+                if let timing = Self.researchTiming(book: automation.book, at: at, running: automation.isRunning, researching: automation.isResearching) {
+                    Text(timing).font(.caption).foregroundStyle(.secondary)
+                }
                 Self.pendingRequests(automation.book.pending, running: automation.isRunning, at: at)
-                #endif
+                Self.accountSummary(book: automation.book, quotes: automation.quotes, at: at)
+                #else
                 HStack(spacing: 20) {
                     VStack(alignment: .leading) {
                         Text("Total paper cash").font(.caption)
@@ -100,7 +114,7 @@ struct StockSagePaperAutomationPanel: View {
                             DisclosureGroup("Scheduled paper settlements · \(sales.count)") {
                                 ForEach(sales) { trade in
                                     if let closed = trade.closedAt, let date = StockSagePaperAutomation.settlementDate(forSaleAt: closed) {
-                                        Text("\(trade.symbol): \(settlementDateLabel(date)) New York · \((trade.exitPrice! * trade.shares).formatted(.currency(code: "USD")))")
+                                        Text("\(trade.symbol): \(Self.settlementDateLabel(date)) New York · \((trade.exitPrice! * trade.shares).formatted(.currency(code: "USD")))")
                                     } else {
                                         Text("\(trade.symbol): settlement calendar unavailable; proceeds remain unspendable.")
                                             .foregroundStyle(DS.Palette.warningSoft)
@@ -109,10 +123,12 @@ struct StockSagePaperAutomationPanel: View {
                             }
                         }
                     }.font(.caption).foregroundStyle(.secondary)
+                #endif
                 }
                 }
                 Text("\(automation.book.open.count) paper positions · \(automation.book.pending.count) pending · \(automation.book.trades.filter { !$0.isOpen }.count) closed")
                     .font(.caption)
+                #if !os(macOS)
                 if let scan = automation.book.decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
                     Text("Market coverage · \(scan.at.formatted(date: .omitted, time: .shortened))").font(.caption.bold())
                     Text(scan.reason).font(.caption).foregroundStyle(.secondary)
@@ -120,15 +136,18 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Full US market discovery begins on the next research cycle; your watchlist is not the scan limit.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                #endif
                 #if os(macOS)
                 Self.recordedActivity(automation.book.decisions)
+                DisclosureGroup("Market coverage and research cycles") {
+                    Self.coverageSummary(automation.book.decisions)
+                }.font(.caption)
                 #else
                 if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
                     Text("Latest decision: \(decision.symbol) · \(Self.actionLabel(decision.action))").font(.callout.bold())
                     Text(decision.reason).font(.caption).foregroundStyle(.secondary)
                     if let plan = decision.plan { Self.entryPlan(plan) }
                 }
-                #endif
                 if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
                     Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(Self.reasonLabel(action: cycle.action, reason: cycle.reason))")
                         .font(.caption).foregroundStyle(.secondary)
@@ -137,6 +156,7 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Next research due \(last.addingTimeInterval(StockSagePaperAutomation.interval).formatted(date: .omitted, time: .shortened)) · while awake, connected and in session")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                #endif
                 if let audit = automation.book.audit, !audit.archives.isEmpty {
                     Text("Older audit records preserved in \(audit.archives.count) verified archive chunks beside the account. Recent history is shown below.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -145,7 +165,9 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Paper balances and history unavailable: the saved account could not be verified. No new account balance is assumed.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
+                #if !os(macOS)
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
+                #endif
                 if automation.hasLoadedBook, !automation.book.open.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Paper positions").font(.callout.bold())
@@ -156,6 +178,10 @@ struct StockSagePaperAutomationPanel: View {
                     }
                 }
                 DisclosureGroup("Simulation policy and limitations") {
+                    #if os(macOS)
+                    Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
+                    Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
+                    #endif
                     Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
                     Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
                     Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Up to \(StockSagePaperAutomation.discoveryLimit) total checks per cycle: all paper holdings first, then affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
@@ -205,6 +231,108 @@ struct StockSagePaperAutomationPanel: View {
     }
 
     #if os(macOS)
+    static func researchTiming(book: StockSagePaperAutomation.Book, at now: Date, running: Bool, researching: Bool) -> String? {
+        guard running, !researching else { return nil }
+        if let last = book.lastResearch, last > now {
+            return "Clock precedes the saved cycle; waiting for monitor review."
+        }
+        guard StockSagePaperAutomation.entryWindowOpen(now) else { return nil }
+        if StockSagePaperAutomation.researchDue(book: book, at: now) {
+            return "Research due; waiting for monitor and eligible data."
+        }
+        guard let last = book.lastResearch else { return nil }
+        return "Earliest next cycle: \(activityDateLabel(last.addingTimeInterval(StockSagePaperAutomation.interval))) New York · while awake, connected and in session"
+    }
+
+    static func closeOutWarning(book: StockSagePaperAutomation.Book, at now: Date, running: Bool) -> String? {
+        guard book.open.contains(where: { StockSagePaperAutomation.dayExitDue(openedAt: $0.openedAt, now: now) }) else { return nil }
+        return running ? "Close-out required: awaiting fresh later prices. No overnight or closing fill is assumed."
+            : "Close-out required; exit checks are paused. No overnight or closing fill is assumed."
+    }
+
+    @ViewBuilder static func attention(_ error: String?) -> some View {
+        if let error {
+            VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                Label("Needs attention", systemImage: "exclamationmark.triangle").font(.callout.bold())
+                Text(verbatim: error).font(.callout)
+            }
+            .foregroundStyle(DS.Palette.warningSoft).textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    static func coverageSummary(_ decisions: [StockSagePaperAutomation.Decision]) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            if let scan = decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
+                Text("Market coverage · \(activityDateLabel(scan.at)) New York").font(.caption.bold())
+                Text(verbatim: scan.reason).font(.caption)
+            } else {
+                Text("No scan summary in recent history.").font(.caption)
+            }
+            if let cycle = decisions.last(where: { $0.action == "Research complete" }) {
+                Text("Last completed cycle · \(activityDateLabel(cycle.at)) New York").font(.caption.bold())
+                Text(verbatim: cycle.reason).font(.caption)
+            } else {
+                Text("No completed-cycle summary in recent history.").font(.caption)
+            }
+        }
+        .foregroundStyle(.secondary).textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func accountSummary(book: StockSagePaperAutomation.Book,
+                               quotes: [String: StockSageQuoteService.LiveQuote], at: Date) -> some View {
+        let settled = book.settledCash(at: at)
+        let sales = book.unsettledSales(at: at)
+        return VStack(alignment: .leading, spacing: DS.Space.xs) {
+            LabeledContent("Settled spending capacity") {
+                Text(book.buyingCash(at: at), format: .currency(code: "USD")).monospacedDigit()
+            }
+            if settled < 0 {
+                Text("Legacy funding deficit: \((-settled).formatted(.currency(code: "USD"))). New entries wait for settlement; holdings and exits are retained.")
+                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+            }
+            LabeledContent("Total paper cash") {
+                Text(book.cash, format: .currency(code: "USD")).monospacedDigit()
+            }
+            LabeledContent("Unsettled proceeds") {
+                Text(book.unsettledProceeds(at: at), format: .currency(code: "USD")).monospacedDigit()
+            }
+            if let equity = book.equity(quotes: quotes, at: at) {
+                LabeledContent("Estimated paper equity") {
+                    Text(equity, format: .currency(code: "USD")).monospacedDigit()
+                }
+                Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                LabeledContent("Estimated paper equity") {
+                    Text("Fresh marks unavailable").font(.caption)
+                }
+            }
+            Text("Calculated \(Self.activityDateLabel(at)) New York. Calculation time, not a market timestamp or broker balance.")
+                .font(.caption).foregroundStyle(.secondary)
+            if !sales.isEmpty {
+                DisclosureGroup("Scheduled paper settlements · \(sales.count)") {
+                    ForEach(sales) { trade in
+                        if let closed = trade.closedAt,
+                           let date = StockSagePaperAutomation.settlementDate(forSaleAt: closed) {
+                            Text("\(trade.symbol): \(Self.settlementDateLabel(date)) New York · \((trade.exitPrice! * trade.shares).formatted(.currency(code: "USD")))")
+                        } else {
+                            Text("\(trade.symbol): settlement calendar unavailable; proceeds remain unspendable.")
+                                .foregroundStyle(DS.Palette.warningSoft)
+                        }
+                    }
+                }.font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     static func latestActivity(in decisions: [StockSagePaperAutomation.Decision]) -> StockSagePaperAutomation.Decision? {
         decisions.last
     }
@@ -358,7 +486,7 @@ struct StockSagePaperAutomationPanel: View {
         return reason.replacingOccurrences(of: " unavailable checks.", with: " incomplete checks.")
     }
 
-    private func settlementDateLabel(_ date: Date) -> String {
+    private static func settlementDateLabel(_ date: Date) -> String {
         var style = Date.FormatStyle(date: .abbreviated, time: .omitted)
         style.timeZone = TimeZone(identifier: "America/New_York")!
         return style.format(date)

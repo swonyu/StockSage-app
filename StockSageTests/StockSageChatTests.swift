@@ -19,6 +19,54 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: ["empty", "fresh", "stale", "deficit", "long-error", "coverage-only"])
+    func renderPaperSummaryFromValuesOnly(state: String) async throws {
+        typealias A = StockSagePaperAutomation
+        let at = try Date("2026-09-09T11:00:00-04:00", strategy: .iso8601)
+        let markAt = at.addingTimeInterval(-10), displayAt = state == "stale" ? at.addingTimeInterval(0.001) : at
+        var book = A.Book()
+        var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
+        if ["fresh", "stale", "long-error"].contains(state) {
+            book.trades = [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98,
+                target: 104, shares: 1, openedAt: at.addingTimeInterval(-60))]
+            quotes["AAPL"] = .init(symbol: "AAPL", price: 100, previousClose: 100,
+                marketTime: markAt, priceSource: .massiveSIP, paperTradeQualified: true)
+        }
+        if state == "deficit" {
+            book.trades = [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98, target: 104,
+                shares: 100, openedAt: at.addingTimeInterval(-60), exitPrice: 100, closedAt: at),
+                .init(symbol: "MSFT", side: .long, entry: 100, stop: 98, target: 104, shares: 1, openedAt: at)]
+            #expect(book.cash == 9900 && book.buyingCash(at: at) == 0 && book.settledCash(at: at) == -100)
+        }
+        if state == "coverage-only" {
+            book.note(action: "Market scan", reason: "Earlier committed scan.", at: at)
+            book.note(action: "Market scan unavailable", reason: "Last committed scan; saved reason retained.", at: at.addingTimeInterval(-60))
+            book.note(action: "Research complete", reason: "Saved cycle evidence; no promised trade.", at: at.addingTimeInterval(-120))
+        }
+        let error = state == "long-error"
+            ? String(repeating: "Synthetic save failure; retained balances do not establish readiness. ", count: 5) : nil
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(book), timestamps = quotes.mapValues(\.marketTime)
+        var heights: [CGFloat] = []
+        for width in [360, 760] {
+            let content = GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    StockSagePaperAutomationPanel.attention(error)
+                    if state != "coverage-only" {
+                        StockSagePaperAutomationPanel.accountSummary(book: book, quotes: quotes, at: displayAt)
+                    }
+                    StockSagePaperAutomationPanel.coverageSummary(book.decisions)
+                }.padding(12)
+            }.padding(16).frame(width: CGFloat(width)).background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+            let size = try await capture(content, name: "stocksage-paper-summary-\(state)-\(width)")
+            #expect(size.width == CGFloat(width) && size.height > 40)
+            heights.append(size.height)
+            #expect(try encoder.encode(book) == before)
+            #expect(quotes.mapValues(\.marketTime) == timestamps)
+        }
+        if state == "long-error" { #expect(heights[0] > heights[1], "Long attention text must wrap at narrow width") }
+    }
+
     @Test(arguments: ["empty", "ordinary", "protective", "global-failure", "opinion-after-fill", "long-no-fill"])
     func renderPaperActivityWithoutAccountAccess(state: String) async throws {
         typealias A = StockSagePaperAutomation

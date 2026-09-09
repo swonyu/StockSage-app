@@ -1,5 +1,57 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac paper summary and clock labels — September 9, verified; not installed
+
+Remaining approved paper-panel items 1/3: errors now precede actions and money;
+settled spending capacity leads the account summary, with deficit, unsettled
+proceeds and scheduled settlements retained. Estimated paper equity reuses the
+existing Book calculation; unavailable marks show no amount/change. Its New York
+calculation time is explicitly not a market timestamp or broker balance.
+
+Reproduced three misleading next-cycle states through the real Mac caller:
+missing prior scan evidence can make research immediately due, and expired cycle
+times were still presented as appointments. The UI now uses actual researchDue,
+conditional earliest-start wording, and the existing clock. Overdue paused exits
+explicitly say checks are paused. No assumed closing fill. Dated coverage/cycle
+summaries use original committed reasons and truthful recent-history absence;
+coverage and static policies use native disclosures, outside the refreshed history.
+Loaded-book guard, actions, engine/money/risk/cadence and non-Mac behavior unchanged.
+
+Behavioral RED: 91 tests/2 suites/10.394s, three issues, exec28835 exit65.
+Focused GREEN: 95/2/10.531s, exec28017 exit0. Twelve native360/760 captures
+inspected: empty/fresh/stale/deficit/long-error/coverage-only, no clipping found.
+Synthetic Book and quote timestamps unchanged. Real helper tests cover freshness,
+settlement, due clocks, normal/early cutoff and paused overdue states. Final source
+reviews found no must-fix. No live account singleton in fixtures.
+
+FullMac: **2,074 tests/200 suites/117.632s**, TEST SUCCEEDED. Strict Mac emission
+74s and test-source typecheck102s; exec68704 aggregate exit0:
+macos=OK ios=SKIP tests=OK. Same three opt-in exclusions; iOS skipped under
+September9 pause. Frozen372-source manifest
+b312fb361b1d3556e247bbfedaa69997558bf6ed0572b02f2f6e43970d49fec0.
+All372 sources rechecked; exact64-entry retained candidate matches tested bundle
+and deep strict signature verification passed; dylib
+6ae0c02f5f91ab0d219fa3c55120704cedc59482b7b9791e2936b434ca90a227.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/PAPER_SUMMARY.md`;
+same root holds captures/logs/xcresults/plan/manifest/checker and
+candidate-paper-summary/StockSageX.app. Parent sole writer/tester/installer.
+
+Not installed: restart/clear hold remains. No probes, pushes, paid resources,
+historical edits, model calls, real orders or IBKR relay changes. Day101/manual500
+unchanged. Live timer ticking, integrated loaded/unloaded transitions, expanded
+settlements, keyboard/VoiceOver, alternate accessibility and iOS unverified.
+Installed dylib remains84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef;
+no StockSageX process observed after test host exit, cause unknown. Qwen2120 is
+present, not health-tested; paper flag0. No claim session-only results survived.
+
+All reviewers closed. Next current-source intake: existing settlement uses later
+qualified trades plus assumed10bps, not NBBO-side/size/partial fills. Those are
+execution-model changes, not a reproduced defect or completed work. Smallest
+behavior-preserving check: replay the existing two-symbol cash-recheck batch after
+Book JSON round-trip, asserting trades/decision IDs/pending/cash unchanged. Parent
+verified that the current test round-trips but does not replay; no new defect
+claimed. Paper-panel plan items1–3 now addressed; do not repeat this UI pass.
+
 ## Mac paper requests and dated activity — September 9, verified; not installed
 
 Reproduced actual latest-decision selector hiding a newer ticker-less Qwen failure

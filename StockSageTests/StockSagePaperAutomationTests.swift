@@ -7,6 +7,18 @@ struct StockSagePaperAutomationTests {
     typealias A = StockSagePaperAutomation
     private let now = Date(timeIntervalSince1970: 1_788_886_800) // 2026-09-08, US regular session.
     #if os(macOS)
+    @Test func paperResearchTimingUsesActualDuePredicate() throws {
+        let start = try Date("2026-09-09T15:00:00Z", strategy: .iso8601)
+        var book = A.Book(); book.lastResearch = start
+        let due = "Research due; waiting for monitor and eligible data."
+        #expect(A.researchDue(book: book, at: start))
+        #expect(StockSagePaperAutomationPanel.researchTiming(book: book, at: start, running: true, researching: false) == due)
+        book.note(action: "Market scan", reason: "Synthetic scan", at: start)
+        for offset in [900.0, 1200] {
+            #expect(StockSagePaperAutomationPanel.researchTiming(book: book, at: start.addingTimeInterval(offset), running: true, researching: false) == due)
+        }
+    }
+
     @Test func paperLatestActivityIncludesGlobalFailure() throws {
         var book = A.Book()
         book.note(symbol: "AAPL", action: "Buy", reason: "Synthetic opinion", at: now)
@@ -30,6 +42,58 @@ struct StockSagePaperAutomationTests {
     }
 
     #if os(macOS)
+    @Test func paperResearchTimingBoundaryAndStatePrecedence() throws {
+        let start = try Date("2026-09-09T11:00:00-04:00", strategy: .iso8601)
+        var book = A.Book(); book.lastResearch = start
+        book.note(action: "Market scan", reason: "Synthetic scan", at: start)
+        for offset in [899.0, 899.999] {
+            let text = try #require(StockSagePaperAutomationPanel.researchTiming(book: book,
+                at: start.addingTimeInterval(offset), running: true, researching: false))
+            #expect(text.hasPrefix("Earliest next cycle: ") && text.hasSuffix(" · while awake, connected and in session"))
+        }
+        var never = book; never.lastResearch = nil
+        #expect(StockSagePaperAutomationPanel.researchTiming(book: never, at: start, running: true, researching: false)
+            == "Research due; waiting for monitor and eligible data.")
+        for (running, researching) in [(false, false), (true, true), (false, true)] {
+            #expect(StockSagePaperAutomationPanel.researchTiming(book: book, at: start.addingTimeInterval(-1),
+                running: running, researching: researching) == nil)
+        }
+        let closed = try Date("2026-09-09T20:00:00-04:00", strategy: .iso8601)
+        #expect(StockSagePaperAutomationPanel.researchTiming(book: book, at: closed, running: true, researching: false) == nil)
+        book.lastResearch = closed.addingTimeInterval(1)
+        let warning = try #require(StockSagePaperAutomationPanel.researchTiming(book: book, at: closed, running: true, researching: false))
+        #expect(warning.localizedCaseInsensitiveContains("clock") && !warning.hasPrefix("Earliest next cycle: "))
+    }
+
+    @Test func paperSummaryMarksAgeWithoutRefreshingQuotesOrSettlementHistory() throws {
+        let at = try Date("2026-09-09T11:00:00-04:00", strategy: .iso8601)
+        let held = A.Book(trades: [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98,
+            target: 104, shares: 1, openedAt: at.addingTimeInterval(-60))])
+        let sold = A.Book(trades: [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98,
+            target: 104, shares: 1, openedAt: at.addingTimeInterval(-60), exitPrice: 110, closedAt: at)])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode([held, sold]), q = quote(at: at)
+        #expect(held.equity(quotes: ["AAPL": q], at: at.addingTimeInterval(10)) == 9999.9)
+        #expect(held.equity(quotes: ["AAPL": q], at: at.addingTimeInterval(10.001)) == nil)
+        #expect(held.equity(quotes: [:], at: at) == nil && A.Book().equity(quotes: [:], at: at) == 10_000)
+        let due = try #require(A.settlementDate(forSaleAt: at))
+        #expect(sold.buyingCash(at: due.addingTimeInterval(-1)) == 9900 && sold.unsettledProceeds(at: due.addingTimeInterval(-1)) == 110)
+        #expect(sold.buyingCash(at: due) == 10_010 && sold.unsettledProceeds(at: due) == 0)
+        #expect(sold.equity(quotes: [:], at: due.addingTimeInterval(-1)) == sold.equity(quotes: [:], at: due))
+        #expect(try encoder.encode([held, sold]) == before && q.marketTime == at)
+    }
+
+    @Test(arguments: ["2026-09-09T19:55:00-04:00", "2026-11-27T16:55:00-05:00"])
+    func paperCloseOutWarningTracksCutoffsAndRetainedHoldings(_ iso: String) throws {
+        let at = try Date(iso, strategy: .iso8601)
+        let book = A.Book(trades: [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98,
+            target: 104, shares: 1, openedAt: at.addingTimeInterval(-3600))])
+        #expect(StockSagePaperAutomationPanel.closeOutWarning(book: book, at: at.addingTimeInterval(-1), running: true) == nil)
+        #expect(StockSagePaperAutomationPanel.closeOutWarning(book: book, at: at, running: true) != nil)
+        #expect(StockSagePaperAutomationPanel.closeOutWarning(book: book, at: at, running: false)?.localizedCaseInsensitiveContains("exit checks are paused") == true)
+        #expect(StockSagePaperAutomationPanel.closeOutWarning(book: book, at: at.addingTimeInterval(23 * 3600), running: true) != nil)
+    }
+
     @Test func paperActivityCommitOrderAndExactNoFillActions() throws {
         let at = try Date("2026-09-09T10:00:00-04:00", strategy: .iso8601)
         let actions = ["Unavailable", "Skipped", "Expired", "Cancelled", "Buy", "Strong Buy", "Paper Buy",
