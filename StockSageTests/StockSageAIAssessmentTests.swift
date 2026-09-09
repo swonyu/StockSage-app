@@ -257,4 +257,43 @@ struct StockSageAIAssessmentTests {
         #expect(!c.facts.joined().contains("999999"))
         #expect(A.parse(json.replacingOccurrences(of: "could support ORCL", with: "will reach 999999"), facts: c.facts) == nil)
     }
+
+    @Test func invalidReplyReportsSpecificFailureWithoutRawText() async {
+        let state = StockSageAIAssessments()
+        await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in
+            "SECRET malformed reply"
+        }
+        #expect(state.records.isEmpty)
+        #expect(state.errors["ORCL"]?.contains("validation=malformedJSON") == true)
+        #expect(state.errors["ORCL"]?.contains("SECRET") == false)
+    }
+
+    @Test func detailedFailuresAndRepairKeepSafeMetadata() async {
+        typealias S = StockSageLocalModelServer
+        let initial = StockSageAIAssessments()
+        await initial.assess(context, config: config, now: now, stillValid: { true }, generateDetailed: { _, _ in
+            .failure(.init(diagnostic: .init(category: .timeout)))
+        })
+        #expect(initial.records.isEmpty && initial.activeSymbol == nil)
+        #expect(initial.errors["ORCL"]?.contains("server=timeout") == true)
+        let draft = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible."}"#
+        let changed = #"{"action":"Buy","reason":"Outlook mixed.","risk":"Loss possible.","evidence":["F1"]}"#
+        let invalid = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible.","evidence":["F999"]}"#
+        let outcomes: [(S.CompletionResult, String)] = [
+            (.failure(.init(diagnostic: .init(category: .cancelled))), "server=cancelled"),
+            (.success(.init(text: changed, diagnostic: .init(finish: .stop))), "validation=changedOpinion"),
+            (.success(.init(text: invalid, diagnostic: .init(finish: .tokenLimit))), "validation=unknownEvidence")]
+        for (reply, expected) in outcomes {
+            let state = StockSageAIAssessments()
+            var calls = 0
+            await state.assess(context, config: config, now: now, stillValid: { true }, generateDetailed: { _, _ in
+                calls += 1
+                return calls == 1 ? .success(.init(text: draft, diagnostic: .init())) : reply
+            })
+            #expect(calls == 2 && state.records.isEmpty && state.activeSymbol == nil)
+            #expect(state.drafts["ORCL"]?.text == draft)
+            #expect(state.errors["ORCL"]?.contains(expected) == true)
+        }
+    }
+
 }

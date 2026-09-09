@@ -136,35 +136,52 @@ enum StockSageAIAssessment {
         facts.enumerated().map { "F\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
     }
 
+    nonisolated enum ValidationFailure: String, Error, Sendable {
+        case oversizedText, emptyFacts, invalidLeadCount, malformedJSON, schema, action, fieldType
+        case emptyEvidence, tooManyEvidence, duplicateEvidence, unknownEvidence
+        case emptyProse, oversizedProse, bracketContent, nonASCIINumber, unknownReference, foreignNumber
+        case referencePattern, changedOpinion
+    }
+
     nonisolated static func parse(_ text: String, facts: [String], leadCount: Int = 0) -> Verdict? {
-        guard text.utf8.count <= 4_000, !facts.isEmpty, (0...3).contains(leadCount),
-              let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
-              Set(obj.keys) == ["action", "reason", "risk", "evidence"],
-              let raw = obj["action"] as? String, let action = TradeAdvice.Action(rawValue: raw),
-              let reason = obj["reason"] as? String, let risk = obj["risk"] as? String,
-              let evidence = obj["evidence"] as? [String], !evidence.isEmpty, evidence.count <= facts.count,
-              Set(evidence).count == evidence.count else { return nil }
+        try? validate(text, facts: facts, leadCount: leadCount).get()
+    }
+
+    /// Same guards, order and output as the optional parser; failures contain no input strings.
+    nonisolated static func validate(_ text: String, facts: [String], leadCount: Int = 0) -> Swift.Result<Verdict, ValidationFailure> {
+        guard text.utf8.count <= 4_000 else { return .failure(.oversizedText) }
+        guard !facts.isEmpty else { return .failure(.emptyFacts) }
+        guard (0...3).contains(leadCount) else { return .failure(.invalidLeadCount) }
+        guard let json = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else { return .failure(.malformedJSON) }
+        guard let obj = json as? [String: Any] else { return .failure(.schema) }
+        guard Set(obj.keys) == ["action", "reason", "risk", "evidence"] else { return .failure(.schema) }
+        guard let raw = obj["action"] as? String, let action = TradeAdvice.Action(rawValue: raw) else { return .failure(.action) }
+        guard let reason = obj["reason"] as? String, let risk = obj["risk"] as? String,
+              let evidence = obj["evidence"] as? [String] else { return .failure(.fieldType) }
+        guard !evidence.isEmpty else { return .failure(.emptyEvidence) }
+        guard evidence.count <= facts.count else { return .failure(.tooManyEvidence) }
+        guard Set(evidence).count == evidence.count else { return .failure(.duplicateEvidence) }
         let offered = Set(facts.indices.map { "F\($0 + 1)" })
         let cited = Set(evidence)
-        guard cited.isSubset(of: offered) else { return nil }
+        guard cited.isSubset(of: offered) else { return .failure(.unknownEvidence) }
         // ponytail: selected-fact numeric membership, not subject/sign/unit entailment.
         // Typed source-bound claims are needed to validate meaning within a cited fact.
         let citedFacts = facts.enumerated().filter { cited.contains("F\($0.offset + 1)") }.map(\.element)
         let references = cited.union((0..<leadCount).map { "W\($0 + 1)" })
-        guard let referencePattern = try? NSRegularExpression(pattern: #"\b[FW][0-9]+\b"#) else { return nil }
+        guard let referencePattern = try? NSRegularExpression(pattern: #"\b[FW][0-9]+\b"#) else { return .failure(.referencePattern) }
         for value in [reason, risk] {
-            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.count <= 600,
-                  !value.contains("["), !value.contains("]"), !value.contains("<"), !value.contains(">"),
-                  value.allSatisfy({ !$0.isNumber || $0.isASCII }) else { return nil }
-            // Validate reference identities separately; their digits are not financial claims.
+            guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .failure(.emptyProse) }
+            guard value.count <= 600 else { return .failure(.oversizedProse) }
+            guard !value.contains("["), !value.contains("]"), !value.contains("<"), !value.contains(">") else { return .failure(.bracketContent) }
+            guard value.allSatisfy({ !$0.isNumber || $0.isASCII }) else { return .failure(.nonASCIINumber) }
             let numericText = NSMutableString(string: value)
             for match in referencePattern.matches(in: value, range: NSRange(location: 0, length: numericText.length)).reversed() {
-                guard references.contains((value as NSString).substring(with: match.range)) else { return nil }
+                guard references.contains((value as NSString).substring(with: match.range)) else { return .failure(.unknownReference) }
                 numericText.replaceCharacters(in: match.range, with: "reference")
             }
-            guard !StockSageCatalystNarrator.introducesForeignNumbers(numericText as String, facts: citedFacts) else { return nil }
+            guard !StockSageCatalystNarrator.introducesForeignNumbers(numericText as String, facts: citedFacts) else { return .failure(.foreignNumber) }
         }
-        return Verdict(action: action, reason: reason, risk: risk, evidence: evidence)
+        return .success(Verdict(action: action, reason: reason, risk: risk, evidence: evidence))
     }
 
     /// Repair only the observed schema omission, never invalid claims or a different action.
@@ -254,20 +271,33 @@ final class StockSageAIAssessments: ObservableObject {
                   let current = store.ideas.first(where: { $0.symbol == idea.symbol }) else { return false }
             return context.matches(idea: current, earnings: store.catalystChain[idea.symbol],
                                    company: store.companyEventChecks[idea.symbol] ?? [:])
-        }) { config, prompt in
+        }, generateDetailed: { config, prompt in
             let probe = await StockSageLocalModelServer.probe(config)
-            guard !Task.isCancelled, Self.configuration == config, probe.reachable, probe.hasModel else { return nil }
-            let reply = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
+            guard !Task.isCancelled, Self.configuration == config, probe.reachable, probe.hasModel else {
+                let category: StockSageLocalModelServer.FailureCategory = Task.isCancelled ? .cancelled
+                    : (Self.configuration != config ? .invalidConfig : (!probe.reachable ? .unavailable : .modelMissing))
+                return .failure(.init(diagnostic: .init(category: category)))
+            }
+            return await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
                 system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240)
-            if case .success(let text) = reply { return text }
-            return nil
-        }
+        })
     }
 
     /// Same production seam used by tests; injected completion avoids real networks/model loads.
     func assess(_ context: StockSageAIAssessment.Context, config: StockSageLocalModelServer.Config,
                 now: Date, stillValid: () -> Bool,
                 generate: (StockSageLocalModelServer.Config, String) async -> String?) async {
+        await assess(context, config: config, now: now, stillValid: stillValid, generateDetailed: { config, prompt in
+            guard let text = await generate(config, prompt) else {
+                return .failure(.init(diagnostic: .init(category: .unavailable)))
+            }
+            return .success(.init(text: text, diagnostic: .init(textBytes: StockSageLocalModelServer.boundedCount(text.utf8.count))))
+        })
+    }
+
+    func assess(_ context: StockSageAIAssessment.Context, config: StockSageLocalModelServer.Config,
+                now: Date, stillValid: () -> Bool,
+                generateDetailed: (StockSageLocalModelServer.Config, String) async -> StockSageLocalModelServer.CompletionResult) async {
         let symbol = context.idea.symbol
         guard activeSymbol == nil, !Task.isCancelled, stillValid() else { return }
         guard context.canAssess(at: now) else {
@@ -280,7 +310,8 @@ final class StockSageAIAssessments: ObservableObject {
         defer { activeSymbol = nil }
         let facts = context.facts
         // Group claims remain OUTSIDE facts: their numbers cannot whitelist an unsupported assertion.
-        let text = await generate(config, StockSageAIAssessment.prompt(facts: facts) + "\n\n" + (context.research?.prompt ?? ""))
+        let reply = await generateDetailed(config, StockSageAIAssessment.prompt(facts: facts) + "\n\n" + (context.research?.prompt ?? ""))
+        let text = try? reply.get().text
         guard !Task.isCancelled else { return }
         if let text {
             if drafts.count >= 100, drafts[symbol] == nil,
@@ -289,23 +320,28 @@ final class StockSageAIAssessments: ObservableObject {
                 text: text.count <= 8_000 ? text : String(text.prefix(8_000)) + "\n[Display truncated at 8,000 characters]")
         }
         guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
-        guard let text else { errors[symbol] = "Local model unavailable or request failed; reassess when it is reachable."; return }
+        guard let text else {
+            if case .failure(let failure) = reply { errors[symbol] = "Local model request failed; " + failure.diagnostic.summary }
+            return
+        }
         let leadCount = context.research?.messages.count ?? 0
-        var verdict = StockSageAIAssessment.parse(text, facts: facts, leadCount: leadCount)
+        let validation = StockSageAIAssessment.validate(text, facts: facts, leadCount: leadCount)
+        var verdict = try? validation.get()
         if verdict == nil, let repair = StockSageAIAssessment.evidenceRepairPrompt(text, facts: facts, leadCount: leadCount) {
             // ponytail: one schema-only repair, no retry loop or opinion changes; failed checks leave a visible draft.
-            let repaired = await generate(config, repair)
+            let repairedReply = await generateDetailed(config, repair)
+            let repaired = try? repairedReply.get().text
             guard !Task.isCancelled else { return }
             guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
             guard let repaired, let candidate = StockSageAIAssessment.parse(repaired, facts: facts, leadCount: leadCount),
                   StockSageAIAssessment.preservesOpinion(candidate, draft: text) else {
-                errors[symbol] = "Unverified draft: Qwen omitted evidence references, and its one format-repair attempt did not supply valid references without changing the opinion."
+                errors[symbol] = "Unverified draft: evidence repair failed; " + Self.failureSummary(repairedReply, facts: facts, leadCount: leadCount, draft: text)
                 return
             }
             verdict = candidate
         }
         guard let verdict else {
-            errors[symbol] = "Unverified draft: invalid action, evidence reference, format or unsupported number. The model's text is visible below; it is not a validated badge."
+            errors[symbol] = "Unverified draft: " + Self.failureSummary(reply, facts: facts, leadCount: leadCount)
             return
         }
         if records.count >= 100, records[symbol] == nil, let oldest = records.min(by: { $0.value.at < $1.value.at })?.key {
@@ -314,4 +350,22 @@ final class StockSageAIAssessments: ObservableObject {
         records[symbol] = .init(context: context, verdict: verdict, config: config, at: now)
         drafts[symbol] = nil
     }
+
+    /// Safe error-path formatter; finish=tokenLimit is evidence of stopping, not proof of why validation failed.
+    static func failureSummary(_ reply: StockSageLocalModelServer.CompletionResult,
+                               facts: [String], leadCount: Int, draft: String? = nil) -> String {
+        switch reply {
+        case .failure(let failure): return failure.diagnostic.summary
+        case .success(let completion):
+            let category: String
+            switch StockSageAIAssessment.validate(completion.text, facts: facts, leadCount: leadCount) {
+            case .failure(let failure): category = failure.rawValue
+            case .success(let verdict):
+                category = draft.map { StockSageAIAssessment.preservesOpinion(verdict, draft: $0) } == false
+                    ? StockSageAIAssessment.ValidationFailure.changedOpinion.rawValue : "accepted"
+            }
+            return "validation=\(category) " + completion.diagnostic.summary
+        }
+    }
+
 }
