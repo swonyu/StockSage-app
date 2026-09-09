@@ -49,13 +49,13 @@ struct StockSageResearchModesPanel: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(horizon.rawValue) · research only").font(.headline)
-                        Text("One full-US-market pass. No paper positions or real orders.").font(.callout).foregroundStyle(.secondary)
+                        Text("Up to \(StockSageHorizonResearch.scanLimit) US listings · one pass. No paper positions or real orders.").font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if research.running == horizon {
                         Button("Stop scan", systemImage: "stop.fill") { research.stop() }
                     } else {
-                        Button(scan.at == nil ? "Run US-market scan" : "Run again", systemImage: "play.fill") {
+                        Button(scan.at == nil ? "Run \(StockSageHorizonResearch.scanLimit)-stock scan" : "Run again", systemImage: "play.fill") {
                             selected = nil
                             research.start(horizon, store: store)
                         }.buttonStyle(.borderedProminent).disabled(research.running != nil)
@@ -72,7 +72,7 @@ struct StockSageResearchModesPanel: View {
                     Text("Started \(at.formatted(date: .abbreviated, time: .shortened)) · \(scan.results.count)/\(scan.listings.count) listings checked")
                         .font(.caption).monospacedDigit()
                 }
-                Text("All active US listings returned by Massive, including ETFs and other listed stock-market instruments; no OTC. No watchlist, price or 101-name cap. One manual worker protects local-model capacity; thousands of checks can take hours. Results stay in this app session, including when you switch modes. A new run replaces this horizon’s results.")
+                Text("First \(StockSageHorizonResearch.scanLimit) active US listings in Massive’s alphabetical directory, including ETFs and other listed stock-market instruments; no OTC. This is a size limit, not a best-stock ranking or the S&P 500. One manual worker checks them in order. Results stay in this app session; a new run replaces this horizon’s results.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     TextField("Find a symbol or company", text: $search).textFieldStyle(.roundedBorder)

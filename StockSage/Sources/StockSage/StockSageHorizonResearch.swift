@@ -5,6 +5,7 @@ import Combine
 @MainActor
 final class StockSageHorizonResearch: ObservableObject {
     static let shared = StockSageHorizonResearch()
+    static let scanLimit = 500
     nonisolated enum Horizon: String, CaseIterable, Identifiable, Sendable {
         case week = "1–7 trading days", fortnight = "7–14 trading days"
         var id: String { rawValue }
@@ -48,7 +49,7 @@ final class StockSageHorizonResearch: ObservableObject {
     struct Scan {
         var listings: [Listing] = []
         var results: [String: Result] = [:]
-        var status = "Press Run to research the US market once."
+        var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) US listings once."
         var at: Date?
     }
     @Published private(set) var scans: [Horizon: Scan] = [:]
@@ -168,17 +169,19 @@ final class StockSageHorizonResearch: ObservableObject {
                analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
         guard task == nil, allowed() else { return false }
         running = horizon
-        scans[horizon] = Scan(status: "Loading the full US listing directory…", at: Date())
+        scans[horizon] = Scan(status: "Loading US directory · research capped at \(Self.scanLimit)…", at: Date())
         task = Task {
             defer { activeSymbol = nil; running = nil; task = nil }
             @MainActor func valid() -> Bool { !Task.isCancelled && allowed() }
             do {
-                let names = try await universe()
+                let directory = try await universe()
                 guard valid() else { throw CancellationError() }
-                guard Set(names.map(\.ticker)).count == names.count, names.count <= 50_000 else { throw URLError(.cannotParseResponse) }
+                guard Set(directory.map(\.ticker)).count == directory.count, directory.count <= 50_000 else { throw URLError(.cannotParseResponse) }
+                // Preserve directory order; this cap is not an investment ranking or an index.
+                let names = Array(directory.prefix(Self.scanLimit))
                 scans[horizon]?.listings = names
                 // ponytail: one manual worker limits additional local-model load while the independent
-                // four-worker day scanner runs. A full-market pass can take hours; no automatic repeat.
+                // four-worker day scanner runs. No automatic repeat; parallelize only if model capacity allows.
                 for item in names {
                     guard valid() else { throw CancellationError() }
                     activeSymbol = item.ticker

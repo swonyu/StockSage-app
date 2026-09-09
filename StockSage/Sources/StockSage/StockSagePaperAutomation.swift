@@ -365,6 +365,7 @@ final class StockSagePaperAutomation: ObservableObject {
     static func fetchPaperQuotes(for symbols: [String], after: [String: Date] = [:], at fixedTime: Date? = nil,
         maximumAge: TimeInterval = StockSageLiveStream.maximumLiveAge,
         externalAllowed: @escaping @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
+        received: @escaping @MainActor (StockSageQuoteService.LiveQuote) -> Void = { _ in },
         snapshots: @MainActor ([String]) async -> [String: StockSageQuoteService.LiveQuote] = { _ in [:] },
         tick: @escaping @MainActor (String, Date) async -> StockSageQuoteService.LiveQuote? = { await StockSageMassiveTicks.freshPaperQuote(symbol: $0, now: $1) }
     ) async -> [String: StockSageQuoteService.LiveQuote] {
@@ -380,9 +381,11 @@ final class StockSagePaperAutomation: ObservableObject {
             guard externalAllowed(), !Task.isCancelled else { return }
             if let q = snapshots[symbol], eligible(q, symbol: symbol) {
                 result[symbol] = q
+                received(q)
             } else if let q = await tick(symbol, fixedTime ?? Date()),
                       externalAllowed(), !Task.isCancelled, eligible(q, symbol: symbol) {
                 result[symbol] = q
+                received(q)
             }
         }
         // A sibling request may finish after permission was revoked; discard the entire batch.
@@ -678,25 +681,14 @@ final class StockSagePaperAutomation: ObservableObject {
                 : "Session closed with unresolved paper positions; no closing prices invented. Exits retry next session."
             return
         }
-        let held = Array(Set(book.open.map(\.symbol) + book.pending.map(\.symbol))).sorted()
-        let after = Dictionary(uniqueKeysWithValues: book.pending.map { ($0.symbol, $0.at) })
-        let latest = await Self.fetchPaperQuotes(for: held, after: after)
-        guard !Task.isCancelled, isRunning else { return }
+        let run = generation
+        let polled = await pollPositions(allowed: { self.isRunning && self.generation == run
+            && ToolPolicy.isExternalAllowed && !store.isSampleData })
+        guard !Task.isCancelled, isRunning, generation == run else { return }
         guard ToolPolicy.isExternalAllowed, !store.isSampleData else {
             status = "Waiting: web access or usable market data unavailable"; return
         }
-        quotes = latest
-        // Do not mis-account for a possible split as a giant profit/loss. No split-factor guessing.
-        if book.open.contains(where: { t in
-            guard let q = latest[t.symbol], Self.fresh(q, at: Date()) else { return false }
-            return q.price / t.entry < 0.67 || q.price / t.entry > 1.5
-        }) {
-            stop(); error = "Large price/basis change: review possible corporate actions before restarting the simulation."; return
-        }
-        next = book
-        let before = next.decisions.count
-        next.settle(quotes: latest, at: Date())
-        if next.decisions.count != before, !save(next) { return }
+        guard polled else { return }
         if !isResearching, Self.entryWindowOpen(Date()), Self.researchDue(book: book, at: Date()) {
             scheduleResearch { [weak self] in await self?.researchCycle(store: store) }
         }
@@ -704,6 +696,46 @@ final class StockSagePaperAutomation: ObservableObject {
             status = Self.entryWindowOpen(Date()) ? "Monitoring paper positions; waiting for the next research cycle"
                 : "Same-day close-out: new entries stopped; \(book.open.count) positions awaiting eligible exits"
         }
+    }
+
+    /// Process held-position observations as they arrive; new buys retain aggregate ordering.
+    /// A later sibling basis warning pauses remaining work, never rewrites an already saved exit.
+    func pollPositions(allowed: @escaping @MainActor () -> Bool, at fixedTime: Date? = nil,
+        tick: @escaping @MainActor (String, Date) async -> StockSageQuoteService.LiveQuote? = {
+            await StockSageMassiveTicks.freshPaperQuote(symbol: $0, now: $1)
+        }) async -> Bool {
+        var healthy = true
+        let active = { @MainActor in healthy && allowed() && !Task.isCancelled }
+        guard active() else { return false }
+        let held = Array(Set(book.open.map(\.symbol) + book.pending.map(\.symbol))).sorted()
+        let identities = Dictionary(uniqueKeysWithValues: book.open.map { ($0.symbol, $0.id) })
+        let after = Dictionary(uniqueKeysWithValues: book.pending.map { ($0.symbol, $0.at) })
+        let latest = await Self.fetchPaperQuotes(for: held, after: after, at: fixedTime,
+            externalAllowed: active, received: { q in
+                guard active(), let original = identities[q.symbol],
+                      self.book.open.contains(where: { $0.id == original && $0.symbol == q.symbol }),
+                      !self.book.pending.contains(where: { $0.symbol == q.symbol && $0.buy }) else { return }
+                healthy = self.applyPositionQuotes([q.symbol: q], at: fixedTime ?? Date())
+            }, tick: tick)
+        guard active() else { return false }
+        quotes = latest
+        return applyPositionQuotes(latest, at: fixedTime ?? Date())
+    }
+
+    private func applyPositionQuotes(_ latest: [String: StockSageQuoteService.LiveQuote], at now: Date) -> Bool {
+        // The existing per-holding split/basis guard applies before any trigger or fill.
+        if book.open.contains(where: { t in
+            guard let q = latest[t.symbol], Self.fresh(q, at: now) else { return false }
+            return q.price / t.entry < 0.67 || q.price / t.entry > 1.5
+        }) {
+            stop(); error = "Large price/basis change: review possible corporate actions before restarting the simulation."
+            return false
+        }
+        quotes.merge(latest) { _, new in new }
+        var next = book
+        let before = next.decisions.count
+        next.settle(quotes: latest, at: now)
+        return next.decisions.count == before || save(next)
     }
 
     private func researchCycle(store: StockSageStore) async {

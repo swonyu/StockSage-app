@@ -109,6 +109,126 @@ struct StockSagePaperAutomationTests {
         #expect(book.pending.map(\.symbol) == ["AAPL"])
     }
 
+    @Test func readyExitDoesNotWaitForSlowPeerQuote() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "monitor-arrival-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let url = root.appendingPathComponent("account.json")
+        let state = A(url: url, defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        try #require(state.acquire())
+        var seeded = A.Book()
+        seeded.propose(symbol: "AAPL", action: .buy, at: now)
+        seeded.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(1))
+        seeded.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(2))
+        seeded.propose(symbol: "MSFT", action: .buy, at: now.addingTimeInterval(2))
+        try #require(state.save(seeded))
+        let originalID = try #require(seeded.open.first?.id)
+        let observedAt = now.addingTimeInterval(4)
+        var suspended: CheckedContinuation<Void, Never>?
+        var fastReturned = false
+        let work = Task { @MainActor in
+            let completed = await state.pollPositions(allowed: { true }, at: observedAt,
+                tick: { symbol, _ in
+                    if symbol == "MSFT" { await withCheckedContinuation { suspended = $0 } }
+                    else { fastReturned = true }
+                    return quote(symbol, price: 101, at: observedAt)
+                })
+            #expect(completed)
+        }
+        for _ in 0..<100 {
+            if suspended != nil && fastReturned { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(suspended != nil && fastReturned)
+        #expect(state.book.trades.first(where: { $0.id == originalID })?.isOpen == false,
+                "A ready later exit observation must be saved before the slow sibling returns")
+        #expect(!state.book.open.contains(where: { $0.symbol == "MSFT" }))
+        suspended?.resume(); suspended = nil
+        await work.value
+        #expect(state.book.decisions.filter { $0.action == "Paper Sell" && $0.symbol == "AAPL" }.count == 1)
+        #expect(state.book.trades.first?.id == originalID)
+        let saved = try JSONDecoder().decode(A.Book.self, from: Data(contentsOf: url))
+        #expect(saved.trades == state.book.trades && saved.valid)
+    }
+
+    @Test(arguments: [false, true])
+    func retiredMonitorCannotPublishOrOverwriteInterveningBook(cancel: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "retired-monitor-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let url = root.appendingPathComponent("account.json")
+        let state = A(url: url, defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        try #require(state.acquire())
+        var seeded = A.Book()
+        seeded.propose(symbol: "AAPL", action: .buy, at: now)
+        seeded.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(1))
+        seeded.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(2))
+        try #require(state.save(seeded))
+        var allowed = true
+        var suspended: CheckedContinuation<Void, Never>?
+        let work = Task { @MainActor in
+            await state.pollPositions(allowed: { allowed }, at: now.addingTimeInterval(4), tick: { _, at in
+                await withCheckedContinuation { suspended = $0 } // Deliberately ignores cancellation until released.
+                return quote(at: at)
+            })
+        }
+        for _ in 0..<100 {
+            if suspended != nil { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(suspended != nil)
+        if cancel { work.cancel() } else { allowed = false }
+        state.recordFailure("Intervening synthetic research record", at: now.addingTimeInterval(3))
+        let before = try Data(contentsOf: url)
+        suspended?.resume(); suspended = nil
+        let completed = await work.value
+        #expect(!completed && state.quotes.isEmpty && state.book.open.count == 1)
+        #expect(try Data(contentsOf: url) == before)
+    }
+
+    @Test func laterBasisWarningStopsRemainingWorkWithoutRewritingCompletedExit() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "monitor-basis-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let state = A(url: root.appendingPathComponent("account.json"), defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        try #require(state.acquire())
+        var seeded = A.Book()
+        for symbol in ["AAPL", "MSFT"] {
+            seeded.propose(symbol: symbol, action: .buy, at: now)
+            seeded.settle(quotes: [symbol: quote(symbol, at: now.addingTimeInterval(1))], at: now.addingTimeInterval(1))
+        }
+        seeded.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(2))
+        seeded.propose(symbol: "NVDA", action: .buy, at: now.addingTimeInterval(2))
+        try #require(state.save(seeded))
+        var suspended: CheckedContinuation<Void, Never>?
+        var buyReturned = false
+        let work = Task { @MainActor in
+            await state.pollPositions(allowed: { true }, at: now.addingTimeInterval(4), tick: { symbol, at in
+                if symbol == "MSFT" { await withCheckedContinuation { suspended = $0 } }
+                if symbol == "NVDA" { buyReturned = true }
+                return quote(symbol, price: symbol == "MSFT" ? 200 : 100, at: at)
+            })
+        }
+        for _ in 0..<100 {
+            if suspended != nil && buyReturned && !state.book.open.contains(where: { $0.symbol == "AAPL" }) { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(suspended != nil && buyReturned)
+        #expect(!state.book.open.contains(where: { $0.symbol == "AAPL" }))
+        #expect(!state.book.open.contains(where: { $0.symbol == "NVDA" })) // No early buy.
+        let exited = state.book.trades.first(where: { $0.symbol == "AAPL" })
+        suspended?.resume(); suspended = nil
+        let completed = await work.value
+        #expect(!completed && state.error?.contains("basis change") == true)
+        #expect(state.book.open.map(\.symbol) == ["MSFT"] && state.book.pending.isEmpty)
+        #expect(state.book.trades.first(where: { $0.symbol == "AAPL" }) == exited)
+        #expect(state.book.decisions.filter { $0.action == "Paper Sell" }.count == 1)
+        #expect(state.quotes["MSFT"] == nil)
+    }
+
     @Test func unqualifiedSnapshotCannotBypassTradeChecksOrSettle() async throws {
         // The display snapshot preserves price/time, not condition/event-clock qualification.
         for condition in [NSNull(), [999_999]] as [Any] {

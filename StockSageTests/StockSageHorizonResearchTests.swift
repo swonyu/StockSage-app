@@ -150,6 +150,25 @@ import Testing
         try await Task.sleep(for: .milliseconds(10))
         #expect(seen.count == count) // no timer or automatic repeat
     }
+    @Test(arguments: R.Horizon.allCases)
+    func manualRunCapsDirectoryAt500BeforeResearch(_ horizon: R.Horizon) async throws {
+        let r = R()
+        let names = (0..<13_000).map { listing(String(format: "S%05d", $0)) }
+        var seen: [String] = []
+        let started = r.start(horizon, allowed: { true }, universe: { names }, analyze: { item in
+            seen.append(item.ticker)
+            return .init(note: "Synthetic research only")
+        })
+        #expect(started)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(r.running == nil)
+        #expect(seen.count == 500 && Set(seen).count == 500)
+        #expect(Array(seen.prefix(500)) == names.prefix(500).map(\.ticker))
+        #expect(r.scans[horizon]?.listings.count == 500)
+        #expect(r.scans[horizon]?.results.count == 500)
+        #expect(r.scans[horizon]?.status.contains("500 listings checked once") == true)
+    }
+
     @Test func cancellationOrSettingsChangeCannotPublishLateResult() async throws {
         for cancel in [true, false] {
             let r = R()

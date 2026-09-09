@@ -1,5 +1,52 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## 500-listing manual scans and per-arrival paper exits — September 9, Mac installed
+
+Owner reduced both manual research horizons from the full directory to at most
+500 listings. The shared scheduler caps the existing alphabetical directory
+before publishing rows or making model calls. This is not an investment ranking
+or the S&P 500. Day trading remains 101 total checks; manual runs remain research
+only, once per Run. Full reference validation still precedes selection.
+
+Paper monitoring now processes eligible held-position quotes as they arrive,
+instead of delaying a ready exit behind a slow sibling request. Pending buys
+retain aggregate ordering. Current-book saves, holding identity, generation,
+permission/cancellation, freshness and basis guards remain. A later basis warning
+pauses remaining processing without undoing a valid earlier saved exit. The next
+poll still starts after the bounded batch plus the existing interval; this is
+not a fixed-latency or continuous-stream guarantee. No financial thresholds changed.
+
+Regression evidence: monitor red 54 tests/1 issue/7.741s, green 56/7.279s;
+cap red 11 tests/8 issues/26.570s, green 11/0.168s. Full combined Mac gate passed
+**2,027 tests in 200 suites in 344.283s**, canonical three exclusions retained.
+Strict Mac emit 92s and test typecheck 137s passed, aggregate exit 0:
+`macos=OK ios=SKIP tests=OK`. Exec 83392 completed; no iOS today.
+The source review closed with no must-fix. Source manifest `monitor-500-source.sha256`:
+45a53b487ebc3fb6e27307207546bf08fb4ee3f27b3526f390fd2e234219cf78.
+
+Pre-install native inspection found day paper monitoring already paused
+(`stocksage.qwenPaper.enabled=0`); preserve that state, not earlier enabled=1 notes.
+The old 13,157-listing manual scan was stopped at 60 completed checks for this
+cap change. Its session-only list was cleared by the authorized restart; no new
+manual scan was launched. Normal quit, exclusive-lease backup, exact tested app
+copy and reopen completed. All 64 bundle files/links matched; deep/strict signature
+verified. Paper bytes unchanged during install; all 3 prior trades and 2,186 prior
+decisions matched exactly/in order afterward, 0 pending. App PID 40101, paused
+preference still 0; no paper writer lease while paused. Qwen PID 2120 remains on
+127.0.0.1:8765 unchanged. No push, real orders, IBKR relay or paid resources.
+
+Installed dylib SHA256 84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef.
+Pre-install paper SHA256 3979e2676e366606a4c3b7632e43f67445e28582883f90485725271dbeaead64.
+Both manual tabs were inspected via native AX and window-only screenshots:
+500-copy, Run controls, entry/stop/target headings and paused-monitor status.
+Left the app on 1–7 trading days. No live 500-name/model pass or live exit was
+performed; the bound and per-arrival accounting were exercised offline. CUA
+transport failed; authorized StockSage-only System Events inspection worked.
+
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/MONITOR_500.md`.
+Recoverable prior app: `/Users/saleh/StockSage-release-20260909.hrzqVh/retired-monitor-arrival/StockSageX.app`.
+Consistent paper backup: same release root, `paper-before-monitor-arrival`.
+
 ## Three research modes and price levels — September 9, Mac installed
 
 Owner-approved Chat controls now separate continuous **Day trading** (101 total
