@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// On-tap cited news, never a trading/ranking signal. Massive first, EODHD fallback.
+/// On-tap cited news, never a trading/ranking signal. Massive; EODHD is disabled.
 /// https://massive.com/docs/rest/stocks/news — GET /v2/reference/news; ticker,
 /// published_utc.gte/lte (also verified in the official Python SDK), order/sort/limit.
 /// results[]: published_utc, title, description, article_url, publisher.name, tickers,
@@ -49,6 +49,7 @@ enum StockSageNewsService {
     nonisolated enum Failure: String, Sendable, Equatable {
         case policyDenied = "external access off", cancelled, unsupported, invalidBounds = "invalid bounds"
         case missingKey = "missing key", transport, http, malformed, oversized
+        case providerDisabled = "provider disabled"
     }
     nonisolated enum Status: Sendable, Equatable {
         case answered
@@ -148,7 +149,8 @@ enum StockSageNewsService {
                 break
             }
             guard let req = request(provider) else {
-                attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(.missingKey)))
+                let reason: Failure = provider == .eodhd && !StockSageEODHD.isEnabled ? .providerDisabled : .missingKey
+                attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(reason)))
                 continue
             }
             // Recheck after request construction too; no transport starts after permission revocation.
@@ -192,7 +194,7 @@ enum StockSageNewsService {
     }
 
     nonisolated static func eodhdRequest(symbol: String, key: String, limit: Int) -> URLRequest? {
-        guard StockSageEODHD.covers(symbol), !key.isEmpty, (1...5).contains(limit),
+        guard StockSageEODHD.isEnabled, StockSageEODHD.covers(symbol), !key.isEmpty, (1...5).contains(limit),
               var parts = URLComponents(string: "https://eodhd.com/api/news") else { return nil }
         parts.queryItems = [.init(name: "s", value: StockSageEODHD.eodhdSymbol(symbol)),
                             .init(name: "limit", value: String(limit)), .init(name: "api_token", value: key),

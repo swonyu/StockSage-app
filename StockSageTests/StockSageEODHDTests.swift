@@ -107,17 +107,24 @@ struct StockSageEODHDTests {
         #expect(E.parseRealTime(j, requestedSymbol: "X") == nil)
     }
 
-    @Test("a Settings override replaces the embedded key")
-    func overrideWins() {
+    @Test("disabled EODHD cannot resolve a credential, including a saved override")
+    func disabledProviderIgnoresKeys() {
+        ToolPolicyTestLock.lock.lock()
+        defer { ToolPolicyTestLock.lock.unlock() }
         let d = UserDefaults.standard
-        let saved = d.string(forKey: E.overrideDefaultsKey)
-        defer { saved.map { d.set($0, forKey: E.overrideDefaultsKey) } ?? d.removeObject(forKey: E.overrideDefaultsKey) }
+        let priorArguments = d.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { d.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain) }
 
-        d.removeObject(forKey: E.overrideDefaultsKey)
-        #expect(E.apiKey == E.embeddedKey)
-        d.set("  rotated-key-123  ", forKey: E.overrideDefaultsKey)
-        #expect(E.apiKey == "rotated-key-123")      // trimmed
-        d.set("   ", forKey: E.overrideDefaultsKey)
-        #expect(E.apiKey == E.embeddedKey)          // whitespace-only override ignored
+        ToolPolicyTestLock.set("", forKey: E.overrideDefaultsKey)
+        let noBlankFallback = E.apiKey.isEmpty
+        #expect(noBlankFallback)
+        ToolPolicyTestLock.set("  rotated-key-123  ", forKey: E.overrideDefaultsKey)
+        let noSavedOverride = E.apiKey.isEmpty
+        #expect(noSavedOverride)
+        ToolPolicyTestLock.set("   ", forKey: E.overrideDefaultsKey)
+        let noWhitespaceFallback = E.apiKey.isEmpty
+        #expect(noWhitespaceFallback)
+        #expect(!StockSageEODHDCalendar.isAvailable())
+        #expect(StockSageNewsService.eodhdRequest(symbol: "AAPL", key: "fixture-only", limit: 5) == nil)
     }
 }

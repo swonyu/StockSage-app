@@ -13,4 +13,12 @@ import Foundation
 enum ToolPolicyTestLock {
     // NSLock is already Sendable, so a plain `static let` suffices.
     static let lock = NSLock()
+
+    /// Hold `lock` and restore the prior argument domain after the test. A killed
+    /// host loses this in-memory overlay, never leaving temporary policy on disk.
+    nonisolated static func set(_ value: Any, forKey key: String, defaults: UserDefaults = .standard) {
+        var arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[key] = value
+        defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+    }
 }

@@ -444,6 +444,62 @@ struct StockSagePaperTraderTests {
         #expect(Set(final.trades.map(\.symbol)) == ["AAA", "BBB"])
     }
 
+    @Test func staleProcessCannotIntroduceDuplicateOpenSymbols() throws {
+        for incomingSymbol in ["AAA", "aaa"] {
+            let (a, defaults, suite) = isolatedStore()
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let b = StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1")
+            let original = try #require(StockSagePaperTrader.open(from: idea("AAA", price: 100,
+                .buy, stop: 90, target: 120), at: d(0)))
+            let duplicate = try #require(StockSagePaperTrader.open(from: idea(incomingSymbol, price: 101,
+                .buy, stop: 90, target: 120), at: d(1)))
+            let other = try #require(StockSagePaperTrader.open(from: idea("BBB", price: 50,
+                .buy, stop: 45, target: 60), at: d(1)))
+            a.add(original)
+            b.apply(closes: [], opens: [duplicate, other])
+            let reloaded = StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1")
+            #expect(reloaded.trades.count == 2 && reloaded.trades.contains(original))
+            #expect(reloaded.trades.contains(other) && !reloaded.trades.contains(duplicate))
+            #expect(b.trades == reloaded.trades && b.lastError != nil)
+        }
+    }
+
+    @Test func duplicateGuardPreservesHistoryAndAllowsClosedSymbolToReopen() throws {
+        let (store, defaults, suite) = isolatedStore()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = try #require(StockSagePaperTrader.open(from: idea("AAA", price: 100,
+            .buy, stop: 90, target: 120), at: d(0)))
+        let replacement = try #require(StockSagePaperTrader.open(from: idea("AAA", price: 101,
+            .buy, stop: 90, target: 120), at: d(1)))
+        store.add(original)
+        var closed = original
+        closed.exitPrice = 110; closed.closedAt = d(1)
+        store.apply(closes: [closed], opens: [replacement])
+        #expect(store.trades == [replacement, closed] && store.lastError == nil)
+
+        // Pre-existing duplicates are historical records, not newly requested positions.
+        let oldHistory = [original, replacement]
+        defaults.set(try JSONEncoder().encode(oldHistory), forKey: "stocksage.papertrades.v1")
+        let loaded = StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1")
+        let other = try #require(StockSagePaperTrader.open(from: idea("BBB", price: 50,
+            .buy, stop: 45, target: 60), at: d(2)))
+        loaded.add(other)
+        #expect(loaded.trades == [other] + oldHistory, "Never clean up historical duplicates implicitly")
+        #expect(loaded.lastError == nil)
+    }
+
+    @Test func oneBatchCannotCreateTwoNewOpenPositionsForOneSymbol() throws {
+        let (store, defaults, suite) = isolatedStore()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = try #require(StockSagePaperTrader.open(from: idea("AAA", price: 100,
+            .buy, stop: 90, target: 120), at: d(0)))
+        let second = try #require(StockSagePaperTrader.open(from: idea("AAA", price: 101,
+            .buy, stop: 90, target: 120), at: d(1)))
+        store.apply(closes: [], opens: [first, second])
+        #expect(store.open.count == 1 && store.lastError != nil)
+        #expect(StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1").open.count == 1)
+    }
+
     @Test func resetAndRemoveStillDeleteDespiteTheReconcilingSave() {
         let (a, defaults, suite) = isolatedStore()
         defer { defaults.removePersistentDomain(forName: suite) }

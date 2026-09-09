@@ -154,7 +154,7 @@ struct StockSageChatSection: View {
     private var connectionNotice: some View {
         Text(config == nil
                     ? "Chat requires the local server enabled in Catalysts → Explanation model. On iPhone, localhost is the phone, not your Mac; private HTTPS serving is not configured in this slice."
-                    : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive/EODHD, when web access is enabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
+                    : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
                     .font(.caption).foregroundStyle(.secondary)
     }
 

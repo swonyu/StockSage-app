@@ -242,7 +242,7 @@ struct CatalystsSection: View {
             Text("The same ranked ideas as the Ideas tab, in the same order — viewed by what could move each one next.")
                 .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Primary badges are AI assessments; open Details for the reasoning or to assess a name with selected recent Massive/EODHD news. Failed checks leave a visible unverified draft. Rules action remains separate; AI does not change sizing or execution checks.")
+            Text("Primary badges are AI assessments; open Details for the reasoning or to assess a name with selected recent Massive news. EODHD is disabled. Failed checks leave a visible unverified draft. Rules action remains separate; AI does not change sizing or execution checks.")
                 .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
             DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }
@@ -283,10 +283,10 @@ struct CatalystsSection: View {
             }
             // Privacy line (fix pass 2026-09-06, W4): "Explain" fetches CITABLE SOURCES itself —
             // separate from, and in addition to, whichever narrator backend answers the
-            // paragraph. Those fetches are the app's own Massive/EODHD/SEC calls, so this is true
+            // paragraph. Those fetches are the app's own Massive/SEC calls, so this is true
             // regardless of the loopback/LAN warning above, which only covers the backend.
             Text("When external access is enabled, Explain also sends the symbol to api.massive.com "
-                + "(news, updated hourly), eodhd.com if that news is unavailable, and sec.gov "
+                + "(news, updated hourly) and sec.gov "
                 + "(filings, insider trades) from this device, in addition to the narrator backend.")
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

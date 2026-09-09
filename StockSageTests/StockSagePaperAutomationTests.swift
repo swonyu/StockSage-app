@@ -665,6 +665,40 @@ struct StockSagePaperAutomationTests {
         }
     }
 
+    @Test func protectiveExitWaitsThroughClosedSessionsThenRearmsOnce() throws {
+        let closures = [
+            ("2026-09-08T23:58:00Z", "2026-09-09T08:00:00Z"), // Ordinary night.
+            ("2026-09-04T23:58:00Z", "2026-09-08T08:00:00Z"), // Labor Day weekend.
+            ("2026-11-27T21:58:00Z", "2026-11-30T09:00:00Z"), // Early close.
+            ("2026-10-30T23:58:00Z", "2026-11-02T09:00:00Z")  // Fall DST weekend.
+        ]
+        for (triggerISO, reopenISO) in closures {
+            let trigger = try Date(triggerISO, strategy: .iso8601)
+            let reopen = try Date(reopenISO, strategy: .iso8601)
+            let holding = TradeRecord(symbol: "AAPL", side: .long, entry: 100,
+                stop: 98, target: 104, shares: 1, openedAt: trigger.addingTimeInterval(-3600))
+            let order = A.Pending(id: UUID(), symbol: "AAPL", buy: false,
+                                  at: trigger, protectiveTradeID: holding.id)
+            var book = A.Book(trades: [holding], pending: [order])
+            for offset in stride(from: 120.0, to: reopen.timeIntervalSince(trigger), by: 120.0) {
+                book.settle(quotes: [:], at: trigger.addingTimeInterval(offset))
+            }
+            #expect(book.decisions.isEmpty, "Closed sessions must not generate retry audit churn: \(triggerISO)")
+            #expect(book.pending.first?.at == trigger)
+            #expect(book.open.count == 1 && book.pending.first?.protectiveTradeID == holding.id)
+
+            book = try JSONDecoder().decode(A.Book.self, from: JSONEncoder().encode(book))
+            let retry = reopen.addingTimeInterval(30)
+            book.settle(quotes: ["AAPL": quote(price: 100, at: retry)], at: retry)
+            #expect(book.open.count == 1, "Rearming cannot fill from that same observation")
+            #expect(book.pending.first?.id == order.id && book.pending.first?.at == retry)
+            #expect(book.decisions.filter { $0.action == "Stop exit retry" }.count == 1)
+            book.settle(quotes: ["AAPL": quote(price: 100, at: retry.addingTimeInterval(1))],
+                        at: retry.addingTimeInterval(1))
+            #expect(book.open.isEmpty && book.pending.isEmpty && book.valid)
+        }
+    }
+
     @Test func exchangeHolidaysAndEarlyCloseGateActualOrders() throws {
         let cases = [("2026-11-26T16:00:00Z", false, false),
                      ("2026-11-27T21:54:59Z", true, true),

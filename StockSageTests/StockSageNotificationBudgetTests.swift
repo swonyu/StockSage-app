@@ -11,6 +11,13 @@ struct StockSageNotificationBudgetTests {
     typealias B = StockSageNotificationBudget
     let t0 = Date(timeIntervalSince1970: 1_700_000_000)
 
+    private func emptyBudget() throws -> B {
+        let name = "budget.empty.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        return B(loadingFrom: defaults, now: t0)
+    }
+
     // MARK: hysteresis — the wobble case that caused the spam
 
     @Test("a price wobbling across a threshold cannot re-alert")
@@ -81,8 +88,8 @@ struct StockSageNotificationBudgetTests {
     // MARK: stateful behaviour + visibility
 
     @Test("suppression is COUNTED, never silent")
-    func suppressionIsVisible() {
-        var b = B()
+    func suppressionIsVisible() throws {
+        var b = try emptyBudget()
         let first = b.allow(symbol: "AAPL", price: 100, now: t0)
         #expect(first)
         b.record(symbol: "AAPL", price: 100, now: t0)
@@ -105,8 +112,8 @@ struct StockSageNotificationBudgetTests {
     }
 
     @Test("symbols are independent and case-insensitive")
-    func symbolsAreIndependentAndNormalised() {
-        var b = B()
+    func symbolsAreIndependentAndNormalised() throws {
+        var b = try emptyBudget()
         let first = b.allow(symbol: "AAPL", price: 100, now: t0)
         #expect(first)
         b.record(symbol: "AAPL", price: 100, now: t0)
@@ -119,8 +126,8 @@ struct StockSageNotificationBudgetTests {
     }
 
     @Test("clearing a symbol re-arms it — an explicit owner action is never silenced")
-    func clearReArms() {
-        var b = B()
+    func clearReArms() throws {
+        var b = try emptyBudget()
         b.record(symbol: "AAPL", price: 100, now: t0)
         let blocked = b.allow(symbol: "AAPL", price: 100.1, now: t0.addingTimeInterval(60))
         #expect(!blocked)

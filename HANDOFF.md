@@ -1,5 +1,113 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Owner disables EODHD — September9, 07:35 Riyadh
+
+Latest owner direction: "Remove EODHD entirely", clarified immediately as
+"disable the provider". Implemented a compile-time OFF guard at the shared
+credential resolver; saved overrides and the legacy built-in fallback cannot
+enable requests. Calendar availability stays false; the explicit news request
+builder also refuses EODHD, even with an injected key. News diagnostics say
+"provider disabled", not missing credentials or a successful empty observation.
+Chat, assessment, Ideas and Catalyst disclosures now describe Massive/SEC only.
+Keep US-equity classification, legacy parsers, source enums, caches and historical
+records unchanged. No substitution of Yahoo fiscal quarter ends for US report
+dates, key deletion/revocation, provider-account change, risk or model change.
+Massive/Benzinga and the existing Yahoo routes remain as before.
+
+Parent's synthetic red selected2tests/2suites,6issues,0.006s,exit65;
+`green-eodhd-disabled` passed67tests/5suites,0.046s,exit0. Injected transport
+records only api.massive.com; no real provider requests were used as evidence.
+Source trace confirms calendar/probe/fundamentals/legacy quote leaves all require
+the now-empty shared key. Generic legacy-response fixtures and historical parsing
+remain tested without constructing EODHD requests.
+
+Additional test isolation: ToolPolicy and API-key fixtures now use a locked,
+memory-only argument-domain overlay; no temporary policy/key reaches the owner's
+preferences. Red1test/1issue/exit65 through a disposable suite; green7tests/2suites
+and expanded34tests/4suites,0.022s,exit0. The first isolation selector selected0
+tests and is NOT evidence. Full Mac then exposed3 notification tests constructing
+their budget from real defaults:5issues across1,972tests. They now use the existing
+injected-defaults initializer with unique disposable suites; production notification
+rules/state unchanged. Rerun `full-macos-eodhd-disabled-2` passed1,972tests/197suites,
+62.473s,exit0. `full-ios-eodhd-disabled` passed1,968tests/197suites,
+61.547s,exit0 on iPhone17Pro(gate), UUID3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA.
+Both platforms retain the three canonical exclusions. Strict gate in
+`/private/tmp/stocksage-strict-eodhd-20260909.6ENN1y` passed macOS61s,
+iOS56s,test-typecheck79s,each rc0; aggregate macos=OK ios=OK tests=OK,exit0.
+
+Exact Mac-tested bundle: `checkpoint-macos-eodhd-disabled/StockSageX.app` under the
+artifact root below; strict/deep signature passes. Dylib SHA256
+`09a422ac21d645bea1617eb0a67db3196ae282511c8d91ecb31efcf8fdf99eb2`.
+After all gates, all343 entries in `eodhd-disabled-source-2.sha256` rechecked OK.
+OldPID14962 was quit normally via its native Quit menu; process and lease release
+were verified before backup/install. Whole paper directory was copied consistently;
+checksum/symlink-aware dry comparison was empty. Account hash at backup:
+`3a95a78b245189341660a7e54512cef8b72e5f259463954e0d86094a24377e7f`.
+Recoverable previous bundle and private whole-account backup:
+`/private/tmp/stocksage-install-eodhd-20260909.p1HmMG/`.
+Exact tested bundle now installed at `/Applications/StockSageX.app`; signature
+and checksum/symlink-aware tree comparison passed, dylib equals the hash above.
+ReopenedPID22077 owns the account lease; enabled1. All2trades,1,026decisions
+and0pending records compare exactly with the pre-install backup. No historical edits,
+real orders or relay process. Native Home rendered after reopening; subsequent
+Chat inspection and reconnect hit the CUA native-pipe error, so the changed-tab
+post-install visual checks remain UNVERIFIED. This is not proof of an app crash;
+PID22077 was independently confirmed running afterward. Do not force-quit it.
+Six existing Claude review sessions were reused for the broader follow-up round.
+The narrower disable review returned the same key-choke-point recommendation;
+some desktop review navigation/send attempts are unreliable. One reviewer has an
+owner-authored unsent draft: preserve it, do not submit or replace it. Do not claim
+an attempted dispatch succeeded without a running state or returned review.
+
+Owner's subsequent Reddit request is captured in
+`agent-docs/IBKR_REDDIT_IDEAS_2026-09-09.md`: source-checked ideas, current callers
+and explicit gaps. No Reddit strategy thresholds, self-tuning weights, broker
+reconnect daemon or live order behavior were implemented. The approved native
+bid/ask/size work remains pending; current native fills still use qualified trades
+plus the disclosed10bps-per-side assumption, not executable NBBO or measured fees.
+
+## Account-switch resumption and focused follow-up — September9, 07:20 Riyadh
+
+Owner resumed this SAME parent task after the account switch. Original local
+tasks remain visible; no restoration or authentication changes were needed.
+Immutable backup `/Users/saleh/Codex-Backups/pre-account-switch-20260909-0642.yqZKTD`
+stays intact. Existing quarter-hour heartbeat was updated, not duplicated.
+Parent remains sole writer/installer/heavy tester in `codex/qwen-chat-context`;
+Good-spender OFF for every lane, no pushes/paid resources/real orders, relay OFF.
+
+Owner07:01 requested always six parallel Claude sessions. Reused all SIX existing
+Fable5.1 reviewers for independent read-only follow-ups, visibly Running together;
+no duplicate sessions/writers. Brief:
+`/Users/saleh/Documents/Codex/2026-09-09/stocksage-fable-round2-0701.md`.
+These source reviews are leads, not executed acceptance. First-round reports were
+collected; follow-up reports are returning in their existing conversations.
+
+Uncommitted parent fixes, artifacts under the existing reliability root below:
+
+- Closed-session protective STOP retry: retain intent without120-second retry
+  audit churn while the venue is closed. Restart and first eligible session retry
+  covered across overnight/holiday/early-close/DST. Red44tests/12issues/exit65;
+  green44tests/1suite/1.593s/exit0 (`green-closed-stop-retry`).
+- Legacy paper store: shared save rejects conflicting NEW open symbols after
+  reconciling disk IDs. Existing history/duplicates and close-then-reopen batches
+  remain intact; unrelated new opens still save. Red32tests/8issues/exit65;
+  green32tests/1suite/0.029s/exit0 (`green-legacy-new-open-collision`). This fixes
+  stale-instance snapshots, not atomic cross-process UserDefaults transactions.
+- Qwen badge retry: production scheduling guard no longer treats transient
+  failures as permanent blockers. Normal next scan/detail can retry; invalid
+  drafts still require explicit reassessment, current valid records still skip.
+  Actual scheduling/core-completion regression red17tests/1issue/0.014s/exit65;
+  green17tests/1suite/0.020s/exit0 (`green-assessment-transient-retry`). No new
+  timer/concurrency or weaker validation. Tests use isolated state and fake model.
+
+Status at07:20 (superseded by the EODHD entry above): this dirty batch had NOT
+yet passed full platform gates or been installed.
+Installed sourceb0b757f remains PID14962 with account lock, verified unchanged
+dylib89d02032dd06b02f1be23ad1304346103cabe6d1a1922dbb30b6b65f96874cf4.
+No live paper record was modified by the parent. Continue detail lifecycle,
+test/QA isolation and the documented remaining queue; preserve this running build
+until a verified replacement can be installed through the normal safe workflow.
+
 ## SEC reliability follow-up — September9, parent-only
 
 Installed reliability source`b0b757f` and install-evidence HEAD`b34c8e4` remain

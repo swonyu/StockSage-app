@@ -203,6 +203,28 @@ struct StockSageAIAssessmentTests {
         #expect(invalid.drafts["ORCL"]?.text == "Buy" && invalid.drafts["ORCL"]?.displayText == "Buy")
     }
 
+    @Test func automaticRequestRecoversAfterTransportFailureWithoutLoopingInvalidDrafts() async {
+        let state = StockSageAIAssessments()
+        var calls = 0
+        // Exercise the UI's scheduling gate and its actual injected completion path.
+        for _ in 0..<2 {
+            if state.shouldRequest("ORCL", hasCurrentRecord: state.records["ORCL"] != nil) {
+                await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in
+                    calls += 1
+                    return calls == 1 ? nil : json
+                }
+            }
+        }
+        #expect(calls == 2 && state.records["ORCL"] != nil && state.errors["ORCL"] == nil)
+        #expect(!state.shouldRequest("ORCL", hasCurrentRecord: true))
+
+        let invalid = StockSageAIAssessments()
+        await invalid.assess(context, config: config, now: now, stillValid: { true }) { _, _ in "Buy" }
+        #expect(invalid.drafts["ORCL"] != nil)
+        #expect(!invalid.shouldRequest("ORCL", hasCurrentRecord: false))
+        #expect(invalid.shouldRequest("ORCL", hasCurrentRecord: false, force: true))
+    }
+
     @Test func settingsRespectOffAndNeverSendAssessmentFactsOffDevice() {
         #expect(StockSageStore.isRunningTests)
         for backend in ["off", "onDeviceOnly"] {

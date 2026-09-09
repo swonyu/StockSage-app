@@ -353,6 +353,20 @@ final class StockSagePaperTradeStore: ObservableObject {
                 records.append(d)
             }
         }
+        // Preserve persisted history; only newly requested opens can be rejected.
+        // Use reconciled records so a close and reopen in one batch remains valid.
+        let diskIDs = Set(disk.map(\.id))
+        var openSymbols = Set(records.filter { diskIDs.contains($0.id) && $0.isOpen }
+            .map { $0.symbol.uppercased() })
+        var rejectedOpen = false
+        records.removeAll { record in
+            guard record.isOpen, !diskIDs.contains(record.id) else { return false }
+            guard openSymbols.insert(record.symbol.uppercased()).inserted else {
+                rejectedOpen = true
+                return true
+            }
+            return false
+        }
         guard let data = try? JSONEncoder().encode(records) else {
             lastError = "Couldn't encode the paper history; the previous saved records were kept."; return false
         }
@@ -360,7 +374,9 @@ final class StockSagePaperTradeStore: ObservableObject {
         defaults.set(data, forKey: key)
         trades = records
         scoreboard = nil // a cached scoreboard cannot describe the previous book after a mutation
-        lastError = nil
+        lastError = rejectedOpen
+            ? "A new paper position was skipped because that symbol is already open. Saved history was preserved."
+            : nil
         return true
     }
 }

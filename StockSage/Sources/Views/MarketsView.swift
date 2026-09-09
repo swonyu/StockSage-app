@@ -4960,7 +4960,7 @@ struct MarketsView: View {
     /// `StockSageAdvisor.caveat`. What remains here is Tier-1: it qualifies every EV number on
     /// the board and must never be collapsible.
     @ViewBuilder private var ideasHeaderBlurb: some View {
-        Text("Primary badges are unvalidated AI assessments. The top three ideas are assessed after a scan; open another idea to assess it. Assessments retrieve selected recent news via Massive/EODHD when external access is enabled. Failed checks leave a visible unverified draft. Filters, rank, signal blocks and money calculations remain Rules-based, not Qwen probabilities.")
+        Text("Primary badges are unvalidated AI assessments. The top three ideas are assessed after a scan; open another idea to assess it. Assessments retrieve selected recent news via Massive when external access is enabled. EODHD is disabled. Failed checks leave a visible unverified draft. Filters, rank, signal blocks and money calculations remain Rules-based, not Qwen probabilities.")
             .font(.caption).foregroundStyle(DS.Palette.warningSoft)
             .fixedSize(horizontal: false, vertical: true)
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or

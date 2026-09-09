@@ -158,8 +158,10 @@ final class StockSagePaperAutomation: ObservableObject {
                 guard (0..<120).contains(now.timeIntervalSince(order.at)) else {
                     if let holding = order.protectiveTradeID,
                        open.contains(where: { $0.id == holding && $0.symbol == order.symbol }) {
+                        // Retain the intent while closed without generating futile retry records.
                         // Never backdate a retry or let an expired attempt fill on this observation.
-                        if now >= order.at, let i = pending.firstIndex(where: { $0.id == order.id }) {
+                        if now >= order.at, StockSagePaperAutomation.paperSessionOpen(now),
+                           let i = pending.firstIndex(where: { $0.id == order.id }) {
                             pending[i].at = now
                             note(symbol: order.symbol, action: "Stop exit retry",
                                  reason: "Protective intent retained; new two-minute attempt awaits a later qualified observation.", at: now)

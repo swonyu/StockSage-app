@@ -208,23 +208,28 @@ struct StockSageMassiveTests {
 
     @Test("apiKey: Settings field (trimmed) wins; blank/whitespace falls back to the MASSIVE_API_KEY env var; never printed")
     func apiKeyResolution() {
+        ToolPolicyTestLock.lock.lock()
+        defer { ToolPolicyTestLock.lock.unlock() }
         let d = UserDefaults.standard
-        let saved = d.string(forKey: M.keyDefaultsKey)
-        defer { saved.map { d.set($0, forKey: M.keyDefaultsKey) } ?? d.removeObject(forKey: M.keyDefaultsKey) }
+        let priorArguments = d.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { d.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain) }
         #expect(M.keyDefaultsKey == "stocksage.massive." + "key")
         #expect(M.keyEnvName == "MASSIVE_API_KEY")
         // The env fallback on THIS machine, trimmed — compared, never printed.
         let envFallback = ProcessInfo.processInfo.environment[M.keyEnvName]?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        d.removeObject(forKey: M.keyDefaultsKey)
-        #expect(M.apiKey == envFallback)
+        ToolPolicyTestLock.set("", forKey: M.keyDefaultsKey)
+        let blankUsesFallback = M.apiKey == envFallback
+        #expect(blankUsesFallback)
         #expect(M.isConfigured == !envFallback.isEmpty)
-        d.set("  settings-key-123  ", forKey: M.keyDefaultsKey)
-        #expect(M.apiKey == "settings-key-123")                   // trimmed
+        ToolPolicyTestLock.set("  settings-key-123  ", forKey: M.keyDefaultsKey)
+        let settingsOverrideIsTrimmed = M.apiKey == "settings-key-123"
+        #expect(settingsOverrideIsTrimmed)
         #expect(M.isConfigured)
-        d.set("   ", forKey: M.keyDefaultsKey)
-        #expect(M.apiKey == envFallback)                          // whitespace-only field ignored
+        ToolPolicyTestLock.set("   ", forKey: M.keyDefaultsKey)
+        let whitespaceUsesFallback = M.apiKey == envFallback
+        #expect(whitespaceUsesFallback)
     }
 
     @Test("an empty symbol list never builds a request (fetchSnapshots is a no-op without work)")

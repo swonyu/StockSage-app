@@ -47,7 +47,7 @@ struct StockSageAIAssessmentPanel: View {
             Text("Unvalidated AI opinion; can misstate. Not a probability or permission to execute. Levels, sizing, rankings and trade controls below remain Rules-based.")
                 .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Assessing retrieves up to three recent news excerpts via Massive, with EODHD fallback when external access is enabled. Missing coverage stays explicit.")
+            Text("Assessing retrieves up to three recent news excerpts via Massive when external access is enabled. EODHD is disabled. Missing coverage stays explicit.")
                 .font(.caption).foregroundStyle(.secondary)
             if ai.activeSymbol == idea.symbol {
                 ProgressView("Qwen is assessing the dated facts…")

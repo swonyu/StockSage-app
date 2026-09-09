@@ -14,11 +14,29 @@ struct StockSageNewsOutcomeTests {
     private func request(_ provider: N.Provider) -> URLRequest? {
         switch provider {
         case .massive: N.massiveRequest(symbol: "AAPL", key: "fixture-only", now: now)
-        case .eodhd: N.eodhdRequest(symbol: "AAPL", key: "fixture-only", limit: 5)
+        // Synthetic legacy-provider response coverage, never a production EODHD request.
+        case .eodhd: URLRequest(url: URL(string: "https://example.invalid/legacy-news")!)
         }
     }
     private func response(_ req: URLRequest, _ status: Int, _ body: Data) -> (Data, URLResponse) {
         (body, HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+    }
+    @Test("Production request factories never send news to disabled EODHD")
+    func disabledProviderDoesNotFallBack() async {
+        var hosts: [String] = []
+        let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { provider in
+            switch provider {
+            case .massive: return N.massiveRequest(symbol: "AAPL", key: "fixture-only", now: now)
+            case .eodhd: return N.eodhdRequest(symbol: "AAPL", key: "fixture-only", limit: 5)
+            }
+        }, transport: { req in
+            hosts.append(req.url?.host ?? "")
+            return response(req, 503, Data())
+        })
+        #expect(hosts == ["api.massive.com"])
+        #expect(result.items.isEmpty)
+        #expect(result.summary.contains("EODHD: not checked (provider disabled)"))
+        #expect(result.attempts.first?.status == .unavailable(.http))
     }
     @Test("HTTP failure differs from answered empty at actual transport boundary")
     func httpVersusEmpty() async throws {
@@ -81,7 +99,7 @@ struct StockSageNewsOutcomeTests {
         }
         let missing = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { _ in nil },
             transport: { _ in Issue.record("unexpected network"); throw URLError(.badURL) })
-        #expect(missing.attempts.count == 2 && missing.attempts.allSatisfy { $0.status == .notChecked(.missingKey) })
+        #expect(missing.attempts.map(\.status) == [.notChecked(.missingKey), .notChecked(.providerDisabled)])
     }
     @Test("Policy revoked across either await discards late news and stops fallback")
     func revokedAfterAwait() async throws {

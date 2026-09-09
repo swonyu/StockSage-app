@@ -21,6 +21,10 @@ import Foundation
 @MainActor
 enum StockSageEODHD {
 
+    /// Owner disabled this provider on 2026-09-09. Keep parsers/source identities for
+    /// historical records; neither saved overrides nor the legacy fallback can enable I/O.
+    nonisolated static let isEnabled = false
+
     /// Owner's key (private repo). Overridable at runtime via Settings.
     nonisolated static let embeddedKey = "6a48aed005ce91.66058292"
 
@@ -28,6 +32,7 @@ enum StockSageEODHD {
     nonisolated static let overrideDefaultsKey = "stocksage.eodhd.key"
 
     static var apiKey: String {
+        guard isEnabled else { return "" }
         let override = UserDefaults.standard.string(forKey: overrideDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return override.isEmpty ? embeddedKey : override

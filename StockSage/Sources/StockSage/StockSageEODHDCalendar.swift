@@ -129,7 +129,7 @@ enum StockSageEODHDCalendar {
     }
 
     static func isAvailable(now: Date = Date()) -> Bool {
-        Self.isAvailable(unavailableUntil: calendarUnavailableUntil, now: now)
+        StockSageEODHD.isEnabled && Self.isAvailable(unavailableUntil: calendarUnavailableUntil, now: now)
     }
 
     /// Pure core: given the probe's HTTP status, the new `calendarUnavailableUntil` (nil = stays

@@ -258,7 +258,8 @@ final class StockSageAIAssessments: ObservableObject {
         guard !Task.isCancelled, !StockSageStore.isRunningTests,
               !CommandLine.arguments.contains("--qa"), !store.isSampleData,
               activeSymbol == nil else { return }
-        if !force, record(for: idea, store: store) != nil || errors[idea.symbol] != nil { return }
+        guard shouldRequest(idea.symbol, hasCurrentRecord: record(for: idea, store: store) != nil,
+                            force: force) else { return }
         guard let config = Self.configuration else {
             errors[idea.symbol] = "Choose a reachable loopback Qwen server in Catalysts → Explanation model. Off/on-device-only disables AI badges. Remote iPhone serving is not configured here."
             return
@@ -291,6 +292,13 @@ final class StockSageAIAssessments: ObservableObject {
             return await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
                 system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240, stillValid: active)
         })
+    }
+
+    /// Scheduling gate shared with the real UI callers; tests need no owner-backed store.
+    func shouldRequest(_ symbol: String, hasCurrentRecord: Bool, force: Bool = false) -> Bool {
+        // Retry transport/precondition failures on a later normal request, not in a loop.
+        // Keep invalid drafts visible until an explicit reassessment.
+        force || (!hasCurrentRecord && drafts[symbol] == nil)
     }
 
     /// Same production seam used by tests; injected completion avoids real networks/model loads.

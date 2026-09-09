@@ -23,8 +23,8 @@ import Foundation
 @Suite(.serialized)
 struct ToolPolicyTests {
 
-    /// Run `body` with `ToolPolicy.override` + every UserDefaults key the gate
-    /// consults saved & restored. The gate currently reads two keys:
+    /// Run `body` with `ToolPolicy.override` + a process-local preferences overlay.
+    /// Never persist temporary policy to the owner's defaults. The gate reads two keys:
     /// `Keys.webAccess` (the original input) AND `Keys.offlineOnly` (added by
     /// the Offline-mode feature — forces `isExternalAllowed` to false
     /// regardless of override). A persisted `offlineOnly = true` from a prior
@@ -37,17 +37,12 @@ struct ToolPolicyTests {
         ToolPolicyTestLock.lock.lock()
         defer { ToolPolicyTestLock.lock.unlock() }   // LIFO: unlocks AFTER the restore defer
         let priorOverride = ToolPolicy.override
-        let webKey = AppSettings.Keys.webAccess
         let offlineKey = AppSettings.Keys.offlineOnly
-        let priorWeb     = UserDefaults.standard.object(forKey: webKey)
-        let priorOffline = UserDefaults.standard.object(forKey: offlineKey)
-        UserDefaults.standard.set(false, forKey: offlineKey)
+        let priorArguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        ToolPolicyTestLock.set(false, forKey: offlineKey)
         defer {
             ToolPolicy.override = priorOverride
-            if let priorWeb     { UserDefaults.standard.set(priorWeb,     forKey: webKey) }
-            else                { UserDefaults.standard.removeObject(forKey: webKey) }
-            if let priorOffline { UserDefaults.standard.set(priorOffline, forKey: offlineKey) }
-            else                { UserDefaults.standard.removeObject(forKey: offlineKey) }
+            UserDefaults.standard.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain)
         }
         body()
     }
@@ -65,12 +60,36 @@ struct ToolPolicyTests {
     @Test func withoutOverrideTheGateFollowsTheWebAccessSetting() {
         withCleanPolicy {
             ToolPolicy.override = nil
-            UserDefaults.standard.set(false, forKey: AppSettings.Keys.webAccess)
+            ToolPolicyTestLock.set(false, forKey: AppSettings.Keys.webAccess)
             #expect(ToolPolicy.isExternalAllowed == false)
 
-            UserDefaults.standard.set(true, forKey: AppSettings.Keys.webAccess)
+            ToolPolicyTestLock.set(true, forKey: AppSettings.Keys.webAccess)
             #expect(ToolPolicy.isExternalAllowed == true)
         }
+    }
+
+    @Test func policyOverridesNeverChangePersistedPreferences() throws {
+        ToolPolicyTestLock.lock.lock()
+        defer { ToolPolicyTestLock.lock.unlock() }
+        let suite = "StockSageTests.policy-isolation." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let priorArguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer {
+            defaults.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        defaults.setPersistentDomain([AppSettings.Keys.webAccess: true,
+            AppSettings.Keys.offlineOnly: false, "fixtureUnrelated": "preserved"], forName: suite)
+        let before = try #require(defaults.persistentDomain(forName: suite))
+        ToolPolicyTestLock.set(false, forKey: AppSettings.Keys.webAccess, defaults: defaults)
+        ToolPolicyTestLock.set(true, forKey: AppSettings.Keys.offlineOnly, defaults: defaults)
+        ToolPolicyTestLock.set("fixture-key", forKey: "fixtureProviderKey", defaults: defaults)
+        #expect(!defaults.bool(forKey: AppSettings.Keys.webAccess))
+        #expect(defaults.bool(forKey: AppSettings.Keys.offlineOnly))
+        #expect(defaults.string(forKey: "fixtureProviderKey") == "fixture-key")
+        let persisted = try #require(defaults.persistentDomain(forName: suite))
+        #expect(NSDictionary(dictionary: before).isEqual(to: persisted),
+                "A test-host interruption must never leave temporary policy values on disk")
     }
 
 }
@@ -93,18 +112,14 @@ struct WebToolsDisabledReasonTests {
         let priorOverride = ToolPolicy.override
         let webKey     = AppSettings.Keys.webAccess
         let offlineKey = AppSettings.Keys.offlineOnly
-        let priorWeb     = UserDefaults.standard.object(forKey: webKey)
-        let priorOffline = UserDefaults.standard.object(forKey: offlineKey)
+        let priorArguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         defer {
             ToolPolicy.override = priorOverride
-            if let priorWeb     { UserDefaults.standard.set(priorWeb,     forKey: webKey) }
-            else                { UserDefaults.standard.removeObject(forKey: webKey) }
-            if let priorOffline { UserDefaults.standard.set(priorOffline, forKey: offlineKey) }
-            else                { UserDefaults.standard.removeObject(forKey: offlineKey) }
+            UserDefaults.standard.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain)
         }
         ToolPolicy.override = nil
-        UserDefaults.standard.set(webAccess,   forKey: webKey)
-        UserDefaults.standard.set(offlineOnly, forKey: offlineKey)
+        ToolPolicyTestLock.set(webAccess, forKey: webKey)
+        ToolPolicyTestLock.set(offlineOnly, forKey: offlineKey)
         body()
     }
 
