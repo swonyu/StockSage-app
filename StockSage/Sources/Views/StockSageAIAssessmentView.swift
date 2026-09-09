@@ -35,6 +35,13 @@ struct StockSageAIAssessmentPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            #if os(macOS)
+            RequestControls(hasRecord: ai.records[idea.symbol] != nil,
+                            hasDraft: ai.drafts[idea.symbol] != nil,
+                            activeSymbol: ai.activeSymbol, isSampleData: store.isSampleData) {
+                Task { await ai.assess(idea, store: store, force: true) }
+            }
+            #else
             HStack {
                 Text("AI assessment · next trading week").font(.headline)
                 Spacer()
@@ -44,6 +51,7 @@ struct StockSageAIAssessmentPanel: View {
                 .disabled(ai.activeSymbol != nil || store.isSampleData)
                 .touchHitArea()
             }
+            #endif
             Text("Unvalidated AI opinion; can misstate. Not a probability or permission to execute. Levels, sizing, rankings and trade controls below remain Rules-based.")
                 .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
@@ -112,4 +120,44 @@ struct StockSageAIAssessmentPanel: View {
         .padding(12)
         .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: DS.Radius.card))
     }
+
+    #if os(macOS)
+    struct RequestControls: View {
+        let hasRecord: Bool
+        let hasDraft: Bool
+        let activeSymbol: String?
+        let isSampleData: Bool
+        let request: () -> Void
+
+        var title: String { hasRecord || hasDraft ? "Reassess" : "Assess with Qwen" }
+        var disabledReason: String? {
+            var reasons: [String] = []
+            if isSampleData { reasons.append("Assessments are unavailable with sample data. Switch to market data to assess an idea.") }
+            if let activeSymbol { reasons.append("Assessment in progress for \(activeSymbol). Wait for it to finish before starting another assessment.") }
+            return reasons.isEmpty ? nil : reasons.joined(separator: " ")
+        }
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { headerContent }
+                    VStack(alignment: .leading, spacing: 8) { headerContent }
+                }
+                if let disabledReason {
+                    Text(disabledReason).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        @ViewBuilder private var headerContent: some View {
+            Text("AI assessment · next trading week").font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(title, action: request)
+                .disabled(activeSymbol != nil || isSampleData)
+                .touchHitArea()
+        }
+    }
+    #endif
 }

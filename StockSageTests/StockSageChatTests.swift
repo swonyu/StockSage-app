@@ -19,6 +19,42 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test func assessmentControlsExplainRetriesAndUnavailableActions() {
+        for hasRecord in [false, true] {
+            for hasDraft in [false, true] {
+                for activeSymbol: String? in [nil, "ORCL", "QCOM"] {
+                    for isSampleData in [false, true] {
+                        let controls = StockSageAIAssessmentPanel.RequestControls(
+                            hasRecord: hasRecord, hasDraft: hasDraft,
+                            activeSymbol: activeSymbol, isSampleData: isSampleData, request: {})
+                        #expect(controls.title == (hasRecord || hasDraft ? "Reassess" : "Assess with Qwen"))
+                        #expect((controls.disabledReason != nil) == (activeSymbol != nil || isSampleData))
+                        if isSampleData {
+                            #expect(controls.disabledReason?.contains("sample data") == true)
+                        }
+                        if let activeSymbol {
+                            #expect(controls.disabledReason?.contains(activeSymbol) == true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test(arguments: [360, 760], ["fresh", "draft", "busy", "sample-and-busy"])
+    func renderAssessmentControlsWithoutRequesting(width: Int, state: String) async throws {
+        var requests = 0
+        let view = StockSageAIAssessmentPanel.RequestControls(
+            hasRecord: false, hasDraft: state != "fresh",
+            activeSymbol: state.contains("busy") ? "QCOM" : nil,
+            isSampleData: state == "sample-and-busy", request: { requests += 1 })
+            .padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-assessment-controls-\(width)-\(state)")
+        #expect(size.width == CGFloat(width) && size.height > 40)
+        #expect(requests == 0, "Rendering an assessment control cannot request news or inference")
+    }
+
     @Test func macGuidanceNamesTheActualActionSourceAndRawLength() {
         #expect(StockSageChatSection.modelSetupGuidance.contains("Model settings"))
         #expect(StockSageChatSection.modelSetupGuidance.contains("on this Mac"))

@@ -1,5 +1,39 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac assessment retry controls — September 9, verified; not installed
+
+Mac detail-sheet header now offers Reassess for a stored record OR unverified
+draft, including stale records; no record/draft retains Assess with Qwen.
+Visible copy explains active assessment and sample-data restrictions, both when
+simultaneous. No generation/queue claim. Native ViewThatFits adapts the header
+to narrow widths. Same explicit force:true callback and disabled predicate;
+execution-time guards, classified errors, drafts, stale records and Rules copy
+are untouched. Non-Mac header retained unchanged; no iOS verification today.
+
+Actual-header baseline RED41 tests/2suites/46 expected assertion issues/0.409s,
+exit65. GREEN42/2/1.184s exit0. Matrix covers24 record/draft/active/sample states.
+Parent inspected all8 native captures at360/760 for fresh/draft/busy/combined
+sample-and-busy: wrapped text, visible control, no clipping. Render invokes no
+request callback; no owner-backed Store used. This is not live activation or
+VoiceOver/keyboard proof. Sol call-chain and Astra final reviews: no must-fix;
+reviewers closed, parent sole shared writer/tester/installer.
+
+Full Mac **2,049 tests/200 suites/107.663s**, exit0. Strict Mac emit67s and test
+typecheck95s passed, aggregate exec27933 exit0: `macos=OK ios=SKIP tests=OK`.
+Same3opt-in exclusions. All372 frozen source entries checked after both gates;
+manifest SHA2560c0818d7756e8df1be11ed21f97bd8075b444142fed107cd941659bd4f793f9b.
+Exact64-entry retained candidate matches tested bundle, deep/strict codesign0.
+Debug dylib SHA25627ae3ad8b654e55ddcb66b93874e07433725a24f67e33e0e4d229416698f084f.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-assessment-controls/StockSageX.app`.
+Same root: ASSESSMENT_CONTROLS.md, assessment-controls-plan.md, images, source
+manifest/check, focused/full logs/xcresults and preserved strict detailed logs.
+
+**Not installed:** preserve current app40101/Qwen2120, pausedpaper0 and session-only
+manual500 research pending owner restart/clear choice. No push, paid resources,
+model/provider calls, relay, real orders or historical-record edits. Remaining
+approved pending-row/draft-record grouping and interaction work is separate;
+do not infer live acceptance from component renders or passing offline tests.
+
 ## Mac Chat setup and accessibility — September 9, verified; not installed
 
 Missing Mac configuration now has a short on-this-Mac explanation and a labeled
