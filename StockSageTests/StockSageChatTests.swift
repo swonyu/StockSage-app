@@ -19,6 +19,25 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: ["", "My unsent draft", " \n"], [false, true])
+    func reusingAQuestionNeverOverwritesADraftOrRunsDuringARequest(draft: String, pending: Bool) {
+        var question = draft
+        var issue: String? = "Previous input warning"
+        let questionBinding = Binding(get: { question }, set: { question = $0 })
+        let issueBinding = Binding(get: { issue }, set: { issue = $0 })
+        let original = "Explain the source · اشرح المخاطر"
+        StockSageChatSection.reuseQuestion(original, question: questionBinding, issue: issueBinding, pending: pending)
+        let shouldCopy = draft.isEmpty && !pending
+        #expect(question == (shouldCopy ? original : draft))
+        #expect(issue == (shouldCopy ? nil : "Previous input warning"))
+        if shouldCopy {
+            issue = "New input warning"
+            StockSageChatSection.reuseQuestion("A different old question", question: questionBinding, issue: issueBinding, pending: false)
+            #expect(question == original, "A stale enabled action must not overwrite the now-filled draft")
+            #expect(issue == "New input warning")
+        }
+    }
+
     @Test func transcriptScrollIdentityChangesOnlyForANewQuestionOrClear() throws {
         let chat = StockSageChatSession(historyURL: nil)
         #expect(StockSageChatSection.latestTurnID(in: chat) == nil)
@@ -90,8 +109,10 @@ struct StockSageChatTests {
         #expect(size.width == CGFloat(width) && size.height > 60)
     }
 
-    @Test(arguments: [360, 760], [false, true])
-    func renderCapturedTurnWithoutLiveChat(width: Int, pending: Bool) async throws {
+    @Test(arguments: [360, 760], ["pending", "completed", "draft-in-progress"])
+    func renderCapturedTurnWithoutLiveChat(width: Int, state: String) async throws {
+        let pending = state == "pending"
+        let edit: (() -> Void)? = state == "completed" ? {} : nil
         let captured = snapshot()
         let fact = try #require(captured.facts.first)
         let turn = StockSageChatSession.Turn(id: UUID(),
@@ -99,10 +120,10 @@ struct StockSageChatTests {
             snapshot: captured, model: "fixture",
             answer: "Synthetic answer: a recorded observation is not a prediction. Check the captured source and its timestamp below.",
             evidence: [fact.id], notice: "Unverified draft · fixture")
-        let view = StockSageChatSection.turnContent(turn, pending: pending)
+        let view = StockSageChatSection.turnContent(turn, pending: pending, editQuestion: edit)
             .padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
-        let size = try await capture(view, name: "stocksage-chat-turn-\(width)-\(pending)")
+        let size = try await capture(view, name: "stocksage-chat-turn-\(width)-\(state)")
         #expect(size.width == CGFloat(width) && size.height > 100)
     }
 

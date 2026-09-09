@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac Edit question — September 9, verified candidate; not installed
+
+Completed question bubbles now offer **Edit question**: copy the exact original
+into an empty composer, clearing only its old transient input warning. No send,
+history edit, clipboard, focus change or reuse of historical facts as current.
+Any pending Chat request or raw nonempty draft disables reuse; whitespace counts
+as a draft. The callback rereads pending state and the helper checks live Bindings
+before writing. Blocked and repeated actions cannot overwrite the current draft.
+Pending rows hide the control. Existing Send validation/fresh capture is unchanged.
+Legacy non-Mac call/rendering retained except the defaulted shared signature;
+no iOS verification today. Model, research and trading behavior unchanged.
+
+Actual-call no-op baseline RED: 17 tests / 1 suite / 3 assertion issues / 0.297s,
+exit 65. Focused GREEN: 17 tests / 1 suite passed in 0.518s, TEST SUCCEEDED;
+its terminal handle expired after context rollover, so no separate rc retained.
+Six actual native-renderer captures (360/760 x pending/completed/draft-in-progress)
+inspected by parent: hidden/enabled/disabled controls and complete wrapped text.
+Sol policy/test critique and Astra final source review closed with no must-fix.
+Binding tests and synthetic captures are not native click/keyboard/VoiceOver proof.
+
+Full Mac **2,045 tests / 200 suites / 137.210s, exit 0**. Strict Mac emit140s and
+test typecheck214s passed; aggregate exit 0: `macos=OK ios=SKIP tests=OK`.
+The same three opt-in exclusions remain; no live diagnostic env or iOS gate.
+All 372 source entries rechecked after both gates. Manifest SHA256:
+8374c287cdf5811c32197ce984a1a30715255f9c00679a591afa0a4bfd938a2e.
+Exact 64-entry candidate match; deep/strict codesign passed. Debug dylib SHA256:
+d34b4b2a75a077d37365f5cd5a8f82a5a72a437a1232f0d9c46f48f5309a64d2.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-chat-edit/StockSageX.app`.
+Same root holds CHAT_EDIT.md, focused/full logs and xcresults, strict detailed
+logs, source manifest/check log and chat-edit-images. Parent sole writer/tester.
+
+**Not installed:** preserve installed27a4727/PID40101, Qwen2120, owner-paused paper
+and session-only manual500 results pending the existing restart/clear choice.
+No owner history/input actions, push, paid resources, relay or real orders.
+Integrated native activation, focus/keyboard and VoiceOver remain unverified.
+
 ## Chat reading position — September 9, verified candidate; not installed
 
 Mac autoscroll now observes the retained newest question ID, not pending request

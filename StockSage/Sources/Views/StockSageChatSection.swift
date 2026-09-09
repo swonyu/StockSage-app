@@ -109,13 +109,21 @@ struct StockSageChatSection: View {
                      : "Event logging is off. Chat does not enable alerts or background monitoring.").font(.caption).foregroundStyle(.secondary)
             }
             ForEach(chat.turns) { turn in
+                #if os(macOS)
+                let edit: (() -> Void)? = chat.pending == nil && question.isEmpty ? {
+                    Self.reuseQuestion(turn.question, question: $question, issue: $issue, pending: chat.pending != nil)
+                } : nil
+                Self.turnContent(turn, pending: chat.pending == turn.id, editQuestion: edit)
+                #else
                 Self.turnContent(turn, pending: chat.pending == turn.id)
+                #endif
             }
         }
     }
 
     /// Pure rendering keeps captured evidence separate from the live Chat session.
-    @ViewBuilder static func turnContent(_ turn: StockSageChatSession.Turn, pending: Bool) -> some View {
+    @ViewBuilder static func turnContent(_ turn: StockSageChatSession.Turn, pending: Bool,
+                                        editQuestion: (() -> Void)? = nil) -> some View {
         #if os(macOS)
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
@@ -125,6 +133,12 @@ struct StockSageChatSection: View {
                     .accessibilityAddTraits(.isHeader)
                 Text(turn.question).font(.body).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                if !pending {
+                    Button("Edit question", systemImage: "square.and.pencil") { editQuestion?() }
+                        .controlSize(.small)
+                        .disabled(editQuestion == nil)
+                        .help("Copies this question into the empty message box without sending or changing history. Finish or clear your draft, and wait for any current request to finish.")
+                }
             }
             .padding(DS.Space.md)
             .frame(maxWidth: 620, alignment: .leading)
@@ -245,6 +259,12 @@ struct StockSageChatSection: View {
     }
 
     #if os(macOS)
+    static func reuseQuestion(_ original: String, question: Binding<String>, issue: Binding<String?>, pending: Bool) {
+        guard !pending, question.wrappedValue.isEmpty else { return }
+        question.wrappedValue = original
+        issue.wrappedValue = nil
+    }
+
     static func latestTurnID(in chat: StockSageChatSession) -> UUID? {
         chat.turns.last?.id
     }
