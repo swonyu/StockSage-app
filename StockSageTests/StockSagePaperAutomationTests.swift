@@ -27,6 +27,22 @@ struct StockSagePaperAutomationTests {
         #expect(!A.fresh(quote(at: now, source: .yahoo), at: now))
     }
 
+    @Test func mixedPaperCandidatesCannotBorrowPeerFreshness() async {
+        let fillAt = now.addingTimeInterval(30)
+        let candidates = ["AAPL": quote("AAPL", at: fillAt.addingTimeInterval(-11)),
+                          "MSFT": quote("MSFT", at: fillAt)]
+        var requested: [String] = []
+        let selected = await A.fetchPaperQuotes(for: ["AAPL", "MSFT"], after: [:], at: fillAt,
+            externalAllowed: { true }, snapshots: { _ in candidates },
+            tick: { symbol, _ in requested.append(symbol); return nil })
+        #expect(requested == ["AAPL"] && Set(selected.keys) == ["MSFT"])
+        var book = A.Book()
+        for symbol in ["AAPL", "MSFT"] { book.propose(symbol: symbol, action: .buy, at: now) }
+        book.settle(quotes: candidates, at: fillAt)
+        #expect(book.open.map(\.symbol) == ["MSFT"])
+        #expect(book.pending.map(\.symbol) == ["AAPL"])
+    }
+
     @Test func unqualifiedSnapshotCannotBypassTradeChecksOrSettle() async throws {
         // The display snapshot preserves price/time, not condition/event-clock qualification.
         for condition in [NSNull(), [999_999]] as [Any] {

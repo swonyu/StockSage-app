@@ -20,6 +20,119 @@ struct StockSagePaperAuditTests {
         return book
     }
 
+    #if os(macOS)
+    @Test func researchExportPreservesCompleteCommittedHistoryWithoutInventingEvidence() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("paper/account.json")
+        let destination = root.appendingPathComponent("research.json")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var original = A.Book()
+        for i in 0..<5 {
+            original.note(symbol: "ORCL", action: "Fixture", reason: "Exact prose 🙂 \(i)",
+                          at: now.addingTimeInterval(Double(5 - i) / 1_000))
+        }
+        var book = original, audit = A.Audit()
+        var expectedFiles: [String: Data] = [:]
+        for records in [Array(original.decisions.prefix(2)), Array(original.decisions[2..<4])] {
+            let data = try JSONEncoder().encode(records)
+            let archive = A.AuditArchive(id: UUID(), count: records.count, bytes: data.count,
+                sha256: A.AuditArchive.digest(data), latestAt: records.map(\.at).max()!)
+            try data.write(to: archive.url(beside: source))
+            expectedFiles[archive.url(beside: source).lastPathComponent] = data
+            audit.archives.append(archive); audit.control.include(records)
+        }
+        book.version = 2; book.audit = audit; book.decisions = Array(original.decisions.suffix(1))
+        let encoded = try JSONEncoder().encode(book)
+        let sourceBytes = Data("{\"lastResearch\":null,".utf8) + encoded.dropFirst()
+        try sourceBytes.write(to: source)
+        expectedFiles["account.json"] = sourceBytes
+        let orphan = source.deletingLastPathComponent().appendingPathComponent("audit-orphan.json")
+        try Data("uncommitted; never export".utf8).write(to: orphan)
+
+        try A.saveResearchExport(account: source, to: destination, at: now)
+        let envelope = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: destination)) as? [String: Any])
+        #expect(envelope["portfolioEconomics"] as? String == "not evaluated")
+        #expect(envelope["decisionCount"] as? Int == 5)
+        #expect((envelope["embeddedDateEncoding"] as? String)?.contains("2001-01-01T00:00:00Z") == true)
+        let missing = try #require(envelope["missingEvidence"] as? [String])
+        #expect(missing.contains("portfolio_equity_and_mark_series"))
+        let files = try #require(envelope["files"] as? [[String: Any]])
+        #expect(files.count == 3)
+        var recovered: [A.Decision] = []
+        for file in files {
+            let name = try #require(file["name"] as? String)
+            let bytes = Data(try #require(file["content"] as? String).utf8)
+            #expect(bytes == expectedFiles[name])
+            #expect(file["sha256"] as? String == A.AuditArchive.digest(bytes))
+            #expect(file["bytes"] as? Int == bytes.count)
+            if name != "account.json" { recovered += try JSONDecoder().decode([A.Decision].self, from: bytes) }
+        }
+        recovered += book.decisions
+        #expect(recovered == original.decisions, "Preserve commit sequence; do not sort by timestamps or infer missing joins")
+        for (name, bytes) in expectedFiles {
+            #expect(try Data(contentsOf: source.deletingLastPathComponent().appendingPathComponent(name)) == bytes)
+        }
+        #expect(try Data(contentsOf: orphan) == Data("uncommitted; never export".utf8))
+
+        let exported = try Data(contentsOf: destination)
+        let chunk = try #require(audit.archives.first).url(beside: source)
+        try Data("corrupt".utf8).write(to: chunk)
+        #expect(throws: (any Error).self) { try A.saveResearchExport(account: source, to: destination, at: now) }
+        #expect(try Data(contentsOf: destination) == exported)
+        try FileManager.default.removeItem(at: chunk)
+        #expect(throws: (any Error).self) { try A.saveResearchExport(account: source, to: destination, at: now) }
+        #expect(try Data(contentsOf: destination) == exported)
+    }
+
+    @Test func researchExportRejectsLiveDirectoryMissingAccountAndDuplicateHistory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("paper/account.json"), destination = root.appendingPathComponent("export.json")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(throws: (any Error).self) { try A.saveResearchExport(account: source, to: destination, at: now) }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        let empty = try JSONEncoder().encode(A.Book())
+        try empty.write(to: source)
+        #expect(throws: (any Error).self) { try A.saveResearchExport(account: source, to: source, at: now) }
+        #expect(try Data(contentsOf: source) == empty)
+        var invalid = A.Book()
+        invalid.note(action: "Fixture", reason: "Duplicate", at: now)
+        let bytes = try JSONEncoder().encode(invalid.decisions)
+        let archive = A.AuditArchive(id: UUID(), count: 1, bytes: bytes.count,
+            sha256: A.AuditArchive.digest(bytes), latestAt: now)
+        try bytes.write(to: archive.url(beside: source))
+        var audit = A.Audit(); audit.archives = [archive]; audit.control.include(invalid.decisions)
+        invalid.version = 2; invalid.audit = audit
+        try JSONEncoder().encode(invalid).write(to: source)
+        #expect(throws: (any Error).self) { try A.saveResearchExport(account: source, to: destination, at: now) }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    @Test func researchExportRejectsSymlinkSourcesAndDirectoryDestinations() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("paper/account.json")
+        let output = root.appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try JSONEncoder().encode(A.Book())
+        try bytes.write(to: source)
+        let sentinel = output.appendingPathComponent("keep.txt")
+        try Data("Keep".utf8).write(to: sentinel)
+        #expect(throws: (any Error).self) { try A.saveResearchExport(account: source, to: output, at: now) }
+        #expect(try Data(contentsOf: sentinel) == Data("Keep".utf8))
+        #expect(try Data(contentsOf: source) == bytes)
+        let alias = root.appendingPathComponent("alias.json")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: source)
+        #expect(throws: (any Error).self) {
+            try A.saveResearchExport(account: alias, to: output.appendingPathComponent("export.json"), at: now)
+        }
+        #expect(!FileManager.default.fileExists(atPath: output.appendingPathComponent("export.json").path))
+        #expect(try Data(contentsOf: source) == bytes)
+    }
+    #endif
+
     @Test func countRotationPreservesOrderedRecordsPolicyAndResearchControl() throws {
         let original = fixture()
         let (rotated, writes, bytes) = try A.prepareAudit(original)

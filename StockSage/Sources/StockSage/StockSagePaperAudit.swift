@@ -2,6 +2,78 @@ import Foundation
 import CryptoKit
 
 extension StockSagePaperAutomation {
+    #if os(macOS)
+    /// Export exact committed bytes, not the UI tail or reconstructed portfolio economics.
+    /// Atomic account replacement + immutable referenced chunks define the snapshot boundary;
+    /// later saves may append new history without changing this captured generation.
+    nonisolated static func saveResearchExport(account: URL, to destination: URL, at now: Date) throws {
+        let sourceDirectory = account.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+        let output = destination.resolvingSymlinksInPath().standardizedFileURL.path
+        guard output != sourceDirectory, !output.hasPrefix(sourceDirectory + "/") else {
+            throw ResearchExportError("Choose a location outside the live paper-account directory.")
+        }
+        func read(_ file: URL) throws -> Data {
+            let info = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard info.isRegularFile == true, info.isSymbolicLink != true,
+                  let size = info.fileSize, (1...32_000_000).contains(size) else {
+                throw ResearchExportError("A required account or audit file is missing, unsupported or too large. Nothing was exported.")
+            }
+            let data = try Data(contentsOf: file)
+            guard data.count == size else { throw ResearchExportError("The captured file changed while reading. Retry the export.") }
+            return data
+        }
+        let accountData = try read(account)
+        let captured = try JSONDecoder().decode(Book.self, from: accountData)
+        guard captured.valid, now.timeIntervalSince1970.isFinite else { throw CocoaError(.fileReadCorruptFile) }
+        let archives = captured.audit?.archives ?? []
+        var total = accountData.count
+        for archive in archives {
+            guard (1...32_000_000).contains(archive.bytes) else { throw CocoaError(.fileReadCorruptFile) }
+            total += archive.bytes
+            // ponytail: bounded in-memory JSON envelope; stream an export package if a real history exceeds 128 MB.
+            guard total <= 128_000_000 else { throw ResearchExportError("History exceeds the 128 MB export limit. No partial export was saved; a streaming exporter is required.") }
+        }
+        try captured.audit?.validate(beside: account, activeIDs: Set(captured.decisions.map(\.id)))
+        var files: [[String: Any]] = []
+        func include(_ name: String, _ data: Data) throws {
+            guard let content = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadCorruptFile) }
+            files.append(["name": name, "bytes": data.count, "sha256": AuditArchive.digest(data), "content": content])
+        }
+        try include("account.json", accountData)
+        for archive in archives {
+            let data = try read(archive.url(beside: account))
+            // Recheck the exact bytes being exported, not only the earlier validation read.
+            guard data.count == archive.bytes, AuditArchive.digest(data) == archive.sha256 else { throw CocoaError(.fileReadCorruptFile) }
+            try include(archive.url(beside: account).lastPathComponent, data)
+        }
+        let envelope: [String: Any] = [
+            "schemaVersion": 1, "exportedAt": now.ISO8601Format(),
+            "encoding": "Each files[].content is the exact original UTF-8 JSON. Encode that string as UTF-8 to verify bytes and SHA256; decode its JSON separately. Original nulls, omissions, prose and IDs are unchanged.",
+            "embeddedDateEncoding": "Foundation Date: numeric seconds since 2001-01-01T00:00:00Z, including fractional seconds. Preserve precision. Outer exportedAt is ISO-8601 export-time metadata, not a market-observation or information-availability timestamp.",
+            "scope": "Committed native Qwen paper account and all referenced audit chunks; unreferenced files excluded. Private local research export, not a broker statement or the separate frozen forecast pilot.",
+            "recordOrder": "Concatenate archives in account.audit.archives order, then account.decisions. Commit order, not chronological sorting. No joins are inferred.",
+            "hashScope": "Hashes verify the included original bytes, not historical truth, source authenticity or model quality. Export-time metadata cannot establish historical code or model versions.",
+            "decisionCount": captured.decisions.count + archives.reduce(0) { $0 + $1.count },
+            "portfolioEconomics": "not evaluated",
+            "missingEvidence": ["structured_decision_to_intent_and_sell_fill_links", "original_protective_attempt_history",
+                "structured_observation_ids_side_size_and_arrival_times", "cumulative_displayed_size_and_partial_fills",
+                "measured_commission_spread_fx_breakdown", "portfolio_equity_and_mark_series",
+                "complete_per_candidate_exclusion_denominator", "external_flows_dividends_and_interest",
+                "historical_model_prompt_policy_versions_and_request_latency",
+                "point_in_time_information_availability_and_universe"],
+            "files": files
+        ]
+        let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+        try data.write(to: destination, options: [.atomic, .completeFileProtection])
+    }
+
+    nonisolated struct ResearchExportError: LocalizedError {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
+    }
+    #endif
+
     nonisolated struct AuditArchive: Codable, Sendable, Equatable {
         let id: UUID
         let count: Int

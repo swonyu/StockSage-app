@@ -1,7 +1,15 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+import UniformTypeIdentifiers
+#endif
 
 struct StockSagePaperAutomationPanel: View {
     @ObservedObject private var automation = StockSagePaperAutomation.shared
+    #if os(macOS)
+    @State private var exporting = false
+    @State private var exportResult: String?
+    #endif
 
     var body: some View {
         GroupBox("Qwen research and paper trading") {
@@ -109,6 +117,12 @@ struct StockSagePaperAutomationPanel: View {
                     }
                 }
                 if automation.hasLoadedBook {
+                #if os(macOS)
+                Button(exporting ? "Exporting verified history…" : "Export paper research…") { exportResearch() }
+                    .disabled(exporting)
+                    .help("Save the committed account, every referenced audit chunk and missing-evidence disclosures. No portfolio performance is calculated.")
+                if let exportResult { Text(exportResult).font(.caption).textSelection(.enabled) }
+                #endif
                 DisclosureGroup("Research and decisions · latest \(min(100, automation.book.decisions.count))") {
                     ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
                         VStack(alignment: .leading, spacing: 4) {
@@ -131,6 +145,27 @@ struct StockSagePaperAutomationPanel: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+
+    #if os(macOS)
+    private func exportResearch() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "stocksage-paper-research.json"
+        panel.message = "Private paper history and model evidence. This does not establish portfolio profitability."
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        exporting = true; exportResult = nil
+        Task {
+            let access = destination.startAccessingSecurityScopedResource()
+            defer { if access { destination.stopAccessingSecurityScopedResource() }; exporting = false }
+            do {
+                try await automation.exportResearch(to: destination)
+                exportResult = "Research export saved with verified archives and missing-evidence disclosures. Portfolio economics: not evaluated."
+            } catch {
+                exportResult = "Export failed: \(error.localizedDescription) Existing history and previous export preserved."
+            }
+        }
+    }
+    #endif
 
     private func settlementDateLabel(_ date: Date) -> String {
         var style = Date.FormatStyle(date: .abbreviated, time: .omitted)

@@ -11,6 +11,44 @@ struct StockSageFeedIngressTests {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     let auth = Data(#"[{"ev":"status","status":"auth_success"}]"#.utf8)
 
+    @Test(arguments: [false, true]) @MainActor
+    func mixedQuoteFrameCannotRefreshStalePeer(_ reverse: Bool) async throws {
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        let refresh = live.refreshReferences(now: now,
+            stillValid: { true }, conditions: { [801] }, exchangeList: { [:] })
+        let reference = try #require(refresh)
+        await reference.value
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress, symbols: ["AAPL", "MSFT"])
+        let rows = [
+            #"{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"c":801,"t":1699999989000}"#,
+            #"{"ev":"Q","sym":"MSFT","bp":199,"ap":201,"bs":100,"as":100,"c":801,"t":1700000000000}"#,
+            #"{"ev":"T","sym":"AAPL","p":100,"t":1699999989000}"#,
+            #"{"ev":"T","sym":"MSFT","p":200,"t":1700000000000}"#
+        ]
+        let ordered = reverse ? Array(rows.reversed()) : rows
+        #expect(ingress.offer(Data(("[" + ordered.joined(separator: ",") + "]").utf8), at: now))
+        let captured = try await drained(ingress, symbols: ["AAPL", "MSFT"])
+        #expect(captured.metrics.processedEvents == 5 && captured.metrics.failure == nil)
+        #expect(captured.newestSIP == now && captured.metrics.quoteSIPToReceive == 0)
+        var ideas = ["AAPL", "MSFT"].map { SageFix.idea($0, conviction: 0.8) }
+        var delivered: [String: L.Tick] = [:]
+        let published = live.publish(captured, from: ingress, now: now) { ticks, quotes, at in
+            delivered = StockSageStore.liveTicksForStore(ticks)
+            ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: at)
+        }
+        #expect(published && live.isStreaming)
+        let stale = try #require(live.quotes["AAPL"]), fresh = try #require(live.quotes["MSFT"])
+        #expect(stale.timestamp == now.addingTimeInterval(-11) && fresh.timestamp == now)
+        #expect(stale.costConditionVerified && fresh.costConditionVerified)
+        #expect(stale.spreadBps(at: now) == nil && fresh.spreadBps(at: now) != nil)
+        #expect(ideas[0].nbbo == nil && ideas[1].nbbo == fresh)
+        #expect(delivered["AAPL"]?.timestamp == now.addingTimeInterval(-11))
+        #expect(!L.isLiveObservation(delivered["AAPL"]?.timestamp, at: now))
+        #expect(L.isLiveObservation(delivered["MSFT"]?.timestamp, at: now))
+    }
+
     @Test @MainActor func expiredReferenceRefreshesButOldQuoteNeverBecomesFresh() async throws {
         let live = L()
         var requests = 0

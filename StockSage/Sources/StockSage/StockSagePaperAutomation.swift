@@ -479,6 +479,15 @@ final class StockSagePaperAutomation: ObservableObject {
         return value
     }
 
+    #if os(macOS)
+    func exportResearch(to destination: URL) async throws {
+        let account = url
+        try await Task.detached(priority: .utility) {
+            try Self.saveResearchExport(account: account, to: destination, at: Date())
+        }.value
+    }
+    #endif
+
     /// Preserve exact cycle accounting even when an unusually long cycle spans audit rotation.
     private func decisions(since date: Date) throws -> [Decision] {
         var result: [Decision] = []

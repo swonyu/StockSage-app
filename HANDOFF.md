@@ -1,5 +1,68 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Section16 research export — September 9, macOS delivery
+
+Owner approved implementing `stocksage-section-16-research/outputs/EXECUTION_RESULT.md`
+and paused all iOS work today (Asia/Riyadh). Parent is sole repository writer,
+installer and heavy tester; three agents supplied bounded source-only reviews.
+Good-spender remains uninstalled. Base: `3ef4c98196ce29bf9224a6a2eac68e0e98965f25`
+on `codex/qwen-chat-context`.
+
+Mac Chat paper panel now offers **Export paper research…**. The utility-priority
+exporter reads one committed account generation plus every referenced immutable
+audit chunk, reuses Book/Audit integrity checks, and atomically writes a JSON
+envelope containing exact original UTF-8 JSON with hashes/byte counts. It preserves
+nulls, omissions, fractional dates, prose, IDs and manifest order. The envelope
+declares Foundation's 2001 date epoch, full decision count, missing evidence and
+`portfolioEconomics: not evaluated`. No inferred causal joins, fabricated financial
+records or historical rewrites. Orphans are excluded; corrupt/missing/duplicate
+history and live-directory destinations are refused. Input ceiling is128MB; no
+partial export on overflow. This is not a peak-memory or output-size guarantee.
+
+Mixed fresh/stale Q/Q/T/T regression now exercises both frame orders through actual
+ingress, publication and Store cost projection. A separate real selection/Book.settle
+test confirms a fresh paper candidate cannot confer eligibility on a stale peer.
+These are new coverage, not proof that all feeds are current or paper fills use NBBO.
+
+Durable receipts: `/Users/saleh/StockSage-verification-20260909.M0MISy/SECTION16_EXPORT.md`.
+Initial missing-API red was a compile failure, not executed tests. Focused export:
+7 tests/1 suite/1.385s, exit0. Combined focused:72 tests/3 suites/5.669s, exit0
+(an earlier macro Sendable compile failure was corrected). Review's date-disclosure
+red:8 tests/1 suite/1 issue/1.401s, exit65; source reviewer closed the correction.
+Final canonical macOS: **1,992 tests/199 suites/62.045s, exit0**. Strict
+`tools/gate.sh <repo> tests`: macOS emit57s rc0, test typecheck77s rc0, aggregate0;
+**iOS SKIP at owner's request**. Canonical three exclusions unchanged. No live
+diagnostics, frozen measurement sentinels or iPhone/simulator work initiated.
+Final source manifest SHA256:
+`2fd38ab8d0feab7b39f0b05293662fd5b880f32cef2de0d31455de39a7afa0b1`.
+All manifest entries rechecked after gates. Candidate and installed bundle contain
+50 matching files and pass deep/strict codesign. Installed debug-dylib SHA256:
+`42ffab77401854c7c8d6307278a9fc5bbc406d8bb195c114d57366dbb7135238`.
+
+Installed `/Applications/StockSageX.app`, reopened through native app control, PID8631
+observed. The old app was already no longer running; cause not inferred, no force
+quit performed. An exclusive paper lease covered consistent pre-install backup:
+`/Users/saleh/StockSage-release-20260909.hrzqVh/paper-before-section16` (2 files;
+account SHA256 `accbf68d8ba9d088c7339a83856801e5c93250138b3afb1a0b1b9b83e17a0310`).
+Prior app retained at `retired-section16/StockSageX.app` in that release directory,
+as well as `previous/StockSageX.app`. Installation left paper bytes unchanged.
+Post-launch: all2 prior trades and1,130 prior decisions compare exactly; current
+history1,144 decisions,0 pending; enabled preference1 and app owns its paper lease.
+Qwen's existing local PID2120 remains running; no duplicate model or weight changes.
+
+Home rendered after launch with cached prices correctly labelled NOT live.
+Subsequent Chat-navigation and readback failed with the native computer-use pipe
+closed, so the new export dialog is **not visually/end-to-end verified**. No UI
+bypass or real owner research export was attempted. Backend export checks use only
+isolated synthetic files. No broker/relay activation, paid resources, push, new
+cohort, risk/strategy change or profitability calculation.
+
+Next actionable report work: reproduce the source-reviewed rotating-publication
+NBBO replacement gap before fixing; keep stale/withdrawal/session invalidation
+intact. Native side/size/partial accounting and process-interruption evidence remain
+open. The frozen forecast pilot is not a portfolio backtest; do not manufacture its
+missing records or promote this descriptive export to economic validation.
+
 ## Detail request lifecycle — September9, parent verified checkpoint
 
 Parent remains sole writer/installer/heavy tester on `codex/qwen-chat-context`,
