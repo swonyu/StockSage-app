@@ -1,5 +1,44 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac Chat setup and accessibility — September 9, verified; not installed
+
+Missing Mac configuration now has a short on-this-Mac explanation and a labeled
+gear Model settings button at the composer. The header omits its settings button
+only in this state; configured Chat retains its existing header and privacy copy.
+Same navigation callback, cancellation and request ownership. The destination's
+existing auto/localServerOnly connection probe may run; settings is not promised
+to be network-free. No new probing path and no live navigation during this QA.
+
+Source links keep their title, exact URL and nil-link guard; accessibility text
+adds ticker and attribution without grouping away warnings/dates/excerpts. The
+counter gets descriptive label/value using the same raw String.count (including
+over-limit and whitespace), not a validity judgment. Existing Command-Return
+shortcut gains help. Native UI only; no model/trading/history/validation changes.
+Non-Mac behavior preserved; iOS remains unverified and was not run today.
+
+Copy-policy RED: 18 tests / 10 expected assertion issues /0.387s, exit65.
+GREEN: 19 tests /1 suite /0.461s, exit0. Tests cover raw counts0/1/2000/2001,
+Unicode/whitespace and distinct source attributions. Parent inspected setup and
+completed-source-card captures at360/760; no clipping, linked news and unlinked
+lead preserved. Eight generated PNGs retained; four inspected. Setup-render
+fixture invokes no navigation callback. This is not live AX/keyboard acceptance.
+Sol critique and Astra final source review closed with no must-fix.
+
+Full Mac **2,047 tests /200 suites /79.488s, exit0**. Strict Mac emit70s and test
+typecheck93s passed, aggregate0: `macos=OK ios=SKIP tests=OK`. Same three opt-in
+exclusions retained. All372 frozen source entries rechecked after both gates.
+Manifest SHA256: b5d353c7a3cb3bbcd934336cbf4d31ab6c5b32503b49e9be3405fc187b8735a4.
+Exact64-entry retained candidate matches tested bundle; deep/strict codesign0.
+Debug dylib SHA256: f930996f9b4cc702f0c050055bbfb68bd47ccc30be9bed719c61aa3a50386050.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-chat-guidance/StockSageX.app`.
+Same root: CHAT_GUIDANCE.md, chat-guidance-images, focused/full logs and xcresults,
+strict detailed logs, source manifest/check and completed plan.
+
+**Not installed:** preserve installed27a4727/PID40101, Qwen2120, paused paper and
+session-only manual500 research pending the existing owner restart/clear choice.
+Parent sole writer/tester. No push, paid resources, relay, real orders or record
+edits. Live settings activation, keyboard focus and VoiceOver remain unverified.
+
 ## Mac Edit question — September 9, verified candidate; not installed
 
 Completed question bubbles now offer **Edit question**: copy the exact original

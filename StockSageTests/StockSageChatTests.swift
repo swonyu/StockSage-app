@@ -19,6 +19,21 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test func macGuidanceNamesTheActualActionSourceAndRawLength() {
+        #expect(StockSageChatSection.modelSetupGuidance.contains("Model settings"))
+        #expect(StockSageChatSection.modelSetupGuidance.contains("on this Mac"))
+        #expect(!StockSageChatSection.modelSetupGuidance.contains("iPhone"))
+        for attribution in ["Fixture news", "مصدر تجريبي"] {
+            let source = StockSageChat.Source(id: "fixture", subject: "ORCL", attribution: attribution,
+                date: now, excerpt: "Synthetic excerpt", warning: "Unverified fixture", link: nil)
+            #expect(StockSageChatSection.sourceLinkLabel(source) == "Read ORCL source · \(attribution)")
+        }
+        for (text, count) in [("", 0), ("x", 1), (String(repeating: "x", count: 2_000), 2_000),
+                              (String(repeating: "x", count: 2_001), 2_001), ("👩🏽‍💻ا", 2), (" \n", 2)] {
+            #expect(StockSageChatSection.questionLengthDescription(text) == "\(count) of 2,000 characters")
+        }
+    }
+
     @Test(arguments: ["", "My unsent draft", " \n"], [false, true])
     func reusingAQuestionNeverOverwritesADraftOrRunsDuringARequest(draft: String, pending: Bool) {
         var question = draft
@@ -97,6 +112,17 @@ struct StockSageChatTests {
     }
 
     @Test(arguments: [360, 760])
+    func renderMissingModelGuidanceWithoutOpeningSettings(width: Int) async throws {
+        var opens = 0
+        let view = StockSageChatSection.missingModelNotice { opens += 1 }
+            .padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-chat-guidance-\(width)")
+        #expect(size.width == CGFloat(width) && size.height > 60)
+        #expect(opens == 0, "Rendering guidance must not invoke settings navigation")
+    }
+
+    @Test(arguments: [360, 760])
     func renderInputAndStorageWarnings(width: Int) async throws {
         let issue = "Use 1–2000 characters without credentials or account identifiers. Nothing was saved or sent."
         let storage = "Saved Chat history could not be read. It has not been overwritten. Clear history to start again."
@@ -113,13 +139,23 @@ struct StockSageChatTests {
     func renderCapturedTurnWithoutLiveChat(width: Int, state: String) async throws {
         let pending = state == "pending"
         let edit: (() -> Void)? = state == "completed" ? {} : nil
-        let captured = snapshot()
+        var captured = snapshot()
         let fact = try #require(captured.facts.first)
+        let sources: [StockSageChat.Source] = [
+            .init(id: "fixture.news", subject: "ORCL", attribution: "Fixture market bulletin with a deliberately long attribution",
+                  date: now, excerpt: "Synthetic source excerpt · تحقق من المصدر والتاريخ.",
+                  warning: "Attributed report, not a verified forecast or an executable quote.",
+                  link: URL(string: "https://example.invalid/research")),
+            .init(id: "fixture.lead", subject: "ORCL", attribution: "Private imported lead",
+                  date: now, excerpt: "Synthetic imported text without a public destination.",
+                  warning: "Unverified imported claim, not trading evidence.", link: nil)
+        ]
+        captured.sources = sources
         let turn = StockSageChatSession.Turn(id: UUID(),
             question: "What does this dated observation tell me, and what remains unknown?",
             snapshot: captured, model: "fixture",
             answer: "Synthetic answer: a recorded observation is not a prediction. Check the captured source and its timestamp below.",
-            evidence: [fact.id], notice: "Unverified draft · fixture")
+            evidence: [fact.id] + sources.map(\.id), notice: "Unverified draft · fixture")
         let view = StockSageChatSection.turnContent(turn, pending: pending, editQuestion: edit)
             .padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)

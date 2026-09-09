@@ -78,7 +78,11 @@ struct StockSageChatSection: View {
                     .font(.headline).foregroundStyle(.secondary)
                 #endif
                 Spacer()
+                #if os(macOS)
+                if config != nil { Button("Model settings", action: openModelSettings) }
+                #else
                 Button("Model settings", action: openModelSettings)
+                #endif
                 Button("Clear history", role: .destructive) { confirmClear = true }
                     .disabled(chat.turns.isEmpty && chat.storageError == nil)
             }
@@ -235,10 +239,15 @@ struct StockSageChatSection: View {
                     .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config == nil)
                     #if os(macOS)
                     .keyboardShortcut(.return, modifiers: .command)
+                    .help("Send your question with Command-Return.")
                     #endif
                 if chat.pending != nil { Button("Cancel") { cancel() } }
                 Spacer()
                 Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
+                    #if os(macOS)
+                    .accessibilityLabel("Question character count")
+                    .accessibilityValue(Self.questionLengthDescription(question))
+                    #endif
             }
             #if os(macOS)
             Self.composerWarnings(issue: issue, storageError: chat.storageError)
@@ -247,7 +256,7 @@ struct StockSageChatSection: View {
             #endif
             #if os(macOS)
             if config == nil {
-                connectionNotice
+                Self.missingModelNotice(openModelSettings: openModelSettings)
             } else {
                 DisclosureGroup("Privacy and model connection") { connectionNotice }
                     .font(.caption).foregroundStyle(.secondary)
@@ -259,6 +268,25 @@ struct StockSageChatSection: View {
     }
 
     #if os(macOS)
+    static let modelSetupGuidance = "Configure a local model in Model settings. Chat requires a server on this Mac."
+
+    static func missingModelNotice(openModelSettings: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(modelSetupGuidance).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Model settings", systemImage: "gearshape", action: openModelSettings)
+                .controlSize(.small)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func sourceLinkLabel(_ source: StockSageChat.Source) -> String {
+        "Read \(source.subject) source · \(source.attribution)"
+    }
+
+    static func questionLengthDescription(_ question: String) -> String {
+        "\(question.count) of 2,000 characters"
+    }
+
     static func reuseQuestion(_ original: String, question: Binding<String>, issue: Binding<String?>, pending: Bool) {
         guard !pending, question.wrappedValue.isEmpty else { return }
         question.wrappedValue = original
@@ -302,8 +330,13 @@ struct StockSageChatSection: View {
     #endif
 
     private var connectionNotice: some View {
-        Text(config == nil
-                    ? "Chat requires the local server enabled in Catalysts → Explanation model. On iPhone, localhost is the phone, not your Mac; private HTTPS serving is not configured in this slice."
+        #if os(macOS)
+        let missing = Self.modelSetupGuidance
+        #else
+        let missing = "Chat requires the local server enabled in Catalysts → Explanation model. On iPhone, localhost is the phone, not your Mac; private HTTPS serving is not configured in this slice."
+        #endif
+        return Text(config == nil
+                    ? missing
                     : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
                     .font(.caption).foregroundStyle(.secondary)
     }
@@ -313,7 +346,14 @@ struct StockSageChatSection: View {
             Text("\(source.subject) · \(source.attribution) · \(source.publicationTime ?? StockSageNewsService.instant(source.date))").font(.caption.bold())
             Text(source.warning).font(.caption).foregroundStyle(.secondary)
             Text(source.excerpt).font(.callout).textSelection(.enabled)
-            if let link = source.link { Link("Read attributed source", destination: link) }
+            if let link = source.link {
+                #if os(macOS)
+                Link("Read attributed source", destination: link)
+                    .accessibilityLabel(Self.sourceLinkLabel(source))
+                #else
+                Link("Read attributed source", destination: link)
+                #endif
+            }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
