@@ -64,6 +64,16 @@ struct StockSageMarketHoursTests {
 
     // MARK: NASDAQ
 
+    @Test func publishedHolidaysAndEarlyClosesDriveAllTransitions() {
+        let calendar = Self.utcCalendar
+        let closed = StockSageMarketHours.nasdaqState(at: utc(2026, 11, 26, 16, 0), calendar: calendar)
+        #expect(closed.phase == .closed)
+        #expect(closed.nextTransition == utc(2026, 11, 27, 9, 0))
+        let shortened = StockSageMarketHours.nasdaqState(at: utc(2026, 11, 27, 18, 0), calendar: calendar)
+        #expect(shortened.phase == .afterHours && shortened.nextTransition == utc(2026, 11, 27, 22, 0))
+        #expect(StockSageMarketHours.nasdaqState(at: utc(2026, 12, 25, 16, 0), calendar: calendar).phase == .closed)
+    }
+
     @Test func tuesdayTenAMETIsOpen() {
         let date = utc(2026, 7, 21, 14, 0) // Tue 10:00 EDT
         let state = StockSageMarketHours.nasdaqState(at: date, calendar: Self.utcCalendar)

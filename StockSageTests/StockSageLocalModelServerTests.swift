@@ -12,6 +12,30 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    @Test @MainActor func responseReaderCapsActualBytesNotJustContentLength() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ModelBodyProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        for path in ["small", "chunked", "understated", "declared"] {
+            let request = URLRequest(url: URL(string: "https://fixture.invalid/\(path)")!)
+            do {
+                let (data, _) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: 1024)
+                #expect(path == "small" && data.count == 512, "Oversized body accepted: \(path)")
+            } catch {
+                #expect(path != "small")
+                #expect((error as? URLError)?.code == .dataLengthExceedsMaximum)
+            }
+        }
+    }
+
+    @Test func sharedConfigRejectsCredentialBearingURLs() {
+        for url in ["http://owner:fixture@127.0.0.1:8765", "http://127.0.0.1:8765?key=fixture",
+                    "http://127.0.0.1:8765#fixture"] {
+            #expect(S.config(url: url, model: "fixture") == nil)
+        }
+    }
+
     @Test @MainActor func redirectsCannotForwardModelFactsToAnotherEndpoint() throws {
         let session = URLSession(configuration: .ephemeral)
         let url = URL(string: "http://127.0.0.1:8765/v1/chat/completions")!
@@ -144,4 +168,21 @@ struct StockSageLocalModelServerTests {
         #expect(S.parseChatResponse(Data(#"{"message":{"content":"   "}}"#.utf8), isOllama: true) == nil)
         #expect(S.parseChatResponse(Data(#"{"choices":[]}"#.utf8), isOllama: false) == nil)
     }
+}
+
+/// URLProtocol provides actual URLSession bytes without network, credentials or a server.
+private nonisolated final class ModelBodyProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated override class func canInit(with request: URLRequest) -> Bool { true }
+    nonisolated override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    nonisolated override func startLoading() {
+        let url = request.url!
+        let path = url.lastPathComponent
+        let headers = path == "declared" ? ["Content-Length": "2048"]
+            : path == "understated" ? ["Content-Length": "512"] : [:]
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        for _ in 0..<(path == "small" ? 1 : 4) { client?.urlProtocol(self, didLoad: Data(repeating: 65, count: 512)) }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    nonisolated override func stopLoading() {}
 }

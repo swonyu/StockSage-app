@@ -560,6 +560,11 @@ struct StockSagePaperTraderTests {
         #expect(abs((p.target ?? 0) - 12.1) < 1e-9)
         #expect(abs(p.shares - 20.0) < 1e-9)
         #expect(abs(p.entry * p.shares - 220.0) < 1e-9)    // position value preserved
+        let step = StockSagePaperTrader.step(current: [t],
+            ideas: [idea("SPLT", price: 11, .buy, stop: 10.45, target: 12.1)],
+            histories: ["SPLT": h], openDate: d(3), costsFor: { _ in costs })
+        #expect(step.closes == [p], "Changed open rebases must reach the existing persistence batch")
+        #expect(step.opens.isEmpty, "A rebase is not a terminal close")
     }
 
     @Test func rebasedStopStillFiresAtHonestMinusOneR() {

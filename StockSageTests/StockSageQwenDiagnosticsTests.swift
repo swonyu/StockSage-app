@@ -67,7 +67,7 @@ struct StockSageQwenDiagnosticsTests {
         }
     }
 
-    @Test func malformedEmptyAndOversizedEnvelopesRemainCompatible() throws {
+    @Test func malformedEmptyAndOversizedEnvelopesAreRejected() throws {
         for ollama in [true, false] {
             for (raw, expected): (String, S.FailureCategory) in [("not json", .malformedJSON), ("[]", .responseShape),
                 ("{}", .missingContent), (#"{"choices":[]}"#, .missingContent)] {
@@ -81,13 +81,14 @@ struct StockSageQwenDiagnosticsTests {
                 Issue.record("Empty reply accepted"); continue
             }
             #expect(empty.diagnostic.category == .emptyContent)
-            // The old transport had no size rejection. Flag size, preserving acceptance.
+            // Resource cap is a transport contract, not a model/strategy output threshold.
             let large = String(repeating: "a", count: 1_048_577)
             let data = try body(large, ollama: ollama)
-            let reply = try S.parseCompletion(data, isOllama: ollama).get()
-            #expect(reply.text == large && reply.diagnostic.oversizedBody)
-            #expect(S.parseChatResponse(data, isOllama: ollama) == large)
-            #expect(A.validate(reply.text, facts: facts) == .failure(.oversizedText))
+            guard case .failure(let failure) = S.parseCompletion(data, isOllama: ollama) else {
+                Issue.record("Oversized response retained"); continue
+            }
+            #expect(failure.diagnostic.category == .responseTooLarge && failure.diagnostic.oversizedBody)
+            #expect(S.parseChatResponse(data, isOllama: ollama) == nil)
         }
         #expect(S.boundedCount(Int.max) == 16_777_216 && S.boundedCount(-1) == 0)
     }
@@ -129,6 +130,64 @@ struct StockSageQwenDiagnosticsTests {
         })
         guard case .failure(let failure) = nonHTTP else { Issue.record("Non-HTTP accepted"); return }
         #expect(failure.diagnostic.category == .nonHTTP)
+    }
+
+    @Test func obsoleteCancelledOrRemoteOfflineRequestsNeverDispatchOrPublish() async throws {
+        let data = try body(text, ollama: false)
+        for boundary in ["before", "during"] {
+            for reason in ["config", "cancel", "remote", "invalidURL"] {
+                var valid = boundary != "before", allowed = boundary != "before", calls = 0
+                let endpoint = reason == "remote" ? URL(string: "https://fixture.invalid")!
+                    : reason == "invalidURL" ? URL(string: "http://user:fixture@127.0.0.1:8765")! : config.baseURL
+                let c = S.Config(baseURL: endpoint, model: config.model)
+                let task = Task { @MainActor in
+                    if reason == "cancel", boundary == "before" { withUnsafeCurrentTask { $0?.cancel() } }
+                    return await S.completeDetailed(c, isOllama: false, system: "private facts", user: "fixture",
+                        stillValid: { reason != "config" || valid }, externalAllowed: { allowed },
+                        transport: { _ in
+                            calls += 1
+                            await Task.yield()
+                            valid = false; allowed = false
+                            if reason == "cancel" { withUnsafeCurrentTask { $0?.cancel() } }
+                            return (data, HTTPURLResponse(url: endpoint, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                        })
+                }
+                let result = await task.value
+                #expect(calls == (boundary == "during" && reason != "invalidURL" ? 1 : 0), "Unexpected dispatch: \(boundary) \(reason)")
+                #expect((try? result.get()) == nil, "Obsolete result published: \(boundary) \(reason)")
+            }
+        }
+        let local = await S.completeDetailed(config, isOllama: false, system: "", user: "", externalAllowed: { false }, transport: { _ in
+            (data, HTTPURLResponse(url: config.baseURL, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        #expect(try local.get().text == text, "Actual loopback inference still works offline")
+    }
+
+    @Test func probeCannotContinueFallbackAfterRevocationOrAcceptOversizedBody() async throws {
+        for boundary in ["before", "fallback", "publish", "oversized"] {
+            var allowed = boundary != "before", calls = 0
+            let remote = S.Config(baseURL: URL(string: "https://fixture.invalid")!, model: "fixture")
+            let probe = await S.probe(remote, externalAllowed: { allowed }, transport: { request in
+                calls += 1
+                await Task.yield()
+                if boundary != "oversized" { allowed = false }
+                let data = boundary == "oversized" ? Data(repeating: 65, count: 262_145)
+                    : Data(#"{"models":[{"name":"fixture"}]}"#.utf8)
+                return (data, HTTPURLResponse(url: request.url!, statusCode: boundary == "fallback" ? 404 : 200,
+                                             httpVersion: nil, headerFields: nil)!)
+            })
+            #expect(!probe.reachable && !probe.hasModel && probe.models.isEmpty)
+            #expect(calls == (boundary == "before" ? 0 : boundary == "oversized" ? 2 : 1))
+        }
+        for status in [200, 500] {
+            let result = await S.completeDetailed(config, isOllama: false, system: "", user: "", transport: { request in
+                (Data(repeating: 65, count: S.maximumResponseBytes + 1),
+                 HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            })
+            #expect((try? result.get()) == nil)
+            guard case .failure(let error) = result else { continue }
+            #expect(error.diagnostic.category == .responseTooLarge && error.diagnostic.oversizedBody)
+        }
     }
 
     @Test func realTransportSeamPreservesRequestAndStatus() async throws {

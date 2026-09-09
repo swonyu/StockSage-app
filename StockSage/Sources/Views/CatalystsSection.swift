@@ -49,8 +49,8 @@ struct CatalystsSection: View {
     @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL: String = StockSageLocalModelServer.defaultURL
     @AppStorage(StockSageLocalModelServer.modelKey) private var serverModel: String = StockSageLocalModelServer.defaultModel
     @State private var probeState = ConnectionProbeState()
-    private var probe: StockSageLocalModelServer.Probe? { probeState.current(for: explanationSettings) }
-    private var probing: Bool { probeState.isProbing(for: explanationSettings) }
+    private var probe: StockSageLocalModelServer.Probe? { probeState.current(for: explanationRequestSettings) }
+    private var probing: Bool { probeState.isProbing(for: explanationRequestSettings) }
 
     /// Shared state transitions for manual and automatic connection checks.
     struct ConnectionProbeState {
@@ -85,7 +85,13 @@ struct CatalystsSection: View {
 
     private var backendBinding: Binding<StockSageLocalModelServer.Backend> {
         Binding(get: { StockSageCatalystNarrator.selectedBackend(backendRaw) },
-               set: { backendRaw = $0.rawValue })
+               set: { updateModelSetting($0.rawValue, key: StockSageLocalModelServer.backendKey) })
+    }
+
+    private func updateModelSetting(_ value: String, key: String) {
+        if StockSageLocalModelServer.setSetting(value, for: key) {
+            StockSagePaperAutomation.shared.cancelResearchForSettingsChange()
+        }
     }
 
     /// Color for the combined status line: green once a probe has actually confirmed the model
@@ -98,6 +104,10 @@ struct CatalystsSection: View {
 
     /// Structured task identity: no delimiter collisions between URL/model settings.
     private var explanationSettings: [String] { [backendRaw, serverURL, serverModel] }
+    /// The revision distinguishes A→B→A while a source fetch or probe is suspended.
+    private var explanationRequestSettings: [String] {
+        explanationSettings + [StockSageLocalModelServer.settingsRevision() ?? ""]
+    }
 
     /// [network-safety-warn-first], fix pass 2026-09-06 (review blocker): true whenever the
     /// PERSISTED server settings parse to a non-loopback host, independent of which backend is
@@ -121,11 +131,13 @@ struct CatalystsSection: View {
 
     private func testConnection() {
         guard !probing else { return }
-        let request = probeState.begin(settings: explanationSettings)
+        let settings = explanationRequestSettings
+        let request = probeState.begin(settings: settings)
         let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel)
         Task {
-            let result = await StockSageCatalystNarrator.probeServer(config: config)
-            probeState.finish(result, request: request, currentSettings: explanationSettings,
+            let result = await StockSageCatalystNarrator.probeServer(config: config,
+                stillValid: { settings == explanationRequestSettings })
+            probeState.finish(result, request: request, currentSettings: explanationRequestSettings,
                               cancelled: Task.isCancelled)
         }
     }
@@ -140,10 +152,12 @@ struct CatalystsSection: View {
             probeState = .init()
             return
         }
-        let request = probeState.begin(settings: explanationSettings)
+        let settings = explanationRequestSettings
+        let request = probeState.begin(settings: settings)
         let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel)
-        let result = await StockSageCatalystNarrator.probeServer(config: config)
-        probeState.finish(result, request: request, currentSettings: explanationSettings,
+        let result = await StockSageCatalystNarrator.probeServer(config: config,
+            stillValid: { settings == explanationRequestSettings })
+        probeState.finish(result, request: request, currentSettings: explanationRequestSettings,
                           cancelled: Task.isCancelled)
     }
 
@@ -178,7 +192,7 @@ struct CatalystsSection: View {
                 }
             }
         }
-        .task(id: explanationSettings) { await probeIfBackendNeedsServer() }
+        .task(id: explanationRequestSettings) { await probeIfBackendNeedsServer() }
         .onDisappear { probeState = .init() }
     }
 
@@ -299,9 +313,9 @@ struct CatalystsSection: View {
                     }
                 }
                 .pickerStyle(.menu)
-                TextField("Server URL", text: $serverURL)
+                TextField("Server URL", text: Binding(get: { serverURL }, set: { updateModelSetting($0, key: StockSageLocalModelServer.urlKey) }))
                     .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
-                TextField("Model", text: $serverModel)
+                TextField("Model", text: Binding(get: { serverModel }, set: { updateModelSetting($0, key: StockSageLocalModelServer.modelKey) }))
                     .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
                 Button(probing ? "Testing…" : "Test connection") { testConnection() }
                     .buttonStyle(.plain).touchHitArea().disabled(probing)
@@ -632,10 +646,11 @@ struct CatalystsSection: View {
         guard !filingsFetched.contains(symbol) else { return }
         filingsLoading.insert(symbol)
         Task {
+            defer { filingsLoading.remove(symbol) }
             let found = await StockSageDisclosureService.recentFilings(for: symbol, forms: ["8-K"], limit: 5)
+            guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
             filings[symbol] = found
             filingsFetched.insert(symbol)
-            filingsLoading.remove(symbol)
         }
     }
 
@@ -645,16 +660,20 @@ struct CatalystsSection: View {
         narrating.insert(symbol)
         let facts = StockSageCatalystNarrator.facts(for: brief)
         let settings = explanationSettings
+        let requestSettings = explanationRequestSettings
         Task {
             defer { narrating.remove(symbol) }
             let (sources, news) = await Self.citedSources(for: symbol)
             // Do not silently send a pending Explain request to newly selected settings.
-            guard !Task.isCancelled, settings == explanationSettings,
-                  news.items.isEmpty || ToolPolicy.isExternalAllowed else { return }
-            let result = await StockSageCatalystNarrator.explain(brief, sources: sources)
-            guard !Task.isCancelled, news.items.isEmpty || ToolPolicy.isExternalAllowed else { return }
+            let allowed: @MainActor () -> Bool = {
+                !Task.isCancelled && requestSettings == explanationRequestSettings
+                    && (sources.isEmpty || ToolPolicy.isExternalAllowed)
+            }
+            guard allowed() else { return }
+            let result = await StockSageCatalystNarrator.explain(brief, sources: sources, stillValid: allowed)
+            guard allowed() else { return }
             // Publish the response and its ORIGINAL context together, after the last await.
-            // A settings change during generation leaves a readable, explicitly stale snapshot.
+            // Retain prior snapshots; never publish a cancelled generation for new settings.
             narrationFacts[symbol] = facts
             narrationSettings[symbol] = settings
             narrationSources[symbol] = sources

@@ -332,9 +332,11 @@ enum StockSageCatalystNarrator {
 
     /// Probe the settings captured at the button/task boundary, never re-read preferences
     /// after scheduling. Invalid settings return nil without contacting any endpoint.
-    static func probeServer(config: StockSageLocalModelServer.Config?) async -> StockSageLocalModelServer.Probe? {
+    static func probeServer(config: StockSageLocalModelServer.Config?,
+        stillValid: @MainActor () -> Bool = { true },
+        transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> StockSageLocalModelServer.Probe? {
         guard let config else { return nil }
-        return await StockSageLocalModelServer.probe(config)
+        return await StockSageLocalModelServer.probe(config, stillValid: stillValid, transport: transport)
     }
 
     /// Availability check → local session → respond → trim → number-fence. Never throws, never
@@ -391,10 +393,11 @@ enum StockSageCatalystNarrator {
     private static func explainViaServer(_ brief: StockSageCatalystWatch.Brief,
                                          config: StockSageLocalModelServer.Config,
                                          isOllama: Bool,
-                                         sources: [CitedSource] = []) async -> Result {
+                                         sources: [CitedSource] = [],
+                                         stillValid: @MainActor () -> Bool = { true }) async -> Result {
         let briefFacts = facts(for: brief, sources: sources)
         let result = await StockSageLocalModelServer.complete(
-            config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts))
+            config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts), stillValid: stillValid)
         switch result {
         case .success(let text):
             return checkedResponse(text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count)
@@ -423,39 +426,71 @@ enum StockSageCatalystNarrator {
     /// `sources` — the citable news/filing/insider items the Explain flow fetched in parallel —
     /// is passed straight through to whichever backend runs; each backend's own number-fence
     /// AND `citationsValid` check gate the result before it ever becomes `.text`.
-    static func explain(_ brief: StockSageCatalystWatch.Brief, sources: [CitedSource] = []) async -> Result {
-        let backend = selectedBackend(UserDefaults.standard.string(forKey: StockSageLocalModelServer.backendKey))
-        let urlSetting = UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey)
+    static func explain(_ brief: StockSageCatalystWatch.Brief, sources: [CitedSource] = [],
+        defaults: UserDefaults = .standard,
+        stillValid: @escaping @MainActor () -> Bool = { true },
+        checkServer: ((StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe)? = nil,
+        local: (() async -> Result)? = nil,
+        server: ((StockSageLocalModelServer.Config, Bool) async -> Result)? = nil) async -> Result {
+        let backend = selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
+        let urlSetting = defaults.string(forKey: StockSageLocalModelServer.urlKey)
             ?? StockSageLocalModelServer.defaultURL
-        let modelSetting = UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey)
+        let modelSetting = defaults.string(forKey: StockSageLocalModelServer.modelKey)
             ?? StockSageLocalModelServer.defaultModel
+        let revision = StockSageLocalModelServer.settingsRevision(defaults)
+        let active: @MainActor @Sendable () -> Bool = {
+            !Task.isCancelled && stillValid() && revision == StockSageLocalModelServer.settingsRevision(defaults)
+                && backend == selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
+                && urlSetting == (defaults.string(forKey: StockSageLocalModelServer.urlKey) ?? StockSageLocalModelServer.defaultURL)
+                && modelSetting == (defaults.string(forKey: StockSageLocalModelServer.modelKey) ?? StockSageLocalModelServer.defaultModel)
+        }
+        let stopped = Result.unavailable("Explanation cancelled or model settings changed. Request a new explanation with the current settings.")
+        guard active() else { return stopped }
+
+        func onDevice() async -> Result {
+            guard active() else { return stopped }
+            let result = if let local { await local() } else { await explainOnDevice(brief, sources: sources) }
+            return active() ? result : stopped
+        }
+        func viaServer(_ config: StockSageLocalModelServer.Config, _ ollama: Bool) async -> Result {
+            guard active() else { return stopped }
+            let result = if let server { await server(config, ollama) }
+                else { await explainViaServer(brief, config: config, isOllama: ollama, sources: sources, stillValid: active) }
+            return active() ? result : stopped
+        }
+        func fetchProbe(_ config: StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe {
+            if let checkServer { return await checkServer(config) }
+            return await StockSageLocalModelServer.probe(config, stillValid: active)
+        }
 
         switch backend {
         case .off:
             return .unavailable("Explanations are turned off in the Explanation model settings.")
 
         case .onDeviceOnly:
-            return await explainOnDevice(brief, sources: sources)
+            return await onDevice()
 
         case .localServerOnly:
             guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
                 return .unavailable(humanServerError(.invalidConfig))
             }
-            let probe = await StockSageLocalModelServer.probe(config)
+            let probe = await fetchProbe(config)
+            guard active() else { return stopped }
             guard probe.reachable, probe.hasModel else {
                 return .unavailable("Local server unavailable: \(probe.detail)")
             }
-            return await explainViaServer(brief, config: config, isOllama: probe.isOllama, sources: sources)
+            return await viaServer(config, probe.isOllama)
 
         case .auto:
             guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
-                return await explainOnDevice(brief, sources: sources)
+                return await onDevice()
             }
-            let probe = await StockSageLocalModelServer.probe(config)
+            let probe = await fetchProbe(config)
+            guard active() else { return stopped }
             if probe.reachable, probe.hasModel {
-                return await explainViaServer(brief, config: config, isOllama: probe.isOllama, sources: sources)
+                return await viaServer(config, probe.isOllama)
             }
-            let onDeviceResult = await explainOnDevice(brief, sources: sources)
+            let onDeviceResult = await onDevice()
             if case .unavailable(let onDeviceReason) = onDeviceResult {
                 return .unavailable("Local server: \(probe.detail). On-device: \(onDeviceReason)")
             }

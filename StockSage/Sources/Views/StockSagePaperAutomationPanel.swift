@@ -17,10 +17,11 @@ struct StockSagePaperAutomationPanel: View {
                     }
                 }
                 Text(automation.status).font(.callout)
-                Text("Paper sessions: pre-market, regular and after-hours · 04:00–20:00 New York time")
+                Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
                     .font(.caption).foregroundStyle(.secondary)
-                Text("Same-day only · entries stop and closing requests begin at 19:55 New York")
+                Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
                     .font(.caption).foregroundStyle(.secondary)
+                if automation.hasLoadedBook {
                 if automation.book.open.contains(where: { StockSagePaperAutomation.dayExitDue(openedAt: $0.openedAt, now: Date()) }) {
                     Text("Close-out required: awaiting fresh later prices. No overnight or closing fill is assumed.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
@@ -82,16 +83,24 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Next research due \(last.addingTimeInterval(StockSagePaperAutomation.interval).formatted(date: .omitted, time: .shortened)) · while awake, connected and in session")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if let audit = automation.book.audit, !audit.archives.isEmpty {
+                    Text("Older audit records preserved in \(audit.archives.count) verified archive chunks beside the account. Recent history is shown below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                } else {
+                    Text("Paper balances and history unavailable: the saved account could not be verified. No new account balance is assumed.")
+                        .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                }
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
                 DisclosureGroup("Simulation policy and limitations") {
-                    Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop at 19:55 New York and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
+                    Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
                     Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Qwen reviews all paper holdings first, then up to \(StockSagePaperAutomation.discoveryLimit) affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
                     Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
                     Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
-                    Text("Simulated fills require a Massive SIP observation after the decision, received within two minutes. When snapshots are stale or missing, a bounded tick-tape fallback checks trade conditions and actual participant time; average-price, prior-reference, corrected and unknown-condition trades are excluded. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts. Exits use a subsequent observed price; gaps and missed crossings can worsen outcomes.")
-                    Text("Runs while this Mac is awake and StockSage is open. Weekday session hours do not include a holiday calendar; stale or missing data blocks fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
+                    Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")
+                    Text("Runs while this Mac is awake and StockSage is open. Published 2026 holidays and early closes are modeled; unsupported calendar years and stale or missing data block fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
                 }.font(.caption).foregroundStyle(.secondary)
-                if !automation.book.open.isEmpty {
+                if automation.hasLoadedBook, !automation.book.open.isEmpty {
                     DisclosureGroup("Paper positions") {
                         ForEach(automation.book.open) { trade in
                             Text("\(trade.symbol) · \(Int(trade.shares)) shares · entry \(trade.entry.formatted(.currency(code: "USD"))) · stop \(trade.stop.formatted(.currency(code: "USD")))")
@@ -99,7 +108,8 @@ struct StockSagePaperAutomationPanel: View {
                         }
                     }
                 }
-                DisclosureGroup("Research and decisions · latest 100") {
+                if automation.hasLoadedBook {
+                DisclosureGroup("Research and decisions · latest \(min(100, automation.book.decisions.count))") {
                     ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(decision.symbol) \(decision.action) · \(decision.at.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
@@ -116,6 +126,7 @@ struct StockSagePaperAutomationPanel: View {
                         }.textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                         Divider()
                     }
+                }
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }

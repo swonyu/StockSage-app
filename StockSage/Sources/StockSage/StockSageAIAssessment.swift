@@ -35,11 +35,16 @@ enum StockSageAIAssessment {
             }
             if let e = earnings, e.symbol == idea.symbol.uppercased() {
                 let status: String
-                switch e.status {
-                case .projected: status = "projected, not announced"
-                case .dateKnown: status = e.confirmed == true ? "confirmed" : "estimated or confirmation unknown"
-                case .notApplicable: status = "not applicable"
-                case .unchecked: status = "unchecked or no usable answer; not proof of no earnings"
+                let age = asOf.timeIntervalSince(e.checkedAt)
+                if !(0..<StockSageStore.earningsCheckTTL).contains(age) {
+                    status = "stale or invalid check clock; current confirmation unavailable"
+                } else {
+                    switch e.status {
+                    case .projected: status = "projected, not announced"
+                    case .dateKnown: status = e.confirmed == true ? "confirmed" : "estimated or confirmation unknown"
+                    case .notApplicable: status = "not applicable"
+                    case .unchecked: status = "unchecked or no usable answer; not proof of no earnings"
+                    }
                 }
                 result.append("Earnings: \(e.earningsDate?.ISO8601Format() ?? "date unavailable"), status: \(status). Source: \(e.source). Last checked: \(e.checkedAt.ISO8601Format()). A scheduled release does not establish a beat or price direction.")
             } else { result.append("Earnings: not checked; date and outcome unknown.") }
@@ -258,28 +263,33 @@ final class StockSageAIAssessments: ObservableObject {
             errors[idea.symbol] = "Choose a reachable loopback Qwen server in Catalysts → Explanation model. Off/on-device-only disables AI badges. Remote iPhone serving is not configured here."
             return
         }
+        let revision = StockSageLocalModelServer.settingsRevision()
+        let active: @MainActor @Sendable () -> Bool = {
+            !Task.isCancelled && Self.configuration == config && !store.isSampleData
+                && StockSageLocalModelServer.settingsRevision() == revision
+        }
         activeSymbol = idea.symbol
         let news = await StockSageNewsService.recentNews(for: idea.symbol, limit: 3)
         activeSymbol = nil
-        guard !Task.isCancelled, Self.configuration == config, !store.isSampleData,
+        guard active(),
               let current = store.ideas.first(where: { $0.symbol == idea.symbol }) else { return }
         let context = StockSageAIAssessment.Context(idea: current, earnings: store.catalystChain[idea.symbol],
             company: store.companyEventChecks[idea.symbol] ?? [:], news: news,
             research: StockSageResearchLeads.load(symbol: idea.symbol), at: Date())
         await assess(context, config: config, now: Date(), stillValid: {
-            guard Self.configuration == config, !store.isSampleData,
+            guard active(),
                   let current = store.ideas.first(where: { $0.symbol == idea.symbol }) else { return false }
             return context.matches(idea: current, earnings: store.catalystChain[idea.symbol],
                                    company: store.companyEventChecks[idea.symbol] ?? [:])
         }, generateDetailed: { config, prompt in
-            let probe = await StockSageLocalModelServer.probe(config)
-            guard !Task.isCancelled, Self.configuration == config, probe.reachable, probe.hasModel else {
+            let probe = await StockSageLocalModelServer.probe(config, stillValid: active)
+            guard active(), probe.reachable, probe.hasModel else {
                 let category: StockSageLocalModelServer.FailureCategory = Task.isCancelled ? .cancelled
-                    : (Self.configuration != config ? .invalidConfig : (!probe.reachable ? .unavailable : .modelMissing))
+                    : (!active() ? .obsoleteRequest : (!probe.reachable ? .unavailable : .modelMissing))
                 return .failure(.init(diagnostic: .init(category: category)))
             }
             return await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
-                system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240)
+                system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240, stillValid: active)
         })
     }
 
@@ -313,13 +323,13 @@ final class StockSageAIAssessments: ObservableObject {
         let reply = await generateDetailed(config, StockSageAIAssessment.prompt(facts: facts) + "\n\n" + (context.research?.prompt ?? ""))
         let text = try? reply.get().text
         guard !Task.isCancelled else { return }
+        guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
         if let text {
             if drafts.count >= 100, drafts[symbol] == nil,
                let oldest = drafts.min(by: { $0.value.context.asOf < $1.value.context.asOf })?.key { drafts[oldest] = nil }
             drafts[symbol] = .init(context: context, config: config,
                 text: text.count <= 8_000 ? text : String(text.prefix(8_000)) + "\n[Display truncated at 8,000 characters]")
         }
-        guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
         guard let text else {
             if case .failure(let failure) = reply { errors[symbol] = "Local model request failed; " + failure.diagnostic.summary }
             return

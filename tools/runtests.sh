@@ -41,5 +41,9 @@ r=$?; grep -E "error:" "$OUT/tests.log" | grep -v "^\s*|" | head -20; echo "[run
 [ $BUILD_ONLY -eq 1 ] && exit 0
 export HOME="${TMPDIR:-/tmp}/stocksage_testhome"; mkdir -p "$HOME/Library/Application Support"
 echo "[runtests] running with HOME=$HOME args: $*"; t2=$(date +%s)
-"$OUT/testrunner" "$@" 2>&1 | tee "$OUT/run.log" | grep -E "Test run|✘|failed|Suite .* (passed|failed)|Test .* recorded an issue|Expectation failed|Issue recorded" | head -80
-echo "[runtests] exit=${PIPESTATUS[0]} in $(( $(date +%s)-t2 ))s (full log: $OUT/run.log)"
+"$OUT/testrunner" "$@" > "$OUT/run.log" 2>&1
+result=$?
+# Summarize only after completion: head must never SIGPIPE the test process.
+grep -E "Test run|✘|failed|Suite .* (passed|failed)|Test .* recorded an issue|Expectation failed|Issue recorded" "$OUT/run.log" | head -80
+echo "[runtests] exit=$result in $(( $(date +%s)-t2 ))s (full log: $OUT/run.log)"
+exit "$result"

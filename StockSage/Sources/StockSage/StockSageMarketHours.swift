@@ -5,9 +5,8 @@ import Foundation
 // Purely a SCHEDULE readout — "what time is it there, and what does the published calendar
 // say should be happening" — not a live open/closed feed and not a promise. Two honesty
 // limits, stated up front because this app makes real-money decisions (HONESTY FLOOR):
-//   1. NASDAQ carries NO US market-holiday table. A "scheduled open" on Thanksgiving reads
-//      exactly like any other Thursday. `caveat` says so on every NASDAQ state so a caller
-//      can surface it — this engine never claims certainty it doesn't have.
+//   1. NASDAQ uses the published 2026 calendar; unsupported years are unavailable.
+//      Scheduled hours never establish a live market, eligible quote, or broker permission.
 //   2. Tadawul's schedule (Sun–Thu, continuous 10:00–15:00 Riyadh, closing auction to ~15:10)
 //      matches the existing sourced fact in StockSageExecutionTiming.swift (saudiexchange.sa
 //      Trading Cycle and Times, sourced 2026-07-16) — same numbers, not re-derived.
@@ -90,21 +89,47 @@ enum StockSageMarketHours {
     // MARK: NASDAQ (Mon–Fri, pre 4:00–9:30, regular 9:30–16:00, after 16:00–20:00 America/New_York)
 
     private nonisolated static let nasdaqCaveat =
-        "Scheduled weekday schedule; US exchange holidays (Thanksgiving, July 4th, etc.) not modeled."
+        "Published 2026 holiday/early-close schedule; unexpected closures and broker-specific hours are not modeled. Fresh eligible data is still required."
+
+    nonisolated struct NasdaqDay: Sendable {
+        let trading: Bool
+        let regularClose: Int
+        let extendedClose: Int
+    }
+
+    /// Nasdaq 2026 holiday calendar and UTP SIP transmission schedule, verified 2026-09-09.
+    /// https://www.nasdaq.com/market-activity/stock-market-holiday-schedule
+    /// https://www.utpplan.com/DOC/UTP_SIP_Transmission_Schedule.pdf
+    /// ponytail: explicit published year; extend from verified notices before 2027, never guess.
+    nonisolated static func nasdaqDay(at date: Date) -> NasdaqDay? {
+        guard date.timeIntervalSince1970.isFinite else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let parts = calendar.dateComponents([.year, .month, .day, .weekday], from: date)
+        guard parts.year == 2026, let month = parts.month, let day = parts.day else { return nil }
+        let key = month * 100 + day
+        let holidays: Set<Int> = [101, 119, 216, 403, 525, 619, 703, 907, 1126, 1225]
+        let early = key == 1127 || key == 1224
+        return .init(trading: parts.weekday != 1 && parts.weekday != 7 && !holidays.contains(key),
+                     regularClose: early ? 13 : 16, extendedClose: early ? 17 : 20)
+    }
 
     nonisolated static func nasdaqState(at date: Date, calendar: Calendar) -> SessionState {
         var cal = calendar
         let tz = TimeZone(identifier: "America/New_York")!
         cal.timeZone = tz
         let weekday = cal.component(.weekday, from: date) // 1=Sun...7=Sat
-
-        guard weekday != 1, weekday != 7 else {
+        guard let day = nasdaqDay(at: date) else {
             return SessionState(market: .nasdaq, phase: .closed,
-                                 phaseLabel: "Closed (weekend)",
+                                phaseLabel: "Session calendar unavailable", nextTransition: nil, caveat: nasdaqCaveat)
+        }
+        guard day.trading else {
+            return SessionState(market: .nasdaq, phase: .closed,
+                                 phaseLabel: weekday == 1 || weekday == 7 ? "Closed (weekend)" : "Closed (exchange holiday)",
                                  nextTransition: nextNasdaqPreMarket(after: date, calendar: cal),
                                  caveat: nasdaqCaveat)
         }
-        let boundaries = dayBoundaries(for: date, calendar: cal, hourMin: [(4, 0), (9, 30), (16, 0), (20, 0)])
+        let boundaries = dayBoundaries(for: date, calendar: cal, hourMin: [(4, 0), (9, 30), (day.regularClose, 0), (day.extendedClose, 0)])
         let preOpen = boundaries[0], regOpen = boundaries[1], regClose = boundaries[2], afterClose = boundaries[3]
 
         if date < preOpen {
@@ -119,12 +144,12 @@ enum StockSageMarketHours {
         }
         if date < regClose {
             return SessionState(market: .nasdaq, phase: .open,
-                                 phaseLabel: "Open — closes 16:00 ET",
+                                 phaseLabel: "Open — closes \(day.regularClose):00 ET",
                                  nextTransition: regClose, caveat: nasdaqCaveat)
         }
         if date < afterClose {
             return SessionState(market: .nasdaq, phase: .afterHours,
-                                 phaseLabel: "After-hours — ends 20:00 ET",
+                                 phaseLabel: "After-hours — ends \(day.extendedClose):00 ET",
                                  nextTransition: afterClose, caveat: nasdaqCaveat)
         }
         return SessionState(market: .nasdaq, phase: .closed,
@@ -136,8 +161,7 @@ enum StockSageMarketHours {
     private nonisolated static func nextNasdaqPreMarket(after date: Date, calendar cal: Calendar) -> Date? {
         for offset in 0...8 {
             guard let day = cal.date(byAdding: .day, value: offset, to: date) else { continue }
-            let weekday = cal.component(.weekday, from: day)
-            guard weekday != 1, weekday != 7 else { continue }
+            guard nasdaqDay(at: day)?.trading == true else { continue }
             guard let pre = combining(day: day, hour: 4, minute: 0, calendar: cal) else { continue }
             if pre > date { return pre }
         }

@@ -1,5 +1,8 @@
 import Testing
 import Foundation
+#if os(macOS)
+import AppKit
+#endif
 @testable import StockSage
 
 // Swipe navigation between board sections (iPhone, 2026-07-28). The gesture itself is UI,
@@ -9,6 +12,13 @@ import Foundation
 struct MarketSectionNavigationTests {
 
     #if os(macOS)
+    @Test @MainActor func testHostDoesNotPresentAnApplicationWindow() async {
+        await Task.yield()
+        // Inspect only this XCTest-host process, never the owner's installed app.
+        let mainWindows = NSApplication.shared.windows.filter { $0.isVisible && $0.canBecomeMain }
+        #expect(mainWindows.isEmpty, "Automated tests must not present an empty StockSage window")
+    }
+
     @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
         #expect(Set(StockSageDesktop.sections) == Set(MarketSection.allCases))
         #expect(StockSageDesktop.sections.count == MarketSection.allCases.count)

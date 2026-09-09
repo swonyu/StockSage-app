@@ -38,7 +38,7 @@ struct StockSageApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("StockSage", id: "main") {
+        WindowGroup(StockSageStore.isRunningTests ? "StockSage — Automated Tests" : "StockSage", id: "main") {
             // Unit-test hosts must not launch refresh/scan/monitor or write owner state.
             if !StockSageStore.isRunningTests {
                 // Review triage 2026-07-27: an Xcode-assistant edit wrapped this in a DEBUG
@@ -94,9 +94,16 @@ struct StockSageApp: App {
                         }
                     }
                     #endif
+            } else {
+                Text("Automated test host. App startup services are disabled.")
+                    .padding()
             }
         }
         #if os(macOS)
+        // XCTest uses this app as a host, not as the owner's visible workspace.
+        // Disable restoration too: launch suppression alone allows a saved empty window back.
+        .defaultLaunchBehavior(StockSageStore.isRunningTests ? .suppressed : .automatic)
+        .restorationBehavior(StockSageStore.isRunningTests ? .disabled : .automatic)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1280, height: 840)
         .windowToolbarStyle(.unifiedCompact)

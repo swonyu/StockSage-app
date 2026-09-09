@@ -57,8 +57,22 @@ enum StockSageLocalModelServer {
     static let urlKey = "localModelServerURL"
     static let modelKey = "localModelServerModel"
 
+    /// Written with each in-app mutation: A→B→A must not revive an old request.
+    private static let revisionKey = "stocksage.modelSettings.revision"
+    static func settingsRevision(_ defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: revisionKey)
+    }
+    @discardableResult static func setSetting(_ value: String, for key: String,
+                                             defaults: UserDefaults = .standard) -> Bool {
+        guard [backendKey, urlKey, modelKey].contains(key), defaults.string(forKey: key) != value else { return false }
+        defaults.set(UUID().uuidString, forKey: revisionKey)
+        defaults.set(value, forKey: key)
+        return true
+    }
+
     static let defaultURL = "http://127.0.0.1:11434"
     static let defaultModel = "qwen3.8"
+    nonisolated static let maximumResponseBytes = 1_048_576
 
     // MARK: Config
 
@@ -74,12 +88,13 @@ enum StockSageLocalModelServer {
     /// must be non-empty after trimming.
     nonisolated static func config(url: String, model: String) -> Config? {
         let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedModel.isEmpty else { return nil }
+        guard !trimmedModel.isEmpty, trimmedModel.utf8.count <= 512 else { return nil }
         var trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         while trimmedURL.hasSuffix("/") { trimmedURL.removeLast() }
         guard let parsed = URL(string: trimmedURL),
               let scheme = parsed.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = parsed.host, !host.isEmpty else { return nil }
+              let host = parsed.host, !host.isEmpty,
+              parsed.user == nil, parsed.password == nil, parsed.query == nil, parsed.fragment == nil else { return nil }
         return Config(baseURL: parsed, model: trimmedModel)
     }
 
@@ -110,12 +125,29 @@ enum StockSageLocalModelServer {
         s.hasSuffix(":latest") ? String(s.dropLast(":latest".count)) : s
     }
 
-    private static func fetchJSONObject(_ url: URL) async -> [String: Any]? {
+    private static func requestFailure(_ c: Config, stillValid: @MainActor () -> Bool,
+                                      externalAllowed: @MainActor () -> Bool) -> CompletionFailure? {
+        if Task.isCancelled { return .init(diagnostic: .init(category: .cancelled)) }
+        if !stillValid() { return .init(diagnostic: .init(category: .obsoleteRequest)) }
+        guard config(url: c.baseURL.absoluteString, model: c.model) == c else {
+            return .init(diagnostic: .init(category: .invalidConfig))
+        }
+        if !isLoopback(c.baseURL), !externalAllowed() {
+            return .init(diagnostic: .init(category: .policyDenied))
+        }
+        return nil
+    }
+
+    private static func fetchJSONObject(_ url: URL,
+        transport: ((URLRequest) async throws -> (Data, URLResponse))?) async -> [String: Any]? {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.5
         do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            let (data, response): (Data, URLResponse)
+            if let transport { (data, response) = try await transport(request) }
+            else { (data, response) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: 262_144) }
+            guard data.count <= 262_144, let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else { return nil }
             return try JSONSerialization.jsonObject(with: data) as? [String: Any]
         } catch {
             return nil
@@ -125,28 +157,37 @@ enum StockSageLocalModelServer {
     /// 1) Ollama's `/api/tags` ; on failure 2) an OpenAI-compatible `/v1/models`. Never throws —
     /// an unreachable server, a malformed body, or a timeout all come back as
     /// `reachable: false`, never as a thrown error the caller has to handle.
-    static func probe(_ c: Config) async -> Probe {
-        if let tags = await fetchJSONObject(c.baseURL.appendingPathComponent("api/tags")),
+    static func probe(_ c: Config, stillValid: @MainActor () -> Bool = { true },
+                      externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
+                      transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Probe {
+        func denied() -> Bool { requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) != nil }
+        let stopped = Probe(reachable: false, isOllama: false, models: [], hasModel: false,
+                            detail: "Model check stopped: request cancelled, settings changed, or network access disabled.")
+        guard !denied() else { return stopped }
+        if let tags = await fetchJSONObject(c.baseURL.appendingPathComponent("api/tags"), transport: transport),
            let rawModels = tags["models"] as? [[String: Any]] {
+            guard !denied() else { return stopped }
             let names = rawModels.compactMap { $0["name"] as? String }
             let hasModel = names.contains { stripLatestSuffix($0) == stripLatestSuffix(c.model) }
             let list = names.map(stripLatestSuffix)
             let detail = hasModel
                 ? "Reachable · Ollama · model \(c.model) present"
-                : "Reachable · Ollama · model \(c.model) NOT found (have: \(list.isEmpty ? "none" : list.joined(separator: ", ")))"
+                : "Reachable · Ollama · requested model not found. Check the model ID in Model settings."
             return Probe(reachable: true, isOllama: true, models: list, hasModel: hasModel, detail: detail)
         }
-        if let openAI = await fetchJSONObject(c.baseURL.appendingPathComponent("v1/models")),
+        guard !denied() else { return stopped }
+        if let openAI = await fetchJSONObject(c.baseURL.appendingPathComponent("v1/models"), transport: transport),
            let rawData = openAI["data"] as? [[String: Any]] {
+            guard !denied() else { return stopped }
             let ids = rawData.compactMap { $0["id"] as? String }
             let hasModel = ids.contains { stripLatestSuffix($0) == stripLatestSuffix(c.model) }
             let detail = hasModel
                 ? "Reachable · OpenAI-compatible · model \(c.model) present"
-                : "Reachable · OpenAI-compatible · model \(c.model) NOT found (have: \(ids.isEmpty ? "none" : ids.joined(separator: ", ")))"
+                : "Reachable · OpenAI-compatible · requested model not found. Check the model ID in Model settings."
             return Probe(reachable: true, isOllama: false, models: ids, hasModel: hasModel, detail: detail)
         }
         return Probe(reachable: false, isOllama: false, models: [], hasModel: false,
-                     detail: "Unreachable: could not reach \(c.baseURL.absoluteString)")
+                     detail: "Unreachable: check the model server and Model settings.")
     }
 
     // MARK: Chat
@@ -185,7 +226,7 @@ enum StockSageLocalModelServer {
     nonisolated enum Finish: String, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
     nonisolated enum FailureCategory: String, Sendable {
         case invalidConfig, unavailable, modelMissing, unsupportedModel, nonHTTP, http, malformedJSON, responseShape, missingContent, emptyContent
-        case timeout, cancelled, network
+        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge
     }
     nonisolated struct Diagnostic: Sendable, Equatable {
         var category: FailureCategory? = nil
@@ -213,7 +254,7 @@ enum StockSageLocalModelServer {
             switch diagnostic.category {
             case .invalidConfig: return .invalidConfig
             case .modelMissing: return .modelMissing(diagnostic.summary)
-            case .timeout, .cancelled, .network, .unavailable: return .unreachable(diagnostic.summary)
+            case .timeout, .cancelled, .network, .unavailable, .obsoleteRequest, .policyDenied: return .unreachable(diagnostic.summary)
             default: return .badResponse(diagnostic.summary)
             }
         }
@@ -231,7 +272,11 @@ enum StockSageLocalModelServer {
     }
 
     nonisolated static func parseCompletion(_ data: Data, isOllama: Bool) -> CompletionResult {
-        var diagnostic = Diagnostic(bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)
+        var diagnostic = Diagnostic(bodyBytes: boundedCount(data.count), oversizedBody: data.count > maximumResponseBytes)
+        guard !diagnostic.oversizedBody else {
+            diagnostic.category = .responseTooLarge
+            return .failure(.init(diagnostic: diagnostic))
+        }
         guard let json = try? JSONSerialization.jsonObject(with: data) else {
             diagnostic.category = .malformedJSON
             return .failure(.init(diagnostic: diagnostic))
@@ -294,23 +339,36 @@ enum StockSageLocalModelServer {
             switch error.code {
             case .cancelled: category = .cancelled
             case .timedOut: category = .timeout
+            case .dataLengthExceedsMaximum: category = .responseTooLarge
             default: category = .network
             }
         } else { category = .network }
-        return .init(diagnostic: .init(category: category))
+        return .init(diagnostic: .init(category: category, oversizedBody: category == .responseTooLarge))
     }
 
     /// Shared transport seam; injected transport is for deterministic offline tests only.
     static func completeDetailed(_ c: Config, isOllama: Bool, system: String, user: String,
                                  maxTokens: Int = 170, contextTokens: Int = 4096,
                                  timeout: TimeInterval = 90,
+                                 stillValid: @MainActor () -> Bool = { true },
+                                 externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
                                  transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> CompletionResult {
+        if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
+            return .failure(failure)
+        }
         let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
                                   maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
         do {
             let (data, response): (Data, URLResponse)
             if let transport { (data, response) = try await transport(request) }
-            else { (data, response) = try await session.data(for: request) }
+            else { (data, response) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumResponseBytes) }
+            if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
+                return .failure(failure)
+            }
+            guard data.count <= maximumResponseBytes else {
+                return .failure(.init(diagnostic: .init(category: .responseTooLarge,
+                    bodyBytes: boundedCount(data.count), oversizedBody: true)))
+            }
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
                                                         oversizedBody: data.count > 1_048_576)))
@@ -341,9 +399,10 @@ enum StockSageLocalModelServer {
 
     static func complete(_ c: Config, isOllama: Bool, system: String, user: String,
                          maxTokens: Int = 170, contextTokens: Int = 4096,
-                         timeout: TimeInterval = 90) async -> Swift.Result<String, ServerError> {
+                         timeout: TimeInterval = 90,
+                         stillValid: @MainActor () -> Bool = { true }) async -> Swift.Result<String, ServerError> {
         await completeDetailed(c, isOllama: isOllama, system: system, user: user,
-            maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
+            maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout, stillValid: stillValid)
             .map(\.text).mapError(\.legacyError)
     }
 }

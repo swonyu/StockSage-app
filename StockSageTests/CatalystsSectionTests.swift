@@ -57,6 +57,13 @@ struct CatalystsSectionTests {
         state.finish(reachable, request: disappeared, currentSettings: a, cancelled: false)
         #expect(state.current(for: a) == nil && !state.probing)
         #expect(await StockSageCatalystNarrator.probeServer(config: nil) == nil)
+
+        // Equal values after A→B→A still carry a new in-app revision.
+        let firstRevision = a + ["revision-1"]
+        let nextRevision = a + ["revision-2"]
+        let roundTrip = state.begin(settings: firstRevision)
+        state.finish(reachable, request: roundTrip, currentSettings: nextRevision, cancelled: false)
+        #expect(state.current(for: nextRevision) == nil && !state.probing)
     }
 
     @Test("an explanation is current only for the facts AND settings that requested it")

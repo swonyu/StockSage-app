@@ -251,14 +251,14 @@ enum StockSageMassiveTicks {
         // No previous-close claim is supplied by a tick. Research retains its daily-bar inputs.
         return .init(symbol: symbol, price: trade.price, previousClose: trade.price,
                      marketTime: trade.participantTime, isNewListing: true,
-                     massiveTradeSequence: trade.sequence, priceSource: .massiveSIP)
+                     massiveTradeSequence: trade.sequence, priceSource: .massiveSIP, paperTradeQualified: true)
     }
 
     static func freshPaperQuote(symbol: String, now: Date = Date()) async -> StockSageQuoteService.LiveQuote? {
         guard let trade = await freshPaperTrades(symbol: symbol, now: now).last else { return nil }
         return .init(symbol: symbol, price: trade.price, previousClose: trade.price,
                      marketTime: trade.participantTime, isNewListing: true,
-                     massiveTradeSequence: trade.sequence, priceSource: .massiveSIP)
+                     massiveTradeSequence: trade.sequence, priceSource: .massiveSIP, paperTradeQualified: true)
     }
 
     private static func freshPaperTrades(symbol: String, now: Date) async -> [Trade] {

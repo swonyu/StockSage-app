@@ -10,6 +10,107 @@ import Foundation
 struct StockSageCatalystNarratorTests {
 
     typealias N = StockSageCatalystNarrator
+
+    @Test @MainActor func callerCancellationCoversSourceFetchProbeAndBackend() async throws {
+        typealias S = StockSageLocalModelServer
+        let suite = "StockSageCallerFixture.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for backend in ["auto", "localServerOnly", "onDeviceOnly"] {
+            for revokedAt in ["sources", "probe", "completion"] {
+                S.setSetting(backend, for: S.backendKey, defaults: defaults)
+                S.setSetting("http://127.0.0.1:8765", for: S.urlKey, defaults: defaults)
+                S.setSetting("fixture", for: S.modelKey, defaults: defaults)
+                let revision = S.settingsRevision(defaults)
+                var webAllowed = true
+                var probes = 0, completions = 0
+                // The caller captures its identity BEFORE the asynchronous source fetch.
+                await Task.yield()
+                if revokedAt == "sources" {
+                    S.setSetting("off", for: S.backendKey, defaults: defaults)
+                    S.setSetting(backend, for: S.backendKey, defaults: defaults)
+                }
+                let result = await N.explain(brief(symbol: "AAPL"), sources: [oneSource()], defaults: defaults,
+                    stillValid: { webAllowed && revision == S.settingsRevision(defaults) },
+                    checkServer: { _ in
+                        probes += 1
+                        await Task.yield()
+                        if revokedAt == "probe" { webAllowed = false }
+                        return .init(reachable: true, isOllama: false, models: ["fixture"], hasModel: true, detail: "fixture")
+                    }, local: {
+                        completions += 1
+                        if revokedAt == "completion" { webAllowed = false }
+                        return .text("fixture", .onDevice)
+                    }, server: { _, _ in
+                        completions += 1
+                        if revokedAt == "completion" { webAllowed = false }
+                        return .text("fixture", .localServer(model: "fixture"))
+                    })
+                if revokedAt == "sources" { #expect(probes == 0 && completions == 0) }
+                if revokedAt == "probe" && backend != "onDeviceOnly" { #expect(completions == 0) }
+                if revokedAt != "probe" || backend != "onDeviceOnly" {
+                    if case .unavailable = result {} else { Issue.record("Obsolete result published: \(backend)/\(revokedAt)") }
+                }
+            }
+        }
+    }
+
+    @Test @MainActor func callerProbeDoesNotFallBackAfterSettingsRoundTrip() async throws {
+        typealias S = StockSageLocalModelServer
+        let suite = "StockSageProbeCallerFixture.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        for change in ["off", "roundTrip"] {
+            S.setSetting("localServerOnly", for: S.backendKey, defaults: defaults)
+            let revision = S.settingsRevision(defaults)
+            var calls = 0
+            let result = await N.probeServer(config: config,
+                stillValid: { revision == S.settingsRevision(defaults) }, transport: { request in
+                    calls += 1
+                    await Task.yield()
+                    S.setSetting("off", for: S.backendKey, defaults: defaults)
+                    if change == "roundTrip" { S.setSetting("localServerOnly", for: S.backendKey, defaults: defaults) }
+                    return (Data(), try #require(HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)))
+                })
+            #expect(calls == 1 && result?.reachable == false)
+        }
+    }
+
+    @Test @MainActor func settingChangesDuringProbeDoNotStartEitherBackend() async throws {
+        typealias S = StockSageLocalModelServer
+        let suite = "StockSageNarratorFixture.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for backend in ["auto", "localServerOnly"] {
+            for available in [true, false] {
+                for change in ["off", "url", "model", "roundTrip", "cancel"] {
+                    S.setSetting(backend, for: S.backendKey, defaults: defaults)
+                    S.setSetting("http://127.0.0.1:8765", for: S.urlKey, defaults: defaults)
+                    S.setSetting("fixture", for: S.modelKey, defaults: defaults)
+                    var calls = 0
+                    let task = Task { @MainActor in
+                        await N.explain(brief(symbol: "AAPL"), defaults: defaults, checkServer: { _ in
+                            await Task.yield()
+                            switch change {
+                            case "off": S.setSetting("off", for: S.backendKey, defaults: defaults)
+                            case "url": S.setSetting("http://127.0.0.1:9999", for: S.urlKey, defaults: defaults)
+                            case "model": S.setSetting("other", for: S.modelKey, defaults: defaults)
+                            case "roundTrip":
+                                S.setSetting("off", for: S.backendKey, defaults: defaults)
+                                S.setSetting(backend, for: S.backendKey, defaults: defaults)
+                            default: withUnsafeCurrentTask { $0?.cancel() }
+                            }
+                            return .init(reachable: available, isOllama: false, models: [], hasModel: available, detail: "fixture")
+                        }, local: { calls += 1; return .unavailable("fixture backend called") },
+                           server: { _, _ in calls += 1; return .unavailable("fixture backend called") })
+                    }
+                    _ = await task.value
+                    #expect(calls == 0, "Follow-up inference after \(backend) probe changed \(change)")
+                }
+            }
+        }
+    }
     static let now = Date(timeIntervalSince1970: 1_757_000_000)
 
     private func brief(symbol: String, rr: Double? = 2.0) -> StockSageCatalystWatch.Brief {

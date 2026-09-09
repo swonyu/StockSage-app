@@ -119,12 +119,12 @@ enum StockSagePaperTrader {
         for t in current where t.isOpen {
             guard let h = histories[t.symbol] ?? histories[t.symbol.uppercased()] else { continue }
             if let u = markToMarket([t], history: h, costs: costsFor(t.symbol),
-                                    maxHoldingBars: maxHoldingBars).first, !u.isOpen {
+                                    maxHoldingBars: maxHoldingBars).first, u != t {
                 closes.append(u)
             }
         }
         // Symbols that remain open after this step's closes — don't double-open into them.
-        let closedIds = Set(closes.map(\.id))
+        let closedIds = Set(closes.filter { !$0.isOpen }.map(\.id))
         let stillOpen = Set(current.filter { $0.isOpen && !closedIds.contains($0.id) }
                                     .map { $0.symbol.uppercased() })
         // 2. Open new paper trades for long-actionable ideas without an open position.

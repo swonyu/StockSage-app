@@ -38,6 +38,9 @@ enum StockSageQuoteService {
         /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
         let massiveTradeSequence: Int64?
         let priceSource: StockSagePriceSource?
+        /// Only the qualified tape adapter sets this after checking conditions, correction,
+        /// size and participant/SIP clocks. A display snapshot is not execution evidence.
+        let paperTradeQualified: Bool
         /// True when Yahoo returned no real previousClose (a brand-new listing) and `previousClose`
         /// was set to `price` as a flat placeholder. WITHOUT this flag that placeholder reads as a
         /// genuine 0%-move "hold" signal — it's actually "unevaluated," not "no move." Set precisely
@@ -46,12 +49,13 @@ enum StockSageQuoteService {
         let isNewListing: Bool
         init(symbol: String, price: Double, previousClose: Double, marketTime: Date? = nil,
              isNewListing: Bool = false, massiveTradeSequence: Int64? = nil,
-             priceSource: StockSagePriceSource? = nil) {
+             priceSource: StockSagePriceSource? = nil, paperTradeQualified: Bool = false) {
             self.symbol = symbol; self.price = price
             self.previousClose = previousClose; self.marketTime = marketTime
             self.isNewListing = isNewListing
             self.massiveTradeSequence = massiveTradeSequence
             self.priceSource = priceSource
+            self.paperTradeQualified = paperTradeQualified
         }
     }
 

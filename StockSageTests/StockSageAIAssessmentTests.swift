@@ -26,6 +26,17 @@ struct StockSageAIAssessmentTests {
         .init(baseURL: URL(string: "http://127.0.0.1:8765")!, model: "fixture-qwen")
     }
 
+    @Test func expiredOrFutureEarningsChecksAreNotCurrentConfirmedFacts() {
+        for age in [-1.0, 86_400, 172_800] {
+            let record = StockSageCatalystRecordCache.Record(symbol: "ORCL",
+                earningsDate: now.addingTimeInterval(3 * 86_400), checkedAt: now.addingTimeInterval(-age),
+                source: "fixture", status: .dateKnown, confirmed: true)
+            let facts = A.Context(idea: idea(), earnings: record, company: [:], at: now).facts
+            #expect(!facts.contains { $0.contains("status: confirmed") })
+        }
+        #expect(context.facts.contains { $0.contains("status: confirmed") })
+    }
+
     @Test func strictOutputCanDisagreeWithRulesWithoutChangingMoneyInputs() throws {
         let c = context
         let verdict = try #require(A.parse(json, facts: c.facts))
@@ -185,7 +196,7 @@ struct StockSageAIAssessmentTests {
             valid = false
             return json
         }
-        #expect(obsolete.records.isEmpty && obsolete.activeSymbol == nil)
+        #expect(obsolete.records.isEmpty && obsolete.activeSymbol == nil && obsolete.drafts.isEmpty)
         let invalid = StockSageAIAssessments()
         await invalid.assess(c, config: config, now: now, stillValid: { true }) { _, _ in "Buy" }
         #expect(invalid.records.isEmpty && invalid.errors["ORCL"] != nil)

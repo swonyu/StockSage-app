@@ -8,7 +8,8 @@ struct StockSagePaperAutomationTests {
     private let now = Date(timeIntervalSince1970: 1_788_886_800) // 2026-09-08, US regular session.
     private func quote(_ symbol: String = "AAPL", price: Double = 100, at: Date,
                        source: StockSagePriceSource = .massiveSIP) -> StockSageQuoteService.LiveQuote {
-        .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source)
+        .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source,
+              paperTradeQualified: true) // Explicit synthetic qualified-tape fixture.
     }
 
     @Test func tenSecondPriceBoundaryControlsActualPaperFills() {
@@ -24,6 +25,26 @@ struct StockSagePaperAutomationTests {
         #expect(!A.fresh(.init(symbol: "AAPL", price: 100, previousClose: 99, marketTime: nil,
                               priceSource: .massiveSIP), at: now))
         #expect(!A.fresh(quote(at: now, source: .yahoo), at: now))
+    }
+
+    @Test func unqualifiedSnapshotCannotBypassTradeChecksOrSettle() async throws {
+        // The display snapshot preserves price/time, not condition/event-clock qualification.
+        for condition in [NSNull(), [999_999]] as [Any] {
+            let raw: [String: Any] = ["status": "OK", "tickers": [["ticker": "AAPL",
+                "lastTrade": ["p": 100, "t": (now.timeIntervalSince1970 + 1) * 1_000_000_000,
+                              "c": condition, "s": 0], "prevDay": ["c": 99]]]]
+            let data = try JSONSerialization.data(withJSONObject: raw)
+            let snapshot = try #require(StockSageMassive.parseSnapshot(data, requestedSymbols: ["AAPL"])["AAPL"])
+            var ticks = 0
+            let selected = await A.fetchPaperQuotes(for: ["AAPL"], after: ["AAPL": now],
+                at: now.addingTimeInterval(2), externalAllowed: { true },
+                snapshots: { _ in ["AAPL": snapshot] }, tick: { _, _ in ticks += 1; return nil })
+            #expect(ticks == 1 && selected.isEmpty)
+            var book = A.Book()
+            book.propose(symbol: "AAPL", action: .buy, at: now)
+            book.settle(quotes: ["AAPL": snapshot], at: now.addingTimeInterval(2))
+            #expect(book.open.isEmpty && book.cash == A.initialCash)
+        }
     }
 
     @Test func delayedInferenceRevalidatesWithoutRewritingFactsOrOverwritingConcurrentBook() async throws {
@@ -217,6 +238,45 @@ struct StockSagePaperAutomationTests {
             finished.insert(symbol); active -= 1
         }
         #expect(peak == 4 && active == 0 && finished == Set(symbols))
+    }
+
+    @Test func changedResearchPolicyStopsQueueReplenishment() async {
+        var allowed = true
+        var started: [String] = []
+        await A.forEachResearchTarget((0..<100).map(String.init), allowed: { allowed }) { symbol in
+            started.append(symbol)
+            await Task.yield()
+            allowed = false
+        }
+        #expect(started.count <= A.researchConcurrency && !started.isEmpty)
+    }
+
+    @Test func modelEditCancellationPreservesBookAndClearsResearchOnUnwind() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "research-cancel-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let state = A(url: root.appendingPathComponent("account.json"), defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        var resumed: CheckedContinuation<Void, Never>?
+        var cancelled = false
+        let original = try JSONEncoder().encode(state.book)
+        state.scheduleResearch {
+            await withCheckedContinuation { resumed = $0 }
+            cancelled = Task.isCancelled
+        }
+        while resumed == nil { await Task.yield() }
+        #expect(state.isResearching)
+        state.cancelResearchForSettingsChange()
+        #expect(state.isResearching, "Do not allow a new cycle before the cancelled cycle unwinds")
+        resumed?.resume()
+        while state.isResearching { await Task.yield() }
+        #expect(cancelled && !state.isRunning)
+        #expect(try JSONDecoder().decode(A.Book.self, from: original).decisions == state.book.decisions)
+        #expect(state.book.trades.isEmpty && state.book.pending.isEmpty && state.book.lastResearch == nil)
+        var nextRan = false
+        state.scheduleResearch { nextRan = true }
+        while state.isResearching { await Task.yield() }
+        #expect(nextRan, "Cancelled research must not strand the next cycle")
     }
 
     @Test func positionQuoteFallbackIsBoundedAndConcurrent() async {
@@ -581,6 +641,54 @@ struct StockSagePaperAutomationTests {
         #expect(book.trades[0].exitPrice != book.trades[0].stop)
     }
 
+    @Test func protectiveExitSurvivesExpiryRecoveryAndRestartButModelSellDoesNot() throws {
+        for protective in [true, false] {
+            var book = A.Book()
+            book.propose(symbol: "AAPL", action: .buy, at: now)
+            book.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+            let trigger = now.addingTimeInterval(4)
+            if protective {
+                book.settle(quotes: ["AAPL": quote(price: 96, at: trigger)], at: trigger)
+            } else { book.propose(symbol: "AAPL", action: .sell, at: trigger) }
+            let original = try #require(book.pending.first)
+            let retry = trigger.addingTimeInterval(120)
+            book.settle(quotes: ["AAPL": quote(price: 100, at: retry)], at: retry)
+            #expect(book.open.count == 1, "Expiry/rearm cannot invent an immediate fill")
+            #expect(book.pending.count == (protective ? 1 : 0))
+            book = try JSONDecoder().decode(A.Book.self, from: JSONEncoder().encode(book))
+            if protective {
+                #expect(book.pending.first?.id == original.id && book.pending.first?.at == retry)
+            }
+            book.settle(quotes: ["AAPL": quote(price: 100, at: retry.addingTimeInterval(1))], at: retry.addingTimeInterval(1))
+            #expect(book.open.count == (protective ? 0 : 1))
+            #expect(book.valid)
+        }
+    }
+
+    @Test func exchangeHolidaysAndEarlyCloseGateActualOrders() throws {
+        let cases = [("2026-11-26T16:00:00Z", false, false),
+                     ("2026-11-27T21:54:59Z", true, true),
+                     ("2026-11-27T21:55:00Z", true, false),
+                     ("2026-11-27T22:00:00Z", false, false),
+                     ("2026-10-12T15:00:00Z", true, true), // Bank holiday, exchange open.
+                     ("2026-11-11T15:00:00Z", true, true)]
+        for (iso, session, entry) in cases {
+            let at = try Date(iso, strategy: .iso8601)
+            #expect(A.paperSessionOpen(at) == session)
+            #expect(A.entryWindowOpen(at) == entry)
+            var book = A.Book()
+            book.propose(symbol: "AAPL", action: .buy, at: at)
+            #expect(book.pending.isEmpty == !entry)
+        }
+        let at = try Date("2026-11-27T21:55:00Z", strategy: .iso8601)
+        var book = A.Book()
+        book.trades = [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98, target: 104,
+                             shares: 1, openedAt: at.addingTimeInterval(-3600))]
+        book.enforceDayLimit(at: at)
+        #expect(book.pending.count == 1 && book.pending.first?.buy == false)
+        #expect(A.sessionClockFact(at: at).contains("2026-11-27T16:55:00-05:00"))
+    }
+
     @Test func settlementCalendarUsesNewYorkBusinessDatesIncludingBankHolidays() throws {
         let cases = [
             ("2026-09-08T23:59:59Z", "2026-09-09T04:00:00Z"),
@@ -689,7 +797,27 @@ struct StockSagePaperAutomationTests {
         second.stop()
         try Data("broken".utf8).write(to: url)
         let corrupt = A(url: url, defaults: defaults)
-        #expect(!corrupt.acquire() && corrupt.error != nil)
+        #expect(!corrupt.acquire() && corrupt.error != nil && !corrupt.hasLoadedBook)
         #expect(try Data(contentsOf: url) == Data("broken".utf8))
+    }
+
+    @Test func fullAuditHistoryDoesNotPreventSavingAnEligibleExit() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "qwen-capacity-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let url = root.appendingPathComponent("account.json")
+        let state = A(url: url, defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        var full = A.Book()
+        full.trades = [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98, target: 104, shares: 1, openedAt: now)]
+        for _ in 0..<50_000 { full.note(action: "Fixture", reason: "Preserve this audit record", at: now) }
+        full.propose(symbol: "AAPL", action: .sell, at: now.addingTimeInterval(1))
+        #expect(state.acquire() && state.save(full))
+        var next = state.book
+        next.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(2))], at: now.addingTimeInterval(2))
+        #expect(next.open.isEmpty)
+        let saved = state.save(next)
+        #expect(saved, "Audit capacity must not reject a valid protective/ordinary exit")
+        #expect(state.book.open.isEmpty)
     }
 }

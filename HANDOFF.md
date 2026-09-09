@@ -1,5 +1,75 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Parent reliability checkpoint; test-window mitigation — 2026-09-09
+
+Parent01a0772c-d7ba-7c50-906c-0a3a3e9baef1 remains sole writer, installer and
+serial heavy tester in `/Users/saleh/StockSage-wt/qwen-context`, branch
+`codex/qwen-chat-context`. HEAD16f5d6f includes earlier feed/diagnostics/news;
+the parent-owned reliability diff is not yet installed. Good-spender OFF;
+no pushes, paid resources, model changes or real orders; IBKR relay OFF.
+
+Implemented with actual red/green checks: qualified paper observations instead
+of display snapshots; owner-delegated persistent protective STOP intent; shared
+2026 holiday/early-close calendar; immutable decision archives with atomic manifest
+publication and corruption rejection; unavailable-account UI; legacy rebase save;
+model setting revisions/cancellation through research, Chat and Catalyst callers;
+bounded HTTP accumulation; and faithful test-runner exit status. Risk/strategy
+thresholds and existing historical records were not changed. Detailed evidence and
+limits: `agent-docs/RELIABILITY_WORKFLOW_2026-09-09.md`.
+
+Owner's05:20:55 blank-window screenshot coincided with XCTest hostPID91377's
+05:20:02–05:21:08 run. It is not proven that the screenshot belongs to that PID.
+A new test nevertheless reproduced an actual visible, empty main-capable window
+in the test host. macOS test scenes now suppress automatic presentation and
+restoration; any explicitly opened test scene is distinctly titled and labelled.
+The existing test isolation guard and normal app launch/restoration remain intact.
+The old04:26 spin was another test host, not proof of a production hang.
+
+Caller regression red:29tests/1suite15issues,exit65. Window red:58/4,1issue;
+other57 passed. Focused combined green:58/4,0.045s,exit0. Latest full macOS:
+**1,949 tests in196 suites,63.288s,exit0** (`full-macos-caller-checkpoint`), with
+the three unchanged canonical exclusions. Earlier full1,946/196 also passed.
+Latest iPhone17Pro(gate): **1,945 tests in196 suites,63.676s,exit0**
+(`full-ios-caller-checkpoint`), same three exclusions. Final `tools/gate.sh all`
+also passed: macOS emit-module63s, iOS59s, test typecheck81s, all rc0;
+`GATE repo=qwen-context macos=OK ios=OK tests=OK`. Test-runner exit-status
+self-check and338-file source-manifest recheck passed. This is all-platform
+acceptance of this checkpoint, not completion of the remaining reliability queue.
+
+Artifacts `/private/tmp/stocksage-reliability-20260909.v6DO1E/` include logs,
+xcresults,338-file `checkpoint-callers-source.sha256`, and the exact tested Mac
+app at `checkpoint-macos-callers/StockSageX.app` (dylibSHA256
+`89d02032dd06b02f1be23ad1304346103cabe6d1a1922dbb30b6b65f96874cf4`).
+Installed `/Applications/StockSageX.app` remains source18d3070. PreviousPID84844
+was already absent when checked; exact-path CUA selection relaunchedPID94289 at
+05:24:09. Actual AX and screenshot verified full Home/Catalysts rendering, and
+PID94289 survived the subsequent full Mac test. No forced quit/reset/installation
+or actual ledger mutation by the parent. Read-only account inspection found
+version1,2trades,0pending,1,026decisions and no archive manifest; automation enabled1.
+The ledger is `/Users/saleh/Library/Application Support/StockSageQwenPaper/account.json`;
+PID94289 holds its adjacent lock. These are pre-install observations, not restart
+verification. At05:43–05:46 native CUA lost its connection ("native pipe closed before
+response") before a normal quit could succeed. PID94289 remains alive. Installation
+is pending; do not force-quit, bypass the UI control failure or overwrite the running
+app. No consistent post-quit ledger backup exists yet. First restore normal control
+or have the owner quit, then verify lease release and back up the full ledger/archive
+directory and previous bundle before installing the exact tested signed checkpoint.
+
+Owner authorized a seventh read-only supporting task for Catalyst Today/Week/Month
+navigation:01a083fa-97d6-70a0-8720-a22ea1450eea. Its completed design is at
+`/Users/saleh/Documents/Codex/2026-09-09/stocksage-catalysts-navigation-review/outputs/catalyst-navigation-design.md`.
+Parent presented a period-first agenda, UTC Monday-start dates/defaultThisWeek,
+and explicit retained-observation/Ideas-filter coverage for approval; check the
+owner reply. This is not a complete monthly archive/all-market coverage promise.
+
+Still actionable: SEC cache/policy and actual detail-task ownership, qualified
+latest bid/ask/size paper fills, small corporate actions, legacy new-open duplicate
+prevention, QA automatic-work isolation, remaining settings/UI and shared bounded
+Massive/Benzinga evidence integration. No source lead is a proven fix without a
+real caller trace and regression. Frozen prospective research remains untouched;
+next scheduled observationSept9 18:10 Riyadh. Keep installed app intact until
+full gates, recoverable bundle/ledger-plus-archive backup and normal-quit workflow.
+
 
 ## Whole-market bounded T/Q feed ready for parent integration — 2026-09-09
 

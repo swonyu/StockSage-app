@@ -188,12 +188,17 @@ struct StockSageChatSection: View {
         let history = chat.turns
         let researchTicker = StockSageChat.requestedSymbols(question: text, symbols: store.symbols).first?.symbol
         guard let id = chat.begin(question: text, snapshot: facts, model: config.model) else { return }
+        let revision = StockSageLocalModelServer.settingsRevision()
+        let active: @MainActor @Sendable () -> Bool = {
+            !Task.isCancelled && chat.pending == id && StockSageAIAssessments.configuration == config
+                && StockSageLocalModelServer.settingsRevision() == revision
+        }
         question = ""; issue = nil
         request = Task {
             var enriched = facts
             if let ticker = researchTicker {
                 let news = await StockSageNewsService.observation(for: ticker, limit: 3, now: facts.at)
-                guard !Task.isCancelled, chat.pending == id, StockSageAIAssessments.configuration == config else {
+                guard active() else {
                     if chat.pending == id { chat.cancel() }
                     return
                 }
@@ -207,17 +212,23 @@ struct StockSageChatSection: View {
             }
             let includesNews = enriched.sources?.contains { $0.id.contains(".news.") } == true
             guard !includesNews || ToolPolicy.isExternalAllowed else { chat.cancel(); return }
-            let probe = await StockSageLocalModelServer.probe(config)
-            guard !Task.isCancelled, StockSageAIAssessments.configuration == config,
+            let allowed: @MainActor @Sendable () -> Bool = { active() && (!includesNews || ToolPolicy.isExternalAllowed) }
+            let probe = await StockSageLocalModelServer.probe(config, stillValid: allowed)
+            guard active(),
                   !includesNews || ToolPolicy.isExternalAllowed else {
                 if chat.pending == id { chat.cancel() }
                 return
             }
-            guard probe.reachable && probe.hasModel else { chat.finish(id: id, text: nil); return }
+            guard probe.reachable && probe.hasModel else {
+                chat.finish(id: id, text: nil, unavailable: probe.reachable
+                    ? "The server is reachable, but the configured model was not found. Check its model ID in Model settings."
+                    : "The model server could not be verified. Check that it is running, then use Test connection in Model settings.")
+                return
+            }
             let result = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
                 system: StockSageChat.instructions, user: prompt, maxTokens: StockSageChat.outputTokens,
-                contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout)
-            guard !Task.isCancelled, StockSageAIAssessments.configuration == config,
+                contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)
+            guard active(),
                   !includesNews || ToolPolicy.isExternalAllowed else {
                 // Identity ownership makes clear/cancel/newer requests immune to late completions.
                 if chat.pending == id { chat.cancel() }
@@ -225,7 +236,7 @@ struct StockSageChatSection: View {
             }
             switch result {
             case .success(let response): chat.finish(id: id, text: response)
-            case .failure: chat.finish(id: id, text: nil)
+            case .failure: chat.finish(id: id, text: nil, unavailable: "The model request failed or was interrupted. Your saved facts remain available. Check Model settings and retry; no answer was assumed.")
             }
         }
     }
