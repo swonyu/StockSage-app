@@ -26,6 +26,7 @@ enum StockSageBackup {
     }
 
     enum BackupError: Error, LocalizedError {
+        case encodeFailed
         case unsupportedSchemaVersion(found: Int, supported: Int)
         case decodeFailed(String)
         case invalidJournalRecord(index: Int, reason: String)
@@ -35,6 +36,8 @@ enum StockSageBackup {
 
         var errorDescription: String? {
             switch self {
+            case .encodeFailed:
+                return "Couldn't create a backup because a record could not be encoded. Check journal and portfolio values, then retry. No backup was saved."
             case .unsupportedSchemaVersion(let found, let supported):
                 return "This backup file is schema version \(found); this app reads version \(supported). It may be from a newer or older version of StockSage."
             case .decodeFailed(let reason):
@@ -57,11 +60,17 @@ enum StockSageBackup {
 
     // MARK: Export
 
+    /// Shared native export path; keep encoding before any destination write.
+    static func save(to url: URL, trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) throws {
+        let data = try export(trades: trades, positions: positions, userSymbols: userSymbols)
+        try data.write(to: url, options: .atomic)
+    }
+
     /// Builds a pretty-printed, ISO-8601-dated JSON snapshot of everything passed in.
     /// Pure — callers read `StockSageJournalStore.shared.trades`,
     /// `StockSagePortfolio.shared.positions`, `StockSageStore.shared.userSymbols` and pass
     /// them in; exporting never mutates those stores.
-    static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) -> Data {
+    static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) throws -> Data {
         let payload = BackupPayload(
             schemaVersion: currentSchemaVersion,
             exportedAt: Date(),
@@ -72,11 +81,8 @@ enum StockSageBackup {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        // A payload built from Codable structs with only finite Doubles can't fail to
-        // encode; a force-try here would be reachable only by a future field breaking
-        // that invariant, so encode defensively and return empty JSON rather than crash.
-        guard let data = try? encoder.encode(payload) else { return Data("{}".utf8) }
-        return data
+        do { return try encoder.encode(payload) }
+        catch { throw BackupError.encodeFailed }
     }
 
     // MARK: Restore

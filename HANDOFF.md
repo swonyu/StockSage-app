@@ -1,5 +1,71 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Backup export data-loss repair — September9, 09:04 Riyadh
+
+Parent remains sole writer/installer/heavy tester on `codex/qwen-chat-context`,
+base266846a. Good-spender OFF. No strategy/risk/model settings, stored records,
+broker submission, EODHD enablement, paid resources or pushes changed.
+
+Confirmed both production export callers in MarketsView: macOS wrote the shared
+exporter's bytes directly and reported success; iOS shared those bytes. The
+exporter returned `{}` on encoding failure, so a non-finite journal/portfolio
+value could silently replace a previous backup with an unusable file. Parent
+first extracted the real macOS file-save path without fixing that behavior:
+two disposable-fixture cases reproduced both missing error and overwritten bytes.
+The shared exporter now throws a localized encoding error; macOS encodes before
+an atomic Foundation file replacement and reports success only after saving.
+iOS offers ShareLink only for valid encoded output, otherwise an error action
+using the existing visible feedback. Restore semantics are unchanged, including
+the documented non-crash-atomic three-store commit. No owner file was used as a
+test destination and no corrupt owner record was injected or repaired.
+
+Artifacts: `/private/tmp/stocksage-reliability-20260909.v6DO1E`.
+Actual `red-backup-export`:18tests/1suite,4issues,0.034s,exit65 (journal NaN and
+portfolio Infinity arguments). `green-backup-export`:18tests/1suite,0.036s,exit0.
+Regressions cover failed encoding retaining prior bytes, successful chosen-file
+replacement/round-trip with an unrelated sibling unchanged, and a rejected
+directory destination retaining its contents. Full `full-macos-backup-export`:
+1,979tests/197suites,62.398s,exit0. Full `full-ios-backup-export`:
+1,975tests/197suites,62.016s,exit0 on iPhone17Pro(gate),
+UUID3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA. Both retain the canonical exclusions:
+CalibrationPersistRunTests, LiveUniverseVerificationTests and
+StrategyBaselineMeasurementTests. No frozen/live measurement was rerun.
+Strict `/private/tmp/stocksage-strict-backup-20260909.m2tqpP` passed
+macOS60s/iOS57s/test-typecheck80s, eachrc0 and aggregateexit0.
+Independent bounded read-only Codex review found no issues in the scoped diff
+or real callers. iOS error presentation was reviewed from source, not visually.
+Interrupted writes, disk-full/power-loss durability, destination filesystem
+behavior and cloud synchronization were not exercised; `.atomic` is not a claim
+of universal durability. These are executed platform tests, not a live-provider
+or UI acceptance claim.
+
+Exact Mac-tested candidate retained BEFORE iPhone testing:
+`checkpoint-macos-backup-export/StockSageX.app` under the artifact root;
+strict/deep signature passed, dylibSHA256
+`eee7c4d807bfdda3c087757b1a16f57407fc40345299956253d24dcaddc7d68f`.
+Source manifest `backup-export-source.sha256` covers343files; all entries and
+`git diff --check` passed after the platform runs, with a final recheck at commit.
+This backup fix is NOT installed yet. Existing `/Applications/StockSageX.app`
+remains sourceaeeb4aa, PID11619, automationenabled1 and owning its account lease.
+Account SHA256 remains
+`3a95a78b245189341660a7e54512cef8b72e5f259463954e0d86094a24377e7f`
+(same2trades/1,026decisions/0pending as the verified installed checkpoint).
+IBKR relay process absent. No normal quit, replacement, new account-backup claim
+or historical edit was performed. Exact-path native control still returns
+"Sky Computer Use native pipe closed before response"; inventory/process reads
+work. Keep the running app intact until normal quit and the authorized recoverable
+install workflow can be verified. This is an app-control limitation, not an
+app/API/trading block. Prior app/account backup remains at
+`/private/tmp/stocksage-install-reference-20260909.oD6wHv`.
+
+Six existing Claude reviewers were observed Idle, but an attempted follow-up
+navigation was stopped by the user-activity guard while the owner used the separate
+Day trading automation research session. No follow-up was sent there or into any
+unsent draft. The supplementary Codex reviewer completed and was closed; do not
+claim six active Claude reviews. Continue remaining approved reliability repairs,
+including actual detail-sheet task ownership, native bid/ask/size paper fills,
+QA startup isolation and bounded Massive/Benzinga evidence; do not redo this fix.
+
 ## Quote-condition reference recovery — September9, parent follow-up
 
 Parent remains sole writer/installer/heavy tester on `codex/qwen-chat-context`,

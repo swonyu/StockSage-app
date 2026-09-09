@@ -7,6 +7,52 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @Test(arguments: ["journal", "portfolio"])
+    func failedExportPreservesPreviousBackup(collection: String) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-export-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("backup.json")
+        try StockSageBackup.save(to: url, trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        let before = try Data(contentsOf: url)
+        var trade = fixtureTrade(), position = fixturePosition()
+        if collection == "journal" { trade.conviction = .nan } else { position.shares = .infinity }
+        var failed = false
+        do { try StockSageBackup.save(to: url, trades: [trade], positions: [position], userSymbols: ["NVDA"]) }
+        catch StockSageBackup.BackupError.encodeFailed { failed = true }
+        catch { Issue.record("Unexpected export error: \(error)") }
+        #expect(failed, "Encoding failure must reach the save caller, not produce an empty backup")
+        #expect(try Data(contentsOf: url) == before, "A failed export must not replace the previous backup")
+    }
+
+    @Test func fileExportReplacesOnlyTheChosenBackupAndRoundTrips() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-export-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("backup.json"), sibling = directory.appendingPathComponent("keep.json")
+        let sentinel = Data("keep this unrelated file".utf8)
+        try sentinel.write(to: sibling)
+        try StockSageBackup.save(to: url, trades: [], positions: [], userSymbols: [])
+        try StockSageBackup.save(to: url, trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        let payload = try StockSageBackup.restore(from: Data(contentsOf: url)).get()
+        #expect(payload.trades == [fixtureTrade()] && payload.positions == [fixturePosition()] && payload.userSymbols == ["NVDA"])
+        #expect(try Data(contentsOf: sibling) == sentinel)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == ["backup.json", "keep.json"])
+    }
+
+    @Test func rejectedExportDestinationRemainsIntact() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-export-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sentinel = Data("keep directory contents".utf8), child = directory.appendingPathComponent("keep.json")
+        try sentinel.write(to: child)
+        var failed = false
+        do { try StockSageBackup.save(to: directory, trades: [fixtureTrade()], positions: [], userSymbols: []) }
+        catch { failed = true }
+        #expect(failed)
+        #expect(try Data(contentsOf: child) == sentinel)
+    }
+
     @MainActor @Test func deletionMarkersSurviveLegacyWritesAndOnlySuccessfulExplicitRestoreRevivesIDs() throws {
         let suite = "stocksage-backup-deletions-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -14,7 +60,7 @@ struct StockSageBackupTests {
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
-        let data = StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        let data = try StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
         _ = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
         let journalBytes = try #require(defaults.data(forKey: "stocksage.journal.v1"))
         let portfolioBytes = try #require(defaults.data(forKey: "stocksage_portfolio_v1"))
@@ -121,7 +167,7 @@ struct StockSageBackupTests {
         let portfolio = StockSagePortfolio(userDefaults: defaults)
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         let trade = fixtureTrade(), position = fixturePosition()
-        let data = StockSageBackup.export(trades: [trade], positions: [position], userSymbols: ["TSLA", "NVDA"])
+        let data = try StockSageBackup.export(trades: [trade], positions: [position], userSymbols: ["TSLA", "NVDA"])
         let summary = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
         #expect(summary.trades == 1)
         #expect(summary.positions == 1)
@@ -159,7 +205,7 @@ struct StockSageBackupTests {
         let newTrade = TradeRecord(symbol: "NVDA", side: .long, entry: 100, stop: 95,
             target: nil, shares: 2, openedAt: original.openedAt)
         let lot = fixturePosition()
-        let data = StockSageBackup.export(trades: [fixtureTrade(), newTrade, newTrade],
+        let data = try StockSageBackup.export(trades: [fixtureTrade(), newTrade, newTrade],
             positions: [lot, lot], userSymbols: [" tsla ", "nvda", "NVDA"])
         let result = try StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store).get()
         #expect(result.trades == 1 && result.positions == 1 && result.symbols == 1)
@@ -186,7 +232,7 @@ struct StockSageBackupTests {
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         let before = defaults.persistentDomain(forName: suite) ?? [:]
         let positionsBefore = portfolio.positions
-        let valid = StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        let valid = try StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
         var json = try #require(JSONSerialization.jsonObject(with: valid) as? [String: Any])
         switch fault {
         case "journal":
@@ -241,7 +287,7 @@ struct StockSageBackupTests {
         }
         let before = defaults.persistentDomain(forName: suite) ?? [:]
         let journalIDs = journal.trades.map(\.id), lotIDs = portfolio.positions.map(\.id)
-        let data = StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
+        let data = try StockSageBackup.export(trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"])
         switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
         case .success: Issue.record("Destination \(fault) failure must not partially restore")
         case .failure(let error): #expect(error.localizedDescription.contains("Nothing was restored"))
@@ -252,10 +298,10 @@ struct StockSageBackupTests {
         #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
     }
 
-    @Test func incoherentJournalRejectsTheWholeRestoreWithoutRepairingIt() {
+    @Test func incoherentJournalRejectsTheWholeRestoreWithoutRepairingIt() throws {
         var invalid = fixtureTrade()
         invalid.closedAt = nil
-        let data = StockSageBackup.export(trades: [fixtureTrade(), invalid], positions: [fixturePosition()], userSymbols: ["AAPL"])
+        let data = try StockSageBackup.export(trades: [fixtureTrade(), invalid], positions: [fixturePosition()], userSymbols: ["AAPL"])
         switch StockSageBackup.restore(from: data) {
         case .success:
             Issue.record("An exit without a close time must fail the entire restore, not be repaired or dropped")
@@ -284,7 +330,7 @@ struct StockSageBackupTests {
         let position = fixturePosition()
         let symbols = ["TSLA", "NVDA"]
 
-        let data = StockSageBackup.export(trades: [trade], positions: [position], userSymbols: symbols)
+        let data = try StockSageBackup.export(trades: [trade], positions: [position], userSymbols: symbols)
         let result = StockSageBackup.restore(from: data)
 
         let payload = try result.get()
@@ -294,8 +340,8 @@ struct StockSageBackupTests {
         #expect(payload.userSymbols == symbols)
     }
 
-    @Test func exportProducesNonEmptyPrettyJSON() {
-        let data = StockSageBackup.export(trades: [fixtureTrade()], positions: [], userSymbols: [])
+    @Test func exportProducesNonEmptyPrettyJSON() throws {
+        let data = try StockSageBackup.export(trades: [fixtureTrade()], positions: [], userSymbols: [])
         let text = String(decoding: data, as: UTF8.self)
         #expect(text.contains("\"schemaVersion\""))
         #expect(text.contains("AAPL"))

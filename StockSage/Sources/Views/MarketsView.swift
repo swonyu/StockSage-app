@@ -2847,10 +2847,11 @@ struct MarketsView: View {
                         panel.allowedContentTypes = [.json]
                         panel.nameFieldStringValue = "stocksage-backup.json"
                         guard panel.runModal() == .OK, let url = panel.url else { return }
-                        let data = StockSageBackup.export(trades: journal.trades,
-                                                          positions: portfolio.positions,
-                                                          userSymbols: store.userSymbols)
-                        do { try data.write(to: url); journalDataFeedback = "Backup saved (journal, portfolio, watchlist)." }
+                        do {
+                            try StockSageBackup.save(to: url, trades: journal.trades,
+                                positions: portfolio.positions, userSymbols: store.userSymbols)
+                            journalDataFeedback = "Backup saved (journal, portfolio, watchlist)."
+                        }
                         catch { journalDataFeedback = "Backup failed: \(error.localizedDescription)" }
                     }
                     Button("Restore backup…") {
@@ -2895,12 +2896,21 @@ struct MarketsView: View {
                               preview: SharePreview("StockSage journal (CSV)")) {
                         Label("Share journal CSV", systemImage: "square.and.arrow.up")
                     }
-                    ShareLink(item: String(data: StockSageBackup.export(trades: journal.trades,
-                                                                        positions: portfolio.positions,
-                                                                        userSymbols: store.userSymbols),
-                                           encoding: .utf8) ?? "{}",
-                              preview: SharePreview("StockSage backup (JSON)")) {
-                        Label("Share journal, portfolio & watchlist (JSON)", systemImage: "externaldrive.badge.icloud")
+                    switch Result(catching: {
+                        try StockSageBackup.export(trades: journal.trades,
+                            positions: portfolio.positions, userSymbols: store.userSymbols)
+                    }) {
+                    case .success(let data):
+                        ShareLink(item: String(decoding: data, as: UTF8.self),
+                                  preview: SharePreview("StockSage backup (JSON)")) {
+                            Label("Share journal, portfolio & watchlist (JSON)", systemImage: "externaldrive.badge.icloud")
+                        }
+                    case .failure(let error):
+                        Button {
+                            journalDataFeedback = "Backup failed: \(error.localizedDescription)"
+                        } label: {
+                            Label("Backup unavailable — show error", systemImage: "exclamationmark.triangle")
+                        }
                     }
                     Divider()
                     Button { showRestoreImporter = true } label: {
