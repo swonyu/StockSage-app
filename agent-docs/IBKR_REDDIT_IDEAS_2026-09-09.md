@@ -50,8 +50,9 @@ Source paths: `StockSage/Sources/StockSage/StockSagePaperAutomation.swift`,
 `StockSagePaperAudit.swift`, `StockSageLiveStream.swift`, and
 `tools/ibkr_paper_relay.py` / `tools/ibkr_paper_relay.md`.
 
-Priority: safely install the full-gated condition-reference repair, then approved native quote-side/size realism,
-then deterministic restart/duplicate/late-receipt tests. Broker-specific changes
+The full-gated condition-reference repair is installed (see HANDOFF).
+Next: approved native quote-side/size realism, then deterministic
+restart/duplicate/late-receipt tests. Broker-specific changes
 remain offline-only; relay OFF. No new strategy, adaptive exits, model-weight
 changes, market-data purchase or real orders are authorized by this note.
 Price/volume activity may identify something to investigate; it must never become

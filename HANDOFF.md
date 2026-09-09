@@ -50,20 +50,28 @@ Exact latest Mac-tested bundle preserved at `checkpoint-macos-feed-reference-2/S
 strict/deep signature passed, dylibSHA256
 `15bb614a368e09d28c901281651c09f3afc6d93de40f63a196793d79c362e2bb`.
 
-Installed app is still source8972836, PID22077 last verified, enabled1 and owning
-the account lease; installed dylib remains09a422ac…9eb2. Native control still fails
-with "Sky Computer Use native pipe closed before response", including after a
-CUA binding reset. Leave the running app intact; no force-quit or unsafe replacement.
-Owner08:33 challenged "blocked": clarified this is ONLY an app-control connection
-failure, not an app/API/trading restriction or a halt to repository work. Latest
-native retry returned the same error; PID22077 remains running. Parent did not
-install this source batch. At08:35, paper account SHA256 still exactly matches
-the backup hash3a95a78b…e7f recorded below; no historical records changed.
-All gates are now passed. Installation is pending normal Quit/process-and-lease
-release, whole-account backup, recoverable installed bundle, exact candidate copy,
-signature/hash checks, reopen and state verification. Owner was told they can
-quit with Cmd-Q because native control is unavailable. Do not assume they did.
-No changed UI or live-provider recovery has been verified for this batch.
+Installation completed08:38–08:42 Riyadh; source commitaeeb4aa. Owner08:33
+challenged "blocked": clarified the native-pipe failure affected app-control,
+not an app/API/trading restriction or repository work. After explaining Cmd-Q,
+parent observed PID22077 gone and verified no replacement process/ledger-lock
+holder. No force-quit was performed. A consistent whole-paper-directory copy and
+recoverable previous app are at `/private/tmp/stocksage-install-reference-20260909.oD6wHv`.
+Checksum/symlink-aware dry comparisons were empty for the paper backup, staged
+candidate and installed app. Installed `/Applications/StockSageX.app` now matches
+the exact Mac-tested candidate/hash above; strict/deep signature passes.
+
+Native getApp briefly recovered and reopened PID11619: Home rendered, feed
+"connected · no recent observation", old prices explicitly NOT live. Process
+and account lease ownership verified, automation enabled1. Paper account SHA256
+still3a95a78b245189341660a7e54512cef8b72e5f259463954e0d86094a24377e7f;
+all2trades/1,026decisions/0pending compare exactly with the new pre-install backup.
+No historical changes. Subsequent Chat click/keyboard navigation/reselection hit
+native-pipe/inactive-target errors; that tab's post-install visual check remains
+UNVERIFIED, not evidence the app crashed (PID11619 is still running). No additional
+get_app_state tool was exposed. Reopening/state verification succeeded; do not
+mistake the remaining UI-control error for a pending installation.
+Real-provider reference-expiry/failure recovery was not exercised live; synthetic
+real-path regressions and full platform gates are the acceptance evidence.
 Exchange-list failure remains observational (unknown venue); it does not prevent
 condition qualification and has no independent minute retry in this narrow fix.
 Native paper bid/ask/size fills are still pending, not supplied by this change.
