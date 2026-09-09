@@ -1,5 +1,38 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Chat input recovery — September 9, verified candidate; not installed
+
+Mac edits now synchronously clear the obsolete input warning; same-value writes
+preserve a current warning. Input and storage warnings display independently,
+including equal text, with vertical wrapping. Native Binding and existing renderer
+reused; no deferred handler, validation/send/cancel/history/model/trading changes.
+NonMac field/warning rendering remains unchanged; no iOS work today.
+
+Both real paths reproduced before repair: red13tests/1suite/3issues/0.198s,
+exit65; green13/0.181s, exit0. Post-green native-render suite14/0.251s, exit0;
+parent inspected actual field/two-warning synthetic captures at360/760. These
+are actual-binding tests and render/geometry checks, not native typing/AX proof.
+Ptolemy/Lorentz bounded source reviews complete, final no must-fix.
+
+Full canonical Mac **2,042tests/200suites/65.204s, exit0**; original three opt-in
+exclusions retained. Strict Mac emit58s and test typecheck80s passed, aggregate0:
+`GATE repo=qwen-context macos=OK ios=SKIP tests=OK`. All372 source-manifest entries
+rechecked after both gates. ManifestSHA256:
+911c19741c1111199536ec0725b6f6c455e80416859fce801b4a5dc68a484ec0.
+Retained candidate matches all64 tested file/link entries; deep/strict codesign
+passed. DylibSHA256:
+3efea60106cc03f6f0fc6c6ec4f7412adbf1a74e7f1977193a82a1f8406fcfd3.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-chat-input/StockSageX.app`.
+Same root holds CHAT_INPUT_RECOVERY.md, chat-input-images, red/green/render/final
+logs and xcresults, frozen source manifest and preserved strict detailed logs.
+
+**Not installed:** retain session-only manual500 scan/results pending the existing
+owner restart/clear choice, even if finished. Installed27a4727/PID40101, Qwen2120
+and paused paper preference0 rechecked unchanged. No live owner-input/history
+action, push, paid resources, relay or real order. Integrated native layout,
+keyboard/VoiceOver and link/disclosure interaction remain unverified. This
+supersedes the older pending composer-warning findings below.
+
 ## Chat bubbles — September 9, verified candidate; not installed
 
 Mac transcript now separates trailing You, leading Qwen and cited evidence/full

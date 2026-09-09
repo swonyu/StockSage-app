@@ -195,9 +195,13 @@ struct StockSageChatSection: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            #if os(macOS)
+            QuestionField(question: $question, issue: $issue)
+            #else
             TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $question, axis: .vertical)
                 .lineLimit(2...5).textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Question for Qwen")
+            #endif
             HStack {
                 Button("Ask Qwen", systemImage: "arrow.up.circle.fill", action: send)
                     .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config == nil)
@@ -208,7 +212,11 @@ struct StockSageChatSection: View {
                 Spacer()
                 Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
             }
+            #if os(macOS)
+            Self.composerWarnings(issue: issue, storageError: chat.storageError)
+            #else
             if let issue = issue ?? chat.storageError { Text(issue).foregroundStyle(DS.Palette.warningSoft) }
+            #endif
             #if os(macOS)
             if config == nil {
                 connectionNotice
@@ -221,6 +229,39 @@ struct StockSageChatSection: View {
             #endif
         }
     }
+
+    #if os(macOS)
+    struct QuestionField: View {
+        @Binding var question: String
+        @Binding var issue: String?
+
+        var editingBinding: Binding<String> {
+            Binding(get: { question }, set: { value in
+                guard question != value else { return }
+                issue = nil
+                question = value
+            })
+        }
+
+        var body: some View {
+            TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: editingBinding, axis: .vertical)
+                .lineLimit(2...5).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Question for Qwen")
+        }
+    }
+
+    static func composerIssues(issue: String?, storageError: String?) -> [String] {
+        [issue, storageError].compactMap { $0 }
+    }
+
+    static func composerWarnings(issue: String?, storageError: String?) -> some View {
+        let warnings = composerIssues(issue: issue, storageError: storageError)
+        return ForEach(warnings.indices, id: \.self) { index in
+            Text(warnings[index]).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    #endif
 
     private var connectionNotice: some View {
         Text(config == nil

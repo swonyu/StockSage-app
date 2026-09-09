@@ -19,6 +19,47 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test func editingQuestionClearsOnlyTheObsoleteInputIssue() {
+        var question = String(repeating: "x", count: 2_001)
+        var issue: String? = "Use 1–2000 characters."
+        let field = StockSageChatSection.QuestionField(
+            question: Binding(get: { question }, set: { question = $0 }),
+            issue: Binding(get: { issue }, set: { issue = $0 }))
+        #expect(!StockSageChat.safeQuestion(question))
+        #expect(field.editingBinding.wrappedValue == question)
+        field.editingBinding.wrappedValue = question
+        #expect(issue == "Use 1–2000 characters.", "An unchanged value must not dismiss the warning")
+        field.editingBinding.wrappedValue = "Explain uncertainty"
+        #expect(question == "Explain uncertainty" && StockSageChat.safeQuestion(question))
+        #expect(issue == nil, "An actual edit must discard the old input warning")
+        issue = "A newer validation failure"
+        field.editingBinding.wrappedValue = question
+        #expect(issue == "A newer validation failure", "No delayed edit handler may erase a newer error")
+    }
+
+    @Test func inputWarningsCannotConcealHistoryErrors() {
+        let input = "Use 1–2000 characters."
+        let storage = "Saved Chat history could not be read. It has not been overwritten."
+        #expect(StockSageChatSection.composerIssues(issue: nil, storageError: nil).isEmpty)
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: nil) == [input])
+        #expect(StockSageChatSection.composerIssues(issue: nil, storageError: storage) == [storage])
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: storage) == [input, storage])
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: input) == [input, input])
+    }
+
+    @Test(arguments: [360, 760])
+    func renderInputAndStorageWarnings(width: Int) async throws {
+        let issue = "Use 1–2000 characters without credentials or account identifiers. Nothing was saved or sent."
+        let storage = "Saved Chat history could not be read. It has not been overwritten. Clear history to start again."
+        let view = VStack(alignment: .leading, spacing: 8) {
+            StockSageChatSection.QuestionField(question: .constant("What remains uncertain?"), issue: .constant(issue))
+            StockSageChatSection.composerWarnings(issue: issue, storageError: storage)
+        }.padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-chat-input-\(width)")
+        #expect(size.width == CGFloat(width) && size.height > 60)
+    }
+
     @Test(arguments: [360, 760], [false, true])
     func renderCapturedTurnWithoutLiveChat(width: Int, pending: Bool) async throws {
         let captured = snapshot()
@@ -31,10 +72,15 @@ struct StockSageChatTests {
         let view = StockSageChatSection.turnContent(turn, pending: pending)
             .padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-chat-turn-\(width)-\(pending)")
+        #expect(size.width == CGFloat(width) && size.height > 100)
+    }
+
+    private func capture(_ view: some View, name: String) async throws -> CGSize {
         var appeared = false
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
-            width: width, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            width: 500, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = host
         window.orderBack(nil)
@@ -49,8 +95,8 @@ struct StockSageChatTests {
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         // Matches the existing offline component-render checks; inspect these for copy/wrapping.
         try png.write(to: FileManager.default.temporaryDirectory
-            .appendingPathComponent("stocksage-chat-turn-\(width)-\(pending).png"), options: .atomic)
-        #expect(host.view.bounds.width == CGFloat(width) && host.view.bounds.height > 100)
+            .appendingPathComponent("\(name).png"), options: .atomic)
+        return host.view.bounds.size
     }
     #endif
 
