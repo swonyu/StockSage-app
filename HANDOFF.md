@@ -1,5 +1,37 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac Research Run/Stop layout — September 9, verified; not installed
+
+Actual manual header and other-running notice now use native horizontal/stacked
+layouts. Baseline360 captured truncated Run/subtitle and scan notice; first-run
+height94. Regression height>110 failed once, then passed at129 with full labels.
+760 layout remains horizontal. Existing Run selection-clear/start, Stop, Show,
+running guard, retry meaning, help and accessibility labels preserved. Status,
+tables, filters, price calculations and Day101/manual500 behavior unchanged.
+
+New renderer seam compile-REDexit65 is not an executed assertion. Baseline36/2/
+2.313s exit0; layoutRED36/2/2.268s oneissue exit65; GREEN36/2/2.354s exit0.
+All8 final native360/760 captures inspected. Actual renderers take values/callbacks,
+not Store/singletons; rendering invoked zero callbacks. Source reviews Sol/Astra
+no must-fix, closed. Native action activation/keyboard/VoiceOver and installed UI
+remain unverified; visual checks and height alone do not certify them.
+
+Full Mac **2,052 tests/200 suites/81.382s**, exit0. Strict Mac emit128s/test
+typecheck182s, exec19280 aggregate0: macos=OK ios=SKIP tests=OK, same3opt-in exclusions.
+Frozen372-source manifest1d90e9f9e6e3a8df5ddee336452dce483f6f1f03eb29ce42873ee2fb7e276d64
+rechecked exit0. Retained64-entry exactcandidate and deepstrictsignature verified;
+dylib dc2d16082c69f8f9651cca28e3b23264255229fed248cecec665d3f8969953ea.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/RESEARCH_CONTROLS.md`;
+same root contains before/after images, plan, focused/full xcresults, source
+manifest and candidate-research-controls/StockSageX.app. iOS skipped today.
+
+No install/quit/reopen/probes/push. Installed app absent for unverified reason;
+installed files unchanged, Qwen2120 present, paper enabled0. Do not claim500
+session-only results retained or restart/restore under the existing ownerhold.
+No paid resources, relay, real orders or historical edits. Parent sole writer/
+tester/installer. Next filter/price-layout risks are source-inferred only; see
+research-next-controls-intake.md, reproduce before changing. All reviewers closed.
+
 ## Mac explicit Chat focus — September 9, verified; not installed
 
 Composer focus returns after successful guarded Edit, accepted Send (before its

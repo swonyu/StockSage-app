@@ -19,6 +19,31 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [360, 760], ["fresh", "rerun", "running", "other-running"])
+    func renderResearchControlsWithoutStartingScans(width: Int, state: String) async throws {
+        typealias R = StockSageHorizonResearch
+        let running: R.Horizon? = state == "running" ? .week : state == "other-running" ? .fortnight : nil
+        var actions = 0
+        let view = VStack(alignment: .leading, spacing: 14) {
+            GroupBox {
+                StockSageResearchModesPanel.manualControls(horizon: .week, hasRun: state != "fresh",
+                    running: running, run: { actions += 1 }, stop: { actions += 1 })
+                    .padding(DS.Space.xs)
+            }
+            if let running, running != .week {
+                StockSageResearchModesPanel.runningScanControls(running: running,
+                    show: { actions += 1 }, stop: { actions += 1 })
+            }
+        }.padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-research-controls-\(width)-\(state)")
+        #expect(size.width == CGFloat(width) && size.height > 40)
+        if width == 360 && state == "fresh" {
+            #expect(size.height > 110, "The narrow first-run header needs room for its full description and Run action")
+        }
+        #expect(actions == 0, "Rendering either layout must not start, stop or switch a research scan")
+    }
+
     @Test func nativeQuestionFocusUsesActualFieldWithoutOwnerState() async throws {
         var focus: FocusState<Bool>.Binding?
         var text: Binding<String>?

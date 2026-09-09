@@ -28,14 +28,8 @@ struct StockSageResearchModesPanel: View {
                 StockSagePaperAutomationPanel()
             }
             if let running = research.running, running != horizon {
-                HStack {
-                    Text("\(running.rawValue) scan is still running. Switching tabs does not stop it.").font(.caption)
-                    Spacer()
-                    Button("Show scan") { mode = running.rawValue }
-                        .accessibilityLabel("Show \(running.rawValue) research scan")
-                    Button("Stop scan") { research.stop() }
-                        .accessibilityLabel("Stop \(running.rawValue) research scan")
-                }
+                Self.runningScanControls(running: running,
+                    show: { mode = running.rawValue }, stop: { research.stop() })
             }
         }
     }
@@ -51,27 +45,8 @@ struct StockSageResearchModesPanel: View {
         let incomplete = scan.results.values.filter { $0.verdict == nil }.count
         return GroupBox {
             VStack(alignment: .leading, spacing: DS.Space.md) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(horizon.rawValue).font(.headline)
-                        Text("Research only · up to \(StockSageHorizonResearch.scanLimit) US listings · one-time scan")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if isRunning {
-                        Button("Stop scan", systemImage: "stop.fill") { research.stop() }
-                            .accessibilityLabel("Stop \(horizon.rawValue) research scan")
-                            .help("Stop this research scan. Day trading is controlled separately.")
-                    } else {
-                        Button(scan.at == nil ? "Run \(StockSageHorizonResearch.scanLimit)-stock scan" : "Run again", systemImage: "play.fill") {
-                            selected = nil
-                            research.start(horizon, store: store)
-                        }.buttonStyle(.borderedProminent).tint(DS.Palette.accent)
-                            .accessibilityLabel("Run \(horizon.rawValue) research scan")
-                            .disabled(research.running != nil)
-                            .help("Research once; no orders. A new run replaces this horizon’s temporary results.")
-                    }
-                }
+                Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: research.running,
+                    run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Label(scan.status, systemImage: isRunning ? "arrow.triangle.2.circlepath" : "info.circle")
                         .font(.callout).accessibilityLabel("Scan status: \(scan.status)")
@@ -158,6 +133,58 @@ struct StockSageResearchModesPanel: View {
                 }.font(.caption).foregroundStyle(.secondary)
             }.padding(DS.Space.xs)
         }
+    }
+
+    static func manualControls(horizon: StockSageHorizonResearch.Horizon, hasRun: Bool,
+                               running: StockSageHorizonResearch.Horizon?,
+                               run: @escaping () -> Void, stop: @escaping () -> Void) -> some View {
+        adaptiveActionRow {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(horizon.rawValue).font(.headline)
+                Text("Research only · up to \(StockSageHorizonResearch.scanLimit) US listings · one-time scan")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        } actions: {
+            if running == horizon {
+                Button("Stop scan", systemImage: "stop.fill", action: stop)
+                    .accessibilityLabel("Stop \(horizon.rawValue) research scan")
+                    .help("Stop this research scan. Day trading is controlled separately.")
+            } else {
+                Button(hasRun ? "Run again" : "Run \(StockSageHorizonResearch.scanLimit)-stock scan", systemImage: "play.fill", action: run)
+                    .buttonStyle(.borderedProminent).tint(DS.Palette.accent)
+                    .accessibilityLabel("Run \(horizon.rawValue) research scan")
+                    .disabled(running != nil)
+                    .help("Research once; no orders. A new run replaces this horizon’s temporary results.")
+            }
+        }
+    }
+
+    static func runningScanControls(running: StockSageHorizonResearch.Horizon,
+                                   show: @escaping () -> Void, stop: @escaping () -> Void) -> some View {
+        adaptiveActionRow {
+            Text("\(running.rawValue) scan is still running. Switching tabs does not stop it.").font(.caption)
+        } actions: {
+            Button("Show scan", action: show)
+                .accessibilityLabel("Show \(running.rawValue) research scan")
+            Button("Stop scan", action: stop)
+                .accessibilityLabel("Stop \(running.rawValue) research scan")
+        }
+    }
+
+    private static func adaptiveActionRow<Content: View, Actions: View>(
+        @ViewBuilder _ content: () -> Content, @ViewBuilder actions: () -> Actions
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: DS.Space.md) {
+                content().fixedSize()
+                Spacer(minLength: DS.Space.sm)
+                HStack(spacing: DS.Space.sm, content: actions).fixedSize()
+            }
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                content().fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: DS.Space.sm, content: actions).fixedSize()
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Called only when no rows are visible; a filter is not a failed scan.
