@@ -160,7 +160,7 @@ struct StockSageChatSection: View {
 
     private func sourceCard(_ source: StockSageChat.Source) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("\(source.subject) · \(source.attribution) · \(source.date.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
+            Text("\(source.subject) · \(source.attribution) · \(source.publicationTime ?? StockSageNewsService.instant(source.date))").font(.caption.bold())
             Text(source.warning).font(.caption).foregroundStyle(.secondary)
             Text(source.excerpt).font(.callout).textSelection(.enabled)
             if let link = source.link { Link("Read attributed source", destination: link) }
@@ -192,22 +192,24 @@ struct StockSageChatSection: View {
         request = Task {
             var enriched = facts
             if let ticker = researchTicker {
-                let webAllowed = ToolPolicy.isExternalAllowed
-                let news = webAllowed ? await StockSageNewsService.recentNews(for: ticker, limit: 3, now: facts.at) : []
+                let news = await StockSageNewsService.observation(for: ticker, limit: 3, now: facts.at)
                 guard !Task.isCancelled, chat.pending == id, StockSageAIAssessments.configuration == config else {
                     if chat.pending == id { chat.cancel() }
                     return
                 }
-                enriched = StockSageChat.addingResearch(to: facts, symbol: ticker, news: news,
-                    leads: StockSageResearchLeads.load(symbol: ticker, now: facts.at), webAllowed: webAllowed)
+                enriched = StockSageChat.addingResearch(to: facts, symbol: ticker, observation: news,
+                    leads: StockSageResearchLeads.load(symbol: ticker, now: facts.at), webAllowed: ToolPolicy.isExternalAllowed)
                 guard chat.attachResearch(id: id, snapshot: enriched) else { return }
             }
             guard let prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: history) else {
                 chat.finish(id: id, text: nil, unavailable: "This context is too large for the local request. Ask a shorter question or use fewer tickers. Source snapshots remain available.")
                 return
             }
+            let includesNews = enriched.sources?.contains { $0.id.contains(".news.") } == true
+            guard !includesNews || ToolPolicy.isExternalAllowed else { chat.cancel(); return }
             let probe = await StockSageLocalModelServer.probe(config)
-            guard !Task.isCancelled, StockSageAIAssessments.configuration == config else {
+            guard !Task.isCancelled, StockSageAIAssessments.configuration == config,
+                  !includesNews || ToolPolicy.isExternalAllowed else {
                 if chat.pending == id { chat.cancel() }
                 return
             }
@@ -215,7 +217,8 @@ struct StockSageChatSection: View {
             let result = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
                 system: StockSageChat.instructions, user: prompt, maxTokens: StockSageChat.outputTokens,
                 contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout)
-            guard !Task.isCancelled, StockSageAIAssessments.configuration == config else {
+            guard !Task.isCancelled, StockSageAIAssessments.configuration == config,
+                  !includesNews || ToolPolicy.isExternalAllowed else {
                 // Identity ownership makes clear/cancel/newer requests immune to late completions.
                 if chat.pending == id { chat.cancel() }
                 return
