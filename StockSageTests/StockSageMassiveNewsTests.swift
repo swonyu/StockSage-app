@@ -50,7 +50,7 @@ struct StockSageMassiveNewsTests {
         #expect(item.snippet == "Capacity rose. Costs increased.")
         let cited = N.CitedSource(news: item)
         let line = N.sourceLine(number: 1, source: cited)
-        #expect(line == "[1] 2026-08-31 Massive news · Fixture Publisher: Capacity update — Capacity rose. Costs increased. (https://example.com/news)\n   sentiment: positive — Capacity rose 12%.")
+        #expect(line == "[1] 2026-08-31T10:00:00.123Z Massive news · Fixture Publisher: Capacity update — Capacity rose. Costs increased. (https://example.com/news)\n   sentiment: positive — Capacity rose 12%.")
         #expect(cited.source == item.source && cited.insight == item.insight && cited.link == item.link)
         #expect(!N.introducesForeignNumbers("Capacity rose 12% [1].", facts: [line]))
         #expect(N.introducesForeignNumbers("Capacity rose 99% [1].", facts: [line]))

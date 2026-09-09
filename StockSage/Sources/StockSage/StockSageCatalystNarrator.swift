@@ -86,15 +86,18 @@ enum StockSageCatalystNarrator {
         let snippet: String
         let link: URL?
         let insight: String?
+        /// Filing/transaction dates can be day-only; only parsed news supplies a publication instant.
+        let publicationTime: String?
 
-        init(date: Date, source: String, title: String, snippet: String, link: URL?, insight: String? = nil) {
+        init(date: Date, source: String, title: String, snippet: String, link: URL?, insight: String? = nil, publicationTime: String? = nil) {
             self.date = date; self.source = source; self.title = title
             self.snippet = snippet; self.link = link; self.insight = insight
+            self.publicationTime = publicationTime
         }
 
         init(news: StockSageNewsService.NewsItem) {
             self.init(date: news.date, source: news.source, title: news.title,
-                      snippet: news.snippet, link: news.link, insight: news.insight)
+                      snippet: news.snippet, link: news.link, insight: news.insight, publicationTime: news.publicationTime ?? StockSageNewsService.instant(news.date))
         }
     }
 
@@ -166,13 +169,17 @@ enum StockSageCatalystNarrator {
         return f.string(from: date)
     }
 
+    nonisolated static func sourceDate(_ source: CitedSource) -> String {
+        source.publicationTime ?? sourceDay(source.date)
+    }
+
     /// One "[n] YYYY-MM-DD <source>: <title> — <snippet> (<link>)" fact line. Split out of
     /// `facts(for:sources:)` so the exact format is pinned in one place a test can call directly.
     nonisolated static func sourceLine(number: Int, source: CitedSource) -> String {
         let snippetPart = source.snippet.isEmpty ? "" : " — \(source.snippet)"
         let linkPart = source.link?.absoluteString ?? "no link"
         let insightPart = source.insight.map { "\n   sentiment: \($0)" } ?? ""
-        return "[\(number)] \(sourceDay(source.date)) \(source.source): \(source.title)\(snippetPart) (\(linkPart))\(insightPart)"
+        return "[\(number)] \(sourceDate(source)) \(source.source): \(source.title)\(snippetPart) (\(linkPart))\(insightPart)"
     }
 
     /// System instructions for the session — fixed, never per-idea (the facts carry everything

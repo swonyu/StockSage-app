@@ -37,6 +37,7 @@ struct CatalystsSection: View {
     /// symbol — kept so `narrationPanel` can render the numbered source list (and its count for
     /// `label(for:sourceCount:)`) alongside the paragraph it actually backed.
     @State private var narrationSources: [String: [StockSageCatalystNarrator.CitedSource]] = [:]
+    @State private var narrationNews: [String: StockSageNewsService.Observation] = [:]
     @State private var filings: [String: [StockSageDisclosureService.Filing]] = [:]
     @State private var filingsLoading: Set<String> = []
     @State private var filingsFetched: Set<String> = []
@@ -569,6 +570,10 @@ struct CatalystsSection: View {
                 }
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
             }
+            if let news = narrationNews[symbol] {
+                Text(news.summary).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !sources.isEmpty { Self.sourceList(sources) }
         }
     }
@@ -593,16 +598,16 @@ struct CatalystsSection: View {
     static func sourceList(_ sources: [StockSageCatalystNarrator.CitedSource]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(sources.enumerated()), id: \.offset) { i, source in
-                let dateStr = StockSageCatalystNarrator.sourceDay(source.date)
+                let dateStr = StockSageCatalystNarrator.sourceDate(source) + (source.publicationTime == nil ? " UTC" : "")
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .top, spacing: 4) {
                         Text("[\(i + 1)]")
                         if let link = source.link {
                             Link(destination: link) {
-                                Text("\(source.title) · \(dateStr) UTC")
+                                Text("\(source.title) · \(dateStr)")
                             }.buttonStyle(.plain)
                         } else {
-                            Text("\(source.title) · \(dateStr) UTC")
+                            Text("\(source.title) · \(dateStr)")
                         }
                     }
                     Text(source.source)
@@ -642,16 +647,18 @@ struct CatalystsSection: View {
         let settings = explanationSettings
         Task {
             defer { narrating.remove(symbol) }
-            let sources = await Self.citedSources(for: symbol)
+            let (sources, news) = await Self.citedSources(for: symbol)
             // Do not silently send a pending Explain request to newly selected settings.
-            guard !Task.isCancelled, settings == explanationSettings else { return }
+            guard !Task.isCancelled, settings == explanationSettings,
+                  news.items.isEmpty || ToolPolicy.isExternalAllowed else { return }
             let result = await StockSageCatalystNarrator.explain(brief, sources: sources)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, news.items.isEmpty || ToolPolicy.isExternalAllowed else { return }
             // Publish the response and its ORIGINAL context together, after the last await.
             // A settings change during generation leaves a readable, explicitly stale snapshot.
             narrationFacts[symbol] = facts
             narrationSettings[symbol] = settings
             narrationSources[symbol] = sources
+            narrationNews[symbol] = news
             narrations[symbol] = result
         }
     }
@@ -659,15 +666,19 @@ struct CatalystsSection: View {
     /// Fetches news, the last 8-K, and insider activity IN PARALLEL (the spinner over the whole
     /// panel already covers this wait — `narrating` is set before this call and cleared after) and
     /// flattens them into the narrator's numbering order: news, then the filing, then insider
-    /// rows. Each feed already fails closed to `[]`/`nil` on its own (policy off, no key,
-    /// unreachable, non-US symbol) — nothing here needs its own error handling.
-    private static func citedSources(for symbol: String) async -> [StockSageCatalystNarrator.CitedSource] {
-        async let newsTask = StockSageNewsService.recentNews(for: symbol)
+    /// rows. Retain the news check separately, even when it yielded no citable source.
+    private static func citedSources(for symbol: String) async -> ([StockSageCatalystNarrator.CitedSource], StockSageNewsService.Observation) {
+        async let newsTask = StockSageNewsService.observation(for: symbol)
         async let filingTask = StockSageDisclosureService.recentFilings(for: symbol, forms: ["8-K"], limit: 1)
         async let insiderTask = StockSageInsider.recentActivity(for: symbol)
         let (news, filings, insider) = await (newsTask, filingTask, insiderTask)
 
-        var sources: [StockSageCatalystNarrator.CitedSource] = news.map {
+        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else {
+            var withheld = news
+            withheld.withholdingReason = Task.isCancelled ? .cancelled : .policyDenied
+            return ([], withheld)
+        }
+        var sources: [StockSageCatalystNarrator.CitedSource] = news.items.map {
             .init(news: $0)
         }
         if let filing = filings.first {
@@ -681,7 +692,7 @@ struct CatalystsSection: View {
             let title = "\(t.insiderName) \(verb) \(Int(t.shares)) shares"
             sources.append(.init(date: date, source: "SEC Form 4", title: title, snippet: "", link: nil))
         }
-        return sources
+        return (sources, news)
     }
 
     /// `.extreme` needs the idea's actual high/low direction, which the pure, testable
