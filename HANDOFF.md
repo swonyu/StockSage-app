@@ -1,5 +1,66 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Detail request lifecycle — September9, parent verified checkpoint
+
+Parent remains sole writer/installer/heavy tester on `codex/qwen-chat-context`,
+base `a56c2ca`. Good-spender is uninstalled for every session: never restore it.
+Owner approved the actionable recommendations in
+`/Users/saleh/research/day-trading-automation-codex-20260909/REPORT.md` and three
+parallel bounded agents. Supporting agents are repository-read-only; heavy gates
+stay serial. No strategy/risk/model weights, historical records, broker/relay,
+subscriptions or pushes changed.
+
+Both card layouts now share request-free price rendering. Presented details own
+SEC/quote requests, cancellation and synchronous selection invalidation. The
+native mounted-sheet regression reproduced coalesced A→nil/B→A stranding the
+symbol-keyed task. A production-shaped callback also reproduced quote publication
+before request ownership validation. Fetching and synchronous shared-board
+publication are now separated, and the sheet uses a selection epoch that is
+stable across same-ID quote updates and load startup. The unused combined
+Store.refreshQuote helper had one caller and is removed; other quote merges keep
+the existing shared validation. Old requests cannot reopen a dismissed sheet,
+replace another selection, or publish into the board before the owner check.
+
+Durable artifacts: `/Users/saleh/StockSage-verification-20260909.M0MISy`.
+`VERIFICATION.md` contains commands and boundaries. Red reviewer regression:
+8tests/2suites,4issues,8.274s,exit65. Focused green:8/2,2.338s,exit0.
+Final macOS:1,987tests/199suites,64.470s,exit0. Final iPhone17Pro(gate),
+UUID3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA:1,979/198,60.916s,exit0.
+Both retain CalibrationPersistRunTests, LiveUniverseVerificationTests and
+StrategyBaselineMeasurementTests as the unchanged canonical exclusions.
+Strict `tools/gate.sh ... all`: macOS60s/iOS71s/test-typecheck80s, eachrc0,
+aggregateexit0. Known live/paper opt-in environment variables were absent.
+All330 entries in `detail-final-source.sha256` were rechecked after platform
+gates; manifestSHA256
+`1bb981d66ddacf97450df119266d79477b9d32bd4a6536fc4e84b202bb3dcecc`.
+The independent reviewer closed both additional findings by source inspection;
+the parent owns executed-test claims.
+
+Exact Mac-tested `candidate/StockSageX.app` was preserved before iPhone work,
+deep/strict signature verified; debug-dylibSHA256
+`690e03591345c4b9769c0569ea9999290c83414d6b0cebbd499f8deafff164b2`.
+`candidate-files.sha256` records43 bundle files. This candidate is NOT installed.
+Native normal-quit control lost its pipe; a session reset also failed. Installed
+PID1990 still owns the paper lease and remains the aeeb4aa build, dylibSHA256
+`15bb614a368e09d28c901281651c09f3afc6d93de40f63a196793d79c362e2bb`.
+Its verified recoverable copy is
+`/Users/saleh/StockSage-release-20260909.hrzqVh/previous/StockSageX.app`.
+No force-quit, overwrite, new consistent paper-directory backup or historical
+mutation occurred. Wait for normal quit/lease release before backing up the
+whole paper directory and installing. The previous /private/tmp artifacts and
+candidates disappeared; older claims of their presence must not be reused.
+
+StockSage Home was observed rendering before the failed quit; no new-build
+visual acceptance is claimed. Existing Qwen is running loopback-only at8765;
+the requested startup was verified by models listing and a minimal READY reply,
+not by investment-quality or universal API tests. Continue the report queue in
+`.../day-trading-automation-codex-20260909/IMPLEMENTATION.md`: native side/size
+fills, accounting/replay evidence, Qwen claim ownership/news outcomes and chat
+earnings freshness, QA isolation, artifact-only research reporting. Reuse the
+three read-only reviews in the durable verification root. Frozen prospective
+research, paper thresholds, 100/four/900 cadence, same-day extended sessions and
+persistent triggered STOP policy remain intact; IBKR relay stays off.
+
 ## Backup export data-loss repair — September9, 09:04 Riyadh
 
 Parent remains sole writer/installer/heavy tester on `codex/qwen-chat-context`,

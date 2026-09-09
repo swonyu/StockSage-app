@@ -2770,17 +2770,6 @@ final class StockSageStore: ObservableObject {
         if mergeLiveQuotes(quotes) { lastUpdated = Date() }
     }
 
-    /// Fetch ONE symbol's quote now (idea detail opens call this) and merge it into the board
-    /// row and the matching idea's price/priceAsOf. Returns the quote, nil on feed miss.
-    @discardableResult
-    func refreshQuote(for symbol: String) async -> StockSageQuoteService.LiveQuote? {
-        guard ToolPolicy.webToolsDisabledReason() == nil else { return nil }
-        guard let q = await StockSageQuoteService.fetchQuotes(for: [symbol])[symbol.uppercased()]
-        else { return nil }
-        mergeLiveQuote(q, symbol: symbol)
-        return q
-    }
-
     /// Shared merge for targeted fetches: rebuilds the board row with the fresh quote (same
     /// two-quote shape refresh() commits) and relabels any matching idea's price honestly.
     private func mergeLiveQuote(_ q: StockSageQuoteService.LiveQuote, symbol: String) {

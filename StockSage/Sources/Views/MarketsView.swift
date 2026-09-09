@@ -267,7 +267,10 @@ struct MarketsView: View {
     /// this box. Cleared when the browse sheet opens/closes.
     @State private var watchlistAddError: String? = nil
     /// Tapped idea → per-symbol detail sheet (full advice + larger sparkline + backtest).
-    @State private var selectedIdea: StockSageIdea?
+    private var selectedIdea: StockSageIdea? {
+        get { detailEvidence.selection }
+        nonmutating set { detailEvidence.selection = newValue }
+    }
     #if os(iOS)
     /// iPhone detail-sheet detent — medium first so the board stays visible while stepping prev/next.
     @State private var detailDetent: PresentationDetent = .medium
@@ -290,10 +293,7 @@ struct MarketsView: View {
     @State private var showFeedDiagnostics = false
     /// Insider activity for the OPEN idea sheet only — fetched on demand (3 SEC hops per symbol),
     /// never swept across the board.
-    @State private var insiderSummary: StockSageInsider.Summary?
-    @State private var insiderLoading = false
-    @State private var disclosures: [StockSageDisclosureService.Filing] = []
-    @State private var disclosuresLoading = false
+    @StateObject private var detailEvidence = IdeaDetailEvidence()
     /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
     /// than a refresh button.
     @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
@@ -747,7 +747,8 @@ struct MarketsView: View {
                 }
             }
         }
-        .sheet(item: $selectedIdea) { idea in
+        .modifier(IdeaDetailPresentation(selection: $detailEvidence.selection,
+            selectionEpoch: detailEvidence.selectionEpoch, load: loadDetailEvidence) { idea in
             ideaDetailSheet(idea)
                 #if os(iOS)
                 // Medium first: the top ~40% is symbol/action/signal/gate/sizer — the decision content.
@@ -759,7 +760,7 @@ struct MarketsView: View {
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .presentationContentInteraction(.scrolls)
                 #endif
-        }
+        })
         // Reset plan-copy feedback when the sheet closes (selectedIdea → nil) OR steps to a
         // DIFFERENT idea via the prev/next chevrons — "Copied" must never describe the
         // previous idea's plan while a new symbol is on screen (honesty floor).
@@ -5674,10 +5675,30 @@ struct MarketsView: View {
         .help("Tap for full advice + backtest · right-click to copy the plan or set an alert")
     }
 
-    /// Idea card metric row — the macOS single-row form, and the ViewThatFits fallback
-    /// when the phone port is wide enough for it. Verbatim content of the pre-UI#3
-    /// (review 2026-07-28) inline HStack — kept byte-identical to the phone-split
-    /// helpers below it so macOS at 780pt renders unchanged.
+    /// Synchronous publication; the detail owner validates the completed fetch first.
+    private func publishDetailQuote(_ quote: StockSageQuoteService.LiveQuote) -> StockSageIdea? {
+        store.mergeLiveQuotes([quote.symbol.uppercased(): quote])
+        return store.ideas.first(where: { $0.symbol.uppercased() == quote.symbol.uppercased() })
+    }
+
+    private func loadDetailEvidence(_ idea: StockSageIdea) async {
+        guard !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
+        await detailEvidence.load(for: idea, using: publishDetailQuote)
+    }
+
+    private func ideaPrice(_ idea: StockSageIdea) -> some View {
+        IdeaPriceContent(source: Self.sourceTagLabel(isSampleData: store.isSampleData,
+                loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf,
+                now: Date(), priceSource: idea.priceSource)) { source in
+            if let source {
+                ideaMetric("Price", adaptivePrice(idea.price), sub: source, subColor: .secondary, flash: idea.price)
+            } else {
+                ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
+            }
+        }
+    }
+
+    /// Idea card metric row — macOS single-row form and the wide iOS ViewThatFits fallback.
     @ViewBuilder
     private func ideaMetricsRow(_ idea: StockSageIdea, atRisk: PositionSize?, vel: Double?, netRR: Double?) -> some View {
         let a = idea.advice
@@ -5694,40 +5715,7 @@ struct MarketsView: View {
                 // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
                 // it can never contradict it; live path ages THIS symbol's own priceAsOf.
-                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date(), priceSource: idea.priceSource) {
-                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary, flash: idea.price)
-                } else {
-                    ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
-                        .task(id: idea.symbol) {
-                            // SEC public disclosure, fetched only for the sheet the owner actually
-                            // opened. US listings only; .SR returns nil/[] and renders nothing.
-                            //
-                            // Form 4 (who traded) and 8-K (what was announced) are INDEPENDENT
-                            // SEC endpoints, so they run concurrently — one sheet open costs one
-                            // round-trip of latency, not two. Each lands as it finishes.
-                            insiderSummary = nil
-                            disclosures = []
-                            guard !idea.symbol.contains(".") else { return }
-                            insiderLoading = true
-                            disclosuresLoading = true
-                            async let form4 = StockSageInsider.recentActivity(for: idea.symbol)
-                            async let filings = StockSageDisclosureService.recentFilings(
-                                for: idea.symbol, forms: ["8-K"], limit: 5)
-                            insiderSummary = await form4
-                            insiderLoading = false
-                            disclosures = await filings
-                            disclosuresLoading = false
-                        }
-                        // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
-                        // live quote; on success the store relabels the idea and we re-point the
-                        // sheet at the refreshed copy (same id — the sheet updates in place).
-                        .task {
-                            if await store.refreshQuote(for: idea.symbol) != nil,
-                               let updated = store.ideas.first(where: { $0.id == idea.id }) {
-                                selectedIdea = updated
-                            }
-                        }
-                }
+                ideaPrice(idea)
                 if let stop = a.stopPrice, idea.price > 0 {
                     // Stop distance % in parentheses — glanceable risk without
                     // opening the sheet. price > 0 guard matches rewardRisk()'s own pattern — a
@@ -5872,40 +5860,7 @@ struct MarketsView: View {
                 // F-round-j FIX 2: per-idea provenance tag, subtle caption under the price —
                 // reuses the SAME isSampleData/loadedFromCache truth the top banner keys on, so
                 // it can never contradict it; live path ages THIS symbol's own priceAsOf.
-                if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: Date(), priceSource: idea.priceSource) {
-                    ideaMetric("Price", adaptivePrice(idea.price), sub: src, subColor: .secondary, flash: idea.price)
-                } else {
-                    ideaMetric("Price", adaptivePrice(idea.price), flash: idea.price)
-                        .task(id: idea.symbol) {
-                            // SEC public disclosure, fetched only for the sheet the owner actually
-                            // opened. US listings only; .SR returns nil/[] and renders nothing.
-                            //
-                            // Form 4 (who traded) and 8-K (what was announced) are INDEPENDENT
-                            // SEC endpoints, so they run concurrently — one sheet open costs one
-                            // round-trip of latency, not two. Each lands as it finishes.
-                            insiderSummary = nil
-                            disclosures = []
-                            guard !idea.symbol.contains(".") else { return }
-                            insiderLoading = true
-                            disclosuresLoading = true
-                            async let form4 = StockSageInsider.recentActivity(for: idea.symbol)
-                            async let filings = StockSageDisclosureService.recentFilings(
-                                for: idea.symbol, forms: ["8-K"], limit: 5)
-                            insiderSummary = await form4
-                            insiderLoading = false
-                            disclosures = await filings
-                            disclosuresLoading = false
-                        }
-                        // Stale self-heal (2026-07-27): opening a detail fetches THIS symbol's
-                        // live quote; on success the store relabels the idea and we re-point the
-                        // sheet at the refreshed copy (same id — the sheet updates in place).
-                        .task {
-                            if await store.refreshQuote(for: idea.symbol) != nil,
-                               let updated = store.ideas.first(where: { $0.id == idea.id }) {
-                                selectedIdea = updated
-                            }
-                        }
-                }
+                ideaPrice(idea)
                 if let target = a.targetPrice {
                     ideaMetric("Target", adaptivePrice(target), color: DS.Palette.successSoft)
                 }
@@ -6677,9 +6632,9 @@ struct MarketsView: View {
     /// is the transaction CODE — option exercises and tax withholding are excluded because the
     /// insider chose nothing, and pretending otherwise would manufacture a signal out of payroll.
     @ViewBuilder private func insiderRow() -> some View {
-        if insiderLoading {
+        if detailEvidence.insiderLoading {
             Text("Checking SEC filings…").font(.system(size: mvFont9)).foregroundStyle(.secondary)
-        } else if let s = insiderSummary {
+        } else if let s = detailEvidence.insiderSummary {
             VStack(alignment: .leading, spacing: 3) {
                 if s.discretionary.isEmpty {
                     // "Nothing filed" and "filings exist, none of them a decision" are different
@@ -6762,17 +6717,17 @@ struct MarketsView: View {
     /// empty result means "nothing found in the window we looked at", not "nothing was filed", so
     /// printing "no filings" would state a fact this app cannot establish.
     @ViewBuilder private func disclosureRow() -> some View {
-        if disclosuresLoading {
+        if detailEvidence.disclosuresLoading {
             Text("Checking SEC filings…").font(.system(size: mvFont9)).foregroundStyle(.secondary)
-        } else if let latest = disclosures.first {
+        } else if let latest = detailEvidence.disclosures.first {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Image(systemName: "doc.text.fill")
                         .font(.system(size: mvFont10)).foregroundStyle(DS.Palette.accent)
                     Text("8-K filed\(StockSageDisclosureService.publicFor(latest).map { " \($0)" } ?? "")")
                         .font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.white)
-                    if disclosures.count > 1 {
-                        Text("+\(disclosures.count - 1) more")
+                    if detailEvidence.disclosures.count > 1 {
+                        Text("+\(detailEvidence.disclosures.count - 1) more")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -8681,10 +8636,11 @@ struct MarketsView: View {
                 // row deliberately: a risk warning outranks an information row.
                 holdingOverlapRow(idea)
                 // SEC Form 4 insider activity — the lawful answer to "can we use MNPI".
-                insiderRow()
-                // The 8-K disclosure clock, directly under it: Form 4 says who traded, 8-K says
-                // what the company announced. Same source, same sheet, read in that order.
-                disclosureRow()
+                if detailEvidence.symbol == idea.symbol {
+                    insiderRow()
+                    // Form 4 says who traded; 8-K says what the company announced.
+                    disclosureRow()
+                }
                 if let stop = a.stopPrice, let target = a.targetPrice,
                    let rr = StockSageRewardRisk.assess(entry: idea.price, stop: stop, target: target) {
                     let c = rr.quality == .strong ? DS.Palette.successSoft
