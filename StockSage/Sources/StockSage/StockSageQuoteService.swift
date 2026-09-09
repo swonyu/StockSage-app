@@ -70,7 +70,7 @@ enum StockSageQuoteService {
     /// callers should treat a missing key as "no live data for this one" rather
     /// than an error. No-ops (returns `[:]`) when external access is disabled.
     static func fetchQuotes(for symbols: [String], concurrency: Int = 6) async -> [String: LiveQuote] {
-        guard ToolPolicy.isExternalAllowed else { return [:] }
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
         guard !symbols.isEmpty else { return [:] }
 
         // M1 routing: Massive snapshot for every covered symbol FIRST (chunked, one request per
@@ -79,6 +79,7 @@ enum StockSageQuoteService {
         // sends everything per-symbol when no key is present.
         let route = StockSageMassive.partition(symbols, keyPresent: StockSageMassive.isConfigured)
         var out: [String: LiveQuote] = await StockSageMassive.fetchSnapshots(for: route.snapshot)
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
         let remaining = route.perSymbol + route.snapshot.filter { out[$0.uppercased()] == nil }
         guard !remaining.isEmpty else { return out }
 
@@ -88,6 +89,7 @@ enum StockSageQuoteService {
             Array(remaining[$0 ..< min($0 + concurrency, remaining.count)])
         }
         for chunk in chunks {
+            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
             let results: [LiveQuote] = await withTaskGroup(of: LiveQuote?.self) { group in
                 for symbol in chunk {
                     group.addTask { await fetchOne(symbol) }
@@ -96,9 +98,10 @@ enum StockSageQuoteService {
                 for await q in group where q != nil { acc.append(q!) }
                 return acc
             }
+            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
             for q in results { out[q.symbol.uppercased()] = q }
         }
-        return out
+        return ToolPolicy.isExternalAllowed && !Task.isCancelled ? out : [:]
     }
 
     // MARK: One symbol
@@ -136,7 +139,9 @@ enum StockSageQuoteService {
     /// Any other status / transport error → nil.
     private nonisolated static func get(_ req: URLRequest) async -> Data? {
         for attempt in 0..<3 {
+            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return nil }
             guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return nil }
+            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return nil }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200 { return data }
             if (code == 429 || code == 503), attempt < 2 {

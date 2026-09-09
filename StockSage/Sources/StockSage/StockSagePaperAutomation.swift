@@ -295,24 +295,29 @@ final class StockSagePaperAutomation: ObservableObject {
 
     /// Shared by research, pending fills and position monitoring; stale snapshots are not final answers.
     static func fetchPaperQuotes(for symbols: [String], after: [String: Date] = [:], at fixedTime: Date? = nil,
+        externalAllowed: @escaping @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
         snapshots: @MainActor ([String]) async -> [String: StockSageQuoteService.LiveQuote] = { await StockSageMassive.fetchSnapshots(for: $0) },
         tick: @escaping @MainActor (String, Date) async -> StockSageQuoteService.LiveQuote? = { await StockSageMassiveTicks.freshPaperQuote(symbol: $0, now: $1) }
     ) async -> [String: StockSageQuoteService.LiveQuote] {
+        guard externalAllowed(), !Task.isCancelled, !symbols.isEmpty else { return [:] }
         let snapshots = await snapshots(symbols)
+        guard externalAllowed(), !Task.isCancelled else { return [:] }
         var result: [String: StockSageQuoteService.LiveQuote] = [:]
         func eligible(_ q: StockSageQuoteService.LiveQuote, symbol: String) -> Bool {
             q.symbol == symbol && fresh(q, at: fixedTime ?? Date())
                 && (after[symbol].map { (q.marketTime ?? .distantPast) > $0 } ?? true)
         }
         await forEachResearchTarget(Array(Set(symbols)).sorted()) { symbol in
-            guard !Task.isCancelled else { return }
+            guard externalAllowed(), !Task.isCancelled else { return }
             if let q = snapshots[symbol], eligible(q, symbol: symbol) {
                 result[symbol] = q
-            } else if let q = await tick(symbol, fixedTime ?? Date()), eligible(q, symbol: symbol) {
+            } else if let q = await tick(symbol, fixedTime ?? Date()),
+                      externalAllowed(), !Task.isCancelled, eligible(q, symbol: symbol) {
                 result[symbol] = q
             }
         }
-        return result
+        // A sibling request may finish after permission was revoked; discard the entire batch.
+        return externalAllowed() && !Task.isCancelled ? result : [:]
     }
 
     /// Rolling task group overlaps I/O/inference, while each ledger mutation stays on MainActor.
@@ -469,6 +474,9 @@ final class StockSagePaperAutomation: ObservableObject {
         let after = Dictionary(uniqueKeysWithValues: book.pending.map { ($0.symbol, $0.at) })
         let latest = await Self.fetchPaperQuotes(for: held, after: after)
         guard !Task.isCancelled, isRunning else { return }
+        guard ToolPolicy.isExternalAllowed, !store.isSampleData else {
+            status = "Waiting: web access or usable market data unavailable"; return
+        }
         quotes = latest
         // Do not mis-account for a possible split as a giant profit/loss. No split-factor guessing.
         if book.open.contains(where: { t in
@@ -585,7 +593,8 @@ final class StockSagePaperAutomation: ObservableObject {
         }
         // History/news can take time. Capture the decision quote after those awaits.
         let observed = await Self.fetchPaperQuotes(for: [symbol])
-        guard isRunning, !Task.isCancelled, generation == run else { return }
+        guard isRunning, !Task.isCancelled, generation == run,
+              ToolPolicy.isExternalAllowed, !store.isSampleData else { return }
         guard let quote = observed[symbol], Self.fresh(quote, at: Date()) else {
             recordFailure("No qualifying Massive trade within two minutes after checking snapshot and tick tape; no paper decision.", symbol: symbol, at: Date()); return
         }

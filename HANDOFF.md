@@ -1,5 +1,53 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Astra reviews integrated: post-await quote policy fix installed — 2026-09-09 03:19 +03
+
+All three Astra support reviews returned; they remain read-only and idle. The
+session review identified a concrete hole: native tick checked Web Access/Offline
+and sample-data state before awaiting quotes, but not before settling the result.
+Main reproduced this through the real shared quote helper and Book.settle with
+fake providers and a per-call permission seam (no live settings/network/ledger).
+Actual red:32 tests,7 expected issues,exit65; denied/late responses opened paper
+positions. The regression now covers permission off before request, after fresh
+or missing snapshot, during tick fallback, and during a partially completed batch.
+
+Shared paper fetching now checks permission/cancellation at async boundaries and
+discards the whole batch when denied. Native tick rechecks policy/sample state
+before ledger mutation; research rechecks before using the quote. Massive batches
+and shared Yahoo quote/history retries stop continuing/publishing after denial or
+cancellation. Already-dispatched network requests are not claimed to be instantly
+aborted. Pending expiry while offline remains intentional. No changes to risk,
+freshness,100-candidate/four-worker cadence,model,fill prices or ledger schema.
+
+Focused57 tests/4 suites passed0.084s. Full macOS1880/192 suites passed57.437s;
+iPhone17Pro(gate)1877/192 passed57.142s. Both exit0 with the unchanged three
+canonical exclusions. Reviewed shared callers/diff; no post-gate source edits.
+Artifacts: `/private/tmp/stocksage-policy-recheck-20260909.DEYrkh/` (red/focused/
+macos/ios logs and xcresults, exact Mac-tested `verified-mac/StockSageX.app`).
+
+Native UI inspection failed with the known Sky pipe error; no visual acceptance
+claimed. Used AppKit's documented normal NSRunningApplication.terminate request,
+not forceTerminate, verifiedPID39416 exited and ledger lease released. Installed
+the exact tested bundle; strict/deep codesign and checksum-aware whole-bundle
+rsync passed. ReopenedPID70053, enabled1, exclusive ledger lease. Installed dylib
+SHA256 `3d3a80af9192a3747fa4aa88ed0d614d35b8265f7b51e4ef91e5ae0357ed731b`.
+Prior app recoverable at `/Users/saleh/.Trash/StockSageX-before-policy-recheck-20260909.app`.
+Private pre-update ledger copy is in the artifact root. All trade records and old
+decision IDs retained; version1,0 open/0 pending/2 closed,1026 decisions,exactly1
+same-day and1 T+1 activation. Ledger never hand-edited. QwenPID7192 still listens
+only on127.0.0.1:8765; no model restart or real broker action. No push.
+
+Remaining Astra findings are NOT fixed by this slice: date-aware trading/early
+close calendar, protective-sell intent surviving TTL, and qualified latest bid/ask
+fills. Quote metadata alone is not fill eligibility; never resurrect withdrawn
+liquidity or multiply quote shares by100. Accounting review reproduced no T+1
+double count; true partial closes need an explicit execution-ledger design.
+Fable's News/catalyst context freshness task has also returned (read via desktop);
+its news-outcome/timestamp/discovery-context findings are review leads, not yet
+main-verified fixes. Qwen quality and strategy experiment Fable tasks were still
+running at last UI check. Preserve sole-writer ownership and frozen pilot; continue
+the existing15-minute heartbeat, no duplicate helpers or competing writers.
+
 ## Same-day exits observed; settlement and quote metadata installed — 2026-09-09 02:56 +03
 
 The running clock-fix app requested exits for USO13/TSM4 at23:55:06 UTC and

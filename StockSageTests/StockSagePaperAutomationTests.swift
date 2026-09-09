@@ -74,7 +74,7 @@ struct StockSagePaperAutomationTests {
         let stale = quote(at: now.addingTimeInterval(-360))
         let later = quote(price: 101, at: now.addingTimeInterval(1))
         let observed = await A.fetchPaperQuotes(for: ["AAPL"], at: now.addingTimeInterval(2),
-            snapshots: { _ in ["AAPL": stale] }, tick: { symbol, _ in calls.append(symbol); return later })
+            externalAllowed: { true }, snapshots: { _ in ["AAPL": stale] }, tick: { symbol, _ in calls.append(symbol); return later })
         #expect(observed["AAPL"] == later && calls == ["AAPL"])
         var book = A.Book()
         book.propose(symbol: "AAPL", action: .buy, at: now)
@@ -82,17 +82,17 @@ struct StockSagePaperAutomationTests {
         #expect(book.open.count == 1 && book.valid)
         calls = []
         let fresh = await A.fetchPaperQuotes(for: ["AAPL"], at: now.addingTimeInterval(2),
-            snapshots: { _ in ["AAPL": later] }, tick: { symbol, _ in calls.append(symbol); return nil })
+            externalAllowed: { true }, snapshots: { _ in ["AAPL": later] }, tick: { symbol, _ in calls.append(symbol); return nil })
         #expect(fresh["AAPL"] == later && calls.isEmpty)
         let missing = await A.fetchPaperQuotes(for: ["AAPL"], at: now,
-            snapshots: { _ in ["AAPL": stale] }, tick: { _, _ in nil })
+            externalAllowed: { true }, snapshots: { _ in ["AAPL": stale] }, tick: { _, _ in nil })
         #expect(missing.isEmpty, "A failed tick fallback never relabels a stale snapshot")
         let preDecision = quote(at: now)
         let postDecision = await A.fetchPaperQuotes(for: ["AAPL"], after: ["AAPL": now], at: now.addingTimeInterval(2),
-            snapshots: { _ in ["AAPL": preDecision] }, tick: { _, _ in later })
+            externalAllowed: { true }, snapshots: { _ in ["AAPL": preDecision] }, tick: { _, _ in later })
         #expect(postDecision["AAPL"] == later, "Fresh but pre-decision snapshots must also use the tick fallback")
         let delayed = await A.fetchPaperQuotes(for: ["AAPL"], after: ["AAPL": now], at: now.addingTimeInterval(2),
-            snapshots: { _ in ["AAPL": preDecision] }, tick: { _, _ in preDecision })
+            externalAllowed: { true }, snapshots: { _ in ["AAPL": preDecision] }, tick: { _, _ in preDecision })
         #expect(delayed.isEmpty, "A pre-decision trade cannot become a later fill")
     }
 
@@ -111,13 +111,41 @@ struct StockSagePaperAutomationTests {
     @Test func positionQuoteFallbackIsBoundedAndConcurrent() async {
         var active = 0, peak = 0
         let names = ["AAPL", "MSFT", "AMZN", "META", "GOOG"]
-        let result = await A.fetchPaperQuotes(for: names, at: now, snapshots: { _ in [:] }, tick: { symbol, at in
+        let result = await A.fetchPaperQuotes(for: names, at: now, externalAllowed: { true }, snapshots: { _ in [:] }, tick: { symbol, at in
             active += 1; peak = max(peak, active)
             try? await Task.sleep(for: .milliseconds(5))
             active -= 1
             return self.quote(symbol, at: at)
         })
         #expect(peak == 4 && active == 0 && Set(result.keys) == Set(names))
+    }
+
+    @Test func revokedQuotePermissionCannotFillOrStartFallback() async {
+        for revokeAt in ["before", "snapshot", "emptySnapshot", "fallback", "partialBatch"] {
+            var allowed = revokeAt != "before"
+            var snapshots = 0, ticks = 0
+            let later = quote(at: now.addingTimeInterval(1))
+            let names = revokeAt == "partialBatch" ? ["AAPL", "MSFT"] : ["AAPL"]
+            let observed = await A.fetchPaperQuotes(for: names, at: now.addingTimeInterval(2),
+                externalAllowed: { allowed }, snapshots: { _ in
+                    snapshots += 1
+                    await Task.yield()
+                    if revokeAt == "snapshot" || revokeAt == "emptySnapshot" { allowed = false }
+                    return revokeAt == "fallback" || revokeAt == "emptySnapshot" ? [:] : ["AAPL": later]
+                }, tick: { symbol, _ in
+                    ticks += 1
+                    await Task.yield()
+                    allowed = false
+                    return self.quote(symbol, at: self.now.addingTimeInterval(1))
+                })
+            #expect(observed.isEmpty, "Discard results when permission is revoked at \(revokeAt)")
+            #expect(snapshots == (revokeAt == "before" ? 0 : 1))
+            #expect(ticks == (revokeAt == "fallback" || revokeAt == "partialBatch" ? 1 : 0))
+            var book = A.Book()
+            book.propose(symbol: "AAPL", action: .buy, at: now)
+            book.settle(quotes: observed, at: now.addingTimeInterval(2))
+            #expect(book.open.isEmpty && book.pending.count == 1 && book.cash == A.Book().cash)
+        }
     }
 
     @Test func sameDayEntryEvidenceCannotBeOnlyDailyBackgroundOrSummary() {

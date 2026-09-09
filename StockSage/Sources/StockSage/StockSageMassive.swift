@@ -196,17 +196,19 @@ enum StockSageMassive {
     /// transport error, unparseable) contributes nothing, so its symbols are absent from the result and
     /// the caller's per-symbol Yahoo fallback picks them up — nothing is dropped silently.
     static func fetchSnapshots(for symbols: [String]) async -> [String: StockSageQuoteService.LiveQuote] {
-        guard ToolPolicy.isExternalAllowed, !symbols.isEmpty else { return [:] }
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled, !symbols.isEmpty else { return [:] }
         let key = apiKey
         guard !key.isEmpty else { return [:] }
         var out: [String: StockSageQuoteService.LiveQuote] = [:]
         for chunk in chunks(symbols) {
+            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
             guard let req = request(for: chunk, key: key),
                   let (data, resp) = try? await URLSession.shared.data(for: req),
                   (resp as? HTTPURLResponse)?.statusCode == 200 else { continue }
+            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
             out.merge(parseSnapshot(data, requestedSymbols: chunk)) { _, new in new }
         }
-        return out
+        return ToolPolicy.isExternalAllowed && !Task.isCancelled ? out : [:]
     }
 
     // MARK: - Explicit full-market discovery (not an empty watchlist request)
