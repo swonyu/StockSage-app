@@ -247,6 +247,7 @@ final class StockSagePaperAutomation: ObservableObject {
     @Published private(set) var hasLoadedBook = false
     @Published private(set) var isRunning = false
     @Published private(set) var isResearching = false
+    @Published private(set) var researchProgress: Progress?
     @Published private(set) var status = "Paused"
     @Published private(set) var error: String?
     @Published private(set) var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
@@ -571,6 +572,7 @@ final class StockSagePaperAutomation: ObservableObject {
         defaults.set(true, forKey: Self.enabledKey)
         generation = UUID()
         isResearching = false
+        researchProgress = nil
         isRunning = true; status = "Waiting for fresh market observations"
         loop = Task { [weak self] in
             while !Task.isCancelled {
@@ -585,6 +587,7 @@ final class StockSagePaperAutomation: ObservableObject {
         generation = UUID()
         loop?.cancel(); research?.cancel(); loop = nil; research = nil
         isRunning = false; isResearching = false; status = "Paused; paper positions retained"
+        researchProgress = nil
         if lease >= 0 {
             var next = book
             next.pending.removeAll { $0.protectiveTradeID == nil }
@@ -604,8 +607,14 @@ final class StockSagePaperAutomation: ObservableObject {
         guard !isResearching else { return }
         let run = generation
         isResearching = true
+        researchProgress = Progress(totalUnitCount: 0)
         research = Task { [weak self] in
-            defer { if let self, self.generation == run { self.isResearching = false } }
+            defer {
+                if let self, self.generation == run {
+                    self.isResearching = false
+                    self.researchProgress = nil
+                }
+            }
             guard !Task.isCancelled else { return }
             await operation()
         }
@@ -680,7 +689,7 @@ final class StockSagePaperAutomation: ObservableObject {
             next.note(action: "Market scan unavailable", reason: "Full-market data could not be verified; no new discovery. Reviewing \(targets.count) existing paper holdings only.", at: selectedAt)
         }
         guard save(next) else { return }
-        guard !targets.isEmpty else { status = market == nil ? "Full-market scan unavailable; will retry next cycle" : "Market screened; no fresh affordable research candidates"; return }
+        guard !targets.isEmpty else { status = market == nil ? "Waiting for full-market data; retries next research cycle" : "Market screened; no fresh affordable research candidates"; return }
         guard let config = StockSageAIAssessments.configuration else {
             recordFailure("Local Qwen is disabled or not configured.", at: Date()); return
         }
@@ -693,6 +702,8 @@ final class StockSagePaperAutomation: ObservableObject {
         let probe = await StockSageLocalModelServer.probe(config, stillValid: active)
         guard active() else { return }
         guard probe.reachable, probe.hasModel else { recordFailure("Local Qwen server is unavailable.", at: Date()); return }
+        researchProgress?.totalUnitCount = Int64(targets.count)
+        status = "Qwen research 0/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
         var finished = 0
         let heldSymbols = Set(book.open.map(\.symbol))
         for batch in [targets.filter { heldSymbols.contains($0) }, targets.filter { !heldSymbols.contains($0) }] {
@@ -703,6 +714,7 @@ final class StockSagePaperAutomation: ObservableObject {
                 guard active() else { return }
                 finished += 1
                 if generation == run, isRunning {
+                    researchProgress?.completedUnitCount = Int64(finished)
                     status = "Qwen research \(finished)/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
                 }
             }
@@ -725,7 +737,7 @@ final class StockSagePaperAutomation: ObservableObject {
         let unavailable = outcomes.filter { $0.action == "Unavailable" }.count
         let buys = outcomes.filter { $0.action == "Paper Buy" }.count
         let sells = outcomes.filter { $0.action == "Paper Sell" }.count
-        next.note(action: "Research complete", reason: "Visited \(finished)/\(targets.count) selected symbols in \(Int(max(0, completedAt.timeIntervalSince(now))))s: \(verified) verified opinions, \(unavailable) unavailable checks. During this cycle: \(buys) paper buys, \(sells) paper sells. A verified opinion is not necessarily an order; skipped decisions remain in the history.", at: completedAt)
+        next.note(action: "Research complete", reason: "Visited \(finished)/\(targets.count) selected symbols in \(Int(max(0, completedAt.timeIntervalSince(now))))s: \(verified) verified opinions, \(unavailable) incomplete checks. During this cycle: \(buys) paper buys, \(sells) paper sells. A verified opinion is not necessarily an order; skipped decisions remain in the history.", at: completedAt)
         guard save(next) else { return }
         status = "Research complete; monitoring paper positions"
     }

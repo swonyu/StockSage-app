@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Research progress and monitoring status — September 9, Mac installed
+
+Native Foundation.Progress now starts indeterminate during market/model setup,
+then reports completed/selected checks. It is reset on completion, cancellation
+and stop; old-generation cleanup cannot erase replacement progress. Operational
+errors/cancellation remain visible beside the bar. Monitoring has an independent
+open/closed/paused label and explains the existing 30-seconds-after-completion
+cadence. No extra timer, new network call, deadline or financial policy change.
+Position valuation refreshes within the existing TimelineView using current wall
+time, never an old scheduled entry. Missing marks say waiting/resume; historical
+Unavailable action labels display Incomplete research, with original reasons,
+facts and export records preserved. Only newly appended cycle summaries use the
+new incomplete-check wording; no historical records are rewritten.
+
+Red: 48 tests/3 issues/1.845s, exit65. Focused green: 50 tests/1.557s, exit0.
+Final Mac: 2,010 tests/199 suites/65.736s, exit0, canonical three exclusions.
+Strict final: Mac emit59s/test typecheck82s, aggregate0; iOS skipped today.
+Source manifest monitor-progress-source.sha256 rechecked, SHA256
+3e82266656b1f2eca341dab70d009ea23982664e19bbe09897719a2d345cfb76.
+Normal quit/install/reopen succeeded with exclusive paper lease. Exact tested
+candidate matches43files/21internal links, strict/deep signature verification.
+Installed debug dylib35d471ded7759aa64fa9eb2deabaf6eb1b52f6842c26dc03dd65570d058c0b57.
+Previous app retained at release-root retired-monitor-progress/StockSageX.app;
+paper-before-monitor-progress is its consistent history backup. Paper bytes
+unchanged during install; postlaunch3prior trades and1,771prior decisions unchanged
+and ordered. PID26888 owns lease, enabled1; Qwen2120 not restarted. No push.
+Bounded Astra review resolved operational-status visibility and Timeline clock
+findings; see monitoring-progress-review.md in the existing verification root.
+
+UI permission update: after the owner's explicit approval, System Events access
+succeeded on the previous installed build. Chat and expanded paper research were
+inspected through AX; new progress rendering is not yet verified. Owner also
+requests letting other symbols continue while a slow request remains in flight.
+The held/discovery batch barrier is confirmed in researchCycle; separate follow-up
+will use the existing bounded rolling queue, retaining holdings-first priority.
+
 ## Chat4K and research availability — September9, macOS installed
 
 Owner requested Chat32K->4K and research quote age10->20seconds. Chat now4096

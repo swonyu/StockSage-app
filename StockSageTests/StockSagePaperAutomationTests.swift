@@ -316,6 +316,14 @@ struct StockSagePaperAutomationTests {
         #expect(delayed.isEmpty, "A pre-decision trade cannot become a later fill")
     }
 
+    @Test func monitoringStatusDoesNotDependOnResearchAndLabelsClosedSessions() throws {
+        let open = try Date("2026-09-09T12:00:00Z", strategy: .iso8601)
+        let closed = try Date("2026-09-09T02:00:00Z", strategy: .iso8601)
+        #expect(StockSagePaperAutomationPanel.monitoringLabel(running: true, at: open) == "Position and exit monitoring active")
+        #expect(StockSagePaperAutomationPanel.monitoringLabel(running: true, at: closed) == "Monitoring enabled · waiting for the next supported session")
+        #expect(StockSagePaperAutomationPanel.monitoringLabel(running: false, at: open) == "Position monitoring paused")
+    }
+
     @Test func researchHasFourBoundedWorkersAndNoLostCompletions() async {
         var active = 0, peak = 0
         var finished: Set<String> = []
@@ -346,6 +354,7 @@ struct StockSagePaperAutomationTests {
         let state = A(url: root.appendingPathComponent("account.json"), defaults: defaults)
         defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
         var resumed: CheckedContinuation<Void, Never>?
+        defer { resumed?.resume() }
         var cancelled = false
         let original = try JSONEncoder().encode(state.book)
         state.scheduleResearch {
@@ -354,17 +363,63 @@ struct StockSagePaperAutomationTests {
         }
         while resumed == nil { await Task.yield() }
         #expect(state.isResearching)
+        let progress = try #require(state.researchProgress)
+        #expect(progress.totalUnitCount == 0 && progress.isIndeterminate)
         state.cancelResearchForSettingsChange()
         #expect(state.isResearching, "Do not allow a new cycle before the cancelled cycle unwinds")
         resumed?.resume()
+        resumed = nil
         while state.isResearching { await Task.yield() }
+        #expect(state.researchProgress == nil)
         #expect(cancelled && !state.isRunning)
         #expect(try JSONDecoder().decode(A.Book.self, from: original).decisions == state.book.decisions)
         #expect(state.book.trades.isEmpty && state.book.pending.isEmpty && state.book.lastResearch == nil)
         var nextRan = false
         state.scheduleResearch { nextRan = true }
+        #expect(state.researchProgress !== progress, "The next research run must not reuse a cancelled run's progress")
         while state.isResearching { await Task.yield() }
+        #expect(state.researchProgress == nil)
         #expect(nextRan, "Cancelled research must not strand the next cycle")
+    }
+
+    @Test func researchDisplayLabelsPreserveOtherActions() {
+        #expect(StockSagePaperAutomationPanel.actionLabel("Unavailable") == "Incomplete research")
+        #expect(StockSagePaperAutomationPanel.actionLabel("Market scan unavailable") == "Market scan incomplete")
+        for action in ["Paper Buy", "Paper Sell", "Paused", "Hold", "Research complete"] {
+            #expect(StockSagePaperAutomationPanel.actionLabel(action) == action)
+        }
+    }
+
+    @Test func oldResearchUnwindCannotClearRestartedProgress() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "research-progress-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let state = A(url: root.appendingPathComponent("account.json"), defaults: defaults)
+        var old: CheckedContinuation<Void, Never>?, new: CheckedContinuation<Void, Never>?
+        defer {
+            old?.resume(); new?.resume(); state.stop()
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: name)
+        }
+        var oldFinished = false
+        state.scheduleResearch {
+            await withCheckedContinuation { old = $0 }
+            oldFinished = true
+        }
+        while old == nil { await Task.yield() }
+        let first = try #require(state.researchProgress)
+        state.stop()
+        #expect(state.researchProgress == nil)
+        state.scheduleResearch { await withCheckedContinuation { new = $0 } }
+        while new == nil { await Task.yield() }
+        let second = try #require(state.researchProgress)
+        #expect(first !== second)
+        old?.resume(); old = nil
+        while !oldFinished { await Task.yield() }
+        #expect(state.isResearching && state.researchProgress === second)
+        new?.resume(); new = nil
+        while state.isResearching { await Task.yield() }
+        #expect(state.researchProgress == nil)
     }
 
     @Test func positionQuoteFallbackIsBoundedAndConcurrent() async {

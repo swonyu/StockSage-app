@@ -24,6 +24,15 @@ struct StockSagePaperAutomationPanel: View {
                         Button("Start paper automation") { automation.start() }
                     }
                 }
+                if let progress = automation.researchProgress {
+                    Text(progress.isIndeterminate ? "Preparing market data and Qwen…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
+                        .font(.callout).monospacedDigit()
+                    ProgressView(progress)
+                        .progressViewStyle(.linear)
+                        .accessibilityLabel("Research checks completed")
+                    Text("Checks completed, not trades. Position and exit checks run separately from research.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text(automation.status).font(.callout)
                 Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
                     .font(.caption).foregroundStyle(.secondary)
@@ -34,6 +43,14 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Close-out required: awaiting fresh later prices. No overnight or closing fill is assumed.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
+                TimelineView(.periodic(from: .now, by: 30)) { _ in
+                // A scheduled TimelineView entry can be older than a newly received quote.
+                let at = Date()
+                VStack(alignment: .leading, spacing: 10) {
+                Text(Self.monitoringLabel(running: automation.isRunning, at: at))
+                    .font(.callout.bold())
+                Text("While StockSage is open and this Mac is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 20) {
                     VStack(alignment: .leading) {
                         Text("Total paper cash").font(.caption)
@@ -41,14 +58,15 @@ struct StockSagePaperAutomationPanel: View {
                     }
                     VStack(alignment: .leading) {
                         Text("Estimated liquidation value").font(.caption)
-                        if let equity = automation.book.equity(quotes: automation.quotes, at: Date()) {
+                        if let equity = automation.book.equity(quotes: automation.quotes, at: at) {
                             Text(equity, format: .currency(code: "USD")).monospacedDigit()
                             Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))").font(.caption)
-                        } else { Text("Fresh marks unavailable").font(.caption) }
+                        } else {
+                            Text(automation.isRunning ? "Waiting for fresh position prices · checks retry automatically" : "Resume monitoring to refresh position prices")
+                                .font(.caption)
+                        }
                     }
                 }
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    let at = context.date
                     let sales = automation.book.unsettledSales(at: at)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Settled available: \(automation.book.buyingCash(at: at).formatted(.currency(code: "USD"))) · Unsettled proceeds: \(automation.book.unsettledProceeds(at: at).formatted(.currency(code: "USD")))")
@@ -70,6 +88,7 @@ struct StockSagePaperAutomationPanel: View {
                         }
                     }.font(.caption).foregroundStyle(.secondary)
                 }
+                }
                 Text("\(automation.book.open.count) paper positions · \(automation.book.pending.count) pending · \(automation.book.trades.filter { !$0.isOpen }.count) closed")
                     .font(.caption)
                 if let scan = automation.book.decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
@@ -80,7 +99,7 @@ struct StockSagePaperAutomationPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
-                    Text("Latest decision: \(decision.symbol) · \(decision.action)").font(.callout.bold())
+                    Text("Latest decision: \(decision.symbol) · \(Self.actionLabel(decision.action))").font(.callout.bold())
                     Text(decision.reason).font(.caption).foregroundStyle(.secondary)
                 }
                 if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
@@ -127,7 +146,7 @@ struct StockSagePaperAutomationPanel: View {
                 DisclosureGroup("Research and decisions · latest \(min(100, automation.book.decisions.count))") {
                     ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("\(decision.symbol) \(decision.action) · \(decision.at.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
+                            Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(decision.at.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
                             Text(decision.reason).font(.callout)
                             if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
                             if !decision.facts.isEmpty {
@@ -171,6 +190,21 @@ struct StockSagePaperAutomationPanel: View {
         }
     }
     #endif
+
+    static func monitoringLabel(running: Bool, at date: Date) -> String {
+        guard running else { return "Position monitoring paused" }
+        return StockSagePaperAutomation.paperSessionOpen(date)
+            ? "Position and exit monitoring active"
+            : "Monitoring enabled · waiting for the next supported session"
+    }
+
+    static func actionLabel(_ action: String) -> String {
+        switch action {
+        case "Unavailable": "Incomplete research"
+        case "Market scan unavailable": "Market scan incomplete"
+        default: action
+        }
+    }
 
     private func settlementDateLabel(_ date: Date) -> String {
         var style = Date.FormatStyle(date: .abbreviated, time: .omitted)
