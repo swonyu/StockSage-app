@@ -286,7 +286,7 @@ final class StockSagePaperAutomation: ObservableObject {
     nonisolated static func fresh(_ quote: StockSageQuoteService.LiveQuote, at now: Date) -> Bool {
         guard quote.price.isFinite, quote.price > 0, quote.priceSource == .massiveSIP,
               let at = quote.marketTime else { return false }
-        return (0...120).contains(now.timeIntervalSince(at))
+        return StockSageLiveStream.isLiveObservation(at, at: now)
     }
     nonisolated static func hasIntradayEvidence(_ evidence: [String], factIndices: Range<Int>) -> Bool {
         let intraday = Set(factIndices.map { "F\($0 + 1)" })
@@ -318,6 +318,49 @@ final class StockSagePaperAutomation: ObservableObject {
         }
         // A sibling request may finish after permission was revoked; discard the entire batch.
         return externalAllowed() && !Task.isCancelled ? result : [:]
+    }
+
+    /// Revalidate actionable opinions after inference. Facts keep their original timestamps;
+    /// read the current ledger only AFTER awaiting the qualified observation.
+    static func decisionBook(symbol: String, verdict: StockSageAIAssessment.Verdict,
+        facts: [String], model: String, researchQuote: StockSageQuoteService.LiveQuote,
+        holdingID: UUID?, citesIntraday: Bool, at fixedTime: Date? = nil,
+        allowed: @MainActor () -> Bool, contextFresh: @MainActor (Date) -> Bool,
+        currentBook: @MainActor () -> Book,
+        commit: @MainActor (Book) -> Bool = { _ in true },
+        fetch: @MainActor (String, Date) async -> StockSageQuoteService.LiveQuote? = { symbol, after in
+            await fetchPaperQuotes(for: [symbol], after: [symbol: after])[symbol]
+        }
+    ) async -> Book? {
+        guard allowed(), !Task.isCancelled else { return nil }
+        let actionable = [.buy, .strongBuy, .sell, .reduce].contains(verdict.action)
+        let cited = ![.buy, .strongBuy].contains(verdict.action) || citesIntraday
+        let initialTime = fixedTime ?? Date()
+        var revalidated: StockSageQuoteService.LiveQuote?
+        if actionable, cited, contextFresh(initialTime), paperSessionOpen(initialTime),
+           let after = researchQuote.marketTime {
+            revalidated = await fetch(symbol, after)
+        }
+        guard allowed(), !Task.isCancelled else { return nil }
+        let decisionAt = fixedTime ?? Date()
+        var next = currentBook()
+        next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
+                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: model)
+        guard actionable else { return commit(next) ? next : nil } // Hold/Avoid is an opinion, not a skipped order.
+        if !cited {
+            next.note(symbol: symbol, action: "Skipped", reason: "Buy opinion did not cite an actual intraday observation; daily background alone cannot open a same-day position.", at: decisionAt)
+        } else if let q = revalidated, q.symbol == symbol, fresh(q, at: decisionAt),
+                  let at = q.marketTime, let capturedAt = researchQuote.marketTime, at >= capturedAt,
+                  contextFresh(decisionAt), paperSessionOpen(decisionAt),
+                  holdingID == next.open.first(where: { $0.symbol == symbol })?.id {
+            next.note(symbol: symbol, action: "Price revalidated",
+                reason: "Separate qualified Massive observation after inference; original cited research facts are unchanged. A fill still requires a later observation.",
+                at: decisionAt, facts: ["Market timestamp: \(at.ISO8601Format())", "Observed price: \(q.price)", "Source: Massive SIP"])
+            next.propose(symbol: symbol, action: verdict.action, at: decisionAt)
+        } else {
+            next.note(symbol: symbol, action: "Skipped", reason: "No qualified price within ten seconds after inference, research expired, session closed or holding changed.", at: decisionAt)
+        }
+        return commit(next) ? next : nil
     }
 
     /// Rolling task group overlaps I/O/inference, while each ledger mutation stays on MainActor.
@@ -596,7 +639,7 @@ final class StockSagePaperAutomation: ObservableObject {
         guard isRunning, !Task.isCancelled, generation == run,
               ToolPolicy.isExternalAllowed, !store.isSampleData else { return }
         guard let quote = observed[symbol], Self.fresh(quote, at: Date()) else {
-            recordFailure("No qualifying Massive trade within two minutes after checking snapshot and tick tape; no paper decision.", symbol: symbol, at: Date()); return
+            recordFailure("No qualifying Massive trade within ten seconds after checking snapshot and tick tape; no paper decision.", symbol: symbol, at: Date()); return
         }
         let idea = base.withLivePrice(quote.price, asOf: quote.marketTime, priceSource: quote.priceSource)
         let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[symbol],
@@ -623,21 +666,15 @@ final class StockSagePaperAutomation: ObservableObject {
         guard let verdict = StockSageAIAssessment.parse(text, facts: facts) else {
             recordFailure("Qwen response failed schema, citation or numeric verification; no paper order. Scheduled exits remain active.", symbol: symbol, at: Date()); return
         }
-        let decisionAt = Date()
-        var next = book
-        next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
-                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: config.model)
-        if (verdict.action == .buy || verdict.action == .strongBuy),
-           !Self.hasIntradayEvidence(verdict.evidence, factIndices: intradayIndices) {
-            next.note(symbol: symbol, action: "Skipped", reason: "Buy opinion did not cite an actual intraday observation; daily background alone cannot open a same-day position.", at: decisionAt)
-        } else if Self.paperSessionOpen(decisionAt), intraday.fresh(at: decisionAt), Self.fresh(quote, at: decisionAt),
-           held?.id == next.open.first(where: { $0.symbol == symbol })?.id,
-           Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(next.open.map(\.symbol))) {
-            next.propose(symbol: symbol, action: verdict.action, at: decisionAt)
-        } else {
-            next.note(symbol: symbol, action: "Skipped", reason: "Research finished after quote expiry, scheduled market close, a holding change or loss of research eligibility.", at: decisionAt)
-        }
-        guard save(next) else { return }
+        _ = await Self.decisionBook(symbol: symbol, verdict: verdict, facts: facts,
+            model: config.model, researchQuote: quote, holdingID: held?.id,
+            citesIntraday: Self.hasIntradayEvidence(verdict.evidence, factIndices: intradayIndices),
+            allowed: {
+                self.isRunning && !Task.isCancelled && ToolPolicy.isExternalAllowed && !store.isSampleData
+                    && self.generation == run && StockSageAIAssessments.configuration == config
+                    && Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(self.book.open.map(\.symbol)))
+            }, contextFresh: { context.canAssess(at: $0) && intraday.fresh(at: $0) },
+            currentBook: { self.book }, commit: { self.save($0) })
     }
 
     private func recordFailure(_ reason: String, symbol: String = "", at: Date) {

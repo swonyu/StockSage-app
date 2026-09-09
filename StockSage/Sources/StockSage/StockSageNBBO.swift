@@ -27,6 +27,11 @@ nonisolated struct StockSageNBBO: Sendable, Equatable {
 
     static let usableAge: TimeInterval = 5
 
+    /// SIP preferred suffixes are case-sensitive: APTVpA is not APTVPA.
+    func matches(_ requestedSymbol: String) -> Bool {
+        symbol == StockSageLiveStream.stockSymbol(requestedSymbol)
+    }
+
     var hasTwoSides: Bool {
         [bid, ask, bidSize, askSize].allSatisfy { $0.isFinite && $0 > 0 }
     }

@@ -287,7 +287,7 @@ struct MarketsView: View {
     @State private var journalDataFeedback: String?
     /// iOS Settings sheet (owner directive 2026-07-27: gear next to refresh).
     @State private var showIOSSettings = false
-    @State private var livePulse = false
+    @State private var showFeedDiagnostics = false
     /// Insider activity for the OPEN idea sheet only — fetched on demand (3 SEC hops per symbol),
     /// never swept across the board.
     @State private var insiderSummary: StockSageInsider.Summary?
@@ -598,10 +598,7 @@ struct MarketsView: View {
                 guard !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshJournalSplits(journal.open)
             }
-            // LIVE STREAMING (owner: "real live tracking, not a button to refresh"). B4: subscribes
-            // every TRACKED US name (board ∪ watchlist ∪ portfolio ∪ open journal trades) to
-            // Massive's trade socket, not just the board, so an off-board US ticker streams too;
-            // prices then move on their own. Unsupported symbols keep their delayed Yahoo poll.
+            // One whole-market T.*,Q.* socket. Board changes only select the UI projection.
             .task(id: streamSubscriptionKey) {
                 guard liveStreamEnabled else { StockSageLiveStream.shared.stop(); return }
                 StockSageLiveStream.shared.start(symbols: store.trackedSymbolsUnion)
@@ -1316,24 +1313,23 @@ struct MarketsView: View {
         return "updated \(secs / 60)m ago"
     }
 
-    /// Pulsing dot shown ONLY while the socket is genuinely open — bound to isStreaming, so it
-    /// can never claim "live" over a dropped connection (the honesty floor applies to indicators
-    /// exactly as it applies to prices).
     @ViewBuilder private var liveStreamIndicator: some View {
-        if liveStreamEnabled, live.isStreaming {
+        if liveStreamEnabled {
+            Button { showFeedDiagnostics.toggle() } label: {
             HStack(spacing: 4) {
-                Circle().fill(DS.Palette.successSoft).frame(width: 6, height: 6)
-                    // Reduce Motion: solid dot. An indefinite pulse in the PINNED header is on-screen
-                    // all session — the textbook case. Colour + the "LIVE" word still carry the state.
-                    .opacity(reduceMotion ? 1 : (livePulse ? 1 : 0.25))
-                    .animation(reduceMotion ? nil : Animation.easeInOut(duration: 1).repeatForever(autoreverses: true),
-                               value: livePulse)
-                Text("LIVE").font(.system(size: mvFont9, weight: .bold))
-                    .foregroundStyle(DS.Palette.successSoft)
+                Circle().fill(live.isStreaming ? DS.Palette.successSoft : .orange).frame(width: 6, height: 6)
+                Text(live.isStreaming ? "LIVE · US" : live.connectionLabel)
+                    .font(.system(size: mvFont9, weight: .bold))
+                if live.gapCount > 0 { Text("Gaps: \(live.gapCount)").font(.system(size: mvFont9)) }
             }
-            .accessibilityLabel("Live streaming prices")
-            .help("Streaming trades in real time for US names. Saudi names refresh on the timer — no stream exists for that exchange.")
-            .onAppear { if !reduceMotion { livePulse = true } }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(live.isStreaming ? DS.Palette.successSoft : .orange)
+            .accessibilityLabel(live.diagnosticText)
+            .help(live.diagnosticText)
+            .popover(isPresented: $showFeedDiagnostics) {
+                Text(live.diagnosticText).font(.caption).padding().frame(maxWidth: 440)
+            }
         }
     }
 
@@ -5226,7 +5222,7 @@ struct MarketsView: View {
         let snapshot = decisionSnapshot(for: idea)
         let cardVM = snapshot.cardViewModel
         let quoteText = StockSageMassive.covers(idea.symbol)
-            ? StockSageNBBO.compactText(live.quotes[idea.symbol.uppercased()], exchanges: live.exchanges) : nil
+            ? StockSageNBBO.compactText(StockSageLiveStream.displayQuote(for: idea.symbol, in: live.quotes), exchanges: live.exchanges) : nil
         let earningsBadge = cardVM.earningsWarningBadge
         let hasFloorWarning = cardVM.hasFloorWarning
         // Legible reason for the earnings-aware rank: a chip when earnings are imminent/approaching.

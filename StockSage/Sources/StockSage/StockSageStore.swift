@@ -66,7 +66,7 @@ struct StockSageIdea: Sendable, Equatable, Identifiable {
 
     nonisolated func withNBBO(_ quote: StockSageNBBO?) -> Self {
         var copy = self
-        copy.nbbo = quote?.symbol.uppercased() == symbol.uppercased() ? quote : nil
+        copy.nbbo = quote?.matches(symbol) == true ? quote : nil
         return copy
     }
 
@@ -2310,20 +2310,6 @@ final class StockSageStore: ObservableObject {
         }.value
     }
 
-    /// Apply one streamed trade tick (StockSageLiveStream). Updates the board row's price in
-    /// place and stamps a real market time, so every downstream honesty surface (staleness
-    /// badge, "live" banner, quoteAsOf) sees a genuinely fresh quote rather than a synthetic one.
-    /// Updates existing board rows or off-board ideas; never invents a board row.
-    /// Pending streamed ticks, keyed by symbol — only the NEWEST price per symbol matters, so
-    /// this is a dictionary rather than a queue.
-    private var pendingTicks: [String: (price: Double, at: Date, sequence: Int64?, source: StockSagePriceSource?)] = [:]
-    private var tickFlushTask: Task<Void, Never>?
-    /// Coalescing window. A liquid name can print many trades per second; applying each one
-    /// individually would republish the whole board that many times and re-evaluate an
-    /// 8,000-line view with it. Two flushes a second is well past what an eye can follow and
-    /// turns an unbounded invalidation storm into a bounded one.
-    private static let tickFlushInterval = Duration.milliseconds(500)
-
     /// Allow small device/SIP clock skew, never an unbounded future freshness stamp.
     nonisolated static func acceptsLiveTick(_ incoming: Date?, after current: Date?,
         massiveTradeSequence: Int64? = nil, afterMassiveTradeSequence: Int64? = nil,
@@ -2377,10 +2363,10 @@ final class StockSageStore: ObservableObject {
                                   priceSource: idea.priceSource, afterPriceSource: latest[key]?.source, now: now) else { continue }
             latest[key] = (idea.price, at, idea.massiveTradeSequence, idea.priceSource)
         }
-        let books = Dictionary(previous.compactMap { idea in idea.nbbo.map { (idea.symbol.uppercased(), $0) } },
+        let books = Dictionary(previous.compactMap { idea in idea.nbbo.map { (idea.symbol, $0) } },
                                uniquingKeysWith: { first, _ in first })
         return fresh.map { original in
-            let book = books[original.symbol.uppercased()] ?? original.nbbo
+            let book = books[original.symbol] ?? original.nbbo
             let idea = original.withNBBO(book?.isFresh(at: now) == true ? book : nil)
             guard let quote = latest[idea.symbol.uppercased()],
                   acceptsLiveTick(quote.at, after: idea.priceAsOf, massiveTradeSequence: quote.sequence,
@@ -2396,7 +2382,7 @@ final class StockSageStore: ObservableObject {
     nonisolated static func ideasWithNBBO(_ ideas: [StockSageIdea], quotes: [String: StockSageNBBO],
                                           now: Date = Date()) -> [StockSageIdea] {
         ideas.map { idea in
-            let quote = quotes[idea.symbol.uppercased()]
+            let quote = StockSageLiveStream.displayQuote(for: idea.symbol, in: quotes)
             return idea.withNBBO(quote?.costConditionVerified == true && quote?.spreadBps(at: now) != nil ? quote : nil)
         }
     }
@@ -2406,52 +2392,21 @@ final class StockSageStore: ObservableObject {
         if updated != ideas { ideas = updated }
     }
 
-    /// Accept one streamed trade tick. Buffered, not applied immediately — see `flushPendingTicks`.
-    func applyLiveTick(symbol: String, price: Double, at when: Date?, massiveTradeSequence: Int64? = nil,
-                       priceSource: StockSagePriceSource? = nil) {
-        // A missing feed timestamp is not a live observation. Keeping it out at the shared
-        // ingress avoids the old `?? Date()` lie in the batched merge below.
-        guard price > 0, price.isFinite,
-              Self.acceptsLiveTick(when, after: nil, priceSource: priceSource), let when else { return }
-        let key = symbol.uppercased()
-        let row = symbolIndex[key].flatMap { symbols[$0].latest }
-        let idea = ideas.first(where: { $0.symbol.uppercased() == key })
-        guard symbolIndex[key] != nil || idea != nil else { return }
-        // Never let an out-of-order packet rewind a displayed quote. The check belongs here,
-        // after every provider's parser but before the coalescing buffer, so it fixes all callers.
-        // Check each observation: max(time) lets one corrupt future date hide a valid clock.
-        if !Self.acceptsLiveTick(when, after: row?.marketTime, massiveTradeSequence: massiveTradeSequence,
-                                afterMassiveTradeSequence: row?.massiveTradeSequence,
-                                priceSource: priceSource, afterPriceSource: row?.priceSource) { return }
-        if !Self.acceptsLiveTick(when, after: idea?.priceAsOf, massiveTradeSequence: massiveTradeSequence,
-                                afterMassiveTradeSequence: idea?.massiveTradeSequence,
-                                priceSource: priceSource, afterPriceSource: idea?.priceSource) { return }
-        if !Self.acceptsLiveTick(when, after: pendingTicks[key]?.at, massiveTradeSequence: massiveTradeSequence,
-                                afterMassiveTradeSequence: pendingTicks[key]?.sequence,
-                                priceSource: priceSource, afterPriceSource: pendingTicks[key]?.source) { return }
-        pendingTicks[key] = (price, when, massiveTradeSequence, priceSource)
-        guard tickFlushTask == nil else { return }
-        tickFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.tickFlushInterval)
-            guard let self else { return }
-            self.tickFlushTask = nil
-            self.flushPendingTicks()
-        }
+    /// The legacy store uses uppercase IDs. Refuse native mixed-case tick projection;
+    /// those exact observations remain in the whole-market cache, never aliased to another stock.
+    nonisolated static func liveTicksForStore(_ ticks: [String: StockSageLiveStream.Tick]) -> [String: StockSageLiveStream.Tick] {
+        ticks.filter { key, tick in key == tick.symbol && tick.symbol == tick.symbol.uppercased() }
     }
 
-    /// Apply every buffered tick in ONE pass, so the board republishes once per window instead
-    /// of once per trade.
-    private func flushPendingTicks() {
-        guard !pendingTicks.isEmpty else { return }
-        let batch = pendingTicks
-        pendingTicks = [:]
+    /// One already-coalesced UI batch. Full-market retention belongs to FeedIngress;
+    /// the existing merge applies only matching rows/ideas in one pass and preserves ordering.
+    func applyLiveTicks(_ ticks: [String: StockSageLiveStream.Tick]) {
         var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
-        for (key, tick) in batch {
-            let row = symbolIndex[key].map { symbols[$0] }
-            let prev = row?.latest?.previousPrice ?? tick.price
-            quotes[key] = .init(symbol: key, price: tick.price, previousClose: prev,
-                                marketTime: tick.at, isNewListing: newListings.contains(key),
-                                massiveTradeSequence: tick.sequence, priceSource: tick.source)
+        for (key, tick) in Self.liveTicksForStore(ticks) {
+            let previous = symbolIndex[key].flatMap { symbols[$0].latest?.previousPrice } ?? tick.price
+            quotes[key] = .init(symbol: key, price: tick.price, previousClose: previous,
+                marketTime: tick.timestamp, isNewListing: newListings.contains(key),
+                massiveTradeSequence: tick.sequence, priceSource: .massiveSIP)
         }
         applyPolledQuotes(quotes)
     }
@@ -2753,7 +2708,7 @@ final class StockSageStore: ObservableObject {
     /// Pure merge step behind `applyPolledQuotes` (W3, owner: "seamless … update automatically").
     /// Given the current board rows, idea rows, and the `symbolIndex` lookup, applies each
     /// PRICED quote (`price > 0`) to the matching board row AND the matching idea's price/asOf —
-    /// the same mirror `flushPendingTicks`/`mergeLiveQuote` already do for a streamed tick, so a
+    /// the same mirror `applyLiveTicks`/`mergeLiveQuote` already do for a streamed tick, so a
     /// polled row and its card can never disagree — leaving every OTHER row, and both arrays'
     /// order/count/identity, byte-identical. `asOf: q.marketTime` is passed straight through
     /// (never `?? Date()`): an undated quote only seeds an undated row, never overwrites a

@@ -11,6 +11,117 @@ struct StockSagePaperAutomationTests {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source)
     }
 
+    @Test func tenSecondPriceBoundaryControlsActualPaperFills() {
+        for age in [0.0, 10, 10.001, -0.001] {
+            let executionAt = now.addingTimeInterval(30)
+            let q = quote(at: executionAt.addingTimeInterval(-age))
+            #expect(A.fresh(q, at: executionAt) == (age >= 0 && age <= 10))
+            var book = A.Book()
+            book.propose(symbol: "AAPL", action: .buy, at: now)
+            book.settle(quotes: ["AAPL": q], at: executionAt)
+            #expect(book.open.count == (age >= 0 && age <= 10 ? 1 : 0))
+        }
+        #expect(!A.fresh(.init(symbol: "AAPL", price: 100, previousClose: 99, marketTime: nil,
+                              priceSource: .massiveSIP), at: now))
+        #expect(!A.fresh(quote(at: now, source: .yahoo), at: now))
+    }
+
+    @Test func delayedInferenceRevalidatesWithoutRewritingFactsOrOverwritingConcurrentBook() async throws {
+        let decisionAt = now.addingTimeInterval(45)
+        let captured = quote(at: now)
+        let fresh = quote(at: decisionAt)
+        let facts = ["Original observation at \(now.ISO8601Format())"]
+        let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
+        var current = A.Book()
+        var fetches = 0, commits = 0
+        let result = await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: facts, model: "test",
+            researchQuote: captured, holdingID: nil, citesIntraday: true, at: decisionAt,
+            allowed: { true }, contextFresh: { _ in true }, currentBook: { current },
+            commit: { current = $0; commits += 1; return true }, fetch: { symbol, after in
+                fetches += 1
+                #expect(symbol == "AAPL" && after == self.now)
+                // Simulate a sibling settlement during the post-model network await.
+                await Task.yield()
+                current.propose(symbol: "MSFT", action: .buy, at: self.now)
+                current.settle(quotes: ["MSFT": self.quote("MSFT", at: decisionAt)], at: decisionAt)
+                return fresh
+            })
+        var book = try #require(result)
+        #expect(fetches == 1 && commits == 1 && book.open.map(\.symbol) == ["MSFT"])
+        #expect(current.pending.contains { $0.symbol == "AAPL" })
+        #expect(book.pending.contains { $0.symbol == "AAPL" })
+        #expect(book.decisions.first { $0.action == verdict.action.rawValue }?.facts == facts)
+        #expect(book.decisions.contains { $0.action == "Price revalidated" && $0.facts.contains("Market timestamp: \(decisionAt.ISO8601Format())") })
+        book.settle(quotes: ["AAPL": fresh], at: decisionAt)
+        #expect(!book.open.contains { $0.symbol == "AAPL" }, "Revalidation cannot also be a post-proposal fill")
+        book.settle(quotes: ["AAPL": quote(at: decisionAt.addingTimeInterval(1))], at: decisionAt.addingTimeInterval(1))
+        #expect(book.open.contains { $0.symbol == "AAPL" })
+    }
+
+    @Test func postInferenceFailureCancellationAndHoldingChangeFailClosed() async throws {
+        let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
+        let at = now.addingTimeInterval(45)
+        for response in [nil, quote(at: at.addingTimeInterval(-10.001)), quote(at: now.addingTimeInterval(-1)),
+                         quote(at: at.addingTimeInterval(0.001)), quote("MSFT", at: at)] {
+            let book = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: ["Original"], model: "test",
+                researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: at,
+                allowed: { true }, contextFresh: { _ in true }, currentBook: { A.Book() }, fetch: { _, _ in response }))
+            #expect(book.pending.isEmpty && book.decisions.contains { $0.action == "Skipped" })
+        }
+        var allowed = true, bookReads = 0
+        let denied = await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
+            researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: at,
+            allowed: { allowed }, contextFresh: { _ in true }, currentBook: { bookReads += 1; return A.Book() },
+            fetch: { _, _ in allowed = false; return self.quote(at: at) })
+        #expect(denied == nil && bookReads == 0)
+        let cancelled = Task { @MainActor in
+            await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
+                researchQuote: self.quote(at: self.now), holdingID: nil, citesIntraday: true, at: at,
+                allowed: { true }, contextFresh: { _ in true }, currentBook: { A.Book() },
+                fetch: { _, _ in withUnsafeCurrentTask { $0?.cancel() }; return self.quote(at: at) })
+        }
+        #expect(await cancelled.value == nil)
+        var current = A.Book()
+        let changed = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
+            researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: at,
+            allowed: { true }, contextFresh: { _ in true }, currentBook: { current }, fetch: { _, _ in
+                current.propose(symbol: "AAPL", action: .buy, at: self.now)
+                current.settle(quotes: ["AAPL": self.quote(at: at)], at: at)
+                return self.quote(at: at)
+            }))
+        #expect(changed.open.count == 1 && changed.pending.isEmpty)
+        #expect(changed.decisions.contains { $0.action == "Skipped" })
+    }
+
+    @Test func revalidationCannotUseOlderResearchPriceOrBypassNewExpiry() async throws {
+        let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Momentum", risk: "Reversal", evidence: ["F1"])
+        var contextValid = true
+        for changedContext in [false, true] {
+            contextValid = true
+            let book = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: [], model: "test",
+                researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: now.addingTimeInterval(1),
+                allowed: { true }, contextFresh: { _ in contextValid }, currentBook: { A.Book() }, fetch: { _, _ in
+                    contextValid = !changedContext
+                    return self.quote(at: self.now.addingTimeInterval(changedContext ? 1 : -0.1))
+                }))
+            #expect(book.pending.isEmpty && book.decisions.contains { $0.action == "Skipped" })
+        }
+    }
+
+    @Test func holdAvoidNeedNoPriceRequestAndAreNotSkippedOrders() async throws {
+        for action in [TradeAdvice.Action.hold, .avoid] {
+            var fetches = 0
+            let result = try #require(await A.decisionBook(symbol: "AAPL",
+                verdict: .init(action: action, reason: "Wait", risk: "Uncertainty", evidence: ["F1"]),
+                facts: ["Dated research"], model: "test", researchQuote: quote(at: now),
+                holdingID: nil, citesIntraday: false, at: now.addingTimeInterval(45),
+                allowed: { true }, contextFresh: { _ in false }, currentBook: { A.Book() },
+                fetch: { _, _ in fetches += 1; return nil }))
+            #expect(fetches == 0 && result.pending.isEmpty)
+            #expect(result.decisions.count == 1 && result.decisions.first?.action == action.rawValue)
+        }
+    }
+
     @Test func sameDayCutoffCancelsBuysAndClosesOnlyOnLaterPrices() throws {
         let cutoff = try Date("2026-09-08T23:55:00Z", strategy: .iso8601)
         var pending = A.Book()

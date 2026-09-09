@@ -1,5 +1,57 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+
+## Whole-market bounded T/Q feed ready for parent integration — 2026-09-09
+
+Implementation is isolated in `/Users/saleh/StockSage-wt/whole-market-feed`, branch
+`codex/whole-market-feed`, based on verified integration commit `18d3070`.
+Parent task `01a0772c-d7ba-7c50-906c-0a3a3e9baef1` owns review/integration/install.
+No merge, push, installed-app replacement, competing authenticated stocks socket,
+model/strategy change, ledger hand-edit or real order was performed here.
+Good-spender stayed OFF and no extra tasks/agents were created by this task.
+
+One auth-gated `T.*,Q.*` socket now drains into a bounded off-MainActor worker:
+8 queued frames/8 MiB plus one processing frame, 1 MiB/frame, 32,768 symbols per
+channel, bounded symbols/indicator metadata. Latest-per-symbol retention is
+explicitly not a lossless tape. One 250ms UI projection (max4,096 symbols) reuses
+the existing store batch merge. Queue/processing/publication overruns and sustained
+stale quote-channel delivery produce visible gaps/recovery rather than a growing
+backlog or silent coverage reduction. Provider clocks, local elapsed timing,
+quiet instruments and connection health remain distinct. Native quote identity
+is exact; mixed-case trades are refused by the legacy uppercase store rather
+than aliased to another instrument. REST coverage stays unchanged.
+
+Paper price eligibility is 0...10 seconds; NBBO cost eligibility remains five.
+Parent-approved post-inference revalidation fetches a qualified separate REST
+observation, preserves cited facts, repeats current policy/context/holding checks,
+and reads/commits the current book without an intervening await. Hold/Avoid makes
+no extra request. Fills still need a later-than-proposal qualifying observation;
+raw WS ticks never enter paper settlement. Risk/cash/cadence/schema are unchanged.
+
+Real red evidence:13 stream tests/5 expected issues;12 NBBO tests/6 expected
+identity issues;15 ingress tests/1 expected authorization-reset publication issue.
+All exit65. Final source:macOS1903 tests/193 suites59.983s; iPhone17Pro(gate)1900
+/193 suites59.031s, both exit0 with the three unchanged canonical exclusions.
+Final strict gate:macOS55s, iOS52s, tests74s; all OK, exit0. Source hashes recorded;
+no Swift edits after these checks. Build window explicitly released to parent.
+
+Representative Debug replay:200k events across20k synthetic symbols,50/50 T/Q,
+117,001-byte peak frame; Mac142,566 events/s,21.628ms peak receive→process.
+Actual250ms published-model cadence:230.558ms peak for a quiet update; injected
+10ms merge work measured13.280ms. A250ms MainActor stall left worker peak0.160ms.
+Unpaced flood hit8 queued frames/400,008 bytes and explicitly invalidated with a
+gap. Test-process RSS and iPhone results are documented in the report; these are
+synthetic results, NOT proof of peak live-market sustainability or a live ten-second
+guarantee. Render/compositor timing remains unmeasured. Parent must perform the
+single-socket live verification after integration, and retain the installed app
+until that separately owned review/installation step.
+
+Evidence and exact replay command: `agent-docs/WHOLE_MARKET_FEED_2026-09-09.md`.
+Design: `docs/superpowers/specs/2026-09-09-whole-market-feed-design.md`.
+Artifacts: `/private/tmp/stocksage-whole-market-feed-20260909/` (red/identity-red/
+auth-reset-red, macos-final-source, ios-final-source logs+xcresults;
+gate-final-source.log and isolated gate outputs; tested-source.sha256).
+
 ## Astra reviews integrated: post-await quote policy fix installed — 2026-09-09 03:19 +03
 
 All three Astra support reviews returned; they remain read-only and idle. The
