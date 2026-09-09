@@ -47,6 +47,7 @@ actor StockSageFeedIngress {
         let data: Data
         let at: Date
         let uptime: TimeInterval
+        let consumed: (@Sendable () -> Void)?
     }
     nonisolated private struct Mailbox: Sendable {
         var active = true, draining = false
@@ -77,8 +78,10 @@ actor StockSageFeedIngress {
     }
 
     /// A fresh ingress object is created per socket. Invalidated objects never accept late callbacks.
+    /// Consumed rearms native receiving only after processing; failed/discarded frames do not call it.
     @discardableResult
-    nonisolated func offer(_ data: Data, at: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+    nonisolated func offer(_ data: Data, at: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                           consumed: (@Sendable () -> Void)? = nil) -> Bool {
         let result = mailbox.withLock { box -> (Bool, Bool, Bool) in
             guard box.active else { return (false, false, false) }
             box.metrics.receivedFrames += 1
@@ -87,11 +90,13 @@ actor StockSageFeedIngress {
             guard data.count <= limits.frameBytes, box.frames.count < limits.queuedFrames,
                   box.metrics.queuedBytes + data.count <= limits.queuedBytes else {
                 box.active = false
-                box.metrics.failure = "Feed overloaded: raw frame capacity exceeded; gap and reconnect"
+                let boundary = data.count > limits.frameBytes ? "frame-size limit"
+                    : box.frames.count >= limits.queuedFrames ? "queued-frame limit" : "queued-byte limit"
+                box.metrics.failure = "Feed overloaded: raw frame capacity exceeded (\(boundary); incoming=\(data.count)B queued=\(box.frames.count)/\(box.metrics.queuedBytes)B); gap and reconnect"
                 box.frames.removeAll(); box.metrics.queuedBytes = 0; box.metrics.queuedFrames = 0
                 return (false, false, true)
             }
-            box.frames.append(Frame(data: data, at: at, uptime: uptime))
+            box.frames.append(Frame(data: data, at: at, uptime: uptime, consumed: consumed))
             box.metrics.queuedFrames = box.frames.count
             box.metrics.queuedBytes += data.count
             box.metrics.peakFrames = max(box.metrics.peakFrames, box.frames.count)
@@ -134,6 +139,9 @@ actor StockSageFeedIngress {
             return frame
         }) {
             autoreleasepool { process(frame) }
+            // Outside the lock: registering the next asynchronous receive may immediately offer.
+            // This paces our native chain, not Foundation/server buffering; SIP age checks still apply.
+            if isActive { frame.consumed?() }
             await Task.yield() // Let the single pending UI snapshot run between bounded frames.
         }
     }

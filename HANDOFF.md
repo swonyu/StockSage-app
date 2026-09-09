@@ -1,5 +1,40 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Feed receive pacing — September9, macOS verified; installation pending
+
+Base270cbb7. Native WebSocket receive now rearms only after the exact original
+ingress finishes consuming an accepted frame, while still active. Rejected,
+discarded, failed and invalidated frames never invoke that continuation. The
+callback runs outside the ingress mutex; healthy empty/malformed/status frames
+continue. The socket/ingress pair remains captured across cancellation/reconnect.
+Capacity diagnostics now identify frame-size, queue-count or queue-byte overflow
+with pre-clear sizes. Existing bounds, session/gap checks and freshness rules are
+unchanged; this does not relax paper eligibility or guarantee ten-second latency.
+
+Real ingress reproduction: eight tiny frames624bytes accepted, ninth rejected.
+Red capacity suite24tests/2issues/4.697s exit65; red eager-continuation fixture
+27tests/13issues/4.740s exit65. A preceding wrong filter ran zero tests and a test
+compile failure were not behavioral evidence. Focused green27tests/1suite/4.145s
+exit0; final discard/overflow/oversize/replacement parameters were then included
+in full canonical Mac **2,004tests/199suites/65.600s exit0**. Strict Mac emit58s,
+tests typecheck81s, aggregate0, **iOS SKIP** by owner request. Canonical exclusions
+unchanged. Final Astra source review closed with no must-fix findings.
+
+Receipt: /Users/saleh/StockSage-verification-20260909.M0MISy/FEED_PACING.md.
+Frozen source manifest rechecked exit0; candidate-feed-paced/StockSageX.app matches
+43 tested bundle files and21 internal links; deep/strict codesign passed. Dylib
+82e450715af7b43e65a8a4251f32782ec66516ce8f147e357eafa1fd609b94c6.
+Installed270cbb7 remains intact: native normal-quit attempt requested refreshed
+control, then refresh failed with closed pipe. No force quit, installation or
+owner history modification. The app was opened on Home at owner's request;
+PID19452 at last check. Native live receive pacing is not yet exercised.
+
+Latest coordination: parent AstraUltra + one AstraUltra source reviewer + five
+SolUltra workers; four external implementation/test candidates, one settings
+review. Parent sole shared writer/installer/heavy tester. Ten-minute heartbeat;
+900-second app research unchanged. Next integrate/refine bounded UI candidates
+and make future no-buy rejection reasons actionable, without rewriting history.
+
 ## Qwen evidence and cancellation — September9, macOS-only installed
 
 Base a00d8ec. Shared assessment now requires qualitative reason/risk: correctly

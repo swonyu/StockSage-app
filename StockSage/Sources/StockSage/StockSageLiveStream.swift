@@ -448,9 +448,10 @@ private final class StockSageLiveStreamConnection {
         }
     }
 
-    /// Receive/rearm and enqueue happen outside MainActor. One callback, one bounded offer;
-    /// never schedule a Task per trade/frame on the UI actor.
+    /// Receive/enqueue and consumption-paced rearming stay outside MainActor. One native
+    /// frame awaits parsing; no Task per trade/frame on the UI actor or expanded raw queue.
     nonisolated private static func receive(_ socket: URLSessionWebSocketTask, ingress: StockSageFeedIngress) {
+        guard ingress.isActive else { return }
         socket.receive { result in
             guard ingress.isActive else { return }
             switch result {
@@ -462,7 +463,7 @@ private final class StockSageLiveStreamConnection {
                 case .data(let bytes): data = bytes
                 @unknown default: ingress.invalidate("Unknown feed frame; gap and reconnect"); return
                 }
-                if ingress.offer(data, at: at, uptime: uptime) { receive(socket, ingress: ingress) }
+                ingress.offer(data, at: at, uptime: uptime, consumed: { receive(socket, ingress: ingress) })
             case .failure:
                 ingress.invalidate("Feed connection lost; gap and reconnect")
             }

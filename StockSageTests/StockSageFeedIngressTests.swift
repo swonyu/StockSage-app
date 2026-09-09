@@ -11,6 +11,96 @@ struct StockSageFeedIngressTests {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     let auth = Data(#"[{"ev":"status","status":"auth_success"}]"#.utf8)
 
+    nonisolated static func offerNext(_ source: I, sequence: Int, total: Int, at: Date,
+                                     didConsume: @escaping @Sendable () -> Void) {
+        let data = Data("[{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":\(100 + sequence),\"t\":1700000000000,\"q\":\(sequence)}]".utf8)
+        source.offer(data, at: at, consumed: {
+            didConsume()
+            if sequence < total { offerNext(source, sequence: sequence + 1, total: total, at: at, didConsume: didConsume) }
+        })
+    }
+
+    @Test func receiveContinuationWaitsForConsumptionBeforeRearming() async throws {
+        let callbacks = Mutex(0)
+        let at = now
+        let ingress = I(authorized: { source in
+            Self.offerNext(source, sequence: 1, total: 100, at: at, didConsume: { callbacks.withLock { $0 += 1 } })
+        })
+        defer { ingress.invalidate() }
+        #expect(ingress.offer(auth, at: now))
+        let snapshot = try await drained(ingress, symbols: ["AAPL"])
+        #expect(snapshot.metrics.failure == nil && ingress.isActive)
+        #expect(callbacks.withLock { $0 } == 100)
+        #expect(snapshot.metrics.processedEvents == 101)
+        #expect(snapshot.metrics.peakFrames == 1)
+        #expect(snapshot.trades["AAPL"]?.price == 200)
+        print("FEED_PACED_BURST callbacks=\(callbacks.withLock { $0 }) processed=\(snapshot.metrics.processedEvents) peak_frames=\(snapshot.metrics.peakFrames)")
+    }
+
+    @Test(arguments: ["[]", "not-json", #"[{"ev":"status","status":"connected"}]"#])
+    func ignoredFramesStillContinueReceiving(_ text: String) async throws {
+        let callbacks = Mutex(0), ingress = I()
+        defer { ingress.invalidate() }
+        let accepted = ingress.offer(Data(text.utf8), consumed: { callbacks.withLock { $0 += 1 } })
+        #expect(accepted)
+        let snapshot = try await drained(ingress)
+        #expect(snapshot.metrics.failure == nil && callbacks.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: ["stop", "auth", "old", "discard", "overflow", "oversize"])
+    func failedOrStoppedFrameCannotContinueReceiving(_ mode: String) async throws {
+        let callbacks = Mutex(0)
+        let queued = Data("[]".utf8)
+        let ingress = I(authorized: { source in
+            if mode == "stop" { source.invalidate() }
+            if mode == "discard" || mode == "overflow" {
+                for _ in 0..<(mode == "overflow" ? 9 : 1) {
+                    source.offer(queued, consumed: { callbacks.withLock { $0 += 1 } })
+                }
+                source.invalidate()
+            }
+        })
+        defer { ingress.invalidate() }
+        let data = mode == "oversize" ? Data(repeating: 32, count: I.Limits().frameBytes + 1)
+            : mode == "auth" ? Data(#"[{"ev":"status","status":"auth_failed"}]"#.utf8) : auth
+        let uptime = ProcessInfo.processInfo.systemUptime - (mode == "old" ? 11 : 0)
+        let accepted = ingress.offer(data, at: now, uptime: uptime, consumed: { callbacks.withLock { $0 += 1 } })
+        #expect(accepted == (mode != "oversize"))
+        _ = try await drained(ingress)
+        #expect(!ingress.isActive && callbacks.withLock { $0 } == 0)
+        let late = ingress.offer(auth, consumed: { callbacks.withLock { $0 += 1 } })
+        #expect(!late)
+        #expect(callbacks.withLock { $0 } == 0)
+
+        let replacement = I()
+        defer { replacement.invalidate() }
+        #expect(replacement.offer(auth, at: now))
+        #expect(try await drained(replacement).authorized)
+        #expect(callbacks.withLock { $0 } == 0, "Discarded old-session callbacks cannot advance the replacement")
+    }
+
+    @Test func smallUnpacedBurstReportsTheActualCapacityBoundary() async throws {
+        let accepted = Mutex([Bool]())
+        let failures = Mutex(0)
+        let frame = Data(#"[{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"t":1700000000000}]"#.utf8)
+        let at = now
+        let ingress = I(authorized: { source in
+            // Hold the real serial parser in its auth callback. No timing/scheduler assumption.
+            for _ in 0..<9 { accepted.withLock { $0.append(source.offer(frame, at: at)) } }
+        }, failed: { failures.withLock { $0 += 1 } })
+        defer { ingress.invalidate() }
+        #expect(ingress.offer(auth, at: now))
+        let snapshot = try await drained(ingress, symbols: ["AAPL"])
+        #expect(accepted.withLock { $0 } == Array(repeating: true, count: 8) + [false])
+        #expect(failures.withLock { $0 } == 1)
+        #expect(snapshot.metrics.peakFrames == 8 && snapshot.metrics.peakBytes == frame.count * 8)
+        #expect(snapshot.quotes.isEmpty && !snapshot.authorized && !ingress.isActive)
+        #expect(snapshot.metrics.failure?.contains("queued-frame limit") == true)
+        #expect(snapshot.metrics.failure?.contains("incoming=\(frame.count)B queued=8/\(frame.count * 8)B") == true)
+        #expect(!ingress.offer(frame, at: now))
+        print("FEED_TINY_BURST accepted=8 rejected=1 peak_bytes=\(snapshot.metrics.peakBytes) reason=\(snapshot.metrics.failure ?? "none")")
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func mixedQuoteFrameCannotRefreshStalePeer(_ reverse: Bool) async throws {
         let ingress = I(), live = L()
