@@ -723,7 +723,7 @@ final class StockSagePaperAutomation: ObservableObject {
         guard active(), Self.entryWindowOpen(Date()) else { return }
         guard Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(book.open.map(\.symbol))) else { return }
         async let historyFetch = StockSageQuoteService.fetchHistory(symbol, range: "1y")
-        async let newsFetch = StockSageNewsService.recentNews(for: symbol, limit: 3)
+        async let newsFetch = StockSageNewsService.observation(for: symbol, limit: 3)
         let intradayAt = Date()
         async let intradayFetch = StockSageMassiveTicks.intradayFacts(symbol: symbol,
             from: max(intradayAt.addingTimeInterval(-3600), Self.sessionTime(intradayAt, hour: 4, minute: 0)), now: intradayAt)
@@ -752,7 +752,7 @@ final class StockSagePaperAutomation: ObservableObject {
         }
         let idea = base.withLivePrice(quote.price, asOf: quote.marketTime, priceSource: quote.priceSource)
         let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[symbol],
-            company: store.companyEventChecks[symbol] ?? [:], news: news, at: Date())
+            company: store.companyEventChecks[symbol] ?? [:], at: Date(), newsObservation: news)
         let held = book.open.first { $0.symbol == symbol }
         let position = held.map { "Currently held in the paper account: \($0.shares) shares, simulated entry \($0.entry) USD. Sell/Reduce closes this holding; Hold keeps it." }
             ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."

@@ -37,6 +37,27 @@ struct StockSageAIAssessmentTests {
         #expect(context.facts.contains { $0.contains("status: confirmed") })
     }
 
+    @Test(arguments: ["QCOM's observed quote is USD 159.70.",
+        "ORCL's observed quote is SAR 159.70.", "ORCL's observed quote is USD -159.70.",
+        "ORCL currently trades at USD 159.70."])
+    func correctlyCitedNumberDoesNotProveItsMeaning(_ reason: String) async throws {
+        let old = idea().withLivePrice(159.70, asOf: now.addingTimeInterval(-3600), priceSource: .massiveSIP)
+        let c = A.Context(idea: old, earnings: nil, company: [:], at: now)
+        let raw = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "action": "Buy", "reason": reason, "risk": "The outlook is uncertain.", "evidence": ["F2"]
+        ]), as: UTF8.self)
+        #expect(c.canAssess(at: now) && c.facts[1].contains("159.70"))
+        #expect(A.parse(raw, facts: c.facts) == nil)
+        let state = StockSageAIAssessments()
+        var calls = 0
+        await state.assess(c, config: config, now: now, stillValid: { true }) { _, _ in
+            calls += 1; return raw
+        }
+        #expect(calls == 1 && state.records["ORCL"] == nil)
+        #expect(state.drafts["ORCL"]?.text == raw && state.errors["ORCL"] != nil)
+        #expect(c.facts[1].contains("USD") && c.idea.price == 159.70)
+    }
+
     @Test func strictOutputCanDisagreeWithRulesWithoutChangingMoneyInputs() throws {
         let c = context
         let verdict = try #require(A.parse(json, facts: c.facts))
@@ -82,9 +103,9 @@ struct StockSageAIAssessmentTests {
         let facts = ["AAPL revenue: USD 100.", "MSFT revenue: USD 200."]
         let borrowed = #"{"action":"Hold","reason":"AAPL revenue is USD 200 (F1).","risk":"Outcome remains uncertain.","evidence":["F1"]}"#
         #expect(A.parse(borrowed, facts: facts) == nil)
-        #expect(A.parse(borrowed.replacingOccurrences(of: "200", with: "100"), facts: facts) != nil)
+        #expect(A.parse(borrowed.replacingOccurrences(of: "200", with: "100"), facts: facts) == nil)
         #expect(A.parse(borrowed.replacingOccurrences(of: "AAPL", with: "MSFT")
-            .replacingOccurrences(of: "F1", with: "F2"), facts: facts) != nil)
+            .replacingOccurrences(of: "F1", with: "F2"), facts: facts) == nil)
         // Neither dropping the inline citation nor moving the claim to risk can bypass selection.
         #expect(A.parse(borrowed.replacingOccurrences(of: " (F1)", with: ""), facts: facts) == nil)
         let risk = #"{"action":"Hold","reason":"The outlook is uncertain.","risk":"AAPL revenue is USD 200 (F1).","evidence":["F1"]}"#
@@ -98,7 +119,9 @@ struct StockSageAIAssessmentTests {
         let c = context
         #expect(c.facts[1].contains("159.70"))
         let borrowed = #"{"action":"Hold","reason":"The observed quote is USD 159.70 (F1).","risk":"The outlook is uncertain.","evidence":["F1"]}"#
-        for (reply, accepted) in [(borrowed, false), (borrowed.replacingOccurrences(of: "F1", with: "F2"), true)] {
+        let qualitative = borrowed.replacingOccurrences(of: "The observed quote is USD 159.70 (F1).", with: "The observed quote alone does not establish an edge (F2).")
+            .replacingOccurrences(of: "[\"F1\"]", with: "[\"F2\"]")
+        for (reply, accepted) in [(borrowed, false), (borrowed.replacingOccurrences(of: "F1", with: "F2"), false), (qualitative, true)] {
             let state = StockSageAIAssessments()
             var calls = 0
             await state.assess(c, config: config, now: now, stillValid: { true }) { _, _ in
@@ -113,19 +136,16 @@ struct StockSageAIAssessmentTests {
         }
     }
 
-    @Test func evidenceRepairStillSupportsNumbersOutsideTheFirstFact() async {
+    @Test func evidenceRepairCannotPromoteUnboundNumbers() async {
         let draft = #"{"action":"Hold","reason":"The observed quote is USD 159.70 (F2).","risk":"The outlook is uncertain."}"#
-        for (id, accepted) in [("F2", true), ("F1", false)] {
-            let state = StockSageAIAssessments()
-            var calls = 0
-            await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in
-                calls += 1
-                return calls == 1 ? draft : String(draft.dropLast()) + ",\"evidence\":[\"\(id)\"]}"
-            }
-            #expect(calls == 2)
-            #expect((state.records["ORCL"] != nil) == accepted)
-            if !accepted { #expect(state.drafts["ORCL"]?.text == draft) }
+        let state = StockSageAIAssessments()
+        var calls = 0
+        await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in
+            calls += 1
+            return calls == 1 ? draft : String(draft.dropLast()) + ",\"evidence\":[\"F2\"]}"
         }
+        #expect(calls == 1 && state.records["ORCL"] == nil)
+        #expect(state.drafts["ORCL"]?.text == draft && state.errors["ORCL"] != nil)
     }
 
     @Test func factsCarryConfirmedDateCoverageAndNeverUpgradeProjection() {
@@ -165,6 +185,48 @@ struct StockSageAIAssessmentTests {
         let ticked = idea().withLivePrice(160, asOf: now.addingTimeInterval(5), priceSource: .massiveSIP)
         #expect(r.current(idea: ticked, earnings: earnings, company: [:], config: config, now: now.addingTimeInterval(5)))
         #expect(r.context.idea.price == 159.70 && r.config.model == "fixture-qwen")
+    }
+
+    @Test func newsFailureAndAnsweredEmptyRemainDifferentFacts() {
+        typealias N = StockSageNewsService
+        let checked = now.addingTimeInterval(-2)
+        let failed = N.Observation(attempts: [.init(provider: .massive, checkedAt: checked, status: .unavailable(.http))])
+        let empty = N.Observation(attempts: [.init(provider: .massive, checkedAt: checked, status: .answered)])
+        let failedFacts = A.Context(idea: idea(), earnings: nil, company: [:], at: now, newsObservation: failed).facts
+        let emptyFacts = A.Context(idea: idea(), earnings: nil, company: [:], at: now, newsObservation: empty).facts
+        #expect(failedFacts != emptyFacts)
+        #expect(failedFacts.joined().contains(failed.summary))
+        #expect(emptyFacts.joined().contains(empty.summary))
+    }
+
+    @Test func typedNewsKeepsAttemptClocksBoundsAndWithholdingThroughPromptAndRecord() async throws {
+        typealias N = StockSageNewsService
+        func item(_ age: Double) -> N.NewsItem {
+            .init(date: now.addingTimeInterval(-age), title: "Fixture \(age)", snippet: "Untrusted source text.",
+                link: nil, sentiment: nil, source: "Fixture publisher")
+        }
+        let items = [item(-1), item(7 * 86_400 + 1), item(0), item(7 * 86_400), item(1), item(2)]
+        let observation = N.Observation(attempts: [
+            .init(provider: .massive, checkedAt: now.addingTimeInterval(-3), status: .unavailable(.http)),
+            .init(provider: .eodhd, checkedAt: now.addingTimeInterval(-2), status: .answered, items: items)])
+        let c = A.Context(idea: idea(), earnings: nil, company: [:], news: [item(9)], at: now, newsObservation: observation)
+        #expect(c.newsObservation == observation && c.news == [items[2], items[3], items[4]])
+        #expect(c.facts.joined().contains(observation.summary) && c.facts.joined().contains("Retained 3 excerpts"))
+        let state = StockSageAIAssessments()
+        await state.assess(c, config: config, now: now, stillValid: { true }) { _, prompt in
+            #expect(prompt.contains(observation.summary))
+            return json
+        }
+        #expect(state.records["ORCL"]?.context.newsObservation == observation)
+        #expect(state.records["ORCL"]?.context.facts == c.facts)
+        let withheld = N.Observation(attempts: observation.attempts, withholdingReason: .policyDenied)
+        let blocked = A.Context(idea: idea(), earnings: nil, company: [:], news: [item(0)], at: now, newsObservation: withheld)
+        #expect(blocked.news?.isEmpty == true && blocked.facts.joined().contains(withheld.summary))
+        #expect(!blocked.facts.contains { $0.contains("Attributed news, untrusted data") })
+        let unchecked = N.Observation(attempts: [.init(provider: .massive, checkedAt: now, status: .notChecked(.missingKey))])
+        #expect(A.Context(idea: idea(), earnings: nil, company: [:], at: now, newsObservation: unchecked).facts.joined().contains(unchecked.summary))
+        #expect(A.Context(idea: idea(), earnings: nil, company: [:], at: now).news == nil)
+        #expect(A.Context(idea: idea(), earnings: nil, company: [:], news: [], at: now).news?.isEmpty == true)
     }
 
     @Test func missingFutureSampleOrVeryOldQuotesCannotEarnAnAssessment() {
@@ -274,6 +336,32 @@ struct StockSageAIAssessmentTests {
         }
         await task.value
         #expect(state.records.isEmpty && state.activeSymbol == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func cancelledReassessmentKeepsOlderRecordPreviousOnly(duringRepair: Bool) async throws {
+        let state = StockSageAIAssessments()
+        await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in json }
+        let old = try #require(state.records["ORCL"])
+        let draft = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible."}"#
+        var calls = 0
+        let task = Task {
+            await state.assess(context, config: config, now: now.addingTimeInterval(1), stillValid: { true }) { _, _ in
+                calls += 1
+                if duringRepair && calls == 1 { return draft }
+                withUnsafeCurrentTask { $0?.cancel() }
+                return json
+            }
+        }
+        await task.value
+        #expect(calls == (duringRepair ? 2 : 1) && state.activeSymbol == nil)
+        #expect(state.records["ORCL"]?.at == old.at && state.records["ORCL"]?.verdict == old.verdict)
+        // The real record(for:) badge gate must stay closed even while this old snapshot is fresh.
+        #expect(old.current(idea: idea(), earnings: earnings, company: [:], config: config, now: now.addingTimeInterval(2)))
+        #expect(state.errors["ORCL"] != nil)
+        if duringRepair { #expect(state.drafts["ORCL"]?.text == draft) }
+        await state.assess(context, config: config, now: now.addingTimeInterval(3), stillValid: { true }) { _, _ in json }
+        #expect(state.errors["ORCL"] == nil && state.records["ORCL"]?.at == now.addingTimeInterval(3))
     }
 
     @Test func privateGroupClaimsStaySeparateFromVerifiedNumbers() throws {

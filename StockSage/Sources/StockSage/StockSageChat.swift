@@ -98,9 +98,11 @@ enum StockSageChat {
                     source: "StockSage rules, not Qwen", status: "unvalidated; no proven predictive edge"))
             }
             if let e = earnings[symbol.symbol], e.symbol == symbol.symbol {
+                let currentCheck = (0..<StockSageStore.earningsCheckTTL).contains(now.timeIntervalSince(e.checkedAt))
                 facts.append(Fact(id: symbol.symbol + ".earnings", subject: symbol.symbol, field: "earnings schedule",
                     value: e.earningsDate?.ISO8601Format() ?? "unknown", unit: "", asOf: e.checkedAt,
-                    source: e.source, status: e.status == .projected ? "historical projection, NOT announced"
+                    source: e.source, status: !currentCheck ? "stale or invalid check clock; current confirmation unavailable"
+                        : e.status == .projected ? "historical projection, NOT announced"
                         : e.status == .dateKnown ? (e.confirmed == true ? "provider-confirmed schedule; outcome unknown" : "estimated or confirmation unknown")
                         : "not checked or not applicable; not proof of no event"))
             }

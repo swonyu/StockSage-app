@@ -1,5 +1,46 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Qwen evidence and cancellation — September9, macOS-only installed
+
+Base a00d8ec. Shared assessment now requires qualitative reason/risk: correctly
+cited digits cannot establish subject/unit/sign/time, and matched numeric prose
+is classified unboundNumber after existing guards. Captured figures and valid F/W
+citations remain unchanged. UI drafts stay readable/unverified; paper rejection
+does not preserve raw drafts or create orders. Qualitative entailment and spelled-out
+numbers remain unverified, not solved by a digit guard.
+Chat earnings applies the existing24h check ceiling without changing source/date.
+Typed news Observation retains failures, answered-empty, withheld items and original
+attempt clocks through both UI and paper Context. Cancelled reassessment invalidates
+the existing badge eligibility before awaits; only successful replacement restores
+it. Previous records remain readable. No new request registry/retry loop or money policy.
+
+Red reproduced numeric/earnings defects (27tests/14issues) and news/cancellation
+outcome loss. An old numeric-positive diagnostic matrix was aligned with the new
+contract, keeping all actions/reference/transport guards. Focused green101tests/
+5suites/1.641s exit0. Full canonical Mac **2,000tests/199suites/64.296s exit0**;
+three canonical exclusions unchanged. Strict Mac emit59s/tests typecheck81s,
+aggregate0, **iOS SKIP** at owner's request. No live diagnostic/replay opt-ins.
+Source manifest rechecked; two source-only reviewers closed must-fix findings.
+Outer news-await cancellation/rendered current badge remain source-traced.
+Receipt: /Users/saleh/StockSage-verification-20260909.M0MISy/QWEN_EVIDENCE.md.
+
+Exact tested candidate installed:43files+21 internal framework links matched,
+deep/strict codesign passed. Dylib b2c9031a4078b1d08a95ae5a0c56fd70fdf3a757aeac153def7be94963ad9b85.
+Prior app was already closed; no force quit. Exclusive paper lease covered fresh
+backup paper-before-qwen-evidence and previous app retired-qwen-evidence/StockSageX.app
+under /Users/saleh/StockSage-release-20260909.hrzqVh. Paper bytes unchanged through install.
+Native reopen/Home observed, PID15831; Qwen2120 and enabled preference1. All2 prior
+trades/1,367 prior decisions unchanged and ordered;0pending at post-launch capture.
+Chat navigation native pipe failed; no bypass or live inference accuracy claim.
+Home showed feed-overload/reconnect gaps: next reproduce/repair, do not call healthy.
+
+Owner now allows six read-only reviewers and requests ongoing15-minute autonomous
+macOS functional/UI improvements until stop, with Codex-like compact left sidebar,
+neutral surfaces, clear bubbles/icons and bottom composer. Preserve Catalyst
+Day/Week/Month. Parent sole writer/installer/heavy tester, serial jobs2. Good-spender
+uninstalled; no iOS today, pushes, paid resources, real orders, IBKR relay, history,
+risk/strategy/model changes. Details/next work in external WORK_CHECKPOINT.md.
+
 ## Rotating feed cost evidence — September9, macOS-only
 
 Parent reproduced4,097 selected symbols rotating through the production4,096

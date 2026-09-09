@@ -14,6 +14,20 @@ struct StockSageChatTests {
         StockSageChat.snapshot(symbols: symbols ?? [symbol()], ideas: [], earnings: [:], sample: sample, now: now)
     }
 
+    @Test func earningsConfirmationRequiresCurrentCheck() throws {
+        for age in [-1.0, 0, StockSageStore.earningsCheckTTL - 1, StockSageStore.earningsCheckTTL] {
+            let record = StockSageCatalystRecordCache.Record(symbol: "ORCL",
+                earningsDate: now.addingTimeInterval(3 * 86_400), checkedAt: now.addingTimeInterval(-age),
+                source: "Fixture", status: .dateKnown, confirmed: true)
+            let captured = StockSageChat.snapshot(symbols: [symbol()], ideas: [],
+                earnings: ["ORCL": record], sample: false, now: now)
+            let fact = try #require(captured.facts.first { $0.id == "ORCL.earnings" })
+            #expect(fact.status.contains("provider-confirmed") == (0..<StockSageStore.earningsCheckTTL).contains(age))
+            #expect(fact.asOf == record.checkedAt && fact.source == record.source)
+            #expect(fact.value == record.earningsDate?.ISO8601Format())
+        }
+    }
+
     @Test func evidenceIsTypedAndCannotBeRewrittenByModel() throws {
         let facts = snapshot([symbol(), symbol("QCOM", age: 901)])
         #expect(facts.facts[0].subject == "ORCL" && facts.facts[0].unit == "USD")

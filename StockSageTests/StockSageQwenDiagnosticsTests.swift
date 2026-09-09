@@ -236,7 +236,9 @@ struct StockSageQwenDiagnosticsTests {
             (text.replacingOccurrences(of: "(F1)", with: "²"), .nonASCIINumber),
             (text.replacingOccurrences(of: "(F1)", with: "(F2)"), .unknownReference),
             (text.replacingOccurrences(of: "(F1)", with: "(W2)"), .unknownReference),
-            (text.replacingOccurrences(of: "(F1)", with: "99999"), .foreignNumber)]
+            (text.replacingOccurrences(of: "(F1)", with: "99999"), .foreignNumber),
+            (text.replacingOccurrences(of: "(F1)", with: "2000.0"), .unboundNumber),
+            (text.replacingOccurrences(of: "A loss remains possible.", with: "A loss of 2000.0 USD is possible."), .unboundNumber)]
         for (input, failure) in cases {
             #expect(A.validate(input, facts: facts) == .failure(failure))
             #expect(A.parse(input, facts: facts) == nil)
@@ -254,7 +256,7 @@ struct StockSageQwenDiagnosticsTests {
     @Test func acceptedVerdictsRetainAllFieldsAndEvidenceOrder() throws {
         for action in ["Strong Buy", "Buy", "Hold", "Avoid", "Reduce", "Sell"] {
             for evidence in [["F1"], ["F2", "F1"]] {
-                let reason = "Observed 2000.0 USD (F1); W1 is unverified."
+                let reason = "The observed quote alone is not an edge (F1); W1 is unverified."
                 let risk = "A loss remains possible."
                 let data = try JSONSerialization.data(withJSONObject: ["action": action, "reason": reason, "risk": risk, "evidence": evidence])
                 let input = String(decoding: data, as: UTF8.self)
