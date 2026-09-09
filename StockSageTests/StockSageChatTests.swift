@@ -171,10 +171,10 @@ struct StockSageChatTests {
         #expect(size.width == CGFloat(width) && size.height > 60)
     }
 
-    @Test(arguments: [360, 760], ["pending", "completed", "draft-in-progress"])
+    @Test(arguments: [360, 760], ["pending", "cancelled", "completed", "draft-in-progress"])
     func renderCapturedTurnWithoutLiveChat(width: Int, state: String) async throws {
         let pending = state == "pending"
-        let edit: (() -> Void)? = state == "completed" ? {} : nil
+        let edit: (() -> Void)? = state == "completed" || state == "cancelled" ? {} : nil
         var captured = snapshot()
         let fact = try #require(captured.facts.first)
         let sources: [StockSageChat.Source] = [
@@ -187,11 +187,18 @@ struct StockSageChatTests {
                   warning: "Unverified imported claim, not trading evidence.", link: nil)
         ]
         captured.sources = sources
-        let turn = StockSageChatSession.Turn(id: UUID(),
+        var turn = StockSageChatSession.Turn(id: UUID(),
             question: "What does this dated observation tell me, and what remains unknown?",
             snapshot: captured, model: "fixture",
             answer: "Synthetic answer: a recorded observation is not a prediction. Check the captured source and its timestamp below.",
             evidence: [fact.id] + sources.map(\.id), notice: "Unverified draft · fixture")
+        if pending || state == "cancelled" {
+            let session = StockSageChatSession(historyURL: nil)
+            _ = try #require(session.begin(question: turn.question, snapshot: captured, model: "fixture"))
+            if state == "cancelled" { session.cancel() }
+            turn = try #require(session.turns.first)
+            #expect(pending == (session.pending == turn.id))
+        }
         let view = StockSageChatSection.turnContent(turn, pending: pending, editQuestion: edit)
             .padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)

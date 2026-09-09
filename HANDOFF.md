@@ -1,5 +1,33 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac Chat pending status — September 9, verified; not installed
+
+Mac pending turns now show one small native ProgressView with the exact request
+notice, not a second hardcoded preparation message. Settled notice/answer,
+evidence, snapshots, composer Cancel and nonMac rendering are unchanged. No
+request/controller/status parsing or percentage added. Original uncertainty stays.
+
+Actual memory-only begin/cancel fixture: baseline21tests/.652s exit0; visual
+duplicate confirmed in pending360/760 captures, NOT an assertion RED. After21tests/
+.794s exit0. Parent inspected6aftercaptures (pending/cancelled/completed360/760)
+of8generated; no clipping or lost cancellation/evidence text. Pending identity
+asserted; cancelled fixture shows enabled reuse for an idle empty composer.
+Sol source review closed, no must-fix. Native activation/VoiceOver unverified.
+
+Full Mac **2,049tests/200suites/93.647s**, exit0. Strict Mac90s/tests129s passed,
+aggregateexec88231 exit0, macos=OK ios=SKIP tests=OK; same3opt-in exclusions.
+All372 sourceentries and exact64-entry signedcandidate rechecked after gates.
+Source manifest a1722fc4134b562b0b1107773e10e1c21cafd4564731a7c7e2db036f5ebff5f4.
+Candidate dylib f1e66ad0947fb00a77d4dbf32df39f40504bb8f7c55b374de68c659dde4e4772.
+Artifacts: `/Users/saleh/StockSage-verification-20260909.M0MISy/CHAT_PENDING.md`,
+chat-pending-before/after, focused/full/strict logs, manifest and
+candidate-chat-pending/StockSageX.app. Parent sole writer/tester/installer.
+
+**Not installed:** app40101/Qwen2120/pausedpaper0 retained; preserve session-only500
+results pending owner restart/clear choice. No iOS, model/provider calls, push,
+paid resources, relay, real orders or historical edits. Next group-layout candidate
+is outside repo, source-only/unintegrated; both supporting agents now closed.
+
 ## Mac assessment retry controls — September 9, verified; not installed
 
 Mac detail-sheet header now offers Reassess for a stored record OR unverified

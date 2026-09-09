@@ -158,12 +158,15 @@ struct StockSageChatSection: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(DS.Palette.textSecondary)
                     .accessibilityAddTraits(.isHeader)
-                Text(turn.notice).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 if pending {
-                    ProgressView("Preparing sources / asking the local model…")
-                        .fixedSize(horizontal: false, vertical: true)
+                    ProgressView {
+                        Text(turn.notice).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .controlSize(.small)
                 } else {
+                    Text(turn.notice).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(turn.answer).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
