@@ -1,5 +1,44 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Rotating feed cost evidence — September9, macOS-only
+
+Parent reproduced4,097 selected symbols rotating through the production4,096
+slice: an unchanged fresh MSFT spread disappeared from publisher/Store, causing
+NetEdge to fall from492.6108374384237bps measured spread to estimated8bps.
+Red21tests/1suite/2issues/2.863s exit65. No owner records or live calls used.
+
+Ingress now approves identities of unchanged fresh observations from the exact
+immutable prior dictionary submitted by the publisher. Existing NBBO qualification
+normalizes only the local verification flag for equality. Publication rechecks
+freshness, overlays primary observations/withdrawals and requalifies current
+references; post-await selection mismatch discards the capture. Session failure,
+expiry and clearing still dominate. No synthetic receipt clocks/acknowledgements.
+Primary raw slices remain capped4,096; retained metadata/cache/requalification can
+reach the existing32,768 quote limit. A changed off-slice quote waits its primary
+turn; this does not guarantee continuously current market-wide evidence.
+
+Focused36tests/2suites/4.150s exit0 includes11 retention control scenarios plus
+32,768-quote publisher/projection replay. Review added a twelfth same-sequence
+changed-price case and corrected benchmark medians. A test-only date-precision
+assertion failed once (1issue,exit65), then was corrected with matching decoded
+millisecond construction; capture occurs after the accepted update.
+Final canonical Mac **1,995tests/199suites/63.801s exit0**. Final strict
+`tools/gate.sh <repo> tests`: **Mac56s/tests80s,aggregate0,iOS SKIP**.
+Final replay publication/projection median64.001ms/max88.736ms; two full-cache
+passes87.944ms/max88.736ms. Timers exclude runtime selection/sorting, tick application,
+Store assignment/observation and rendering. Not a speedup or live-latency guarantee.
+Three canonical exclusions unchanged; all iOS work paused today by owner.
+Durable receipt: /Users/saleh/StockSage-verification-20260909.M0MISy/ROTATION_RELIABILITY.md.
+Final candidate-retention-accepted is preserved and signed;43bundle files match
+the tested app. Dylib SHA256c3e431b42529ead1cfdc8e3283d8f6941d620f7f307a45cadbb93bbb2f6799ac.
+retention-accepted-source.sha256 rechecked after gates; manifest SHA256
+5588b0a6a6a56e3f2fc0881264ebd591b198941385d59703f616a92557005965.
+Three source-only reviewers closed material findings; production start-loop
+selection ownership is source-inspected, not exercised by the isolated fixture.
+Installed941f88b remains intact, PID8631 holds the paper lease, enabled1, Qwen2120.
+Native app control still fails with closed pipe; no forced quit/UI bypass.
+No threshold/risk/model/ledger, broker/relay, paid-resource or push changes.
+
 ## Section16 research export — September 9, macOS delivery
 
 Owner approved implementing `stocksage-section-16-research/outputs/EXECUTION_RESULT.md`

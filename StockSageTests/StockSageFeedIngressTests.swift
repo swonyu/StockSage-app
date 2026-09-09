@@ -350,6 +350,160 @@ struct StockSageFeedIngressTests {
         ingress.invalidate()
     }
 
+    @Test @MainActor func completeRotationPreservesUnchangedFreshCostEvidence() async throws {
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        let task = live.refreshReferences(now: now, stillValid: { true },
+            conditions: { [801] }, exchangeList: { [:] })
+        await task?.value
+        let all = ((0..<4095).map { "A\($0)" } + ["MSFT", "TSLA"]).sorted()
+        let first = StockSageStore.rotatedSweepSlice(all: all, cursor: 0, limit: ingress.limits.publicationSymbols)
+        let second = StockSageStore.rotatedSweepSlice(all: all, cursor: first.nextCursor, limit: ingress.limits.publicationSymbols)
+        #expect(first.picked.count == 4096 && second.picked.count == 4096)
+        #expect(Set(first.picked + second.picked) == Set(all))
+        #expect(first.picked.contains("MSFT") && !first.picked.contains("TSLA"))
+        #expect(!second.picked.contains("MSFT") && second.picked.contains("TSLA"))
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress, symbols: first.picked)
+        let rows = ["MSFT", "TSLA", "ZZZ"].flatMap { symbol in [
+            "{\"ev\":\"Q\",\"sym\":\"\(symbol)\",\"bp\":99,\"ap\":104,\"bs\":100,\"as\":100,\"c\":801,\"t\":1700000000000}",
+            "{\"ev\":\"T\",\"sym\":\"\(symbol)\",\"p\":100,\"t\":1700000000000}"
+        ] }
+        #expect(ingress.offer(Data(("[" + rows.joined(separator: ",") + "]").utf8), at: now))
+        var ideas = ["MSFT", "TSLA"].map { SageFix.idea($0, conviction: 0.8) }
+        let initial = try await drained(ingress, symbols: first.picked)
+        let firstPublished = live.publish(initial, from: ingress, now: now) { _, quotes, at in
+            ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: at)
+        }
+        #expect(firstPublished && initial.quotes.count == 1)
+        await ingress.acknowledge(initial.receivedUptime, at: ProcessInfo.processInfo.systemUptime)
+        let original = try #require(ideas[0].nbbo)
+        let cost = StockSageNetEdge.costs(forSymbol: "MSFT", nbbo: original, now: now)
+        let selected = Set(all)
+        let retained = live.quotes.filter { selected.contains($0.key) }
+        let next = await ingress.snapshot(symbols: second.picked, now: now, retainingQuotes: retained)
+        let secondPublished = live.publish(next, from: ingress, now: now, retainingQuotes: retained) { _, quotes, at in
+            ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: at)
+        }
+        #expect(secondPublished && next.quotes.count == 1)
+        #expect(next.metrics.tradeSymbols == 3 && next.metrics.quoteSymbols == 3)
+        #expect(live.quotes["ZZZ"] == nil)
+        #expect(ideas[1].nbbo?.symbol == "TSLA")
+        #expect(live.quotes["MSFT"] == original && ideas[0].nbbo == original,
+                "Rotation alone must not discard a still-current, fresh spread")
+        #expect(StockSageNetEdge.costs(forSymbol: "MSFT", nbbo: ideas[0].nbbo, now: now) == cost)
+    }
+
+    @Test(arguments: ["unchanged", "withdrawal", "condition", "sequence", "price", "capture-expiry",
+        "publish-expiry", "future", "reference-expiry", "deselected", "empty", "invalidated"])
+    @MainActor func retentionPreservesFreshnessAndInvalidation(_ scenario: String) async throws {
+        let ingress = I(limits: .init(publicationSymbols: 1)), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        let referencesAt = scenario == "reference-expiry" ? now.addingTimeInterval(-86_399) : now
+        let task = live.refreshReferences(now: referencesAt, stillValid: { true },
+            conditions: { [801] }, exchangeList: { [:] })
+        await task?.value
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress, symbols: ["AAPL"])
+        let rows = ["AAPL", "MSFT"].map { symbol in
+            "{\"ev\":\"Q\",\"sym\":\"\(symbol)\",\"bp\":99,\"ap\":101,\"bs\":100,\"as\":100,\"c\":801,\"q\":1,\"t\":1700000000000}"
+        }
+        #expect(ingress.offer(Data(("[" + rows.joined(separator: ",") + "]").utf8), at: now))
+        let initial = try await drained(ingress, symbols: ["AAPL"])
+        var ideas = [SageFix.idea("AAPL", conviction: 0.8)]
+        #expect(live.publish(initial, from: ingress, now: now) { _, quotes, at in
+            ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: at)
+        })
+        let original = try #require(ideas[0].nbbo)
+        #expect(original.costConditionVerified)
+        let retained = scenario == "deselected" ? [:] : live.quotes
+        if ["withdrawal", "condition", "sequence", "price"].contains(scenario) {
+            let bidSize = scenario == "withdrawal" ? 0 : 100
+            let condition = scenario == "condition" ? 802 : 801
+            let price = scenario == "price" ? 100 : 99
+            let sequence = scenario == "price" ? 1 : 2
+            let timestamp: Int64 = scenario == "price" ? 1_700_000_000_001 : 1_700_000_000_000
+            let update = "[{\"ev\":\"Q\",\"sym\":\"AAPL\",\"bp\":\(price),\"ap\":101,\"bs\":\(bidSize),\"as\":100,\"c\":\(condition),\"q\":\(sequence),\"t\":\(timestamp)}]"
+            #expect(ingress.offer(Data(update.utf8), at: now.addingTimeInterval(0.001)))
+            let updated = try await drained(ingress, symbols: ["AAPL"])
+            if scenario == "price" {
+                #expect(updated.quotes["AAPL"]?.bid == 100 && updated.quotes["AAPL"]?.sequence == original.sequence)
+                #expect(updated.quotes["AAPL"]?.timestamp == Date(timeIntervalSince1970: Double(timestamp) / 1000))
+            }
+        }
+        let captureAt = now.addingTimeInterval(scenario == "capture-expiry" ? 5.001 : scenario == "future" ? -0.001 : scenario == "price" ? 0.01 : 0)
+        let captured = await ingress.snapshot(symbols: scenario == "empty" ? [] : ["MSFT"],
+            now: captureAt, retainingQuotes: retained)
+        let approved = ["unchanged", "publish-expiry", "reference-expiry", "invalidated"].contains(scenario)
+        #expect(captured.retainedQuoteSymbols.contains("AAPL") == approved)
+        #expect(captured.quotes.count <= 1 && captured.receivedUptime["Q.AAPL"] == nil)
+        if scenario == "invalidated" { ingress.invalidate("replay connection replaced") }
+        let publicationAt = now.addingTimeInterval(scenario == "publish-expiry" ? 5.001 : scenario == "reference-expiry" ? 2 : 5)
+        let published = live.publish(captured, from: ingress, now: publicationAt, retainingQuotes: retained) { _, quotes, at in
+            ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: at)
+        }
+        #expect(published == (scenario != "invalidated"))
+        if scenario == "unchanged" {
+            #expect(live.quotes["AAPL"] == original && ideas[0].nbbo == original)
+        } else if scenario == "reference-expiry" {
+            #expect(live.quotes["AAPL"]?.timestamp == original.timestamp)
+            #expect(live.quotes["AAPL"]?.costConditionVerified == false && ideas[0].nbbo == nil)
+        } else {
+            #expect(live.quotes["AAPL"] == nil && ideas[0].nbbo == nil)
+        }
+        if scenario == "invalidated" { #expect(live.quotes.isEmpty && !live.isStreaming) }
+    }
+
+    @Test @MainActor func retainedPublicationAtFullSymbolCapacity() async throws {
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        let task = live.refreshReferences(now: now, stillValid: { true },
+            conditions: { [801] }, exchangeList: { [:] })
+        await task?.value
+        let all = (0..<ingress.limits.symbols).map { "S\($0)" }.sorted()
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress)
+        for offset in stride(from: 0, to: all.count, by: 512) {
+            let rows = all[offset..<min(offset + 512, all.count)].map { symbol in
+                "{\"ev\":\"Q\",\"sym\":\"\(symbol)\",\"bp\":99,\"ap\":101,\"bs\":100,\"as\":100,\"c\":801,\"t\":1700000000000}"
+            }
+            #expect(ingress.offer(Data(("[" + rows.joined(separator: ",") + "]").utf8), at: now))
+            #expect(try await drained(ingress).metrics.failure == nil)
+        }
+        var ideas = all.map { SageFix.idea($0, conviction: 0.8) }
+        var visited = Set<String>(), cursor = 0
+        var captureTimes: [Double] = [], publishTimes: [Double] = [], mergeTimes: [Double] = []
+        for pass in 0..<10 { // Eight full-cap slices, then two steady-state captures.
+            let selection = StockSageStore.rotatedSweepSlice(all: all, cursor: cursor, limit: ingress.limits.publicationSymbols)
+            cursor = selection.nextCursor
+            visited.formUnion(selection.picked)
+            let retained = live.quotes
+            let start = ProcessInfo.processInfo.systemUptime
+            let snapshot = await ingress.snapshot(symbols: selection.picked, now: now, retainingQuotes: retained)
+            let capturedAt = ProcessInfo.processInfo.systemUptime
+            let published = live.publish(snapshot, from: ingress, now: now, retainingQuotes: retained) { _, quotes, at in
+                let start = ProcessInfo.processInfo.systemUptime
+                ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: at)
+                mergeTimes.append(ProcessInfo.processInfo.systemUptime - start)
+            }
+            let end = ProcessInfo.processInfo.systemUptime
+            captureTimes.append(capturedAt - start); publishTimes.append(end - capturedAt)
+            #expect(published && snapshot.metrics.failure == nil)
+            #expect(snapshot.quotes.count == 4096 && snapshot.retainedQuoteSymbols.count <= 28_672)
+            #expect(snapshot.metrics.quoteSymbols == 32_768 && snapshot.metrics.processedEvents == 32_769)
+            #expect(snapshot.metrics.queuedFrames == 0 && snapshot.metrics.queuedBytes == 0 && snapshot.metrics.peakFrames <= 1)
+            #expect(Set(live.quotes.keys) == visited && snapshot.retainedQuoteSymbols.isSubset(of: Set(retained.keys)))
+            if pass == 7 { #expect(cursor == 0 && visited.count == 32_768) }
+            await ingress.acknowledge(snapshot.receivedUptime, at: end)
+        }
+        #expect(live.quotes.count == 32_768)
+        func measured(_ times: [Double]) -> String {
+            let sorted = times.sorted(), middle = sorted.count / 2
+            return String(format: "median=%.6fs max=%.6fs", (sorted[middle - 1] + sorted[middle]) / 2, sorted.last ?? 0)
+        }
+        print("FEED_RETAINED_REPLAY symbols=32768 raw_slice=4096 growth=8 steady=2 capture_\(measured(captureTimes)) publish_including_projection_\(measured(publishTimes)) projection_\(measured(mergeTimes)); steady_capture_\(measured(Array(captureTimes.suffix(2)))) steady_publish_\(measured(Array(publishTimes.suffix(2)))); synthetic offline; excludes selection/sorting, applyLiveTicks, Store assignment/observation and rendering")
+    }
+
     @Test @MainActor func stalledUILeavesWorkerRunningAndPublicationExpiresAtTenSeconds() async throws {
         let ingress = I()
         ingress.offer(auth, at: now)

@@ -33,6 +33,9 @@ actor StockSageFeedIngress {
         var createdUptime = ProcessInfo.processInfo.systemUptime
         var trades: [String: L.Tick] = [:]
         var quotes: [String: StockSageNBBO] = [:]
+        /// Approves only the exact prior observations submitted with this capture.
+        /// Primary records remain capped; identities let unchanged quotes survive rotation.
+        var retainedQuoteSymbols: Set<String> = []
         var receivedUptime: [String: TimeInterval] = [:]
         var newestSIP: Date?
         var metrics = Metrics()
@@ -218,7 +221,12 @@ actor StockSageFeedIngress {
     }
 
     /// One caller awaits one snapshot; selection is capped even if the board grows unexpectedly.
-    func snapshot(symbols: [String], now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Snapshot {
+    func snapshot(symbols: [String], now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                  retainingQuotes: [String: StockSageNBBO] = [:]) -> Snapshot {
+        guard retainingQuotes.count <= limits.symbols else {
+            invalidate("Feed overloaded: retained quote capacity exceeded; gap and reconnect")
+            return Snapshot(metrics: Metrics(failure: failureReason))
+        }
         if !symbols.isEmpty {
             selected = Set(symbols.prefix(limits.publicationSymbols))
             tradeReceived = tradeReceived.filter { selected.contains($0.key) }
@@ -251,6 +259,13 @@ actor StockSageFeedIngress {
             // symbol's observation age is not local backlog. Caller acknowledges after publish.
             if let at = tradeReceived[symbol] { snapshot.receivedUptime["T." + symbol] = at }
             if let at = quoteReceived[symbol] { snapshot.receivedUptime["Q." + symbol] = at }
+        }
+        if state.isAuthorized, !symbols.isEmpty {
+            for (symbol, previous) in retainingQuotes where !selected.contains(symbol) {
+                guard previous.symbol == symbol, let current = state.latestQuotes[symbol], current.isFresh(at: now),
+                      current.qualifyingCosts(regularConditions: []) == previous.qualifyingCosts(regularConditions: []) else { continue }
+                snapshot.retainedQuoteSymbols.insert(symbol)
+            }
         }
         return snapshot
     }

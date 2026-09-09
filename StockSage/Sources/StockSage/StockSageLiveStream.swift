@@ -205,14 +205,21 @@ final class StockSageLiveStream: ObservableObject {
                 })
                 if let ingress = current.ingress {
                     let store = StockSageStore.shared
-                    let all = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).sorted()
+                    let selected = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol))
+                    let all = selected.sorted()
                     let selection = StockSageStore.rotatedSweepSlice(all: all, cursor: self.publicationCursor,
                                                                    limit: ingress.limits.publicationSymbols)
                     self.publicationCursor = selection.nextCursor
-                    let snapshot = await ingress.snapshot(symbols: selection.picked)
+                    let retained = all.count > ingress.limits.publicationSymbols
+                        ? self.quotes.filter { selected.contains($0.key) } : [:]
+                    let snapshot = await ingress.snapshot(symbols: selection.picked, retainingQuotes: retained)
                     guard !Task.isCancelled, self.connection === current, current.ingress === ingress else { continue }
                     guard ToolPolicy.isExternalAllowed else { self.stop(); return }
-                    if self.publish(snapshot, from: ingress, now: Date()) {
+                    guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)) else {
+                        self.publicationCursor = 0 // A selection changed while the worker was capturing.
+                        continue
+                    }
+                    if self.publish(snapshot, from: ingress, now: Date(), retainingQuotes: retained) {
                         await ingress.acknowledge(snapshot.receivedUptime, at: ProcessInfo.processInfo.systemUptime)
                     } else { current.retry() }
                 } else {
@@ -265,6 +272,7 @@ final class StockSageLiveStream: ObservableObject {
     /// merge; compositor/render time remains separate. Tests replace only the store side effect.
     @discardableResult
     func publish(_ snapshot: StockSageFeedIngress.Snapshot, from ingress: StockSageFeedIngress, now: Date,
+        retainingQuotes: [String: StockSageNBBO] = [:],
         apply: @MainActor ([String: Tick], [String: StockSageNBBO], Date) -> Void = { ticks, quotes, at in
             StockSageStore.shared.applyLiveTicks(ticks)
             StockSageStore.shared.applyLiveNBBO(quotes, now: at)
@@ -288,7 +296,14 @@ final class StockSageLiveStream: ObservableObject {
         connectionLabel = !snapshot.authorized ? "Feed authenticating" : recent ? "US trades + quotes" : "Feed connected · no recent observation"
         delivered = snapshot.authorized ? snapshot.trades : [:]
         let regular = conditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true ? regularConditions : []
-        let latest = snapshot.authorized ? snapshot.quotes.mapValues { $0.qualifyingCosts(regularConditions: regular) } : [:]
+        // ponytail: retained cache/requalification can reach the existing 32,768-symbol
+        // ingress bound; primary snapshot records stay capped at 4,096. No receipt time is invented.
+        var latest: [String: StockSageNBBO] = [:]
+        if snapshot.authorized {
+            latest = retainingQuotes.filter { snapshot.retainedQuoteSymbols.contains($0.key) && $0.value.isFresh(at: now) }
+            latest.merge(snapshot.quotes) { _, current in current } // Withdrawals replace old liquidity.
+            latest = latest.mapValues { $0.qualifyingCosts(regularConditions: regular) }
+        }
         if quotes != latest { quotes = latest }
         apply(delivered, latest, now)
         let publishedAt = ProcessInfo.processInfo.systemUptime
