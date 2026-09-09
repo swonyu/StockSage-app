@@ -6,6 +6,13 @@ import Testing
 struct StockSagePaperAutomationTests {
     typealias A = StockSagePaperAutomation
     private let now = Date(timeIntervalSince1970: 1_788_886_800) // 2026-09-08, US regular session.
+    #if os(macOS)
+    @Test func panelModeDescribesEnabledStateNotContinuousActivity() {
+        #expect(StockSagePaperAutomationPanel.modeLabel(running: true) == "Day trading enabled · simulation only")
+        #expect(StockSagePaperAutomationPanel.modeLabel(running: false) == "Day trading paused · simulation only")
+    }
+    #endif
+
     private func quote(_ symbol: String = "AAPL", price: Double = 100, at: Date,
                        source: StockSagePriceSource = .massiveSIP) -> StockSageQuoteService.LiveQuote {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source,

@@ -1,5 +1,39 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Paper panel clarity — September 9, verified candidate; not installed
+
+Small presentation-only batch: Day trading enabled/paused labels, native Pause
+help/accessibility hint explaining that research and exit checks stop, and stored
+paper positions always expanded above the policy disclosure. Entry, stop, target,
+share counts and original ordering/hasLoadedBook guard are unchanged. All existing
+controls, progress bars, errors, evidence/history/export and financial predicates
+remain. The shared type is retained; production mounting is macOS-only. No iOS
+work today; shared presentation remains iOS-unverified.
+
+Red:57 tests/1 suite/2 issues/7.672s, exit65, both old header labels reproduced.
+Final canonical Mac **2,038 tests/200 suites/186.679s, exit0**; new test passed0.001s.
+Strict Mac emit208s and test typecheck271s passed, aggregateexit0:
+`macos=OK ios=SKIP tests=OK`. Existing three exclusions retained; no opt-in live,
+model or replay work. Final bounded Astra source review closed with no must-fix.
+
+Frozen paper-panel-clarity-source.sha256 rechecked after gates, manifestSHA256
+e78d74562025fc7c6c465e865cb6b00d809ea221568e2c19908a6af4af93a066.
+All64 tested bundle file/link entries match the retained candidate; deep/strict
+codesign passed. Candidate dylibSHA256
+3dd0c80a4ef99e750270be985b580faa688491fcd48e04ab0e7109410910df30.
+Candidate: `/Users/saleh/StockSage-verification-20260909.M0MISy/candidate-paper-panel-clarity/StockSageX.app`.
+Receipt/commands: same root, `PAPER_PANEL_CLARITY.md`. Includes the earlier verified
+manual-research and Catalyst navigation UI batches. No service/model/risk/fill or
+historical-record edits, no push/real orders/IBKR relay/paid resources.
+
+**Not installed:** retain owner manual500 session-only scan/results pending the
+existing restart/clear choice. Installed27a4727/PID40101, paper paused0 and
+Qwen2120 remain unchanged. Native layout/keyboard/VoiceOver inspection of the
+new UI remains pending safe installation. Do not auto-quit when a scan completes.
+Next queued issue: transient Chat input warning persists after edits and can mask
+a storage error; source-confirmed, not reproduced/fixed here. A separate Sol
+Chat-bubble candidate is external-only/in progress, not part of this tested build.
+
 ## Catalyst Today / Week / Month — September 9, verified candidate; not installed
 
 macOS Catalysts now offers Today, This Week and This Month over retained engine

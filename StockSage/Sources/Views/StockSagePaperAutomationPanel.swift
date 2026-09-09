@@ -15,11 +15,13 @@ struct StockSagePaperAutomationPanel: View {
         GroupBox("Qwen research and paper trading") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Label(automation.isRunning ? "Running · simulation only" : "Paused · simulation only",
+                    Label(Self.modeLabel(running: automation.isRunning),
                           systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
                     Spacer()
                     if automation.isRunning {
                         Button("Pause day trading") { automation.stop() }
+                            .help("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
+                            .accessibilityHint("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
                     } else {
                         Button("Start day trading") { automation.start() }
                     }
@@ -137,6 +139,15 @@ struct StockSagePaperAutomationPanel: View {
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
                 if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
+                if automation.hasLoadedBook, !automation.book.open.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Paper positions").font(.callout.bold())
+                        ForEach(automation.book.open) { trade in
+                            Text("\(trade.symbol) · \(Int(trade.shares)) shares · entry $\(StockSageCurrency.adaptivePrice(trade.entry)) · stop $\(StockSageCurrency.adaptivePrice(trade.stop)) · target \(trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded")")
+                                .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
                 DisclosureGroup("Simulation policy and limitations") {
                     Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
                     Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
@@ -146,14 +157,6 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")
                     Text("Runs while this Mac is awake and StockSage is open. Published 2026 holidays and early closes are modeled; unsupported calendar years and stale or missing data block fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
                 }.font(.caption).foregroundStyle(.secondary)
-                if automation.hasLoadedBook, !automation.book.open.isEmpty {
-                    DisclosureGroup("Paper positions") {
-                        ForEach(automation.book.open) { trade in
-                            Text("\(trade.symbol) · \(Int(trade.shares)) shares · entry $\(StockSageCurrency.adaptivePrice(trade.entry)) · stop $\(StockSageCurrency.adaptivePrice(trade.stop)) · target \(trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded")")
-                                .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
                 if automation.hasLoadedBook {
                 #if os(macOS)
                 Button(exporting ? "Exporting verified history…" : "Export paper research…") { exportResearch() }
@@ -209,6 +212,10 @@ struct StockSagePaperAutomationPanel: View {
         }
     }
     #endif
+
+    static func modeLabel(running: Bool) -> String {
+        running ? "Day trading enabled · simulation only" : "Day trading paused · simulation only"
+    }
 
     static func monitoringLabel(running: Bool, at date: Date) -> String {
         guard running else { return "Position monitoring paused" }
