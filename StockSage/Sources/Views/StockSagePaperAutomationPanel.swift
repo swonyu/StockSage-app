@@ -19,9 +19,9 @@ struct StockSagePaperAutomationPanel: View {
                           systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
                     Spacer()
                     if automation.isRunning {
-                        Button("Pause automation") { automation.stop() }
+                        Button("Pause day trading") { automation.stop() }
                     } else {
-                        Button("Start paper automation") { automation.start() }
+                        Button("Start day trading") { automation.start() }
                     }
                 }
                 if let progress = automation.researchProgress {
@@ -118,6 +118,7 @@ struct StockSagePaperAutomationPanel: View {
                 if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
                     Text("Latest decision: \(decision.symbol) · \(Self.actionLabel(decision.action))").font(.callout.bold())
                     Text(decision.reason).font(.caption).foregroundStyle(.secondary)
+                    if let plan = decision.plan { entryPlan(plan) }
                 }
                 if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
                     Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(Self.reasonLabel(action: cycle.action, reason: cycle.reason))")
@@ -139,7 +140,7 @@ struct StockSagePaperAutomationPanel: View {
                 DisclosureGroup("Simulation policy and limitations") {
                     Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
                     Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
-                    Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Qwen reviews all paper holdings first, then up to \(StockSagePaperAutomation.discoveryLimit) affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
+                    Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Up to \(StockSagePaperAutomation.discoveryLimit) total checks per cycle: all paper holdings first, then affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
                     Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
                     Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
                     Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")
@@ -148,7 +149,7 @@ struct StockSagePaperAutomationPanel: View {
                 if automation.hasLoadedBook, !automation.book.open.isEmpty {
                     DisclosureGroup("Paper positions") {
                         ForEach(automation.book.open) { trade in
-                            Text("\(trade.symbol) · \(Int(trade.shares)) shares · entry \(trade.entry.formatted(.currency(code: "USD"))) · stop \(trade.stop.formatted(.currency(code: "USD")))")
+                            Text("\(trade.symbol) · \(Int(trade.shares)) shares · entry $\(StockSageCurrency.adaptivePrice(trade.entry)) · stop $\(StockSageCurrency.adaptivePrice(trade.stop)) · target \(trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded")")
                                 .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -165,6 +166,7 @@ struct StockSagePaperAutomationPanel: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(decision.at.formatted(date: .abbreviated, time: .shortened))").font(.caption.bold())
                             Text(Self.reasonLabel(action: decision.action, reason: decision.reason)).font(.callout)
+                            if let plan = decision.plan { entryPlan(plan) }
                             if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
                             if !decision.facts.isEmpty {
                                 DisclosureGroup(decision.action == "Unavailable" ? "Available source evidence · incomplete research" : "Saved evidence and model") {
@@ -213,6 +215,15 @@ struct StockSagePaperAutomationPanel: View {
         return StockSagePaperAutomation.paperSessionOpen(date)
             ? "Position and exit monitoring active"
             : "Monitoring enabled · waiting for the next supported session"
+    }
+
+    private func entryPlan(_ plan: StockSagePaperAutomation.EntryPlan) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Entry reference: $\(StockSageCurrency.adaptivePrice(plan.entry)) · Stop-loss: $\(StockSageCurrency.adaptivePrice(plan.stop)) · Target: $\(StockSageCurrency.adaptivePrice(plan.target))")
+                .font(.callout.bold()).monospacedDigit()
+            Text("Preview from Massive observation \(plan.at.formatted(date: .abbreviated, time: .shortened)): entry includes the assumed 10bps buy cost, stop 2% below and target 4% above. Not a fill or prediction. Actual paper levels use the later simulated fill, shown under Paper positions.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     static func actionLabel(_ action: String) -> String {

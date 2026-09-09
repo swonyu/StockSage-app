@@ -11,7 +11,7 @@ final class StockSagePaperAutomation: ObservableObject {
     nonisolated static let positionCap = 2_000.0
     nonisolated static let costRate = 0.001 // Assumed 10 bps on each side, not measured broker costs.
     nonisolated static let interval: TimeInterval = 900
-    nonisolated static let discoveryLimit = 100
+    nonisolated static let discoveryLimit = 101 // Total checks per cycle, including holdings (owner choice).
     nonisolated static let researchConcurrency = 4
     nonisolated static let researchMaximumAge: TimeInterval = 60
     nonisolated static let researchInstructions = StockSageAIAssessment.instructions
@@ -30,6 +30,22 @@ final class StockSagePaperAutomation: ObservableObject {
         let facts: [String]
         let evidence: [String]
         let model: String
+        var plan: EntryPlan? = nil
+    }
+
+    nonisolated struct EntryPlan: Codable, Sendable, Equatable {
+        let entry: Double
+        let stop: Double
+        let target: Double
+        let at: Date
+        init(entry: Double, at: Date) {
+            self.entry = entry; self.at = at
+            stop = entry * 0.98; target = entry * 1.04
+        }
+        var valid: Bool {
+            entry.isFinite && stop.isFinite && target.isFinite && stop > 0 && stop < entry && target > entry
+                && at.timeIntervalSince1970.isFinite && at.timeIntervalSince1970 > 0
+        }
     }
 
     nonisolated struct Pending: Codable, Identifiable, Sendable {
@@ -103,13 +119,13 @@ final class StockSagePaperAutomation: ObservableObject {
                             !order.buy && open.contains { $0.id == id && $0.symbol == order.symbol }
                         } ?? true)
                 }
-                && decisions.allSatisfy { $0.at.timeIntervalSince1970.isFinite }
+                && decisions.allSatisfy { $0.at.timeIntervalSince1970.isFinite && ($0.plan?.valid ?? true) }
         }
 
         mutating func note(symbol: String = "", action: String, reason: String, at: Date,
-                           risk: String = "", facts: [String] = [], evidence: [String] = [], model: String = "") {
+                           risk: String = "", facts: [String] = [], evidence: [String] = [], model: String = "", plan: EntryPlan? = nil) {
             decisions.append(.init(id: UUID(), at: at, symbol: symbol, action: action,
-                reason: reason, risk: risk, facts: facts, evidence: evidence, model: model))
+                reason: reason, risk: risk, facts: facts, evidence: evidence, model: model, plan: plan))
         }
 
         mutating func activateSameDay(at now: Date) {
@@ -186,8 +202,9 @@ final class StockSagePaperAutomation: ObservableObject {
                         note(symbol: order.symbol, action: "Skipped", reason: "Insufficient settled paper cash or position capacity at the observed fill.", at: now)
                         continue
                     }
+                    let levels = EntryPlan(entry: fill, at: quoteTime)
                     trades.append(TradeRecord(id: order.id, symbol: order.symbol, side: .long, entry: fill,
-                        stop: fill * 0.98, target: fill * 1.04, shares: shares, openedAt: now,
+                        stop: levels.stop, target: levels.target, shares: shares, openedAt: now,
                         note: "Qwen paper simulation; assumed costs, not a broker fill."))
                 } else if let i = trades.firstIndex(where: { $0.isOpen && $0.symbol == order.symbol }) {
                     trades[i].exitPrice = fill; trades[i].closedAt = now
@@ -402,8 +419,14 @@ final class StockSagePaperAutomation: ObservableObject {
         guard allowed(), !Task.isCancelled else { return nil }
         let decisionAt = fixedTime ?? Date()
         var next = currentBook()
+        var preview: EntryPlan?
+        if verdict.action == .buy || verdict.action == .strongBuy,
+           researchQuote.priceSource == .massiveSIP, let at = researchQuote.marketTime, at <= decisionAt {
+            let levels = EntryPlan(entry: researchQuote.price * (1 + costRate), at: at)
+            if levels.valid { preview = levels }
+        }
         next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
-                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: model)
+                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: model, plan: preview)
         guard actionable else { return commit(next) ? next : nil } // Hold/Avoid is an opinion, not a skipped order.
         if !cited {
             revalidationFailure = "Buy opinion did not cite an actual intraday observation; daily background alone cannot open a same-day position."
@@ -454,8 +477,8 @@ final class StockSagePaperAutomation: ObservableObject {
             || (book.lastResearch.map { now.timeIntervalSince($0) >= interval } ?? true)
     }
 
-    /// Full-market screening is cheap; model calls have bounded concurrency. Holdings never compete
-    /// for discovery slots. Least-recently attempted names rotate ahead of repeated opinions.
+    /// Full-market screening is cheap; model calls have bounded concurrency. Holdings have first
+    /// priority inside the 101 total slots. Least-recently attempted names rotate ahead of repeats.
     nonisolated static func researchTargets(market: StockSageMassive.MarketSnapshot?, book: Book, at now: Date) -> [String] {
         let held = Set(book.open.map(\.symbol).filter(validSymbol))
         let pending = Set(book.pending.map(\.symbol))
@@ -477,7 +500,7 @@ final class StockSagePaperAutomation: ObservableObject {
             let rhs = $1.dollarVolume.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? -1
             return lhs != rhs ? lhs > rhs : $0.quote.symbol < $1.quote.symbol
         }
-        return held.sorted() + candidates.prefix(discoveryLimit).map(\.quote.symbol)
+        return held.sorted() + candidates.prefix(max(0, discoveryLimit - held.count)).map(\.quote.symbol)
     }
 
     private func read() throws -> Book {
@@ -703,7 +726,7 @@ final class StockSagePaperAutomation: ObservableObject {
         next = book
         if let market {
             let freshCount = market.rows.filter { Self.validSymbol($0.quote.symbol) && Self.fresh($0.quote, at: selectedAt, maximumAge: Self.researchMaximumAge) }.count
-            next.note(action: "Market scan", reason: "\(market.returnedCount) US listed tickers returned; \(market.rows.count) supported trade observations; \(freshCount) fresh. Selected \(targets.count) for Qwen: \(targets.joined(separator: ", ")). All holdings first, then up to \(Self.discoveryLimit) new candidates, rotating by last attempt then daily dollar activity. Screening is not full model analysis; unsupported, missing and stale data are excluded.", at: selectedAt)
+            next.note(action: "Market scan", reason: "\(market.returnedCount) US listed tickers returned; \(market.rows.count) supported trade observations; \(freshCount) fresh. Selected \(targets.count) for Qwen: \(targets.joined(separator: ", ")). Up to \(Self.discoveryLimit) total checks: all holdings first, then new candidates, rotating by last attempt then daily dollar activity. Screening is not full model analysis; unsupported, missing and stale data are excluded.", at: selectedAt)
         } else {
             next.note(action: "Market scan unavailable", reason: "Full-market data could not be verified; no new discovery. Reviewing \(targets.count) existing paper holdings only.", at: selectedAt)
         }

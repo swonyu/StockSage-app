@@ -70,7 +70,7 @@ struct StockSageChatSection: View {
             }
             Text("Your briefing first. Ask Qwen when you want to go deeper.").foregroundStyle(.secondary)
             #if os(macOS)
-            StockSagePaperAutomationPanel()
+            StockSageResearchModesPanel(store: store)
             #endif
             if let opening {
                 GroupBox("App briefing · no model call") {

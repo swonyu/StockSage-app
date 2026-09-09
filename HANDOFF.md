@@ -1,5 +1,62 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Three research modes and price levels — September 9, Mac installed
+
+Owner-approved Chat controls now separate continuous **Day trading** (101 total
+checks per cycle, holdings first) from **1–7 trading days** and **7–14 trading
+days**. The latter run once per button press and are strictly research-only:
+no paper positions, orders, broker calls or journal writes. Switching modes and
+stopping a manual scan do not stop the independent day-position monitor.
+
+Manual scans paginate Massive's active US stock-market reference census without
+watchlist, snapshot-price or 101-name truncation. ETFs and unsupported/missing-data
+listings remain visible; failed pagination cannot certify complete coverage.
+One manual worker protects model capacity. Results are held separately for each
+horizon in memory only; quitting loses them, and rerunning replaces that horizon.
+Thousands of checks can take hours. Captured settings, permissions, credential
+identity and cancellation are rechecked around awaits; late results are rejected.
+
+Buy/Strong Buy manual results display a dated entry reference, stop-loss and target
+using the existing ATR/volatility/2R calculation and completed split-adjusted daily
+bars. Current-day candles, mismatched ticker/adjustment/counts, missing volume and
+invalid OHLC/date geometry are rejected. USD is provider-confirmed, avoiding
+share-class suffix currency conversions. These are research scenarios, not live
+order prices or validated profitable strategies; thresholds/weights are unchanged.
+Future same-day Buy/Strong Buy decisions carry optional dated previews using the
+existing cost/2% stop/4% target formula. Actual positions show their stored entry,
+stop and target. Old decisions retain nil previews; no history was backfilled.
+
+Verification: core red 58 tests/15 issues, green 58; day-preview red 60/1 issue,
+green 60; provider/currency red 10/9 issues. Final canonical Mac **2,023 tests in
+200 suites passed in 66.421s, exit 0**. Strict Mac emit 137s and test typecheck
+184s, aggregate exit 0: `macos=OK ios=SKIP tests=OK`. Three canonical exclusions
+retained (CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests); no opt-in live/model/replay suites. Final
+bounded Astra source review closed both P2s. No iOS work today.
+
+Frozen `horizon-v2-source.sha256` was rechecked before copying the tested app;
+manifest SHA256 bdc6eac55b4fdf3af5a5f284444a3539c0697059518f97aa3821c7769374f171.
+Normal quit, exclusive-lease paper backup, installation and reopen completed.
+All 64 bundle files/links matched the tested build; deep/strict signature passed.
+Installed dylib SHA256 d496deede002da2543076305a2541b526063ece7214ec8deba98fd8be07bdfa0.
+Paper bytes were unchanged during install; postlaunch all 3 prior trades and
+2,114 prior decisions matched exactly/in order, with 0 pending. PID 37880 owns
+the sole paper lease, enabled=1. Qwen PID 2120 remains on 127.0.0.1:8765 unchanged.
+
+Native AX and window-only screenshots verified both manual mode labels, enabled
+Run controls, search/filter, and Entry ref./Stop-loss/Target table headers. No
+manual scan was started for UI QA. Day monitoring stayed active across switches;
+Paper positions AX showed the existing IREN stored entry/stop/target. Populated
+manual results and a full live reference/Qwen pass were NOT runtime-verified.
+Existing incomplete day research/timeouts remain explicit, not claimed repaired
+by this feature. No push, paid resources, real orders or IBKR relay.
+
+Artifacts: `/Users/saleh/StockSage-verification-20260909.M0MISy/HORIZONS.md`,
+`horizons-install.json`, `macos-horizon-v2-final.log/xcresult`,
+`strict-horizons-final.log`, `horizon-1-7-ui.png`, `horizon-7-14-ui.png`.
+Recoverable prior app: `/Users/saleh/StockSage-release-20260909.hrzqVh/retired-horizons/StockSageX.app`.
+Consistent paper backup: same release root, `paper-before-horizons`.
+
 ## Per-check loading and one-minute research — September 9, Mac installed
 
 Owner requested one loading bar per active research check (not one aggregate bar),

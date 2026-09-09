@@ -55,6 +55,27 @@ struct StockSagePaperAutomationTests {
         }
     }
 
+    @Test func buyOpinionsKeepDatedEntryStopTargetPreviewWithoutRewritingOlderRows() async throws {
+        for action in [TradeAdvice.Action.buy, .strongBuy, .hold] {
+            let verdict = StockSageAIAssessment.Verdict(action: action, reason: "Case", risk: "Risk", evidence: ["F1"])
+            let b = try #require(await A.decisionBook(symbol: "AAPL", verdict: verdict, facts: ["Observed"],
+                model: "test", researchQuote: quote(at: now), holdingID: nil, citesIntraday: true, at: now.addingTimeInterval(1),
+                allowed: { true }, contextFresh: { _ in true }, currentBook: { A.Book() }, fetch: { _, _ in nil }))
+            let decision = try #require(b.decisions.first)
+            if action == .hold { #expect(decision.plan == nil); continue }
+            let p = try #require(decision.plan)
+            #expect(p.at == now && p.entry == 100 * (1 + A.costRate))
+            #expect(p.stop == p.entry * 0.98 && p.target == p.entry * 1.04)
+            #expect(b.pending.isEmpty && b.trades.isEmpty) // preview is not an executable order
+            let encoded = try JSONEncoder().encode(decision)
+            #expect(try JSONDecoder().decode(A.Decision.self, from: encoded) == decision)
+            var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            legacy.removeValue(forKey: "plan")
+            let old = try JSONDecoder().decode(A.Decision.self, from: JSONSerialization.data(withJSONObject: legacy))
+            #expect(old.plan == nil && old.facts == ["Observed"])
+        }
+    }
+
     @Test func failedResearchRetainsSourceEvidenceWithoutAnOpinionOrOrder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "failed-research-\(UUID())"
@@ -689,22 +710,22 @@ struct StockSagePaperAutomationTests {
     }
 
     @Test func discoveryRotatesBeyondWatchlistAndAlwaysReviewsHoldingsFirst() {
-        let names = (0..<101).map { "ZX" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
+        let names = (0..<102).map { "ZX" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
         let rows = names.enumerated().map { index, symbol in
             StockSageMassive.MarketCandidate(quote: quote(symbol, at: now), dollarVolume: Double(1000 - index))
         }
         let market = StockSageMassive.MarketSnapshot(returnedCount: rows.count, rows: rows)
         var book = A.Book()
         let first = A.researchTargets(market: market, book: book, at: now)
-        #expect(first == Array(names.prefix(100)), "Research 100 candidates, not twelve or just the watchlist")
+        #expect(first == Array(names.prefix(101)), "Owner-selected 101 total checks, not a watchlist cap")
         for symbol in first { book.note(symbol: symbol, action: "Hold", reason: "Fixture", at: now) }
         #expect(A.researchTargets(market: market, book: book, at: now).first == names.last)
         let held = ["MSFT", "NVDA", "ORCL", "TSLA", "V"]
         for symbol in held { book.propose(symbol: symbol, action: .buy, at: now.addingTimeInterval(-2)) }
         book.settle(quotes: Dictionary(uniqueKeysWithValues: held.map { ($0, quote($0, at: now.addingTimeInterval(-1))) }), at: now)
         #expect(Array(A.researchTargets(market: market, book: book, at: now).prefix(5)) == held)
-        #expect(A.researchTargets(market: market, book: book, at: now).count == 105,
-                "All five holdings are additional to the 100 discovery slots")
+        #expect(A.researchTargets(market: market, book: book, at: now).count == 101,
+                "Holdings retain priority inside the owner's 101-check cap")
         #expect(A.researchTargets(market: nil, book: book, at: now) == held,
                 "Discovery failure must not suppress held-stock sell reviews")
     }

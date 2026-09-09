@@ -11,22 +11,25 @@ enum StockSageAIAssessment {
         let newsObservation: StockSageNewsService.Observation?
         let research: StockSageResearchLeads.Snapshot?
         let asOf: Date
+        /// Only for a provider-confirmed USD listing; suffixes can name US share classes.
+        let quotedInUSD: Bool
 
         init(idea: StockSageIdea, earnings: StockSageCatalystRecordCache.Record?,
              company: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation],
              news: [StockSageNewsService.NewsItem]? = nil, research: StockSageResearchLeads.Snapshot? = nil, at: Date? = nil,
-             newsObservation: StockSageNewsService.Observation? = nil) {
+             newsObservation: StockSageNewsService.Observation? = nil, quotedInUSD: Bool = false) {
             self.idea = idea; self.earnings = earnings; self.company = company
             let snapshotTime = at ?? idea.generatedAt ?? Date()
             asOf = snapshotTime
             self.newsObservation = newsObservation
             self.news = (newsObservation?.items ?? news).map { Array($0.filter { (0...7 * 86_400).contains(snapshotTime.timeIntervalSince($0.date)) }.prefix(3)) }
             self.research = research
+            self.quotedInUSD = quotedInUSD
         }
 
         var facts: [String] {
-            let currency = StockSageCurrency.conversionCurrencyForSymbol(idea.symbol)
-            let price = StockSageCurrency.majorUnitValue(symbol: idea.symbol, rawValue: idea.price)
+            let currency = quotedInUSD ? "USD" : StockSageCurrency.conversionCurrencyForSymbol(idea.symbol)
+            let price = quotedInUSD ? idea.price : StockSageCurrency.majorUnitValue(symbol: idea.symbol, rawValue: idea.price)
             var result = [
                 "Symbol: \(idea.symbol). Market: \(idea.market). Assessment snapshot: \(asOf.ISO8601Format()).",
                 "Observed quote: \(StockSageCurrency.adaptivePrice(price)) \(currency). Source: \(idea.priceSource?.label ?? "unknown"). Market time: \(idea.priceAsOf?.ISO8601Format() ?? "unknown"). Not a live fill quote.",
