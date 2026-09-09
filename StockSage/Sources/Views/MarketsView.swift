@@ -4704,7 +4704,12 @@ struct MarketsView: View {
     /// viewed by what could move each idea next. Read `displayedIdeas` exactly once here — it
     /// re-projects on every access. Tapping a card opens the existing detail sheet via `selectedIdea`.
     private var catalystsSection: some View {
+        #if os(macOS)
+        CatalystsSection(ideas: displayedIdeas, store: store, onSelect: { selectedIdea = $0 },
+            ideasFilterMessage: ideasEmptyMessage, onOpenIdeas: { section = .ideas })
+        #else
         CatalystsSection(ideas: displayedIdeas, store: store) { selectedIdea = $0 }
+        #endif
     }
 
     // MARK: Ideas (the advisor across the universe)
@@ -4948,11 +4953,27 @@ struct MarketsView: View {
 
     /// Why the filtered ideas list is empty — names the active constraint so the user knows what to relax.
     private var ideasEmptyMessage: String {
+        #if os(macOS)
+        Self.ideasEmptyMessage(search: ideaSearch, minConviction: ideaMinConv,
+            filter: ideaFilter, sourceIsEmpty: store.ideas.isEmpty)
+        #else
         if !ideaSearch.trimmingCharacters(in: .whitespaces).isEmpty { return "No ideas match “\(ideaSearch)”." }
         if ideaMinConv > 0 { return "No ideas at ≥ \(Int(ideaMinConv * 100))% signal strength — lower the signal-strength filter." }
         if ideaFilter != .all { return "No \(ideaFilter.rawValue.lowercased()) ideas in this scan." }
         return "No ideas in this scan."
+        #endif
     }
+
+    #if os(macOS)
+    nonisolated static func ideasEmptyMessage(search: String, minConviction: Double,
+        filter: StockSageIdeaProjection.Filter, sourceIsEmpty: Bool) -> String {
+        if !search.trimmingCharacters(in: .whitespaces).isEmpty { return "No ideas match “\(search)”." }
+        if minConviction > 0 { return "No ideas at ≥ \(Int(minConviction * 100))% signal strength — lower the signal-strength filter." }
+        if filter != .all { return "No \(filter.rawValue.lowercased()) ideas in this scan." }
+        if !sourceIsEmpty { return "No ideas qualify for this view — try a different rules sort." }
+        return "No ideas in this scan."
+    }
+    #endif
 
     /// F19/F20 (2026-07-15): body moved to the engine (see StockSageIdeaProjection.rewardRisk);
     /// this thin wrapper keeps the view's 3 call sites diff-free.

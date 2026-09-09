@@ -19,6 +19,24 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [360, 760], ["filtered", "loading", "empty", "failed-empty", "failed-retained", "sort"])
+    func renderCatalystRecoveryWithoutStartingOrChangingAnything(width: Int, state: String) async throws {
+        var navigations = 0
+        let content = GroupBox {
+            CatalystsSection.ideasRecovery(visibleCount: state == "failed-retained" ? 1 : 0,
+                totalCount: ["filtered", "sort", "failed-retained"].contains(state) ? 4 : 0,
+                loading: state == "loading", filteredMessage: state == "sort"
+                    ? "No ideas qualify for this view — try a different rules sort."
+                    : "No ideas match “A deliberately long synthetic filter · بحث تجريبي”.",
+                error: state.hasPrefix("failed") ? "Synthetic scan failure. Earlier observations may remain; the new request did not complete." : nil,
+                openIdeas: { navigations += 1 }).font(.system(size: 11.5)).padding(DS.Space.sm)
+        }.padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(content, name: "stocksage-catalyst-recovery-\(width)-\(state)")
+        #expect(size.width == CGFloat(width) && size.height > 40)
+        #expect(navigations == 0, "Rendering must not navigate, clear filters, or start a scan")
+    }
+
     @Test func researchRetryStatusWrapsTheRetainedDataExplanation() async throws {
         let message = "Scan incomplete: listing directory could not be verified. Check Massive settings and retry. Earlier scan data retained; no new listings checked."
         let content = GroupBox {

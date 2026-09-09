@@ -10,6 +10,56 @@ import SwiftUI
 @Suite("CatalystsSection — pure view helpers")
 struct CatalystsSectionTests {
 
+    #if os(macOS)
+    @Test(arguments: ["search", "action", "strength"], [false, true])
+    @MainActor func filteredIdeasNeedFilterRecoveryNotAnotherScan(filter: String, loading: Bool) throws {
+        let source = [SageFix.idea("AAPL", conviction: 0.6)]
+        let visible = StockSageIdeaProjection.displayed(source, sort: .signal,
+            filter: filter == "action" ? .sells : .all,
+            minConviction: filter == "strength" ? 0.8 : 0,
+            search: filter == "search" ? "ABSENT" : "", regime: nil, earnings: [:],
+            liquidity: [:], seasonality: [:], holds: .defaults, calibration: nil)
+        try #require(visible.isEmpty && source.count == 1)
+        let detail = MarketsView.ideasEmptyMessage(search: filter == "search" ? "ABSENT" : "",
+            minConviction: filter == "strength" ? 0.8 : 0,
+            filter: filter == "action" ? .sells : .all, sourceIsEmpty: false)
+        let recovery = try #require(CatalystsSection.ideasRecoveryState(visibleCount: visible.count,
+            totalCount: source.count, loading: loading, filteredMessage: detail))
+        #expect(recovery.message == detail && recovery.action == "Open Ideas")
+    }
+
+    @Test("a saved rules sort can exclude ideas without any active filter")
+    @MainActor func sortExcludedIdeasAreNotAnEmptySource() throws {
+        let source = [SageFix.idea("AAPL", conviction: 0.6, rr: nil)]
+        func project(_ sort: StockSageIdeaProjection.Sort) -> [StockSageIdea] {
+            StockSageIdeaProjection.displayed(source, sort: sort, filter: .all,
+                minConviction: 0, search: "", regime: nil, earnings: [:], liquidity: [:],
+                seasonality: [:], holds: .defaults, calibration: nil)
+        }
+        #expect(project(.signal).count == 1)
+        try #require(project(.momentumWeighted).isEmpty)
+        let message = MarketsView.ideasEmptyMessage(search: "", minConviction: 0,
+            filter: .all, sourceIsEmpty: false)
+        #expect(message == "No ideas qualify for this view — try a different rules sort.")
+        #expect(MarketsView.ideasEmptyMessage(search: "", minConviction: 0,
+            filter: .all, sourceIsEmpty: true) == "No ideas in this scan.")
+        let recovery = try #require(CatalystsSection.ideasRecoveryState(visibleCount: 0,
+            totalCount: source.count, loading: false, filteredMessage: message))
+        #expect(recovery.message == message && recovery.action == "Open Ideas")
+    }
+
+    @Test(arguments: [false, true])
+    func catalystRecoveryDistinguishesAnEmptyScanFromLoading(loading: Bool) throws {
+        let recovery = try #require(CatalystsSection.ideasRecoveryState(visibleCount: 0,
+            totalCount: 0, loading: loading, filteredMessage: "Do not display a filter explanation"))
+        #expect(recovery.message == (loading ? "Ideas scan in progress. Results will appear here as ideas become available."
+            : "No ideas yet. Open Ideas to choose and run a scan."))
+        #expect(recovery.action == "Open Ideas")
+        #expect(CatalystsSection.ideasRecoveryState(visibleCount: 1, totalCount: 2,
+            loading: loading, filteredMessage: "Some names hidden") == nil)
+    }
+    #endif
+
     @Test("late connection probes cannot publish for new settings or clear a newer spinner")
     @MainActor func connectionProbeCompletionBelongsToItsRequest() async {
         let a = ["localServerOnly", "http://127.0.0.1:8765", "model-A"]

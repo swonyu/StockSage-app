@@ -1,5 +1,41 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Mac Catalyst recovery — September 9, verified; not installed
+
+Reproduced misleading no-ideas/run-scan guidance when current Ideas filters hide
+populated source data. Catalysts now uses the actual visible/raw counts, loading
+state and shared parent filter explanation. Raw-empty loading/idle are distinct;
+retained-but-hidden ideas keep their current filter explanation during loading.
+The accepted saved momentumWeighted sort can exclude no-EV ideas without filters:
+the Mac parent fallback now suggests another rules sort, not an empty source.
+
+Native Open Ideas button only assigns section=.ideas; no filter/sort reset, scan
+invocation or new controller/dependency. Recovery sits below period controls.
+Existing ideasError is independent and remains visible with retained results.
+Calendar native Button and coverage already existed; no redundant changes there.
+Day101/manual500, source/date/uncertainty warnings and trading rules unchanged.
+
+Actual projection + production-caption RED50/2/2.521s8issues65; expanded saved-sort
+RED51/2/2.623s10issues65; finalGREEN51/2/2.465s0. All12 final native360/760 captures
+inspected (filtered/loading/empty/failed-empty/failed-retained/sort); render callback
+count0. Sol/Astra final source reviews no must-fix, closed. Native activation,
+integrated navigation, keyboard/focus-return/VoiceOver and installed UI unverified.
+Existing parent background activity is separate; no network-quiescence claim.
+
+FullMac **2,063 tests/200 suites/84.068s**, exit0. StrictMac emit80s/testtypecheck
+105s, exec33123 aggregate0: macos=OK ios=SKIP tests=OK. Same3opt-in exclusions.
+Frozen372-source manifestbe2d252452ea39ad4c55a868d80e5b402c54bd84f47d91e4bbc307b29f349bfb;
+exact64-entry candidate/deepstrictsignature verified, dylib
+37ab32348fcc9420d08fdb47b64e2b4703b8fedd87df9aa755305e0876eb7d58.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/CATALYST_RECOVERY.md`;
+same root has plan, logs/xcresults, images, manifest/checker and
+candidate-catalyst-recovery/StockSageX.app. Parent sole writer/tester/installer.
+
+No install/quit/reopen/probes/push/paidresources/history/orders/relay changes.
+Existing restart/clear hold remains. iOS paused September9; non-Mac branches kept.
+Next approved navigation item: Mac-only outline icons, a visual preference rather
+than a navigation defect; use isolated expanded/collapsed sidebar capture first.
+
 ## Failed manual-research retries — September 9, verified; not installed
 
 Reproduced loss of prior same-horizon results when asynchronous model/directory

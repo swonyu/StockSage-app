@@ -19,6 +19,10 @@ struct CatalystsSection: View {
     let ideas: [StockSageIdea]
     @ObservedObject var store: StockSageStore
     let onSelect: (StockSageIdea) -> Void
+    #if os(macOS)
+    let ideasFilterMessage: String
+    let onOpenIdeas: () -> Void
+    #endif
 
     enum Mode: String, CaseIterable {
         case cards, calendar
@@ -294,6 +298,35 @@ struct CatalystsSection: View {
 
     // MARK: - Header card
 
+    #if os(macOS)
+    nonisolated static func ideasRecoveryState(visibleCount: Int, totalCount: Int, loading: Bool,
+        filteredMessage: String) -> (message: String, action: String)? {
+        guard visibleCount == 0 else { return nil }
+        if totalCount > 0 { return (filteredMessage, "Open Ideas") }
+        return (loading ? "Ideas scan in progress. Results will appear here as ideas become available."
+            : "No ideas yet. Open Ideas to choose and run a scan.", "Open Ideas")
+    }
+
+    @ViewBuilder
+    static func ideasRecovery(visibleCount: Int, totalCount: Int, loading: Bool,
+        filteredMessage: String, error: String? = nil, openIdeas: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            if let state = ideasRecoveryState(visibleCount: visibleCount, totalCount: totalCount,
+                                             loading: loading, filteredMessage: filteredMessage) {
+                Text(state.message).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(state.action, action: openIdeas)
+                    .help("Open the Ideas tab without changing filters or starting a scan.")
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+    #endif
+
     @ViewBuilder
     private func headerCard(briefs: [StockSageCatalystWatch.Brief],
                             availability: StockSageCatalystNarrator.Availability,
@@ -334,6 +367,10 @@ struct CatalystsSection: View {
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                 }
             }
+            Self.ideasRecovery(visibleCount: ideas.count, totalCount: store.ideas.count,
+                loading: store.isLoadingIdeas, filteredMessage: ideasFilterMessage,
+                error: store.ideasError, openIdeas: onOpenIdeas)
+                .font(.system(size: font11_5))
             #else
             DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
             #endif
@@ -381,11 +418,13 @@ struct CatalystsSection: View {
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             explanationModelSettings(availability: availability)
+            #if !os(macOS)
             if ideas.isEmpty {
                 Text("No ideas yet — run a scan on the Ideas tab.")
                     .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            #endif
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
