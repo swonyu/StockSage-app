@@ -63,6 +63,11 @@ struct CatalystsSection: View {
     @State private var narrationBenzinga: [String: StockSageBenzinga.Snapshot] = [:]
     @State private var narrationSettings: [String: [String]] = [:]
     @State private var narrating: Set<String> = []
+    /// Which stage each in-flight explanation is at. The panel showed one unlabelled spinner
+    /// across source collection, a model probe and a completion that can run for 90 seconds,
+    /// so a stalled fetch and a running model looked identical. No percentage is invented:
+    /// the remaining work is genuinely unknown, so the stage is named instead.
+    @State private var narratingStage: [String: StockSageCatalystNarrator.Stage] = [:]
     /// The citable news/filing/insider sources fetched for the LAST "Explain" press on each
     /// symbol — kept so `narrationPanel` can render the numbered source list (and its count for
     /// `label(for:sourceCount:)`) alongside the paragraph it actually backed.
@@ -680,7 +685,8 @@ struct CatalystsSection: View {
     private func narrationPanel(_ brief: StockSageCatalystWatch.Brief) -> some View {
         let symbol = brief.idea.symbol
         if narrating.contains(symbol) {
-            ProgressView().controlSize(.small)
+            ProgressView(narratingStage[symbol]?.label ?? StockSageCatalystNarrator.Stage.sources.label)
+                .controlSize(.small)
         } else if let result = narrations[symbol] {
             let sources = narrationSources[symbol] ?? []
             let refreshReason = Self.narrationRefreshReason(
@@ -814,12 +820,13 @@ struct CatalystsSection: View {
         let symbol = brief.idea.symbol
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
+        narratingStage[symbol] = .sources
         let facts = StockSageCatalystNarrator.facts(for: brief)
         let settings = Self.narrationCacheSettings(explanationSettings,
             revision: StockSageLocalModelServer.settingsRevision())
         let requestSettings = explanationRequestSettings
         Task {
-            defer { narrating.remove(symbol) }
+            defer { narrating.remove(symbol); narratingStage[symbol] = nil }
             let active: @MainActor () -> Bool = {
                 !Task.isCancelled && requestSettings == explanationRequestSettings
             }
@@ -831,6 +838,7 @@ struct CatalystsSection: View {
             }
             guard allowed() else { return }
             let suppliedFacts = StockSageCatalystNarrator.facts(for: brief, sources: sources, benzinga: evidence)
+            narratingStage[symbol] = .explaining
             let result = await StockSageCatalystNarrator.explain(brief, sources: sources, benzinga: evidence, stillValid: allowed)
             guard allowed() else { return }
             // Publish the response and its ORIGINAL context together, after the last await.

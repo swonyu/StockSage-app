@@ -40,6 +40,15 @@ enum StockSageCatalystNarrator {
         case localServer(model: String)
     }
 
+    /// The stages one Explain request passes through, in order. Named rather than measured:
+    /// the model's remaining output length is unknown, so a percentage here would be invented.
+    nonisolated enum Stage: String, Sendable, CaseIterable {
+        case sources = "Collecting cited sources…"
+        case explaining = "Writing the explanation…"
+        var label: String { rawValue }
+        static var allLabels: [String] { allCases.map(\.label) }
+    }
+
     // MARK: Availability
 
     enum Availability: Equatable, Sendable {

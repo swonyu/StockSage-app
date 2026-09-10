@@ -494,6 +494,29 @@ struct StockSageModelHarnessTests {
                 "a later request inherited contention from failed ones")
     }
 
+    // Catalysts Explain showed one unlabelled spinner across source collection, a 2.5-second
+    // probe and a completion that can run for 90 seconds. Stages are named, distinct, and
+    // invent no percentage.
+    @Test func explainStagesAreNamedDistinctAndInventNoPercentage() {
+        let labels = StockSageCatalystNarrator.Stage.allLabels
+        #expect(labels.count == StockSageCatalystNarrator.Stage.allCases.count)
+        #expect(Set(labels).count == labels.count)
+        #expect(labels.allSatisfy { !$0.isEmpty && !$0.contains("%") })
+        // Ordered: evidence is collected before the model is asked.
+        #expect(StockSageCatalystNarrator.Stage.allCases.first == .sources)
+        #expect(StockSageCatalystNarrator.Stage.allCases.last == .explaining)
+    }
+
+    // Chat and Catalysts describe the same two phases, so a user reads consistent wording for
+    // the same underlying work on both surfaces.
+    @Test func chatAndExplainAgreeOnWhatTheStagesMean() {
+        #expect(StockSageChatSession.Phase.sources.notice.localizedCaseInsensitiveContains("evidence")
+                || StockSageChatSession.Phase.sources.notice.localizedCaseInsensitiveContains("source"))
+        #expect(StockSageCatalystNarrator.Stage.sources.label.localizedCaseInsensitiveContains("source"))
+        #expect(StockSageChatSession.Phase.generating.notice.localizedCaseInsensitiveContains("model"))
+        #expect(StockSageCatalystNarrator.Stage.explaining.label.localizedCaseInsensitiveContains("explanation"))
+    }
+
     // MARK: The diagnostic must never carry server text
 
     @Test func diagnosticSummaryStaysFixedKeysAndNumbers() {
