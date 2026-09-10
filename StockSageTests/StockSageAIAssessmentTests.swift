@@ -287,8 +287,8 @@ struct StockSageAIAssessmentTests {
         }
         let items = [item(-1), item(7 * 86_400 + 1), item(0), item(7 * 86_400), item(1), item(2)]
         let observation = N.Observation(attempts: [
-            .init(provider: .massive, checkedAt: now.addingTimeInterval(-3), status: .unavailable(.http)),
-            .init(provider: .eodhd, checkedAt: now.addingTimeInterval(-2), status: .answered, items: items)])
+            .init(provider: .benzinga, checkedAt: now.addingTimeInterval(-3), status: .unavailable(.http)),
+            .init(provider: .massive, checkedAt: now.addingTimeInterval(-2), status: .answered, items: items)])
         let c = A.Context(idea: idea(), earnings: nil, company: [:], news: [item(9)], at: now, newsObservation: observation)
         #expect(c.newsObservation == observation && c.news == [items[2], items[3], items[4]])
         #expect(c.facts.joined().contains(observation.summary) && c.facts.joined().contains("Retained 3 excerpts"))

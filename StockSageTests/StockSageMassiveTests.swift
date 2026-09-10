@@ -31,15 +31,15 @@ struct StockSageMassiveTests {
 
     // MARK: Coverage / routing
 
-    @Test("covers() is the EODHD US-equities rule: bare alphabetic tickers only")
-    func coversMirrorsEODHDRule() {
-        for s in ["AAPL", "NVDA", "msft", "BCAT"] {
-            #expect(M.covers(s) == StockSageEODHD.covers(s))
-            #expect(M.covers(s))
-        }
-        for s in ["2222.SR", "^TASI.SR", "EURUSD=X", "BTC-USD", "^VIX", ""] {
-            #expect(M.covers(s) == StockSageEODHD.covers(s))
-            #expect(!M.covers(s))
+    @Test("US-equities classification stays bare alphabetic tickers only")
+    func coversExistingClassificationFixtures() {
+        let fixtures: [(symbol: String, covered: Bool)] = [
+            ("AAPL", true), ("NVDA", true), ("msft", true), ("Å", true),
+            ("2222.SR", false), ("^TASI.SR", false), ("EURUSD=X", false),
+            ("BTC-USD", false), ("A1", false), ("", false)
+        ]
+        for fixture in fixtures {
+            #expect(M.covers(fixture.symbol) == fixture.covered)
         }
     }
 

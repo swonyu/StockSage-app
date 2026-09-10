@@ -3,12 +3,10 @@ import Foundation
 // MARK: - The catalyst chain: one honest next-earnings answer per tracked equity
 //
 // Pure orchestration — no direct network access, no singleton. Every provider is an injected
-// async closure so a test can stub "EODHD nil, Yahoo hit" / "both nil, project from history" /
+// async closure so a test can stub "Yahoo nil, project from history" / "no history stage" /
 // "fewer than 3 history dates" without ever touching the network (STANDING RULES: tests must
-// never hit the network). `StockSageStore` is the only real caller; it wires `eodhdCalendar` /
-// `yahooCalendar` / `history` to the live StockSageEODHDCalendar / StockSageEarnings functions,
-// picking EODHD fundamentals (US) vs Yahoo `earningsHistory` (Tadawul) for `history` by region —
-// this function itself doesn't need to know which region it's running for.
+// never hit the network). `StockSageStore` is the only real caller; it wires `yahooCalendar` to
+// Yahoo calendarEvents and admits Yahoo quarter-end history only for non-US equities.
 nonisolated enum StockSageCatalystChain {
     /// Whether a provider closure actually OBSERVED something, distinct from never having asked
     /// at all (blocker fix 2026-09-06). Before this, every provider closure returned a plain
@@ -36,22 +34,21 @@ nonisolated enum StockSageCatalystChain {
         let anySourceAnswered: Bool
     }
 
-    /// Runs the Massive/Benzinga → EODHD → Yahoo → history chain for ONE equity symbol (the caller has already excluded
-    /// non-equities, which go straight to `.notApplicable` without calling this at all).
+    /// Runs the Massive/Benzinga → Yahoo → optional history chain for ONE equity symbol (the
+    /// caller has already excluded non-equities, which go straight to `.notApplicable` without
+    /// calling this at all).
     /// `now` gates a stale date the SAME way `StockSageStore.earningsRefreshOutcome` always has:
     /// more than a day in the past is not a usable "next" catalyst, so the chain falls through to
-    /// its next step rather than reporting a report that already happened. `historyUnitLabel`
-    /// names what `history`'s dates actually ARE (EODHD fundamentals = past REPORT dates; Yahoo
-    /// `earningsHistory` = past fiscal QUARTER-END dates, a materially different thing) so the
-    /// projection's basis string never claims more than the source actually supports.
+    /// its next step rather than reporting a report that already happened.
+    /// `history` returns nil when that stage does not exist (US after provider retirement),
+    /// `.unavailable` when an admitted source did not answer, and `.answered` only for an actual
+    /// Yahoo fiscal-quarter-end observation.
     static func resolve(
         now: Date,
         stillValid: () -> Bool = { true },
         massiveCalendar: () async -> Answer<StockSageMassiveEarnings.Row?> = { .unavailable },
-        eodhdCalendar: () async -> Answer<StockSageEODHDCalendar.Row?>,
         yahooCalendar: () async -> Answer<StockSageEarnings.EarningsCalendarInfo?>,
-        historyUnitLabel: String = "reports",
-        history: () async -> Answer<[Date]>
+        history: (() async -> Answer<[Date]>)?
     ) async -> Outcome {
         var sourcesAsked: [String] = []
         var anySourceAnswered = false
@@ -79,25 +76,8 @@ nonisolated enum StockSageCatalystChain {
         }
 
         // Each step appends to `sourcesAsked` ONLY after `.answered` — a provider that was never
-        // actually reachable (not covered, key empty, 24h-unavailable window open, external
-        // access off, non-equity, timeout, non-200, 429-exhaustion) must never be recorded as
-        // asked (blocker fix 2026-09-06 — see StockSageCatalystRecordCache.Record.sourcesAsked's
-        // own doc: it's the ONLY field distinguishing "never asked" from "asked, nothing usable").
-        guard active() else { return unchecked() }
-        let eodhdAnswer = await eodhdCalendar()
-        guard active() else { return unchecked() }
-        if case .answered(let row) = eodhdAnswer {
-            anySourceAnswered = true
-            sourcesAsked.append("eodhd calendar")
-            if let row, row.date.timeIntervalSince(now) > -86_400 {
-                return Outcome(earningsDate: row.date, dateRangeEnd: nil,
-                              confirmed: StockSageEODHDCalendar.confirmed(for: row),
-                              status: .dateKnown, source: "eodhd calendar",
-                              sourcesAsked: sourcesAsked, projectionBasis: nil,
-                              anySourceAnswered: anySourceAnswered)
-            }
-        }
-
+        // actually reachable (external access off, non-equity, timeout, non-200, 429-exhaustion)
+        // must never be recorded as asked (blocker fix 2026-09-06).
         guard active() else { return unchecked() }
         let yahooAnswer = await yahooCalendar()
         guard active() else { return unchecked() }
@@ -113,6 +93,7 @@ nonisolated enum StockSageCatalystChain {
         }
 
         guard active() else { return unchecked() }
+        guard let history else { return unchecked() }
         let historyAnswer = await history()
         guard active() else { return unchecked() }
         if case .answered(let pastDates) = historyAnswer {
@@ -123,7 +104,7 @@ nonisolated enum StockSageCatalystChain {
             // when both calendars come up empty) projects a date that's already in the past and
             // gets filed as an upcoming catalyst (major fix 2026-09-06). Same `> -86_400`
             // boundary as the two steps above, for the same reason.
-            if let projection = StockSageCatalystProjection.project(history: pastDates, unitLabel: historyUnitLabel),
+            if let projection = StockSageCatalystProjection.project(history: pastDates, unitLabel: "quarter ends"),
                projection.date.timeIntervalSince(now) > -86_400 {
                 return Outcome(earningsDate: projection.date, dateRangeEnd: projection.dateRangeEnd,
                               confirmed: nil, status: .projected, source: "projection",

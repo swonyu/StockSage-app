@@ -150,14 +150,13 @@ enum StockSageEarnings {
 
     // MARK: - Tadawul projection source: Yahoo `earningsHistory`
     //
-    // EODHD has no Tadawul coverage at any tier (StockSageEODHD.swift's own measured gap), so a
-    // `.SR` equity's only candidate projection source is Yahoo's own past-earnings module.
+    // A `.SR` equity's retained candidate projection source is Yahoo's own past-earnings module.
     // UNVERIFIED LIVE (2026-09-06): Yahoo's keyless endpoint was 429-rate-limited on this Mac's IP
     // all day (research_earnings_sources_2026-09-06.md), so a live probe of a `.SR` symbol's
     // `earningsHistory` module could not be confirmed this session. Written defensively against
     // Yahoo's documented `quoteSummary?modules=earningsHistory` shape (`earningsHistory.history`:
     // an array of `{quarter: {raw: epoch}, ...}`) — if Tadawul carries no such module, or the
-    // request never lands, this returns `nil` (UNAVAILABLE — never asked) and the chain correctly
+    // request never lands, this returns `nil` (UNAVAILABLE) and the chain correctly
     // falls through to `.unchecked` with a SAHMK TODO, never a guess. `nil` also distinguishes
     // "never answered" from "answered, empty" (blocker fix 2026-09-06 — this used to return `[]`
     // identically for both, letting the caller wrongly count an unreachable provider as asked).
@@ -178,8 +177,8 @@ enum StockSageEarnings {
     /// previously documented ambiguously as "past report dates", which let a projection built off
     /// these dates get labelled "reports" in its basis string — systematically early by the whole
     /// reporting lag, typically 3-6 weeks, while claiming to be projected from prior REPORTS. See
-    /// `StockSageCatalystChain.resolve`'s `historyUnitLabel`, which the store sets to "quarter
-    /// ends" for exactly this source). Missing/malformed/partial modules are unavailable;
+    /// `StockSageCatalystChain.resolve` therefore labels its projection inputs "quarter ends".
+    /// Missing/malformed/partial modules are unavailable;
     /// an explicit empty history array is a valid observation.
     nonisolated static func parseEarningsHistory(_ data: Data) -> [Date]? {
         guard let hist = module(data, named: "earningsHistory"),

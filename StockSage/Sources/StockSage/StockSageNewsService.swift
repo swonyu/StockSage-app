@@ -2,8 +2,8 @@ import Foundation
 import CryptoKit
 
 /// Cited research news, never a trading/ranking signal or a complete news census.
-/// Ordered stages: shared Massive/Benzinga news, generic Massive, disabled EODHD.
-/// At most three attempts, no retries/pagination/polling; stop on usable evidence.
+/// Ordered stages: shared Massive/Benzinga news, then generic Massive.
+/// At most two attempts, no retries/pagination/polling; stop on usable evidence.
 /// Dedicated and fallback transports share the Benzinga client's global bounds.
 enum StockSageNewsService {
 
@@ -17,8 +17,7 @@ enum StockSageNewsService {
         /// body (a long or paywalled article body is not something this app is licensed to show).
         let snippet: String
         let link: URL?
-        /// EODHD's own sentiment polarity, when the payload carries one. Nil is common (most rows
-        /// omit it) and is not an error.
+        /// Optional provider-supplied sentiment, including legacy values. Nil is not an error.
         let sentiment: Double?
         let source: String
         /// Provider commentary for THIS ticker, not a prediction or verified app fact.
@@ -26,7 +25,7 @@ enum StockSageNewsService {
         private let articleIdentity: String?
 
         init(date: Date, title: String, snippet: String, link: URL?, sentiment: Double?,
-             source: String = "EODHD news", insight: String? = nil, articleIdentity: String? = nil, publicationTime: String? = nil, updatedTime: String? = nil) {
+             source: String, insight: String? = nil, articleIdentity: String? = nil, publicationTime: String? = nil, updatedTime: String? = nil) {
             self.date = date; self.title = title; self.snippet = snippet; self.link = link
             self.sentiment = sentiment; self.source = source; self.insight = insight
             self.articleIdentity = articleIdentity
@@ -41,11 +40,10 @@ enum StockSageNewsService {
         "Selected news excerpts and provider sentiment are not verified analysis or trading signals. "
         + "Absence here is not evidence that nothing happened."
 
-    nonisolated enum Provider: String, Sendable, Equatable { case benzinga = "Massive/Benzinga", massive = "Massive", eodhd = "EODHD" }
+    nonisolated enum Provider: String, Sendable, Equatable { case benzinga = "Massive/Benzinga", massive = "Massive" }
     nonisolated enum Failure: String, Sendable, Equatable {
         case policyDenied = "external access off", cancelled, unsupported, invalidBounds = "invalid bounds"
         case missingKey = "missing key", transport, http, malformed, oversized
-        case providerDisabled = "provider disabled"
         case unauthorized, entitlement, throttled, timedOut, obsoleteCredential
         case notRequested = "not requested"
     }
@@ -70,7 +68,7 @@ enum StockSageNewsService {
         var excluded = Excluded()
     }
     nonisolated struct Observation: Sendable, Equatable {
-        /// At most three attempts in request order; empty primary permits the next provider.
+        /// At most two attempts in request order; empty dedicated evidence permits generic Massive.
         let attempts: [Attempt]
         var withholdingReason: Failure? = nil
         var items: [NewsItem] { withholdingReason == nil ? attempts.last?.items ?? [] : [] }
@@ -125,7 +123,6 @@ enum StockSageNewsService {
                 case .massive:
                     return massiveRequest(symbol: symbol, key: StockSageMassive.apiKey,
                                           limit: limit, maxAgeDays: maxAgeDays, now: now)
-                case .eodhd: return nil // Provider remains disabled; no credential read or dispatch.
                 }
             }, transport: { request in
                 // page(for:) has returned; acquire exactly one permit inside this client method.
@@ -178,47 +175,37 @@ enum StockSageNewsService {
             }
             if !attempt.items.isEmpty { return Observation(attempts: attempts) }
         }
-        for provider in [Provider.massive, .eodhd] {
+        let provider = Provider.massive
+        if let reason = blocked() {
+            attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(reason)))
+            return Observation(attempts: attempts)
+        }
+        guard let req = request(provider) else {
+            attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(.missingKey)))
+            return Observation(attempts: attempts)
+        }
+        // Recheck after request construction too; no transport starts after permission revocation.
+        if let reason = blocked() {
+            attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(reason)))
+            return Observation(attempts: attempts)
+        }
+        do {
+            let (data, response) = try await transport(req)
             if let reason = blocked() {
-                attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(reason)))
-                break
-            }
-            guard provider != .eodhd || StockSageEODHD.covers(symbol) else {
-                attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(.unsupported)))
-                break
-            }
-            guard let req = request(provider) else {
-                let reason: Failure = provider == .eodhd && !StockSageEODHD.isEnabled ? .providerDisabled : .missingKey
-                attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(reason)))
-                continue
-            }
-            // Recheck after request construction too; no transport starts after permission revocation.
-            if let reason = blocked() {
-                attempts.append(.init(provider: provider, checkedAt: clock(), status: .notChecked(reason)))
-                break
-            }
-            do {
-                let (data, response) = try await transport(req)
-                if let reason = blocked() {
-                    attempts.append(.init(provider: provider, checkedAt: clock(), status: .unavailable(reason)))
-                    break
-                }
-                let attempt: Attempt
-                if (response as? HTTPURLResponse)?.statusCode != 200 {
-                    attempt = .init(provider: provider, checkedAt: clock(),
-                                    status: .unavailable(httpFailure((response as? HTTPURLResponse)?.statusCode)))
-                } else {
-                    attempt = parseObservation(data, provider: provider, symbol: symbol, limit: limit,
-                                               maxAgeDays: maxAgeDays, now: now, checkedAt: clock())
-                }
-                attempts.append(attempt)
-                if !attempt.items.isEmpty { break }
-            } catch {
-                let reason = blocked() ?? (error as? StockSageBenzinga.Failure).map(newsFailure)
-                    ?? ((error as? URLError)?.code == .timedOut ? .timedOut : .transport)
                 attempts.append(.init(provider: provider, checkedAt: clock(), status: .unavailable(reason)))
-                if reason == .cancelled || reason == .policyDenied || reason == .obsoleteCredential { break }
+                return Observation(attempts: attempts)
             }
+            if (response as? HTTPURLResponse)?.statusCode != 200 {
+                attempts.append(.init(provider: provider, checkedAt: clock(),
+                    status: .unavailable(httpFailure((response as? HTTPURLResponse)?.statusCode))))
+            } else {
+                attempts.append(parseObservation(data, provider: provider, symbol: symbol, limit: limit,
+                    maxAgeDays: maxAgeDays, now: now, checkedAt: clock()))
+            }
+        } catch {
+            let reason = blocked() ?? (error as? StockSageBenzinga.Failure).map(newsFailure)
+                ?? ((error as? URLError)?.code == .timedOut ? .timedOut : .transport)
+            attempts.append(.init(provider: provider, checkedAt: clock(), status: .unavailable(reason)))
         }
         return Observation(attempts: attempts)
     }
@@ -292,27 +279,6 @@ enum StockSageNewsService {
         }
     }
 
-    /// Compatibility seam for older callers/tests; production uses typed attempts above.
-    static func firstAvailable(massive: () async -> [NewsItem],
-                               fallback: () async -> [NewsItem]) async -> [NewsItem] {
-        guard !Task.isCancelled else { return [] }
-        let items = await massive()
-        guard !Task.isCancelled else { return [] }
-        if !items.isEmpty { return items }
-        let result = await fallback()
-        return Task.isCancelled ? [] : result
-    }
-
-    nonisolated static func eodhdRequest(symbol: String, key: String, limit: Int) -> URLRequest? {
-        guard StockSageEODHD.isEnabled, StockSageEODHD.covers(symbol), !key.isEmpty, (1...5).contains(limit),
-              var parts = URLComponents(string: "https://eodhd.com/api/news") else { return nil }
-        parts.queryItems = [.init(name: "s", value: StockSageEODHD.eodhdSymbol(symbol)),
-                            .init(name: "limit", value: String(limit)), .init(name: "api_token", value: key),
-                            .init(name: "fmt", value: "json")]
-        guard let url = parts.url else { return nil }
-        return URLRequest(url: url, timeoutInterval: 12)
-    }
-
     nonisolated static func parseObservation(_ data: Data, provider: Provider, symbol: String,
                                             limit: Int = 5, maxAgeDays: Double = 7, now: Date,
                                             checkedAt: Date) -> Attempt {
@@ -330,14 +296,11 @@ enum StockSageNewsService {
                   root["status"] == nil || root["status"] as? String == "OK",
                   let values = root["results"] as? [[String: Any]] else { return failed(.malformed) }
             rows = values
-        case .eodhd:
-            guard let values = json as? [[String: Any]] else { return failed(.malformed) }
-            rows = values
         }
         guard rows.count <= 1_000 else { return failed(.oversized) }
         var excluded = Excluded()
         for row in rows {
-            guard let date = publicationDate(row[provider == .massive ? "published_utc" : "date"]) else {
+            guard let date = publicationDate(row["published_utc"]) else {
                 excluded.missingDate += 1; continue
             }
             if date.instant > Decimal(now.timeIntervalSince1970) { excluded.future += 1; continue }
@@ -345,13 +308,11 @@ enum StockSageNewsService {
                 excluded.stale += 1; continue
             }
             if boundedText(row["title"] as? String ?? "", limit: 240).isEmpty
-                || (provider == .massive && !(row["tickers"] as? [String] ?? []).contains(symbol.uppercased())) {
+                || !(row["tickers"] as? [String] ?? []).contains(symbol.uppercased()) {
                 excluded.invalid += 1
             }
         }
-        let items = provider == .massive
-            ? parseMassiveNews(data, symbol: symbol, limit: limit, maxAgeDays: maxAgeDays, now: now)
-            : parseNews(rows, limit: limit, maxAgeDays: maxAgeDays, now: now)
+        let items = parseMassiveNews(data, symbol: symbol, limit: limit, maxAgeDays: maxAgeDays, now: now)
         return Attempt(provider: provider, checkedAt: checkedAt, status: .answered, items: items, excluded: excluded)
     }
 
@@ -398,29 +359,6 @@ enum StockSageNewsService {
                             insight: unique.count == 1 ? unique.first : nil, articleIdentity: identity(row, provider: .massive), publicationTime: row["published_utc"] as? String)
         }
         return selection(items, limit: limit)
-    }
-
-    /// Pure parse of the vendor's array-of-objects payload — no network, unit-testable. Skips any
-    /// row missing a usable date or title, and drops rows older than `maxAgeDays`.
-    nonisolated static func parseNews(_ raw: [[String: Any]], limit: Int = 5, maxAgeDays: Double = 7,
-                                      now: Date = Date()) -> [NewsItem] {
-        guard validBounds(limit, maxAgeDays, now), raw.count <= 1_000 else { return [] }
-        var out: [NewsItem] = []
-        for row in raw {
-            guard let date = recentDate(row["date"], maxAgeDays: maxAgeDays, now: now),
-                  let rawTitle = row["title"] as? String else { continue }
-            let title = boundedText(rawTitle, limit: 240)
-            guard !title.isEmpty else { continue }
-            let link = safeLink(row["link"])
-            let sentimentObj = row["sentiment"] as? [String: Any]
-            let sentiment = (sentimentObj?["polarity"] as? Double)
-                ?? (sentimentObj?["polarity"] as? Int).map(Double.init)
-            out.append(NewsItem(date: date, title: title,
-                                snippet: snippet(from: row["content"] as? String ?? ""),
-                                link: link, sentiment: sentiment.flatMap { $0.isFinite ? $0 : nil },
-                                articleIdentity: identity(row, provider: .eodhd), publicationTime: row["date"] as? String))
-        }
-        return selection(out, limit: limit)
     }
 
     private nonisolated static func validBounds(_ limit: Int, _ days: Double, _ now: Date) -> Bool {

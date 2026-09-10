@@ -28,29 +28,14 @@ enum DS {
 
     // MARK: Semantic colors
     enum Palette {
-        // BRAND = indigo, not red (colour overhaul 2026-07-28). Two reasons, both measured:
-        //
-        // 1. SEMANTIC COLLISION. This is a trading app: red already means loss and green means
-        //    gain, everywhere, non-negotiably. Using red as the BRAND colour put a red "Find
-        //    ideas" button beside a red −18.1%, and rendered neutral metrics like "Base size
-        //    20.0%" in alarm-red — a position size is not a warning. Moving the brand off red
-        //    leaves red and green to carry P&L meaning alone.
-        //
-        // 2. CONTRAST. White label on the old crimson fill measured 3.78:1 — under WCAG AA
-        //    4.5:1 for sub-18pt text, so every primary button ("Find ideas", "Gauge", "Run",
-        //    "Log trade") failed on its own label. This fill measures 4.96:1.
-        //
-        // `accent` is the FILL (white text sits on it); `accentText` is the lighter sibling for
-        // brand-coloured TEXT and icons on dark surfaces, which measures 4.56:1 on the card
-        // surface. Same split the palette already uses for success/successSoft — one swatch
-        // cannot both host white text and be legible as text on a dark card.
-        static let accent        = Color(red: 0.350, green: 0.360, blue: 0.950)
-        static let accent2       = Color(red: 0.506, green: 0.514, blue: 0.962)
-        /// Brand colour for TEXT/icons on dark surfaces (AA 4.56:1 on the card surface).
-        /// Use `accent` for fills and `accentText` when the brand colour IS the glyph.
-        static let accentText    = Color(red: 0.506, green: 0.514, blue: 0.962)
+        // Owner-selected magenta. The asset is shared with native control tint.
+        // Keep white-label fills dark enough for AA; use the lighter sibling for
+        // text/icons on dark surfaces. Financial/status colors remain separate.
+        static let accent        = Color("AccentColor")
+        static let accent2       = Color(.sRGB, red: 197 / 255.0, green: 39 / 255.0, blue: 173 / 255.0)
+        static let accentText    = Color(.sRGB, red: 244 / 255.0, green: 123 / 255.0, blue: 222 / 255.0)
         // Canvas wash (macOS 27 overhaul, 2026-07-16): deep slate with a slight
-        // violet-warm cast that flatters the crimson accent — replaces the flat
+        // violet-warm cast that flatters the magenta accent — replaces the flat
         // codeSurface grey. Going DARKER only raises text contrast, so the
         // dangerSoft AA measurements (derived on the lighter 0.125 surface) hold.
         #if os(macOS)
@@ -163,7 +148,7 @@ enum DS {
 
 // MARK: - DSCanvasBackground
 /// The app's window canvas (macOS 27 overhaul, 2026-07-16): the deep slate wash
-/// plus a faint crimson aurora bleeding from the top edge — the brand identity
+/// plus a faint magenta aurora bleeding from the top edge — the brand identity
 /// breathing through the dark, and the depth Liquid Glass materials need behind
 /// them to read as glass at all. Kept faint (screen-blended 0.08) so it frames
 /// content without ever competing with it.
@@ -211,10 +196,12 @@ struct Card<Content: View>: View {
 /// that provide their own chrome (brand gradient, accent border, etc.).
 /// Moved from CodeView so all tabs share one definition. (Marathon EN)
 struct LuxPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration c: Configuration) -> some View {
         c.label
-            .scaleEffect(c.isPressed ? 0.97 : 1)
-            .animation(DS.Motion.lux, value: c.isPressed)
+            .scaleEffect(reduceMotion ? 1 : (c.isPressed ? 0.97 : 1))
+            .animation(reduceMotion ? nil : DS.Motion.lux, value: c.isPressed)
     }
 }
 
@@ -321,6 +308,7 @@ struct DSSegmentPicker<T: Hashable>: View {
     @Binding var selection: T
     let label: (T) -> String
     @Namespace private var ns
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 2) {
@@ -330,7 +318,9 @@ struct DSSegmentPicker<T: Hashable>: View {
                     // #if os(iOS)
                     // HapticFeedback.trigger(.selection)
                     // #endif
-                    withAnimation(DS.Motion.spring) { selection = item }
+                    var transaction = Transaction(animation: reduceMotion ? nil : DS.Motion.spring)
+                    transaction.disablesAnimations = reduceMotion
+                    withTransaction(transaction) { selection = item }
                 } label: {
                     Text(label(item))
                         .font(.system(size: 12, weight: .semibold))

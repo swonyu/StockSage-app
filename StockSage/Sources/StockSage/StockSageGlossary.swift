@@ -118,9 +118,10 @@ enum StockSageGlossary {
     """
 
     nonisolated static let heatmapHelp = """
-    Pairwise correlation of daily returns. Green (≤0) = the two move independently or opposite — real diversification. \
-    Red (>0, deeper = closer to +1) = they move together, so they're closer to one position than two. \
-    Correlations rise in crashes exactly when you need diversification most — treat low correlation as fragile.
+    Last-computed pairwise linear correlation of daily returns over the shared overlapping history. \
+    Positive values mean same-direction sample co-movement; negative values mean opposite-direction sample co-movement; \
+    zero means no measured linear relationship in this sample; an em dash means the coefficient was undefined. \
+    Small samples and regime changes limit reliability. None proves independence, a reliable hedge, or future behavior.
     """
 
     nonisolated static let strategyHelp = """

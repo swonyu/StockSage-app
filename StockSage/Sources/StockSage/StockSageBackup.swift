@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Full backup / restore + parent-app (Salehman AI) migration
 //
-// Journal + portfolio + watchlist live in three separate UserDefaults keys. This
+// Journal + portfolio + watchlist + price alerts live in four separate UserDefaults keys. This
 // snapshot excludes settings, credentials, chat and research. The "don't lose it" escape
 // hatch: one JSON snapshot, validate/prepare before applying any collection (never
 // partially apply a corrupt or mismatched file), plus a one-time read of the PARENT
@@ -11,7 +11,7 @@ import Foundation
 //
 // HONESTY FLOOR: merge missing record IDs only; existing records win, never guess or
 // overwrite quantities/costs. The two file pickers share the same application path.
-// ponytail: three UserDefaults writes are not crash-atomic or cross-process locked;
+// ponytail: four UserDefaults writes are not crash-atomic or cross-process locked;
 // a transactional store is needed for that stronger guarantee.
 enum StockSageBackup {
 
@@ -23,6 +23,7 @@ enum StockSageBackup {
         var trades: [TradeRecord]
         var positions: [PortfolioPosition]
         var userSymbols: [String]
+        var priceAlerts: [PriceAlert]? = nil
     }
 
     enum BackupError: Error, LocalizedError {
@@ -33,12 +34,13 @@ enum StockSageBackup {
         case invalidJournalRecord(index: Int, reason: String)
         case invalidPosition(index: Int)
         case invalidSymbol(index: Int, reason: String)
+        case invalidPriceAlert(index: Int, reason: String)
         case restoreFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .encodeFailed:
-                return "Couldn't create a backup because a record could not be encoded. Check journal and portfolio values, then retry. No backup was saved."
+                return "Couldn't create a backup because a record could not be encoded. Check journal, portfolio and price-alert values, then retry. No backup was saved."
             case .sourceReadFailed(let collection):
                 return "Couldn't read the saved \(collection). Existing data was preserved."
             case .unsupportedSchemaVersion(let found, let supported):
@@ -51,6 +53,8 @@ enum StockSageBackup {
                 return "Invalid portfolio position \(index): ticker, positive finite shares and nonnegative finite cost basis are required. Nothing was restored."
             case .invalidSymbol(let index, let reason):
                 return "Invalid watchlist entry \(index): \(reason) Nothing was restored."
+            case .invalidPriceAlert(let index, let reason):
+                return "Invalid price alert \(index): \(reason) Nothing was restored."
             case .restoreFailed(let reason):
                 return "Couldn't prepare the saved records: \(reason) Nothing was restored."
             }
@@ -74,25 +78,29 @@ enum StockSageBackup {
     @MainActor static func export(journal: StockSageJournalStore,
                                   portfolio: StockSagePortfolio, store: StockSageStore) throws -> Data {
         try export(trades: journal.backupRecords(), positions: portfolio.backupRecords(),
-                   userSymbols: store.backupSymbols())
+                   userSymbols: store.backupSymbols(), priceAlerts: store.backupPriceAlerts())
     }
 
     /// Shared native export path; keep encoding before any destination write.
-    static func save(to url: URL, trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) throws {
-        let data = try export(trades: trades, positions: positions, userSymbols: userSymbols)
+    static func save(to url: URL, trades: [TradeRecord], positions: [PortfolioPosition],
+                     userSymbols: [String], priceAlerts: [PriceAlert] = []) throws {
+        let data = try export(trades: trades, positions: positions, userSymbols: userSymbols,
+                              priceAlerts: priceAlerts)
         try data.write(to: url, options: .atomic)
     }
 
     /// Builds a pretty-printed, ISO-8601-dated JSON snapshot of everything passed in.
     /// Pure value encoder for fixtures and recovery, including retained invalid closures.
     /// Native full-backup actions use the store-taking overload to check committed sources.
-    static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) throws -> Data {
+    static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String],
+                       priceAlerts: [PriceAlert] = []) throws -> Data {
         let payload = BackupPayload(
             schemaVersion: currentSchemaVersion,
             exportedAt: Date(),
             trades: trades,
             positions: positions,
-            userSymbols: userSymbols
+            userSymbols: userSymbols,
+            priceAlerts: priceAlerts
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -107,15 +115,16 @@ enum StockSageBackup {
         var trades = 0
         var positions = 0
         var symbols = 0
+        var priceAlerts = 0
         var skipped = 0
 
         var message: String {
-            "Restored \(trades) trade(s), \(positions) portfolio position(s), \(symbols) watchlist entry/entries. Kept \(skipped) existing/duplicate record(s); no existing records replaced."
+            "Restored \(trades) trade(s), \(positions) portfolio position(s), \(symbols) watchlist entry/entries, \(priceAlerts) price alert(s). Kept \(skipped) existing/duplicate record(s); no existing records replaced."
         }
     }
 
     /// Shared application path for both native file pickers; injectable stores keep tests
-    /// off the owner's journal, portfolio and watchlist.
+    /// off the owner's journal, portfolio, watchlist and price alerts.
     @MainActor static func restore(from data: Data, journal: StockSageJournalStore,
                                    portfolio: StockSagePortfolio, store: StockSageStore) -> Result<RestoreSummary, BackupError> {
         restore(from: data).flatMap { payload in
@@ -123,13 +132,18 @@ enum StockSageBackup {
                 let trades = try journal.prepareBackupImport(payload.trades)
                 let positions = try portfolio.prepareBackupImport(payload.positions)
                 let symbols = try store.prepareBackupImport(payload.userSymbols)
+                let alerts = try payload.priceAlerts.map { try store.preparePriceAlertBackupImport($0) }
                 // All decoding, reconciliation and encoding succeeded; no await between writes.
                 trades.apply()
                 positions.apply()
                 symbols.apply()
+                alerts?.apply()
+                let alertCount = payload.priceAlerts?.count ?? 0
+                let alertsAdded = alerts?.added ?? 0
                 return .success(RestoreSummary(trades: trades.added, positions: positions.added,
-                    symbols: symbols.added, skipped: payload.trades.count + payload.positions.count
-                        + payload.userSymbols.count - trades.added - positions.added - symbols.added))
+                    symbols: symbols.added, priceAlerts: alertsAdded,
+                    skipped: payload.trades.count + payload.positions.count + payload.userSymbols.count
+                        + alertCount - trades.added - positions.added - symbols.added - alertsAdded))
             } catch let error as BackupError {
                 return .failure(error)
             } catch {
@@ -139,7 +153,7 @@ enum StockSageBackup {
     }
 
     /// Decode/validate only, with watchlist normalization. Use the store-taking overload
-    /// to apply all three collections; this overload never writes any state.
+    /// to apply all four collections; this overload never writes any state.
     static func restore(from data: Data) -> Result<BackupPayload, BackupError> {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -180,10 +194,30 @@ enum StockSageBackup {
                 }
                 payload.userSymbols[index] = symbol
             }
+            if let alerts = payload.priceAlerts, let error = priceAlertValidationError(in: alerts) {
+                return .failure(error)
+            }
             return .success(payload)
         } catch {
             return .failure(.decodeFailed(String(describing: error)))
         }
+    }
+
+    /// Exact duplicates are repeatable restore inputs; one ID carrying different intent is
+    /// ambiguous and rejects the whole file before any destination preparation or mutation.
+    static func priceAlertValidationError(in alerts: [PriceAlert]) -> BackupError? {
+        var seen: [UUID: PriceAlert] = [:]
+        for (index, alert) in alerts.enumerated() {
+            if let reason = alert.validationError {
+                return .invalidPriceAlert(index: index + 1, reason: reason)
+            }
+            if let prior = seen[alert.id], prior != alert {
+                return .invalidPriceAlert(index: index + 1,
+                    reason: "its ID conflicts with an earlier price alert.")
+            }
+            seen[alert.id] = alert
+        }
+        return nil
     }
 
     // MARK: Parent-app (Salehman AI) migration

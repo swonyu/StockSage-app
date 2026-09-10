@@ -75,7 +75,6 @@ struct StockSageMassiveEarningsTests {
         var fallbackCalled = false
         let out = await StockSageCatalystChain.resolve(now: today,
             massiveCalendar: { .answered(.init(date: today, confirmed: false)) },
-            eodhdCalendar: { fallbackCalled = true; return .answered(nil) },
             yahooCalendar: { fallbackCalled = true; return .answered(nil) },
             history: { fallbackCalled = true; return .answered([]) })
         #expect(!fallbackCalled && out.status == .dateKnown && out.confirmed == false)
@@ -92,28 +91,27 @@ struct StockSageMassiveEarningsTests {
         for answered in [false, true] {
             let out = await StockSageCatalystChain.resolve(now: today,
                 massiveCalendar: { answered ? .answered(nil) : .unavailable },
-                eodhdCalendar: { .unavailable }, yahooCalendar: { .unavailable }, history: { .unavailable })
+                yahooCalendar: { .unavailable }, history: { .unavailable })
             #expect(out.anySourceAnswered == answered)
             #expect(out.sourcesAsked == (answered ? ["Massive/Benzinga earnings"] : []))
             #expect(out.status == .unchecked)
         }
     }
 
-    @Test func emptyOrStaleBenzingaDateFallsThroughToEodhdInOrder() async {
+    @Test func emptyOrStaleBenzingaDateFallsThroughToYahooInOrder() async {
         for first: E.Row? in [nil, .init(date: today.addingTimeInterval(-86_400), confirmed: true)] {
             var order: [String] = []
             let out = await StockSageCatalystChain.resolve(now: today,
                 massiveCalendar: { order.append("massive"); return .answered(first) },
-                eodhdCalendar: {
-                    order.append("eodhd")
-                    return .answered(.init(code: "AAPL.US", reportPeriod: nil,
-                        date: self.today.addingTimeInterval(86_400), beforeAfterMarket: nil,
-                        estimate: nil, actual: nil))
-                }, yahooCalendar: { order.append("yahoo"); return .unavailable },
+                yahooCalendar: {
+                    order.append("yahoo")
+                    return .answered(.init(date: self.today.addingTimeInterval(86_400),
+                                           dateRangeEnd: nil, isEstimate: true))
+                },
                 history: { order.append("history"); return .unavailable })
-            #expect(order == ["massive", "eodhd"])
-            #expect(out.source == "eodhd calendar" && out.status == .dateKnown)
-            #expect(out.sourcesAsked == ["Massive/Benzinga earnings", "eodhd calendar"])
+            #expect(order == ["massive", "yahoo"])
+            #expect(out.source == "yahoo calendarEvents" && out.status == .dateKnown)
+            #expect(out.sourcesAsked == ["Massive/Benzinga earnings", "yahoo calendarEvents"])
         }
     }
 }

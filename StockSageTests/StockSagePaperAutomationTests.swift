@@ -1044,6 +1044,16 @@ struct StockSagePaperAutomationTests {
         }
     }
 
+    @Test func announcedUTPOvernightHoursDoNotExpandApprovedPaperSession() throws {
+        for iso in ["2026-12-07T02:00:00Z", "2026-12-08T02:30:00Z"] {
+            let at = try Date(iso, strategy: .iso8601)
+            #expect(!A.paperSessionOpen(at), "SIP or exchange overnight operation is outside the approved paper window: \(iso)")
+            #expect(!A.entryWindowOpen(at))
+        }
+        let approvedPreMarket = try Date("2026-12-07T09:00:00Z", strategy: .iso8601)
+        #expect(A.paperSessionOpen(approvedPreMarket))
+    }
+
     @Test(arguments: ["2026-09-08T08:30:00Z", "2026-09-08T21:00:00Z"])
     func extendedHoursUsesLaterQuotesForEntriesAndStopExits(_ iso: String) throws {
         let at = try Date(iso, strategy: .iso8601)
@@ -1242,6 +1252,15 @@ struct StockSagePaperAutomationTests {
         #expect(A.sessionClockFact(at: at).contains("2026-11-27T16:55:00-05:00"))
     }
 
+    @Test func unpublished2027NasdaqCalendarKeepsPaperEligibilityFailClosed() throws {
+        for iso in ["2027-01-04T15:00:00Z", "2027-11-26T17:00:00Z", "2027-12-31T17:00:00Z"] {
+            let at = try Date(iso, strategy: .iso8601)
+            #expect(!A.paperSessionOpen(at), "Unsupported Nasdaq date must not become paper eligible: \(iso)")
+            #expect(!A.entryWindowOpen(at))
+            #expect(A.entryCutoff(at) == nil)
+        }
+    }
+
     @Test func settlementCalendarUsesNewYorkBusinessDatesIncludingBankHolidays() throws {
         let cases = [
             ("2026-09-08T23:59:59Z", "2026-09-09T04:00:00Z"),
@@ -1266,6 +1285,29 @@ struct StockSagePaperAutomationTests {
             #expect(A.settlementDate(forSaleAt: try Date(unsupported, strategy: .iso8601)) == nil)
         }
         #expect(A.settlementDate(forSaleAt: Date(timeIntervalSince1970: .nan)) == nil)
+    }
+
+    @Test func settlementCoverageStopsAtTheExistingJanuary2027Boundary() throws {
+        let supportedSale = try Date("2027-01-28T19:00:00Z", strategy: .iso8601)
+        let due = try Date("2027-01-29T05:00:00Z", strategy: .iso8601)
+        #expect(A.settlementDate(forSaleAt: supportedSale) == due)
+
+        let supportedBook = A.Book(trades: [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98,
+            target: 104, shares: 100, openedAt: supportedSale.addingTimeInterval(-60),
+            exitPrice: 101, closedAt: supportedSale)])
+        #expect(supportedBook.unsettledProceeds(at: due.addingTimeInterval(-1)) == 10_100)
+        #expect(supportedBook.buyingCash(at: due.addingTimeInterval(-1)) == 0)
+        #expect(supportedBook.unsettledProceeds(at: due) == 0)
+        #expect(supportedBook.buyingCash(at: due) == 10_100)
+
+        let unsupportedSale = try Date("2027-01-29T19:00:00Z", strategy: .iso8601)
+        #expect(A.settlementDate(forSaleAt: unsupportedSale) == nil)
+        let unsupportedBook = A.Book(trades: [.init(symbol: "AAPL", side: .long, entry: 100, stop: 98,
+            target: 104, shares: 100, openedAt: unsupportedSale.addingTimeInterval(-60),
+            exitPrice: 101, closedAt: unsupportedSale)])
+        let later = unsupportedSale.addingTimeInterval(14 * 86_400)
+        #expect(unsupportedBook.unsettledProceeds(at: later) == 10_100)
+        #expect(unsupportedBook.buyingCash(at: later) == 0)
     }
 
     @Test func proceedsReleaseAtScheduledDateWithoutChangingEquityOrHistory() throws {

@@ -2221,49 +2221,15 @@ struct MarketsView: View {
                 HStack(spacing: DS.Space.sm) {
                     Image(systemName: "square.grid.3x3.fill").font(.system(size: mvFont16)).foregroundStyle(DS.Palette.accent)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Correlation heatmap").font(DS.Typography.titleM).foregroundStyle(.white)
+                        Text("Correlation matrix").font(DS.Typography.titleM).foregroundStyle(DS.Palette.textPrimary)
                             .help(StockSageGlossary.heatmapHelp)
-                        Text("Green = independent · red = moves together (concentration risk).")
-                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text("Signed values describe the last-computed sample; color is supplementary.")
+                            .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    VStack(spacing: 2) {
-                        ForEach(c.symbols.indices, id: \.self) { i in
-                            HStack(spacing: 2) {
-                                Text(String(c.symbols[i].prefix(6)))
-                                    .font(.system(size: mvFont8, weight: .semibold)).foregroundStyle(.secondary)
-                                    .frame(width: 46, alignment: .leading).lineLimit(1)
-                                ForEach(c.symbols.indices, id: \.self) { j in
-                                    let v = c.matrix[i][j]
-                                    // F3 (audit 2026-07-12): an undefined pair (zero-variance series)
-                                    // holds a display-only 0 — render it as a neutral "—", never a
-                                    // green "0.0 independent" cell that fabricates a diversification claim.
-                                    let defined = c.isDefined(i, j)
-                                    Rectangle().fill(defined ? correlationColor(v) : DS.Palette.surfaceAlt)
-                                        .frame(width: 26, height: 18)
-                                        .overlay(Text(defined ? String(format: "%.1f", v) : "—")
-                                            .font(.system(size: mvFont7, weight: .bold)).foregroundStyle(.white.opacity(defined ? 0.92 : 0.5)))
-                                        .accessibilityElement(children: .ignore)
-                                        .accessibilityLabel(defined
-                                            ? "\(c.symbols[i]) vs \(c.symbols[j]), correlation \(String(format: "%.1f", v))"
-                                            : "\(c.symbols[i]) vs \(c.symbols[j]), correlation undefined — one series has no price variation over the window")
-                                }
-                            }
-                        }
-                    }
-                }
-                if let cluster = StockSageCorrelationCluster.largest(c) {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "link").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.danger)
-                        Text(cluster.note).font(.caption2).foregroundStyle(DS.Palette.dangerSoft)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                // F5 (audit 2026-07-12): disclose the thin-sample floor + the "—" undefined cell.
-                Text("Pairwise daily-return correlation over the overlapping window — lower (greener) off-diagonal = better diversified. Computed on as few as ~5 overlapping days for a freshly-added name, so a few-point cell is a weak estimate, not a settled relationship; a “—” cell is undefined (a series with no price variation).")
-                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                CorrelationMatrixView(matrix: c)
             }
             .padding(DS.Space.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2276,15 +2242,8 @@ struct MarketsView: View {
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
             // .contain (not .combine) so the per-cell correlation labels above survive as children.
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Correlation heatmap, \(c.symbols.count) symbols")
+            .accessibilityLabel("Correlation matrix, \(c.symbols.count) symbols")
         }
-    }
-
-    /// ≤0 (green, independent/hedged) → +1 (red, moves together / concentration).
-    /// A correlation of ~0 IS the diversified case, so it must read green, not red.
-    private func correlationColor(_ v: Double) -> Color {
-        if v > 0 { return DS.Palette.danger.opacity(0.22 + min(v, 1) * 0.55) }
-        return DS.Palette.successSoft.opacity(0.22 + min(-v, 1) * 0.55)
     }
 
     // MARK: Trade journal
@@ -2503,7 +2462,7 @@ struct MarketsView: View {
                         do {
                             try StockSageBackup.save(to: url, journal: journal,
                                 portfolio: portfolio, store: store)
-                            journalDataFeedback = "Backup saved (journal, portfolio, watchlist)."
+                            journalDataFeedback = "Backup saved (journal, portfolio, watchlist, price alerts)."
                         }
                         catch { journalDataFeedback = "Backup failed: \(error.localizedDescription)" }
                     }
@@ -2542,7 +2501,7 @@ struct MarketsView: View {
                     Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 .menuStyle(.borderlessButton).fixedSize()
-                .help("Import a journal CSV; back up or merge journal, portfolio and watchlist (JSON); or import your journal from Salehman AI. JSON backup excludes settings, credentials, chat and research imports.")
+                .help("Import a journal CSV; back up or merge journal, portfolio, watchlist and price alerts (JSON); or import your journal from Salehman AI. JSON backup excludes settings, credentials, chat and research imports.")
                 #else
                 // iOS Data affordance (2026-07-27): the mac menu above is NSOpenPanel-bound, so
                 // fencing it left iPhone with NO export path. Share sheet is the iOS-native
@@ -2560,7 +2519,7 @@ struct MarketsView: View {
                     case .success(let data):
                         ShareLink(item: String(decoding: data, as: UTF8.self),
                                   preview: SharePreview("StockSage backup (JSON)")) {
-                            Label("Share journal, portfolio & watchlist (JSON)", systemImage: "externaldrive.badge.icloud")
+                            Label("Share journal, portfolio, watchlist & price alerts (JSON)", systemImage: "externaldrive.badge.icloud")
                         }
                     case .failure(let error):
                         Button {
@@ -2577,7 +2536,7 @@ struct MarketsView: View {
                     Text("Data").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 .fileImporter(isPresented: $showRestoreImporter, allowedContentTypes: [.json]) { result in
-                    // Same three-store merge as macOS; existing records win, counts are actual adds.
+                    // Same four-collection merge as macOS; existing records win, counts are actual adds.
                     guard case .success(let url) = result else { return }
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }

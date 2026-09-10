@@ -88,9 +88,15 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
 
     // MARK: Thin file I/O (Application Support) — mirrors StockSageQuoteCache
 
-    nonisolated static func diskURL() -> URL? {
-        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                     in: .userDomainMask, appropriateFor: nil, create: true) else { return nil }
+    nonisolated static func diskURL(
+        isRunningTests: Bool = StockSageStore.isRunningTests,
+        resolveApplicationSupport: () -> URL? = {
+            try? FileManager.default.url(for: .applicationSupportDirectory,
+                                         in: .userDomainMask, appropriateFor: nil, create: true)
+        }
+    ) -> URL? {
+        guard !isRunningTests else { return nil }
+        guard let dir = resolveApplicationSupport() else { return nil }
         // STANDALONE DEVIATION (review HIGH, 2026-07-16): the parent app writes
         // "salehman_history_cache.json" at this same path with a whole-file replace and no
         // cross-process coordination — two apps sharing one cache silently destroy each
@@ -107,13 +113,14 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         return cache
     }
 
-    nonisolated static func load() -> StockSageHistoryCache? {
-        guard let url = diskURL(), let data = try? Data(contentsOf: url) else { return nil }
+    /// `url` overrides the real Application Support location for temp-file tests.
+    nonisolated static func load(from url: URL? = nil) -> StockSageHistoryCache? {
+        guard let url = url ?? diskURL(), let data = try? Data(contentsOf: url) else { return nil }
         return decode(data)
     }
 
-    nonisolated func save() {
-        guard let url = Self.diskURL(), let data = try? JSONEncoder().encode(self) else { return }
+    nonisolated func save(to url: URL? = nil) {
+        guard let url = url ?? Self.diskURL(), let data = try? JSONEncoder().encode(self) else { return }
         try? data.write(to: url, options: .atomic)
     }
 
@@ -127,8 +134,9 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     /// serial actor that reads-merges-writes atomically inside its isolation — two writers can neither
     /// reorder nor interleave, and a same-UTC-day on-disk superset is never shrunk. Callers use
     /// `await saveSerialized()` instead of the fire-and-forget `save()`.
-    func saveSerialized() async {
-        await CacheWriter.shared.write(self)
+    func saveSerialized(to url: URL? = nil) async {
+        guard let url = url ?? Self.diskURL() else { return }
+        await CacheWriter.shared.write(self, to: url)
     }
 
     /// PURE non-shrink merge decision (unit-testable without disk — mirrors `cancelSaveDecision`'s
@@ -153,8 +161,10 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     /// reorder nor interleave, so a same-day cache is never shrunk by a late-landing smaller write.
     actor CacheWriter {
         static let shared = CacheWriter()
-        func write(_ candidate: StockSageHistoryCache) {
-            StockSageHistoryCache.nonShrinkMerge(disk: StockSageHistoryCache.load(), candidate: candidate).save()
+        func write(_ candidate: StockSageHistoryCache, to url: URL) {
+            StockSageHistoryCache.nonShrinkMerge(
+                disk: StockSageHistoryCache.load(from: url), candidate: candidate
+            ).save(to: url)
         }
     }
 

@@ -153,7 +153,7 @@ struct StockSageEarningsTests {
     }
 
     @Test(arguments: [false, true])
-    @MainActor func invalidatedEarningsChainDoesNotStartNextProvider(cancel: Bool) async throws {
+    @MainActor func invalidatedEarningsChainDoesNotStartHistory(cancel: Bool) async throws {
         let pause = EarningsPause()
         var permitted = true
         var yahooCalls = 0
@@ -161,8 +161,8 @@ struct StockSageEarningsTests {
         let task = Task { @MainActor in
             await StockSageCatalystChain.resolve(now: now, stillValid: { permitted },
                 massiveCalendar: { .answered(nil) },
-                eodhdCalendar: { await pause.suspend(); return .answered(nil) },
                 yahooCalendar: {
+                    await pause.suspend()
                     yahooCalls += 1
                     return .answered(.init(date: now.addingTimeInterval(86_400), dateRangeEnd: nil, isEstimate: false))
                 }, history: { historyCalls += 1; return .answered([]) })
@@ -172,7 +172,7 @@ struct StockSageEarningsTests {
         if cancel { task.cancel() } else { permitted = false }
         pause.release()
         let result = await task.value
-        #expect(yahooCalls == 0 && historyCalls == 0)
+        #expect(yahooCalls == 1 && historyCalls == 0)
         #expect(result.earningsDate == nil && result.status == .unchecked)
         #expect(result.sourcesAsked == [StockSageMassiveEarnings.source])
         #expect(result.anySourceAnswered, "Keep provenance from the completed first source")

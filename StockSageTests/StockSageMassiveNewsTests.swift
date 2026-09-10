@@ -110,12 +110,11 @@ struct StockSageMassiveNewsTests {
         #expect(item.source == "Massive news · publisher unavailable")
     }
 
-    @Test("both parsers reject invalid budgets; source URLs cannot launch commands or disclose credentials")
+    @Test("parser rejects invalid budgets; source URLs cannot launch commands or disclose credentials")
     func trustBoundaries() throws {
         let data = try payload([article])
         for limit in [-1, 0, 6] {
             #expect(NS.parseMassiveNews(data, symbol: "AAPL", limit: limit, now: now).isEmpty)
-            #expect(NS.parseNews([], limit: limit, now: now).isEmpty)
             #expect(NS.massiveRequest(symbol: "AAPL", key: "fixture-only", limit: limit, now: now) == nil)
         }
         for days in [-1.0, 8, .infinity, .nan] {
@@ -141,33 +140,6 @@ struct StockSageMassiveNewsTests {
         let item = try #require(NS.parseMassiveNews(longData, symbol: "AAPL", now: now).first)
         #expect(item.title.count <= 241 && item.source.count <= 100 && item.snippet.count <= 501)
         #expect(try #require(item.insight).count <= 371)
-    }
-
-    @Test("successful primary skips fallback; unavailable/empty primary tries it exactly once")
-    func fallbackOrder() async throws {
-        let data = try payload([article])
-        let primary = NS.parseMassiveNews(data, symbol: "AAPL", now: now)
-        let fallback = [NS.NewsItem(date: now, title: "Fallback", snippet: "", link: nil, sentiment: nil)]
-        var calls: [String] = []
-        let success = await NS.firstAvailable(massive: { calls.append("massive"); return primary },
-                                             fallback: { calls.append("fallback"); return fallback })
-        #expect(success == primary && calls == ["massive"])
-        calls = []
-        let failure = await NS.firstAvailable(massive: { calls.append("massive"); return [] },
-                                             fallback: { calls.append("fallback"); return fallback })
-        #expect(failure == fallback && calls == ["massive", "fallback"])
-        #expect(failure.first?.source == "EODHD news" && failure.first?.insight == nil)
-    }
-
-    @Test("cancellation during primary does not start a fallback request")
-    func cancellation() async {
-        let result = await Task { @MainActor in
-            await NS.firstAvailable(massive: {
-                withUnsafeCurrentTask { $0?.cancel() }
-                return []
-            }, fallback: { Issue.record("Fallback called after cancellation"); return [] })
-        }.value
-        #expect(result.isEmpty)
     }
 
     #if os(macOS)

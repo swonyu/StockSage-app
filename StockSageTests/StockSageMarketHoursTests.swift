@@ -74,6 +74,22 @@ struct StockSageMarketHoursTests {
         #expect(StockSageMarketHours.nasdaqState(at: utc(2026, 12, 25, 16, 0), calendar: calendar).phase == .closed)
     }
 
+    @Test func unpublished2027NasdaqCalendarRemainsUnavailable() {
+        let unsupported = [
+            utc(2027, 1, 4, 17, 0),
+            utc(2027, 11, 26, 17, 0),
+            utc(2027, 12, 31, 17, 0)
+        ]
+        for date in unsupported {
+            #expect(StockSageMarketHours.nasdaqDay(at: date) == nil)
+            let state = StockSageMarketHours.nasdaqState(at: date, calendar: Self.utcCalendar)
+            #expect(state.phase == .closed)
+            #expect(state.phaseLabel == "Session calendar unavailable")
+            #expect(state.nextTransition == nil)
+        }
+        #expect(StockSageMarketHours.nasdaqDay(at: Date(timeIntervalSince1970: .nan)) == nil)
+    }
+
     @Test func tuesdayTenAMETIsOpen() {
         let date = utc(2026, 7, 21, 14, 0) // Tue 10:00 EDT
         let state = StockSageMarketHours.nasdaqState(at: date, calendar: Self.utcCalendar)

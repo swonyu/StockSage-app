@@ -401,8 +401,19 @@ final class StockSageStore: ObservableObject {
     // MARK: Price alerts (user-set target levels)
 
     private static func loadPriceAlerts(from defaults: UserDefaults) -> [PriceAlert] {
+        // Preserve baseline loading: backup validation must not hide decodable saved records.
         guard let data = defaults.data(forKey: priceAlertsKey),
               let decoded = try? JSONDecoder().decode([PriceAlert].self, from: data) else { return [] }
+        return decoded
+    }
+
+    private static func readPriceAlerts(from defaults: UserDefaults) throws -> [PriceAlert] {
+        guard let stored = defaults.object(forKey: priceAlertsKey) else { return [] }
+        guard let data = stored as? Data,
+              let decoded = try? JSONDecoder().decode([PriceAlert].self, from: data),
+              StockSageBackup.priceAlertValidationError(in: decoded) == nil else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
         return decoded
     }
 
@@ -699,6 +710,13 @@ final class StockSageStore: ObservableObject {
         return symbols
     }
 
+    /// Read committed alerts at export time; load's empty fallback must never become a false
+    /// successful backup when the saved value is corrupt or has the wrong defaults type.
+    func backupPriceAlerts() throws -> [PriceAlert] {
+        do { return try Self.readPriceAlerts(from: defaults) }
+        catch { throw StockSageBackup.BackupError.sourceReadFailed("price alerts") }
+    }
+
     /// Backup tickers were validated/normalized by the decoder. Restore the preference,
     /// not a quote: no network or invented prices, even when the app is offline.
     func prepareBackupImport(_ incoming: [String]) throws -> (added: Int, apply: () -> Void) {
@@ -713,6 +731,22 @@ final class StockSageStore: ObservableObject {
         return (additions.count, {
             self.defaults.set(symbols, forKey: Self.userSymbolsKey)
             self.userSymbols = symbols
+        })
+    }
+
+    /// Committed alerts win by immutable one-shot ID; only explicit backup records may be added.
+    /// Memory-only IDs may have been deleted/rearmed by another writer, so never resurrect them.
+    func preparePriceAlertBackupImport(_ incoming: [PriceAlert]) throws -> (added: Int, apply: () -> Void) {
+        let disk = try Self.readPriceAlerts(from: defaults)
+        var merged = disk
+        var ids = Set(merged.map(\.id))
+        let additions = incoming.filter { ids.insert($0.id).inserted }
+        merged.append(contentsOf: additions)
+        let data = try JSONEncoder().encode(merged)
+        let records = merged
+        return (additions.count, {
+            self.defaults.set(data, forKey: Self.priceAlertsKey)
+            self.priceAlerts = records
         })
     }
 
@@ -2091,10 +2125,10 @@ final class StockSageStore: ObservableObject {
         return (now, usable)
     }
 
-    /// Full chain for ONE tracked symbol: Massive/Benzinga earnings first, then EODHD calendar (if the plan tier
-    /// allows) → Yahoo `calendarEvents` (reading the range + estimate flag) → history-based
-    /// projection (EODHD fundamentals `Earnings.History` for a US name, Yahoo `earningsHistory`
-    /// for a Tadawul one) → `.unchecked`. Non-equities (index/forex/crypto, `^TASI.SR` included
+    /// Full chain for ONE tracked symbol: Massive/Benzinga earnings first, then Yahoo
+    /// `calendarEvents` (reading the range + estimate flag) → optional history-based projection
+    /// (Yahoo `earningsHistory` for non-US equities only) → `.unchecked`. Non-equities
+    /// (index/forex/crypto, `^TASI.SR` included
     /// via its `^` prefix) never reach the chain at all — `.notApplicable` is a pure
     /// classification, assigned once and left alone (no network, no TTL: it can't go stale).
     /// TTL-gated 24h off `catalystChain[symbol]?.checkedAt`, same constant and same "never
@@ -2113,32 +2147,15 @@ final class StockSageStore: ObservableObject {
         guard ToolPolicy.isExternalAllowed else { return }   // never stamp on a request never made
 
         let now = Date()
-        let isUS = StockSageEODHD.covers(up)
-        let outcome = await StockSageCatalystChain.resolve(
-            now: now,
-            stillValid: { ToolPolicy.isExternalAllowed },
-            massiveCalendar: { await StockSageMassiveEarnings.fetch(up, now: now) },
-            eodhdCalendar: {
-                // `fetchCalendar` returns nil for EVERY unreachable case (not covered, empty
-                // key, 24h-unavailable window open, non-200, timeout) — exactly the shape
-                // `.unavailable` needs, so no further translation is required (blocker fix
-                // 2026-09-06: previously this `nil` collapsed indistinguishably into the chain's
-                // OWN "nothing found" nil, which is what let an unasked source get recorded as
-                // asked and a never-answered question get stamped as a dated negative).
-                guard let rows = await StockSageEODHDCalendar.fetchCalendar(up) else { return .unavailable }
-                return .answered(StockSageEODHDCalendar.nextRow(rows, now: now))
-            },
-            yahooCalendar: {
-                switch await StockSageEarnings.fetchEarningsCalendarOutcome(for: up) {
-                case .answered(let info): return .answered(info)
-                case .unavailable:        return .unavailable
-                }
-            },
-            historyUnitLabel: isUS ? "reports" : "quarter ends",
-            history: {
-                let dates = isUS ? await StockSageEODHDCalendar.fetchEarningsHistory(up)
-                                 : await StockSageEarnings.fetchEarningsHistory(for: up)
-                // TODO(SAHMK): Tadawul has no EODHD coverage and Yahoo's `earningsHistory` module
+        let isUS = StockSageMassive.covers(up)
+        let history: (() async -> StockSageCatalystChain.Answer<[Date]>)?
+        if isUS {
+            // The retired US fundamentals leg had no transport. Do not silently add Yahoo US history.
+            history = nil
+        } else {
+            history = {
+                let dates = await StockSageEarnings.fetchEarningsHistory(for: up)
+                // TODO(SAHMK): Yahoo's `earningsHistory` module for Tadawul
                 // is unverified live for `.SR` (429-rate-limited today — see
                 // research_tadawul_realtime_2026-09-06.md). If it comes back empty (`.answered([])`,
                 // not `.unavailable`), this symbol lands on `.unchecked` with `sourcesAsked`
@@ -2147,6 +2164,18 @@ final class StockSageStore: ObservableObject {
                 guard let dates else { return .unavailable }
                 return .answered(dates)
             }
+        }
+        let outcome = await StockSageCatalystChain.resolve(
+            now: now,
+            stillValid: { ToolPolicy.isExternalAllowed },
+            massiveCalendar: { await StockSageMassiveEarnings.fetch(up, now: now) },
+            yahooCalendar: {
+                switch await StockSageEarnings.fetchEarningsCalendarOutcome(for: up) {
+                case .answered(let info): return .answered(info)
+                case .unavailable:        return .unavailable
+                }
+            },
+            history: history
         )
         publishCatalyst(outcome, symbol: up, checkedAt: now)
     }
@@ -2178,16 +2207,15 @@ final class StockSageStore: ObservableObject {
     /// have a catalyst on file" owner directive (2026-09-06: cost gates waived, provider rate
     /// limits still bind) covers the FULL tracked set, not just the top-ranked board names.
     /// TTL-gated per symbol via `refreshCatalyst`'s own guard (W1, 2026-09-06 — was
-    /// `refreshEarnings`, now superseded by the EODHD→Yahoo→projection chain), so a re-sweep
+    /// `refreshEarnings`, now superseded by the Massive/Benzinga→Yahoo→optional projection chain), so a re-sweep
     /// after the board is already fully checked is cheap — only never-checked or >24h-stale names
     /// actually hit the network. 4-parallel chunking unchanged from the old top-15 sweep; each
     /// chunk boundary checks `Task.isCancelled` so a superseded scan's sweep (e.g. `refreshIdeas`
     /// firing again before this one finished) doesn't keep grinding through hundreds of names
     /// after the caller moved on — whatever chunks DID complete are saved via the `defer` either
     /// way. Symbols this sweep hasn't reached yet are simply absent from `earningsCheckedAt` —
-    /// UNCHECKED, never fabricated as "none known" (honesty floor). One EODHD calendar
-    /// availability probe per sweep, skipped entirely while the 24h unavailable window is open
-    /// (never spends a request re-confirming a rejection we already know about).
+    /// UNCHECKED, never fabricated as "none known" (honesty floor). The shared Massive/Benzinga
+    /// availability probe remains once per sweep; no retired-provider probe is performed.
     func refreshEarningsForTracked() async {
         defer { saveCatalystRecords() }
         guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
@@ -2196,9 +2224,6 @@ final class StockSageStore: ObservableObject {
             await StockSageMassiveEarnings.probeAvailability()
         }
         guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
-        if StockSageEODHDCalendar.isAvailable() {
-            await StockSageEODHDCalendar.probeCalendarAvailability()
-        }
         let chunks = stride(from: 0, to: all.count, by: 4).map { Array(all[$0 ..< min($0 + 4, all.count)]) }
         for (index, chunk) in chunks.enumerated() {
             if Task.isCancelled { return }
@@ -2207,8 +2232,8 @@ final class StockSageStore: ObservableObject {
                 for await _ in group { }
             }
             // Pacing (major fix 2026-09-06; STANDING RULES: Yahoo 429s this Mac's IP today).
-            // Every non-EODHD-covered/miss symbol in a chunk hits Yahoo `calendarEvents`, and a
-            // `.SR` name hits it a second time for `earningsHistory` — with ZERO delay between
+            // Every Massive/Benzinga miss in a chunk hits Yahoo `calendarEvents`, and a non-US
+            // equity hits it a second time for `earningsHistory` — with ZERO delay between
             // chunks, a sustained throttle turned one ~900-name sweep into up to ~2,700 requests
             // fired as fast as 4-way parallelism allowed (only per-request backoff existed, no
             // shared cooldown across the sweep). 4 symbols / 750ms caps the whole sweep at
@@ -2704,8 +2729,9 @@ final class StockSageStore: ObservableObject {
     /// `.task` timer and `StockSageMonitor`'s every-cycle call are two OWNERS of one polling
     /// budget, not two independent budgets — without a floor, a monitor cycle landing between two
     /// MarketsView ticks (or the two simply racing) doubles the effective rate against an
-    /// endpoint (Yahoo, for every non-EODHD-covered tracked name) that's already 429ing this
-    /// Mac's IP today (STANDING RULES). 25s sits just under the 30s cadence so the owner's stated
+    /// endpoint (Yahoo, for every name not served by the retained Massive snapshot route) that's
+    /// already 429ing this Mac's IP today (STANDING RULES). 25s sits just under the 30s cadence so
+    /// the owner's stated
     /// "every 30 seconds" still holds while a redundant near-simultaneous call is dropped.
     nonisolated static let streamGapMinInterval: TimeInterval = 25
 

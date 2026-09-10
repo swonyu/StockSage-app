@@ -41,8 +41,8 @@ nonisolated struct StockSageCatalystRecordCache: Codable, Sendable, Equatable {
         /// record on disk, written before any of these fields existed, still decodes.
         var status: Status
         /// The provider's own confirmation flag, when it has one (Yahoo's `isEarningsDateEstimate`
-        /// inverted; EODHD's calendar has none, so it is always `false` there — see
-        /// StockSageEODHDCalendar.swift). `nil` when no source supplied a flag at all.
+        /// inverted; legacy observations from providers without a flag may carry `false`). `nil`
+        /// when no source supplied a flag at all.
         var confirmed: Bool?
         /// Upper bound of a provider-supplied date RANGE (Yahoo's 2-element `earningsDate`), or the
         /// ±7-day projection window's upper bound for `status == .projected`. `nil` for a single

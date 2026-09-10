@@ -15,7 +15,7 @@ enum StockSageDesktop {
         SidebarGroup(title: "Your records", sections: [.portfolio, .alerts]),
     ]
     static let sections: [MarketSection] = groups.flatMap(\.sections)
-    static let berry = Color(red: 0.85, green: 0.294, blue: 0.439)
+    static let berry = DS.Palette.accentText
     /// Command-1…9 follow the ORIGINAL raw order (watchlist=1 … briefing=9); appended routes get none.
     static func shortcut(for section: MarketSection) -> Int? {
         guard let index = MarketSection.allCases.firstIndex(of: section), index < 9 else { return nil }

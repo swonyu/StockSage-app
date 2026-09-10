@@ -278,6 +278,10 @@ enum StockSageCatalystNarrator {
         if introducesForeignNumbers(text, facts: facts) {
             return .unverified(text, source, reason: "The model introduced a number that is not in the supplied facts. Verify it before relying on it.")
         }
+        let prose = text.replacingOccurrences(of: #"\[[0-9]+\]"#, with: "", options: .regularExpression)
+        if prose.contains(where: \.isNumber) {
+            return .unverified(text, source, reason: "Figures in prose are not validated for subject, sign, unit or time. Use the original supplied facts.")
+        }
         return .text(text, source)
     }
 

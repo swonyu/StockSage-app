@@ -433,6 +433,14 @@ struct CatalystsSection: View {
                     }
                 }
                 .pickerStyle(.menu)
+                #if os(macOS)
+                Button("Use LM Studio · Qwen3.5 9B") {
+                    updateModelSetting("localServerOnly", key: StockSageLocalModelServer.backendKey)
+                    updateModelSetting(StockSageLocalModelServer.lmStudioURL, key: StockSageLocalModelServer.urlKey)
+                    updateModelSetting(StockSageLocalModelServer.lmStudioModel, key: StockSageLocalModelServer.modelKey)
+                }
+                .help("Select the installed stock 6-bit model on this Mac. This does not start a server or modify historical results.")
+                #endif
                 TextField("Server URL", text: Binding(get: { serverURL }, set: { updateModelSetting($0, key: StockSageLocalModelServer.urlKey) }))
                     .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
                 TextField("Model", text: Binding(get: { serverModel }, set: { updateModelSetting($0, key: StockSageLocalModelServer.modelKey) }))
@@ -622,7 +630,7 @@ struct CatalystsSection: View {
             HStack(spacing: DS.Space.md) {
                 Button("Details") { onSelect(idea) }
                     .buttonStyle(.plain).touchHitArea()
-                if StockSageEODHD.covers(idea.symbol) {
+                if StockSageMassive.covers(idea.symbol) {
                     Button(expanded.contains(idea.symbol) ? "Hide filings" : "Filings") { toggleFilings(idea.symbol) }
                         .buttonStyle(.plain).touchHitArea()
                 }
@@ -717,6 +725,15 @@ struct CatalystsSection: View {
             if let news = narrationNews[symbol] {
                 Text(news.summary).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let checkedAt = news.attempts.last?.checkedAt, !news.items.isEmpty {
+                    DisclosureGroup("Local headline sentiment · optional") {
+                        ForEach(news.items) { item in
+                            StockSageLocalSentimentView(evidence: .init(item: item, symbol: symbol, checkedAt: checkedAt),
+                                evidenceCurrent: refreshReason == nil && ToolPolicy.isExternalAllowed)
+                        }
+                    }
+                    .font(.caption)
+                }
             }
             if let evidence = narrationBenzinga[symbol] {
                 StockSageBenzingaEvidenceView(capturedSnapshot: evidence)

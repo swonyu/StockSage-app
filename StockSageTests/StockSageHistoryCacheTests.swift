@@ -17,6 +17,51 @@ struct StockSageHistoryCacheTests {
                                      highs: closes, lows: closes, closes: closes, volumes: closes)
     }
 
+    @Test func diskURLSkipsResolverInTestHostAndUsesItInProductionMode() {
+        #expect(StockSageStore.isRunningTests)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockSageHistoryCachePathProbe-\(UUID().uuidString)", isDirectory: true)
+        var resolverCalls = 0
+        let resolveApplicationSupport = {
+            resolverCalls += 1
+            return dir
+        }
+
+        #expect(HC.diskURL(isRunningTests: StockSageStore.isRunningTests,
+                           resolveApplicationSupport: resolveApplicationSupport) == nil)
+        #expect(resolverCalls == 0)
+
+        resolverCalls = 0
+        #expect(HC.diskURL(isRunningTests: false,
+                           resolveApplicationSupport: resolveApplicationSupport)
+                == dir.appendingPathComponent("stocksage_history_cache.json"))
+        #expect(resolverCalls == 1)
+    }
+
+    @Test func injectedPathKeepsSerializedMergeAndRoundTripOffApplicationSupport() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StockSageHistoryCacheTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("stocksage_history_cache.json")
+        let day = Date(timeIntervalSince1970: 100 * 86_400)
+        let disk = HC.from(
+            histories: ["AAA": history("AAA", bars: 2, base: 10),
+                        "BBB": history("BBB", bars: 2, base: 20)],
+            universe: ["AAA", "BBB"], savedAt: day)
+        disk.save(to: url)
+
+        let candidate = HC.from(histories: ["AAA": history("AAA", bars: 2, base: 100)],
+                                universe: ["AAA"], savedAt: day)
+        await candidate.saveSerialized(to: url)
+
+        let restored = try #require(HC.load(from: url))
+        #expect(Set(restored.priceHistories().keys) == ["AAA", "BBB"])
+        #expect(restored.priceHistories()["AAA"]?.closes == [100, 101])
+        #expect(restored.priceHistories()["BBB"]?.closes == [20, 21])
+        #expect(restored.schemaVersion == HC.currentSchemaVersion)
+    }
+
     // 1. Codec round-trip: encode → decode preserves entries and parallel-array equality.
     @Test func codecRoundTripPreservesEntries() throws {
         let e = HC.Entry(symbol: "AAA",

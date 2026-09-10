@@ -31,6 +31,19 @@ struct PriceAlert: Sendable, Equatable, Identifiable, Codable {
 
     nonisolated var isArmed: Bool { triggeredAt == nil }
 
+    /// Validate backup values without narrowing the stored symbol contract. The dedicated
+    /// ticker form is stricter than the store/Codable paths; preserve legacy spelling verbatim.
+    nonisolated var validationError: String? {
+        guard !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "ticker must not be blank."
+        }
+        guard target > 0, target.isFinite else { return "target must be positive and finite." }
+        guard triggeredAt.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true else {
+            return "trigger time must be finite when present."
+        }
+        return nil
+    }
+
     /// A new one-shot intent: old fetches/accepted-send callbacks must not match this arm.
     func rearmed() -> PriceAlert {
         PriceAlert(symbol: symbol, target: target, direction: direction)

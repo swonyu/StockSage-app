@@ -25,6 +25,7 @@ final class StockSageLiveStream: ObservableObject {
     private var conditionTask: Task<Void, Never>?
     private var regularConditions: Set<Int64> = []
     private var conditionsAsOf: Date?
+    private var exchangesAsOf: Date?
     private var referenceAttemptAt: Date?
     private var referenceGeneration = UUID()
     private static let referenceLifetime: TimeInterval = 86_400
@@ -242,27 +243,41 @@ final class StockSageLiveStream: ObservableObject {
         }
     ) -> Task<Void, Never>? {
         guard now.timeIntervalSince1970.isFinite, stillValid(), conditionTask == nil else { return nil }
-        if let at = conditionsAsOf, (0..<Self.referenceLifetime).contains(now.timeIntervalSince(at)) { return nil }
+        let conditionsFresh = conditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true
+        let exchangesFresh = exchangesAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true
+        guard !conditionsFresh || !exchangesFresh else { return nil }
         // One retry per minute after failure/empty data; the 250ms publisher never fans out requests.
         if let at = referenceAttemptAt, (0..<60).contains(now.timeIntervalSince(at)) { return nil }
         referenceAttemptAt = now
+        let refreshConditions = !conditionsFresh, refreshExchanges = !exchangesFresh
         let run = UUID()
         referenceGeneration = run
         let task = Task { [weak self] in
             defer {
                 if self?.referenceGeneration == run { self?.conditionTask = nil }
             }
-            guard !Task.isCancelled, stillValid() else { return }
-            do {
-                let regular = try await conditions()
-                guard !Task.isCancelled, stillValid(), let self,
-                      self.referenceGeneration == run, !regular.isEmpty else { return }
-                self.regularConditions = regular
-                self.conditionsAsOf = now // Request-start time conservatively bounds reference age.
-                let exchanges = try await exchangeList()
-                guard !Task.isCancelled, stillValid(), self.referenceGeneration == run else { return }
-                self.exchanges = exchanges
-            } catch { /* Keep the previous reference timestamp; no failed fetch becomes fresh. */ }
+            guard !Task.isCancelled, stillValid(), let self, self.referenceGeneration == run else { return }
+            if refreshConditions {
+                do {
+                    let regular = try await conditions()
+                    guard !Task.isCancelled, stillValid(), self.referenceGeneration == run else { return }
+                    if !regular.isEmpty {
+                        self.regularConditions = regular
+                        self.conditionsAsOf = now // Request-start time conservatively bounds reference age.
+                    }
+                } catch { /* Failed/empty conditions remain stale and retryable. */ }
+            }
+            guard !Task.isCancelled, stillValid(), self.referenceGeneration == run else { return }
+            if refreshExchanges {
+                do {
+                    let exchanges = try await exchangeList()
+                    guard !Task.isCancelled, stillValid(), self.referenceGeneration == run else { return }
+                    if !exchanges.isEmpty {
+                        self.exchanges = exchanges
+                        self.exchangesAsOf = now
+                    }
+                } catch { /* Failed/empty exchanges remain stale and retryable. */ }
+            }
         }
         conditionTask = task
         return task
@@ -352,7 +367,7 @@ final class StockSageLiveStream: ObservableObject {
         conditionTask?.cancel(); conditionTask = nil
         referenceGeneration = UUID(); referenceAttemptAt = nil
         connection?.close(); connection = nil
-        regularConditions = []; conditionsAsOf = nil; exchanges = [:]
+        regularConditions = []; conditionsAsOf = nil; exchanges = [:]; exchangesAsOf = nil
         clearPrices(clearNBBO: clearNBBO)
         connectionLabel = "Feed stopped"
     }

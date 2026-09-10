@@ -12,6 +12,56 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    @Test @MainActor func lmStudioProfileBoundsTheEntirePromptBeforeDispatch() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        // Output and both messages must fit together, including non-thinking chat framing.
+        for (system, user, output) in [(String(repeating: "a", count: 2000), String(repeating: "b", count: 2000), 170),
+                                      ("instructions", String(repeating: "ش", count: 2000), 170),
+                                      ("instructions", "facts", 4096)] {
+            var calls = 0
+            let result = await S.completeDetailed(config, isOllama: false, system: system, user: user,
+                maxTokens: output, transport: { request in
+                    calls += 1
+                    return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+            #expect(calls == 0)
+            #expect((try? result.get()) == nil)
+        }
+    }
+
+    @Test @MainActor func lmStudioProfileDoesNotAcceptTruncatedOrUnconfirmedFinish() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        for finish in ["length", "tool_calls", "unknown", ""] {
+            let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts", transport: { request in
+                let data = try JSONSerialization.data(withJSONObject: ["model": config.model,
+                    "choices": [["message": ["content": "A complete-looking sentence."], "finish_reason": finish]]])
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+            if case .success = result { Issue.record("New profile accepted unfinished content: \(finish)") }
+        }
+    }
+
+    @Test func lmStudioStableProfileRequestsIdleUnloadWithoutOllamaOptions() throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:1234", model: "qwen3.5-9b"))
+        let req = S.chatRequest(config, system: "instructions", user: "facts", isOllama: false, maxTokens: 16)
+        let data = try #require(req.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(req.url?.absoluteString == "http://127.0.0.1:1234/v1/chat/completions")
+        #expect(body["model"] as? String == "qwen3.5-9b")
+        #expect(body["ttl"] as? Int == 180)
+        #expect(body["think"] == nil && body["options"] == nil)
+        #expect(req.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test @MainActor func lmStudioProfileRejectsAnAnswerFromAnotherModel() async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:1234", model: "qwen3.5-9b"))
+        let result = await S.completeDetailed(config, isOllama: false, system: "facts only", user: "fixture", transport: { request in
+            let data = Data(#"{"model":"different-model","choices":[{"message":{"content":"positive"},"finish_reason":"stop"}]}"#.utf8)
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        if case .success = result { Issue.record("Wrong model response was accepted under the configured 9B identity") }
+    }
+
     @Test @MainActor func responseReaderCapsActualBytesNotJustContentLength() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ModelBodyProtocol.self]

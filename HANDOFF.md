@@ -1,5 +1,89 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Publication checkpoint — September 10, one commit; not an installation
+
+Owner requested commit/push, then explicitly requested one combined commit. Target:
+`origin` (`https://github.com/swonyu/StockSage-app.git`), branch
+`codex/qwen-chat-context`, base `d301176d645cce3fbf7b4836f394fd3961b52721`.
+This publication is a development checkpoint, not a merge into `main`, a model
+quality approval, or completion of the proposed AI harness.
+
+Included: pending app reliability fixes, native magenta/correlation/launch changes,
+retired EODHD paths and corresponding regressions, partial guarded LM Studio/local
+headline sentiment integration, and the AI-model/harness research report. The
+report describes proposals, not completed features. Model migration's remaining
+quality, lifecycle and promotion checks stay open; keep the fine-tuned 27B rollback.
+
+Owner dropped the IBKR integration idea. Do not continue that work or activate its
+relay. These pre-existing modified files remain local and are excluded from the
+commit: `tools/ibkr_paper_relay.py`, `tools/test_ibkr_paper_relay.py`, and
+`tools/ibkr_paper_relay.md`. Existing tracked integration is not deleted by this
+scope change. No relay launchd job was listed during the publication check.
+
+Fresh verification on the unchanged app source, Xcode 26.6 (17F113):
+
+- macOS 27: 2,176 passed, 1 existing opt-in skip, 0 failures; 206 suites;
+  xcodebuild exit 0. Swift Testing elapsed 120.443 seconds.
+- iPhone 17 Pro (gate), iOS 26.5 simulator: 2,110 passed, 0 skips/failures;
+  203 suites; xcodebuild exit 0. Swift Testing elapsed 71.886 seconds.
+- Both runs used the existing parent wrapper at
+  `/Users/saleh/StockSage-model-migration-20260910.w6pSJw/run-tests.sh`, stages
+  `commit-macos macos` and `commit-ios ios`, serial heavy testing, two build jobs,
+  with the prescribed exclusions `CalibrationPersistRunTests`,
+  `LiveUniverseVerificationTests`, and `StrategyBaselineMeasurementTests`.
+- Exact logs, xcresults, exit files and source checks are in that artifact root's
+  `commit-macos/` and `commit-ios/` directories. Both 385-path source manifests
+  match; each before/after source check passed. They include the locally retained
+  relay tooling, which is not part of the publication. App/test/build source is
+  the tested source; do not treat excluded relay changes as published.
+- `git diff --check` passed. Added/outgoing content had zero matches in the
+  bounded credential-pattern scan; this is not a complete historical-secret audit.
+  The research copy has 57 resolved numbered source references.
+
+No fresh Xcode 27 beta, strict standalone compiler, physical-iPhone, live-provider,
+model-quality or manual UI sign-off is claimed here. No installed app replacement,
+model restart, paid resource, real order, credential or historical-record edit.
+The new research and current migration status are in
+`agent-docs/AI_MODEL_HARNESS_RESEARCH_2026-09-10.md` and
+`agent-docs/MODEL_MIGRATION_2026-09-10.md`.
+
+## Master-plan review and four-fix wave — September 10, verified and not installed
+
+Current base `d301176d645cce3fbf7b4836f394fd3961b52721`, branch `codex/qwen-chat-context`,
+checkout `/Users/saleh/StockSage-wt/qwen-context`. Parent sole writer; four isolated
+Sol5.6-ultra implementers and one Astra6-ultra reviewer/editor completed and are closed.
+All five Claude reports were reviewed; all54 candidates and seven owner-gated source
+objects are retained with corrected dispositions in the external reviewed master plan.
+
+Uncommitted changes: HistoryCache test-host disk isolation; independent exchange-list
+recovery; additive checked price-alert backup/restore; shared press/segment Reduce Motion.
+Astra's two backup P1 findings were reproduced and fixed: restore no longer resurrects
+stale memory-only alerts, and backup validation no longer empties normal loading of
+previously supported records. Existing records, strategy/risk and research are preserved.
+
+Final frozen-source verification, serial, all exits0 and zero failures:
+- Xcode26.6/macOS27: **2190 passed +1 existing opt-in skip**,205 suites,350.126s.
+- Xcode26.6/iPhone17Pro gate/iOS26.5: **2127 passed**,203 suites,301.860s.
+- Xcode27 beta/macOS27: **2190 passed +1 existing opt-in skip**,205 suites,278.228s.
+- Xcode27 beta/iPhone17Pro/iOS27: **2127 passed**,203 suites,190.679s.
+- Strict Swift6 Mac module143s, iPhone module81s, test-source typecheck125s: allOK.
+Counts are test definitions, not expanded parameter cases; all three prescribed
+suite exclusions remain. All384 code/build hashes match across gates. The original
+iPhone attempt was cancelled for responsiveness (exit75, not a pass); owner resumed,
+then restored normal priority and two build jobs. Its successful retry is above.
+The157,500-input synthetic catalyst sweep finished in full. No active gate remains.
+
+Installed app unchanged; no install, commit/push, paid resource, provider/model call,
+broker activation, or historical-record edit. No full UI/VoiceOver, physical-iPhone,
+live credentials/source-age, profitability or crash-atomic multi-collection backup claim.
+Exact checkpoint, reports and receipts:
+`/Users/saleh/StockSage-master-plan-20260910.ZYd545/WORK_CHECKPOINT.md`.
+Final detailed receipt: `EXECUTION_RESULT.md` beside that checkpoint. BetaMac retained
+two pre-existing sidebar-fixture publishing warnings; no warning-free claim. iOS27
+simulator is Shutdown, iOS26.5 left as found. All54 candidates were reviewed, not
+implemented. Global instructions preserve the owner's preference to choose a better
+verified approach even when existing code must be rebuilt.
+
 ## macOS 27 restart continuation — September 10; verified, not installed
 
 Resumed the saved reliability/research reconciliation after the owner's Mac restart

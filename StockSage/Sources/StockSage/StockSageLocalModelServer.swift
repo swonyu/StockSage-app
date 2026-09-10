@@ -54,7 +54,7 @@ enum StockSageLocalModelServer {
     static let modelKey = "localModelServerModel"
 
     /// Written with each in-app mutation: A→B→A must not revive an old request.
-    private static let revisionKey = "stocksage.modelSettings.revision"
+    static let revisionKey = "stocksage.modelSettings.revision"
     static func settingsRevision(_ defaults: UserDefaults = .standard) -> String? {
         defaults.string(forKey: revisionKey)
     }
@@ -68,13 +68,33 @@ enum StockSageLocalModelServer {
 
     static let defaultURL = "http://127.0.0.1:11434"
     static let defaultModel = "qwen3.8"
+    // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
+    nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
+    nonisolated static let lmStudioModel = "qwen3.5-9b"
     nonisolated static let maximumResponseBytes = 1_048_576
+
+    /// Qwen3.5's installed NFC + byte-level BPE tokenizer cannot emit more tokens than
+    /// normalized UTF-8 bytes. The verified two-string-message non-thinking template has
+    /// fewer than 128 framing bytes. This is a sufficient bound, not an exact token count.
+    // ponytail: conservative bound can reject a tokenizable prompt; use a supported tokenizer
+    // endpoint if LM Studio exposes one, never guess bytes/4 or silently drop mandatory facts.
+    nonisolated static func promptFits(system: String, user: String, outputTokens: Int) -> Bool {
+        guard (1..<4096).contains(outputTokens) else { return false }
+        let budget = 4096 - outputTokens - 128
+        let systemBytes = system.precomposedStringWithCanonicalMapping.utf8.count
+        guard systemBytes <= budget else { return false }
+        return user.precomposedStringWithCanonicalMapping.utf8.count <= budget - systemBytes
+    }
 
     // MARK: Config
 
     struct Config: Sendable, Equatable {
         let baseURL: URL
         let model: String
+        nonisolated var isLMStudio9B: Bool {
+            model == StockSageLocalModelServer.lmStudioModel && StockSageLocalModelServer.isLoopback(baseURL)
+                && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
+        }
     }
 
     /// Validates and normalizes the two raw settings strings into a `Config`, or `nil` when
@@ -213,6 +233,7 @@ enum StockSageLocalModelServer {
         } else {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
+            if c.isLMStudio9B { body["ttl"] = 180 }
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         return request
@@ -222,7 +243,7 @@ enum StockSageLocalModelServer {
     nonisolated enum Finish: String, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
     nonisolated enum FailureCategory: String, Sendable {
         case invalidConfig, unavailable, modelMissing, unsupportedModel, nonHTTP, http, malformedJSON, responseShape, missingContent, emptyContent
-        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge
+        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge, contextBudget, incompleteOutput
     }
     nonisolated struct Diagnostic: Sendable, Equatable {
         var category: FailureCategory? = nil
@@ -243,6 +264,7 @@ enum StockSageLocalModelServer {
     nonisolated struct Completion: Sendable, Equatable {
         let text: String
         let diagnostic: Diagnostic
+        var model: String? = nil
     }
     nonisolated struct CompletionFailure: Error, Sendable, Equatable {
         let diagnostic: Diagnostic
@@ -313,7 +335,8 @@ enum StockSageLocalModelServer {
             diagnostic.category = .emptyContent
             return .failure(.init(diagnostic: diagnostic))
         }
-        return .success(.init(text: trimmed, diagnostic: diagnostic))
+        let model = (obj["model"] as? String).flatMap { !$0.isEmpty && $0.utf8.count <= 512 ? $0 : nil }
+        return .success(.init(text: trimmed, diagnostic: diagnostic, model: model))
     }
 
     /// Compatibility wrapper: exactly the existing trimmed content, regardless of metadata.
@@ -352,6 +375,9 @@ enum StockSageLocalModelServer {
         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
             return .failure(failure)
         }
+        if c.isLMStudio9B, !promptFits(system: system, user: user, outputTokens: maxTokens) {
+            return .failure(.init(diagnostic: .init(category: .contextBudget)))
+        }
         let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
                                   maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
         do {
@@ -382,9 +408,20 @@ enum StockSageLocalModelServer {
             }
             switch parseCompletion(data, isOllama: isOllama) {
             case .success(let reply):
+                // The new profile must not publish another model's answer under its selected ID.
+                // Keep legacy metadata acceptance unchanged for existing servers.
+                if c.isLMStudio9B, reply.model != c.model {
+                    return .failure(.init(diagnostic: .init(category: .responseShape, httpStatus: http.statusCode)))
+                }
+                if c.isLMStudio9B, reply.diagnostic.finish != .stop {
+                    var diagnostic = reply.diagnostic
+                    diagnostic.category = .incompleteOutput
+                    diagnostic.httpStatus = http.statusCode
+                    return .failure(.init(diagnostic: diagnostic))
+                }
                 var diagnostic = reply.diagnostic
                 diagnostic.httpStatus = http.statusCode
-                return .success(.init(text: reply.text, diagnostic: diagnostic))
+                return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
             case .failure(let failure):
                 var diagnostic = failure.diagnostic
                 diagnostic.httpStatus = http.statusCode

@@ -143,16 +143,20 @@ struct StockSageFeedIngressTests {
         let live = L()
         var requests = 0
         let load: @MainActor () async throws -> Set<Int64> = { requests += 1; return [801] }
+        // This case tests successful reference expiry; empty exchange data is now a retryable failure.
+        let exchanges: @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange] = {
+            [1: .init(id: 1, mic: "XNAS", acronym: "NASDAQ")]
+        }
         let initial = live.refreshReferences(now: now, stillValid: { true },
-            conditions: load, exchangeList: { [:] })
+            conditions: load, exchangeList: exchanges)
         let first = try #require(initial)
         await first.value
         let early = live.refreshReferences(now: now.addingTimeInterval(86_399), stillValid: { true },
-            conditions: load, exchangeList: { [:] })
+            conditions: load, exchangeList: exchanges)
         #expect(early == nil)
         let expired = now.addingTimeInterval(86_400)
         let second = live.refreshReferences(now: expired, stillValid: { true },
-            conditions: load, exchangeList: { [:] })
+            conditions: load, exchangeList: exchanges)
         #expect(second != nil, "Expired references must refresh without restarting the feed")
         await second?.value
         #expect(requests == 2)

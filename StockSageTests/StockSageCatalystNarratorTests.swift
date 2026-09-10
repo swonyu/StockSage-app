@@ -390,8 +390,9 @@ struct StockSageCatalystNarratorTests {
                 }
                 #expect(draft == text && actual == source && reason.contains("source number"))
             }
-            #expect(N.checkedResponse("Target 27.", facts: ["Target 27"], source: source,
-                sourceCount: 0) == .text("Target 27.", source))
+            if case .text = N.checkedResponse("Target 27.", facts: ["Target 27"], source: source, sourceCount: 0) {
+                Issue.record("Number membership alone cannot verify the figure's meaning")
+            }
             // Once a citation is valid, genuinely foreign financial numbers still fail.
             guard case .unverified(_, _, let reason) = N.checkedResponse("Target 99 [1].",
                 facts: ["Target 27", "[1] Source"], source: source, sourceCount: 1) else {
@@ -417,8 +418,17 @@ struct StockSageCatalystNarratorTests {
                 #expect(result != .text(text, source))
             }
         }
-        #expect(N.checkedResponse("AAPL price 100 [1].", facts: ["Price: 100", "[1] Source"],
-                                  source: .onDevice, sourceCount: 1) == .text("AAPL price 100 [1].", .onDevice))
+        #expect(N.checkedResponse("AAPL has an upcoming release [1].", facts: ["Price: 100", "[1] Source"],
+                                  source: .onDevice, sourceCount: 1) == .text("AAPL has an upcoming release [1].", .onDevice))
+    }
+
+    @Test func knownButMisboundNumbersRemainUnverified() {
+        for text in ["Net profit is 9.35 USD [1].", "Quote age is 5 seconds [1].", "العائد ٩٫٣٥٪ [1]."] {
+            let result = N.checkedResponse(text, facts: ["Net loss -9.35 USD", "Quote age 5 minutes", "[1] Fixture"],
+                source: .localServer(model: "qwen3.5-9b"), sourceCount: 1)
+            guard case .unverified(let draft, _, _) = result else { Issue.record("Known value gained unchecked sign/unit/subject: \(text)"); continue }
+            #expect(draft == text)
+        }
     }
 
     @Test("Result compares by case and payload")

@@ -1,6 +1,21 @@
 import SwiftUI
 import UserNotifications
 
+/// Reject the retired capture flag before SwiftUI constructs any preference-backed
+/// App properties, scenes or shared stores. Component fixtures run in the test host.
+@main
+enum StockSageLauncher {
+    static let unsupportedQAMessage = "The former --qa capture mode is unavailable. Use isolated component fixture tests; full-app QA is not configured.\n"
+
+    @MainActor static func main() {
+        if CommandLine.arguments.contains("--qa") {
+            FileHandle.standardError.write(Data(unsupportedQAMessage.utf8))
+            exit(64)
+        }
+        StockSageApp.main()
+    }
+}
+
 // MARK: - StockSage (standalone app entry)
 //
 // The Markets/StockSage money engine, extracted from the "Salehman AI" app @ fc8f383 as a
@@ -14,7 +29,6 @@ import UserNotifications
 // Extension batch (2026-07-16): menu-bar ticker (toggle in Settings, default on), Settings
 // scene (launch-at-login, monitor autostart, menu bar), first-run onboarding sheet (the
 // first-trade checklist + parent-app data import), App Intents (Shortcuts/Spotlight).
-@main
 struct StockSageApp: App {
     // Review 2026-07-27: the App-scope @ObservedObject store was UNUSED in this body yet
     // re-evaluated the whole scene on every store publish (each quote tick). MarketsView
@@ -49,6 +63,7 @@ struct StockSageApp: App {
                 // Both platforms open on Home: the iPhone's first native tab, never a route that
                 // lives behind the system More list.
                 Group { MarketsView(qaSection: .briefing) }
+                    .tint(DS.Palette.accent)
                     #if os(macOS)
                     .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
                                                             // a 900pt canvas onto a 430pt phone (clip)
@@ -114,6 +129,7 @@ struct StockSageApp: App {
         #if os(macOS)
         Settings {
             StockSageSettingsView()
+                .tint(DS.Palette.accent)
                 // Same dark commitment as the main window: the Form's DS.Palette
                 // captions (white-opacity) were unreadable on a light system Form.
                 .preferredColorScheme(.dark)

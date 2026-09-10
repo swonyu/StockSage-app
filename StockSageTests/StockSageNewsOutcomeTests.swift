@@ -15,30 +15,55 @@ struct StockSageNewsOutcomeTests {
         switch provider {
         case .benzinga: nil // Dedicated stage is always injected as a Page, never live.
         case .massive: N.massiveRequest(symbol: "AAPL", key: "fixture-only", now: now)
-        // Synthetic legacy-provider response coverage, never a production EODHD request.
-        case .eodhd: URLRequest(url: URL(string: "https://example.invalid/legacy-news")!)
         }
     }
     private func response(_ req: URLRequest, _ status: Int, _ body: Data) -> (Data, URLResponse) {
         (body, HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
-    @Test("Production request factories never send news to disabled EODHD")
-    func disabledProviderDoesNotFallBack() async {
+    @Test("Generic news failure dispatches only the retained Massive transport")
+    func genericFailureDispatchesOnlyMassive() async {
         var hosts: [String] = []
-        let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { provider in
-            switch provider {
-            case .benzinga: return nil
-            case .massive: return N.massiveRequest(symbol: "AAPL", key: "fixture-only", now: now)
-            case .eodhd: return N.eodhdRequest(symbol: "AAPL", key: "fixture-only", limit: 5)
-            }
-        }, transport: { req in
-            hosts.append(req.url?.host ?? "")
-            return response(req, 503, Data())
-        })
+        let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: request,
+            transport: { req in
+                hosts.append(req.url?.host ?? "")
+                return response(req, 503, Data())
+            })
         #expect(hosts == ["api.massive.com"])
         #expect(result.items.isEmpty)
-        #expect(result.summary.contains("EODHD: not checked (provider disabled)"))
-        #expect(result.attempts.first?.status == .unavailable(.http))
+        #expect(result.attempts.map(\.provider) == [.massive])
+        #expect(result.attempts.map(\.status) == [.unavailable(.http)])
+    }
+
+    @Test("Missing Massive news remains unavailable without admitting another provider stage")
+    func missingMassiveNewsStaysUnavailable() async {
+        var requested: [N.Provider] = []
+        let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { provider in
+            requested.append(provider)
+            return nil
+        }, transport: { _ in
+            Issue.record("missing request must not reach transport")
+            throw URLError(.badURL)
+        })
+        #expect(requested == [.massive])
+        #expect(result.attempts.map(\.status) == [.notChecked(.missingKey)])
+        #expect(result.items.isEmpty)
+    }
+
+    @Test("Failed Massive news remains unavailable without admitting another provider stage")
+    func failedMassiveNewsStaysUnavailable() async {
+        var requested: [N.Provider] = []
+        var transports = 0
+        let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { provider in
+            requested.append(provider)
+            return URLRequest(url: URL(string: "https://example.invalid/news")!)
+        }, transport: { _ in
+            transports += 1
+            throw URLError(.notConnectedToInternet)
+        })
+        #expect(requested == [.massive])
+        #expect(transports == 1)
+        #expect(result.attempts.map(\.status) == [.unavailable(.transport)])
+        #expect(result.items.isEmpty)
     }
     @Test("HTTP failure differs from answered empty at actual transport boundary")
     func httpVersusEmpty() async throws {
@@ -47,35 +72,12 @@ struct StockSageNewsOutcomeTests {
             let empty = try data(["status": "OK", "results": []])
             let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: request) { req in
                 calls += 1
-                return response(req, status, calls == 1 ? empty : Data("[]".utf8))
+                return response(req, status, empty)
             }
-            #expect(calls == 2 && result.items.isEmpty)
-            #expect(result.attempts.map(\.provider) == [.massive, .eodhd])
+            #expect(calls == 1 && result.items.isEmpty)
+            #expect(result.attempts.map(\.provider) == [.massive])
             #expect(result.attempts.first?.status == (status == 200 ? .answered : .unavailable(.http)))
             #expect(result.summary.contains(status == 200 ? "answered; selected 0" : "unavailable (http)"))
-        }
-    }
-    @Test("Empty primary retains provenance with fallback success or failure")
-    func emptyFallback() async throws {
-        for success in [true, false] {
-            var calls = 0
-            let empty = try data(["status": "OK", "results": []])
-            let fallback = try data([["title": "Fallback story", "date": "2026-08-31T20:00:00-03:00"]])
-            let checked = now.addingTimeInterval(2)
-            let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { checked }, request: request) { req in
-                calls += 1
-                return response(req, calls == 2 && !success ? 500 : 200, calls == 1 ? empty : fallback)
-            }
-            #expect(calls == 2 && result.attempts[0].status == .answered)
-            #expect(result.attempts[1].status == (success ? .answered : .unavailable(.http)))
-            #expect(result.items.count == (success ? 1 : 0))
-            #expect(result.attempts.allSatisfy { $0.checkedAt == checked })
-            #expect(result.summary.contains("Massive:") && result.summary.contains("EODHD:"))
-            if success {
-                #expect(result.items[0].source == "EODHD news")
-                #expect(N.instant(result.items[0].date) == "2026-08-31T23:00:00.000Z")
-                #expect(result.items[0].date != checked)
-            }
         }
     }
     @Test("Usable primary stops after one request and returns attributed story")
@@ -101,27 +103,23 @@ struct StockSageNewsOutcomeTests {
         }
         let missing = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { _ in nil },
             transport: { _ in Issue.record("unexpected network"); throw URLError(.badURL) })
-        #expect(missing.attempts.map(\.status) == [.notChecked(.missingKey), .notChecked(.providerDisabled)])
+        #expect(missing.attempts.map(\.status) == [.notChecked(.missingKey)])
     }
-    @Test("Policy revoked across either await discards late news and stops fallback")
+    @Test("Policy revoked across the generic transport discards late news")
     func revokedAfterAwait() async throws {
-        for revokeOn in [1, 2] {
-            var permitted = true
-            var calls = 0
-            let empty = try data(["status": "OK", "results": []])
-            let article = try data(["status": "OK", "results": [row()]])
-            let fallback = try data([["title": "Late story", "date": "2026-08-31T23:00:00Z"]])
-            let result = await N.observe(for: "AAPL", now: now, allowed: { permitted }, clock: { now }, request: request) { req in
-                calls += 1
-                await Task.yield()
-                if calls == revokeOn { permitted = false }
-                return response(req, 200, calls == 1 ? (revokeOn == 1 ? article : empty) : fallback)
-            }
-            #expect(calls == revokeOn && result.items.isEmpty)
-            #expect(result.attempts.last?.status == .unavailable(.policyDenied))
+        var permitted = true
+        var calls = 0
+        let article = try data(["status": "OK", "results": [row()]])
+        let result = await N.observe(for: "AAPL", now: now, allowed: { permitted }, clock: { now }, request: request) { req in
+            calls += 1
+            await Task.yield()
+            permitted = false
+            return response(req, 200, article)
         }
+        #expect(calls == 1 && result.items.isEmpty)
+        #expect(result.attempts.map(\.status) == [.unavailable(.policyDenied)])
     }
-    @Test("Cancellation after transport returns no evidence and never starts fallback")
+    @Test("Cancellation after transport returns no evidence")
     func cancellation() async throws {
         let body = try data(["status": "OK", "results": [row()]])
         let task = Task {
@@ -140,7 +138,7 @@ struct StockSageNewsOutcomeTests {
         let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: request) { _ in
             throw NSError(domain: "must-never-appear", code: 123)
         }
-        #expect(result.attempts.count == 2 && result.attempts.allSatisfy { $0.status == .unavailable(.transport) })
+        #expect(result.attempts.count == 1 && result.attempts[0].status == .unavailable(.transport))
         #expect(!result.summary.contains("must-never-appear"))
     }
     @Test("Malformed and oversized bodies are unavailable, valid excluded rows are answered")
@@ -182,34 +180,8 @@ struct StockSageNewsOutcomeTests {
         }, transport: { _ in Issue.record("unexpected transport"); throw URLError(.badURL) })
         #expect(result.attempts.count == 1 && result.attempts[0].status == .notChecked(.policyDenied))
     }
-    @Test("Fallback malformed and excluded responses keep primary failure and safe counts")
-    func fallbackParser() async throws {
-        for malformed in [true, false] {
-            var calls = 0
-            let body = malformed ? Data("{}".utf8) : try data([
-                ["title": "Missing date"], ["title": "Future", "date": "2026-09-01T00:00:01Z"],
-                ["title": "Old", "date": "2026-08-24T23:59:59Z"]])
-            let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: request) { req in
-                calls += 1; return response(req, calls == 1 ? 503 : 200, body)
-            }
-            #expect(calls == 2 && result.items.isEmpty && result.attempts[0].status == .unavailable(.http))
-            #expect(result.attempts[1].status == (malformed ? .unavailable(.malformed) : .answered))
-            if !malformed { #expect(result.attempts[1].excluded == .init(stale: 1, future: 1, missingDate: 1)) }
-        }
-    }
-    @Test("Cancellation on fallback and withholding after collection preserve primary provenance")
-    func fallbackCancellationAndWithholding() async throws {
-        let task = Task {
-            var calls = 0
-            return await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: request) { req in
-                calls += 1
-                if calls == 2 { withUnsafeCurrentTask { $0?.cancel() } }
-                return response(req, 200, calls == 1 ? Data(#"{"results":[]}"#.utf8) : Data("[]".utf8))
-            }
-        }
-        let result = await task.value
-        #expect(result.attempts.count == 2 && result.items.isEmpty)
-        #expect(result.attempts[0].status == .answered && result.attempts[1].status == .unavailable(.cancelled))
+    @Test("Withholding after collection preserves the answered attempt provenance")
+    func withholdingAfterCollectionPreservesAttemptProvenance() throws {
         let attempt = N.parseObservation(try data(["results": [row()]]), provider: .massive, symbol: "AAPL", now: now, checkedAt: now)
         var withheld = N.Observation(attempts: [attempt]); withheld.withholdingReason = .policyDenied
         #expect(withheld.items.isEmpty && withheld.attempts[0].status == .answered)
@@ -234,6 +206,15 @@ struct StockSageNewsOutcomeTests {
         #expect(N.parseMassiveNews(try data(["results": [row(date: rawTime + " instructions")]]), symbol: "AAPL", now: now).isEmpty)
         let dayOnly = StockSageCatalystNarrator.CitedSource(date: now, source: "SEC", title: "Filing", snippet: "", link: nil)
         #expect(StockSageCatalystNarrator.sourceDate(dayOnly) == "2026-09-01")
+    }
+    @Test("Explicit legacy news provenance survives citation conversion")
+    func legacyNewsProvenance() {
+        let item = N.NewsItem(date: now, title: "Historical fixture", snippet: "Attributed excerpt",
+                              link: nil, sentiment: nil, source: "EODHD news")
+        #expect(StockSageCatalystNarrator.CitedSource(news: item).source == "EODHD news")
+        let snapshot = StockSageChat.addingResearch(to: .init(at: now, facts: [], context: "Fixture"),
+            symbol: "AAPL", news: [item], leads: nil, webAllowed: true)
+        #expect(snapshot.sources?.first?.attribution == "EODHD news")
     }
     @Test("Typed outcome reaches bounded Chat status without becoming a fact or source")
     func chatPresentation() throws {
@@ -280,13 +261,12 @@ struct StockSageNewsOutcomeTests {
             var loads = 0, transports = 0
             let result = await N.observe(for: "AAPL", now: now, benzingaPage: page,
                 loadBenzinga: { loads += 1; return benzingaPage() },
-                isCurrent: { $0 == "opaque-fixture" }, allowed: { true }, clock: { now }, request: { provider in
-                    provider == .eodhd ? nil : request(provider)
-                }, transport: { req in
+                isCurrent: { $0 == "opaque-fixture" }, allowed: { true }, clock: { now }, request: request,
+                transport: { req in
                     transports += 1; return response(req, 200, Data(#"{"results":[]}"#.utf8))
                 })
             #expect(loads == 0 && transports == (page.records.isEmpty ? 1 : 0))
-            #expect(result.attempts.map(\.provider) == (page.records.isEmpty ? [.benzinga, .massive, .eodhd] : [.benzinga]))
+            #expect(result.attempts.map(\.provider) == (page.records.isEmpty ? [.benzinga, .massive] : [.benzinga]))
             #expect(result.attempts.first?.checkedAt == page.checkedAt)
             #expect(try encoder.encode(page) == before)
             if !page.records.isEmpty { #expect(result.items.count == 1) }
@@ -360,9 +340,9 @@ struct StockSageNewsOutcomeTests {
                                  (403, .entitlement), (429, .throttled), (503, .http)] {
             let result = await N.observe(for: "AAPL", now: now, benzingaPage: benzingaPage(),
                 isCurrent: { $0 == "opaque-fixture" }, allowed: { true }, clock: { now },
-                request: { $0 == .eodhd ? nil : request($0) },
+                request: request,
                 transport: { req in response(req, code, Data("private server body".utf8)) })
-            #expect(result.attempts.count == 3 && result.attempts[1].status == .unavailable(expected))
+            #expect(result.attempts.count == 2 && result.attempts[1].status == .unavailable(expected))
             #expect(!result.summary.contains("private server body"))
         }
     }
@@ -414,30 +394,29 @@ struct StockSageNewsOutcomeTests {
         #expect(result.attempts.first?.status == .unavailable(.cancelled))
     }
 
-    @Test("Typed fallback throws retain provider status and terminal failures stop the chain")
-    func benzingaThrownFallbackFailures() async {
-        let cases: [(B.Failure, N.Failure, Bool)] = [
-            (.unauthorized, .unauthorized, false), (.throttled, .throttled, false),
-            (.timedOut, .timedOut, false), (.obsoleteCredential, .obsoleteCredential, true),
-            (.policyDenied, .policyDenied, true)]
-        for (failure, expected, terminal) in cases {
+    @Test("Typed generic transport failures retain provider status")
+    func benzingaTypedGenericTransportFailures() async {
+        let cases: [(B.Failure, N.Failure)] = [
+            (.unauthorized, .unauthorized), (.throttled, .throttled),
+            (.timedOut, .timedOut), (.obsoleteCredential, .obsoleteCredential),
+            (.policyDenied, .policyDenied)]
+        for (failure, expected) in cases {
             var requested: [N.Provider] = []
             var transports = 0
             let result = await N.observe(for: "AAPL", now: now, benzingaPage: benzingaPage(),
                 isCurrent: { _ in true }, allowed: { true }, clock: { now }, request: { provider in
                     requested.append(provider)
-                    return provider == .eodhd ? nil : request(provider)
+                    return request(provider)
                 }, transport: { _ in
                     transports += 1
                     throw failure
                 })
             #expect(transports == 1 && result.items.isEmpty)
-            #expect(requested == (terminal ? [.massive] : [.massive, .eodhd]))
-            #expect(result.attempts.map(\.provider) == (terminal ? [.benzinga, .massive] : [.benzinga, .massive, .eodhd]))
+            #expect(requested == [.massive])
+            #expect(result.attempts.map(\.provider) == [.benzinga, .massive])
             #expect(result.attempts[0].status == .answered)
             #expect(result.attempts[1].status == .unavailable(expected))
             #expect(result.summary.contains("Massive: unavailable (\(expected.rawValue))"))
-            if !terminal { #expect(result.attempts.last?.status == .notChecked(.providerDisabled)) }
         }
     }
 

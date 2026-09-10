@@ -26,15 +26,18 @@ import Testing
         let yahoo = try #require(StockSageQuoteService.parseChart(Data(#"{"chart":{"result":[{"meta":{"symbol":"AAPL","regularMarketPrice":100,"previousClose":99,"regularMarketTime":1700000000}}]}}"#.utf8)))
         #expect(yahoo.priceSource == .yahoo)
         #expect(yahoo.marketTime == Date(timeIntervalSince1970: 1_700_000_000))
-        let eodhd = try #require(StockSageEODHD.parseRealTime(["close": 100, "previousClose": 99], requestedSymbol: "AAPL"))
-        #expect(eodhd.priceSource == .eodhd)
-        #expect(eodhd.marketTime == nil)
         let bars = try #require(StockSageMassive.parseHistory(Data(#"{"status":"OK","results":[{"t":1700000000000,"o":100,"h":102,"l":99,"c":101,"v":10},{"t":1700086400000,"o":101,"h":103,"l":100,"c":102,"v":20}]}"#.utf8), symbol: "AAPL"))
         #expect(bars.priceSource == .massiveDaily)
         #expect(bars.closes == [101, 102])
         let yahooBars = try #require(StockSageQuoteService.parseHistory(Data(#"{"chart":{"result":[{"timestamp":[1700000000,1700086400],"indicators":{"quote":[{"open":[100,101],"high":[102,103],"low":[99,100],"close":[101,102],"volume":[10,20]}]}}]}}"#.utf8), symbol: "AAPL"))
         #expect(yahooBars.priceSource == .yahooBars)
         #expect(yahooBars.closes == bars.closes)
+    }
+
+    @Test func legacyEODHDSourceStillDecodesAndLabels() throws {
+        let source = try JSONDecoder().decode(StockSagePriceSource.self, from: Data(#""eodhd""#.utf8))
+        #expect(source == .eodhd)
+        #expect(source.label == "EODHD")
     }
 
     @Test func acceptedPriceAndOriginMoveTogetherRejectedPriceCannotRelabel() {
