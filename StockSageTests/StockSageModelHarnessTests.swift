@@ -7,6 +7,21 @@ import Foundation
 // Every case here reproduces a defect confirmed by reading the shipped source, or a measured
 // failure from the frozen baseline in `StockSage-harness-20260910.opus/`. No live network:
 // each test injects a transport closure, exactly like the existing suite.
+/// Releases every waiter once two have arrived, so two requests are provably in flight at the
+/// same moment without a sleep-based guess.
+private actor AsyncGate {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    func arriveAndWait() async {
+        if waiting.count >= 1 {
+            let held = waiting
+            waiting.removeAll()
+            held.forEach { $0.resume() }
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+}
+
 @Suite("Model harness — budget, truncation and identity across every backend")
 struct StockSageModelHarnessTests {
 
@@ -412,6 +427,71 @@ struct StockSageModelHarnessTests {
         // A superseded request must not relabel a newer turn.
         session.advance(id: UUID(), to: .sources)
         #expect(session.turns.last?.notice == StockSageChatSession.Phase.generating.notice)
+    }
+
+    // MARK: Cross-caller contention is observed, not assumed
+
+    // Nothing in the app serialises model work across callers: the assessment object's
+    // single-active-symbol guard is local to itself, so a Chat turn and a background research
+    // cycle can generate simultaneously and neither knows. The approved design gates its
+    // admission policy on instrumenting the callers FIRST, so this counts rather than locks —
+    // it must never block a request, and it must never leave a request permanently counted.
+
+    @Test @MainActor func aLoneRequestReportsNoContention() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
+            transport: { request in
+                try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                             "done_reason": "stop"], request)
+            })
+        let completion = try #require(try? result.get())
+        #expect(completion.diagnostic.concurrentRequests == 0)
+        #expect(completion.diagnostic.summary.contains("concurrent=0"))
+    }
+
+    // Two overlapping requests must each observe the other. The transport blocks until both
+    // have entered, which is only possible if the counter does not serialise them.
+    @Test @MainActor func overlappingRequestsEachObserveTheOther() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let bothEntered = AsyncGate()
+        func call() async -> S.CompletionResult {
+            await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
+                transport: { request in
+                    await bothEntered.arriveAndWait()
+                    return try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                                        "done_reason": "stop"], request)
+                })
+        }
+        async let first = call()
+        async let second = call()
+        let results = await [first, second]
+        let observed = results.compactMap { try? $0.get() }.map(\.diagnostic.concurrentRequests)
+        #expect(observed.count == 2)
+        // Whichever entered second saw one already running; the counter did not block either.
+        #expect(observed.contains(1), "no request observed the other: \(observed)")
+    }
+
+    // A request that fails must still release its slot, or observed concurrency would creep
+    // upward forever and the measurement would be worthless.
+    @Test @MainActor func aFailedRequestDoesNotStayCounted() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        for _ in 0..<5 {
+            _ = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
+                transport: { _ in throw URLError(.timedOut) })
+        }
+        // Give the deferred release a chance to run, then confirm the counter drained.
+        for _ in 0..<50 where await S.currentInFlight() != 0 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await S.currentInFlight() == 0)
+
+        let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
+            transport: { request in
+                try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                             "done_reason": "stop"], request)
+            })
+        #expect((try? result.get())?.diagnostic.concurrentRequests == 0,
+                "a later request inherited contention from failed ones")
     }
 
     // MARK: The diagnostic must never carry server text

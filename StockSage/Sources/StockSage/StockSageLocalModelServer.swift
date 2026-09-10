@@ -336,6 +336,11 @@ enum StockSageLocalModelServer {
         var promptTokens: Int? = nil
         var completionTokens: Int? = nil
         var malformedUsage = false
+        /// How many OTHER model requests were already running when this one started.
+        /// 0 means this request had the local model to itself. Non-zero is the measurement the
+        /// admission-policy decision needs: it shows real cross-caller contention rather than
+        /// an assumption about it.
+        var concurrentRequests: Int? = nil
         /// Wall-clock milliseconds this request spent at the transport, success or failure.
         /// Callers use it to show elapsed time and to explain a slow turn instead of a spinner
         /// with no information. It is a measured duration, never an estimate.
@@ -343,7 +348,7 @@ enum StockSageLocalModelServer {
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown")"
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown")"
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -364,6 +369,34 @@ enum StockSageLocalModelServer {
     }
     typealias CompletionResult = Swift.Result<Completion, CompletionFailure>
     nonisolated static func boundedCount(_ value: Int) -> Int { min(max(value, 0), 16_777_216) }
+
+    // MARK: In-flight observation
+    //
+    // WHY ONLY COUNTING, NOT LOCKING: the approved design's admission policy ("one heavy local
+    // generator, interactive priority") is explicitly gated on instrumenting all six callers
+    // FIRST. Nothing in this app currently serialises model work across callers — the
+    // assessment object's single-active-symbol guard is local to itself, so a Chat turn and a
+    // background research cycle can be generating at the same time and neither knows.
+    //
+    // This counter is the measurement that decision needs, and it is deliberately not a lock:
+    // it never blocks, never queues and cannot deadlock a model call. Each completion records
+    // how many requests were in flight when it started, so real contention can be read off
+    // production diagnostics instead of guessed at.
+    private actor InFlight {
+        private var count = 0
+        /// Returns the number of requests already running when this one entered.
+        func enter() -> Int {
+            defer { count += 1 }
+            return count
+        }
+        func leave() { count = max(0, count - 1) }
+        var current: Int { count }
+    }
+    private static let inFlight = InFlight()
+
+    /// How many model requests were already running when the most recent one started.
+    /// Test/diagnostic read; production callers get this on the completion's `Diagnostic`.
+    static func currentInFlight() async -> Int { await inFlight.current }
 
     /// The distinct causes a caller must be able to tell apart when a model turn fails.
     /// Every caller renders its own wording, but the CLASSIFICATION lives here so no surface
@@ -536,6 +569,10 @@ enum StockSageLocalModelServer {
         func elapsedMilliseconds() -> Int {
             Int((DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds) / 1_000_000)
         }
+        // Counted for the whole transport, and released on EVERY exit path including a thrown
+        // cancellation, so an abandoned request can never inflate the observed concurrency.
+        let concurrent = await inFlight.enter()
+        defer { Task { await inFlight.leave() } }
         do {
             let (data, response): (Data, URLResponse)
             if let transport { (data, response) = try await transport(request) }
@@ -574,6 +611,7 @@ enum StockSageLocalModelServer {
                 if identityMismatch {
                     return .failure(.init(diagnostic: .init(category: .responseShape,
                                                             httpStatus: http.statusCode,
+                                                            concurrentRequests: concurrent,
                                                             elapsedMilliseconds: elapsedMilliseconds())))
                 }
                 // Truncation stays OBSERVATIONAL here, as this seam has always documented:
@@ -587,22 +625,26 @@ enum StockSageLocalModelServer {
                     diagnostic.category = .incompleteOutput
                     diagnostic.httpStatus = http.statusCode
                     diagnostic.elapsedMilliseconds = elapsedMilliseconds()
+                diagnostic.concurrentRequests = concurrent
                     return .failure(.init(diagnostic: diagnostic))
                 }
                 var diagnostic = reply.diagnostic
                 diagnostic.httpStatus = http.statusCode
                 diagnostic.elapsedMilliseconds = elapsedMilliseconds()
+                diagnostic.concurrentRequests = concurrent
                 return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
             case .failure(let failure):
                 var diagnostic = failure.diagnostic
                 diagnostic.httpStatus = http.statusCode
                 diagnostic.elapsedMilliseconds = elapsedMilliseconds()
+                diagnostic.concurrentRequests = concurrent
                 return .failure(.init(diagnostic: diagnostic))
             }
         } catch {
             var failure = transportFailure(error)
             var diagnostic = failure.diagnostic
             diagnostic.elapsedMilliseconds = elapsedMilliseconds()
+            diagnostic.concurrentRequests = concurrent
             failure = .init(diagnostic: diagnostic)
             return .failure(failure)
         }
