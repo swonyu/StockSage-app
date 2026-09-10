@@ -875,6 +875,31 @@ struct StockSageChatTests {
                      omittedRecordCount: 2)
     }
 
+    // The Catalysts narration panel used one unlabelled spinner across source collection, a
+    // model probe and a 90-second completion. This renders the real labelled control and
+    // proves the label actually draws: a labelled spinner must be materially larger than the
+    // bare one it replaced, which an empty or dropped label would not be.
+    @Test(arguments: [360, 760])
+    @MainActor func renderNarrationStageLabels(width: Int) async throws {
+        func panel(_ label: String?) -> some View {
+            GroupBox {
+                Group {
+                    if let label { ProgressView(label).controlSize(.small) }
+                    else { ProgressView().controlSize(.small) }
+                }.padding(DS.Space.sm)
+            }.padding(16).frame(width: CGFloat(width))
+                .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        }
+        let bare = try await capture(panel(nil), name: "stocksage-narration-stage-bare-\(width)")
+        for stage in StockSageCatalystNarrator.Stage.allCases {
+            let labelled = try await capture(panel(stage.label),
+                name: "stocksage-narration-stage-\(stage.rawValue.prefix(10))-\(width)")
+            #expect(labelled.width == CGFloat(width))
+            #expect(labelled.height > bare.height,
+                    "\(stage) label did not render: same height as an unlabelled spinner")
+        }
+    }
+
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil) async throws -> CGSize {
         var appeared = false
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
