@@ -76,14 +76,79 @@ enum StockSageLocalModelServer {
     /// Qwen3.5's installed NFC + byte-level BPE tokenizer cannot emit more tokens than
     /// normalized UTF-8 bytes. The verified two-string-message non-thinking template has
     /// fewer than 128 framing bytes. This is a sufficient bound, not an exact token count.
-    // ponytail: conservative bound can reject a tokenizable prompt; use a supported tokenizer
-    // endpoint if LM Studio exposes one, never guess bytes/4 or silently drop mandatory facts.
-    nonisolated static func promptFits(system: String, user: String, outputTokens: Int) -> Bool {
-        guard (1..<4096).contains(outputTokens) else { return false }
-        let budget = 4096 - outputTokens - 128
+    ///
+    /// MEASURED CONSERVATISM (2026-09-10, qwen3.5-9b via LM Studio, receipts in
+    /// `StockSage-harness-20260910.opus/context-budget-calibration.json`): the real ratio is
+    /// 1.21 bytes/unit for dense numeric tables, 2.0 for JSON facts, 4.0 for English news and
+    /// 5.5 for Arabic news. So this bound is nearly tight for tables and costs Arabic evidence
+    /// about 5.5x of its allowance. It is kept because it is SOUND — the installed LM Studio
+    /// build exposes no tokenizer endpoint (`/v1/tokenize` and `/api/v0/tokenize` both return
+    /// an "Unexpected endpoint" body), so there is nothing exact to ask. Callers must therefore
+    /// pack to `maximumUserBytes` and DISCLOSE what they dropped, never silently truncate.
+    // ponytail: swap for a real count if a tokenizer endpoint ships; never guess bytes/4.
+    nonisolated static func promptFits(system: String, user: String, outputTokens: Int,
+                                       contextTokens: Int = 4096) -> Bool {
+        guard let budget = promptBudget(outputTokens: outputTokens, contextTokens: contextTokens) else {
+            return false
+        }
         let systemBytes = system.precomposedStringWithCanonicalMapping.utf8.count
         guard systemBytes <= budget else { return false }
         return user.precomposedStringWithCanonicalMapping.utf8.count <= budget - systemBytes
+    }
+
+    /// Total normalized-UTF-8 byte budget for system + user together, or nil when the caller's
+    /// output/context request is itself unusable.
+    private nonisolated static func promptBudget(outputTokens: Int, contextTokens: Int) -> Int? {
+        guard (1..<1_048_576).contains(contextTokens), (1..<contextTokens).contains(outputTokens) else {
+            return nil
+        }
+        let budget = contextTokens - outputTokens - 128
+        return budget > 0 ? budget : nil
+    }
+
+    /// How many UTF-8 bytes of `user` content actually fit alongside this `system` string.
+    /// Callers pack evidence to THIS number instead of a hardcoded constant, so an over-large
+    /// fact set becomes a disclosed partial answer rather than a rejected whole request.
+    nonisolated static func maximumUserBytes(system: String, outputTokens: Int,
+                                             contextTokens: Int = 4096) -> Int {
+        guard let budget = promptBudget(outputTokens: outputTokens, contextTokens: contextTokens) else {
+            return 0
+        }
+        return max(0, budget - system.precomposedStringWithCanonicalMapping.utf8.count)
+    }
+
+    /// Result of fitting an evidence set to the real budget.
+    /// `omitted > 0` is a fact the caller MUST disclose — silently shortening evidence and then
+    /// presenting a confident answer is exactly the failure this whole seam exists to prevent.
+    nonisolated struct FittedPrompt: Sendable, Equatable {
+        let optionalKept: Int
+        let omitted: Int
+        let userBytes: Int
+        var isComplete: Bool { omitted == 0 }
+    }
+
+    /// Drop whole OPTIONAL records from the end, one at a time, until the assembled prompt fits.
+    /// Mandatory content is never dropped: if the prompt does not fit with zero optional records,
+    /// this returns nil and the caller must report a context-budget limit rather than send a
+    /// prompt with a risk disclosure or a cash constraint quietly removed.
+    ///
+    /// `assemble` receives the number of optional records to include and returns the exact
+    /// (system, user) pair that would be sent, so the measurement is of the real strings —
+    /// no estimate of template overhead, no guessing at per-fact prefixes.
+    nonisolated static func fit(optionalCount: Int, outputTokens: Int, contextTokens: Int = 4096,
+                                assemble: (Int) -> (system: String, user: String)) -> FittedPrompt? {
+        guard optionalCount >= 0 else { return nil }
+        var keep = optionalCount
+        while true {
+            let (system, user) = assemble(keep)
+            if promptFits(system: system, user: user, outputTokens: outputTokens,
+                          contextTokens: contextTokens) {
+                return FittedPrompt(optionalKept: keep, omitted: optionalCount - keep,
+                                    userBytes: user.precomposedStringWithCanonicalMapping.utf8.count)
+            }
+            guard keep > 0 else { return nil }
+            keep -= 1
+        }
     }
 
     // MARK: Config
@@ -255,10 +320,14 @@ enum StockSageLocalModelServer {
         var promptTokens: Int? = nil
         var completionTokens: Int? = nil
         var malformedUsage = false
+        /// Wall-clock milliseconds this request spent at the transport, success or failure.
+        /// Callers use it to show elapsed time and to explain a slow turn instead of a spinner
+        /// with no information. It is a measured duration, never an estimate.
+        var elapsedMilliseconds: Int? = nil
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage)"
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown")"
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -279,6 +348,19 @@ enum StockSageLocalModelServer {
     }
     typealias CompletionResult = Swift.Result<Completion, CompletionFailure>
     nonisolated static func boundedCount(_ value: Int) -> Int { min(max(value, 0), 16_777_216) }
+
+    /// True when a completion stopped because it hit the output limit rather than finishing.
+    ///
+    /// Callers that publish a FINANCIAL VERDICT must refuse such an answer: measured 2026-09-10,
+    /// the frozen `holdout_01_loss` case came back with finish_reason "length", a P/L cut off
+    /// mid-sentence, and a headline figure its own truncated working contradicted. A cut-off
+    /// number is not a shorter answer, it is a different one.
+    ///
+    /// Callers that publish PROSE (conversational Chat) should instead keep the text and tell the
+    /// user it was cut off — discarding a long, useful, merely-unfinished reply helps nobody.
+    nonisolated static func rejectsTruncatedOutput(_ completion: Completion) -> Bool {
+        completion.diagnostic.finish == .tokenLimit
+    }
 
     private nonisolated static func tokenCount(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber,
@@ -375,11 +457,18 @@ enum StockSageLocalModelServer {
         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
             return .failure(failure)
         }
-        if c.isLMStudio9B, !promptFits(system: system, user: user, outputTokens: maxTokens) {
+        // The budget applies to EVERY backend, not only the LM Studio profile. Before this, the
+        // shipped Ollama default dispatched any size of prompt and let the server truncate it
+        // silently, so a caller that packed 12,000 bytes into a 4,096-unit window was never told.
+        if !promptFits(system: system, user: user, outputTokens: maxTokens, contextTokens: contextTokens) {
             return .failure(.init(diagnostic: .init(category: .contextBudget)))
         }
         let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
                                   maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
+        let started = DispatchTime.now()
+        func elapsedMilliseconds() -> Int {
+            Int((DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds) / 1_000_000)
+        }
         do {
             let (data, response): (Data, URLResponse)
             if let transport { (data, response) = try await transport(request) }
@@ -408,26 +497,48 @@ enum StockSageLocalModelServer {
             }
             switch parseCompletion(data, isOllama: isOllama) {
             case .success(let reply):
-                // The new profile must not publish another model's answer under its selected ID.
-                // Keep legacy metadata acceptance unchanged for existing servers.
-                if c.isLMStudio9B, reply.model != c.model {
-                    return .failure(.init(diagnostic: .init(category: .responseShape, httpStatus: http.statusCode)))
+                // No backend may publish another model's answer under the selected ID. Ollama
+                // serves a model as "name:latest" while a viewer types the bare name, so both
+                // sides are compared with the suffix stripped. A server that reports no model at
+                // all stays acceptable off the strict profile — absent metadata is not a mismatch.
+                let identityMismatch = reply.model.map {
+                    stripLatestSuffix($0) != stripLatestSuffix(c.model)
+                } ?? c.isLMStudio9B
+                if identityMismatch {
+                    return .failure(.init(diagnostic: .init(category: .responseShape,
+                                                            httpStatus: http.statusCode,
+                                                            elapsedMilliseconds: elapsedMilliseconds())))
                 }
+                // Truncation stays OBSERVATIONAL here, as this seam has always documented:
+                // `finish` is reported, never used to reject text outside the strict profile.
+                // That contract is deliberate and correct — a truncated Chat answer is still
+                // worth showing, while a truncated financial verdict is not. The decision
+                // therefore belongs to each caller, and lives in `rejectsTruncatedOutput` /
+                // `StockSageAIAssessment.validate`, not here.
                 if c.isLMStudio9B, reply.diagnostic.finish != .stop {
                     var diagnostic = reply.diagnostic
                     diagnostic.category = .incompleteOutput
                     diagnostic.httpStatus = http.statusCode
+                    diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                     return .failure(.init(diagnostic: diagnostic))
                 }
                 var diagnostic = reply.diagnostic
                 diagnostic.httpStatus = http.statusCode
+                diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                 return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
             case .failure(let failure):
                 var diagnostic = failure.diagnostic
                 diagnostic.httpStatus = http.statusCode
+                diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                 return .failure(.init(diagnostic: diagnostic))
             }
-        } catch { return .failure(transportFailure(error)) }
+        } catch {
+            var failure = transportFailure(error)
+            var diagnostic = failure.diagnostic
+            diagnostic.elapsedMilliseconds = elapsedMilliseconds()
+            failure = .init(diagnostic: diagnostic)
+            return .failure(failure)
+        }
     }
 
     static func complete(_ c: Config, isOllama: Bool, system: String, user: String,

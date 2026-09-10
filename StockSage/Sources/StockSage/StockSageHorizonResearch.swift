@@ -281,17 +281,38 @@ final class StockSageHorizonResearch: ObservableObject {
                 horizonFacts.append("Observed return over the last \(period) completed daily bars: \(value)%. Bar window ends \(history.dates.last!.ISO8601Format()). Historical change, not an expected return.")
             }
         }
-        let facts = context.facts(maximumUTF8Bytes: max(0,
-            12_000 - horizonFacts.joined(separator: "\n").utf8.count - 1)) + horizonFacts
-        guard context.canAssess(at: Date()), facts.joined(separator: "\n").utf8.count <= 12_000 else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion.") }
+        // Pack to the model's real allowance rather than a hardcoded 12,000 bytes; the horizon
+        // facts are mandatory (they define the requested holding period and the reference entry)
+        // and are never dropped. Omissions are disclosed in the returned note.
+        let optionalFacts = context.facts(maximumUTF8Bytes: 12_000)
+        func assemble(_ optionalCount: Int) -> (facts: [String], user: String) {
+            let facts = Array(optionalFacts.prefix(optionalCount)) + horizonFacts
+            return (facts, StockSageAIAssessment.prompt(facts: facts))
+        }
+        guard let fitted = StockSageLocalModelServer.fit(optionalCount: optionalFacts.count, outputTokens: 192,
+                  assemble: { (horizon.instructions, assemble($0).user) }) else {
+            return .init(facts: horizonFacts,
+                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.")
+        }
+        let assembled = assemble(fitted.optionalKept)
+        let facts = assembled.facts
+        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion.") }
+        let trimmedNote = fitted.omitted > 0
+            ? " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
+            : ""
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: horizon.instructions, user: StockSageAIAssessment.prompt(facts: facts), maxTokens: 192, stillValid: evidenceAllowed)
+            system: horizon.instructions, user: assembled.user, maxTokens: 192, stillValid: evidenceAllowed)
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
+        // A verdict truncated at the output limit is refused, exactly as in paper research.
+        if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
+            return .init(facts: facts,
+                         note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote)
+        }
         guard context.canAssess(at: Date()), case .success(let completion) = response,
               case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
-            return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0))
+            return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote)
         }
         return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
-            facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created.", model: config.model)
+            facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote, model: config.model)
     }
 }

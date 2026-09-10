@@ -478,7 +478,7 @@ struct StockSageChatSection: View {
                     requestSnapshot: prepared.snapshot)
                 return
             }
-            let result = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
+            let result = await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
                 system: StockSageChat.instructions, user: prepared.prompt, maxTokens: StockSageChat.outputTokens,
                 contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)
             guard allowed() else {
@@ -487,8 +487,21 @@ struct StockSageChatSection: View {
                 return
             }
             switch result {
-            case .success(let response): chat.finish(id: id, text: response, requestSnapshot: prepared.snapshot)
-            case .failure: chat.finish(id: id, text: nil, unavailable: "The model request failed or was interrupted. Your captured facts remain available. Check Model settings and retry; no answer was assumed.", requestSnapshot: prepared.snapshot)
+            case .success(let completion):
+                // A cut-off prose answer is still worth reading, but the user must know it is
+                // cut off rather than assume the model finished its thought.
+                let text = StockSageLocalModelServer.rejectsTruncatedOutput(completion)
+                    ? completion.text + "\n\n[This answer stopped at the reply length limit and is incomplete. Ask a narrower question for a complete one.]"
+                    : completion.text
+                chat.finish(id: id, text: text, requestSnapshot: prepared.snapshot)
+            case .failure(let failure):
+                // Chat was the only caller still on the legacy `complete()` wrapper, which folds
+                // eighteen diagnostic categories into four and was then discarded entirely — a
+                // stopped server, a misspelled model ID and a five-minute timeout all produced
+                // one identical sentence. The Catalysts tab already discriminated its failures.
+                chat.finish(id: id, text: nil,
+                            unavailable: StockSageChat.unavailableMessage(for: failure.diagnostic),
+                            requestSnapshot: prepared.snapshot)
             }
         }
     }

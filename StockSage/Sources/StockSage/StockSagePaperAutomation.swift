@@ -870,24 +870,55 @@ final class StockSagePaperAutomation: ObservableObject {
             ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."
         let executionFacts = intraday.facts + ["Daily background bars end \(historyAt.ISO8601Format()); daily indicators are not intraday predictions. Same-day policy: new entries stop five minutes before the scheduled extended-session end; no intended overnight holdings.",
             position, "Settled paper cash available for entries: \(book.buyingCash(at: Date())) USD. Total paper cash including unsettled sale proceeds: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Simulated T+1 cash policy, not broker buying power. Do not invent a trade just to spend cash.", Self.sessionClockFact(at: Date())]
-        let contextFacts = context.facts(maximumUTF8Bytes: max(0,
-            12_000 - executionFacts.joined(separator: "\n").utf8.count - 1))
-        let facts = contextFacts + executionFacts
-        // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
-        let intradayIndices = (contextFacts.count + 1)..<(contextFacts.count + intraday.facts.count)
-        let entryInstruction = "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "
-            + intradayIndices.map { "F\($0 + 1)" }.joined(separator: ", ") + ". Daily background alone is not a same-day entry case."
-        guard context.canAssess(at: Date()), facts.joined(separator: "\n").utf8.count <= 12_000,
+        // Evidence is packed to what the model's window ACTUALLY holds, not to a hardcoded
+        // 12,000 bytes. Measured 2026-09-10: with these instructions and a 192-unit output, the
+        // real allowance under the 4k target is ~1.9 kB, so the old constant meant the seam
+        // rejected the entire research turn instead of returning a shorter, honest one.
+        // Execution facts (position, settled cash, session clock) are MANDATORY and never dropped.
+        let allFacts = context.facts(maximumUTF8Bytes: 12_000)
+        func assemble(_ optionalCount: Int) -> (facts: [String], system: String, user: String) {
+            let kept = Array(allFacts.prefix(optionalCount))
+            let facts = kept + executionFacts
+            // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
+            let indices = (kept.count + 1)..<(kept.count + intraday.facts.count)
+            let instruction = "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "
+                + indices.map { "F\($0 + 1)" }.joined(separator: ", ")
+                + ". Daily background alone is not a same-day entry case."
+            return (facts, Self.researchInstructions + instruction, StockSageAIAssessment.prompt(facts: facts))
+        }
+        guard let fitted = StockSageLocalModelServer.fit(optionalCount: allFacts.count, outputTokens: 192,
+                  assemble: { let a = assemble($0); return (a.system, a.user) }) else {
+            recordFailure("Research evidence could not be reduced to the model's context budget without dropping a mandatory execution fact. No paper order. Scheduled exits remain active.",
+                          symbol: symbol, at: Date(), facts: partialFacts); return
+        }
+        let assembled = assemble(fitted.optionalKept)
+        let facts = assembled.facts
+        let intradayIndices = (fitted.optionalKept + 1)..<(fitted.optionalKept + intraday.facts.count)
+        guard context.canAssess(at: Date()),
               intraday.fresh(at: Date()), Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
             recordFailure("Research context exceeded its freshness or size limit.", symbol: symbol, at: Date(), facts: partialFacts); return
         }
+        if fitted.omitted > 0 {
+            // Disclosed, never silent: the record shows the answer was formed on partial evidence.
+            var trimmed = book
+            trimmed.note(symbol: symbol, action: "Evidence trimmed",
+                         reason: "\(fitted.omitted) of \(allFacts.count) optional evidence records were omitted to fit the model context budget; all execution facts were kept. Any opinion recorded next was formed without them.",
+                         at: Date(), facts: facts)
+            _ = save(trimmed)
+        }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: Self.researchInstructions + entryInstruction, user: StockSageAIAssessment.prompt(facts: facts),
+            system: assembled.system, user: assembled.user,
             maxTokens: 192, stillValid: evidenceActive)
         guard evidenceActive() else { return }
         guard case .success(let completion) = response else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)
             recordFailure("Qwen request failed; \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
+        }
+        // A verdict cut off at the output limit is refused outright. Measured 2026-09-10: a
+        // truncated P/L answer stated a headline figure its own unfinished working contradicted.
+        guard !StockSageLocalModelServer.rejectsTruncatedOutput(completion) else {
+            recordFailure("Qwen answer stopped at the output limit before finishing; a truncated verdict is not accepted. No paper order. Scheduled exits remain active.",
+                          symbol: symbol, at: Date(), facts: facts); return
         }
         guard case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)

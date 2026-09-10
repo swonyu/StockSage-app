@@ -469,7 +469,8 @@ enum StockSageCatalystNarrator {
                 && urlSetting == (defaults.string(forKey: StockSageLocalModelServer.urlKey) ?? StockSageLocalModelServer.defaultURL)
                 && modelSetting == (defaults.string(forKey: StockSageLocalModelServer.modelKey) ?? StockSageLocalModelServer.defaultModel)
         }
-        let stopped = Result.unavailable("Explanation cancelled or model settings changed. Request a new explanation with the current settings.")
+        let stoppedReason = "Explanation cancelled or model settings changed. Request a new explanation with the current settings."
+        let stopped = Result.unavailable(stoppedReason)
         guard active() else { return stopped }
 
         func onDevice() async -> Result {
@@ -512,12 +513,21 @@ enum StockSageCatalystNarrator {
             }
             let probe = await fetchProbe(config)
             guard active() else { return stopped }
+            // A reachable server is not a successful answer. Before this, `.auto` returned the
+            // server's failure verbatim once the probe passed, so a server that answered the
+            // probe and then timed out, returned a truncated answer, or failed its citation
+            // check left the on-device model — the whole point of "Auto" — never tried.
+            var serverReason: String?
             if probe.reachable, probe.hasModel {
-                return await viaServer(config, probe.isOllama)
+                let serverResult = await viaServer(config, probe.isOllama)
+                guard active() else { return stopped }
+                guard case .unavailable(let reason) = serverResult else { return serverResult }
+                if reason == stoppedReason { return stopped }
+                serverReason = reason
             }
             let onDeviceResult = await onDevice()
             if case .unavailable(let onDeviceReason) = onDeviceResult {
-                return .unavailable("Local server: \(probe.detail). On-device: \(onDeviceReason)")
+                return .unavailable("Local server: \(serverReason ?? probe.detail). On-device: \(onDeviceReason)")
             }
             return onDeviceResult
         }

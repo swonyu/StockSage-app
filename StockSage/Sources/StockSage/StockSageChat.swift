@@ -15,6 +15,42 @@ enum StockSageChat {
     }
     nonisolated static let snapshotContext = "Bounded app snapshot for the listed symbols only. Broker balances, account identifiers, journal notes and credentials are NOT included. Full filings were not retrieved. Missing evidence is not evidence of absence. Quotes are observations, never live execution prices."
 
+    /// One actionable sentence per failure category. Every string is written here — a server's
+    /// own error text is NEVER interpolated, so a hostile or verbose body cannot reach the user.
+    /// Each message says what happened and what to do; none of them claims an answer was formed.
+    nonisolated static func unavailableMessage(for diagnostic: StockSageLocalModelServer.Diagnostic) -> String {
+        let keep = " Your captured facts remain available; no answer was assumed."
+        switch diagnostic.category {
+        case .cancelled, .obsoleteRequest:
+            return "The request was cancelled or the model settings changed while it was running." + keep
+        case .policyDenied:
+            return "Network access to a non-loopback model server is turned off." + keep
+        case .invalidConfig:
+            return "The model server URL or model ID in Model settings is not usable." + keep
+        case .modelMissing, .unsupportedModel:
+            return "The server is running but does not have the requested model. Check its model ID in Model settings." + keep
+        case .timeout:
+            return "The model did not answer within \(Int(requestTimeout)) seconds. It may still be loading; retry, or ask a shorter question." + keep
+        case .unavailable, .network, .nonHTTP:
+            return "The model server could not be reached. Check that it is running, then use Test connection in Model settings." + keep
+        case .http:
+            let status = diagnostic.httpStatus.map { " (HTTP \($0))" } ?? ""
+            return "The model server rejected the request\(status)." + keep
+        case .contextBudget:
+            return "This question and its evidence exceed the model's context budget. Ask a shorter question or use fewer tickers." + keep
+        case .incompleteOutput:
+            return "The model stopped before finishing its answer, so it was withheld rather than shown half-formed. Retry, or ask a narrower question." + keep
+        case .responseTooLarge:
+            return "The model returned more data than this app will read." + keep
+        case .emptyContent, .missingContent:
+            return "The model returned an empty answer." + keep
+        case .malformedJSON, .responseShape:
+            return "The model server returned a response this app could not read, or one identifying a different model." + keep
+        case .none:
+            return "The model request did not complete." + keep
+        }
+    }
+
     nonisolated struct Fact: Codable, Sendable, Identifiable, Equatable {
         let id: String
         let subject: String
