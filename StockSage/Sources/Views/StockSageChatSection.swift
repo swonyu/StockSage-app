@@ -219,9 +219,12 @@ struct StockSageChatSection: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 Text(turn.question).font(.headline).textSelection(.enabled)
-                Text(turn.notice).font(.caption).foregroundStyle(.secondary)
-                if pending { ProgressView(turn.notice) }
-                else { Text(turn.answer).textSelection(.enabled) }
+                if pending {
+                    ProgressView(turn.notice)
+                } else {
+                    Text(turn.notice).font(.caption).foregroundStyle(.secondary)
+                    Text(turn.answer).textSelection(.enabled)
+                }
                 ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
                     Text(fact.text).font(.callout).padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
                 }
@@ -491,12 +494,12 @@ struct StockSageChatSection: View {
             }
             switch result {
             case .success(let completion):
-                // A cut-off prose answer is still worth reading, but the user must know it is
-                // cut off rather than assume the model finished its thought.
-                let text = StockSageLocalModelServer.rejectsTruncatedOutput(completion)
-                    ? completion.text + "\n\n[This answer stopped at the reply length limit and is incomplete. Ask a narrower question for a complete one.]"
-                    : completion.text
-                chat.finish(id: id, text: text, requestSnapshot: prepared.snapshot)
+                // A cut-off prose answer is still worth reading, but the user must know it is cut
+                // off. The note goes in the NOTICE, never appended to the text: `finish` parses
+                // that text as strict JSON, so appending anything makes a complete, valid reply
+                // unparseable and silently drops its evidence cards.
+                chat.finish(id: id, text: completion.text, requestSnapshot: prepared.snapshot,
+                            truncated: StockSageLocalModelServer.rejectsTruncatedOutput(completion))
             case .failure(let failure):
                 // Chat was the only caller still on the legacy `complete()` wrapper, which folds
                 // eighteen diagnostic categories into four and was then discarded entirely — a

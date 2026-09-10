@@ -14,6 +14,9 @@ final class StockSagePaperAutomation: ObservableObject {
     nonisolated static let discoveryLimit = 101 // Total checks per cycle, including holdings (owner choice).
     nonisolated static let researchConcurrency = 4
     nonisolated static let researchMaximumAge: TimeInterval = 60
+    /// One constant for both the fit() budget and the dispatched output limit: two literals
+    /// could drift apart and pack a prompt to a budget larger than the one actually enforced.
+    nonisolated static let researchOutputTokens = 192
     nonisolated static let researchInstructions = StockSageAIAssessment.instructions
         .replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
             with: "Assess an entry or exit NOW for the REMAINDER OF TODAY'S New York session only. No overnight or multi-day thesis. Use the completed intraday bars or explicitly labelled qualified trades; daily technical rules are background, not intraday signals.")
@@ -886,7 +889,9 @@ final class StockSagePaperAutomation: ObservableObject {
                 + ". Daily background alone is not a same-day entry case."
             return (facts, Self.researchInstructions + instruction, StockSageAIAssessment.prompt(facts: facts))
         }
-        guard let fitted = StockSageLocalModelServer.fit(optionalCount: allFacts.count, outputTokens: 192,
+        guard let fitted = StockSageLocalModelServer.fit(optionalCount: allFacts.count,
+                  outputTokens: Self.researchOutputTokens,
+                  contextTokens: StockSageLocalModelServer.researchContextTokens,
                   assemble: { let a = assemble($0); return (a.system, a.user) }) else {
             recordFailure("Research evidence could not be reduced to the model's context budget without dropping a mandatory execution fact. No paper order. Scheduled exits remain active.",
                           symbol: symbol, at: Date(), facts: partialFacts); return
@@ -908,7 +913,9 @@ final class StockSagePaperAutomation: ObservableObject {
         }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
             system: assembled.system, user: assembled.user,
-            maxTokens: 192, stillValid: evidenceActive)
+            maxTokens: Self.researchOutputTokens,
+            contextTokens: StockSageLocalModelServer.researchContextTokens,
+            stillValid: evidenceActive)
         guard evidenceActive() else { return }
         guard case .success(let completion) = response else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)

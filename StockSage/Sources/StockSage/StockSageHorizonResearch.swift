@@ -6,6 +6,8 @@ import Combine
 final class StockSageHorizonResearch: ObservableObject {
     static let shared = StockSageHorizonResearch()
     static let scanLimit = 500
+    /// Shared by the fit() budget and the dispatched output limit; see PaperAutomation.
+    nonisolated static let researchOutputTokens = 192
     nonisolated enum Horizon: String, CaseIterable, Identifiable, Sendable {
         case week = "1–7 trading days", fortnight = "7–14 trading days"
         var id: String { rawValue }
@@ -289,19 +291,24 @@ final class StockSageHorizonResearch: ObservableObject {
             let facts = Array(optionalFacts.prefix(optionalCount)) + horizonFacts
             return (facts, StockSageAIAssessment.prompt(facts: facts))
         }
-        guard let fitted = StockSageLocalModelServer.fit(optionalCount: optionalFacts.count, outputTokens: 192,
+        guard let fitted = StockSageLocalModelServer.fit(optionalCount: optionalFacts.count,
+                  outputTokens: Self.researchOutputTokens,
+                  contextTokens: StockSageLocalModelServer.researchContextTokens,
                   assemble: { (horizon.instructions, assemble($0).user) }) else {
             return .init(facts: horizonFacts,
                          note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.")
         }
         let assembled = assemble(fitted.optionalKept)
         let facts = assembled.facts
-        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion.") }
         let trimmedNote = fitted.omitted > 0
             ? " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
             : ""
+        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion." + trimmedNote) }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: horizon.instructions, user: assembled.user, maxTokens: 192, stillValid: evidenceAllowed)
+            system: horizon.instructions, user: assembled.user,
+            maxTokens: Self.researchOutputTokens,
+            contextTokens: StockSageLocalModelServer.researchContextTokens,
+            stillValid: evidenceAllowed)
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         // A verdict truncated at the output limit is refused, exactly as in paper research.
         if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {

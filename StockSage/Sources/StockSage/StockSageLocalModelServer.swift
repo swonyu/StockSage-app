@@ -68,6 +68,22 @@ enum StockSageLocalModelServer {
 
     static let defaultURL = "http://127.0.0.1:11434"
     static let defaultModel = "qwen3.8"
+
+    /// Context window declared by the EVIDENCE-HEAVY callers (paper research, horizon research,
+    /// AI assessment, Catalyst explanations). Conversational Chat keeps the owner's 4,096
+    /// interactive target, which its own prompt budget already fits inside.
+    ///
+    /// Why this is not 4,096: those callers compile up to 12,000 UTF-8 bytes of facts, and
+    /// `chatRequest` sends `contextTokens` to Ollama verbatim as `num_ctx`. Declaring 4,096 while
+    /// sending 12,000 bytes meant the server silently truncated evidence — mandatory execution
+    /// facts, cash constraints and risk disclosures could fall off the end with nothing reported.
+    /// 16,384 leaves every one of those callers' existing 12,000-byte budgets fitting whole.
+    ///
+    /// Measured 2026-09-10 (receipts in `StockSage-harness-20260910.opus/`): LM Studio auto-fits
+    /// this model to a 262,144 runtime window regardless of the requested value, and accepted a
+    /// single 24,206-byte prompt as 11,015 units, so 16,384 is well inside the served capacity.
+    /// This is a REQUEST target, not a claim about the model's maximum or the server's allocation.
+    nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
     nonisolated static let lmStudioModel = "qwen3.5-9b"

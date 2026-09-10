@@ -369,7 +369,7 @@ final class StockSageChatSession: ObservableObject {
     /// once at `begin` and never updated, so a turn that spent thirty seconds fetching evidence
     /// and one second generating looked identical to the reverse. There is no percentage here on
     /// purpose: the remaining work is genuinely unknown, so the stage is named instead of faked.
-    enum Phase: String, Sendable, CaseIterable {
+    nonisolated enum Phase: String, Sendable, CaseIterable {
         case sources = "Collecting evidence from your sources…"
         case checkingModel = "Checking the local model server…"
         case generating = "Asking the local model…"
@@ -394,7 +394,7 @@ final class StockSageChatSession: ObservableObject {
     }
 
     func finish(id: UUID, text: String?, unavailable: String? = nil,
-                requestSnapshot: StockSageChat.Snapshot? = nil) {
+                requestSnapshot: StockSageChat.Snapshot? = nil, truncated: Bool = false) {
         guard pending == id, let index = turns.firstIndex(where: { $0.id == id }) else { return }
         pending = nil
         let captured = turns[index].snapshot
@@ -417,7 +417,12 @@ final class StockSageChatSession: ObservableObject {
                 return selected
             } ?? captured
             let reply = StockSageChat.reply(text, snapshot: validation)
-            turns[index].answer = reply.text; turns[index].evidence = reply.evidence; turns[index].notice = reply.notice
+            turns[index].answer = reply.text; turns[index].evidence = reply.evidence
+            // The truncation warning belongs to the NOTICE. Appending it to `text` would make a
+            // complete, valid JSON reply unparseable and silently discard its evidence cards.
+            turns[index].notice = truncated
+                ? reply.notice + " The model stopped at the reply length limit, so this answer is incomplete."
+                : reply.notice
         } else {
             turns[index].answer = unavailable ?? "Local model unavailable. The captured app facts remain available below."
             turns[index].notice = "Unavailable — app facts only; no cloud fallback"

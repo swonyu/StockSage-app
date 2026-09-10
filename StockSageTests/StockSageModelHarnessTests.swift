@@ -69,6 +69,45 @@ struct StockSageModelHarnessTests {
                               outputTokens: 192, contextTokens: 4096))
     }
 
+    // MARK: Every real caller's own instructions must fit its declared window
+
+    // The suite originally exercised the seam with `system: "s"`, which is why applying the
+    // budget to every backend silently broke AI assessment and the Catalyst narrator: both
+    // compile up to 12,000 bytes of facts, and neither fitted a 4,096-unit window. These cases
+    // use each caller's ACTUAL instruction string and ACTUAL output budget.
+    @Test func everyEvidenceHeavyCallerFitsItsDeclaredWindow() {
+        let research = S.researchContextTokens
+        let callers: [(name: String, system: String, outputTokens: Int, context: Int)] = [
+            ("assessment", StockSageAIAssessment.instructions, 240, research),
+            ("paper", StockSagePaperAutomation.researchInstructions,
+             StockSagePaperAutomation.researchOutputTokens, research),
+            ("horizon-week", StockSageHorizonResearch.Horizon.week.instructions,
+             StockSageHorizonResearch.researchOutputTokens, research),
+            ("horizon-fortnight", StockSageHorizonResearch.Horizon.fortnight.instructions,
+             StockSageHorizonResearch.researchOutputTokens, research),
+            ("narrator", StockSageCatalystNarrator.instructions, 170, research),
+        ]
+        for caller in callers {
+            let allowance = S.maximumUserBytes(system: caller.system, outputTokens: caller.outputTokens,
+                                               contextTokens: caller.context)
+            // Each of these callers caps its compiled facts at 12,000 UTF-8 bytes. If the
+            // allowance drops below that, the caller starts failing on every real request.
+            #expect(allowance >= 12_000,
+                    "\(caller.name) allows only \(allowance) bytes but compiles up to 12,000")
+        }
+    }
+
+    // Conversational Chat deliberately keeps the owner's 4,096 interactive target. Its own
+    // prompt budget must stay strictly inside the seam's, or every Chat turn would fail.
+    @Test func chatOwnBudgetStaysInsideTheSeamBudget() {
+        let allowance = S.maximumUserBytes(system: StockSageChat.instructions,
+                                           outputTokens: StockSageChat.outputTokens,
+                                           contextTokens: StockSageChat.contextTokens)
+        #expect(StockSageChat.promptByteLimit > 0)
+        #expect(StockSageChat.promptByteLimit <= allowance,
+                "Chat packs \(StockSageChat.promptByteLimit) bytes into a \(allowance)-byte allowance")
+    }
+
     // MARK: Truncation is rejected on every backend
 
     // Measured 2026-09-10: the frozen `holdout_01_loss` case returned finish_reason "length" with a

@@ -331,7 +331,9 @@ final class StockSageAIAssessments: ObservableObject {
                 return .failure(.init(diagnostic: .init(category: category)))
             }
             return await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
-                system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240, stillValid: evidenceActive)
+                system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240,
+                contextTokens: StockSageLocalModelServer.researchContextTokens,
+                stillValid: evidenceActive)
         })
     }
 
@@ -371,6 +373,13 @@ final class StockSageAIAssessments: ObservableObject {
         let facts = context.facts
         // Group claims remain OUTSIDE facts: their numbers cannot whitelist an unsupported assertion.
         let reply = await generateDetailed(config, StockSageAIAssessment.prompt(facts: facts) + "\n\n" + (context.research?.prompt ?? ""))
+        // A verdict cut off at the output limit is refused, as in paper and horizon research.
+        // Measured 2026-09-10: a truncated P/L answer stated a headline figure its own
+        // unfinished working contradicted, while still parsing as well-formed JSON.
+        if case .success(let completion) = reply, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
+            errors[symbol] = "The model stopped at the output limit before finishing; a truncated assessment is not accepted. Reassess this idea."
+            return
+        }
         let text = try? reply.get().text
         guard !Task.isCancelled else { return }
         guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }

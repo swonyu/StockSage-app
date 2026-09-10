@@ -412,7 +412,8 @@ enum StockSageCatalystNarrator {
                                          stillValid: @MainActor () -> Bool = { true }) async -> Result {
         let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
         let result = await StockSageLocalModelServer.complete(
-            config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts), stillValid: stillValid)
+            config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts),
+            contextTokens: StockSageLocalModelServer.researchContextTokens, stillValid: stillValid)
         switch result {
         case .success(let text):
             return checkedResponse(text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count)
