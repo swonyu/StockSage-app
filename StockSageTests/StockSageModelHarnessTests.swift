@@ -449,6 +449,34 @@ struct StockSageModelHarnessTests {
         #expect(session.turns.last?.notice == StockSageChatSession.Phase.generating.notice)
     }
 
+    // MARK: A same-day entry cannot be approved without a dated intraday observation
+
+    // `intradayIndices` deliberately SKIPS the first intraday fact, which is the caveat/summary
+    // line. On the SIP-trade fallback that caveat is the ONLY intraday fact, so the index range
+    // is empty and no entry may qualify. That safety property had no test, and it rests on a
+    // subtlety: an empty Set is disjoint from everything, so `isDisjoint` returns true and
+    // `hasIntradayEvidence` returns false. If that ever inverted, the paper account could open a
+    // same-day position with no dated observation behind it.
+    @Test func theSIPFallbackCannotApproveASameDayEntry() {
+        typealias Paper = StockSagePaperAutomation
+        // One intraday fact (the caveat) at optional-count 4 -> (5)..<(5): empty.
+        let fallbackOnly = (4 + 1)..<(4 + 1)
+        #expect(fallbackOnly.isEmpty)
+        #expect(!Paper.hasIntradayEvidence(["F1", "F5", "F6"], factIndices: fallbackOnly),
+                "an empty intraday index set must never satisfy the entry gate")
+        #expect(!Paper.hasIntradayEvidence([], factIndices: fallbackOnly))
+
+        // With real per-minute bars the gate opens only for the observations, never the caveat.
+        // Six intraday facts at optional-count 4 -> (5)..<(10) -> F6...F10; F5 is the caveat.
+        let withBars = (4 + 1)..<(4 + 6)
+        #expect(!Paper.hasIntradayEvidence(["F5"], factIndices: withBars),
+                "citing only the caveat line must not satisfy the entry gate")
+        #expect(Paper.hasIntradayEvidence(["F6"], factIndices: withBars))
+        #expect(Paper.hasIntradayEvidence(["F1", "F10"], factIndices: withBars))
+        #expect(!Paper.hasIntradayEvidence(["F11"], factIndices: withBars),
+                "a fact beyond the intraday block must not satisfy the gate")
+    }
+
     // MARK: Cross-caller contention is observed, not assumed
 
     // Nothing in the app serialises model work across callers: the assessment object's

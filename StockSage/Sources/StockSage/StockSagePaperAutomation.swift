@@ -882,8 +882,21 @@ final class StockSagePaperAutomation: ObservableObject {
         // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
         // The instruction names the intraday facts by F-number, so it is rebuilt for whatever
         // optional count actually fits.
+        // The FIRST intraday fact is the caveat/summary line, so it is skipped: a same-day entry
+        // must cite an actual dated observation, not the disclaimer about them.
+        //
+        // When the only intraday evidence IS that caveat — the SIP-trade fallback, which supplies
+        // one summary line and no per-minute bars — this range is empty and no entry can qualify.
+        // That is deliberate, and `hasIntradayEvidence` enforces it (an empty index set is
+        // disjoint from any evidence, so it returns false and `decisionBook` refuses the entry).
+        // Say that plainly rather than emitting "cite at least one of: ." with an empty list.
         func entryInstruction(_ keptCount: Int) -> String {
             let indices = (keptCount + 1)..<(keptCount + intraday.facts.count)
+            guard !indices.isEmpty else {
+                return "\nNo dated intraday observation is available for this symbol, only a"
+                    + " summary caveat. Buy and Strong Buy are therefore not available this cycle;"
+                    + " daily background alone is not a same-day entry case."
+            }
             return "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "
                 + indices.map { "F\($0 + 1)" }.joined(separator: ", ")
                 + ". Daily background alone is not a same-day entry case."
