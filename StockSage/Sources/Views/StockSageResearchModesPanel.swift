@@ -91,7 +91,7 @@ struct StockSageResearchModesPanel: View {
                             }.help("\(item.name) · \(item.type ?? "instrument type unconfirmed")")
                         }.width(min: 100, ideal: 160)
                         TableColumn("Check / opinion") { item in
-                            Text(resultLabel(item.ticker, scan: scan, horizon: horizon))
+                            Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
                                 .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.success : .secondary)
                                 .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
                         }.width(min: 100, ideal: 130)
@@ -202,11 +202,12 @@ struct StockSageResearchModesPanel: View {
         return ("Your research starts here", "Choose Run \(StockSageHorizonResearch.scanLimit)-stock scan to check daily history, news and Qwen opinions once. Select a result to see its evidence and any entry, stop-loss and target levels.")
     }
 
-    private func resultLabel(_ symbol: String, scan: StockSageHorizonResearch.Scan,
-                             horizon: StockSageHorizonResearch.Horizon) -> String {
+    static func resultLabel(_ symbol: String, research: StockSageHorizonResearch,
+                            scan: StockSageHorizonResearch.Scan,
+                            horizon: StockSageHorizonResearch.Horizon) -> String {
         if research.running == horizon, research.activeSymbol == symbol { return "Checking…" }
         if let result = scan.results[symbol] { return result.verdict?.action.rawValue ?? "Incomplete" }
-        return research.running == horizon ? "Queued" : "Not checked"
+        return research.running == horizon && research.activeSymbol != nil ? "Queued" : "Not checked"
     }
 
     static func filters(search: Binding<String>, buysOnly: Binding<Bool>) -> some View {

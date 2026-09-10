@@ -4,6 +4,7 @@ import Testing
 #if os(macOS)
 import SwiftUI
 import AppKit
+import Combine
 #endif
 
 @Suite("Native local Chat")
@@ -19,6 +20,26 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [360, 760])
+    func renderNetworkControlsWithoutSettingsOrPreferences(width: Int) async throws {
+        for initialWeb in [false, true] {
+            for initialOffline in [false, true] {
+                var web = initialWeb, offline = initialOffline, changes = 0
+                let content = Form {
+                    StockSageSettingsView.networkControls(
+                        webAccess: Binding(get: { web }, set: { web = $0; changes += 1 }),
+                        offlineOnly: Binding(get: { offline }, set: { offline = $0; changes += 1 }))
+                }.formStyle(.grouped).frame(width: CGFloat(width), height: 260)
+                    .environment(\.colorScheme, .dark)
+                let size = try await capture(content,
+                    name: "stocksage-network-controls-\(width)-web-\(initialWeb)-offline-\(initialOffline)")
+                #expect(size.width == CGFloat(width) && size.height == 260)
+                #expect(web == initialWeb && offline == initialOffline && changes == 0,
+                        "Rendering the actual controls must not change either setting")
+            }
+        }
+    }
+
     @Test(arguments: ["empty", "fresh", "stale", "deficit", "long-error", "coverage-only"])
     func renderPaperSummaryFromValuesOnly(state: String) async throws {
         typealias A = StockSagePaperAutomation
@@ -104,7 +125,10 @@ struct StockSageChatTests {
             let content = GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
                     StockSagePaperAutomationPanel.pendingRequests(book.pending, running: state != "protective", at: at)
-                    if state == "protective" { StockSagePaperAutomationPanel.pendingRequests(rearmed, running: true, at: at) }
+                    if state == "protective" {
+                        StockSagePaperAutomationPanel.pendingRequests(rearmed, running: true, at: at)
+                        StockSagePaperAutomationPanel.pendingRequests(book.pending, running: true, at: at.addingTimeInterval(10 * 3600))
+                    }
                     StockSagePaperAutomationPanel.recordedActivity(book.decisions)
                 }.padding(12)
             }.padding(16).frame(width: CGFloat(width)).background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
@@ -477,16 +501,32 @@ struct StockSageChatTests {
         #expect(opens == 0, "Rendering guidance must not invoke settings navigation")
     }
 
-    @Test(arguments: [360, 760])
-    func renderInputAndStorageWarnings(width: Int) async throws {
+    @Test(arguments: [360, 760], [false, true])
+    func renderInputAndStorageWarnings(width: Int, failedSave: Bool) async throws {
         let issue = "Use 1–2000 characters without credentials or account identifiers. Nothing was saved or sent."
-        let storage = "Saved Chat history could not be read. It has not been overwritten. Clear history to start again."
+        var storage = "Saved Chat history could not be read. It has not been overwritten. Clear history to start again."
+        if failedSave {
+            let files = FileManager.default
+            let root = files.temporaryDirectory.resolvingSymlinksInPath()
+                .appendingPathComponent("chat-storage-render-\(UUID().uuidString)", isDirectory: true)
+            try #require(!files.fileExists(atPath: root.path))
+            try files.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            defer { try? files.removeItem(at: root) }
+            let blocker = root.appendingPathComponent("not-a-directory")
+            try Data("Synthetic Chat warning blocker".utf8).write(to: blocker, options: .withoutOverwriting)
+            let regular = try blocker.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile
+            try #require(regular == true)
+            let chat = StockSageChatSession(historyURL: blocker.appendingPathComponent("history.json"))
+            _ = try #require(chat.begin(question: "What remains uncertain?", snapshot: snapshot(), model: "fixture"))
+            storage = try #require(chat.storageError) // Render the real failure disclosure, never a copied replacement.
+        }
         let view = VStack(alignment: .leading, spacing: 8) {
             StockSageChatSection.QuestionField(question: .constant("What remains uncertain?"), issue: .constant(issue))
             StockSageChatSection.composerWarnings(issue: issue, storageError: storage)
         }.padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
-        let size = try await capture(view, name: "stocksage-chat-input-\(width)")
+        let name = "stocksage-chat-input-\(width)" + (failedSave ? "-failed-save" : "")
+        let size = try await capture(view, name: name)
         #expect(size.width == CGFloat(width) && size.height > 60)
     }
 
@@ -523,6 +563,67 @@ struct StockSageChatTests {
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
         let size = try await capture(view, name: "stocksage-chat-turn-\(width)-\(state)")
         #expect(size.width == CGFloat(width) && size.height > 100)
+    }
+
+    @Test(arguments: ["completed", "cancelled"])
+    func nativeNavigationRetainsUnsavedChatSession(_ state: String) async throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("chat-navigation-\(UUID().uuidString)", isDirectory: true)
+        try #require(!files.fileExists(atPath: root.path))
+        try files.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? files.removeItem(at: root) }
+        let blocker = root.appendingPathComponent("not-a-directory")
+        let blockerBytes = Data("Synthetic Chat save blocker".utf8)
+        try blockerBytes.write(to: blocker, options: .withoutOverwriting)
+        try #require(try blocker.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true)
+        let historyURL = blocker.appendingPathComponent("history.json")
+        let selection = ChatNavigationSelection(), probe = ChatNavigationProbe()
+        let host = NSHostingController(rootView: ChatNavigationFixture(selection: selection,
+            historyURL: historyURL, probe: probe))
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
+            width: 400, height: 180), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        @MainActor func waitFor(_ ready: @MainActor () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready())
+        }
+        try await waitFor { probe.chatAppearances == 1 }
+        weak var original: StockSageChatSession? = probe.session
+        try #require(original != nil && original?.turns.isEmpty == true && original?.storageError == nil)
+        let captured = snapshot()
+        let id = try #require(original?.begin(question: "Explain uncertainty", snapshot: captured, model: "fixture"))
+        if state == "cancelled" { original?.cancel() }
+        else { original?.finish(id: id, text: #"{"analysis":"Synthetic completed answer.","evidence":["ORCL.quote"]}"#) }
+        let turn = try #require(original?.turns.first)
+        let expectedAnswer = state == "cancelled" ? "Request cancelled. Ask again for a fresh snapshot." : "Synthetic completed answer."
+        try #require(turn.id == id && turn.snapshot == captured && turn.answer == expectedAnswer && original?.pending == nil)
+        let error = try #require(original?.storageError)
+        try #require(error == "Chat is available in memory, but local history saving could not be confirmed. Recent changes may not survive closing the conversation or app.")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode([turn])
+
+        selection.isChat = false
+        try await waitFor { probe.otherAppearances == 1 && probe.chatDisappearances == 1 }
+        selection.isChat = true // Never replace host.rootView or supply an externally owned Session.
+        try await waitFor { probe.chatAppearances == 2 }
+        #expect(probe.session != nil && probe.session === original, "The production navigation owner must retain the same Session.")
+        #expect(probe.session?.pending == nil && probe.session?.storageError == error)
+        let restored = try #require(probe.session?.turns)
+        #expect(try encoder.encode(restored) == before, "IDs, snapshots, answers, evidence and notices must survive navigation unchanged.")
+        if state == "cancelled" {
+            probe.session?.finish(id: id, text: #"{"analysis":"Late result must be ignored.","evidence":[]}"#)
+            let afterLateFinish = try #require(probe.session?.turns)
+            #expect(try encoder.encode(afterLateFinish) == before)
+            #expect(probe.session?.pending == nil && probe.session?.storageError == error)
+        }
+        #expect(try Data(contentsOf: blocker) == blockerBytes)
+        #expect(!files.fileExists(atPath: historyURL.path), "Retention must not be explained by disk reload.")
+        #expect(probe.chatAppearances == 2 && probe.chatDisappearances == 1 && probe.otherAppearances == 1)
     }
 
     private func capture(_ view: some View, name: String) async throws -> CGSize {
@@ -640,6 +741,189 @@ struct StockSageChatTests {
         #expect(captured == snapshot(), "The smaller request budget cannot rewrite saved evidence")
     }
 
+    /// Decode the actual request payload, not a second implementation of budget selection.
+    private func offeredSnapshot(in prompt: String, original: StockSageChat.Snapshot) throws -> StockSageChat.Snapshot {
+        let start = try #require(prompt.range(of: "CURRENT SNAPSHOT:\n"))
+        let end = try #require(prompt.range(of: "\nHISTORICAL CONVERSATION (not evidence):\n"))
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let data = Data(prompt[start.upperBound..<end.lowerBound].utf8)
+        // The initial candidate emits full Codable records. The compact candidate emits
+        // id/text records; inspect their actual content before selecting original values.
+        if let full = try? decoder.decode(StockSageChat.Snapshot.self, from: data) { return full }
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["at"] as? String == original.at.ISO8601Format())
+        let facts = try #require(body["facts"] as? [[String: String]])
+        let sources = try #require(body["sources"] as? [[String: String]])
+        let factIDs = facts.compactMap { $0["id"] }, sourceIDs = sources.compactMap { $0["id"] }
+        #expect(Set(factIDs).count == facts.count && Set(sourceIDs).count == sources.count)
+        for row in facts {
+            let fact = try #require(original.facts.first { $0.id == row["id"] })
+            #expect(row["text"] == fact.text)
+        }
+        for row in sources {
+            let source = try #require(original.sources?.first { $0.id == row["id"] })
+            let text = try #require(row["text"])
+            #expect(text.contains(source.subject) && text.contains(source.attribution))
+            #expect(text.contains(source.excerpt) && text.contains(source.warning))
+            #expect(text.contains(source.publicationTime ?? StockSageNewsService.instant(source.date)))
+        }
+        return .init(at: original.at, facts: original.facts.filter { factIDs.contains($0.id) },
+            context: original.context, sources: original.sources?.filter { sourceIDs.contains($0.id) },
+            researchStatus: body["researchStatus"] as? String)
+    }
+
+    @Test(arguments: ["x", "ع"])
+    func ordinaryNewsEnrichmentFitsWithoutRewritingSavedEvidence(_ character: String) throws {
+        typealias C = StockSageChat
+        typealias N = StockSageNewsService
+        let base = snapshot()
+        let news = (1...3).map { index in
+            N.NewsItem(date: now, title: "Fixture \(index)",
+                snippet: String(repeating: character == "ع" ? "خبر " : "news ", count: 100),
+                link: URL(string: "https://example.invalid/news/\(index)"),
+                sentiment: nil, source: "Synthetic publisher")
+        }
+        let observation = N.Observation(attempts: [
+            .init(provider: .massive, checkedAt: now, status: .answered, items: news)])
+        let enriched = C.addingResearch(to: base, symbol: "ORCL", observation: observation,
+            leads: nil, webAllowed: true)
+        let sources = try #require(enriched.sources)
+        try #require(sources.count == 3)
+        try #require(sources.allSatisfy { $0.excerpt.count >= 380 }, "Exercise real long excerpts after provider text bounding")
+        let session = StockSageChatSession(historyURL: nil)
+        let question = character == "ع" ? "اشرح مخاطر ORCL" : "Explain ORCL risks"
+        let id = try #require(session.begin(question: question, snapshot: base, model: "fixture"))
+        try #require(session.attachResearch(id: id, snapshot: enriched))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let saved = try encoder.encode(session.turns)
+
+        let prompt = try #require(C.prompt(question: question, snapshot: enriched, history: []))
+        let offered = try offeredSnapshot(in: prompt, original: enriched)
+        #expect(prompt.contains(question) && prompt.utf8.count <= C.promptByteLimit)
+        #expect(prompt.utf8.count + C.instructions.utf8.count + C.outputTokens + 1_024 <= C.contextTokens)
+        #expect(C.contextTokens == 4_096 && C.outputTokens == 512)
+        #expect(offered.facts == enriched.facts && offered.at == enriched.at && offered.context == enriched.context)
+        let offeredSources = offered.sources ?? []
+        #expect(offeredSources == Array(sources.prefix(offeredSources.count)), "Keep whole sources and their stable IDs")
+        let omitted = sources.filter { !offeredSources.contains($0) }
+        try #require(!omitted.isEmpty)
+        let disclosure = try #require(offered.researchStatus)
+        #expect(disclosure.contains("\(omitted.count)/\(sources.count) sources omitted"))
+        #expect(disclosure.contains("omitted") && disclosure.contains("snapshot"))
+        #expect(disclosure.contains("Missing evidence is not evidence of absence"))
+        #expect(enriched.sources == sources && enriched.researchStatus?.contains(observation.summary) == true)
+        #expect(try encoder.encode(session.turns) == saved, "Request selection must not rewrite saved snapshots or turns")
+
+        let accepted = C.reply(#"{"analysis":"The captured observation is not a forecast.","evidence":["ORCL.quote"]}"#, snapshot: offered)
+        #expect(accepted.evidence == ["ORCL.quote"] && accepted.notice.contains("conclusions not verified"))
+        for source in omitted {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "analysis": "An attributed source was offered.", "evidence": [source.id]])
+            let rejected = C.reply(String(decoding: data, as: UTF8.self), snapshot: offered)
+            #expect(rejected.evidence.isEmpty && rejected.notice.contains("Unverified draft"), "Saved but unoffered IDs must not validate")
+        }
+    }
+
+    @Test func requestBudgetDisclosesOmittedResearchDetailsEvenWithoutSources() throws {
+        var captured = snapshot()
+        captured.sources = []
+        captured.researchStatus = String(repeating: "Synthetic unavailable check. ", count: 100)
+        let original = captured
+        let prompt = try #require(StockSageChat.prompt(question: "Explain uncertainty", snapshot: captured, history: []))
+        let offered = try offeredSnapshot(in: prompt, original: captured)
+        #expect(offered.facts == captured.facts && offered.sources == [])
+        #expect(offered.researchStatus?.contains("research details") == true)
+        #expect(offered.researchStatus?.contains("0/0 sources omitted") == true)
+        #expect(captured == original && prompt.utf8.count <= StockSageChat.promptByteLimit)
+    }
+
+    @Test func requestBudgetDropsOldHistoryBeforeOptionalSources() throws {
+        var captured = snapshot()
+        captured.sources = [.init(id: "ORCL.news.1", subject: "ORCL", attribution: "Fixture",
+            date: now, excerpt: "An attributed opinion.", warning: "Untrusted excerpt; not a verified fact.", link: nil)]
+        captured.researchStatus = "One selected excerpt, not a news census."
+        let session = StockSageChatSession(historyURL: nil)
+        let id = try #require(session.begin(question: "old-question", snapshot: captured, model: "fixture"))
+        session.finish(id: id, text: String(repeating: "historical text ", count: 200))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let saved = try encoder.encode(session.turns)
+        let prompt = try #require(StockSageChat.prompt(question: "Explain risk", snapshot: captured, history: session.turns))
+        let offered = try offeredSnapshot(in: prompt, original: captured)
+        #expect(offered.facts == captured.facts && offered.sources == captured.sources,
+            "Do not sacrifice a fitting source to keep historical replies")
+        #expect(!prompt.contains("old-question") && !prompt.contains("historical text"))
+        #expect(try encoder.encode(session.turns) == saved)
+    }
+
+    @Test(arguments: ["x", "ع"])
+    func requestBudgetNeverTruncatesAnOversizedQuestion(_ character: String) {
+        let question = String(repeating: character, count: 2_000)
+        let captured = snapshot()
+        #expect(StockSageChat.safeQuestion(question))
+        #expect(StockSageChat.prompt(question: question, snapshot: captured, history: []) == nil)
+        #expect(captured == snapshot())
+    }
+
+    @Test(arguments: [1, 4], ["x", "ع"])
+    func actualCallerSnapshotFitsAndOnlyOfferedRecordsCanComplete(symbolCount: Int, character: String) throws {
+        typealias C = StockSageChat
+        let names = Array(["ORCL", "AAPL", "MSFT", "QCOM"].prefix(symbolCount))
+        let symbols = names.map { symbol($0) }
+        let ideas = names.map { ticker in
+            StockSageIdea(symbol: ticker, market: "US", price: 159.70,
+                advice: TradeAdvice(action: .hold, conviction: 0.03, regime: .range,
+                    rationale: ["Synthetic rules only."], stopPrice: nil, targetPrice: nil,
+                    suggestedWeight: 0, caveat: "Rules only."), spark: [155, 158], realizedVol: 0.65,
+                generatedAt: now, priceAsOf: now, priceSource: .massiveSIP)
+        }
+        let earnings = Dictionary(uniqueKeysWithValues: names.map { ticker in
+            (ticker, StockSageCatalystRecordCache.Record(symbol: ticker,
+                earningsDate: now.addingTimeInterval(3 * 86_400), checkedAt: now,
+                source: "Fixture earnings", status: .dateKnown, confirmed: true))
+        })
+        let question = (character == "ع" ? "اشرح مخاطر " : "Explain risks for ") + names.joined(separator: " ")
+        let selected = C.selectedSymbols(question: question, symbols: symbols, watchlist: [])
+        let base = C.snapshot(symbols: selected, ideas: ideas, earnings: earnings, sample: false, now: now)
+        try #require(base.facts.count == 3 * symbolCount)
+        let news = (1...3).map { index in
+            StockSageNewsService.NewsItem(date: now, title: "Fixture \(index)",
+                snippet: String(repeating: character == "ع" ? "خبر " : "news ", count: 100),
+                link: URL(string: "https://example.invalid/news/\(index)"),
+                sentiment: nil, source: "Synthetic publisher")
+        }
+        let observation = StockSageNewsService.Observation(attempts: [
+            .init(provider: .massive, checkedAt: now, status: .answered, items: news)])
+        let captured = C.addingResearch(to: base, symbol: "ORCL", observation: observation,
+            leads: nil, webAllowed: true)
+        try #require(captured.sources?.count == 3 && captured.sources?.allSatisfy { $0.excerpt.count >= 380 } == true)
+        let prepared = try #require(C.request(question: question, snapshot: captured, history: []))
+        let offered = prepared.snapshot
+        #expect(try offeredSnapshot(in: prepared.prompt, original: captured) == offered,
+            "The validation snapshot must name exactly the records actually transmitted")
+        #expect(prepared.prompt.utf8.count <= C.promptByteLimit)
+        #expect(prepared.prompt.utf8.count + C.instructions.utf8.count + C.outputTokens + 1_024 <= 4_096)
+        #expect(offered.facts.filter { $0.field == "observed price" } == base.facts.filter { $0.field == "observed price" },
+            "Never silently lose a selected symbol's quote record to make room")
+        if symbolCount == 1 && character == "x" {
+            #expect(offered.sources?.isEmpty == false, "Ordinary ORCL news must reach Qwen, not merely produce a facts-only success")
+        }
+        let offeredIDs = Set(offered.facts.map(\.id) + (offered.sources ?? []).map(\.id))
+        let omittedIDs = Set(captured.facts.map(\.id) + (captured.sources ?? []).map(\.id)).subtracting(offeredIDs)
+        try #require(!omittedIDs.isEmpty)
+        let session = StockSageChatSession(historyURL: nil)
+        for evidenceID in ["ORCL.quote"] + omittedIDs.sorted() {
+            let id = try #require(session.begin(question: question, snapshot: captured, model: "fixture"))
+            let body = try JSONSerialization.data(withJSONObject: [
+                "analysis": "The supplied evidence remains uncertain.", "evidence": [evidenceID]])
+            session.finish(id: id, text: String(decoding: body, as: UTF8.self), requestSnapshot: offered)
+            let turn = try #require(session.turns.last)
+            #expect(turn.snapshot == captured && session.pending == nil)
+            #expect(turn.notice.contains(try #require(offered.researchStatus)))
+            if offeredIDs.contains(evidenceID) { #expect(turn.evidence == [evidenceID]) }
+            else { #expect(turn.evidence.isEmpty && turn.notice.contains("Unverified draft")) }
+        }
+    }
+
     @Test func longerStructuredRepliesSurvivePersistenceWithoutTruncation() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -654,6 +938,64 @@ struct StockSageChatTests {
         #expect(loaded.storageError == nil && loaded.turns.first?.answer == answer)
         let tooLong = StockSageChat.reply(String(repeating: "x", count: StockSageChat.replyCharacterLimit + 1), snapshot: snapshot())
         #expect(tooLong.text.count == StockSageChat.replyCharacterLimit && tooLong.evidence.isEmpty)
+    }
+
+    // Characterizes failed-save session reconstruction, not native navigation ownership.
+    @Test(arguments: [false, true])
+    func failedSaveRetainsTurnsOnlyInOriginalSession(cancelled: Bool) throws {
+        let files = FileManager.default
+        let root = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try files.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: root) }
+        let blocker = root.appendingPathComponent("blocker")
+        let blockerBytes = Data("Synthetic regular-file blocker".utf8)
+        try blockerBytes.write(to: blocker)
+        let isRegularFile = try blocker.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile
+        try #require(isRegularFile == true)
+        let url = blocker.appendingPathComponent("history.json")
+        let chat = StockSageChatSession(historyURL: url)
+        let captured = snapshot()
+        #expect(captured.facts.contains { $0.id == "ORCL.quote" })
+        #expect(chat.turns.isEmpty && chat.storageError == nil)
+        let id = try #require(chat.begin(question: "Explain ORCL", snapshot: captured, model: "fixture"))
+        let warning = "Chat is available in memory, but local history saving could not be confirmed. Recent changes may not survive closing the conversation or app."
+        #expect(chat.pending == id && chat.storageError == warning)
+        #if os(macOS)
+        let input = "Use 1–2000 characters."
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: chat.storageError) == [input, warning])
+        #endif
+        if cancelled {
+            chat.cancel()
+        } else {
+            chat.finish(id: id, text: #"{"analysis":"Synthetic retained answer.","evidence":["ORCL.quote"]}"#)
+        }
+        let turn = try #require(chat.turns.first)
+        #expect(chat.turns.count == 1 && chat.pending == nil && chat.storageError == warning)
+        #expect(turn.id == id && turn.question == "Explain ORCL" && turn.model == "fixture")
+        #expect(turn.snapshot == captured)
+        #expect(turn.answer == (cancelled ? "Request cancelled. Ask again for a fresh snapshot." : "Synthetic retained answer."))
+        #expect(turn.evidence == (cancelled ? [] : ["ORCL.quote"]))
+        #expect(turn.notice == (cancelled ? "Unavailable — app facts only; no cloud fallback"
+            : "AI interpretation — evidence IDs checked, conclusions not verified. Not an order."))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let memory = try encoder.encode(chat.turns)
+        let reconstructed = StockSageChatSession(historyURL: url)
+        #expect(reconstructed.turns.isEmpty && reconstructed.pending == nil && reconstructed.storageError == nil)
+        #expect(try encoder.encode(chat.turns) == memory)
+        #expect(chat.storageError == warning)
+        let pending = try #require(chat.begin(question: "Clear this pending request", snapshot: captured, model: "fixture"))
+        #expect(chat.turns.count == 2 && chat.pending == pending && chat.storageError == warning)
+        chat.clear()
+        #expect(chat.turns.isEmpty && chat.pending == nil && chat.storageError == nil)
+        chat.finish(id: id, text: "Late result for the earlier turn")
+        chat.finish(id: pending, text: "Late result after Clear")
+        #expect(chat.turns.isEmpty && chat.pending == nil && chat.storageError == nil)
+        #if os(macOS)
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: chat.storageError) == [input])
+        #endif
+        #expect(!files.fileExists(atPath: url.path))
+        #expect(try Data(contentsOf: blocker) == blockerBytes)
     }
 
     @Test func privatePersistenceReloadAndCorruptFileProtection() throws {
@@ -740,6 +1082,36 @@ struct StockSageChatTests {
 }
 
 #if os(macOS)
+@MainActor private final class ChatNavigationSelection: ObservableObject {
+    @Published var isChat = true
+}
+
+@MainActor private final class ChatNavigationProbe {
+    weak var session: StockSageChatSession?
+    var chatAppearances = 0
+    var chatDisappearances = 0
+    var otherAppearances = 0
+}
+
+@MainActor private struct ChatNavigationFixture: View {
+    @ObservedObject var selection: ChatNavigationSelection
+    let historyURL: URL
+    let probe: ChatNavigationProbe
+
+    var body: some View {
+        StockSageChatNavigation(isChat: selection.isChat, historyURL: historyURL) { session in
+            Text("Inert Chat child")
+                .onAppear { [weak session] in
+                    probe.session = session; probe.chatAppearances += 1
+                }
+                .onDisappear { probe.chatDisappearances += 1 }
+        } other: {
+            Text("Inert other child").onAppear { probe.otherAppearances += 1 }
+        }
+        .frame(width: 400, height: 180)
+    }
+}
+
 @MainActor private struct ChatFocusFixture: View {
     @State private var question = "Focus fixture"
     @State private var issue: String?

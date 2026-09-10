@@ -8,6 +8,176 @@ struct StockSageEarningsTests {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @MainActor private final class EarningsPause {
+        private var released = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func suspend() async {
+            guard !released else { return }
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func waitUntilSuspended() async throws {
+            for _ in 0..<100 where continuation == nil {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try #require(continuation != nil, "The real request/publication boundary must be reached")
+        }
+
+        func release() {
+            released = true
+            let pending = continuation
+            continuation = nil
+            pending?.resume()
+        }
+    }
+
+    @Test(arguments: [200, 429], [false, true])
+    @MainActor func yahooSuspendedReplyCannotSurviveInvalidation(status: Int, cancel: Bool) async throws {
+        let pause = EarningsPause()
+        var permitted = true
+        var calls = 0
+        var sleeps: [UInt64] = []
+        let request = URLRequest(url: URL(string: "https://example.invalid/earnings")!)
+        let body = Data(#"{"quoteSummary":{"result":[{"calendarEvents":{"earnings":{"earningsDate":[]}}}]}}"#.utf8)
+        let task = Task { @MainActor in
+            await StockSageEarnings.get(request, allowed: { permitted }, transport: { req in
+                calls += 1
+                if calls == 1 { await pause.suspend() }
+                return (body, HTTPURLResponse(url: req.url!, statusCode: calls == 1 ? status : 200,
+                                              httpVersion: nil, headerFields: nil)!)
+            }, sleep: { sleeps.append($0) })
+        }
+        defer { task.cancel(); pause.release() }
+        try await pause.waitUntilSuspended()
+        #expect(calls == 1)
+        if cancel { task.cancel() } else { permitted = false }
+        pause.release()
+        let result = await task.value
+        #expect(result == nil)
+        #expect(calls == 1 && sleeps.isEmpty, "No retry or backoff may start after invalidation")
+    }
+
+    @Test(arguments: [429, 503], [false, true])
+    @MainActor func yahooInvalidationDuringBackoffCannotStartAnotherRequest(status: Int, cancel: Bool) async throws {
+        let pause = EarningsPause()
+        var permitted = true
+        var calls = 0
+        var sleeps: [UInt64] = []
+        let request = URLRequest(url: URL(string: "https://example.invalid/earnings")!)
+        let task = Task { @MainActor in
+            await StockSageEarnings.get(request, allowed: { permitted }, transport: { req in
+                calls += 1
+                return (Data(), HTTPURLResponse(url: req.url!, statusCode: calls == 1 ? status : 200,
+                                               httpVersion: nil, headerFields: nil)!)
+            }, sleep: { delay in
+                sleeps.append(delay)
+                await pause.suspend()
+                try Task.checkCancellation()
+            })
+        }
+        defer { task.cancel(); pause.release() }
+        try await pause.waitUntilSuspended()
+        #expect(calls == 1 && sleeps == [1_000_000_000])
+        if cancel { task.cancel() } else { permitted = false }
+        pause.release()
+        let result = await task.value
+        #expect(result == nil && calls == 1)
+        #expect(sleeps == [1_000_000_000])
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func yahooValidRetryBudgetRemainsThreeAttempts(exhaust: Bool) async {
+        var calls = 0
+        var sleeps: [UInt64] = []
+        let request = URLRequest(url: URL(string: "https://example.invalid/earnings")!)
+        let body = Data("fixture".utf8)
+        let result = await StockSageEarnings.get(request, allowed: { true }, transport: { req in
+            calls += 1
+            return (body, HTTPURLResponse(url: req.url!, statusCode: exhaust || calls < 3 ? 503 : 200,
+                                          httpVersion: nil, headerFields: nil)!)
+        }, sleep: { sleeps.append($0) })
+        #expect(calls == 3 && sleeps == [1_000_000_000, 2_000_000_000])
+        #expect(result == (exhaust ? nil : body))
+    }
+
+    @Test @MainActor func yahooDeniedBeforeRequestDoesNotCallTransportOrSleep() async {
+        let request = URLRequest(url: URL(string: "https://example.invalid/earnings")!)
+        var calls = 0
+        let result = await StockSageEarnings.get(request, allowed: { false }, transport: { req in
+            calls += 1
+            return (Data(), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }, sleep: { _ in Issue.record("Unexpected backoff") })
+        #expect(result == nil && calls == 0)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    @MainActor func invalidatedChainCannotPublishOverRetainedEarnings(cancel: Bool, negative: Bool) async throws {
+        let suite = "StockSageEarningsTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let originalDate = now.addingTimeInterval(10 * 86_400)
+        let original = StockSageCatalystChain.Outcome(earningsDate: originalDate, dateRangeEnd: nil,
+            confirmed: false, status: .dateKnown, source: "fixture original",
+            sourcesAsked: ["fixture original"], projectionBasis: nil, anySourceAnswered: true)
+        store.publishCatalyst(original, symbol: "AAPL", checkedAt: now, allowed: { true })
+        #expect(store.earningsDates["AAPL"] == originalDate && store.earningsCheckedAt["AAPL"] == now)
+        let records = store.catalystChain
+        let dates = store.earningsDates
+        let checked = store.earningsCheckedAt
+        let replacement = StockSageCatalystChain.Outcome(
+            earningsDate: negative ? nil : now.addingTimeInterval(20 * 86_400), dateRangeEnd: nil,
+            confirmed: negative ? nil : true, status: negative ? .unchecked : .dateKnown,
+            source: "fixture late", sourcesAsked: ["fixture late"], projectionBasis: nil, anySourceAnswered: true)
+        let pause = EarningsPause()
+        var permitted = true
+        let task = Task { @MainActor in
+            await pause.suspend()
+            store.publishCatalyst(replacement, symbol: "AAPL", checkedAt: now.addingTimeInterval(86_400),
+                                  allowed: { permitted })
+        }
+        defer { task.cancel(); pause.release() }
+        try await pause.waitUntilSuspended()
+        if cancel { task.cancel() } else { permitted = false }
+        pause.release()
+        await task.value
+        #expect(store.catalystChain == records)
+        #expect(store.earningsDates == dates && store.earningsCheckedAt == checked)
+        // The same synchronous production publication still accepts a legitimate completion.
+        store.publishCatalyst(replacement, symbol: "AAPL", checkedAt: now.addingTimeInterval(86_400),
+                              allowed: { true })
+        #expect(store.catalystChain["AAPL"]?.source == "fixture late")
+        #expect(store.earningsDates["AAPL"] == replacement.earningsDate)
+        #expect(store.earningsCheckedAt["AAPL"] == now.addingTimeInterval(86_400))
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func invalidatedEarningsChainDoesNotStartNextProvider(cancel: Bool) async throws {
+        let pause = EarningsPause()
+        var permitted = true
+        var yahooCalls = 0
+        var historyCalls = 0
+        let task = Task { @MainActor in
+            await StockSageCatalystChain.resolve(now: now, stillValid: { permitted },
+                massiveCalendar: { .answered(nil) },
+                eodhdCalendar: { await pause.suspend(); return .answered(nil) },
+                yahooCalendar: {
+                    yahooCalls += 1
+                    return .answered(.init(date: now.addingTimeInterval(86_400), dateRangeEnd: nil, isEstimate: false))
+                }, history: { historyCalls += 1; return .answered([]) })
+        }
+        defer { task.cancel(); pause.release() }
+        try await pause.waitUntilSuspended()
+        if cancel { task.cancel() } else { permitted = false }
+        pause.release()
+        let result = await task.value
+        #expect(yahooCalls == 0 && historyCalls == 0)
+        #expect(result.earningsDate == nil && result.status == .unchecked)
+        #expect(result.sourcesAsked == [StockSageMassiveEarnings.source])
+        #expect(result.anySourceAnswered, "Keep provenance from the completed first source")
+    }
+
     @Test func severityBands() {
         #expect(StockSageEarnings.severity(daysUntil: 0) == .imminent)
         #expect(StockSageEarnings.severity(daysUntil: 3) == .imminent)

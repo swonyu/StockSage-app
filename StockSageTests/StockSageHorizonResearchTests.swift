@@ -302,18 +302,45 @@ import Testing
             let r = R()
             var permitted = true
             var resume: CheckedContinuation<Void, Never>?
-            let started = r.start(.week, allowed: { permitted }, universe: { [listing()] }, analyze: { _ in
-                await withCheckedContinuation { resume = $0 }
+            defer { r.stop(); resume?.resume() }
+            var analyzed: [String] = []
+            let started = r.start(.week, allowed: { permitted }, universe: { [listing(), listing("MSFT")] }, analyze: { item in
+                analyzed.append(item.ticker)
+                if item.ticker == "AAPL" { await withCheckedContinuation { resume = $0 } }
                 return .init(note: "late")
             })
             #expect(started)
             for _ in 0..<100 where resume == nil { try await Task.sleep(for: .milliseconds(5)) }
             let continuation = try #require(resume)
             #expect(r.activeSymbol == "AAPL")
+            #if os(macOS)
+            let scan = try #require(r.scans[.week])
+            #expect(StockSageResearchModesPanel.resultLabel("AAPL", research: r, scan: scan, horizon: .week) == "Checking…")
+            #expect(StockSageResearchModesPanel.resultLabel("MSFT", research: r, scan: scan, horizon: .week) == "Queued")
+            #expect(StockSageResearchModesPanel.resultLabel("MSFT", research: r, scan: scan, horizon: .fortnight) == "Not checked")
+            #endif
             if cancel { r.stop() } else { permitted = false }
+            #expect(r.running == .week, "The first request still owns the scan until it unwinds")
+            let overlap = r.start(.fortnight, allowed: { true }, universe: { [] },
+                analyze: { _ in .init(note: "must not run") })
+            #expect(!overlap && r.running == .week && r.scans[.fortnight] == nil)
+            #if os(macOS)
+            if cancel {
+                #expect(r.activeSymbol == nil)
+                #expect(StockSageResearchModesPanel.resultLabel("AAPL", research: r, scan: scan, horizon: .week) == "Not checked")
+                #expect(StockSageResearchModesPanel.resultLabel("MSFT", research: r, scan: scan, horizon: .week) == "Not checked")
+                #expect(StockSageResearchModesPanel.resultLabel("MSFT", research: r, scan: scan, horizon: .fortnight) == "Not checked")
+                var completed = scan
+                completed.results["MSFT"] = .init(note: "Synthetic completed check")
+                #expect(StockSageResearchModesPanel.resultLabel("MSFT", research: r, scan: completed, horizon: .week) == "Incomplete")
+                #expect(StockSageResearchModesPanel.resultLabel("MSFT", research: r, scan: completed, horizon: .fortnight) == "Incomplete")
+            }
+            #endif
+            resume = nil
             continuation.resume()
             for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
             #expect(r.running == nil && r.activeSymbol == nil && r.scans[.week]?.results.isEmpty == true)
+            #expect(analyzed == ["AAPL"], "Neither stop nor revoked settings may start the second listing")
         }
     }
 }

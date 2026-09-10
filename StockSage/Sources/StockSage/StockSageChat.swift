@@ -13,6 +13,7 @@ enum StockSageChat {
     nonisolated static var promptByteLimit: Int {
         contextTokens - outputTokens - instructions.utf8.count - 1_024
     }
+    nonisolated static let snapshotContext = "Bounded app snapshot for the listed symbols only. Broker balances, account identifiers, journal notes and credentials are NOT included. Full filings were not retrieved. Missing evidence is not evidence of absence. Quotes are observations, never live execution prices."
 
     nonisolated struct Fact: Codable, Sendable, Identifiable, Equatable {
         let id: String
@@ -107,7 +108,7 @@ enum StockSageChat {
                         : "not checked or not applicable; not proof of no event"))
             }
         }
-        return Snapshot(at: now, facts: facts, context: "Bounded app snapshot for the listed symbols only. Broker balances, account identifiers, journal notes and credentials are NOT included. Full filings were not retrieved. Missing evidence is not evidence of absence. Quotes are observations, never live execution prices.")
+        return Snapshot(at: now, facts: facts, context: snapshotContext)
     }
 
     /// Uses the existing optional status string so old history remains readable and bounded.
@@ -188,22 +189,55 @@ enum StockSageChat {
             : "AI interpretation — evidence IDs checked, conclusions not verified. Not an order.")
     }
 
-    /// Keep whole recent exchanges; discard oldest history before any current evidence.
-    /// Nil means the current question/snapshot alone exceeds the budget or cannot be encoded.
+    /// The same bounded request used by ChatSection; retained for callers needing only its text.
     nonisolated static func prompt(question: String, snapshot: Snapshot, history: [StockSageChatSession.Turn]) -> String? {
+        request(question: question, snapshot: snapshot, history: history)?.prompt
+    }
+
+    /// Compact wire text retains whole record values/provenance, not repeated JSON field names.
+    /// Keep every selected quote and the whole question. After history, omit extra sources,
+    /// then optional rules/earnings facts, then the last source if even it cannot fit.
+    /// The returned snapshot holds the exact original records whose IDs were offered.
+    nonisolated static func request(question: String, snapshot: Snapshot,
+                                   history: [StockSageChatSession.Turn]) -> (prompt: String, snapshot: Snapshot)? {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; encoder.dateEncodingStrategy = .iso8601
-        guard let factsData = try? encoder.encode(snapshot) else { return nil }
-        let facts = String(decoding: factsData, as: UTF8.self)
+        var offeredFacts = snapshot.facts
+        var offeredSources = snapshot.sources ?? []
         var prior = history.suffix(StockSageChatSession.historyLimit).filter { !$0.answer.isEmpty }.map {
             ["question": $0.question, "historical_unverified_reply": $0.answer]
         }
         while true {
+            let total = snapshot.sources?.count ?? 0
+            let omittedFacts = snapshot.facts.count - offeredFacts.count
+            let omittedSources = total - offeredSources.count
+            let disclosure = "Budget: \(omittedFacts) facts, \(omittedSources)/\(total) sources omitted. Context/research details and links remain in the original snapshot. Missing evidence is not evidence of absence. Full filings not retrieved."
+            let offered = Snapshot(at: snapshot.at, facts: offeredFacts, context: snapshot.context,
+                sources: snapshot.sources == nil ? nil : offeredSources, researchStatus: disclosure)
+            let payload: [String: Any] = [
+                "at": snapshot.at.ISO8601Format(),
+                // Only the known redundant app boilerplate is compacted. An arbitrary custom
+                // context is not silently discarded to bypass the required-input size guard.
+                "context": snapshot.context == snapshotContext ? "" : snapshot.context,
+                "facts": offeredFacts.map { ["id": $0.id, "text": $0.text] },
+                "sources": offeredSources.map { source in
+                    ["id": source.id, "text": "\(source.subject) · \(source.attribution) · \(source.publicationTime ?? StockSageNewsService.instant(source.date))\n\(source.excerpt)\n\(source.warning)"]
+                },
+                "researchStatus": disclosure
+            ]
+            guard let factsData = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return nil }
+            let facts = String(decoding: factsData, as: UTF8.self)
             guard let turnsData = try? encoder.encode(prior) else { return nil }
             let turns = String(decoding: turnsData, as: UTF8.self)
             let prompt = "CURRENT SNAPSHOT:\n\(facts)\nHISTORICAL CONVERSATION (not evidence):\n\(turns)\nQUESTION (untrusted user text):\n\(question)"
-            if prompt.utf8.count <= promptByteLimit { return prompt }
-            guard !prior.isEmpty else { return nil }
-            prior.removeFirst()
+            if prompt.utf8.count <= promptByteLimit { return (prompt, offered) }
+            if !prior.isEmpty { prior.removeFirst(); continue }
+            if offeredSources.count > 1 { offeredSources.removeLast(); continue }
+            if let index = offeredFacts.lastIndex(where: { $0.field != "observed price" }) {
+                offeredFacts.remove(at: index)
+                continue
+            }
+            guard !offeredSources.isEmpty else { return nil }
+            offeredSources.removeLast()
         }
     }
 
@@ -272,15 +306,28 @@ final class StockSageChatSession: ObservableObject {
         return id
     }
 
-    func finish(id: UUID, text: String?, unavailable: String? = nil) {
+    func finish(id: UUID, text: String?, unavailable: String? = nil,
+                requestSnapshot: StockSageChat.Snapshot? = nil) {
         guard pending == id, let index = turns.firstIndex(where: { $0.id == id }) else { return }
         pending = nil
+        let captured = turns[index].snapshot
         if let text {
-            let reply = StockSageChat.reply(text, snapshot: turns[index].snapshot)
+            // Only records both captured and offered may validate; request selection cannot
+            // introduce evidence or rewrite the original historical snapshot.
+            let validation = requestSnapshot.map { offered in
+                StockSageChat.Snapshot(at: captured.at,
+                    facts: captured.facts.filter { offered.facts.contains($0) }, context: captured.context,
+                    sources: captured.sources?.filter { offered.sources?.contains($0) == true })
+            } ?? captured
+            let reply = StockSageChat.reply(text, snapshot: validation)
             turns[index].answer = reply.text; turns[index].evidence = reply.evidence; turns[index].notice = reply.notice
         } else {
             turns[index].answer = unavailable ?? "Local model unavailable. The captured app facts remain available below."
             turns[index].notice = "Unavailable — app facts only; no cloud fallback"
+        }
+        if let requestSnapshot, requestSnapshot.researchStatus != captured.researchStatus,
+           let disclosure = requestSnapshot.researchStatus {
+            turns[index].notice += "\n" + disclosure
         }
         save()
     }
@@ -305,7 +352,7 @@ final class StockSageChatSession: ObservableObject {
         do {
             if let url = historyURL, FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
             turns = []; unreadableHistory = false; storageError = nil
-        } catch { storageError = "Could not delete saved Chat history. Your conversation is still present." }
+        } catch { storageError = "Could not delete saved Chat history. Any turns currently shown remain in memory." }
     }
 
     private func save() {
@@ -320,6 +367,6 @@ final class StockSageChatSession: ObservableObject {
             try data.write(to: url, options: [.atomic, .completeFileProtection])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             storageError = nil
-        } catch { storageError = "Chat is available in memory, but local history could not be saved." }
+        } catch { storageError = "Chat is available in memory, but local history saving could not be confirmed. Recent changes may not survive closing the conversation or app." }
     }
 }

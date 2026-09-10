@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 @testable import StockSage
+#if os(macOS)
+import Darwin
+#endif
 
 @Suite("Qwen paper automation") @MainActor
 struct StockSagePaperAutomationTests {
@@ -134,6 +137,12 @@ struct StockSagePaperAutomationTests {
             let request = A.Pending(id: UUID(), symbol: "AAPL", buy: buy, at: now.addingTimeInterval(-age))
             #expect(StockSagePaperAutomationPanel.pendingStatus(request, running: running, at: now) == expected)
         }
+        var protective = A.Pending(id: UUID(), symbol: "AAPL", buy: false,
+            at: closed.addingTimeInterval(-120), protectiveTradeID: UUID())
+        #expect(StockSagePaperAutomationPanel.pendingStatus(protective, running: false, at: closed) == paused)
+        protective.at = closed.addingTimeInterval(1)
+        #expect(StockSagePaperAutomationPanel.pendingStatus(protective, running: true, at: closed) == future)
+        #expect(StockSagePaperAutomationPanel.pendingStatus(protective, running: false, at: closed) == paused)
     }
     #endif
 
@@ -1191,6 +1200,11 @@ struct StockSagePaperAutomationTests {
             #expect(book.decisions.isEmpty, "Closed sessions must not generate retry audit churn: \(triggerISO)")
             #expect(book.pending.first?.at == trigger)
             #expect(book.open.count == 1 && book.pending.first?.protectiveTradeID == holding.id)
+            #if os(macOS)
+            let retained = try #require(book.pending.first)
+            #expect(StockSagePaperAutomationPanel.pendingStatus(retained, running: true, at: reopen.addingTimeInterval(-120))
+                == "Protective intent retained; waiting for the next supported paper session.")
+            #endif
 
             book = try JSONDecoder().decode(A.Book.self, from: JSONEncoder().encode(book))
             let retry = reopen.addingTimeInterval(30)
@@ -1320,6 +1334,213 @@ struct StockSagePaperAutomationTests {
         #expect(restored.pending.isEmpty && restored.cash == 9699.7)
         #expect(restored.settledCash(at: now.addingTimeInterval(2)) == 199.7 && restored.valid)
         #expect(try encoder.encode(restored) == snapshot)
+    }
+
+    #if os(macOS)
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_PROCESS_DEATH"] == "1"))
+    func abruptChildDeathAtBeforeAccountCommitReleasesLeaseAndRecoversOneFill() async throws {
+        let environment = ProcessInfo.processInfo.environment, files = FileManager.default
+        let flag = "STOCKSAGE_PAPER_PROCESS_DEATH", prefix = "stocksage-paper-process-death-"
+        let childKey = "\(flag)_CHILD", accountKey = "\(flag)_ACCOUNT"
+        let defaultsKey = "\(flag)_DEFAULTS", executableKey = "\(flag)_EXECUTABLE"
+        let executable = try #require(Bundle.main.executableURL).resolvingSymlinksInPath()
+        try #require(executable.lastPathComponent == "testrunner",
+                     "Opt in only with the existing standalone testrunner, never an Xcode app host.")
+        let length = Darwin.confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        try #require(length > 1 && length < 4096)
+        var buffer = [CChar](repeating: 0, count: length)
+        try #require(Darwin.confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, length) == length)
+        let temp = URL(fileURLWithPath: String(cString: buffer), isDirectory: true).resolvingSymlinksInPath()
+        try #require(files.temporaryDirectory.resolvingSymlinksInPath().path == temp.path)
+        func ownedRoot(_ root: URL) -> stat? {
+            var info = stat()
+            guard Darwin.lstat(root.path, &info) == 0, info.st_uid == Darwin.geteuid(),
+                  info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+                  info.st_mode & 0o7777 == 0o700 else { return nil }
+            return info
+        }
+        let witnessName = "abandoned-decision.json"
+        if environment[childKey] == "1" {
+            guard environment[executableKey] == executable.path,
+                  let name = environment[defaultsKey], name.hasPrefix(prefix),
+                  let id = UUID(uuidString: String(name.dropFirst(prefix.count))),
+                  name == prefix + id.uuidString else { Darwin._exit(80) }
+            let root = temp.appendingPathComponent(name), account = root.appendingPathComponent("account.json")
+            var info = stat()
+            guard environment[accountKey] == account.path, ownedRoot(root) != nil,
+                  account.resolvingSymlinksInPath().path == account.path,
+                  Darwin.lstat(account.path, &info) == 0, info.st_uid == Darwin.geteuid(),
+                  info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_nlink == 1,
+                  (try? files.contentsOfDirectory(atPath: root.path)) == ["account.json"],
+                  let defaults = UserDefaults(suiteName: name) else { Darwin._exit(80) }
+            let state = A(url: account, defaults: defaults)
+            guard state.error == nil, state.acquire() else { Darwin._exit(81) }
+            var next = state.book
+            next.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+            guard next.trades.count == 1, next.pending.isEmpty, next.cash == 8_098.10,
+                  next.decisions.count == 40_001, let abandonedID = next.decisions.last?.id else { Darwin._exit(82) }
+            _ = state.save(next, beforeAccountCommit: {
+                let contender = A(url: account, defaults: defaults)
+                guard !contender.acquire(),
+                      contender.error == "This paper account is running in another StockSage process." else { Darwin._exit(84) }
+                try JSONEncoder().encode(abandonedID).write(to: root.appendingPathComponent(witnessName),
+                                                           options: .withoutOverwriting)
+                Darwin._exit(86) // No stop(), defer, or error unwinding; account commit has not happened.
+            })
+            Darwin._exit(83)
+        }
+        try #require([childKey, accountKey, defaultsKey, executableKey].allSatisfy { environment[$0] == nil })
+        let name = prefix + UUID().uuidString, child = Process()
+        let root = temp.appendingPathComponent(name), account = root.appendingPathComponent("account.json")
+        try #require(Darwin.mkdir(root.path, mode_t(0o700)) == 0) // Exclusive creation; never adopt an existing root.
+        let created = try #require(ownedRoot(root))
+        var defaults: UserDefaults?, recovery: A?
+        var childReaped = true
+        defer {
+            if childReaped, let current = ownedRoot(root),
+               current.st_dev == created.st_dev, current.st_ino == created.st_ino {
+                recovery?.stop() // Synthetic cleanup only, after all recovery/replay assertions.
+                defaults?.removePersistentDomain(forName: name)
+                do { try files.removeItem(at: root) } catch { Issue.record(error) }
+            } else {
+                Issue.record("Fixture retained: unreaped child or changed root identity at \(root.path)")
+            }
+        }
+        defaults = try #require(UserDefaults(suiteName: name))
+        let isolatedDefaults = try #require(defaults)
+        var baseline = A.Book()
+        for _ in 0..<40_000 { baseline.note(action: "Fixture", reason: "Synthetic audit identity", at: now) }
+        baseline.propose(symbol: "AAPL", action: .buy, at: now)
+        let pendingID = try #require(baseline.pending.first?.id)
+        try #require(baseline.valid && baseline.decisions.count == 40_000 && baseline.pending.count == 1)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let baselineBytes = try encoder.encode(baseline)
+        try baselineBytes.write(to: account, options: .atomic)
+        child.executableURL = executable
+        child.currentDirectoryURL = root
+        child.arguments = ["--filter",
+            "abruptChildDeathAtBeforeAccountCommitReleasesLeaseAndRecoversOneFill",
+            "--no-parallel"]
+        child.environment = [flag: "1", childKey: "1", accountKey: account.path,
+                             defaultsKey: name, executableKey: executable.path]
+        if let tmp = environment["TMPDIR"] { child.environment?["TMPDIR"] = tmp }
+        child.standardInput = FileHandle.nullDevice
+        try child.run()
+        defer {
+            if child.isRunning { _ = Darwin.kill(child.processIdentifier, SIGKILL) }
+            else { child.waitUntilExit(); childReaped = true }
+        }
+        childReaped = false
+        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        while child.isRunning && !Task.isCancelled && ProcessInfo.processInfo.systemUptime < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let timelyExit = !child.isRunning
+        if child.isRunning {
+            let result = Darwin.kill(child.processIdentifier, SIGKILL)
+            if result != 0 && errno != ESRCH { Issue.record("Could not signal owned child: errno \(errno)") }
+            let reapDeadline = ProcessInfo.processInfo.systemUptime + 5
+            while child.isRunning && ProcessInfo.processInfo.systemUptime < reapDeadline {
+                try? await Task.sleep(for: .milliseconds(10))
+                await Task.yield() // Remain cooperative even if this test task was cancelled.
+            }
+        }
+        try #require(!child.isRunning, "Owned child could not be reaped; fixture retained at \(root.path)")
+        child.waitUntilExit(); childReaped = true
+        try #require(timelyExit, "Child timed out or test was cancelled before the pre-commit exit.")
+        print("[paper-process-death] owned child exit=\(child.terminationStatus)")
+        try #require(child.terminationReason == .exit)
+        try #require(child.terminationStatus == 86)
+
+        #expect(try Data(contentsOf: account) == baselineBytes)
+        let orphanNames = try files.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("audit-") && $0.hasSuffix(".json") }
+        let orphanName = try #require(orphanNames.count == 1 ? orphanNames[0] : nil)
+        let orphan = try JSONDecoder().decode([A.Decision].self,
+            from: Data(contentsOf: root.appendingPathComponent(orphanName)))
+        #expect(orphan == Array(baseline.decisions.prefix(1_000)))
+        let abandonedID = try JSONDecoder().decode(UUID.self,
+            from: Data(contentsOf: root.appendingPathComponent(witnessName)))
+        let restarted = A(url: account, defaults: isolatedDefaults)
+        recovery = restarted
+        try #require(restarted.error == nil && restarted.acquire())
+        #expect(try Data(contentsOf: account) == baselineBytes)
+        #expect(try encoder.encode(restarted.book) == baselineBytes)
+        #expect(try encoder.encode(restarted.book.pending) == encoder.encode(baseline.pending))
+        #expect(restarted.book.decisions == baseline.decisions)
+        #expect(restarted.book.cash == 10_000 && restarted.book.trades.isEmpty)
+        #expect(restarted.book.pending.map(\.id) == [pendingID] && restarted.book.audit == nil)
+
+        var filled = restarted.book
+        filled.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        #expect(filled.pending.isEmpty && filled.trades.count == 1)
+        #expect(filled.trades.first?.id == pendingID && filled.trades.first?.shares == 19)
+        #expect(filled.cash == 8_098.10 && filled.decisions.count == 40_001)
+        try #require(restarted.save(filled))
+        let reopened = A(url: account, defaults: isolatedDefaults)
+        try #require(reopened.error == nil && reopened.hasLoadedBook)
+        let audit = try #require(reopened.book.audit)
+        var history: [A.Decision] = []
+        for archive in audit.archives { history += try archive.read(beside: account) }
+        history += reopened.book.decisions
+        let identical = history == filled.decisions
+        #expect(identical, "Durable recovery retains every complete decision, in commit order.")
+        #expect(history.count == 40_001 && Set(history.map(\.id)).count == 40_001)
+        #expect(!history.contains { $0.id == abandonedID } && history.last?.action == "Paper Buy")
+        #expect(reopened.book.pending.isEmpty && reopened.book.trades.count == 1)
+        #expect(reopened.book.trades == filled.trades && reopened.book.cash == 8_098.10)
+        let referenced = Set(audit.archives.map { $0.url(beside: account).lastPathComponent })
+        let allAudit = Set(try files.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("audit-") && $0.hasSuffix(".json") })
+        #expect(referenced.count == 1 && !referenced.contains(orphanName))
+        #expect(allAudit.subtracting(referenced) == Set([orphanName]))
+        let committedBytes = try Data(contentsOf: account), replayBefore = try encoder.encode(reopened.book)
+        var repeated = reopened.book
+        repeated.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(2))
+        #expect(try encoder.encode(repeated) == replayBefore)
+        #expect(try Data(contentsOf: account) == committedBytes)
+    }
+    #endif
+
+    @Test func failedAcquireAfterInitialReadClearsLoadedStateWithoutChangingBook() throws {
+        let files = FileManager.default
+        let name = "qwen-paper-state-\(UUID().uuidString)"
+        let temp = files.temporaryDirectory.resolvingSymlinksInPath()
+        let root = temp.appendingPathComponent(name, isDirectory: true)
+        try #require(!files.fileExists(atPath: root.path))
+        try files.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? files.removeItem(at: root) }
+        try #require(root.resolvingSymlinksInPath().path == root.path)
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let url = root.appendingPathComponent("account.json")
+        var book = A.Book()
+        book.note(action: "Fixture research", reason: "Synthetic retained evidence", at: now)
+        book.propose(symbol: "AAPL", action: .buy, at: now)
+        try #require(book.valid && book.pending.count == 1)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(book)
+        try before.write(to: url, options: .withoutOverwriting) // Ordinary fixture bytes; no save/acquire yet.
+        let state = A(url: url, defaults: defaults)
+        defer { state.stop() } // Failed read releases its lease; cleanup must not save.
+        try #require(state.hasLoadedBook && state.error == nil)
+        #expect(try encoder.encode(state.book) == before)
+
+        let corruptBytes = Data("broken".utf8)
+        try corruptBytes.write(to: url)
+        try #require(!state.acquire())
+        let corruptError = "Paper account unavailable or corrupt. Existing data has been preserved."
+        #expect(!state.hasLoadedBook)
+        #expect(state.error == corruptError)
+        #expect(try encoder.encode(state.book) == before)
+        #expect(try Data(contentsOf: url) == corruptBytes)
+
+        let second = A(url: url, defaults: defaults)
+        defer { second.stop() } // This reader also fails before retaining a lease.
+        try #require(!second.acquire())
+        #expect(!second.hasLoadedBook && second.error == corruptError,
+                "Failed acquisition must release the lease, not block the next corrupt reader.")
+        #expect(try Data(contentsOf: url) == corruptBytes)
     }
 
     @Test func accountLeasePersistenceAndCorruptionProtection() throws {

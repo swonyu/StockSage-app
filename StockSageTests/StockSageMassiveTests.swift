@@ -264,6 +264,20 @@ struct StockSageMassiveTests {
     }
 
     @Test("aggregate history fails closed and preserves the Yahoo fallback contract")
+    func aggregateAdjustmentMetadataCannotContradictTheRequest() throws {
+        var root = try #require(JSONSerialization.jsonObject(with: Self.aggregateSample) as? [String: Any])
+        for adjusted: Any in [false, "false", 0, NSNull()] {
+            root["adjusted"] = adjusted
+            #expect(M.parseHistory(try JSONSerialization.data(withJSONObject: root), symbol: "AAPL") == nil)
+        }
+        root["adjusted"] = true
+        #expect(M.parseHistory(try JSONSerialization.data(withJSONObject: root), symbol: "AAPL")?.closes == [75.0875, 74.3575])
+        root.removeValue(forKey: "adjusted")
+        #expect(M.parseHistory(try JSONSerialization.data(withJSONObject: root), symbol: "AAPL") != nil,
+                "Retain compatibility with omitted metadata; the request explicitly asks for adjusted bars")
+    }
+
+    @Test("aggregate history rejects empty and malformed bodies")
     func aggregateHistoryRejectsMalformedOrTooShortBodies() {
         #expect(M.parseHistory(Data(), symbol: "AAPL") == nil)
         #expect(M.parseHistory(#"{"status":"OK","results":[]}"#.data(using: .utf8)!, symbol: "AAPL") == nil)

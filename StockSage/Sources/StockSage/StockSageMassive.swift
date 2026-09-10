@@ -321,6 +321,12 @@ enum StockSageMassive {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK",
               let rows = root["results"] as? [[String: Any]], !rows.isEmpty else { return nil }
+        // Requests require adjusted=true. Older payloads may omit this metadata, but
+        // an explicit false or malformed flag must not feed split discontinuities into ATR.
+        if let raw = root["adjusted"] {
+            guard let adjusted = raw as? NSNumber, CFGetTypeID(adjusted) == CFBooleanGetTypeID(),
+                  adjusted.boolValue else { return nil }
+        }
         var bars: [(date: Date, open: Double, high: Double, low: Double, close: Double, volume: Double)] = []
         for row in rows {
             guard let ms = int64(row["t"]), ms >= 0,

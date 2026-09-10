@@ -2093,6 +2093,7 @@ final class StockSageStore: ObservableObject {
     /// TTL-gated 24h off `catalystChain[symbol]?.checkedAt`, same constant and same "never
     /// checked ⇒ due now" rule as the legacy `shouldRefreshEarnings` this replaces in the sweep.
     func refreshCatalyst(symbol: String) async {
+        guard !Task.isCancelled else { return }
         let up = symbol.uppercased()
         guard StockSageAllocation.assetClass(up) == "Equity" else {
             if catalystChain[up]?.status != .notApplicable {
@@ -2108,6 +2109,7 @@ final class StockSageStore: ObservableObject {
         let isUS = StockSageEODHD.covers(up)
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
+            stillValid: { ToolPolicy.isExternalAllowed },
             massiveCalendar: { await StockSageMassiveEarnings.fetch(up, now: now) },
             eodhdCalendar: {
                 // `fetchCalendar` returns nil for EVERY unreachable case (not covered, empty
@@ -2139,6 +2141,14 @@ final class StockSageStore: ObservableObject {
                 return .answered(dates)
             }
         )
+        publishCatalyst(outcome, symbol: up, checkedAt: now)
+    }
+
+    /// Shared synchronous publication of a completed chain; no cache I/O here.
+    func publishCatalyst(_ outcome: StockSageCatalystChain.Outcome, symbol: String, checkedAt now: Date,
+                         allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) {
+        guard !Task.isCancelled, allowed() else { return }
+        let up = symbol.uppercased()
         // Never stamp a dated negative for a question nobody actually answered (blocker fix
         // 2026-09-06) — `.unchecked` from a chain where every provider was `.unavailable` (e.g.
         // external access flickered off mid-symbol, or Yahoo's 429s exhausted every retry) must

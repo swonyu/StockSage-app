@@ -19,10 +19,8 @@ struct CatalystsSection: View {
     let ideas: [StockSageIdea]
     @ObservedObject var store: StockSageStore
     let onSelect: (StockSageIdea) -> Void
-    #if os(macOS)
     let ideasFilterMessage: String
     let onOpenIdeas: () -> Void
-    #endif
 
     enum Mode: String, CaseIterable {
         case cards, calendar
@@ -298,7 +296,6 @@ struct CatalystsSection: View {
 
     // MARK: - Header card
 
-    #if os(macOS)
     nonisolated static func ideasRecoveryState(visibleCount: Int, totalCount: Int, loading: Bool,
         filteredMessage: String) -> (message: String, action: String)? {
         guard visibleCount == 0 else { return nil }
@@ -325,7 +322,6 @@ struct CatalystsSection: View {
             }
         }
     }
-    #endif
 
     @ViewBuilder
     private func headerCard(briefs: [StockSageCatalystWatch.Brief],
@@ -367,13 +363,13 @@ struct CatalystsSection: View {
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                 }
             }
+            #else
+            DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
+            #endif
             Self.ideasRecovery(visibleCount: ideas.count, totalCount: store.ideas.count,
                 loading: store.isLoadingIdeas, filteredMessage: ideasFilterMessage,
                 error: store.ideasError, openIdeas: onOpenIdeas)
                 .font(.system(size: font11_5))
-            #else
-            DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
-            #endif
             if let regime = store.regime {
                 let gaugedStr = store.regimeGaugedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "not yet"
                 Text("Regime: \(regime.state.rawValue) · sizing bias ×\(String(format: "%.2f", regime.sizingBias)) · gauged \(gaugedStr)")
@@ -418,13 +414,6 @@ struct CatalystsSection: View {
                 .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             explanationModelSettings(availability: availability)
-            #if !os(macOS)
-            if ideas.isEmpty {
-                Text("No ideas yet — run a scan on the Ideas tab.")
-                    .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            #endif
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)

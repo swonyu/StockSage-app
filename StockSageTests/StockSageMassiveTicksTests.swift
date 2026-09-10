@@ -8,6 +8,26 @@ struct StockSageMassiveTicksTests {
     let from = Date(timeIntervalSince1970: 1_517_561_900)
     let to = Date(timeIntervalSince1970: 1_517_562_100)
 
+    @Test @MainActor func paperTradeTiesUseSIPThenSequenceRegardlessOfResponseOrder() throws {
+        func row(_ price: Int, sipAge: Int64, sequence: Int64) -> [String: Any] {
+            ["price": price, "size": 10, "conditions": [701], "correction": 0,
+             "participant_timestamp": (Int64(to.timeIntervalSince1970) - 3) * 1_000_000_000,
+             "sip_timestamp": (Int64(to.timeIntervalSince1970) - sipAge) * 1_000_000_000,
+             "sequence_number": sequence]
+        }
+        for older in [row(99, sipAge: 2, sequence: 21), row(99, sipAge: 1, sequence: 19)] {
+            let newer = row(100, sipAge: 1, sequence: 20)
+            for rows in [[newer, older], [older, newer]] {
+                let data = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": rows])
+                let page = try T.parse(data, kind: .trades, symbol: "AAPL", from: from, to: to)
+                let quote = try #require(T.paperQuote(page.trades, symbol: "AAPL", allowed: [701], now: to))
+                #expect(quote.price == 100 && quote.massiveTradeSequence == 20)
+                #expect(quote.marketTime == to.addingTimeInterval(-3), "Do not refresh the participant clock")
+                #expect(T.paperQuote(page.trades, symbol: "AAPL", allowed: [701], now: to.addingTimeInterval(121)) == nil)
+            }
+        }
+    }
+
     @Test func intradayRequiresCompletedFreshValidBarsWithoutPaddingGaps() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_030)
         let from = now.addingTimeInterval(-3600)

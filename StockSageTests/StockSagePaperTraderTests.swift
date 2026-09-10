@@ -265,6 +265,48 @@ struct StockSagePaperTraderTests {
         return (StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1"), defaults, suite)
     }
 
+    @Test(arguments: [false, true])
+    func corruptPaperLoadReportsFailureAndMutationsPreserveRecords(wrongType: Bool) throws {
+        let (store, defaults, suite) = isolatedStore()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "stocksage.papertrades.v1"
+        #expect(store.trades.isEmpty && store.lastError == nil)
+        #expect(store.hasLoadedRecords)
+        let retained = try #require(StockSagePaperTrader.open(
+            from: idea("AAA", price: 100, .buy, stop: 90, target: 120), at: d(0)))
+        store.add(retained)
+        #expect(store.hasLoadedRecords && store.lastError == nil)
+        let validBytes = try #require(defaults.data(forKey: key))
+        let incoming = try #require(StockSagePaperTrader.open(
+            from: idea("BBB", price: 100, .buy, stop: 90, target: 120), at: d(1)))
+        var closed = retained
+        closed.exitPrice = 110; closed.closedAt = d(2)
+        let corrupt = Data("{broken".utf8)
+        if wrongType { defaults.set("not record data", forKey: key) }
+        else { defaults.set(corrupt, forKey: key) }
+        let loaded = StockSagePaperTradeStore(defaults: defaults, key: key)
+        #expect(loaded.lastError != nil, "A corrupt saved paper history must not masquerade as an empty scoreboard")
+        #expect(!loaded.hasLoadedRecords && loaded.trades.isEmpty)
+        for operation in 0..<5 {
+            switch operation {
+            case 0: store.add(incoming)
+            case 1: store.applyClose(closed)
+            case 2: store.apply(closes: [closed], opens: [incoming])
+            case 3: store.remove(retained.id)
+            default: store.reset()
+            }
+            #expect(!store.hasLoadedRecords && store.lastError != nil && store.trades == [retained])
+            #expect(!defaults.bool(forKey: key + ".deleted." + retained.id.uuidString))
+            if wrongType { #expect(defaults.string(forKey: key) == "not record data") }
+            else { #expect(defaults.data(forKey: key) == corrupt) }
+        }
+        defaults.set(validBytes, forKey: key)
+        let recovered = StockSagePaperTradeStore(defaults: defaults, key: key)
+        #expect(recovered.hasLoadedRecords && recovered.trades == [retained] && recovered.lastError == nil)
+        store.add(incoming)
+        #expect(store.hasLoadedRecords && store.lastError == nil && store.trades.count == 2)
+    }
+
     @Test func paperStoreUsesItsOwnKeyNotTheJournalKeyAndRoundTrips() {
         let (store, defaults, suite) = isolatedStore()
         defer { defaults.removePersistentDomain(forName: suite) }

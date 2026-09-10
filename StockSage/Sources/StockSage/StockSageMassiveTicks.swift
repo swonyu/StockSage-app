@@ -241,7 +241,12 @@ enum StockSageMassiveTicks {
                   (0...120).contains(now.timeIntervalSince(trade.timestamp)),
                   trade.price.isFinite, trade.price > 0, trade.size.isFinite, trade.size > 0 else { return false }
             return true
-        }.sorted { $0.participantTime! < $1.participantTime! }
+        }.sorted {
+            // REST arrives SIP-descending. Participant ties must not select the older report.
+            if $0.participantTime != $1.participantTime { return $0.participantTime! < $1.participantTime! }
+            if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
+            return max(-1, $0.sequence ?? -1) < max(-1, $1.sequence ?? -1)
+        }
     }
 
     static func paperQuote(_ trades: [Trade], symbol: String, allowed: Set<Int64>,

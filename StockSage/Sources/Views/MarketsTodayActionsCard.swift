@@ -202,7 +202,11 @@ struct MarketsTodayActionsCard: View {
     private var paperOutcomePanel: some View {
         let (planned, realized, measured) = paperTodayStats
 
-        if measured > 0 {
+        if !paperStore.hasLoadedRecords {
+            Text(paperStore.lastError ?? "Paper history unavailable; outcomes cannot be verified.")
+                .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if measured > 0 {
             let delta = realized - planned
             let color: Color = delta >= 0 ? DS.Palette.successSoft : DS.Palette.warningSoft
             VStack(alignment: .leading, spacing: 2) {
@@ -257,6 +261,7 @@ struct MarketsTodayActionsCard: View {
     }
 
     private var weeklyExecutedVsBlockedMetric: String? {
+        guard paperStore.hasLoadedRecords else { return nil }
         let recent = paperStore.trades.filter {
             guard let closedAt = $0.closedAt else { return false }
             return closedAt >= Date().addingTimeInterval(-7 * 86_400)

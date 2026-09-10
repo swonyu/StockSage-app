@@ -484,6 +484,85 @@ struct StockSageFeedIngressTests {
         #expect(StockSageNetEdge.costs(forSymbol: "MSFT", nbbo: ideas[0].nbbo, now: now) == cost)
     }
 
+    @Test @MainActor func mixedRotationPreservesPerSymbolEvidenceAcrossUpdates() async throws {
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        let task = live.refreshReferences(now: now, stillValid: { true },
+            conditions: { [801] }, exchangeList: { [:] })
+        let reference = try #require(task)
+        await reference.value
+        // Unchanged, aging, missing, changed, withdrawn, condition-ineligible.
+        let sentinels = ["MAFRESH", "MBAGING", "MCMISSING", "MDCHANGED", "MEWITHDRAWN", "MFCONDITION"]
+        let all = ((0..<4090).map { "A\($0)" } + sentinels + (0..<6).map { "Z\($0)" }).sorted()
+        let selected = Set(all)
+        #expect(Array(all[4090..<4096]) == sentinels && sentinels.allSatisfy(StockSageMassive.covers))
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress)
+        let initial = sentinels.enumerated().compactMap { index, symbol -> String? in
+            guard index != 2 else { return nil }
+            let stamp: Int64 = index == 1 ? 1_699_999_996_000 : 1_700_000_000_000
+            return "{\"ev\":\"Q\",\"sym\":\"\(symbol)\",\"bp\":99,\"ap\":104,\"bs\":100,\"as\":100,\"c\":801,\"q\":1,\"t\":\(stamp)}"
+        }
+        #expect(ingress.offer(Data(("[" + initial.joined(separator: ",") + "]").utf8), at: now))
+        _ = try await drained(ingress)
+        let originalIdeas = all.map { SageFix.idea($0, conviction: 0.8) }
+        var ideas = originalIdeas, cursor = 0, visited = Set<String>()
+        var unchanged: StockSageNBBO?
+        for pass in 0..<3 {
+            if pass == 1 {
+                let updates = (3...5).map { index in
+                    "{\"ev\":\"Q\",\"sym\":\"\(sentinels[index])\",\"bp\":100,\"ap\":104,\"bs\":\(index == 4 ? 0 : 100),\"as\":100,\"c\":\(index == 5 ? 802 : 801),\"q\":2,\"t\":1700000001000}"
+                }
+                #expect(ingress.offer(Data(("[" + updates.joined(separator: ",") + "]").utf8), at: now.addingTimeInterval(1)))
+                _ = try await drained(ingress)
+            }
+            let at = now.addingTimeInterval(pass == 0 ? 0 : Double(pass + 1))
+            let slice = StockSageStore.rotatedSweepSlice(all: all, cursor: cursor, limit: ingress.limits.publicationSymbols)
+            cursor = slice.nextCursor
+            visited.formUnion(slice.picked)
+            #expect(slice.picked.count == 4096 && Set(slice.picked).count == 4096)
+            #expect(sentinels.allSatisfy { slice.picked.contains($0) == (pass != 1) })
+            let retained = live.quotes.filter { selected.contains($0.key) }
+            let snapshot = await ingress.snapshot(symbols: slice.picked, now: at, retainingQuotes: retained)
+            let observed = Set(sentinels.filter { $0 != sentinels[2] })
+            let usable: Set<String> = pass == 0 ? observed : pass == 1 ? [sentinels[0]] : [sentinels[0], sentinels[3]]
+            #expect(Set(snapshot.quotes.keys) == (pass == 1 ? [] : observed))
+            #expect(snapshot.retainedQuoteSymbols == (pass == 1 ? [sentinels[0]] : []))
+            #expect(snapshot.authorized && snapshot.metrics.failure == nil && snapshot.metrics.queuedFrames == 0)
+            #expect(snapshot.metrics.quoteSymbols == 5 && snapshot.metrics.tradeSymbols == 0)
+            #expect(snapshot.metrics.processedEvents == (pass == 0 ? 6 : 9))
+            #expect(snapshot.metrics.coalesced == (pass == 0 ? 0 : 3) && snapshot.metrics.rejected == 0)
+            let published = live.publish(snapshot, from: ingress, now: at, retainingQuotes: retained) { ticks, quotes, time in
+                #expect(ticks.isEmpty)
+                ideas = StockSageStore.ideasWithNBBO(ideas, quotes: quotes, now: time)
+            }
+            #expect(published)
+            await ingress.acknowledge(snapshot.receivedUptime, at: ProcessInfo.processInfo.systemUptime)
+            #expect(Set(live.quotes.keys) == (pass == 1 ? [sentinels[0]] : observed))
+            #expect(Set(ideas.compactMap { $0.nbbo == nil ? nil : $0.symbol }) == usable)
+            #expect(ideas.map { $0.withNBBO(nil) } == originalIdeas, "Quote-only arrivals cannot refresh price clocks or advice")
+            for (index, symbol) in sentinels.enumerated() {
+                let updated = pass > 0 && index >= 3
+                if let quote = live.quotes[symbol] {
+                    #expect(quote.timestamp == now.addingTimeInterval(index == 1 ? -4 : updated ? 1 : 0))
+                    #expect(quote.sequence == (updated ? 2 : 1) && quote.bid == (updated ? 100 : 99) && quote.ask == 104)
+                    #expect(quote.bidSize == (updated && index == 4 ? 0 : 100))
+                    #expect(quote.costConditionVerified == !(updated && index == 5))
+                }
+                let idea = ideas[4090 + index], base = StockSageNetEdge.defaultCosts(forSymbol: symbol)
+                let cost = StockSageNetEdge.costs(forSymbol: symbol, nbbo: idea.nbbo, now: at)
+                if usable.contains(symbol) {
+                    #expect(idea.nbbo == live.quotes[symbol] && cost.spreadBps > base.spreadBps)
+                } else {
+                    #expect(idea.nbbo == nil && cost == base)
+                }
+            }
+            if pass == 0 { unchanged = try #require(live.quotes[sentinels[0]]) }
+            #expect(live.quotes[sentinels[0]] == unchanged)
+        }
+        #expect(visited == selected && selected.count == 4102)
+    }
+
     @Test(arguments: ["unchanged", "withdrawal", "condition", "sequence", "price", "capture-expiry",
         "publish-expiry", "future", "reference-expiry", "deselected", "empty", "invalidated"])
     @MainActor func retentionPreservesFreshnessAndInvalidation(_ scenario: String) async throws {

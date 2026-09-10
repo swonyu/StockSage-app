@@ -1,5 +1,210 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Full review fixes — September 10; Mac/iPhone verified, not installed
+
+Owner requested fixes, commit and push after the full code review. Checkout
+`/Users/saleh/StockSage-wt/qwen-context`, branch `codex/qwen-chat-context`, base
+`fcdbcddee171bff31312f851e55624df8daa21e8`. Parent remained sole repository writer
+and heavy tester; all 11 pre-existing unfinished paths were preserved. Helpers
+supplied external patches/read-only reviews. Removed good-spender stayed removed.
+
+All eight review findings addressed through their real callers:
+- Qualified trade ties now sort by participant/SIP/sequence; false or malformed
+  adjustment metadata rejects history through the existing fallback. Missing
+  metadata retains approved compatibility, not independent adjustment proof.
+- Chat budgets whole optional records with a compact wire payload, required
+  quote records and whole questions. Omission counts are disclosed; completion
+  only validates originally captured records actually offered to Qwen. Saved
+  snapshots and the 4096-context/512-output limits are unchanged.
+- Portfolio/Journal/legacy Paper expose unreadable storage instead of empty
+  success, retain records on failed mutations, and gate unsupported analytics
+  on Portfolio/Journal/Paper/Home/Today. Failed Portfolio add retains form input.
+- Earnings transport/backoff/provider transitions/publication recheck permission
+  and cancellation. History projections retain their basis without implying
+  prior announced dates. Both platforms expose native web/offline settings;
+  iPhone Catalysts reuse raw/visible/loading/error recovery and navigation.
+- Preserved unfinished Chat navigation/error copy, paper availability/status,
+  manual Stop labels, and feed/process-death regression checks.
+
+Fresh final verification, frozen source, heavy checks serial:
+- macOS: 2095 passed, 1 opt-in skip, 0 failed; 200 suites, 71.882 test seconds.
+- iPhone 17 Pro (gate), iOS 26.5 simulator: 2042 passed, 0 skipped/failed;
+  199 suites, 72.301 test seconds. Both xcodebuild exits 0. Counts are xcresult
+  test definitions, not expanded parameter cases.
+- Strict Mac module emission 71s, iPhone emission 59s, full test-source typecheck
+  91s; all exit 0, aggregate `macos=OK ios=OK tests=OK`.
+- Fresh standalone library/runner built in 205s, both exit 0. Separately enabled
+  isolated paper process-death test passed: 1 test, 1.626s, exit 0; owned child
+  exited 86 before account commit. Recovery/lease/dedup assertions passed.
+- Same prescribed exclusions on both platforms: CalibrationPersistRunTests,
+  LiveUniverseVerificationTests, StrategyBaselineMeasurementTests. No new skips.
+- 373 source/build-input hashes and the full dirty diff unchanged during gates.
+  Installed executable/dylib unchanged; gate simulator Shutdown afterward.
+- Real long-excerpt Chat path: 39 tests pass, including one/four symbols,
+  English/Arabic, transmitted/validated record agreement and rejected omitted IDs.
+  Earlier focused GREEN: 192 tests. Feed GREEN: 37 tests. RED receipts retained.
+- Native settings fixtures rendered all four toggle combinations at 360/760
+  points without mutating bindings; narrow/wide captures inspected unclipped.
+  18 external wiring checks pass. This is not full native interaction proof.
+- Independent final source review: no material must-fix. Bounded pre-push scan
+  covered the 71 existing commits above main plus the current diff; no confirmed
+  credentials/private-data dumps. Existing nonfatal compiler warnings remain.
+
+Receipt and exact commands: `/Users/saleh/StockSage-fixes-20260910.bFAFrT/FIX_RESULT.md`.
+Gate logs/xcresults/manifests: its `full-gates/`; standalone recovery: `crash-runner/`.
+Mac test candidate: its `derived-macos/Build/Products/Debug/StockSageX.app`.
+Owner opened `/Users/saleh/Downloads/Xcode-beta.app` during verification; it was
+left open. Gates used `/Applications/Xcode.app` (26.6), with no competing build
+or source change observed. No app install/restart, owner preference/history edit,
+provider/model call, real order, IBKR relay, paid resource or strategy/risk change.
+
+These receipts supersede older full-platform/isolated crash-check holds below;
+they do not certify owner-data relaunch/restore, live APIs, model answer quality,
+broker readiness, full-page cancellation or actual native form/toggle interaction.
+Oversized required Chat inputs still fail visibly; optional evidence may be
+omitted with disclosure. No claim of crash-atomic UserDefaults storage is made.
+Publication target is only `origin` = `swonyu/StockSage-app`, current named branch;
+no main merge, force push or worktree cleanup. Final commit/push identity is in
+the external receipt and Git history; all prior dated handoffs remain intact.
+
+## Chat navigation retention — September 10; verified, not installed
+
+Base fcdbcdd, codex/qwen-chat-context; parent sole writer/tester/installer.
+Failed-save memory-only completed/cancelled turns now survive desktop page changes:
+the real Chat/non-Chat branch owns StateObject above the switch. Mac ChatSection
+observes it; non-Mac ownership and existing leaf cancellation hooks are unchanged.
+No global Chat, storage/protection, strategy/risk or historical-record change.
+
+Actual native production-owner RED: 1 test / 2 cases / 8 issues / 0.151s / exit 1.
+Fresh GREEN library38s/client76s, both exit0; same test 2cases/0.166s/exit0.
+Safe Chat9/0.015s, Horizon16/0.293s, paper3/0.112s, native value-view2tests/10cases/
+0.380s all exit0. Inspected360 cancelled/warnings and760 completed, unclipped.
+Canonical strict Mac emission/test-source typecheck exit0, logged1053s/2791s;
+aggregate0/macOSOK/iOSSKIP/testsOK. These are logged elapsed times, not CPU timing.
+373-source manifest rechecked; Sol/Astra review no must-fix. Ten dirty paths now
+include MarketsView/ChatSection plus the previous eight; all edits preserved.
+
+This verifies window-lifetime ownership, not actual full-page network cancellation,
+durable saving, draft/scroll retention, relaunch, cross-window consistency or full
+Mac/iPhone acceptance. No install/commit; installed dylib rehashed unchanged
+84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef.
+No app/compiler process after checks. Keep protected-storage/restart-clear hold
+and retained candidates; no denied-write retries or owner-data access.
+Receipt: `/Users/saleh/StockSage-verification-20260909.M0MISy/CHAT_NAVIGATION.md`.
+Next: failed-save Chat wording, then reproduce export admission before any fix.
+Do not repeat the completed navigation/manual/paper/feed or Catalyst intake work.
+
+## Manual research Stop labels — September 10; verified, not installed
+
+Base fcdbcdd, codex/qwen-chat-context; parent sole writer/tester/installer.
+Stopped unfinished listings now say Not checked rather than Queued while the
+cancelled worker unwinds. Reuses activeSymbol; running/task ownership still
+prevents overlap. Checking/completed-result precedence, 500-listing cap and
+day monitoring unchanged. No scan, strategy, risk, fill, history or model change.
+
+Actual isolated cancellation fixture RED: 1 test / 2 expected issues / 0.028s /
+exit 1. GREEN: same test / 0.028s / exit 0; Horizon suite 16 / 0.253s / exit 0;
+prior paper-state regressions 3 / 0.110s / exit 0. Native controls: 1 test / 8
+parameter cases / 0.261s / exit 0; 360/760-point running captures inspected, no
+clipping. These are helper views, not a full panel or native Stop/Table repaint.
+Strict Mac emission 55s and test-source typecheck 80s: aggregate exit 0,
+macos=OK / ios=SKIP / tests=OK. Full runtime/storage/iPhone remain unverified.
+
+Eight dirty paths: this handoff, ResearchModesPanel and HorizonResearchTests,
+plus the prior five source/test paths listed in the next section. All preserved;
+373-entry source manifest verified. Sol candidate/Astra review: no must-fix.
+Installed dylib re-hashed unchanged 84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef.
+Read-only session check remains locked; no repeat denied-write probes or access
+changes. No candidate, commit, push, install/restart or owner-record operation.
+Keep restart/clear hold and retained candidates. Exact commands/evidence/next work:
+`/Users/saleh/StockSage-verification-20260909.M0MISy/MANUAL_STOP.md`.
+Next independent work: failed-save Chat navigation retention (source-supported;
+safe native owner seam not yet implemented) and export-remount overlap (not yet
+reproduced). Catalyst period intake found no current defect; do not repeat it.
+
+## Paper account and status fixes — September 10; verified, not installed
+
+Current base fcdbcdd on codex/qwen-chat-context. Parent remains sole repository
+writer, heavy tester and installer. Failed acquisition now clears hasLoadedBook
+without replacing the last valid Book; existing panel gates hide unverified
+account data. Closed-session retained protective exits now say they are waiting
+for the next supported paper session. Paused/entry/future-clock precedence is
+unchanged. Cadence text explicitly requires day trading enabled and app/device
+awake. No strategy, risk, fill, calendar, storage protection or history changes.
+
+RED: 3 tests / 5 expected issues / exit 1. GREEN: same 3 tests / 0.111s / exit 0;
+25 neighboring checks / 0.015s / exit 0. Two native render tests, 12 parameter
+cases, 24 images / 0.660s / exit 0. Parent inspected protective pending states at
+360 and 760 points: readable, no clipping. Strict Mac emission 54s and test-source
+typecheck 78s passed; aggregate exit 0, macos=OK / ios=SKIP / tests=OK.
+
+Full Mac runtime/storage, successful recovery, iPhone and owner-app UI remain
+unverified. Protected writes remain denied; latest read-only session check still
+reports locked. Do not rerun denied probes until access changes or weaken any
+protection. No candidate, install/restart, commit, push or owner-data access.
+Installed dylib remains 84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef.
+Keep the prior restart/clear hold, candidates and pending tests. Six dirty paths:
+this handoff, PaperAutomation.swift, PaperAutomationPanel.swift, ChatTests,
+FeedIngressTests (+79 preserved) and PaperAutomationTests (+169 process-death
+preserved, +52 current regression lines). Source freeze: 373 SHA-256 entries.
+
+Five Sol lanes and Astra supplied bounded reviews/test work; no must-fix remained.
+Full receipt, exact commands/results, scoped patches and inspected captures:
+`/Users/saleh/StockSage-verification-20260909.M0MISy/PAPER_STATE.md`.
+Next: resume storage/crash/full gates after access changes; otherwise continue
+bounded current-source UI/reliability work. Export-remount concurrency is only
+source-supported, not an executed overwrite reproduction. Do not duplicate these
+completed status regressions or claim current whole-app acceptance.
+
+## Mixed-state feed rotation — September10, offline acceptance; not installed
+
+Basefcdbcdd plus79 test-only lines. Three4096-symbol publication slices cover4102
+selected identities; six sentinels transition selected/excluded/reselected while
+preserving per-symbol clocks and rejecting stale/withdrawn/ineligible cost inputs.
+Eight Q events plus auth; only five observed quote symbols, not4102 live stocks.
+No production defect or fix claimed; quote-only arrivals leave prices/advice intact.
+
+Final focused1/1/0.036s exit0; full standalone FeedIngressTests28/1/4.211s exit0.
+Canonical strictMac54s/testtypecheck80s exit0, aggregateexec66239 macosOK/iOSSKIP/
+testsOK. Initial macro and synthetic-symbol fixture failures are disclosed in
+`/Users/saleh/StockSage-verification-20260909.M0MISy/MIXED_ROTATION.md`.
+No current fullMac/storage/UI/iOS acceptance, commit or install. Protected-write
+denial below remains unresolved; no repeated probe while session stays locked.
+Keep pending paper test, retained candidates, owner records and restart/clear hold.
+Installed dylib remains84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef.
+Final Astra source review found no must-fix; all five Sol lanes and Astra finished.
+Checkpoint saved; parent remains sole writer/tester/installer. No current app or
+compiler process observed after verification. Do not repeat the now-covered mixed
+rotation gap or treat offline evidence as production latency/financial validation.
+
+## Process-death acceptance — September10, pending protected-storage access
+
+Basefcdbcdd plus an uncommitted Mac-only opt-in standalone test. Production code
+is unchanged; temporary diagnostics removed. The test uses native Process and
+real save/audit/lease helpers on a validated synthetic UUID temp account. It must
+prove abrupt exit86 at beforeAccountCommit, intact previous account/orphan
+exclusion, released lease, one complete recovery fill/history and unchanged replay.
+It does not yet prove those outcomes: protected archive creation currently fails.
+
+Observed513/EPERM for complete-protection writes; ordinary/exclusive writes pass
+in minimal probes, both with ad-hoc and existing development signing. Existing
+Xcode audit tests also now fail:8total,5passed,3failed,5issues,exec15452 exit65.
+The previous passing receipt below is not a current pass. Session reports locked;
+whether unlock alone restores access is not yet verified. No file-protection,
+authentication, entitlement or system-permission weakening. Never use owner data.
+
+No current process-death/full Mac/iOS pass, new candidate, commit or installation.
+Clean standalone library57s/0; normal test explicitlyskipped. Strict Mac55s and
+test-source typecheck79s passed, aggregateexec22024 exit0/iOSSKIP. These are not
+execution acceptance. All reviewers closed; parent sole writer. Installed hash
+unchanged84bd218295ac2ad21be02c648e6aee554e710c449b234df5176bda3a8cf8b2ef;
+no owner app/compiler afterchecks, Qwen2120present(nothealthproof), paperflag0.
+Keep prior restart/clear hold and retained candidates. Exact sources/intakes,
+builds, failed filters/child exits, file-write probes and focused xcresult are in
+`/Users/saleh/StockSage-verification-20260909.M0MISy/PROCESS_DEATH.md`.
+Resume protected-write acceptance after access changes; do not loop failed probes
+while locked. Independent bounded UI/feed work may continue under sole ownership.
+
 ## Restored paper cash replay — September 10, verified; not installed
 
 Extended the existing two-symbol cash-recheck test by net7 lines. The same META/

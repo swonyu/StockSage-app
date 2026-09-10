@@ -16,6 +16,7 @@ import ServiceManagement
 // last write. register()/unregister() can throw (sandboxing, user denial in System Settings);
 // failures surface as inline caption text, never silently swallowed.
 struct StockSageSettingsView: View {
+    @ObservedObject private var settings = AppSettings.shared
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
@@ -25,6 +26,7 @@ struct StockSageSettingsView: View {
 
     var body: some View {
         Form {
+            Self.networkControls(webAccess: $settings.webAccess, offlineOnly: $settings.offlineOnly)
             Section("General") {
                 #if os(macOS)
                 Toggle("Launch StockSage at login", isOn: Binding(
@@ -97,6 +99,21 @@ struct StockSageSettingsView: View {
         refreshLoginItemStatus()
     }
     #endif
+
+    /// Shared native rows; explicit bindings keep isolated render fixtures away from owner settings.
+    static func networkControls(webAccess: Binding<Bool>, offlineOnly: Binding<Bool>) -> some View {
+        Section("Network access") {
+            Toggle("Web access", isOn: webAccess)
+            Toggle("Offline Mode", isOn: offlineOnly)
+            Text(offlineOnly.wrappedValue
+                 ? "Offline Mode takes priority over Web access. External market-data requests are blocked."
+                 : webAccess.wrappedValue
+                    ? "Web access is enabled. Existing refresh and monitoring settings still apply."
+                    : "Web access is off. Turn it on to allow external market-data requests.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 }
 
 #Preview {

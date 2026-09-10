@@ -21,6 +21,47 @@ struct StockSagePortfolioTests {
         #expect(PortfolioPosition(symbol: "X", shares: 10, costBasis: 5).totalCost == 50)
     }
 
+    @Test(arguments: [false, true])
+    func corruptPortfolioLoadReportsFailureAndMutationsPreserveRecords(wrongType: Bool) throws {
+        let suite = "portfolio.corrupt.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "stocksage_portfolio_v1"
+        let store = StockSagePortfolio(userDefaults: defaults)
+        #expect(store.positions.isEmpty && store.lastError == nil) // Missing key is a valid empty book.
+        #expect(store.hasLoadedRecords)
+        #expect(store.add(symbol: "AAPL", shares: 2, costBasis: 100))
+        #expect(store.hasLoadedRecords && store.lastError == nil)
+        let retained = store.positions
+        let id = try #require(retained.first?.id)
+        #expect(!store.add(symbol: " ", shares: 1, costBasis: 100))
+        #expect(store.hasLoadedRecords && store.lastError != nil && store.positions == retained,
+                "Input validation must not mark a successfully read book unavailable")
+        let validBytes = try #require(defaults.data(forKey: key))
+        let corrupt = Data("{broken".utf8)
+        if wrongType { defaults.set("not record data", forKey: key) }
+        else { defaults.set(corrupt, forKey: key) }
+        let loaded = StockSagePortfolio(userDefaults: defaults)
+        #expect(loaded.lastError != nil, "A corrupt saved portfolio must not masquerade as empty success")
+        #expect(!loaded.hasLoadedRecords && loaded.positions.isEmpty)
+        for operation in 0..<3 {
+            switch operation {
+            case 0: #expect(!store.add(symbol: "MSFT", shares: 1, costBasis: 100))
+            case 1: store.remove(id)
+            default: store.clear()
+            }
+            #expect(!store.hasLoadedRecords && store.lastError != nil && store.positions == retained)
+            #expect(!defaults.bool(forKey: key + ".deleted." + id.uuidString))
+            if wrongType { #expect(defaults.string(forKey: key) == "not record data") }
+            else { #expect(defaults.data(forKey: key) == corrupt) }
+        }
+        defaults.set(validBytes, forKey: key) // Synthetic repair; never an owner preference.
+        let recovered = StockSagePortfolio(userDefaults: defaults)
+        #expect(recovered.hasLoadedRecords && recovered.positions == retained && recovered.lastError == nil)
+        #expect(store.add(symbol: "MSFT", shares: 1, costBasis: 100))
+        #expect(store.hasLoadedRecords && store.lastError == nil && store.positions.count == 2)
+    }
+
     @Test func addUppercasesAndTrimsSymbol() {
         let p = freshStore("trim")
         p.add(symbol: "  aapl ", shares: 10, costBasis: 100)

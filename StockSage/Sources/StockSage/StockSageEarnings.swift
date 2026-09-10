@@ -97,7 +97,7 @@ enum StockSageEarnings {
     /// signature change to the original) so pipeline-1's `EarningsFetch`/`fetchNextEarningsOutcome`
     /// and every test pinned to them are untouched.
     static func fetchEarningsCalendarOutcome(for symbol: String) async -> CalendarFetch {
-        guard ToolPolicy.isExternalAllowed else { return .unavailable }
+        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return .unavailable }
         guard StockSageAllocation.assetClass(symbol) == "Equity" else { return .unavailable }
         guard let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
               let url = URL(string: "https://query1.finance.yahoo.com/v10/finance/quoteSummary/\(encoded)?modules=calendarEvents")
@@ -162,7 +162,7 @@ enum StockSageEarnings {
     // "never answered" from "answered, empty" (blocker fix 2026-09-06 — this used to return `[]`
     // identically for both, letting the caller wrongly count an unreachable provider as asked).
     static func fetchEarningsHistory(for symbol: String) async -> [Date]? {
-        guard ToolPolicy.isExternalAllowed else { return nil }
+        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return nil }
         guard let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
               let url = URL(string: "https://query1.finance.yahoo.com/v10/finance/quoteSummary/\(encoded)?modules=earningsHistory")
         else { return nil }
@@ -194,14 +194,22 @@ enum StockSageEarnings {
     // RULES). A single fixed-delay retry (StockSageQuoteService.get's ~1.5s) isn't enough headroom
     // for a sustained throttle — this is a genuine EXPONENTIAL backoff (1s, then 2s) between up to
     // 3 attempts total, never a tight loop, and gives up (nil) on any other status or transport error.
-    private nonisolated static func get(_ req: URLRequest) async -> Data? {
+    // Both Yahoo modules share this request boundary. Dependencies permit offline suspended replies.
+    @MainActor static func get(_ req: URLRequest,
+        allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+        transport: (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) },
+        sleep: (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+    ) async -> Data? {
         for attempt in 0..<3 {
-            guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return nil }
+            guard !Task.isCancelled, allowed() else { return nil }
+            guard let (data, resp) = try? await transport(req) else { return nil }
+            guard !Task.isCancelled, allowed() else { return nil }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200 { return data }
             if (code == 429 || code == 503), attempt < 2 {
                 let seconds = pow(2.0, Double(attempt))   // 1, 2 (attempt 0, 1) — 3rd attempt never sleeps again
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                do { try await sleep(UInt64(seconds * 1_000_000_000)) }
+                catch { return nil }
                 continue
             }
             return nil

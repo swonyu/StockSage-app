@@ -46,6 +46,7 @@ nonisolated enum StockSageCatalystChain {
     /// projection's basis string never claims more than the source actually supports.
     static func resolve(
         now: Date,
+        stillValid: () -> Bool = { true },
         massiveCalendar: () async -> Answer<StockSageMassiveEarnings.Row?> = { .unavailable },
         eodhdCalendar: () async -> Answer<StockSageEODHDCalendar.Row?>,
         yahooCalendar: () async -> Answer<StockSageEarnings.EarningsCalendarInfo?>,
@@ -55,7 +56,17 @@ nonisolated enum StockSageCatalystChain {
         var sourcesAsked: [String] = []
         var anySourceAnswered = false
 
-        if case .answered(let row) = await massiveCalendar() {
+        func active() -> Bool { !Task.isCancelled && stillValid() }
+        func unchecked() -> Outcome {
+            Outcome(earningsDate: nil, dateRangeEnd: nil, confirmed: nil, status: .unchecked,
+                    source: "—", sourcesAsked: sourcesAsked, projectionBasis: nil,
+                    anySourceAnswered: anySourceAnswered)
+        }
+
+        guard active() else { return unchecked() }
+        let massiveAnswer = await massiveCalendar()
+        guard active() else { return unchecked() }
+        if case .answered(let row) = massiveAnswer {
             anySourceAnswered = true
             sourcesAsked.append(StockSageMassiveEarnings.source)
             if let row, row.date.timeIntervalSince(now) > -86_400 {
@@ -72,7 +83,10 @@ nonisolated enum StockSageCatalystChain {
         // access off, non-equity, timeout, non-200, 429-exhaustion) must never be recorded as
         // asked (blocker fix 2026-09-06 — see StockSageCatalystRecordCache.Record.sourcesAsked's
         // own doc: it's the ONLY field distinguishing "never asked" from "asked, nothing usable").
-        if case .answered(let row) = await eodhdCalendar() {
+        guard active() else { return unchecked() }
+        let eodhdAnswer = await eodhdCalendar()
+        guard active() else { return unchecked() }
+        if case .answered(let row) = eodhdAnswer {
             anySourceAnswered = true
             sourcesAsked.append("eodhd calendar")
             if let row, row.date.timeIntervalSince(now) > -86_400 {
@@ -84,7 +98,10 @@ nonisolated enum StockSageCatalystChain {
             }
         }
 
-        if case .answered(let info) = await yahooCalendar() {
+        guard active() else { return unchecked() }
+        let yahooAnswer = await yahooCalendar()
+        guard active() else { return unchecked() }
+        if case .answered(let info) = yahooAnswer {
             anySourceAnswered = true
             sourcesAsked.append("yahoo calendarEvents")
             if let info, info.date.timeIntervalSince(now) > -86_400 {
@@ -95,7 +112,10 @@ nonisolated enum StockSageCatalystChain {
             }
         }
 
-        if case .answered(let pastDates) = await history() {
+        guard active() else { return unchecked() }
+        let historyAnswer = await history()
+        guard active() else { return unchecked() }
+        if case .answered(let pastDates) = historyAnswer {
             anySourceAnswered = true
             sourcesAsked.append("earnings history")
             // A projection is pure history math with no future constraint of its own — without
@@ -112,8 +132,6 @@ nonisolated enum StockSageCatalystChain {
             }
         }
 
-        return Outcome(earningsDate: nil, dateRangeEnd: nil, confirmed: nil, status: .unchecked,
-                       source: "—", sourcesAsked: sourcesAsked, projectionBasis: nil,
-                       anySourceAnswered: anySourceAnswered)
+        return unchecked()
     }
 }

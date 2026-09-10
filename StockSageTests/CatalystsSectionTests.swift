@@ -10,7 +10,6 @@ import SwiftUI
 @Suite("CatalystsSection — pure view helpers")
 struct CatalystsSectionTests {
 
-    #if os(macOS)
     @Test(arguments: ["search", "action", "strength"], [false, true])
     @MainActor func filteredIdeasNeedFilterRecoveryNotAnotherScan(filter: String, loading: Bool) throws {
         let source = [SageFix.idea("AAPL", conviction: 0.6)]
@@ -58,7 +57,6 @@ struct CatalystsSectionTests {
         #expect(CatalystsSection.ideasRecoveryState(visibleCount: 1, totalCount: 2,
             loading: loading, filteredMessage: "Some names hidden") == nil)
     }
-    #endif
 
     @Test("late connection probes cannot publish for new settings or clear a newer spinner")
     @MainActor func connectionProbeCompletionBelongsToItsRequest() async {

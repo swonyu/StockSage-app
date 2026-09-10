@@ -370,7 +370,7 @@ enum StockSageCatalystWatch {
     /// 2026-07-30"), surfaced verbatim as the single why-bullet and folded into `source`.
     private nonisolated static func projectedEarningsItem(idea: StockSageIdea, date: Date, basis: String) -> Item {
         let dateStr = Self.dateStr(date)
-        let headline = "Earnings expected ~\(dateStr) (projected from prior reports, not announced)"
+        let headline = "Earnings expected ~\(dateStr) (projected from recorded history, not announced)"
         return Item(symbol: idea.symbol, kind: .projectedEarnings, headline: headline, date: date,
                    why: [basis], watch: "Not an announced date — re-check after the next full refresh.",
                    weight: .low, source: "projection: \(basis)", caveat: nil)

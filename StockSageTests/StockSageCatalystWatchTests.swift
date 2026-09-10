@@ -373,7 +373,7 @@ struct StockSageCatalystWatchTests {
         #expect(brief.primary.kind == .projectedEarnings)
         #expect(brief.primary.date == projectedDate)
         #expect(brief.primary.headline
-                == "Earnings expected ~\(W.dateStr(projectedDate)) (projected from prior reports, not announced)")
+                == "Earnings expected ~\(W.dateStr(projectedDate)) (projected from recorded history, not announced)")
         #expect(brief.primary.why == [basis])
         #expect(brief.primary.source == "projection: \(basis)")
         #expect(brief.primary.watch == "Not an announced date — re-check after the next full refresh.")

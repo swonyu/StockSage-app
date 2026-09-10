@@ -4,7 +4,11 @@ import SwiftUI
 struct StockSageChatSection: View {
     @ObservedObject var store: StockSageStore
     var openModelSettings: () -> Void
+    #if os(macOS)
+    @ObservedObject var chat: StockSageChatSession
+    #else
     @StateObject private var chat = StockSageChatSession(historyURL: StockSageChatSession.localHistoryURL)
+    #endif
     @State private var question = ""
     @State private var issue: String?
     @State private var request: Task<Void, Never>?
@@ -30,7 +34,7 @@ struct StockSageChatSection: View {
             .onDisappear { cancel() }
             .confirmationDialog("Delete local Chat history?", isPresented: $confirmClear) {
                 Button("Delete history", role: .destructive) { request?.cancel(); request = nil; chat.clear() }
-            } message: { Text("Deletes this app's saved conversation and source snapshots. It cannot erase screenshots or server logs.") }
+            } message: { Text("Deletes this conversation, including unsaved turns and source snapshots. It cannot erase screenshots or server logs.") }
     }
 
     @ViewBuilder private var chatLayout: some View {
@@ -354,7 +358,7 @@ struct StockSageChatSection: View {
         #endif
         return Text(config == nil
                     ? missing
-                    : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. Last 24 turns saved locally, excluded from backup; Clear history deletes this app's copy.")
+                    : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation.")
                     .font(.caption).foregroundStyle(.secondary)
     }
 
@@ -416,7 +420,7 @@ struct StockSageChatSection: View {
                     leads: StockSageResearchLeads.load(symbol: ticker, now: facts.at), webAllowed: ToolPolicy.isExternalAllowed)
                 guard chat.attachResearch(id: id, snapshot: enriched) else { return }
             }
-            guard let prompt = StockSageChat.prompt(question: text, snapshot: enriched, history: history) else {
+            guard let prepared = StockSageChat.request(question: text, snapshot: enriched, history: history) else {
                 chat.finish(id: id, text: nil, unavailable: "This context is too large for the local request. Ask a shorter question or use fewer tickers. Source snapshots remain available.")
                 return
             }
@@ -432,11 +436,12 @@ struct StockSageChatSection: View {
             guard probe.reachable && probe.hasModel else {
                 chat.finish(id: id, text: nil, unavailable: probe.reachable
                     ? "The server is reachable, but the configured model was not found. Check its model ID in Model settings."
-                    : "The model server could not be verified. Check that it is running, then use Test connection in Model settings.")
+                    : "The model server could not be verified. Check that it is running, then use Test connection in Model settings.",
+                    requestSnapshot: prepared.snapshot)
                 return
             }
             let result = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
-                system: StockSageChat.instructions, user: prompt, maxTokens: StockSageChat.outputTokens,
+                system: StockSageChat.instructions, user: prepared.prompt, maxTokens: StockSageChat.outputTokens,
                 contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)
             guard active(),
                   !includesNews || ToolPolicy.isExternalAllowed else {
@@ -445,9 +450,31 @@ struct StockSageChatSection: View {
                 return
             }
             switch result {
-            case .success(let response): chat.finish(id: id, text: response)
-            case .failure: chat.finish(id: id, text: nil, unavailable: "The model request failed or was interrupted. Your saved facts remain available. Check Model settings and retry; no answer was assumed.")
+            case .success(let response): chat.finish(id: id, text: response, requestSnapshot: prepared.snapshot)
+            case .failure: chat.finish(id: id, text: nil, unavailable: "The model request failed or was interrupted. Your captured facts remain available. Check Model settings and retry; no answer was assumed.", requestSnapshot: prepared.snapshot)
             }
         }
     }
 }
+
+#if os(macOS)
+/// Keep memory-only turns above the page switch when a local history save fails.
+/// Window lifetime only; leaving Chat still cancels its request in ChatSection.
+struct StockSageChatNavigation<Chat: View, Other: View>: View {
+    let isChat: Bool
+    @StateObject private var session: StockSageChatSession
+    let chat: (StockSageChatSession) -> Chat
+    let other: () -> Other
+    init(isChat: Bool, historyURL: URL?,
+         @ViewBuilder chat: @escaping (StockSageChatSession) -> Chat,
+         @ViewBuilder other: @escaping () -> Other) {
+        self.isChat = isChat
+        _session = StateObject(wrappedValue: StockSageChatSession(historyURL: historyURL))
+        self.chat = chat
+        self.other = other
+    }
+    var body: some View {
+        if isChat { chat(session) } else { other() }
+    }
+}
+#endif

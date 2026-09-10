@@ -792,9 +792,11 @@ struct MarketsView: View {
                 .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 18)
                 feedBanner.padding(.horizontal, 28).padding(.bottom, 16)
                 Divider().opacity(0.5)
-                if section == .chat {
-                    StockSageChatSection(store: store, openModelSettings: openDesktopModelSettings)
-                } else {
+                StockSageChatNavigation(isChat: section == .chat,
+                                       historyURL: StockSageChatSession.localHistoryURL) { session in
+                    StockSageChatSection(store: store, openModelSettings: openDesktopModelSettings,
+                                        chat: session)
+                } other: {
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(alignment: .leading, spacing: 22) {
@@ -1550,7 +1552,13 @@ struct MarketsView: View {
         case .portfolio:       portfolioSection
         case .alerts:          alertsSection
         case .briefing:        briefingSection
-        case .chat:            StockSageChatSection(store: store, openModelSettings: { section = .catalysts })
+        case .chat:
+            #if os(macOS)
+            // desktopWorkspace routes Chat before invoking content from its non-Chat branch.
+            EmptyView()
+            #else
+            StockSageChatSection(store: store, openModelSettings: { section = .catalysts })
+            #endif
         }
     }
 
@@ -2049,22 +2057,28 @@ struct MarketsView: View {
             case .journal: tradeJournalPanel
             case .paper: forwardScoreboardPanel
             case .analytics:
-                if !portfolio.positions.isEmpty {
+                if !portfolio.hasLoadedRecords {
+                    Text(portfolio.lastError ?? "Portfolio unavailable; saved holdings could not be verified.")
+                        .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !portfolio.positions.isEmpty {
                     allocationPanel
                     riskParityPanel
                     portfolioAnalyticsPanel
                 }
-                correlationHeatmapPanel
+                if portfolio.hasLoadedRecords { correlationHeatmapPanel }
                 kellySizerPanel
             }
         }
         #else
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             portfolioHoldings
-            if !portfolio.positions.isEmpty { allocationPanel }
-            if !portfolio.positions.isEmpty { riskParityPanel }
-            if !portfolio.positions.isEmpty { portfolioAnalyticsPanel }
-            correlationHeatmapPanel
+            if portfolio.hasLoadedRecords {
+                if !portfolio.positions.isEmpty { allocationPanel }
+                if !portfolio.positions.isEmpty { riskParityPanel }
+                if !portfolio.positions.isEmpty { portfolioAnalyticsPanel }
+                correlationHeatmapPanel
+            }
             forwardScoreboardPanel
             tradeJournalPanel
             kellySizerPanel
@@ -2075,9 +2089,17 @@ struct MarketsView: View {
 
     private var portfolioHoldings: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            portfolioSummary
+            if let error = portfolio.lastError {
+                Text(error).font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if portfolio.hasLoadedRecords { portfolioSummary }
             addPositionForm
-            if portfolio.positions.isEmpty {
+            if !portfolio.hasLoadedRecords {
+                Text("Holdings and totals unavailable until the saved portfolio can be read. This is not an empty account.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if portfolio.positions.isEmpty {
                 Text("No holdings yet — add one above to track value & P&L.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 18)
@@ -2182,7 +2204,7 @@ struct MarketsView: View {
             // this unreachable with invalid input; the guard is belt-and-suspenders.
             guard let sh = StockSageInput.positiveAmount(newShares),
                   let cost = StockSageInput.nonNegativeAmount(newCost) else { return }
-            portfolio.add(symbol: newSymbol, shares: sh, costBasis: cost)
+            guard portfolio.add(symbol: newSymbol, shares: sh, costBasis: cost) else { return }
             newSymbol = ""; newShares = ""; newCost = ""
         } label: {
             Image(systemName: "plus.circle.fill").font(.system(size: mvFont20)).foregroundStyle(DS.Palette.accent)
@@ -2670,7 +2692,15 @@ struct MarketsView: View {
                 Spacer()
             }
 
-            if let sb = paperStore.scoreboard {
+            if let error = paperStore.lastError {
+                Text(error).font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !paperStore.hasLoadedRecords {
+                Text("Paper history and scoreboard unavailable. Saved records could not be verified; this is not an empty paper book.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let sb = paperStore.scoreboard {
                 // Two bounds that BRACKET the truth. Closed-only over-represents fast losers; the
                 // full-book mark leans optimistic (open winners can reverse). Neither is an edge claim.
                 HStack(spacing: 1) {
@@ -2735,7 +2765,7 @@ struct MarketsView: View {
             // the ONLY sanctioned route to trading a validated signal bigger: the forward paper
             // DSR > 0.95 promotion bar. Display-only, and it never promises a pass date —
             // performance decides, not time.
-            if !paperStore.trades.isEmpty {
+            if paperStore.hasLoadedRecords, !paperStore.trades.isEmpty {
                 Group {
                     if let fwd = paperStore.forwardStats {
                         // Review fix (2026-07-17, 2-vote): TRUNCATE the displayed percent — plain
@@ -2763,10 +2793,14 @@ struct MarketsView: View {
 
             // The contrast: engine vs the owner's own realized trades.
             let ownEdge = journal.edgeStats
-            if ownEdge.closedWithR > 0 {
+            if !journal.hasLoadedRecords {
+                Text(journal.lastError ?? "Journal unavailable; the comparison cannot be verified.")
+                    .font(.caption2).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if ownEdge.closedWithR > 0, paperStore.hasLoadedRecords {
                 Text("Your own realized track: \(rTxt(ownEdge.expectancyR)) over \(ownEdge.closedWithR) closed — \(paperStore.scoreboard.map { ownEdge.expectancyR > $0.realizedAvgR ? "ahead of the engine so far" : "behind the engine so far" } ?? "logged"). Both small; read at ~100 each.")
                     .font(.caption2).foregroundStyle(DS.Palette.accent).fixedSize(horizontal: false, vertical: true)
-            } else {
+            } else if journal.trades.isEmpty {
                 #if os(macOS)
                 Text("Your own journal is empty — open the Journal tab to log the trades you actually take and measure YOUR edge against the engine's track. That's the one experiment no dataset can run for you.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -2774,6 +2808,9 @@ struct MarketsView: View {
                 Text("Your own journal is empty — log the trades you actually take (below) to measure YOUR edge against the engine's track. That's the one experiment no dataset can run for you.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 #endif
+            } else if ownEdge.closedWithR == 0 {
+                Text("No qualifying closed results yet — your journal records are present, but a measured comparison needs closed trades with a valid realized R.")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
             Text(StockSagePaperTrader.caveat)
@@ -2966,6 +3003,12 @@ struct MarketsView: View {
             }
             lossLimitBanner   // STOP-TRADING / approaching-limit circuit breaker (above system-health)
 
+            if showAddTrade { addTradeForm }
+            if !journal.hasLoadedRecords {
+                Text("Journal analytics unavailable until the saved trades can be read. Retained records and loss-limit warnings are not cleared.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
             if let health = journal.systemHealth {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: healthIcon(health.verdict)).font(.system(size: mvFont11)).foregroundStyle(healthColor(health.verdict))
@@ -2973,8 +3016,6 @@ struct MarketsView: View {
                     Text(health.reason).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-
-            if showAddTrade { addTradeForm }
 
             // Realized stats (closed trades only).
             let s = journal.stats
@@ -3396,6 +3437,7 @@ struct MarketsView: View {
             }
 
             measuredSlippageLine
+            }
             Text(StockSageJournal.caveat).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(DS.Space.sm)
@@ -4704,12 +4746,8 @@ struct MarketsView: View {
     /// viewed by what could move each idea next. Read `displayedIdeas` exactly once here — it
     /// re-projects on every access. Tapping a card opens the existing detail sheet via `selectedIdea`.
     private var catalystsSection: some View {
-        #if os(macOS)
         CatalystsSection(ideas: displayedIdeas, store: store, onSelect: { selectedIdea = $0 },
             ideasFilterMessage: ideasEmptyMessage, onOpenIdeas: { section = .ideas })
-        #else
-        CatalystsSection(ideas: displayedIdeas, store: store) { selectedIdea = $0 }
-        #endif
     }
 
     // MARK: Ideas (the advisor across the universe)
@@ -4953,18 +4991,10 @@ struct MarketsView: View {
 
     /// Why the filtered ideas list is empty — names the active constraint so the user knows what to relax.
     private var ideasEmptyMessage: String {
-        #if os(macOS)
         Self.ideasEmptyMessage(search: ideaSearch, minConviction: ideaMinConv,
             filter: ideaFilter, sourceIsEmpty: store.ideas.isEmpty)
-        #else
-        if !ideaSearch.trimmingCharacters(in: .whitespaces).isEmpty { return "No ideas match “\(ideaSearch)”." }
-        if ideaMinConv > 0 { return "No ideas at ≥ \(Int(ideaMinConv * 100))% signal strength — lower the signal-strength filter." }
-        if ideaFilter != .all { return "No \(ideaFilter.rawValue.lowercased()) ideas in this scan." }
-        return "No ideas in this scan."
-        #endif
     }
 
-    #if os(macOS)
     nonisolated static func ideasEmptyMessage(search: String, minConviction: Double,
         filter: StockSageIdeaProjection.Filter, sourceIsEmpty: Bool) -> String {
         if !search.trimmingCharacters(in: .whitespaces).isEmpty { return "No ideas match “\(search)”." }
@@ -4973,7 +5003,6 @@ struct MarketsView: View {
         if !sourceIsEmpty { return "No ideas qualify for this view — try a different rules sort." }
         return "No ideas in this scan."
     }
-    #endif
 
     /// F19/F20 (2026-07-15): body moved to the engine (see StockSageIdeaProjection.rewardRisk);
     /// this thin wrapper keeps the view's 3 call sites diff-free.
@@ -6780,7 +6809,12 @@ struct MarketsView: View {
     @ViewBuilder private var forwardProgressStrip: some View {
         let closedWithR = paperStore.closed.compactMap(\.realizedR).count
         let needed = 4
-        if closedWithR < needed {
+        if !paperStore.hasLoadedRecords {
+            Text(paperStore.lastError ?? "Paper history unavailable; forward progress cannot be verified.")
+                .font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.sm)
+        } else if closedWithR < needed {
             HStack(spacing: DS.Space.sm) {
                 Image(systemName: "flask.fill")
                     .font(.system(size: mvFont12)).foregroundStyle(DS.Palette.accent)

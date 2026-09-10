@@ -75,7 +75,7 @@ struct StockSagePaperAutomationPanel: View {
                 VStack(alignment: .leading, spacing: 10) {
                 Text(Self.monitoringLabel(running: automation.isRunning, at: at))
                     .font(.callout.bold())
-                Text("While StockSage is open and this Mac is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
+                Text("When day trading is enabled, StockSage is open and this device is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
                     .font(.caption).foregroundStyle(.secondary)
                 #if os(macOS)
                 if let warning = Self.closeOutWarning(book: automation.book, at: at, running: automation.isRunning) {
@@ -347,6 +347,9 @@ struct StockSagePaperAutomationPanel: View {
             return "Entry window closed; awaiting monitor processing."
         }
         if now < request.at { return "Current clock precedes the saved attempt; awaiting monitor processing." }
+        if request.protectiveTradeID != nil && !StockSagePaperAutomation.paperSessionOpen(now) {
+            return "Protective intent retained; waiting for the next supported paper session."
+        }
         if now.timeIntervalSince(request.at) >= 120 {
             return "Attempt window elapsed; awaiting monitor processing."
         }

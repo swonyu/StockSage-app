@@ -559,6 +559,7 @@ final class StockSagePaperAutomation: ObservableObject {
             error = nil
             return true
         } catch {
+            hasLoadedBook = false
             release(); self.error = "Paper account unavailable or corrupt. Existing data has been preserved."; return false
         }
     }

@@ -7,6 +7,7 @@ import SwiftUI
 #if os(iOS)
 struct StockSageIOSSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var settings = AppSettings.shared
     @AppStorage("stocksage.autoRefresh") private var autoRefresh = true
     @AppStorage("stocksage.liveStream") private var liveStream = true
     @AppStorage("stocksage.horizon") private var horizon = "short"
@@ -21,6 +22,7 @@ struct StockSageIOSSettingsSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                StockSageSettingsView.networkControls(webAccess: $settings.webAccess, offlineOnly: $settings.offlineOnly)
                 Section {
                     Toggle("Real-time streaming", isOn: $liveStream)
                     Toggle("Auto-refresh live markets", isOn: $autoRefresh)

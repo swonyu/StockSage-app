@@ -127,6 +127,18 @@ struct StockSageCatalystChainTests {
             now: now, eodhdCalendar: { .answered(nil) }, yahooCalendar: { .answered(nil) },
             historyUnitLabel: "quarter ends", history: { .answered([d1, d2, d3]) })
         #expect(outcome.projectionBasis?.contains("median gap of last 3 quarter ends = 91 d from") == true)
+        let brief = StockSageCatalystWatch.brief(for: SageFix.idea("2222.SR", conviction: 0.5),
+            inputs: .init(now: now, catalystProjectedDate: outcome.earningsDate,
+                          catalystProjectionBasis: outcome.projectionBasis))
+        #expect(brief.primary.kind == .projectedEarnings)
+        #expect(brief.primary.date == outcome.earningsDate)
+        #expect(brief.primary.why == [outcome.projectionBasis!])
+        #expect(brief.primary.headline.contains("projected from recorded history, not announced"))
+        #expect(!brief.primary.headline.contains("prior reports"))
+        let facts = StockSageCatalystNarrator.facts(for: brief)
+        #expect(facts.contains("Catalyst: " + brief.primary.headline))
+        #expect(facts.contains { $0.contains("quarter ends") })
+        #expect(!facts.contains { $0.contains("prior reports") })
     }
 
     @Test func fewerThanThreeHistoryDatesFallsThroughToUnchecked() async {

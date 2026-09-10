@@ -22,6 +22,7 @@ final class StockSagePortfolio: ObservableObject {
 
     @Published private(set) var positions: [PortfolioPosition] = []
     @Published private(set) var lastError: String?
+    @Published private(set) var hasLoadedRecords = false
 
     private static let key = "stocksage_portfolio_v1"
     private let defaults: UserDefaults
@@ -39,12 +40,16 @@ final class StockSagePortfolio: ObservableObject {
 
     /// Add a position. No-ops on a blank symbol or non-positive share count, so a
     /// fat-fingered form submit can't store garbage.
-    func add(symbol: String, shares: Double, costBasis: Double) {
+    @discardableResult func add(symbol: String, shares: Double, costBasis: Double) -> Bool {
         let s = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !s.isEmpty, shares > 0, shares.isFinite, costBasis >= 0, costBasis.isFinite else { return }
+        guard !s.isEmpty, shares > 0, shares.isFinite, costBasis >= 0, costBasis.isFinite else {
+            lastError = "Enter a symbol, positive finite shares and a nonnegative finite cost basis."
+            return false
+        }
         let before = positions
         positions.append(PortfolioPosition(symbol: s, shares: shares, costBasis: costBasis))
-        if !save() { positions = before }
+        guard save() else { positions = before; return false }
+        return true
     }
 
     // Deletes merge foreign lots, excluding only the explicitly deleted IDs.
@@ -71,6 +76,7 @@ final class StockSagePortfolio: ObservableObject {
             self.deletions.restore(Set(additions.map(\.id)))
             self.defaults.set(data, forKey: Self.key)
             self.positions = records
+            self.hasLoadedRecords = true
             self.lastError = nil
         })
     }
@@ -83,6 +89,7 @@ final class StockSagePortfolio: ObservableObject {
     /// impossible. Deletes retain markers; `qaSeed` never touches disk.
     private func save(removing: Set<UUID> = [], clearAll: Bool = false) -> Bool {
         guard let disk = try? deletions.read(PortfolioPosition.self) else {
+            hasLoadedRecords = false
             lastError = "Couldn't read the saved portfolio; no records were changed."; return false
         }
         let removed = clearAll ? Set((positions + disk).map(\.id)) : removing
@@ -97,13 +104,21 @@ final class StockSagePortfolio: ObservableObject {
         deletions.mark(removed)
         defaults.set(data, forKey: Self.key)
         positions = records
+        hasLoadedRecords = true
         lastError = nil
         return true
     }
 
     private func load() {
-        guard let decoded = try? deletions.read(PortfolioPosition.self) else { return }
-        positions = decoded.filter { !deletions.contains($0.id) }
+        do {
+            let decoded = try deletions.read(PortfolioPosition.self)
+            positions = decoded.filter { !deletions.contains($0.id) }
+            hasLoadedRecords = true
+            lastError = nil
+        } catch {
+            hasLoadedRecords = false
+            lastError = "Portfolio unavailable: couldn't read the saved holdings. Existing data was preserved."
+        }
     }
 
     /// QA-only in-memory seed: assigns `positions` directly, bypassing `save()` so nothing

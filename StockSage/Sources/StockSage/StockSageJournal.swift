@@ -993,6 +993,7 @@ final class StockSageJournalStore: ObservableObject {
 
     @Published private(set) var trades: [TradeRecord] = []
     @Published private(set) var lastError: String?
+    @Published private(set) var hasLoadedRecords = false
     private let key: String
     private let defaults: UserDefaults
     private var deletions: StockSageRecordDeletions { .init(defaults: defaults, recordKey: key) }
@@ -1070,6 +1071,7 @@ final class StockSageJournalStore: ObservableObject {
             self.deletions.restore(Set(additions.map(\.id)))
             self.defaults.set(data, forKey: self.key)
             self.trades = records
+            self.hasLoadedRecords = true
             self.lastError = nil
         })
     }
@@ -1101,8 +1103,15 @@ final class StockSageJournalStore: ObservableObject {
     }
 
     private func load() {
-        guard let decoded = try? deletions.read(TradeRecord.self) else { return }
-        trades = decoded.filter { !deletions.contains($0.id) }
+        do {
+            let decoded = try deletions.read(TradeRecord.self)
+            trades = decoded.filter { !deletions.contains($0.id) }
+            hasLoadedRecords = true
+            lastError = nil
+        } catch {
+            hasLoadedRecords = false
+            lastError = "Journal unavailable: couldn't read the saved trades. Existing data was preserved."
+        }
     }
 
     /// LOST-UPDATE FIX (2026-07-09): identical defect class to StockSagePaperTradeStore's,
@@ -1115,6 +1124,7 @@ final class StockSageJournalStore: ObservableObject {
     /// exclude only deleted IDs. `qaSeed` still bypasses save() entirely (in-memory only).
     private func save(removing: Set<UUID> = [], replacing original: TradeRecord? = nil) -> Bool {
         guard let disk = try? deletions.read(TradeRecord.self) else {
+            hasLoadedRecords = false
             lastError = "Couldn't read the saved journal; no records were changed."; return false
         }
         guard let records = reconciled(trades, disk: disk, replacing: original, removing: removing) else { return false }
@@ -1126,6 +1136,7 @@ final class StockSageJournalStore: ObservableObject {
         deletions.mark(removing)
         defaults.set(data, forKey: key)
         trades = records
+        hasLoadedRecords = true
         return true
     }
 

@@ -241,6 +241,7 @@ final class StockSagePaperTradeStore: ObservableObject {
 
     @Published private(set) var trades: [TradeRecord] = []
     @Published private(set) var lastError: String?
+    @Published private(set) var hasLoadedRecords = false
     /// DISTINCT from the journal's "stocksage.journal.v1" — paper and real never share storage.
     private let key: String
     private let defaults: UserDefaults
@@ -278,6 +279,7 @@ final class StockSagePaperTradeStore: ObservableObject {
     /// Recompute the scoreboard from the latest per-symbol closes (the scan's histories). Called from
     /// `StockSageStore.updatePaperTrades` where those histories are in hand.
     func updateScoreboard(latestClose: [String: Double]) {
+        guard hasLoadedRecords else { scoreboard = nil; return }
         scoreboard = StockSagePaperTrader.scoreboard(trades, latestClose: latestClose)
     }
 
@@ -325,8 +327,15 @@ final class StockSagePaperTradeStore: ObservableObject {
     func reset() { _ = save(clearAll: true) }
 
     private func load() {
-        guard let decoded = try? deletions.read(TradeRecord.self) else { return }
-        trades = decoded.filter { !deletions.contains($0.id) }
+        do {
+            let decoded = try deletions.read(TradeRecord.self)
+            trades = decoded.filter { !deletions.contains($0.id) }
+            hasLoadedRecords = true
+            lastError = nil
+        } catch {
+            hasLoadedRecords = false
+            lastError = "Paper history unavailable: couldn't read the saved trades. Existing data was preserved."
+        }
     }
 
     /// LOST-UPDATE FIX (2026-07-09 — found from LIVE data, not review: GE/SAN.MC/O39.SI each
@@ -341,6 +350,8 @@ final class StockSagePaperTradeStore: ObservableObject {
     /// Deleted IDs are filtered from both snapshots; clear/reset includes current disk IDs.
     private func save(removing: Set<UUID> = [], clearAll: Bool = false) -> Bool {
         guard let disk = try? deletions.read(TradeRecord.self) else {
+            hasLoadedRecords = false
+            scoreboard = nil
             lastError = "Couldn't read the saved paper history; no records were changed."; return false
         }
         let removed = clearAll ? Set((trades + disk).map(\.id)) : removing
@@ -373,6 +384,7 @@ final class StockSagePaperTradeStore: ObservableObject {
         deletions.mark(removed)
         defaults.set(data, forKey: key)
         trades = records
+        hasLoadedRecords = true
         scoreboard = nil // a cached scoreboard cannot describe the previous book after a mutation
         lastError = rejectedOpen
             ? "A new paper position was skipped because that symbol is already open. Saved history was preserved."

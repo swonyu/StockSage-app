@@ -852,6 +852,47 @@ struct StockSageJournalStoreQASeedTests {
                     openedAt: Date(timeIntervalSince1970: Double(day) * 86_400))
     }
 
+    @Test(arguments: [false, true])
+    func corruptJournalLoadReportsFailureAndMutationsPreserveRecords(wrongType: Bool) throws {
+        let (store, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "stocksage.journal.v1"
+        #expect(store.trades.isEmpty && store.lastError == nil)
+        #expect(store.hasLoadedRecords)
+        let retained = journalTrade("AAPL", day: 1)
+        try #require(store.add(retained))
+        #expect(store.hasLoadedRecords && store.lastError == nil)
+        #expect(!store.close(retained.id, exitPrice: 0, at: retained.openedAt.addingTimeInterval(60)))
+        #expect(store.hasLoadedRecords && store.lastError != nil && store.trades == [retained],
+                "A rejected close must not hide successfully loaded journal history")
+        let validBytes = try #require(defaults.data(forKey: key))
+        let corrupt = Data("{broken".utf8)
+        if wrongType { defaults.set("not record data", forKey: key) }
+        else { defaults.set(corrupt, forKey: key) }
+        let loaded = StockSageJournalStore(defaults: defaults, key: key)
+        #expect(loaded.lastError != nil, "A corrupt saved journal must not masquerade as empty analytics")
+        #expect(!loaded.hasLoadedRecords && loaded.trades.isEmpty)
+        for operation in 0..<4 {
+            switch operation {
+            case 0: #expect(!store.add(journalTrade("MSFT", day: 2)))
+            case 1: #expect(!store.close(retained.id, exitPrice: 110, at: retained.openedAt.addingTimeInterval(60)))
+            case 2: store.remove(retained.id)
+            default:
+                let result = store.importNew([journalTrade("MSFT", day: 2)])
+                #expect(result.added == 0 && result.rejected == 1)
+            }
+            #expect(!store.hasLoadedRecords && store.lastError != nil && store.trades == [retained])
+            #expect(!defaults.bool(forKey: key + ".deleted." + retained.id.uuidString))
+            if wrongType { #expect(defaults.string(forKey: key) == "not record data") }
+            else { #expect(defaults.data(forKey: key) == corrupt) }
+        }
+        defaults.set(validBytes, forKey: key)
+        let recovered = StockSageJournalStore(defaults: defaults, key: key)
+        #expect(recovered.hasLoadedRecords && recovered.trades == [retained] && recovered.lastError == nil)
+        #expect(store.add(journalTrade("MSFT", day: 2)))
+        #expect(store.hasLoadedRecords && store.lastError == nil && store.trades.count == 2)
+    }
+
     @Test func journalRejectsIncoherentAddsWithoutChangingMemoryOrDisk() {
         let (store, defaults, suite) = isolatedJournal()
         defer { defaults.removePersistentDomain(forName: suite) }
