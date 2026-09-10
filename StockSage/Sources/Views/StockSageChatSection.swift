@@ -220,7 +220,7 @@ struct StockSageChatSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(turn.question).font(.headline).textSelection(.enabled)
                 Text(turn.notice).font(.caption).foregroundStyle(.secondary)
-                if pending { ProgressView("Preparing sources / asking the local model…") }
+                if pending { ProgressView(turn.notice) }
                 else { Text(turn.answer).textSelection(.enabled) }
                 ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
                     Text(fact.text).font(.callout).padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
@@ -432,6 +432,7 @@ struct StockSageChatSection: View {
         request = Task {
             var enriched = facts
             if let ticker = researchTicker {
+                chat.advance(id: id, to: .sources)
                 let evidence = await StockSageBenzingaClient.shared.snapshot(for: ticker, now: facts.at)
                 guard active(), StockSageBenzingaClient.shared.isCurrent(evidence) else {
                     if chat.pending == id { chat.cancel() }
@@ -466,6 +467,7 @@ struct StockSageChatSection: View {
                 if chat.pending == id { chat.cancel() }
                 return
             }
+            chat.advance(id: id, to: .checkingModel)
             let probe = await StockSageLocalModelServer.probe(config, stillValid: allowed)
             guard allowed() else {
                 if chat.pending == id { chat.cancel() }
@@ -478,6 +480,7 @@ struct StockSageChatSection: View {
                     requestSnapshot: prepared.snapshot)
                 return
             }
+            chat.advance(id: id, to: .generating)
             let result = await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
                 system: StockSageChat.instructions, user: prepared.prompt, maxTokens: StockSageChat.outputTokens,
                 contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)

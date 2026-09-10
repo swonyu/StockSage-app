@@ -349,6 +349,57 @@ enum StockSageLocalModelServer {
     typealias CompletionResult = Swift.Result<Completion, CompletionFailure>
     nonisolated static func boundedCount(_ value: Int) -> Int { min(max(value, 0), 16_777_216) }
 
+    /// The distinct causes a caller must be able to tell apart when a model turn fails.
+    /// Every caller renders its own wording, but the CLASSIFICATION lives here so no surface
+    /// re-collapses eighteen diagnostic categories into "check the connection" — which is wrong
+    /// guidance whenever the server was reached and answered.
+    nonisolated enum FailureCause: String, Sendable, CaseIterable {
+        case cancelled          // the user or a newer request stopped this one
+        case settingsChanged    // model settings moved under a running request
+        case networkDenied      // non-loopback access is turned off by policy
+        case badSettings        // URL or model ID unusable
+        case modelMissing       // server running, requested model absent
+        case timedOut           // no answer within the caller's deadline
+        case unreachable        // no usable connection to the server
+        case serverRejected     // reached and answered, with a non-2xx status
+        case tooLarge           // response exceeded what this app will read
+        case contextBudget      // prompt did not fit the declared window
+        case unfinished         // stopped before completing its answer
+        case emptyAnswer        // finished, but said nothing
+        case unreadable         // malformed body, or an answer from a different model
+        case unknown
+
+        /// True when the server was reached and responded. Callers must NOT tell the user to
+        /// check their connection in these cases.
+        var serverAnswered: Bool {
+            switch self {
+            case .serverRejected, .tooLarge, .unfinished, .emptyAnswer, .unreadable, .modelMissing:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    nonisolated static func cause(for diagnostic: Diagnostic) -> FailureCause {
+        switch diagnostic.category {
+        case .cancelled:                        return .cancelled
+        case .obsoleteRequest:                  return .settingsChanged
+        case .policyDenied:                     return .networkDenied
+        case .invalidConfig:                    return .badSettings
+        case .modelMissing, .unsupportedModel:  return .modelMissing
+        case .timeout:                          return .timedOut
+        case .unavailable, .network, .nonHTTP:  return .unreachable
+        case .http:                             return .serverRejected
+        case .responseTooLarge:                 return .tooLarge
+        case .contextBudget:                    return .contextBudget
+        case .incompleteOutput:                 return .unfinished
+        case .emptyContent, .missingContent:    return .emptyAnswer
+        case .malformedJSON, .responseShape:    return .unreadable
+        case .none:                             return .unknown
+        }
+    }
+
     /// True when a completion stopped because it hit the output limit rather than finishing.
     ///
     /// Callers that publish a FINANCIAL VERDICT must refuse such an answer: measured 2026-09-10,

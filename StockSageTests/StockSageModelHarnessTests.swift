@@ -185,6 +185,93 @@ struct StockSageModelHarnessTests {
         #expect(failure.diagnostic.elapsedMilliseconds != nil)
     }
 
+    // MARK: Failures stay distinguishable on every surface
+
+    // Sixteen of eighteen diagnostic categories used to collapse into one message per surface,
+    // so a server that WAS reached and answered still told the user to check their connection.
+    @Test func everyDiagnosticCategoryKeepsADistinguishableCause() {
+        let categories: [S.FailureCategory] = [.invalidConfig, .unavailable, .modelMissing, .unsupportedModel,
+            .nonHTTP, .http, .malformedJSON, .responseShape, .missingContent, .emptyContent, .timeout,
+            .cancelled, .network, .obsoleteRequest, .policyDenied, .responseTooLarge, .contextBudget, .incompleteOutput]
+        var seen: Set<S.FailureCause> = []
+        for category in categories {
+            seen.insert(S.cause(for: .init(category: category)))
+        }
+        // Every cause except the catch-all must be reachable from a real category.
+        #expect(seen.count >= 12, "categories collapsed too far: \(seen.count) distinct causes")
+        #expect(!seen.contains(.unknown), "no real category may fall through to unknown")
+        #expect(S.cause(for: .init()) == .unknown)
+    }
+
+    // The reached-and-answered failures must never be described as connection problems.
+    @Test func reachedAndAnsweredFailuresAreNotCalledConnectionProblems() {
+        for category in [S.FailureCategory.http, .responseTooLarge, .incompleteOutput,
+                         .emptyContent, .malformedJSON, .responseShape, .modelMissing] {
+            let cause = S.cause(for: .init(category: category))
+            #expect(cause.serverAnswered, "\(category) reached the server")
+            let message = StockSageChat.unavailableMessage(for: .init(category: category))
+            #expect(!message.lowercased().contains("could not be reached"),
+                    "\(category) must not be reported as unreachable")
+        }
+        // And the genuinely unreachable ones still say so.
+        for category in [S.FailureCategory.unavailable, .network, .nonHTTP] {
+            #expect(StockSageChat.unavailableMessage(for: .init(category: category))
+                .lowercased().contains("could not be reached"))
+        }
+    }
+
+    @Test func chatMessagesAreDistinctAndCarryNoServerText() {
+        var messages: Set<String> = []
+        for category in [S.FailureCategory.invalidConfig, .unavailable, .modelMissing, .http,
+                         .timeout, .cancelled, .obsoleteRequest, .policyDenied, .responseTooLarge,
+                         .contextBudget, .incompleteOutput, .emptyContent, .malformedJSON] {
+            let message = StockSageChat.unavailableMessage(for: .init(category: category))
+            #expect(messages.insert(message).inserted, "duplicate message for \(category)")
+            #expect(message.contains("no answer was assumed"))
+        }
+    }
+
+    // Sentiment used to report a reachable-but-rejecting server as a connection problem.
+    @Test func sentimentDistinguishesReachedFailuresFromUnreachableOnes() {
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .http)) == .serverRejected)
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .contextBudget)) == .contextBudget)
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .emptyContent)) == .emptyAnswer)
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .responseShape)) == .unreadable)
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .policyDenied)) == .notAllowed)
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .incompleteOutput)) == .incomplete)
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .cancelled)) == .cancelled)
+        // Genuinely unreachable stays the connection message.
+        #expect(StockSageLocalSentiment.Failure.from(.init(category: .network)) == .modelUnavailable)
+        #expect(!StockSageLocalSentiment.Failure.serverRejected.message.lowercased().contains("connection and try again"))
+    }
+
+    // MARK: Chat phase progress
+
+    // The pending notice was written once and never updated, and iOS ignored it entirely in
+    // favour of a hardcoded string. Stages are named; no percentage is invented.
+    @Test @MainActor func chatPhasesAdvanceOnlyForThePendingTurn() throws {
+        let session = StockSageChatSession(historyURL: nil)
+        let snapshot = StockSageChat.Snapshot(at: Date(), facts: [], context: "test")
+        let id = try #require(session.begin(question: "What happened today?", snapshot: snapshot, model: "m"))
+        let initial = try #require(session.turns.last?.notice)
+
+        session.advance(id: id, to: .sources)
+        #expect(session.turns.last?.notice == StockSageChatSession.Phase.sources.notice)
+        session.advance(id: id, to: .checkingModel)
+        #expect(session.turns.last?.notice == StockSageChatSession.Phase.checkingModel.notice)
+        session.advance(id: id, to: .generating)
+        #expect(session.turns.last?.notice == StockSageChatSession.Phase.generating.notice)
+
+        // Each stage is a distinct, non-empty sentence and none of them fakes a percentage.
+        let notices = [initial] + StockSageChatSession.Phase.allNotices
+        #expect(Set(notices).count == notices.count)
+        #expect(notices.allSatisfy { !$0.contains("%") })
+
+        // A superseded request must not relabel a newer turn.
+        session.advance(id: UUID(), to: .sources)
+        #expect(session.turns.last?.notice == StockSageChatSession.Phase.generating.notice)
+    }
+
     // MARK: The diagnostic must never carry server text
 
     @Test func diagnosticSummaryStaysFixedKeysAndNumbers() {

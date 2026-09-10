@@ -20,35 +20,38 @@ enum StockSageChat {
     /// Each message says what happened and what to do; none of them claims an answer was formed.
     nonisolated static func unavailableMessage(for diagnostic: StockSageLocalModelServer.Diagnostic) -> String {
         let keep = " Your captured facts remain available; no answer was assumed."
-        switch diagnostic.category {
-        case .cancelled, .obsoleteRequest:
-            return "The request was cancelled or the model settings changed while it was running." + keep
-        case .policyDenied:
-            return "Network access to a non-loopback model server is turned off." + keep
-        case .invalidConfig:
-            return "The model server URL or model ID in Model settings is not usable." + keep
-        case .modelMissing, .unsupportedModel:
-            return "The server is running but does not have the requested model. Check its model ID in Model settings." + keep
-        case .timeout:
-            return "The model did not answer within \(Int(requestTimeout)) seconds. It may still be loading; retry, or ask a shorter question." + keep
-        case .unavailable, .network, .nonHTTP:
-            return "The model server could not be reached. Check that it is running, then use Test connection in Model settings." + keep
-        case .http:
-            let status = diagnostic.httpStatus.map { " (HTTP \($0))" } ?? ""
-            return "The model server rejected the request\(status)." + keep
+        let body: String
+        switch StockSageLocalModelServer.cause(for: diagnostic) {
+        case .cancelled:
+            body = "The request was cancelled."
+        case .settingsChanged:
+            body = "Model settings changed while the request was running, so its answer was discarded."
+        case .networkDenied:
+            body = "Network access to a non-loopback model server is turned off."
+        case .badSettings:
+            body = "The model server URL or model ID in Model settings is not usable."
+        case .modelMissing:
+            body = "The server is running but does not have the requested model. Check its model ID in Model settings."
+        case .timedOut:
+            body = "The model did not answer within \(Int(requestTimeout)) seconds. It may still be loading; retry, or ask a shorter question."
+        case .unreachable:
+            body = "The model server could not be reached. Check that it is running, then use Test connection in Model settings."
+        case .serverRejected:
+            body = "The model server rejected the request" + (diagnostic.httpStatus.map { " (HTTP \($0))" } ?? "") + "."
+        case .tooLarge:
+            body = "The model returned more data than this app will read."
         case .contextBudget:
-            return "This question and its evidence exceed the model's context budget. Ask a shorter question or use fewer tickers." + keep
-        case .incompleteOutput:
-            return "The model stopped before finishing its answer, so it was withheld rather than shown half-formed. Retry, or ask a narrower question." + keep
-        case .responseTooLarge:
-            return "The model returned more data than this app will read." + keep
-        case .emptyContent, .missingContent:
-            return "The model returned an empty answer." + keep
-        case .malformedJSON, .responseShape:
-            return "The model server returned a response this app could not read, or one identifying a different model." + keep
-        case .none:
-            return "The model request did not complete." + keep
+            body = "This question and its evidence exceed the model's context budget. Ask a shorter question or use fewer tickers."
+        case .unfinished:
+            body = "The model stopped before finishing its answer, so it was withheld rather than shown half-formed. Retry, or ask a narrower question."
+        case .emptyAnswer:
+            body = "The model returned an empty answer."
+        case .unreadable:
+            body = "The model server returned a response this app could not read, or one identifying a different model."
+        case .unknown:
+            body = "The model request did not complete."
         }
+        return body + keep
     }
 
     nonisolated struct Fact: Codable, Sendable, Identifiable, Equatable {
@@ -360,6 +363,25 @@ final class StockSageChatSession: ObservableObject {
             unreadableHistory = true
             storageError = "Saved Chat history could not be read. It has not been overwritten. Clear history to start again."
         }
+    }
+
+    /// The stages a Chat turn actually passes through, in order. The pending notice was written
+    /// once at `begin` and never updated, so a turn that spent thirty seconds fetching evidence
+    /// and one second generating looked identical to the reverse. There is no percentage here on
+    /// purpose: the remaining work is genuinely unknown, so the stage is named instead of faked.
+    enum Phase: String, Sendable, CaseIterable {
+        case sources = "Collecting evidence from your sources…"
+        case checkingModel = "Checking the local model server…"
+        case generating = "Asking the local model…"
+        var notice: String { rawValue }
+        static var allNotices: [String] { allCases.map(\.notice) }
+    }
+
+    /// Advance the pending turn's stage. Ignores any turn that is no longer pending, so a late
+    /// update from a superseded request can never relabel a newer one.
+    func advance(id: UUID, to phase: Phase) {
+        guard pending == id, let index = turns.firstIndex(where: { $0.id == id }) else { return }
+        turns[index].notice = phase.notice
     }
 
     func begin(question: String, snapshot: StockSageChat.Snapshot, model: String) -> UUID? {

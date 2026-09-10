@@ -54,6 +54,11 @@ enum StockSageLocalSentiment {
     }
     nonisolated enum Failure: String, Sendable {
         case invalidEvidence, cancelled, obsolete, modelUnavailable, incomplete, ambiguous
+        // Sixteen of the seam's eighteen diagnostic categories used to collapse into
+        // `modelUnavailable`, so a server that WAS reached and answered still told the user to
+        // "check the local model connection". These cases keep the reached-and-answered failures
+        // distinct from the never-reached ones.
+        case serverRejected, tooLarge, contextBudget, emptyAnswer, unreadable, notAllowed
         var message: String {
             switch self {
             case .invalidEvidence: "Sentiment unavailable: refresh the dated headline evidence."
@@ -62,6 +67,27 @@ enum StockSageLocalSentiment {
             case .modelUnavailable: "Sentiment unavailable: check the local model connection and try again."
             case .incomplete: "Sentiment unavailable: the model did not finish its answer. Try again."
             case .ambiguous: "Sentiment unavailable: the model did not return one clear label. Try again."
+            case .serverRejected: "Sentiment unavailable: the model server rejected the request. The server is running; check its model and settings."
+            case .tooLarge: "Sentiment unavailable: the model returned more data than this app will read."
+            case .contextBudget: "Sentiment unavailable: this headline exceeds the model's context budget. Use a shorter excerpt."
+            case .emptyAnswer: "Sentiment unavailable: the model returned an empty answer. Try again."
+            case .unreadable: "Sentiment unavailable: the model server returned a response this app could not read, or one from a different model."
+            case .notAllowed: "Sentiment unavailable: network access to a non-loopback model server is turned off."
+            }
+        }
+        /// Maps the shared classification onto this surface's wording.
+        static func from(_ diagnostic: StockSageLocalModelServer.Diagnostic) -> Failure {
+            switch StockSageLocalModelServer.cause(for: diagnostic) {
+            case .cancelled: .cancelled
+            case .settingsChanged: .obsolete
+            case .networkDenied: .notAllowed
+            case .badSettings, .modelMissing, .timedOut, .unreachable, .unknown: .modelUnavailable
+            case .serverRejected: .serverRejected
+            case .tooLarge: .tooLarge
+            case .contextBudget: .contextBudget
+            case .unfinished: .incomplete
+            case .emptyAnswer: .emptyAnswer
+            case .unreadable: .unreadable
             }
         }
     }
@@ -93,10 +119,14 @@ enum StockSageLocalSentiment {
             stillValid: active, transport: transport)
         if let reason = failure() { return .unavailable(reason) }
         if case .failure(let failure) = reply {
-            if failure.diagnostic.category == .cancelled { return .unavailable(.cancelled) }
-            if failure.diagnostic.category == .incompleteOutput { return .unavailable(.incomplete) }
+            return .unavailable(Failure.from(failure.diagnostic))
         }
-        guard case .success(let completion) = reply, completion.model == config.model else { return .unavailable(.modelUnavailable) }
+        // The seam already verifies model identity using Ollama's ":latest" spelling rule; a
+        // strict equality check here rejected "qwen3.8:latest" from the very server the app
+        // ships pointed at. Requiring a reported model at all is kept.
+        guard case .success(let completion) = reply, completion.model != nil else {
+            return .unavailable(.unreadable)
+        }
         guard completion.diagnostic.finish == .stop else { return .unavailable(.incomplete) }
         guard let label = Label(rawValue: completion.text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else {
             return .unavailable(.ambiguous)
