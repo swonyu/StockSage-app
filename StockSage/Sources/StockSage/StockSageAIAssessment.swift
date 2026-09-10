@@ -170,6 +170,46 @@ enum StockSageAIAssessment {
         facts.enumerated().map { "F\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
     }
 
+    /// What actually gets sent for one research turn, after fitting evidence to the model's
+    /// real context budget.
+    ///
+    /// `omitted > 0` is a fact the caller MUST disclose. Optional evidence is dropped from the
+    /// END so the F-numbering of everything kept is unchanged, and mandatory facts always come
+    /// last and are never dropped — a cash constraint or a risk disclosure silently falling off
+    /// the prompt is exactly the failure this exists to prevent.
+    nonisolated struct FittedResearchPrompt: Sendable, Equatable {
+        let facts: [String]
+        let system: String
+        let user: String
+        let omitted: Int
+        var isComplete: Bool { omitted == 0 }
+    }
+
+    /// Pure: no clock, no I/O, no shared state. Extracted so the trimming and disclosure
+    /// behaviour of the research callers is testable without their network paths.
+    ///
+    /// `system(keptCount)` is a closure because a caller's instructions can reference the
+    /// F-numbers of the facts it kept (paper research cites its intraday observations by
+    /// number), so the system string must be rebuilt for whatever count actually fits.
+    /// Returns nil when the mandatory facts alone cannot fit — the caller must then report a
+    /// context-budget limit rather than send a prompt with mandatory content removed.
+    nonisolated static func fittedResearchPrompt(
+        optional: [String], mandatory: [String], system: (Int) -> String,
+        outputTokens: Int, contextTokens: Int = StockSageLocalModelServer.researchContextTokens
+    ) -> FittedResearchPrompt? {
+        func assemble(_ keptCount: Int) -> (facts: [String], system: String, user: String) {
+            let facts = Array(optional.prefix(keptCount)) + mandatory
+            return (facts, system(keptCount), prompt(facts: facts))
+        }
+        guard let fitted = StockSageLocalModelServer.fit(
+                optionalCount: optional.count, outputTokens: outputTokens,
+                contextTokens: contextTokens,
+                assemble: { let a = assemble($0); return (a.system, a.user) }) else { return nil }
+        let assembled = assemble(fitted.optionalKept)
+        return FittedResearchPrompt(facts: assembled.facts, system: assembled.system,
+                                    user: assembled.user, omitted: fitted.omitted)
+    }
+
     nonisolated enum ValidationFailure: String, Error, Sendable {
         case oversizedText, emptyFacts, invalidLeadCount, malformedJSON, schema, action, fieldType
         case emptyEvidence, tooManyEvidence, duplicateEvidence, unknownEvidence

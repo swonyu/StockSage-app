@@ -287,25 +287,20 @@ final class StockSageHorizonResearch: ObservableObject {
         // facts are mandatory (they define the requested holding period and the reference entry)
         // and are never dropped. Omissions are disclosed in the returned note.
         let optionalFacts = context.facts(maximumUTF8Bytes: 12_000)
-        func assemble(_ optionalCount: Int) -> (facts: [String], user: String) {
-            let facts = Array(optionalFacts.prefix(optionalCount)) + horizonFacts
-            return (facts, StockSageAIAssessment.prompt(facts: facts))
-        }
-        guard let fitted = StockSageLocalModelServer.fit(optionalCount: optionalFacts.count,
-                  outputTokens: Self.researchOutputTokens,
-                  contextTokens: StockSageLocalModelServer.researchContextTokens,
-                  assemble: { (horizon.instructions, assemble($0).user) }) else {
+        guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
+                optional: optionalFacts, mandatory: horizonFacts,
+                system: { _ in horizon.instructions },
+                outputTokens: Self.researchOutputTokens) else {
             return .init(facts: horizonFacts,
                          note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.")
         }
-        let assembled = assemble(fitted.optionalKept)
-        let facts = assembled.facts
-        let trimmedNote = fitted.omitted > 0
-            ? " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
-            : ""
+        let facts = fitted.facts
+        let trimmedNote = fitted.isComplete
+            ? ""
+            : " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
         guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion." + trimmedNote) }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: horizon.instructions, user: assembled.user,
+            system: fitted.system, user: fitted.user,
             maxTokens: Self.researchOutputTokens,
             contextTokens: StockSageLocalModelServer.researchContextTokens,
             stillValid: evidenceAllowed)

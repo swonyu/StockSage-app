@@ -108,6 +108,109 @@ struct StockSageModelHarnessTests {
                 "Chat packs \(StockSageChat.promptByteLimit) bytes into a \(allowance)-byte allowance")
     }
 
+    // MARK: Research prompt fitting — the logic paper and horizon research both run
+
+    // Extracted from the two research callers so their trimming and disclosure behaviour is
+    // testable without their network paths. `analyze()` does real HTTP through a shared
+    // session with no injectable seam, so this is the part that can be pinned.
+
+    private static let evidence = (1...30).map { "Optional evidence record \($0): ACME reported an item of dated news on 2026-09-\(String(format: "%02d", ($0 % 28) + 1))." }
+    private static let mandatory = [
+        "Settled paper cash available for entries: 4210.55 USD. Maximum per new position: 2000 USD.",
+        "Currently held in the paper account: 12 shares, simulated entry 37.50 USD.",
+        "Authoritative decision-clock snapshot: 2026-09-10 15:04:00 America/New_York.",
+    ]
+
+    @Test func everythingFitsWhenTheBudgetIsAmpleAndNothingIsDisclosedAsOmitted() throws {
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: Self.evidence, mandatory: Self.mandatory, system: { _ in "instructions" },
+            outputTokens: 192, contextTokens: S.researchContextTokens))
+        #expect(fitted.omitted == 0)
+        #expect(fitted.isComplete)
+        #expect(fitted.facts.count == Self.evidence.count + Self.mandatory.count)
+        #expect(fitted.facts.suffix(Self.mandatory.count) == Self.mandatory[...])
+    }
+
+    // Mandatory facts are last and must survive every level of trimming: a cash constraint or a
+    // decision clock silently dropped is the failure this whole path exists to prevent.
+    @Test func mandatoryFactsSurviveEveryLevelOfTrimming() throws {
+        // A window small enough to force heavy trimming but still hold the mandatory tail.
+        for context in [1_024, 1_536, 2_048, 3_072] {
+            guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
+                optional: Self.evidence, mandatory: Self.mandatory, system: { _ in "instructions" },
+                outputTokens: 64, contextTokens: context) else { continue }
+            #expect(fitted.facts.suffix(Self.mandatory.count) == Self.mandatory[...],
+                    "mandatory facts dropped at context \(context)")
+            #expect(fitted.omitted == Self.evidence.count - (fitted.facts.count - Self.mandatory.count))
+            #expect(S.promptFits(system: fitted.system, user: fitted.user,
+                                 outputTokens: 64, contextTokens: context),
+                    "returned prompt does not actually fit at context \(context)")
+        }
+    }
+
+    // When even the mandatory facts cannot fit, the caller must be told to report a budget
+    // limit — never handed a prompt with mandatory content quietly removed.
+    @Test func returnsNilRatherThanDroppingMandatoryContent() {
+        let huge = Array(repeating: String(repeating: "m", count: 4_000), count: 4)
+        #expect(StockSageAIAssessment.fittedResearchPrompt(
+            optional: Self.evidence, mandatory: huge, system: { _ in "instructions" },
+            outputTokens: 64, contextTokens: 1_024) == nil)
+    }
+
+    // Paper research names its intraday facts by F-number in the system string. If trimming
+    // shifted the numbering, the "cite an intraday observation" gate would validate against the
+    // wrong evidence — so the kept facts must keep their original positions and F-numbers.
+    @Test func trimmingPreservesTheFNumberingOfEveryKeptFact() throws {
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: Self.evidence, mandatory: Self.mandatory, system: { _ in "instructions" },
+            outputTokens: 64, contextTokens: 2_048))
+        let kept = fitted.facts.count - Self.mandatory.count
+        #expect(kept < Self.evidence.count, "this case must actually trim to be meaningful")
+        // Optional records are dropped from the END, so record N keeps F-number N.
+        for index in 0..<kept {
+            #expect(fitted.facts[index] == Self.evidence[index])
+            #expect(fitted.user.contains("F\(index + 1): \(Self.evidence[index])"))
+        }
+        // And the mandatory tail is numbered immediately after whatever was kept.
+        for (offset, fact) in Self.mandatory.enumerated() {
+            #expect(fitted.user.contains("F\(kept + offset + 1): \(fact)"))
+        }
+    }
+
+    // The system string is rebuilt for the count that actually fits, because paper research's
+    // instruction interpolates the F-numbers of its intraday facts.
+    @Test func theSystemStringIsBuiltForTheCountThatActuallyFits() throws {
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: Self.evidence, mandatory: Self.mandatory,
+            system: { "instructions for exactly \($0) optional records" },
+            outputTokens: 64, contextTokens: 2_048))
+        let kept = fitted.facts.count - Self.mandatory.count
+        #expect(fitted.system == "instructions for exactly \(kept) optional records")
+    }
+
+    @Test func anEmptyOptionalSetIsCompleteNotOmitted() throws {
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: [], mandatory: Self.mandatory, system: { _ in "instructions" },
+            outputTokens: 192, contextTokens: S.researchContextTokens))
+        #expect(fitted.isComplete)
+        #expect(fitted.facts == Self.mandatory)
+    }
+
+    // Both research callers must be able to send their full 12,000-byte evidence budget at the
+    // declared research context. This is the regression guard for the P0 the review caught.
+    @Test func bothResearchCallersFitAFullTwelveKilobyteEvidenceSet() throws {
+        let bulky = (1...40).map { "Evidence record \($0): " + String(repeating: "e", count: 280) }
+        #expect(bulky.joined(separator: "\n").utf8.count >= 11_000)
+        for (name, system) in [("paper", StockSagePaperAutomation.researchInstructions),
+                               ("horizon", StockSageHorizonResearch.Horizon.week.instructions)] {
+            let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+                optional: bulky, mandatory: Self.mandatory, system: { _ in system },
+                outputTokens: StockSagePaperAutomation.researchOutputTokens,
+                contextTokens: S.researchContextTokens))
+            #expect(fitted.isComplete, "\(name) had to omit \(fitted.omitted) records of a normal evidence set")
+        }
+    }
+
     // MARK: Truncation is rejected on every backend
 
     // Measured 2026-09-10: the frozen `holdout_01_loss` case returned finish_reason "length" with a

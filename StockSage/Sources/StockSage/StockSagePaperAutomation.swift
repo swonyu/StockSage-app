@@ -879,31 +879,30 @@ final class StockSagePaperAutomation: ObservableObject {
         // rejected the entire research turn instead of returning a shorter, honest one.
         // Execution facts (position, settled cash, session clock) are MANDATORY and never dropped.
         let allFacts = context.facts(maximumUTF8Bytes: 12_000)
-        func assemble(_ optionalCount: Int) -> (facts: [String], system: String, user: String) {
-            let kept = Array(allFacts.prefix(optionalCount))
-            let facts = kept + executionFacts
-            // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
-            let indices = (kept.count + 1)..<(kept.count + intraday.facts.count)
-            let instruction = "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "
+        // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
+        // The instruction names the intraday facts by F-number, so it is rebuilt for whatever
+        // optional count actually fits.
+        func entryInstruction(_ keptCount: Int) -> String {
+            let indices = (keptCount + 1)..<(keptCount + intraday.facts.count)
+            return "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "
                 + indices.map { "F\($0 + 1)" }.joined(separator: ", ")
                 + ". Daily background alone is not a same-day entry case."
-            return (facts, Self.researchInstructions + instruction, StockSageAIAssessment.prompt(facts: facts))
         }
-        guard let fitted = StockSageLocalModelServer.fit(optionalCount: allFacts.count,
-                  outputTokens: Self.researchOutputTokens,
-                  contextTokens: StockSageLocalModelServer.researchContextTokens,
-                  assemble: { let a = assemble($0); return (a.system, a.user) }) else {
+        guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
+                optional: allFacts, mandatory: executionFacts,
+                system: { Self.researchInstructions + entryInstruction($0) },
+                outputTokens: Self.researchOutputTokens) else {
             recordFailure("Research evidence could not be reduced to the model's context budget without dropping a mandatory execution fact. No paper order. Scheduled exits remain active.",
                           symbol: symbol, at: Date(), facts: partialFacts); return
         }
-        let assembled = assemble(fitted.optionalKept)
-        let facts = assembled.facts
-        let intradayIndices = (fitted.optionalKept + 1)..<(fitted.optionalKept + intraday.facts.count)
+        let facts = fitted.facts
+        let keptOptional = facts.count - executionFacts.count
+        let intradayIndices = (keptOptional + 1)..<(keptOptional + intraday.facts.count)
         guard context.canAssess(at: Date()),
               intraday.fresh(at: Date()), Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
             recordFailure("Research context exceeded its freshness or size limit.", symbol: symbol, at: Date(), facts: partialFacts); return
         }
-        if fitted.omitted > 0 {
+        if !fitted.isComplete {
             // Disclosed, never silent: the record shows the answer was formed on partial evidence.
             var trimmed = book
             trimmed.note(symbol: symbol, action: "Evidence trimmed",
@@ -912,7 +911,7 @@ final class StockSagePaperAutomation: ObservableObject {
             _ = save(trimmed)
         }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: assembled.system, user: assembled.user,
+            system: fitted.system, user: fitted.user,
             maxTokens: Self.researchOutputTokens,
             contextTokens: StockSageLocalModelServer.researchContextTokens,
             stillValid: evidenceActive)
