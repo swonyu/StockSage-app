@@ -83,6 +83,15 @@ enum StockSageLocalModelServer {
     /// this model to a 262,144 runtime window regardless of the requested value, and accepted a
     /// single 24,206-byte prompt as 11,015 units, so 16,384 is well inside the served capacity.
     /// This is a REQUEST target, not a claim about the model's maximum or the server's allocation.
+    ///
+    /// COST OF RAISING IT, derived from the model's own config rather than assumed: this is a
+    /// HYBRID architecture — `full_attention_interval` 4 over 64 layers, so only 16 layers hold
+    /// a KV cache that grows with context; the other 48 are linear-attention (Gated DeltaNet)
+    /// layers whose state is constant-size regardless of context length. With 4 KV heads and a
+    /// 256 head dim, the growing part is 2 x 16 x 4 x 256 = 64 KiB per token at fp16, so
+    /// 4,096 -> 16,384 costs about 768 MiB (about 384 MiB if the server keeps an 8-bit KV
+    /// cache). That is negligible on this 48 GB machine, which is why raising the request for
+    /// the evidence-heavy callers is safe rather than merely convenient.
     nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"

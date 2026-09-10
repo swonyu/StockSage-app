@@ -245,9 +245,15 @@ final class StockSageHorizonResearch: ObservableObject {
         })
     }
 
-    private static func analyze(_ item: Listing, horizon: Horizon, store: StockSageStore,
+    /// `historyTransport` and `modelTransport` are injected for deterministic offline tests only,
+    /// exactly as `fetchUniverse` and `completeDetailed` already allow. Production passes neither
+    /// and reaches the real endpoints. Without them this function — which owns the evidence
+    /// budget, the freshness gates and the verdict acceptance — had no test at all.
+    static func analyze(_ item: Listing, horizon: Horizon, store: StockSageStore,
         config: StockSageLocalModelServer.Config, isOllama: Bool, key: String,
-        allowed: @escaping @MainActor () -> Bool) async -> Result {
+        allowed: @escaping @MainActor () -> Bool,
+        historyTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
+        modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result {
         guard item.currency_name?.lowercased() == "usd" else {
             return .init(note: "USD price currency not confirmed; listing retained, no opinion.")
         }
@@ -258,7 +264,11 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        guard let (data, historyResponse) = try? await StockSageHTTP.data(for: request, session: session, maximumBytes: 2_000_000),
+        let historyFetch: () async throws -> (Data, URLResponse) = {
+            if let historyTransport { return try await historyTransport(request) }
+            return try await StockSageHTTP.data(for: request, session: session, maximumBytes: 2_000_000)
+        }
+        guard let (data, historyResponse) = try? await historyFetch(),
               allowed(), !Task.isCancelled, (historyResponse as? HTTPURLResponse)?.statusCode == 200,
               let raw = parseResearchHistory(data, symbol: item.ticker),
               let history = completedHistory(raw, at: Date()) else {
@@ -303,7 +313,7 @@ final class StockSageHorizonResearch: ObservableObject {
             system: fitted.system, user: fitted.user,
             maxTokens: Self.researchOutputTokens,
             contextTokens: StockSageLocalModelServer.researchContextTokens,
-            stillValid: evidenceAllowed)
+            stillValid: evidenceAllowed, transport: modelTransport)
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         // A verdict truncated at the output limit is refused, exactly as in paper research.
         if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
