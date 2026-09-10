@@ -11,6 +11,51 @@ struct StockSageSECRequestTests {
         (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
 
+
+    @Test(arguments: ["P", "S"], ["A", "D", "X", "", "missing"])
+    func insiderDirectionMustAgreeThroughActualSECRequests(code: String, flag: String) async throws {
+        func row(_ code: String, _ flag: String, shares: Int) -> String {
+            let side = flag == "missing" ? "" : "<transactionAcquiredDisposedCode><value>\(flag)</value></transactionAcquiredDisposedCode>"
+            return """
+            <nonDerivativeTransaction>
+              <transactionDate><value>2026-09-08</value></transactionDate>
+              <transactionCoding><transactionCode>\(code)</transactionCode></transactionCoding>
+              <transactionAmounts><transactionShares><value>\(shares)</value></transactionShares>
+                <transactionPricePerShare><value>10</value></transactionPricePerShare>\(side)
+              </transactionAmounts>
+            </nonDerivativeTransaction>
+            """
+        }
+        // A valid row precedes the disputed row: rejection must not publish a partial net.
+        let xml = """
+        <ownershipDocument><issuerTradingSymbol>TEST</issuerTradingSymbol><rptOwnerName>Fixture</rptOwnerName>
+          <nonDerivativeTable>\(row("P", "A", shares: 100))\(row(code, flag, shares: 25))</nonDerivativeTable>
+        </ownershipDocument>
+        """
+        let replies = [
+            Data(#"{"filings":{"recent":{"form":["4"],"accessionNumber":["0000000123-26-000001"]}}}"#.utf8),
+            Data(#"{"directory":{"item":[{"name":"doc4.xml"}]}}"#.utf8), Data(xml.utf8)
+        ]
+        let calls = Mutex(0)
+        let result = await StockSageInsider.recentActivity(for: "TEST", lookup: { _ in "0000000123" },
+            transport: { req in
+                let index = calls.withLock { $0 += 1; return $0 - 1 }
+                guard replies.indices.contains(index) else { throw URLError(.badServerResponse) }
+                return Self.response(req, replies[index])
+            }, allowed: { true })
+        #expect(calls.withLock { $0 } == 3)
+        let compatible = flag == "missing" || (code == "P" && flag == "A") || (code == "S" && flag == "D")
+        if compatible {
+            let summary = try #require(result)
+            #expect(summary.symbol == "TEST" && summary.discretionary.count == 2)
+            #expect(summary.discretionary.last?.acquired == (code == "P"))
+            #expect(summary.netBuyValue == (code == "P" ? 1_250 : 750))
+        } else {
+            #expect(StockSageInsider.parseForm4(xml) == nil)
+            #expect(result == nil, "Do not publish a contradictory transaction or a partial directional net")
+        }
+    }
+
     @Test func failedLookupRetriesInsteadOfPoisoningTheSession() async {
         let calls = Mutex(0)
         let map = D.CIKMap { req in

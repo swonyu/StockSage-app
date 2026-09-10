@@ -27,6 +27,7 @@ enum StockSageBackup {
 
     enum BackupError: Error, LocalizedError {
         case encodeFailed
+        case sourceReadFailed(String)
         case unsupportedSchemaVersion(found: Int, supported: Int)
         case decodeFailed(String)
         case invalidJournalRecord(index: Int, reason: String)
@@ -38,6 +39,8 @@ enum StockSageBackup {
             switch self {
             case .encodeFailed:
                 return "Couldn't create a backup because a record could not be encoded. Check journal and portfolio values, then retry. No backup was saved."
+            case .sourceReadFailed(let collection):
+                return "Couldn't read the saved \(collection). Existing data was preserved."
             case .unsupportedSchemaVersion(let found, let supported):
                 return "This backup file is schema version \(found); this app reads version \(supported). It may be from a newer or older version of StockSage."
             case .decodeFailed(let reason):
@@ -60,6 +63,20 @@ enum StockSageBackup {
 
     // MARK: Export
 
+    /// Read committed sources at the action, including after a native save panel returns.
+    /// These sequential defaults reads are not a cross-process transactional snapshot.
+    @MainActor static func save(to url: URL, journal: StockSageJournalStore,
+                                portfolio: StockSagePortfolio, store: StockSageStore) throws {
+        let data = try export(journal: journal, portfolio: portfolio, store: store)
+        try data.write(to: url, options: .atomic)
+    }
+
+    @MainActor static func export(journal: StockSageJournalStore,
+                                  portfolio: StockSagePortfolio, store: StockSageStore) throws -> Data {
+        try export(trades: journal.backupRecords(), positions: portfolio.backupRecords(),
+                   userSymbols: store.backupSymbols())
+    }
+
     /// Shared native export path; keep encoding before any destination write.
     static func save(to url: URL, trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) throws {
         let data = try export(trades: trades, positions: positions, userSymbols: userSymbols)
@@ -67,9 +84,8 @@ enum StockSageBackup {
     }
 
     /// Builds a pretty-printed, ISO-8601-dated JSON snapshot of everything passed in.
-    /// Pure — callers read `StockSageJournalStore.shared.trades`,
-    /// `StockSagePortfolio.shared.positions`, `StockSageStore.shared.userSymbols` and pass
-    /// them in; exporting never mutates those stores.
+    /// Pure value encoder for fixtures and recovery, including retained invalid closures.
+    /// Native full-backup actions use the store-taking overload to check committed sources.
     static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String]) throws -> Data {
         let payload = BackupPayload(
             schemaVersion: currentSchemaVersion,
@@ -190,16 +206,18 @@ enum StockSageBackup {
     /// return nil forever. If either app is ever sandboxed, this migration path goes dark;
     /// document that at the call site rather than resurrecting it as a "bug".
     ///
-    /// Returns nil when the parent domain has no data for either key (nothing to migrate).
-    static func importFromParentApp() -> ParentImport? {
-        guard let parentDefaults = UserDefaults(suiteName: "SA.Salehman-AI") else { return nil }
-
-        let decoder = JSONDecoder()   // matches StockSageJournalStore/StockSagePortfolio: no custom strategy
-
-        let trades: [TradeRecord] = parentDefaults.data(forKey: "stocksage.journal.v1")
-            .flatMap { try? decoder.decode([TradeRecord].self, from: $0) } ?? []
-        let positions: [PortfolioPosition] = parentDefaults.data(forKey: "stocksage_portfolio_v1")
-            .flatMap { try? decoder.decode([PortfolioPosition].self, from: $0) } ?? []
+    /// Returns nil for missing/empty effective records; throws for unreadable collections.
+    /// Defaults injection keeps migration tests out of the real parent-app domain.
+    static func importFromParentApp(defaults: UserDefaults? = UserDefaults(suiteName: "SA.Salehman-AI")) throws -> ParentImport? {
+        guard let parentDefaults = defaults else { throw BackupError.sourceReadFailed("Salehman AI data") }
+        let journal = StockSageRecordDeletions(defaults: parentDefaults, recordKey: "stocksage.journal.v1")
+        let portfolio = StockSageRecordDeletions(defaults: parentDefaults, recordKey: "stocksage_portfolio_v1")
+        let trades: [TradeRecord]
+        let positions: [PortfolioPosition]
+        do { trades = try journal.read(TradeRecord.self).filter { !journal.contains($0.id) } }
+        catch { throw BackupError.sourceReadFailed("Salehman AI journal") }
+        do { positions = try portfolio.read(PortfolioPosition.self).filter { !portfolio.contains($0.id) } }
+        catch { throw BackupError.sourceReadFailed("Salehman AI portfolio") }
 
         guard !trades.isEmpty || !positions.isEmpty else { return nil }
         return ParentImport(trades: trades, positions: positions)

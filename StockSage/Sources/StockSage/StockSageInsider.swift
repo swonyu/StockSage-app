@@ -95,7 +95,7 @@ enum StockSageInsider {
     // MARK: - Parsing (pure — this is where the honesty lives)
 
     /// Extract the discretionary transactions from one Form 4 XML document.
-    /// Returns nil only when the document is not a parseable Form 4.
+    /// Returns nil for an unparseable Form 4 or contradictory discretionary direction.
     nonisolated static func parseForm4(_ xml: String) -> Summary? {
         func tag(_ t: String) -> String? {
             guard let m = xml.range(of: "<\(t)>(.*?)</\(t)>", options: [.regularExpression, .caseInsensitive])
@@ -138,8 +138,10 @@ enum StockSageInsider {
                 $0.isFinite && $0 >= 0 ? $0 : nil
             }
             let date = value("transactionDate").flatMap { day.date(from: $0) }
-            let acquired = value("transactionAcquiredDisposedCode")
-                .map { $0.uppercased() == "A" } ?? (code == .openMarketPurchase)
+            let side = value("transactionAcquiredDisposedCode")?.uppercased()
+            // A disputed row can reverse the net: withhold this summary, not just that row.
+            guard side == nil || side == (code == .openMarketPurchase ? "A" : "D") else { return nil }
+            let acquired = side.map { $0 == "A" } ?? (code == .openMarketPurchase)
             discretionary.append(Transaction(symbol: symbol.uppercased(), insiderName: name,
                                              officerTitle: title, code: code, acquired: acquired,
                                              shares: qty, pricePerShare: price, date: date))

@@ -59,6 +59,8 @@ struct CatalystsSection: View {
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
     @State private var narrationFacts: [String: [String]] = [:]
+    @State private var narrationBaseFacts: [String: [String]] = [:]
+    @State private var narrationBenzinga: [String: StockSageBenzinga.Snapshot] = [:]
     @State private var narrationSettings: [String: [String]] = [:]
     @State private var narrating: Set<String> = []
     /// The citable news/filing/insider sources fetched for the LAST "Explain" press on each
@@ -134,7 +136,7 @@ struct CatalystsSection: View {
     private var explanationSettings: [String] { [backendRaw, serverURL, serverModel] }
     /// The revision distinguishes A→B→A while a source fetch or probe is suspended.
     private var explanationRequestSettings: [String] {
-        explanationSettings + [StockSageLocalModelServer.settingsRevision() ?? ""]
+        Self.narrationCacheSettings(explanationSettings, revision: StockSageLocalModelServer.settingsRevision())
     }
 
     /// [network-safety-warn-first], fix pass 2026-09-06 (review blocker): true whenever the
@@ -674,8 +676,10 @@ struct CatalystsSection: View {
         } else if let result = narrations[symbol] {
             let sources = narrationSources[symbol] ?? []
             let refreshReason = Self.narrationRefreshReason(
-                savedFacts: narrationFacts[symbol], currentFacts: StockSageCatalystNarrator.facts(for: brief),
-                savedSettings: narrationSettings[symbol], currentSettings: explanationSettings)
+                savedFacts: narrationBaseFacts[symbol], currentFacts: StockSageCatalystNarrator.facts(for: brief),
+                savedSettings: narrationSettings[symbol],
+                currentSettings: Self.narrationCacheSettings(explanationSettings,
+                    revision: StockSageLocalModelServer.settingsRevision()))
             if let refreshReason {
                 Text("Previous explanation — not current. " + refreshReason)
                     .font(.system(size: font11, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
@@ -692,7 +696,8 @@ struct CatalystsSection: View {
                     Text(verbatim: text).font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(StockSageCatalystNarrator.label(for: source, sourceCount: sources.count))
+                    Text(StockSageCatalystNarrator.label(for: source)
+                         + " Numbered news/SEC sources: \(sources.count). Benzinga products are shown separately.")
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -701,7 +706,7 @@ struct CatalystsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let facts = narrationFacts[symbol] {
-                DisclosureGroup("Original app facts for this explanation") {
+                DisclosureGroup("Original supplied facts for this explanation") {
                     ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
                         Text(verbatim: fact).font(.system(size: font9)).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -713,8 +718,16 @@ struct CatalystsSection: View {
                 Text(news.summary).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let evidence = narrationBenzinga[symbol] {
+                StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+            }
             if !sources.isEmpty { Self.sourceList(sources) }
         }
+    }
+
+    /// Cache identity only; request admission retains its independent revision guard.
+    nonisolated static func narrationCacheSettings(_ settings: [String], revision: String?) -> [String] {
+        settings + [revision ?? ""]
     }
 
     /// Shared display decision, separate from SwiftUI state so lifecycle changes are testable.
@@ -750,6 +763,7 @@ struct CatalystsSection: View {
                         }
                     }
                     Text(source.source)
+                    if let updated = source.updatedTime { Text("Updated \(updated)") }
                     if !source.snippet.isEmpty { Text(source.snippet) }
                     if let insight = source.insight { Text("Provider sentiment: \(insight)") }
                 }
@@ -784,22 +798,29 @@ struct CatalystsSection: View {
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
         let facts = StockSageCatalystNarrator.facts(for: brief)
-        let settings = explanationSettings
+        let settings = Self.narrationCacheSettings(explanationSettings,
+            revision: StockSageLocalModelServer.settingsRevision())
         let requestSettings = explanationRequestSettings
         Task {
             defer { narrating.remove(symbol) }
-            let (sources, news) = await Self.citedSources(for: symbol)
-            // Do not silently send a pending Explain request to newly selected settings.
-            let allowed: @MainActor () -> Bool = {
+            let active: @MainActor () -> Bool = {
                 !Task.isCancelled && requestSettings == explanationRequestSettings
+            }
+            guard let (sources, news, evidence) = await Self.citedSources(for: symbol, stillValid: active) else { return }
+            // Freeze both the source capture and settings across probe/inference/publication.
+            let allowed: @MainActor () -> Bool = {
+                active() && StockSageBenzingaClient.shared.isCurrent(evidence)
                     && (sources.isEmpty || ToolPolicy.isExternalAllowed)
             }
             guard allowed() else { return }
-            let result = await StockSageCatalystNarrator.explain(brief, sources: sources, stillValid: allowed)
+            let suppliedFacts = StockSageCatalystNarrator.facts(for: brief, sources: sources, benzinga: evidence)
+            let result = await StockSageCatalystNarrator.explain(brief, sources: sources, benzinga: evidence, stillValid: allowed)
             guard allowed() else { return }
             // Publish the response and its ORIGINAL context together, after the last await.
             // Retain prior snapshots; never publish a cancelled generation for new settings.
-            narrationFacts[symbol] = facts
+            narrationBaseFacts[symbol] = facts
+            narrationFacts[symbol] = suppliedFacts
+            narrationBenzinga[symbol] = evidence
             narrationSettings[symbol] = settings
             narrationSources[symbol] = sources
             narrationNews[symbol] = news
@@ -807,24 +828,29 @@ struct CatalystsSection: View {
         }
     }
 
-    /// Fetches news, the last 8-K, and insider activity IN PARALLEL (the spinner over the whole
-    /// panel already covers this wait — `narrating` is set before this call and cleared after) and
-    /// flattens them into the narrator's numbering order: news, then the filing, then insider
-    /// rows. Retain the news check separately, even when it yielded no citable source.
-    private static func citedSources(for symbol: String) async -> ([StockSageCatalystNarrator.CitedSource], StockSageNewsService.Observation) {
-        async let newsTask = StockSageNewsService.observation(for: symbol)
+    /// One product capture alongside existing SEC lookups; news fallback receives that capture's
+    /// page, including empty/failed/unchecked outcomes, rather than fetching it independently.
+    private static func citedSources(for symbol: String, stillValid: @MainActor () -> Bool) async
+        -> ([StockSageCatalystNarrator.CitedSource], StockSageNewsService.Observation, StockSageBenzinga.Snapshot)? {
+        guard stillValid() else { return nil }
+        let now = Date()
+        async let evidenceTask = StockSageBenzingaClient.shared.snapshot(for: symbol, now: now)
         async let filingTask = StockSageDisclosureService.recentFilings(for: symbol, forms: ["8-K"], limit: 1)
         async let insiderTask = StockSageInsider.recentActivity(for: symbol)
-        let (news, filings, insider) = await (newsTask, filingTask, insiderTask)
-
-        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else {
+        let (evidence, filings, insider) = await (evidenceTask, filingTask, insiderTask)
+        guard stillValid(), StockSageBenzingaClient.shared.isCurrent(evidence) else { return nil }
+        let page = evidence.pages.first { $0.query.product == .news && $0.query.subject == symbol }
+            ?? StockSageBenzinga.Page(query: .init(product: .news, subject: symbol, from: nil, through: nil),
+                checkedAt: evidence.capturedAt, credentialGeneration: evidence.credentialGeneration,
+                status: .notChecked, records: [], excludedCount: 0, hasMore: false)
+        let news = await StockSageNewsService.observation(for: symbol, now: now, benzingaPage: page)
+        guard stillValid(), StockSageBenzingaClient.shared.isCurrent(evidence) else { return nil }
+        guard ToolPolicy.isExternalAllowed else {
             var withheld = news
-            withheld.withholdingReason = Task.isCancelled ? .cancelled : .policyDenied
-            return ([], withheld)
+            withheld.withholdingReason = .policyDenied
+            return ([], withheld, evidence)
         }
-        var sources: [StockSageCatalystNarrator.CitedSource] = news.items.map {
-            .init(news: $0)
-        }
+        var sources: [StockSageCatalystNarrator.CitedSource] = news.items.map { .init(news: $0) }
         if let filing = filings.first {
             let title = filing.itemDescriptions.isEmpty ? "8-K filed" : filing.itemDescriptions.joined(separator: ", ")
             sources.append(.init(date: filing.filingDate, source: "SEC 8-K", title: title, snippet: "", link: filing.documentURL))
@@ -836,7 +862,7 @@ struct CatalystsSection: View {
             let title = "\(t.insiderName) \(verb) \(Int(t.shares)) shares"
             sources.append(.init(date: date, source: "SEC Form 4", title: title, snippet: "", link: nil))
         }
-        return (sources, news)
+        return (sources, news, evidence)
     }
 
     /// `.extreme` needs the idea's actual high/low direction, which the pure, testable

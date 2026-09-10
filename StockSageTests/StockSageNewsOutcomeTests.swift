@@ -13,6 +13,7 @@ struct StockSageNewsOutcomeTests {
     }
     private func request(_ provider: N.Provider) -> URLRequest? {
         switch provider {
+        case .benzinga: nil // Dedicated stage is always injected as a Page, never live.
         case .massive: N.massiveRequest(symbol: "AAPL", key: "fixture-only", now: now)
         // Synthetic legacy-provider response coverage, never a production EODHD request.
         case .eodhd: URLRequest(url: URL(string: "https://example.invalid/legacy-news")!)
@@ -26,6 +27,7 @@ struct StockSageNewsOutcomeTests {
         var hosts: [String] = []
         let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: { provider in
             switch provider {
+            case .benzinga: return nil
             case .massive: return N.massiveRequest(symbol: "AAPL", key: "fixture-only", now: now)
             case .eodhd: return N.eodhdRequest(symbol: "AAPL", key: "fixture-only", limit: 5)
             }
@@ -251,5 +253,230 @@ struct StockSageNewsOutcomeTests {
         let old = try JSONDecoder().decode(StockSageChat.Snapshot.self, from: Data(#"{"at":0,"facts":[],"context":"old"}"#.utf8))
         #expect(old.sources == nil && old.researchStatus == nil)
         #expect(try JSONDecoder().decode(StockSageChat.Snapshot.self, from: JSONEncoder().encode(enriched)) == enriched)
+    }
+
+    typealias B = StockSageBenzinga
+    private func benzingaRecord(_ revision: String = "one", published: String = "2026-08-31T23:59:59.123456789Z",
+                                symbol: String = "AAPL", excerpt: String? = nil) -> B.Record {
+        .init(id: "news:42:" + revision, vendorID: "42", revision: revision, product: .news,
+              symbol: symbol, source: "Benzinga via Massive", date: nil, time: nil, timeZone: nil,
+              published: published, lastUpdated: "2026-09-01T00:00:00Z", headline: "Guidance update",
+              details: [], excerpt: excerpt, bullCase: nil, bearCase: nil,
+              link: URL(string: "https://example.com/story"), analystIDs: [], firmIDs: [], ratingIDs: [])
+    }
+    private func benzingaPage(_ status: B.Status = .answered, records: [B.Record] = [],
+                              excluded: Int = 0, more: Bool = false, symbol: String = "AAPL") -> B.Page {
+        .init(query: .init(product: .news, subject: symbol, from: nil, through: nil),
+              checkedAt: now.addingTimeInterval(-10), credentialGeneration: "opaque-fixture",
+              status: status, records: records, excludedCount: excluded, hasMore: more)
+    }
+
+    @Test("Captured Benzinga page is reused unchanged, including empty and failed pages")
+    func benzingaCapturedPageReuse() async throws {
+        for page in [benzingaPage(records: [benzingaRecord()]), benzingaPage(),
+                     benzingaPage(.unavailable(.unauthorized))] {
+            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+            let before = try encoder.encode(page)
+            var loads = 0, transports = 0
+            let result = await N.observe(for: "AAPL", now: now, benzingaPage: page,
+                loadBenzinga: { loads += 1; return benzingaPage() },
+                isCurrent: { $0 == "opaque-fixture" }, allowed: { true }, clock: { now }, request: { provider in
+                    provider == .eodhd ? nil : request(provider)
+                }, transport: { req in
+                    transports += 1; return response(req, 200, Data(#"{"results":[]}"#.utf8))
+                })
+            #expect(loads == 0 && transports == (page.records.isEmpty ? 1 : 0))
+            #expect(result.attempts.map(\.provider) == (page.records.isEmpty ? [.benzinga, .massive, .eodhd] : [.benzinga]))
+            #expect(result.attempts.first?.checkedAt == page.checkedAt)
+            #expect(try encoder.encode(page) == before)
+            if !page.records.isEmpty { #expect(result.items.count == 1) }
+        }
+    }
+
+    @Test("Dedicated news precedes generic fallback and preserves partial usable evidence")
+    func benzingaOrderedFallback() async throws {
+        for partial in [false, true] {
+            var order: [N.Provider] = []
+            let page = benzingaPage(partial ? .partial : .answered,
+                                    records: partial ? [benzingaRecord()] : [], excluded: partial ? 2 : 0, more: partial)
+            let result = await N.observe(for: "AAPL", now: now,
+                loadBenzinga: { order.append(.benzinga); await Task.yield(); return page },
+                isCurrent: { $0 == "opaque-fixture" }, allowed: { true }, clock: { now }, request: request,
+                transport: { req in
+                    order.append(.massive); return response(req, 200, try data(["results": [row()]]))
+                })
+            #expect(order == (partial ? [.benzinga] : [.benzinga, .massive]))
+            #expect(result.items.count == 1)
+            #expect(result.attempts.first?.status == (partial ? .partial : .answered))
+            if partial { #expect(result.summary.contains("partial") && result.summary.contains("provider excluded 2")) }
+        }
+    }
+
+    @Test("Benzinga normalization retains headline-only publication/update and material revisions")
+    func benzingaNormalization() throws {
+        let original = benzingaRecord()
+        let changed = benzingaRecord("two")
+        let page = benzingaPage(records: [original, original, changed])
+        let attempt = N.benzingaAttempt(page, symbol: "AAPL", now: now)
+        #expect(attempt.status == .answered && attempt.items.count == 2)
+        #expect(Set(attempt.items.map(\.id)).count == 2)
+        let item = try #require(attempt.items.first)
+        #expect(item.snippet.isEmpty && item.sentiment == nil && item.insight == nil)
+        #expect(item.publicationTime == original.published && item.updatedTime == original.lastUpdated)
+        #expect(item.date != page.checkedAt && item.source.contains("Benzinga"))
+        #expect(StockSageCatalystNarrator.sourceDate(.init(news: item)) == original.published)
+        let context = StockSageChat.addingResearch(to: .init(at: now, facts: [], context: "fixture"),
+            symbol: "AAPL", observation: .init(attempts: [attempt]), leads: nil, webAllowed: true)
+        #expect(context.facts.isEmpty && context.sources?.count == 2)
+    }
+
+    @Test("Benzinga exact publication and identity boundaries never fabricate empty coverage")
+    func benzingaPublicationBounds() {
+        let page = benzingaPage(records: [
+            benzingaRecord("valid", published: "2026-09-01T02:59:59.123456+03:00"),
+            benzingaRecord("boundary", published: "2026-08-25T00:00:00Z"),
+            benzingaRecord("future", published: "2026-09-01T00:00:00.000000001Z"),
+            benzingaRecord("old", published: "2026-08-24T23:59:59Z"),
+            benzingaRecord("bad", published: "not a date"),
+            benzingaRecord("wrong-symbol", symbol: "MSFT")])
+        let attempt = N.benzingaAttempt(page, symbol: "AAPL", now: now)
+        #expect(attempt.items.count == 2 && attempt.status == .partial)
+        #expect(attempt.excluded.future == 1 && attempt.excluded.stale == 1)
+        #expect(attempt.excluded.missingDate == 1 && attempt.excluded.invalid == 1)
+        #expect(N.benzingaAttempt(benzingaPage(symbol: "MSFT"), symbol: "AAPL", now: now).status == .unavailable(.malformed))
+    }
+
+    @Test("Dedicated failure categories and generic HTTP failures remain distinct")
+    func benzingaFailureCategories() async {
+        let cases: [(B.Failure, N.Failure)] = [
+            (.unauthorized, .unauthorized), (.entitlement, .entitlement), (.throttled, .throttled),
+            (.transport, .transport), (.timedOut, .timedOut), (.malformed, .malformed),
+            (.oversized, .oversized), (.obsoleteCredential, .obsoleteCredential)]
+        for (failure, expected) in cases {
+            #expect(N.benzingaAttempt(benzingaPage(.unavailable(failure)), symbol: "AAPL", now: now).status == .unavailable(expected))
+        }
+        #expect(N.benzingaAttempt(benzingaPage(), symbol: "AAPL", now: now).status == .answered)
+        for (code, expected) in [(401, N.Failure.unauthorized), (402, .entitlement),
+                                 (403, .entitlement), (429, .throttled), (503, .http)] {
+            let result = await N.observe(for: "AAPL", now: now, benzingaPage: benzingaPage(),
+                isCurrent: { $0 == "opaque-fixture" }, allowed: { true }, clock: { now },
+                request: { $0 == .eodhd ? nil : request($0) },
+                transport: { req in response(req, code, Data("private server body".utf8)) })
+            #expect(result.attempts.count == 3 && result.attempts[1].status == .unavailable(expected))
+            #expect(!result.summary.contains("private server body"))
+        }
+    }
+
+    @Test("Opaque generation change across either await withholds late news and aborts fallback")
+    func benzingaGenerationRevoked() async throws {
+        for duringDedicated in [true, false] {
+            var current = "opaque-fixture", calls = 0
+            let result = await N.observe(for: "AAPL", now: now,
+                loadBenzinga: {
+                    calls += 1; await Task.yield()
+                    if duringDedicated { current = "replacement-epoch" }
+                    return benzingaPage(records: duringDedicated ? [benzingaRecord()] : [])
+                }, isCurrent: { $0 == current }, allowed: { true }, clock: { now }, request: request,
+                transport: { req in
+                    calls += 1; await Task.yield(); current = "replacement-epoch"
+                    return response(req, 200, try data(["results": [row()]]))
+                })
+            #expect(calls == (duringDedicated ? 1 : 2) && result.items.isEmpty)
+            #expect(result.attempts.last?.status == .unavailable(.obsoleteCredential))
+        }
+    }
+
+    @Test("Captured obsolete generation and denied access never dispatch or refetch")
+    func benzingaBeforeDispatch() async {
+        for permitted in [false, true] {
+            var calls = 0
+            let result = await N.observe(for: "AAPL", now: now,
+                benzingaPage: benzingaPage(records: [benzingaRecord()]),
+                loadBenzinga: { calls += 1; return benzingaPage() }, isCurrent: { _ in false },
+                allowed: { permitted }, clock: { now }, request: { _ in calls += 1; return nil },
+                transport: { _ in calls += 1; throw URLError(.badURL) })
+            #expect(calls == 0 && result.items.isEmpty)
+            #expect(result.attempts.first?.status == .notChecked(permitted ? .obsoleteCredential : .policyDenied))
+        }
+    }
+
+    @Test("Cancellation during dedicated acquisition never admits generic transport")
+    func benzingaCancellation() async {
+        let result = await Task {
+            await N.observe(for: "AAPL", now: now, loadBenzinga: {
+                withUnsafeCurrentTask { $0?.cancel() }; await Task.yield()
+                return benzingaPage(records: [benzingaRecord()])
+            }, isCurrent: { _ in true }, allowed: { true }, clock: { now },
+            request: { _ in Issue.record("unexpected fallback"); return nil },
+            transport: { _ in Issue.record("unexpected transport"); throw URLError(.badURL) })
+        }.value
+        #expect(result.attempts.count == 1 && result.items.isEmpty)
+        #expect(result.attempts.first?.status == .unavailable(.cancelled))
+    }
+
+    @Test("Typed fallback throws retain provider status and terminal failures stop the chain")
+    func benzingaThrownFallbackFailures() async {
+        let cases: [(B.Failure, N.Failure, Bool)] = [
+            (.unauthorized, .unauthorized, false), (.throttled, .throttled, false),
+            (.timedOut, .timedOut, false), (.obsoleteCredential, .obsoleteCredential, true),
+            (.policyDenied, .policyDenied, true)]
+        for (failure, expected, terminal) in cases {
+            var requested: [N.Provider] = []
+            var transports = 0
+            let result = await N.observe(for: "AAPL", now: now, benzingaPage: benzingaPage(),
+                isCurrent: { _ in true }, allowed: { true }, clock: { now }, request: { provider in
+                    requested.append(provider)
+                    return provider == .eodhd ? nil : request(provider)
+                }, transport: { _ in
+                    transports += 1
+                    throw failure
+                })
+            #expect(transports == 1 && result.items.isEmpty)
+            #expect(requested == (terminal ? [.massive] : [.massive, .eodhd]))
+            #expect(result.attempts.map(\.provider) == (terminal ? [.benzinga, .massive] : [.benzinga, .massive, .eodhd]))
+            #expect(result.attempts[0].status == .answered)
+            #expect(result.attempts[1].status == .unavailable(expected))
+            #expect(result.summary.contains("Massive: unavailable (\(expected.rawValue))"))
+            if !terminal { #expect(result.attempts.last?.status == .notChecked(.providerDisabled)) }
+        }
+    }
+
+    @Test("Shared news cutoff retains the seven-day boundary despite a later provider check")
+    func benzingaSharedCutoffRetainsBoundaryWithoutFallback() async throws {
+        let newsAt = try Date.ISO8601FormatStyle().parse("2026-09-10T12:00:00Z")
+        let published = "2026-09-03T12:00:00Z"
+        var clock = newsAt, dedicatedCalls = 0
+        let client = StockSageBenzingaClient(key: { "synthetic" }, revision: { nil },
+            allowed: { true }, now: { clock }, transport: { req in
+                var rows: [[String: Any]] = []
+                if req.url?.path == "/benzinga/v2/news" {
+                    dedicatedCalls += 1
+                    clock = newsAt.addingTimeInterval(1)
+                    rows = [["benzinga_id": 1, "tickers": ["AAPL"], "title": "Boundary headline",
+                             "author": "Fixture", "published": published, "last_updated": published,
+                             "url": "https://example.invalid/fixture"]]
+                }
+                return self.response(req, 200, try self.data(["status": "OK", "results": rows]))
+            })
+        let snapshot = await client.snapshot(for: "AAPL", now: newsAt)
+        let page = try #require(snapshot.pages.first { $0.query.product == .news })
+        #expect(page.records.count == 1 && page.checkedAt > newsAt)
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let captured = try encoder.encode(snapshot)
+        var refetches = 0, fallbackRequests = 0, fallbackTransports = 0
+        let observation = await N.observe(for: "AAPL", limit: 3, now: newsAt, benzingaPage: page,
+            loadBenzinga: { refetches += 1; return page }, isCurrent: { client.isCurrent($0) },
+            allowed: { true }, clock: { clock }, request: { provider in
+                fallbackRequests += 1
+                return provider == .massive ? N.massiveRequest(symbol: "AAPL", key: "synthetic", now: newsAt) : nil
+            }, transport: { req in
+                fallbackTransports += 1
+                return response(req, 200, Data(#"{"status":"OK","results":[]}"#.utf8))
+            })
+        #expect(dedicatedCalls == 1 && refetches == 0 && fallbackRequests == 0 && fallbackTransports == 0)
+        #expect(observation.attempts.map(\.provider) == [.benzinga] && observation.items.count == 1)
+        #expect(observation.attempts.first?.status == .answered && observation.attempts.first?.checkedAt == page.checkedAt)
+        #expect(observation.items.first?.publicationTime == published && observation.items.first?.updatedTime == published)
+        #expect(try encoder.encode(snapshot) == captured)
     }
 }

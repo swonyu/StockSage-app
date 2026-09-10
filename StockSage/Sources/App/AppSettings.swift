@@ -20,29 +20,51 @@ import SwiftUI
 @MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
+    private let defaults: UserDefaults
 
     /// Web access — the money engine's live quote/history fetches (Yahoo) need this ON.
     /// Defaults ON (like the parent app), persisted under the same UserDefaults key.
-    @Published var webAccess: Bool { didSet { UserDefaults.standard.set(webAccess, forKey: Keys.webAccess) } }
+    @Published var webAccess: Bool {
+        didSet {
+            defaults.set(webAccess, forKey: Keys.webAccess)
+            if webAccess != oldValue {
+                defaults.set(UUID().uuidString, forKey: Keys.policyRevision)
+            }
+        }
+    }
     /// Offline Mode — the stronger constraint: with it ON, no network is attempted at all.
-    @Published var offlineOnly: Bool { didSet { UserDefaults.standard.set(offlineOnly, forKey: Keys.offlineOnly) } }
+    @Published var offlineOnly: Bool {
+        didSet {
+            defaults.set(offlineOnly, forKey: Keys.offlineOnly)
+            if offlineOnly != oldValue {
+                defaults.set(UUID().uuidString, forKey: Keys.policyRevision)
+            }
+        }
+    }
 
-    private init() {
-        webAccess = AppSettings.boolDefaultTrue(Keys.webAccess)
-        offlineOnly = UserDefaults.standard.bool(forKey: Keys.offlineOnly)
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        webAccess = AppSettings.boolDefaultTrue(Keys.webAccess, defaults: defaults)
+        offlineOnly = defaults.bool(forKey: Keys.offlineOnly)
     }
 
     // MARK: - Keys (same string values as the parent app, so existing prefs carry over)
     enum Keys {
         nonisolated static let webAccess = "set_webAccess"
         nonisolated static let offlineOnly = "set_offlineOnly"
+        nonisolated static let policyRevision = "set_policyRevision"
     }
 
     // MARK: - Nonisolated, actor-safe accessors (used by ToolPolicy from off-main contexts)
 
     /// Read a Bool that DEFAULTS TO TRUE when the key has never been written.
-    nonisolated static func boolDefaultTrue(_ key: String) -> Bool {
-        UserDefaults.standard.object(forKey: key) == nil ? true : UserDefaults.standard.bool(forKey: key)
+    nonisolated static func boolDefaultTrue(_ key: String, defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) == nil ? true : defaults.bool(forKey: key)
+    }
+
+    /// Opaque identity for native policy edits; reading or loading settings does not create one.
+    nonisolated static func policyRevision(defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: Keys.policyRevision)
     }
 
     /// True when Offline Mode is on (defaults OFF).

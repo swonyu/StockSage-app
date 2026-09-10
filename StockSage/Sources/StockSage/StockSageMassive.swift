@@ -54,6 +54,17 @@ enum StockSageMassive {
     /// Environment-variable NAME the vendor's llms.txt tells clients to read. Name only — never a value.
     nonisolated static let keyEnvName = "MASSIVE_API_KEY"
 
+    /// In-app credential changes invalidate pending evidence, including A→B→A.
+    nonisolated static func credentialRevision(_ defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: "stocksage.massive.credentialRevision")
+    }
+    @discardableResult nonisolated static func setAPIKey(_ value: String, defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.string(forKey: keyDefaultsKey) != value else { return false }
+        defaults.set(UUID().uuidString, forKey: "stocksage.massive.credentialRevision")
+        defaults.set(value, forKey: keyDefaultsKey)
+        return true
+    }
+
     nonisolated static let host = "https://api.massive.com"
     nonisolated static let snapshotPath = "/v2/snapshot/locale/us/markets/stocks/tickers"
 
@@ -349,10 +360,21 @@ enum StockSageMassive {
     /// Massive first for supported US daily requests; nil leaves the existing Yahoo fallback
     /// completely in charge of indexes, non-US symbols, monthly bars, no-key runs, and failures.
     static func fetchHistory(symbol: String, range: String, interval: String) async -> StockSagePriceHistory? {
-        guard ToolPolicy.isExternalAllowed, interval == "1d", let dates = historyDates(for: range) else { return nil }
+        guard !Task.isCancelled, ToolPolicy.isExternalAllowed, interval == "1d",
+              let dates = historyDates(for: range) else { return nil }
         let key = apiKey
-        guard let req = historyRequest(symbol: symbol, from: dates.from, to: dates.to, key: key),
-              let (data, response) = try? await URLSession.shared.data(for: req),
+        guard let req = historyRequest(symbol: symbol, from: dates.from, to: dates.to, key: key) else { return nil }
+        return await fetchHistory(symbol: symbol, request: req, allowed: { ToolPolicy.isExternalAllowed },
+                                  transport: { try await URLSession.shared.data(for: $0) })
+    }
+
+    /// The production daily-history transport boundary, with no credential lookup in injected calls.
+    static func fetchHistory(symbol: String, request: URLRequest,
+        allowed: @Sendable () -> Bool,
+        transport: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    ) async -> StockSagePriceHistory? {
+        guard !Task.isCancelled, allowed(), let (data, response) = try? await transport(request),
+              !Task.isCancelled, allowed(),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return parseHistory(data, symbol: symbol)
     }

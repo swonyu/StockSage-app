@@ -692,6 +692,13 @@ final class StockSageStore: ObservableObject {
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: [symbol: q])
     }
 
+    /// Read the saved preference, not a possibly stale or failed-load in-memory fallback.
+    func backupSymbols() throws -> [String] {
+        guard let stored = defaults.object(forKey: Self.userSymbolsKey) else { return [] }
+        guard let symbols = stored as? [String] else { throw StockSageBackup.BackupError.sourceReadFailed("watchlist") }
+        return symbols
+    }
+
     /// Backup tickers were validated/normalized by the decoder. Restore the preference,
     /// not a quote: no network or invented prices, even when the app is offline.
     func prepareBackupImport(_ incoming: [String]) throws -> (added: Int, apply: () -> Void) {
@@ -2448,14 +2455,19 @@ final class StockSageStore: ObservableObject {
     // Liquidity — avg daily $ volume + tier, cached per symbol (equities/crypto only).
     @Published private(set) var liquidity: [String: LiquidityProfile] = [:]
 
-    func refreshLiquidity(symbol: String) async {
+    func refreshLiquidity(symbol: String,
+        allowed: () -> Bool = { ToolPolicy.webToolsDisabledReason() == nil },
+        history: (String, String) async -> StockSagePriceHistory? = {
+            await StockSageQuoteService.fetchHistory($0, range: $1)
+        }
+    ) async {
         let up = symbol.uppercased()
         guard liquidity[up] == nil else { return }
         // USD-priced only: a foreign listing's local-currency volume mislabeled "$"
         // (and London's pence quotes) would give a wrong tier/number. FX/index too.
         guard StockSageLiquidity.isUSDPriced(symbol) else { return }
-        if ToolPolicy.webToolsDisabledReason() != nil { return }
-        guard let h = await StockSageQuoteService.fetchHistory(symbol, range: "3mo") else { return }
+        guard !Task.isCancelled, allowed() else { return }
+        guard let h = await history(symbol, "3mo"), !Task.isCancelled, allowed() else { return }
         if let p = StockSageLiquidity.profile(closes: h.closes, volumes: h.volumes) {
             liquidity[up] = p
         }
@@ -2464,11 +2476,16 @@ final class StockSageStore: ObservableObject {
     // ATR trailing-stop suggestion, cached per symbol.
     @Published private(set) var trailingStop: [String: TrailingStop] = [:]
 
-    func refreshTrailingStop(symbol: String) async {
+    func refreshTrailingStop(symbol: String,
+        allowed: () -> Bool = { ToolPolicy.webToolsDisabledReason() == nil },
+        history: (String, String) async -> StockSagePriceHistory? = {
+            await StockSageQuoteService.fetchHistory($0, range: $1)
+        }
+    ) async {
         let up = symbol.uppercased()
         guard trailingStop[up] == nil else { return }
-        if ToolPolicy.webToolsDisabledReason() != nil { return }
-        guard let h = await StockSageQuoteService.fetchHistory(symbol, range: "6mo") else { return }
+        guard !Task.isCancelled, allowed() else { return }
+        guard let h = await history(symbol, "6mo"), !Task.isCancelled, allowed() else { return }
         if let ts = StockSageTrailingStop.suggest(highs: h.highs, lows: h.lows, closes: h.closes) {
             trailingStop[up] = ts
         }

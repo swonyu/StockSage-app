@@ -194,13 +194,24 @@ enum StockSageQuoteService {
     /// Fetch ~1 year of daily OHLC bars for one symbol — enough for the 200-day
     /// trend and every indicator. `nil` on failure / when external access is off.
     nonisolated static func fetchHistory(_ symbol: String, range: String = "1y", interval: String = "1d") async -> StockSagePriceHistory? {
-        guard ToolPolicy.isExternalAllowed else { return nil }
+        await fetchHistory(symbol, range: range, interval: interval, allowed: { ToolPolicy.isExternalAllowed },
+            massive: { await StockSageMassive.fetchHistory(symbol: $0, range: $1, interval: $2) },
+            yahoo: { await get($0) })
+    }
+
+    /// Same provider routing as the public call; inject only external operations and permission.
+    nonisolated static func fetchHistory(_ symbol: String, range: String, interval: String,
+        allowed: @Sendable () -> Bool,
+        massive: @Sendable (String, String, String) async -> StockSagePriceHistory?,
+        yahoo: @Sendable (URLRequest) async -> Data?
+    ) async -> StockSagePriceHistory? {
+        guard !Task.isCancelled, allowed() else { return nil }
         // Paid Massive aggregates are split-adjusted daily bars for covered US equities. Its nil
         // contract is intentional: Yahoo remains the fallback for every unsupported shape and
         // every provider miss, so an HTTP-200 malformed payload never becomes an empty history.
-        if let massive = await StockSageMassive.fetchHistory(symbol: symbol, range: range, interval: interval) {
-            return massive
-        }
+        let primary = await massive(symbol, range, interval)
+        guard !Task.isCancelled, allowed() else { return nil }
+        if let primary { return primary }
         // .urlHostAllowed for the same reason as fetchOne (F38 2026-07-02) — stricter set,
         // path-safe for all curated symbols, consistent with StockSageEarnings.fetchNextEarningsOutcome.
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
@@ -208,7 +219,8 @@ enum StockSageQuoteService {
         var req = URLRequest(url: url)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
-        guard let data = await get(req) else { return nil }
+        guard !Task.isCancelled, allowed(), let data = await yahoo(req),
+              !Task.isCancelled, allowed() else { return nil }
         return parseHistory(data, symbol: symbol)
     }
 

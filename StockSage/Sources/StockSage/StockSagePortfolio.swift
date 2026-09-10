@@ -61,6 +61,12 @@ final class StockSagePortfolio: ObservableObject {
         _ = save(clearAll: true)
     }
 
+    /// Current committed lots, excluding deletion markers, without changing the displayed book.
+    func backupRecords() throws -> [PortfolioPosition] {
+        do { return try deletions.read(PortfolioPosition.self).filter { !deletions.contains($0.id) } }
+        catch { throw StockSageBackup.BackupError.sourceReadFailed("portfolio") }
+    }
+
     /// Validated backup lots keep their IDs. Never call add() here: it creates a fresh ID,
     /// which would duplicate every holding on repeat restore and erase lot provenance.
     func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> (added: Int, apply: () -> Void) {

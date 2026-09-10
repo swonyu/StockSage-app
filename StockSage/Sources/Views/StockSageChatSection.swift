@@ -198,6 +198,9 @@ struct StockSageChatSection: View {
                     ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
                         sourceCard(source).fixedSize(horizontal: false, vertical: true)
                     }
+                    ForEach(selectedBenzingaRecords(in: turn)) { record in
+                        StockSageBenzingaEvidenceView.recordContent(record)
+                    }
                     DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Historical snapshot, not current evidence. Model: \(turn.model)")
@@ -205,6 +208,9 @@ struct StockSageChatSection: View {
                             Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
                             ForEach(turn.snapshot.facts) { Text($0.text) }
                             ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
+                            if let evidence = turn.snapshot.benzinga {
+                                StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+                            }
                         }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -223,6 +229,9 @@ struct StockSageChatSection: View {
                 ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
                     sourceCard(source)
                 }
+                ForEach(selectedBenzingaRecords(in: turn)) { record in
+                    StockSageBenzingaEvidenceView.recordContent(record)
+                }
                 DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Historical snapshot, not current evidence. Model: \(turn.model)")
@@ -230,11 +239,23 @@ struct StockSageChatSection: View {
                         Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
                         ForEach(turn.snapshot.facts) { Text($0.text) }
                         ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
+                        if let evidence = turn.snapshot.benzinga {
+                            StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+                        }
                     }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
         #endif
+    }
+
+    /// Match only cited IDs against the original capture; undated products stay typed records.
+    static func selectedBenzingaRecords(in turn: StockSageChatSession.Turn) -> [StockSageBenzinga.Record] {
+        let cited = Set(turn.evidence)
+        var seen = Set<String>()
+        return (turn.snapshot.benzinga?.pages.flatMap(\.records) ?? []).filter {
+            cited.contains($0.id) && seen.insert($0.id).inserted
+        }
     }
 
     private var composer: some View {
@@ -365,6 +386,7 @@ struct StockSageChatSection: View {
     private static func sourceCard(_ source: StockSageChat.Source) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("\(source.subject) · \(source.attribution) · \(source.publicationTime ?? StockSageNewsService.instant(source.date))").font(.caption.bold())
+            if let updated = source.updatedTime { Text("Updated \(updated)").font(.caption).foregroundStyle(.secondary) }
             Text(source.warning).font(.caption).foregroundStyle(.secondary)
             Text(source.excerpt).font(.callout).textSelection(.enabled)
             if let link = source.link {
@@ -411,13 +433,24 @@ struct StockSageChatSection: View {
         request = Task {
             var enriched = facts
             if let ticker = researchTicker {
-                let news = await StockSageNewsService.observation(for: ticker, limit: 3, now: facts.at)
-                guard active() else {
+                let evidence = await StockSageBenzingaClient.shared.snapshot(for: ticker, now: facts.at)
+                guard active(), StockSageBenzingaClient.shared.isCurrent(evidence) else {
                     if chat.pending == id { chat.cancel() }
                     return
                 }
-                enriched = StockSageChat.addingResearch(to: facts, symbol: ticker, observation: news,
+                // A missing product remains explicitly unchecked, never a nil-page refetch.
+                let page = evidence.pages.first { $0.query.product == .news && $0.query.subject == ticker }
+                    ?? StockSageBenzinga.Page(query: .init(product: .news, subject: ticker, from: nil, through: nil),
+                        checkedAt: evidence.capturedAt, credentialGeneration: evidence.credentialGeneration,
+                        status: .notChecked, records: [], excludedCount: 0, hasMore: false)
+                let news = await StockSageNewsService.observation(for: ticker, limit: 3, now: facts.at, benzingaPage: page)
+                guard active(), StockSageBenzingaClient.shared.isCurrent(evidence) else {
+                    if chat.pending == id { chat.cancel() }
+                    return
+                }
+                let withNews = StockSageChat.addingResearch(to: facts, symbol: ticker, observation: news,
                     leads: StockSageResearchLeads.load(symbol: ticker, now: facts.at), webAllowed: ToolPolicy.isExternalAllowed)
+                enriched = StockSageChat.addingBenzinga(to: withNews, evidence: evidence)
                 guard chat.attachResearch(id: id, snapshot: enriched) else { return }
             }
             guard let prepared = StockSageChat.request(question: text, snapshot: enriched, history: history) else {
@@ -425,11 +458,17 @@ struct StockSageChatSection: View {
                 return
             }
             let includesNews = enriched.sources?.contains { $0.id.contains(".news.") } == true
-            guard !includesNews || ToolPolicy.isExternalAllowed else { chat.cancel(); return }
-            let allowed: @MainActor @Sendable () -> Bool = { active() && (!includesNews || ToolPolicy.isExternalAllowed) }
+            let capturedBenzinga = enriched.benzinga
+            let allowed: @MainActor @Sendable () -> Bool = {
+                active() && (!includesNews || ToolPolicy.isExternalAllowed)
+                    && (capturedBenzinga.map { StockSageBenzingaClient.shared.isCurrent($0) } ?? true)
+            }
+            guard allowed() else {
+                if chat.pending == id { chat.cancel() }
+                return
+            }
             let probe = await StockSageLocalModelServer.probe(config, stillValid: allowed)
-            guard active(),
-                  !includesNews || ToolPolicy.isExternalAllowed else {
+            guard allowed() else {
                 if chat.pending == id { chat.cancel() }
                 return
             }
@@ -443,8 +482,7 @@ struct StockSageChatSection: View {
             let result = await StockSageLocalModelServer.complete(config, isOllama: probe.isOllama,
                 system: StockSageChat.instructions, user: prepared.prompt, maxTokens: StockSageChat.outputTokens,
                 contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)
-            guard active(),
-                  !includesNews || ToolPolicy.isExternalAllowed else {
+            guard allowed() else {
                 // Identity ownership makes clear/cancel/newer requests immune to late completions.
                 if chat.pending == id { chat.cancel() }
                 return

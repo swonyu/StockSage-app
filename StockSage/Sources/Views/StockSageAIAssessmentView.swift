@@ -55,7 +55,7 @@ struct StockSageAIAssessmentPanel: View {
             Text("Unvalidated AI opinion; can misstate. Not a probability or permission to execute. Levels, sizing, rankings and trade controls below remain Rules-based.")
                 .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Assessing retrieves up to three recent news excerpts via Massive when external access is enabled. EODHD is disabled. Missing coverage stays explicit.")
+            Text("Assessing captures bounded Benzinga product evidence via Massive and existing news fallback when needed. EODHD is disabled. Missing and partial coverage stay explicit.")
                 .font(.caption).foregroundStyle(.secondary)
             if ai.activeSymbol == idea.symbol {
                 ProgressView("Qwen is assessing the dated facts…")
@@ -81,6 +81,9 @@ struct StockSageAIAssessmentPanel: View {
                 Text(verbatim: draft.displayText).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Text("Model: \(draft.config.model) · snapshot \(draft.context.asOf.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let captured = draft.context.benzinga {
+                    StockSageBenzingaEvidenceView(capturedSnapshot: captured)
+                }
                 DisclosureGroup("Original model response and supplied facts") {
                     Text(verbatim: draft.text).textSelection(.enabled).font(.caption)
                     ForEach(Array(draft.context.facts.enumerated()), id: \.offset) { index, fact in
@@ -119,6 +122,9 @@ struct StockSageAIAssessmentPanel: View {
                         Text("F\(index + 1): \(fact)").font(.caption).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                }
+                if let captured = record.context.benzinga {
+                    StockSageBenzingaEvidenceView(capturedSnapshot: captured)
                 }
                 if let news = record.context.news, !news.isEmpty {
                     DisclosureGroup("News sources used for this snapshot") {

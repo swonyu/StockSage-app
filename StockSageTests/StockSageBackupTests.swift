@@ -7,6 +7,112 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @MainActor @Test(arguments: ["journal", "portfolio", "watchlist", "journal-type", "portfolio-type"], [false, true])
+    func fullBackupRejectsUnreadableCommittedSource(fault: String, changedAfterLoad: Bool) throws {
+        let suite = "stocksage-backup-source-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
+        defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
+        defaults.set(["NVDA"], forKey: "stocksage_user_symbols")
+        let key = fault.hasPrefix("journal") ? "stocksage.journal.v1"
+            : fault.hasPrefix("portfolio") ? "stocksage_portfolio_v1" : "stocksage_user_symbols"
+        let corrupt: Any = fault.hasSuffix("-type") || fault == "watchlist" ? 42 as Any : Data("{bad".utf8) as Any
+        if !changedAfterLoad { defaults.set(corrupt, forKey: key) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        if changedAfterLoad { defaults.set(corrupt, forKey: key) }
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let trades = journal.trades, positions = portfolio.positions, symbols = store.userSymbols
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-backup-source-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("backup.json")
+        let sentinel = Data("previous recovery copy".utf8)
+        try sentinel.write(to: url)
+        var failed = false
+        do { try StockSageBackup.save(to: url, journal: journal, portfolio: portfolio, store: store) }
+        catch {
+            failed = true
+            #expect(error.localizedDescription.contains(fault.components(separatedBy: "-")[0]))
+        }
+        #expect(failed, "An unreadable committed source is not an empty or stale full backup")
+        #expect(try Data(contentsOf: url) == sentinel)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+        #expect(journal.trades == trades && portfolio.positions == positions && store.userSymbols == symbols)
+    }
+
+    @MainActor @Test func fullBackupReadsCommittedUpdatesAndDeletionMarkersWithoutChangingViews() throws {
+        let suite = "stocksage-backup-current-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var open = fixtureTrade()
+        open.exitPrice = nil; open.closedAt = nil
+        let deleted = TradeRecord(symbol: "MSFT", side: .long, entry: 100, stop: 95,
+            target: nil, shares: 2, openedAt: open.openedAt)
+        defaults.set(try JSONEncoder().encode([open, deleted]), forKey: "stocksage.journal.v1")
+        defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        // A different writer commits while the displayed stores (or save panel) remain open.
+        let foreign = TradeRecord(symbol: "NVDA", side: .long, entry: 100, stop: 95,
+            target: nil, shares: 2, openedAt: open.openedAt)
+        let lot = PortfolioPosition(symbol: "NVDA", shares: 2, costBasis: 100)
+        defaults.set(try JSONEncoder().encode([fixtureTrade(), deleted, foreign]), forKey: "stocksage.journal.v1")
+        defaults.set(try JSONEncoder().encode([fixturePosition(), lot]), forKey: "stocksage_portfolio_v1")
+        defaults.set(["NVDA"], forKey: "stocksage_user_symbols")
+        StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1").mark([deleted.id])
+        StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1").mark([fixturePosition().id])
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let data = try StockSageBackup.export(journal: journal, portfolio: portfolio, store: store)
+        let payload = try StockSageBackup.restore(from: data).get()
+        #expect(payload.trades == [fixtureTrade(), foreign])
+        #expect(payload.positions == [lot] && payload.userSymbols == ["NVDA"])
+        #expect(journal.trades == [open, deleted] && portfolio.positions == [fixturePosition()] && store.userSymbols == ["AAPL"])
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
+    @MainActor @Test(arguments: [false, true])
+    func fullBackupAllowsMissingOrValidEmptySources(explicitEmpty: Bool) throws {
+        let suite = "stocksage-backup-empty-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        if explicitEmpty {
+            defaults.set(Data("[]".utf8), forKey: "stocksage.journal.v1")
+            defaults.set(Data("[]".utf8), forKey: "stocksage_portfolio_v1")
+            defaults.set([String](), forKey: "stocksage_user_symbols")
+        }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let data = try StockSageBackup.export(journal: journal, portfolio: portfolio, store: store)
+        let payload = try StockSageBackup.restore(from: data).get()
+        #expect(payload.trades.isEmpty && payload.positions.isEmpty && payload.userSymbols.isEmpty)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
+    @MainActor @Test func fullBackupRetainsDecodableInvalidClosuresForRecovery() throws {
+        let suite = "stocksage-backup-recovery-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var invalid = fixtureTrade(); invalid.closedAt = nil
+        #expect(invalid.closureError != nil)
+        defaults.set(try JSONEncoder().encode([invalid]), forKey: "stocksage.journal.v1")
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let data = try StockSageBackup.export(journal: journal, portfolio: portfolio, store: store)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(StockSageBackup.BackupPayload.self, from: data)
+        #expect(payload.trades == [invalid]) // export is recovery, not restore validation/repair
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
     @Test(arguments: ["journal", "portfolio"])
     func failedExportPreservesPreviousBackup(collection: String) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-export-\(UUID().uuidString)")
@@ -399,16 +505,60 @@ struct StockSageBackupTests {
         }
     }
 
-    @Test func importFromParentAppNilWhenDomainEmpty() {
-        // A suite name that has never been written to — the parent-app read must return
-        // nil, never throw or fabricate data.
-        let result = StockSageBackup.importFromParentApp()
-        // Can't assert nil unconditionally (a real "SA.Salehman-AI" domain may exist on
-        // the CI/dev machine running the parent app too) — only assert it never crashes
-        // and, when present, the counts are non-negative and internally consistent.
-        if let result {
-            #expect(result.tradeCount == result.trades.count)
-            #expect(result.positionCount == result.positions.count)
+    @Test(arguments: [false, true])
+    func importFromParentAppNilWhenDomainEmpty(explicitEmpty: Bool) throws {
+        let suite = "stocksage-parent-empty-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        if explicitEmpty {
+            defaults.set(Data("[]".utf8), forKey: "stocksage.journal.v1")
+            defaults.set(Data("[]".utf8), forKey: "stocksage_portfolio_v1")
         }
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let result = try StockSageBackup.importFromParentApp(defaults: defaults)
+        #expect(result == nil)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
+    @Test(arguments: ["journal", "portfolio", "journal-type", "portfolio-type"])
+    func parentImportReportsUnreadableCollectionWithoutChangingSource(fault: String) throws {
+        let suite = "stocksage-parent-corrupt-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
+        defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
+        let key = fault.hasPrefix("journal") ? "stocksage.journal.v1" : "stocksage_portfolio_v1"
+        let corrupt: Any = fault.hasSuffix("-type") ? 42 as Any : Data("{bad".utf8) as Any
+        defaults.set(corrupt, forKey: key)
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        var failed = false
+        do { _ = try StockSageBackup.importFromParentApp(defaults: defaults) }
+        catch {
+            failed = true
+            #expect(error.localizedDescription.contains(fault.components(separatedBy: "-")[0]))
+        }
+        #expect(failed, "Do not turn an unreadable collection into no data or partial success")
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
+    }
+
+    @Test(arguments: [false, true])
+    func parentImportPreservesRecordsAndHonorsDeletionMarkers(deleted: Bool) throws {
+        let suite = "stocksage-parent-records-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
+        defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
+        if deleted {
+            StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1").mark([fixtureTrade().id])
+            StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1").mark([fixturePosition().id])
+        }
+        let before = defaults.persistentDomain(forName: suite) ?? [:]
+        let result = try StockSageBackup.importFromParentApp(defaults: defaults)
+        if deleted { #expect(result == nil) }
+        else {
+            let records = try #require(result)
+            #expect(records.trades == [fixtureTrade()] && records.positions == [fixturePosition()])
+        }
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
     }
 }

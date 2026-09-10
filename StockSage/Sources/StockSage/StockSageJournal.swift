@@ -1055,6 +1055,12 @@ final class StockSageJournalStore: ObservableObject {
         return (added, skipped, rejected)
     }
 
+    /// Current committed records for a full backup; do not mutate/reconcile the displayed book.
+    func backupRecords() throws -> [TradeRecord] {
+        do { return try deletions.read(TradeRecord.self).filter { !deletions.contains($0.id) } }
+        catch { throw StockSageBackup.BackupError.sourceReadFailed("journal") }
+    }
+
     /// Backup has already validated every incoming record. Prepare a single batch without
     /// changing memory/defaults, so a later portfolio/watchlist failure changes nothing.
     func prepareBackupImport(_ incoming: [TradeRecord]) throws -> (added: Int, apply: () -> Void) {

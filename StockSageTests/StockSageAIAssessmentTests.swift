@@ -9,12 +9,13 @@ struct StockSageAIAssessmentTests {
     private let now = Date(timeIntervalSince1970: 1_788_739_200) // September7 UTC
     private let json = #"{"action":"Strong Buy","reason":"The earnings catalyst could support ORCL.","risk":"The earnings outcome is unknown and a gap can bypass a stop.","evidence":["F1"]}"#
 
-    private func idea(_ symbol: String = "ORCL") -> StockSageIdea {
+    private func idea(_ symbol: String = "ORCL", analysisAge: TimeInterval = 0, quoteAge: TimeInterval = 0) -> StockSageIdea {
         StockSageIdea(symbol: symbol, market: "US", price: 159.70,
             advice: TradeAdvice(action: .avoid, conviction: 0.03, regime: .range,
                 rationale: ["Below the long-term moving average."], stopPrice: nil,
                 targetPrice: nil, suggestedWeight: 0, caveat: "Rules only."),
-            spark: [155, 158], realizedVol: 0.65, generatedAt: now, priceAsOf: now,
+            spark: [155, 158], realizedVol: 0.65, generatedAt: now.addingTimeInterval(-analysisAge),
+            priceAsOf: now.addingTimeInterval(-quoteAge),
             priceSource: .massiveSIP)
     }
     private var earnings: StockSageCatalystRecordCache.Record {
@@ -24,6 +25,85 @@ struct StockSageAIAssessmentTests {
     private var context: A.Context { .init(idea: idea(), earnings: earnings, company: [:]) }
     private var config: StockSageLocalModelServer.Config {
         .init(baseURL: URL(string: "http://127.0.0.1:8765")!, model: "fixture-qwen")
+    }
+
+    @Test(arguments: ["analysis", "quote"])
+    func currentBadgeRespectsCapturedEvidenceAge(evidence: String) throws {
+        let captured = idea(analysisAge: evidence == "analysis" ? 4 * 3600 - 1 : 0,
+                            quoteAge: evidence == "quote" ? 4 * 86400 - 1 : 0)
+        let c = A.Context(idea: captured, earnings: nil, company: [:], at: now)
+        let record = A.Record(context: c, verdict: try #require(A.parse(json, facts: c.facts)),
+                              config: config, at: now)
+        for elapsed in [0.5, 1, 1.001] {
+            let at = now.addingTimeInterval(elapsed)
+            #expect(c.canAssess(at: at) == (elapsed <= 1))
+            #expect(record.current(idea: captured, earnings: nil, company: [:],
+                                   config: config, now: at) == (elapsed <= 1))
+        }
+        #expect(record.context.idea == captured && record.at == now)
+    }
+
+    @Test(arguments: ["analysis", "quote"], ["answer", "beforeRepair", "repair"])
+    func agingCompletionKeepsPreviousRecordOnly(evidence: String, phase: String) async throws {
+        let captured = idea(analysisAge: evidence == "analysis" ? 4 * 3600 - 1 : 0,
+                            quoteAge: evidence == "quote" ? 4 * 86400 - 1 : 0)
+        let c = A.Context(idea: captured, earnings: nil, company: [:], at: now)
+        let draft = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible."}"#
+        let accepted = String(draft.dropLast()) + #","evidence":["F1"]}"#
+        for elapsed in [1.0, 1.001] {
+            let state = StockSageAIAssessments()
+            await state.assess(context, config: config, now: now,
+                               stillValid: { true }) { _, _ in json }
+            let old = try #require(state.records["ORCL"])
+            var clock = now, calls = 0
+            await state.assess(c, config: config, now: now, revision: "revision-1", clock: { clock },
+                               stillValid: { true }, generateDetailed: { _, _ in
+                calls += 1
+                if phase != "repair" || calls == 2 { clock = now.addingTimeInterval(elapsed) }
+                let text = phase == "answer" || calls == 2 ? accepted : draft
+                return .success(.init(text: text, diagnostic: .init()))
+            })
+            let expired = elapsed > 1
+            #expect(calls == (phase == "answer" || (expired && phase == "beforeRepair") ? 1 : 2))
+            #expect(state.activeSymbol == nil)
+            let saved = try #require(state.records["ORCL"])
+            if expired {
+                #expect(saved.at == old.at && saved.verdict == old.verdict && saved.config == old.config)
+                #expect(saved.context.facts == old.context.facts && saved.revision == old.revision)
+                #expect(saved.timeLabel == old.timeLabel)
+                // record(for:store:) already excludes any record with a nonnil error.
+                #expect(state.errors["ORCL"]?.contains("expired") == true)
+                #expect(state.drafts["ORCL"]?.text == (phase == "answer" ? accepted : draft))
+                #expect(state.drafts["ORCL"]?.context.facts == c.facts)
+            } else {
+                #expect(saved.verdict.action == .hold && saved.context.facts == c.facts)
+                #expect(saved.at == now && saved.revision == "revision-1")
+                #expect(state.errors["ORCL"] == nil && state.drafts["ORCL"] == nil)
+            }
+        }
+    }
+
+    @Test func completedAssessmentCannotReviveAfterSettingsRoundTrip() async throws {
+        for revision in [nil, "revision-1"] as [String?] {
+            let state = StockSageAIAssessments()
+            let c = context
+            await state.assess(c, config: config, now: now, revision: revision,
+                               stillValid: { true }, generateDetailed: { _, _ in
+                .success(.init(text: json, diagnostic: .init()))
+            })
+            let saved = try #require(state.records["ORCL"])
+            #expect(saved.revision == revision)
+            #expect(saved.current(idea: idea(), earnings: earnings, company: [:],
+                                  config: config, now: now, revision: revision))
+            for changed in ["revision-2", "revision-3"] {
+                let current = saved.current(idea: idea(), earnings: earnings, company: [:],
+                                            config: config, now: now, revision: changed)
+                #expect(!current)
+                #expect(state.shouldRequest("ORCL", hasCurrentRecord: current))
+            }
+            #expect(saved.context.facts == c.facts && saved.config == config && saved.at == now)
+            #expect(saved.revision == revision && state.records.count == 1)
+        }
     }
 
     @Test func expiredOrFutureEarningsChecksAreNotCurrentConfirmedFacts() {

@@ -114,6 +114,22 @@ struct CatalystsSectionTests {
         #expect(state.current(for: nextRevision) == nil && !state.probing)
     }
 
+    @Test func completedNarrationCannotReviveAfterSettingsRoundTrip() {
+        let a = ["localServerOnly", "http://127.0.0.1:8765", "model-A"]
+        let facts = ["Price: 100"]
+        for revision in [nil, "revision-1"] as [String?] {
+            let saved = CatalystsSection.narrationCacheSettings(a, revision: revision)
+            #expect(CatalystsSection.narrationRefreshReason(savedFacts: facts, currentFacts: facts,
+                savedSettings: saved, currentSettings: saved) == nil)
+            for changed in ["revision-2", "revision-3"] {
+                let restored = CatalystsSection.narrationCacheSettings(a, revision: changed)
+                #expect(CatalystsSection.narrationRefreshReason(savedFacts: facts, currentFacts: facts,
+                    savedSettings: saved, currentSettings: restored)?.contains("Model settings changed") == true)
+            }
+            #expect(saved == CatalystsSection.narrationCacheSettings(a, revision: revision))
+        }
+    }
+
     @Test("an explanation is current only for the facts AND settings that requested it")
     func narrationSettingsAndFactsMustMatch() {
         let saved = ["localServerOnly", "http://127.0.0.1:8765", "model-A"]

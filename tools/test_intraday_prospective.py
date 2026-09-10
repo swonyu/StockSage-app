@@ -40,6 +40,23 @@ def fake_worker(group,batch,output,seconds):
 
 
 class ProspectiveTests(unittest.TestCase):
+    def setUp(self):
+        # Timing/receipt tests need hash-verified bytes, not the owner's private fitted model.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        fit = Path(temporary.name) / 'synthetic-fit.txt'
+        q.durable(fit, b'synthetic fit; never used for inference\n', raw=True)
+        for replacement in (patch.object(q, 'FIT', fit), patch.object(p, 'MODEL_SHA', r.digest(fit))):
+            replacement.start()
+            self.addCleanup(replacement.stop)
+
+    def test_changed_fit_is_rejected_before_freezing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            q.FIT.write_bytes(b'changed synthetic fit')
+            with self.assertRaisesRegex(r.ResearchError, 'Saved LightGBM changed'):
+                frozen(temp)
+            self.assertFalse((Path(temp) / 'pilot' / 'frozen.json').exists())
+
     def test_causal_features_match_historical_math(self):
         bars=fixture()
         for sample in r.examples(bars,15,6)[0]:

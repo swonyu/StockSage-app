@@ -92,6 +92,66 @@ struct ToolPolicyTests {
                 "A test-host interruption must never leave temporary policy values on disk")
     }
 
+    @MainActor
+    @Test(arguments: [true, false])
+    func nativePolicyRevisionSurvivesUnsampledRoundTrips(webToggle: Bool) throws {
+        ToolPolicyTestLock.lock.lock()
+        defer { ToolPolicyTestLock.lock.unlock() }
+        let suite = "StockSageTests.policy-revision." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let priorArguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer {
+            defaults.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        // Do not let another policy fixture's volatile override mask this real setter.
+        defaults.setVolatileDomain([:], forName: UserDefaults.argumentDomain)
+        defaults.setPersistentDomain(["fixtureUnrelated": "preserved"], forName: suite)
+        let before = try #require(defaults.persistentDomain(forName: suite))
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.webAccess && !settings.offlineOnly)
+        #expect(AppSettings.boolDefaultTrue(AppSettings.Keys.webAccess, defaults: defaults))
+        #expect(AppSettings.policyRevision(defaults: defaults) == nil)
+        let initialized = try #require(defaults.persistentDomain(forName: suite))
+        #expect(NSDictionary(dictionary: before).isEqual(to: initialized))
+
+        settings.webAccess = true
+        settings.offlineOnly = false
+        #expect(AppSettings.policyRevision(defaults: defaults) == nil,
+                "Reassigning the same values must not create a policy revision")
+
+        let toggle: ReferenceWritableKeyPath<AppSettings, Bool> =
+            webToggle ? \.webAccess : \.offlineOnly
+        let initial = settings[keyPath: toggle]
+        // No reader, await, or client synchronization between revoke and restore.
+        settings[keyPath: toggle] = !initial
+        settings[keyPath: toggle] = initial
+        let roundTrip = AppSettings.policyRevision(defaults: defaults)
+        #expect(roundTrip != nil, "An unsampled on/off/on policy round trip must leave a revision")
+        #expect(UUID(uuidString: roundTrip ?? "") != nil)
+        #expect(settings.webAccess && !settings.offlineOnly)
+
+        var prior = roundTrip
+        for value in [!initial, initial] {
+            settings[keyPath: toggle] = value
+            let revision = AppSettings.policyRevision(defaults: defaults)
+            #expect(revision != prior, "Each actual change must replace the revision")
+            #expect(UUID(uuidString: revision ?? "") != nil)
+            settings[keyPath: toggle] = value
+            #expect(AppSettings.policyRevision(defaults: defaults) == revision,
+                    "Same-value assignments must preserve an existing revision")
+            let reloaded = AppSettings(defaults: defaults)
+            #expect(reloaded.webAccess == settings.webAccess)
+            #expect(reloaded.offlineOnly == settings.offlineOnly)
+            #expect(AppSettings.boolDefaultTrue(AppSettings.Keys.webAccess, defaults: defaults)
+                    == settings.webAccess)
+            #expect(AppSettings.policyRevision(defaults: defaults) == revision,
+                    "Reloading settings must not change the revision")
+            prior = revision
+        }
+        #expect(defaults.string(forKey: "fixtureUnrelated") == "preserved")
+    }
+
 }
 
 // MARK: - ToolPolicy.webToolsDisabledReason — three-branch diagnostic string

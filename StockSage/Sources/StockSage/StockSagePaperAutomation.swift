@@ -827,12 +827,19 @@ final class StockSagePaperAutomation: ObservableObject {
         guard active(), Self.entryWindowOpen(Date()) else { return }
         guard Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(book.open.map(\.symbol))) else { return }
         async let historyFetch = StockSageQuoteService.fetchHistory(symbol, range: "1y")
-        async let newsFetch = StockSageNewsService.observation(for: symbol, limit: 3)
+        let newsAt = Date()
+        async let benzingaFetch = StockSageBenzingaClient.shared.snapshot(for: symbol, now: newsAt)
         let intradayAt = Date()
         async let intradayFetch = StockSageMassiveTicks.intradayFacts(symbol: symbol,
             from: max(intradayAt.addingTimeInterval(-3600), Self.sessionTime(intradayAt, hour: 4, minute: 0)), now: intradayAt)
-        let (history, news, intraday) = await (historyFetch, newsFetch, intradayFetch)
-        guard active() else { return }
+        let (history, benzinga, intraday) = await (historyFetch, benzingaFetch, intradayFetch)
+        let evidenceActive: @MainActor @Sendable () -> Bool = {
+            active() && StockSageBenzingaClient.shared.isCurrent(benzinga)
+        }
+        guard evidenceActive() else { return }
+        let news = await StockSageNewsService.observation(for: symbol, limit: 3, now: newsAt,
+            benzingaPage: benzinga.pages.first { $0.query.product == .news })
+        guard evidenceActive() else { return }
         guard let intraday else {
             recordFailure("Recent intraday bars and qualified trade evidence unavailable; no same-day model decision. Scheduled exits remain active.", symbol: symbol, at: Date()); return
         }
@@ -845,35 +852,39 @@ final class StockSagePaperAutomation: ObservableObject {
         let definitions = [store.symbols.first { $0.symbol == symbol }
             ?? StockSageSymbol(symbol: symbol, market: "US · Massive")]
         let ideas = await StockSageStore.buildIdeas(defs: definitions, histories: [symbol: history])
-        guard active() else { return }
+        guard evidenceActive() else { return }
         guard let base = ideas.first else {
             recordFailure("Price history or symbol definition unavailable; no paper decision.", symbol: symbol, at: Date(), facts: partialFacts); return
         }
         // History/news can take time. Capture the decision quote after those awaits.
         let observed = await Self.fetchPaperQuotes(for: [symbol], maximumAge: Self.researchMaximumAge)
-        guard active() else { return }
+        guard evidenceActive() else { return }
         guard let quote = observed[symbol], Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
             recordFailure("No qualifying Massive trade within one minute in the bounded tick tape; no paper decision.", symbol: symbol, at: Date(), facts: partialFacts); return
         }
         let idea = base.withLivePrice(quote.price, asOf: quote.marketTime, priceSource: quote.priceSource)
         let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[symbol],
-            company: store.companyEventChecks[symbol] ?? [:], at: Date(), newsObservation: news)
+            company: store.companyEventChecks[symbol] ?? [:], at: Date(), newsObservation: news, benzinga: benzinga)
         let held = book.open.first { $0.symbol == symbol }
         let position = held.map { "Currently held in the paper account: \($0.shares) shares, simulated entry \($0.entry) USD. Sell/Reduce closes this holding; Hold keeps it." }
             ?? "Not currently held in the paper account. Buy/Strong Buy can open a simulated position; Hold/Avoid leaves cash unchanged. Sell/Reduce cannot open a short."
-        let facts = context.facts + intraday.facts + ["Daily background bars end \(historyAt.ISO8601Format()); daily indicators are not intraday predictions. Same-day policy: new entries stop five minutes before the scheduled extended-session end; no intended overnight holdings.",
+        let executionFacts = intraday.facts + ["Daily background bars end \(historyAt.ISO8601Format()); daily indicators are not intraday predictions. Same-day policy: new entries stop five minutes before the scheduled extended-session end; no intended overnight holdings.",
             position, "Settled paper cash available for entries: \(book.buyingCash(at: Date())) USD. Total paper cash including unsettled sale proceeds: \(book.cash) USD; maximum per new position: \(Self.positionCap) USD. Simulated T+1 cash policy, not broker buying power. Do not invent a trade just to spend cash.", Self.sessionClockFact(at: Date())]
+        let contextFacts = context.facts(maximumUTF8Bytes: max(0,
+            12_000 - executionFacts.joined(separator: "\n").utf8.count - 1))
+        let facts = contextFacts + executionFacts
         // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
-        let intradayIndices = (context.facts.count + 1)..<(context.facts.count + intraday.facts.count)
+        let intradayIndices = (contextFacts.count + 1)..<(contextFacts.count + intraday.facts.count)
         let entryInstruction = "\nFor Buy or Strong Buy, cite at least one actual intraday observation: "
             + intradayIndices.map { "F\($0 + 1)" }.joined(separator: ", ") + ". Daily background alone is not a same-day entry case."
-        guard context.canAssess(at: Date()), intraday.fresh(at: Date()), Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
+        guard context.canAssess(at: Date()), facts.joined(separator: "\n").utf8.count <= 12_000,
+              intraday.fresh(at: Date()), Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
             recordFailure("Research context exceeded its freshness or size limit.", symbol: symbol, at: Date(), facts: partialFacts); return
         }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
             system: Self.researchInstructions + entryInstruction, user: StockSageAIAssessment.prompt(facts: facts),
-            maxTokens: 192, stillValid: active)
-        guard active() else { return }
+            maxTokens: 192, stillValid: evidenceActive)
+        guard evidenceActive() else { return }
         guard case .success(let completion) = response else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)
             recordFailure("Qwen request failed; \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
@@ -886,7 +897,7 @@ final class StockSagePaperAutomation: ObservableObject {
             model: config.model, researchQuote: quote, holdingID: held?.id,
             citesIntraday: Self.hasIntradayEvidence(verdict.evidence, factIndices: intradayIndices),
             allowed: {
-                active()
+                evidenceActive()
                     && Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(self.book.open.map(\.symbol)))
             }, contextFresh: { context.canAssess(at: $0) && intraday.fresh(at: $0) },
             currentBook: { self.book }, commit: { self.save($0) })

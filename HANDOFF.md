@@ -1,5 +1,72 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## macOS 27 restart continuation — September 10; verified, not installed
+
+Resumed the saved reliability/research reconciliation after the owner's Mac restart
+and macOS27 upgrade. Same checkout `/Users/saleh/StockSage-wt/qwen-context`, branch
+`codex/qwen-chat-context`, HEAD `661a1bba68b4a835aeacdf6de7d18d909b43016f`.
+Preserved all pre-restart dirty work. Parent was sole repository writer/heavy tester;
+four existing helpers supplied external patches and reviews, then were closed.
+Good-spender remains removed. No restore over current state or duplicate writer.
+
+Implemented and reviewed this uncommitted batch:
+- Checked-source journal/portfolio/watchlist full backup and parent migration;
+  corruption cannot overwrite a valid backup as empty success. Isolated test suites
+  no longer inspect the real parent preference domain.
+- Daily-history transport/fallback/cache cancellation and permission rechecks;
+  direct SEC Form4 contradictory P/S versus A/D fails closed; evidence expiry
+  across Qwen inference/repair and completed model-settings revision checks.
+- Existing prospective test suite uses temporary hash-verified fit bytes, not an
+  unavailable private model. Production frozen recorder, fit/model weights and
+  experiments were not altered. README and research disposition ledger updated.
+- Approved nine-product Massive/Benzinga evidence: earnings, ratings, guidance,
+  analyst insights, bull/bear cases, news, consensus and referenced analyst/firm
+  metadata. Shared existing credential, single-flight/three admitted transports,
+  one20-row page, total12s deadline, native2MB response cap and500-entry memory cache.
+  No direct Benzinga key, EODHD activation, pagination or automatic retries.
+- Native key/web/offline setters preserve revision identity across unsampled
+  off/on changes. Old evidence cannot publish after transport/inference suspension.
+  Native Test connection clears only cached401/402/403, retaining other answers
+  and Retry-After cooldown; it does not claim to probe every product.
+- Captured evidence wired into assessment, paper/manual research, Chat, details
+  and Catalyst explanations. Shared news cutoff prevents boundary rows falling
+  out merely because requests finish later. Published/updated/checked times remain
+  distinct; targets/opinions are never quotes or substitutes for intraday evidence.
+- Whole optional records are budgeted with omission counts; all-nine provider
+  statuses cannot silently disappear. Oversize mandatory facts reject before
+  model dispatch. Chat validates actually offered original IDs/records without
+  rewriting saved snapshots; undated metadata is not manufactured into dated news.
+
+Fresh final verification on frozen source (serial):
+- macOS27.0/26A428:2166 passed, one existing opt-in skip, zero failed;
+  204 suites/71.047 test seconds. Xcode26.6/17F113, xcodebuild exit0.
+- iPhone17Pro(gate), iOS26.5/23F77:2111 passed, zero skipped/failed;
+  203 suites/65.193 test seconds, xcodebuild exit0. Counts are test definitions.
+- Strict Mac module61s, iPhone module56s, test-source typecheck91s; all exit0,
+  aggregate macos=OK ios=OK tests=OK. No Xcode27 SDK or physical-phone claim.
+- Research47passed/2.473s; final focused164tests/nine suites/0issues/exit0.
+  Behavioral REDs retained. Native360/760-point fixture rendering passed; narrow
+  and wide status/multilingual source cards inspected unclipped, not full app interaction.
+- 383 tracked/untracked code/build hashes and path inventory, complete dirty diff
+  and installed executable/debug-dylib hashes stable throughout gates. Overall exit0.
+- Prescribed exclusions remain CalibrationPersistRunTests, LiveUniverseVerificationTests,
+  StrategyBaselineMeasurementTests. Normal Mac run skips opt-in process-death;
+  the earlier isolated receipt is historical, not a new execution. Nonfatal warnings remain.
+
+Installed `/Applications/StockSageX.app` is unchanged/unlaunched; gate simulator is
+Shutdown. Candidate: `/Users/saleh/StockSage-fixes-20260910.bFAFrT/derived-macos/Build/Products/Debug/StockSageX.app`.
+Exact commands, logs, xcresults, manifests and screenshots:
+`/Users/saleh/StockSage-reconcile-20260910.gNvfUH/POST_RESTART_RESULT.md` and `full-gates/`.
+Current implementation/evidence matrix: `agent-docs/RESEARCH_IMPLEMENTATION_RECONCILIATION_2026-09-10.md`.
+
+No install, new commit/push, paid resource, authenticated provider/model request,
+model start/training, real order, IBKR relay, historical-record edit or risk/strategy
+change. Day101/manual500 and research-only horizon modes preserved. Live product
+entitlements, production schema/latency, model answer quality, owner-data relaunch
+and profitability are not verified. Native paper remains the approved later-trade
+fixed-cost simulation, not an executable NBBO/size fill model. Held relay v2-book
+and extended-session incompatibilities remain documented in the external paper review.
+
 ## Full review fixes — September 10; Mac/iPhone verified, not installed
 
 Owner requested fixes, commit and push after the full code review. Checkout

@@ -626,6 +626,90 @@ struct StockSageChatTests {
         #expect(probe.chatAppearances == 2 && probe.chatDisappearances == 1 && probe.otherAppearances == 1)
     }
 
+    @Test func benzingaPresentationKeepsChecksDistinctFromUndatedRecords() throws {
+        let evidence = benzingaViewFixture()
+        let view = StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+        let projection = try #require(view.projection)
+        #expect(projection.statusLines.count == StockSageBenzinga.Product.allCases.count)
+        #expect(view.capturedSnapshot == evidence)
+        let undated = try #require(projection.records.first { $0.product == .bullsBearsSay })
+        #expect(undated.date == nil && undated.published == nil && undated.lastUpdated == nil)
+        #expect(undated.sourceText.contains("Synthetic bull case") && undated.sourceText.contains("Synthetic bear case"))
+        #expect(!undated.sourceText.contains(evidence.capturedAt.ISO8601Format()),
+                "Local check/capture clocks cannot become the source's publication time")
+        let answered = try #require(evidence.pages.first { $0.query.product == .guidance })
+        #expect(StockSageBenzingaEvidenceView.checkLabel(answered).contains(answered.checkedAt.ISO8601Format()))
+        let unchecked = try #require(evidence.pages.first { $0.status == .notChecked })
+        #expect(StockSageBenzingaEvidenceView.checkLabel(unchecked).contains("Not checked"))
+        #expect(!StockSageBenzingaEvidenceView.checkLabel(unchecked).contains(unchecked.checkedAt.ISO8601Format()))
+        var captured = snapshot()
+        captured.benzinga = evidence
+        captured.offeredBenzingaIDs = [undated.id]
+        let turn = StockSageChatSession.Turn(id: UUID(), question: "Explain the counter-case",
+            snapshot: captured, model: "fixture", answer: "Attributed opinion, not a quote.",
+            evidence: [undated.id], notice: "Fixture")
+        #expect(StockSageChatSection.selectedBenzingaRecords(in: turn) == [undated])
+        #expect(turn.snapshot.sources == nil, "Undated products are not converted to dated news Sources")
+    }
+
+    @Test(arguments: [360, 760], [false, true])
+    func renderCapturedBenzingaWithoutClientsOrStore(width: Int, mixed: Bool) async throws {
+        let evidence = mixed ? benzingaViewFixture() : StockSageBenzinga.Snapshot(
+            symbol: "ORCL", capturedAt: now, credentialGeneration: nil, pages: [])
+        let original = evidence
+        let content = StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+            .padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(content, name: "stocksage-benzinga-status-\(width)-\(mixed)")
+        #expect(size.width == CGFloat(width) && size.height > 32)
+        if mixed {
+            let record = try #require(evidence.pages.flatMap(\.records).first { $0.product == .bullsBearsSay })
+            var captured = snapshot()
+            captured.benzinga = evidence
+            captured.offeredBenzingaIDs = [record.id]
+            let turn = StockSageChatSession.Turn(id: UUID(), question: "Explain the bull and bear cases",
+                snapshot: captured, model: "fixture", answer: "These are attributed views, not observed prices.",
+                evidence: [record.id], notice: "Synthetic captured-source fixture")
+            let selected = StockSageChatSection.turnContent(turn, pending: false)
+                .padding(16).frame(width: CGFloat(width))
+                .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+            let selectedSize = try await capture(selected, name: "stocksage-benzinga-chat-source-\(width)")
+            #expect(selectedSize.width == CGFloat(width) && selectedSize.height > 32)
+        }
+        #expect(evidence == original, "Rendering cannot mutate the immutable capture")
+    }
+
+    private func benzingaViewFixture() -> StockSageBenzinga.Snapshot {
+        typealias B = StockSageBenzinga
+        let record = B.Record(id: "bullsBearsSay.fixture.r1", vendorID: "fixture", revision: "r1",
+            product: .bullsBearsSay, symbol: "ORCL", source: "Benzinga via Massive · synthetic",
+            date: nil, time: nil, timeZone: nil, published: nil, lastUpdated: nil,
+            headline: "Synthetic balanced commentary", details: ["Attributed opinion; no executable price"],
+            excerpt: nil, bullCase: "Synthetic bull case: demand could improve; تحقق من المصدر.",
+            bearCase: "Synthetic bear case: execution could disappoint; not a forecast or trading instruction.",
+            link: nil, analystIDs: [], firmIDs: [], ratingIDs: [])
+        let dated = B.Record(id: "news.fixture.r1", vendorID: "fixture", revision: "r1",
+            product: .news, symbol: "ORCL", source: "Benzinga via Massive · synthetic",
+            date: nil, time: nil, timeZone: nil, published: "2026-09-09T09:30:00.123-04:00",
+            lastUpdated: "2026-09-09T09:35:00.456-04:00", headline: "Synthetic dated news",
+            details: [], excerpt: "Untrusted provider excerpt.", bullCase: nil, bearCase: nil,
+            link: URL(string: "https://example.invalid/source"), analystIDs: [], firmIDs: [], ratingIDs: [])
+        var pages = B.Product.allCases.map { product -> B.Page in
+            let status: B.Status = product == .bullsBearsSay ? .partial
+                : product == .ratings ? .unavailable(.entitlement)
+                : product == .guidance || product == .news || product == .analysts ? .answered : .notChecked
+            return B.Page(query: .init(product: product, subject: product == .analysts ? "analyst-1" : "ORCL", from: nil, through: nil),
+                checkedAt: now.addingTimeInterval(-20), credentialGeneration: "fixture-generation", status: status,
+                records: product == .bullsBearsSay ? [record] : product == .news ? [dated] : [],
+                excludedCount: product == .bullsBearsSay ? 1 : 0, hasMore: product == .bullsBearsSay)
+        }
+        pages.append(.init(query: .init(product: .analysts, subject: "analyst-2", from: nil, through: nil),
+            checkedAt: now.addingTimeInterval(-10), credentialGeneration: "fixture-generation",
+            status: .unavailable(.malformed), records: [], excludedCount: 0, hasMore: false))
+        return .init(symbol: "ORCL", capturedAt: now, credentialGeneration: "fixture-generation", pages: pages,
+                     omittedRecordCount: 2)
+    }
+
     private func capture(_ view: some View, name: String) async throws -> CGSize {
         var appeared = false
         let host = NSHostingController(rootView: view.onAppear { appeared = true })

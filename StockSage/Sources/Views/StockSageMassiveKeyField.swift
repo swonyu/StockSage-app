@@ -13,7 +13,10 @@ struct StockSageMassiveKeyField: View {
     @State private var status: String?
 
     var body: some View {
-        SecureField("Massive API key (\(StockSageMassive.keyEnvName))", text: $massiveKey)
+        SecureField("Massive API key (\(StockSageMassive.keyEnvName))", text: Binding(
+            get: { massiveKey }, set: { value in
+                if StockSageMassive.setAPIKey(value) { status = nil }
+            }))
             .autocorrectionDisabled()
         HStack(spacing: 8) {
             Button(probing ? "Testing…" : "Test connection") { testConnection() }
@@ -33,9 +36,16 @@ struct StockSageMassiveKeyField: View {
     private func testConnection() {
         guard !probing else { return }
         probing = true
+        let revision = StockSageMassive.credentialRevision()
+        let key = StockSageMassive.apiKey
         Task {
-            status = await StockSageMassive.probe()
-            probing = false
+            defer { probing = false }
+            guard revision == StockSageMassive.credentialRevision(), key == StockSageMassive.apiKey else { return }
+            StockSageBenzingaClient.shared.clearAuthorizationFailures()
+            let result = await StockSageMassive.probe()
+            guard !Task.isCancelled, revision == StockSageMassive.credentialRevision(),
+                  key == StockSageMassive.apiKey else { return }
+            status = result
         }
     }
 }

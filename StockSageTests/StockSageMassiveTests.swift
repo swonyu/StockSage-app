@@ -11,6 +11,24 @@ struct StockSageMassiveTests {
 
     typealias M = StockSageMassive
 
+    @Test func credentialRoundTripDoesNotReviveOldEvidence() throws {
+        let suite = "StockSageMassiveTests.credentials." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        #expect(M.credentialRevision(defaults) == nil)
+        #expect(M.setAPIKey("synthetic-A", defaults: defaults))
+        let first = M.credentialRevision(defaults)
+        #expect(first != nil)
+        #expect(!M.setAPIKey("synthetic-A", defaults: defaults))
+        #expect(M.credentialRevision(defaults) == first)
+        #expect(M.setAPIKey("synthetic-B", defaults: defaults))
+        let second = M.credentialRevision(defaults)
+        #expect(second != first)
+        #expect(M.setAPIKey("synthetic-A", defaults: defaults))
+        #expect(M.credentialRevision(defaults) != first && M.credentialRevision(defaults) != second)
+        #expect(defaults.string(forKey: M.keyDefaultsKey) == "synthetic-A")
+    }
+
     // MARK: Coverage / routing
 
     @Test("covers() is the EODHD US-equities rule: bare alphabetic tickers only")

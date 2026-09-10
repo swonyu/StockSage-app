@@ -7,6 +7,7 @@ import Combine
     typealias FilingsFetch = @MainActor @Sendable (String) async -> [StockSageDisclosureService.Filing]
     typealias QuoteFetch = @MainActor @Sendable (String) async -> StockSageQuoteService.LiveQuote?
     typealias QuotePublish = @MainActor @Sendable (StockSageQuoteService.LiveQuote) -> StockSageIdea?
+    typealias BenzingaFetch = @MainActor @Sendable (String) async -> StockSageBenzinga.Snapshot?
 
     @Published var selection: StockSageIdea? {
         didSet {
@@ -17,6 +18,8 @@ import Combine
             symbol = selection?.symbol
             insiderSummary = nil
             disclosures = []
+            benzinga = nil
+            benzingaLoading = false
             insiderLoading = false
             disclosuresLoading = false
         }
@@ -27,9 +30,13 @@ import Combine
     @Published private(set) var disclosures: [StockSageDisclosureService.Filing] = []
     @Published private(set) var disclosuresLoading = false
     @Published private(set) var symbol: String?
+    @Published private(set) var benzinga: StockSageBenzinga.Snapshot?
+    @Published private(set) var benzingaLoading = false
     private let fetchInsider: InsiderFetch
     private let fetchFilings: FilingsFetch
     private let fetchQuote: QuoteFetch
+    private let fetchBenzinga: BenzingaFetch
+    private let benzingaIsCurrent: @MainActor @Sendable (StockSageBenzinga.Snapshot) -> Bool
     private let isAllowed: @MainActor @Sendable () -> Bool
     private var generation = UUID()
 
@@ -37,10 +44,14 @@ import Combine
          fetchFilings: @escaping FilingsFetch = {
              await StockSageDisclosureService.recentFilings(for: $0, forms: ["8-K"], limit: 5)
          }, fetchQuote: @escaping QuoteFetch = { await StockSageQuoteService.fetchQuotes(for: [$0])[$0.uppercased()] },
-         isAllowed: @escaping @MainActor @Sendable () -> Bool = { ToolPolicy.webToolsDisabledReason() == nil }) {
+         isAllowed: @escaping @MainActor @Sendable () -> Bool = { ToolPolicy.webToolsDisabledReason() == nil },
+         fetchBenzinga: @escaping BenzingaFetch = { _ in nil },
+         benzingaIsCurrent: @escaping @MainActor @Sendable (StockSageBenzinga.Snapshot) -> Bool = { _ in true }) {
         self.fetchInsider = fetchInsider
         self.fetchFilings = fetchFilings
         self.fetchQuote = fetchQuote
+        self.fetchBenzinga = fetchBenzinga
+        self.benzingaIsCurrent = benzingaIsCurrent
         self.isAllowed = isAllowed
     }
 
@@ -72,6 +83,16 @@ import Combine
         selection = updated
     }
 
+    private func loadBenzinga(for symbol: String, isCurrent: @MainActor @Sendable () -> Bool) async {
+        guard isCurrent() else { return }
+        benzingaLoading = true
+        let captured = await fetchBenzinga(symbol)
+        guard isCurrent() else { return }
+        benzingaLoading = false
+        guard let captured, captured.symbol.uppercased() == symbol.uppercased(), benzingaIsCurrent(captured) else { return }
+        benzinga = captured
+    }
+
     func load(for idea: StockSageIdea, using publish: QuotePublish) async {
         guard !Task.isCancelled, selection?.id == idea.id else { return }
         let request = UUID()
@@ -79,11 +100,13 @@ import Combine
         symbol = idea.symbol
         insiderSummary = nil
         disclosures = []
+        benzinga = nil
+        benzingaLoading = false
         insiderLoading = false
         disclosuresLoading = false
         defer {
             // An older cancelled request must not clear the replacement's loading flags.
-            if generation == request { insiderLoading = false; disclosuresLoading = false }
+            if generation == request { insiderLoading = false; disclosuresLoading = false; benzingaLoading = false }
         }
         let isCurrent: @MainActor @Sendable () -> Bool = {
             !Task.isCancelled && self.generation == request && self.selection?.id == idea.id && self.isAllowed()
@@ -91,7 +114,8 @@ import Combine
         async let insider: Void = loadInsider(for: idea.symbol, isCurrent: isCurrent)
         async let filings: Void = loadFilings(for: idea.symbol, isCurrent: isCurrent)
         async let quote: Void = refreshQuote(for: idea, using: publish, isCurrent: isCurrent)
-        _ = await (insider, filings, quote)
+        async let productEvidence: Void = loadBenzinga(for: idea.symbol, isCurrent: isCurrent)
+        _ = await (insider, filings, quote, productEvidence)
     }
 }
 

@@ -88,16 +88,19 @@ enum StockSageCatalystNarrator {
         let insight: String?
         /// Filing/transaction dates can be day-only; only parsed news supplies a publication instant.
         let publicationTime: String?
+        let updatedTime: String?
 
-        init(date: Date, source: String, title: String, snippet: String, link: URL?, insight: String? = nil, publicationTime: String? = nil) {
+        init(date: Date, source: String, title: String, snippet: String, link: URL?, insight: String? = nil, publicationTime: String? = nil, updatedTime: String? = nil) {
             self.date = date; self.source = source; self.title = title
             self.snippet = snippet; self.link = link; self.insight = insight
             self.publicationTime = publicationTime
+            self.updatedTime = updatedTime
         }
 
         init(news: StockSageNewsService.NewsItem) {
             self.init(date: news.date, source: news.source, title: news.title,
-                      snippet: news.snippet, link: news.link, insight: news.insight, publicationTime: news.publicationTime ?? StockSageNewsService.instant(news.date))
+                      snippet: news.snippet, link: news.link, insight: news.insight,
+                      publicationTime: news.publicationTime ?? StockSageNewsService.instant(news.date), updatedTime: news.updatedTime)
         }
     }
 
@@ -111,7 +114,7 @@ enum StockSageCatalystNarrator {
     /// `citationsValid(_:sourceCount:)` is the other half of this contract: it checks the model's
     /// output never cites a number outside `1...sources.count`.
     nonisolated static func facts(for brief: StockSageCatalystWatch.Brief,
-                                  sources: [CitedSource] = []) -> [String] {
+                                  sources: [CitedSource] = [], benzinga: StockSageBenzinga.Snapshot? = nil) -> [String] {
         let idea = brief.idea
         let advice = idea.advice
         var lines: [String] = []
@@ -154,6 +157,12 @@ enum StockSageCatalystNarrator {
         for (i, s) in sources.enumerated() {
             lines.append(sourceLine(number: i + 1, source: s))
         }
+        if let benzinga, benzinga.symbol == idea.symbol.uppercased(),
+           let projection = StockSageBenzinga.projection(benzinga,
+                maximumUTF8Bytes: max(0, 12_000 - lines.joined(separator: "\n").utf8.count - 1))
+                ?? StockSageBenzinga.projection(benzinga, maximumUTF8Bytes: 12_000, maximumRecords: 0) {
+            lines.append(projection.text)
+        }
         return lines
     }
 
@@ -179,7 +188,8 @@ enum StockSageCatalystNarrator {
         let snippetPart = source.snippet.isEmpty ? "" : " — \(source.snippet)"
         let linkPart = source.link?.absoluteString ?? "no link"
         let insightPart = source.insight.map { "\n   sentiment: \($0)" } ?? ""
-        return "[\(number)] \(sourceDate(source)) \(source.source): \(source.title)\(snippetPart) (\(linkPart))\(insightPart)"
+        let updatePart = source.updatedTime.map { " · updated \($0)" } ?? ""
+        return "[\(number)] \(sourceDate(source))\(updatePart) \(source.source): \(source.title)\(snippetPart) (\(linkPart))\(insightPart)"
     }
 
     /// System instructions for the session — fixed, never per-idea (the facts carry everything
@@ -345,13 +355,13 @@ enum StockSageCatalystNarrator {
     /// `.unverified` with the draft and generating source preserved. The session is local to
     /// this call — no shared mutable state.
     private static func explainOnDevice(_ brief: StockSageCatalystWatch.Brief,
-                                        sources: [CitedSource] = []) async -> Result {
+                                        sources: [CitedSource] = [], benzinga: StockSageBenzinga.Snapshot? = nil) async -> Result {
         #if canImport(FoundationModels)
         guard case .available = availability else {
             if case .unavailable(let reason) = availability { return .unavailable(reason) }
             return .unavailable("On-device model not available in this build.")
         }
-        let briefFacts = facts(for: brief, sources: sources)
+        let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
         let session = LanguageModelSession(instructions: instructions)
         do {
             let response = try await session.respond(
@@ -394,8 +404,9 @@ enum StockSageCatalystNarrator {
                                          config: StockSageLocalModelServer.Config,
                                          isOllama: Bool,
                                          sources: [CitedSource] = [],
+                                         benzinga: StockSageBenzinga.Snapshot? = nil,
                                          stillValid: @MainActor () -> Bool = { true }) async -> Result {
-        let briefFacts = facts(for: brief, sources: sources)
+        let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
         let result = await StockSageLocalModelServer.complete(
             config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts), stillValid: stillValid)
         switch result {
@@ -427,11 +438,21 @@ enum StockSageCatalystNarrator {
     /// is passed straight through to whichever backend runs; each backend's own number-fence
     /// AND `citationsValid` check gate the result before it ever becomes `.text`.
     static func explain(_ brief: StockSageCatalystWatch.Brief, sources: [CitedSource] = [],
+        benzinga: StockSageBenzinga.Snapshot? = nil,
         defaults: UserDefaults = .standard,
         stillValid: @escaping @MainActor () -> Bool = { true },
         checkServer: ((StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe)? = nil,
         local: (() async -> Result)? = nil,
         server: ((StockSageLocalModelServer.Config, Bool) async -> Result)? = nil) async -> Result {
+        if let benzinga {
+            guard benzinga.symbol == brief.idea.symbol.uppercased(),
+                  StockSageBenzinga.projection(benzinga, maximumUTF8Bytes: 12_000, maximumRecords: 0) != nil else {
+                return .unavailable("Research capture is invalid. Refresh evidence before requesting an explanation.")
+            }
+        }
+        guard facts(for: brief, sources: sources, benzinga: benzinga).joined(separator: "\n").utf8.count <= 12_000 else {
+            return .unavailable("Evidence exceeds the explanation budget. Use a smaller source selection; provider checks were not silently omitted.")
+        }
         let backend = selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
         let urlSetting = defaults.string(forKey: StockSageLocalModelServer.urlKey)
             ?? StockSageLocalModelServer.defaultURL
@@ -449,13 +470,13 @@ enum StockSageCatalystNarrator {
 
         func onDevice() async -> Result {
             guard active() else { return stopped }
-            let result = if let local { await local() } else { await explainOnDevice(brief, sources: sources) }
+            let result = if let local { await local() } else { await explainOnDevice(brief, sources: sources, benzinga: benzinga) }
             return active() ? result : stopped
         }
         func viaServer(_ config: StockSageLocalModelServer.Config, _ ollama: Bool) async -> Result {
             guard active() else { return stopped }
             let result = if let server { await server(config, ollama) }
-                else { await explainViaServer(brief, config: config, isOllama: ollama, sources: sources, stillValid: active) }
+                else { await explainViaServer(brief, config: config, isOllama: ollama, sources: sources, benzinga: benzinga, stillValid: active) }
             return active() ? result : stopped
         }
         func fetchProbe(_ config: StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe {

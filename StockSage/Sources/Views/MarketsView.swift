@@ -293,7 +293,9 @@ struct MarketsView: View {
     @State private var showFeedDiagnostics = false
     /// Insider activity for the OPEN idea sheet only — fetched on demand (3 SEC hops per symbol),
     /// never swept across the board.
-    @StateObject private var detailEvidence = IdeaDetailEvidence()
+    @StateObject private var detailEvidence = IdeaDetailEvidence(
+        fetchBenzinga: { await StockSageBenzingaClient.shared.snapshot(for: $0, now: Date()) },
+        benzingaIsCurrent: { StockSageBenzingaClient.shared.isCurrent($0) })
     /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
     /// than a refresh button.
     @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
@@ -2886,8 +2888,8 @@ struct MarketsView: View {
                         panel.nameFieldStringValue = "stocksage-backup.json"
                         guard panel.runModal() == .OK, let url = panel.url else { return }
                         do {
-                            try StockSageBackup.save(to: url, trades: journal.trades,
-                                positions: portfolio.positions, userSymbols: store.userSymbols)
+                            try StockSageBackup.save(to: url, journal: journal,
+                                portfolio: portfolio, store: store)
                             journalDataFeedback = "Backup saved (journal, portfolio, watchlist)."
                         }
                         catch { journalDataFeedback = "Backup failed: \(error.localizedDescription)" }
@@ -2910,13 +2912,17 @@ struct MarketsView: View {
                     #endif
                     Divider()
                     Button("Import from Salehman AI…") {
-                        if let parent = StockSageBackup.importFromParentApp() {
-                            let result = journal.importNew(parent.trades)
-                            journalDataFeedback = "Imported \(result.added) trade\(result.added == 1 ? "" : "s") from Salehman AI"
-                                + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
-                                + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "") + "."
-                        } else {
-                            journalDataFeedback = "No Salehman AI data found on this Mac."
+                        do {
+                            if let parent = try StockSageBackup.importFromParentApp() {
+                                let result = journal.importNew(parent.trades)
+                                journalDataFeedback = "Imported \(result.added) trade\(result.added == 1 ? "" : "s") from Salehman AI"
+                                    + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
+                                    + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved" : "") + "."
+                            } else {
+                                journalDataFeedback = "No Salehman AI data found on this Mac."
+                            }
+                        } catch {
+                            journalDataFeedback = "Import failed: \(error.localizedDescription)"
                         }
                     }
                 } label: {
@@ -2935,8 +2941,8 @@ struct MarketsView: View {
                         Label("Share journal CSV", systemImage: "square.and.arrow.up")
                     }
                     switch Result(catching: {
-                        try StockSageBackup.export(trades: journal.trades,
-                            positions: portfolio.positions, userSymbols: store.userSymbols)
+                        try StockSageBackup.export(journal: journal,
+                            portfolio: portfolio, store: store)
                     }) {
                     case .success(let data):
                         ShareLink(item: String(decoding: data, as: UTF8.self),
@@ -8695,6 +8701,15 @@ struct MarketsView: View {
                     insiderRow()
                     // Form 4 says who traded; 8-K says what the company announced.
                     disclosureRow()
+                    if detailEvidence.benzingaLoading {
+                        ProgressView("Capturing Benzinga evidence…").controlSize(.small)
+                    } else if let captured = detailEvidence.benzinga {
+                        StockSageBenzingaEvidenceView(capturedSnapshot: captured)
+                    } else {
+                        Text("Benzinga evidence not captured for this detail selection.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 if let stop = a.stopPrice, let target = a.targetPrice,
                    let rr = StockSageRewardRisk.assess(entry: idea.price, stop: stop, target: target) {

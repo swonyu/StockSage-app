@@ -72,15 +72,19 @@ struct OnboardingSheet: View {
             // Migration: the parent app's journal/portfolio, one click, honest result line.
             HStack(spacing: 10) {
                 Button("Import data from Salehman AI") {
-                    if let parent = StockSageBackup.importFromParentApp() {
-                        let journal = StockSageJournalStore.shared
-                        let result = journal.importNew(parent.trades)
-                        importResult = "Imported \(result.added) journal trade\(result.added == 1 ? "" : "s")"
-                            + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
-                            + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved — check journal errors" : "")
-                            + ". Portfolio positions found: \(parent.positions.count) — add them from the Portfolio section."
-                    } else {
-                        importResult = "No Salehman AI data found on this Mac."
+                    do {
+                        if let parent = try StockSageBackup.importFromParentApp() {
+                            let journal = StockSageJournalStore.shared
+                            let result = journal.importNew(parent.trades)
+                            importResult = "Imported \(result.added) journal trade\(result.added == 1 ? "" : "s")"
+                                + (result.skipped > 0 ? " (\(result.skipped) already present)" : "")
+                                + (result.rejected > 0 ? "; \(result.rejected) rejected/not saved — check journal errors" : "")
+                                + ". Portfolio positions found: \(parent.positions.count) — add them from the Portfolio section."
+                        } else {
+                            importResult = "No Salehman AI data found on this Mac."
+                        }
+                    } catch {
+                        importResult = "Import failed: \(error.localizedDescription)"
                     }
                 }
                 if let importResult {

@@ -245,7 +245,7 @@ final class StockSageHorizonResearch: ObservableObject {
 
     private static func analyze(_ item: Listing, horizon: Horizon, store: StockSageStore,
         config: StockSageLocalModelServer.Config, isOllama: Bool, key: String,
-        allowed: @MainActor () -> Bool) async -> Result {
+        allowed: @escaping @MainActor () -> Bool) async -> Result {
         guard item.currency_name?.lowercased() == "usd" else {
             return .init(note: "USD price currency not confirmed; listing retained, no opinion.")
         }
@@ -264,20 +264,29 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         let ideas = await StockSageStore.buildIdeas(defs: [.init(symbol: item.ticker, market: "US · \(item.primary_exchange ?? "exchange unconfirmed")")], histories: [item.ticker: history])
         guard allowed(), !Task.isCancelled, let idea = ideas.first else { return .init(note: "Analysis interrupted or unsupported history.") }
-        let news = await StockSageNewsService.observation(for: item.ticker, limit: 3)
-        guard allowed(), !Task.isCancelled else { return .init(note: "Analysis interrupted.") }
+        let newsAt = Date()
+        let benzinga = await StockSageBenzingaClient.shared.snapshot(for: item.ticker, now: newsAt)
+        let evidenceAllowed: @MainActor () -> Bool = {
+            allowed() && !Task.isCancelled && StockSageBenzingaClient.shared.isCurrent(benzinga)
+        }
+        guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
+        let news = await StockSageNewsService.observation(for: item.ticker, limit: 3, now: newsAt,
+            benzingaPage: benzinga.pages.first { $0.query.product == .news })
+        guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[item.ticker],
-            company: store.companyEventChecks[item.ticker] ?? [:], at: Date(), newsObservation: news, quotedInUSD: true)
-        var facts = context.facts + ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
+            company: store.companyEventChecks[item.ticker] ?? [:], at: Date(), newsObservation: news, quotedInUSD: true, benzinga: benzinga)
+        var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
         for period in [7, 14] {
             if let value = StockSageIndicators.returnOverPeriod(history.closes, period: period), value.isFinite {
-                facts.append("Observed return over the last \(period) completed daily bars: \(value)%. Bar window ends \(history.dates.last!.ISO8601Format()). Historical change, not an expected return.")
+                horizonFacts.append("Observed return over the last \(period) completed daily bars: \(value)%. Bar window ends \(history.dates.last!.ISO8601Format()). Historical change, not an expected return.")
             }
         }
-        guard context.canAssess(at: Date()), facts.joined().utf8.count <= 12_000 else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion.") }
+        let facts = context.facts(maximumUTF8Bytes: max(0,
+            12_000 - horizonFacts.joined(separator: "\n").utf8.count - 1)) + horizonFacts
+        guard context.canAssess(at: Date()), facts.joined(separator: "\n").utf8.count <= 12_000 else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion.") }
         let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: horizon.instructions, user: StockSageAIAssessment.prompt(facts: facts), maxTokens: 192, stillValid: allowed)
-        guard allowed(), !Task.isCancelled else { return .init(note: "Analysis interrupted.") }
+            system: horizon.instructions, user: StockSageAIAssessment.prompt(facts: facts), maxTokens: 192, stillValid: evidenceAllowed)
+        guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         guard context.canAssess(at: Date()), case .success(let completion) = response,
               case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
             return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0))

@@ -31,6 +31,7 @@ struct IdeaDetailLifecycleTests {
         driver.idea = driver.idea.withLivePrice(102, asOf: nil)
         try await Task.sleep(for: .milliseconds(150))
         #expect(driver.probe.insiderCalls == ["AAPL"] && driver.probe.filingCalls == ["AAPL"] && driver.probe.quoteCalls == ["AAPL"])
+        #expect(driver.probe.benzingaCalls == ["AAPL"], "Native detail redraw cannot refetch Benzinga")
         driver.selection = nil
         // Offscreen AppKit detaches the real sheet without reliably firing onDisappear.
         try await waitUntil("Clearing selection did not detach the sourced AAPL sheet") { window.attachedSheet == nil }
@@ -128,6 +129,40 @@ struct IdeaDetailLifecycleTests {
 
 @Suite(.serialized) @MainActor
 struct IdeaDetailEvidenceTests {
+    @Test(arguments: ["cancel", "policy", "credential", "mismatched-symbol"])
+    func benzingaLateCompletionRequiresCurrentOwnershipAndReceipt(reason: String) async throws {
+        let driver = DetailFixtureDriver(source: nil)
+        driver.selection = driver.idea
+        driver.probe.hold = true
+        defer { driver.probe.releaseAll() }
+        let load = Task { await driver.load(driver.idea) }
+        defer { load.cancel() }
+        try await driver.waitForRequests(1)
+        switch reason {
+        case "cancel": load.cancel()
+        case "policy": driver.probe.allowed = false
+        case "credential": driver.probe.benzingaCurrent = false
+        default: driver.probe.benzingaSymbol = "MSFT"
+        }
+        driver.probe.complete(0)
+        await load.value
+        #expect(driver.evidence.benzinga == nil)
+        #expect(!driver.evidence.benzingaLoading)
+    }
+
+    @Test func benzingaRetainsExactCaptureAndClearsOnSelectionChange() async {
+        let driver = DetailFixtureDriver(source: nil)
+        driver.selection = driver.idea
+        await driver.load(driver.idea)
+        let expected = driver.probe.benzingaSnapshot("AAPL", index: 0)
+        #expect(driver.evidence.benzinga == expected)
+        #expect(driver.probe.benzingaCalls == ["AAPL"])
+        driver.selection = driver.selection?.withLivePrice(105, asOf: nil)
+        #expect(driver.evidence.benzinga == expected, "Same-selection quote publication cannot replace source capture")
+        #expect(driver.probe.benzingaCalls == ["AAPL"])
+        driver.selection = nil
+        #expect(driver.evidence.benzinga == nil && !driver.evidence.benzingaLoading)
+    }
     @Test(arguments: [true, false])
     func selectionCycleInvalidatesBeforeReplacementLoadStarts(dismiss: Bool) async throws {
         let driver = DetailFixtureDriver(source: nil)
@@ -169,6 +204,8 @@ struct IdeaDetailEvidenceTests {
         driver.probe.complete(0)
         await first.value
         #expect(driver.evidence.insiderSummary == nil && driver.evidence.insiderLoading)
+        #expect(driver.evidence.benzinga == nil && driver.evidence.benzingaLoading,
+                "An older cleanup must not clear the replacement's loading state")
         #expect(driver.evidence.disclosures.isEmpty && driver.evidence.disclosuresLoading)
         driver.probe.complete(2)
         await third.value
@@ -177,6 +214,7 @@ struct IdeaDetailEvidenceTests {
         #expect(driver.selection?.symbol == "AAPL" && driver.selection?.price == 103)
         #expect(driver.evidence.insiderSummary?.nonDiscretionaryCount == 3)
         #expect(driver.evidence.disclosures.first?.accessionNumber == "AAPL-2")
+        #expect(driver.evidence.benzinga == driver.probe.benzingaSnapshot("AAPL", index: 2))
     }
 
     @Test func deniedAndRevokedPolicyCannotFetchOrPublish() async throws {
@@ -220,6 +258,10 @@ struct IdeaDetailEvidenceTests {
     var insiderCalls: [String] = []
     var filingCalls: [String] = []
     var quoteCalls: [String] = []
+    var benzingaCalls: [String] = []
+    var benzingaCurrent = true
+    var benzingaSymbol: String?
+    var pendingBenzinga: [CheckedContinuation<StockSageBenzinga.Snapshot?, Never>?] = []
     var hold = false
     var allowed = true
     var empty = false
@@ -243,14 +285,28 @@ struct IdeaDetailEvidenceTests {
         if hold { return await withCheckedContinuation { pendingQuote.append($0) } }
         return empty ? nil : .init(symbol: symbol, price: 100 + Double(quoteCalls.count), previousClose: 100)
     }
+    func benzinga(_ symbol: String) async -> StockSageBenzinga.Snapshot? {
+        benzingaCalls.append(symbol)
+        if hold { return await withCheckedContinuation { pendingBenzinga.append($0) } }
+        return empty ? nil : benzingaSnapshot(symbol, index: benzingaCalls.count - 1)
+    }
+    func benzingaSnapshot(_ symbol: String, index: Int) -> StockSageBenzinga.Snapshot {
+        .init(symbol: benzingaSymbol ?? symbol,
+              capturedAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(index)),
+              credentialGeneration: "fixture-generation", pages: [])
+    }
     func publish(_ quote: StockSageQuoteService.LiveQuote) -> StockSageIdea? {
         publishedPrices.append(quote.price)
         return DetailFixtureDriver.idea(quote.symbol).withLivePrice(quote.price, asOf: quote.marketTime)
     }
     func allStarted(_ count: Int) -> Bool {
-        insiderCalls.count == count && filingCalls.count == count && quoteCalls.count == count
+        insiderCalls.count == count && filingCalls.count == count && quoteCalls.count == count && benzingaCalls.count == count
     }
     func complete(_ index: Int) {
+        if pendingBenzinga.indices.contains(index) {
+            pendingBenzinga[index]?.resume(returning: benzingaSnapshot(benzingaCalls[index], index: index))
+            pendingBenzinga[index] = nil
+        }
         if pendingInsider.indices.contains(index) {
             pendingInsider[index]?.resume(returning: summary(insiderCalls[index], index: index)); pendingInsider[index] = nil
         }
@@ -263,7 +319,7 @@ struct IdeaDetailEvidenceTests {
     }
     func releaseAll() {
         hold = false
-        for index in 0..<max(pendingInsider.count, pendingFilings.count, pendingQuote.count) { complete(index) }
+        for index in 0..<max(pendingInsider.count, pendingFilings.count, pendingQuote.count, pendingBenzinga.count) { complete(index) }
     }
     private func summary(_ symbol: String, index: Int) -> StockSageInsider.Summary {
         .init(symbol: symbol, discretionary: [], nonDiscretionaryCount: index + 1)
@@ -293,7 +349,8 @@ struct IdeaDetailEvidenceTests {
         self.source = source
         let probe = self.probe
         evidence = IdeaDetailEvidence(fetchInsider: { await probe.insider($0) }, fetchFilings: { await probe.filings($0) },
-            fetchQuote: { await probe.quote($0) }, isAllowed: { probe.allowed })
+            fetchQuote: { await probe.quote($0) }, isAllowed: { probe.allowed },
+            fetchBenzinga: { await probe.benzinga($0) }, benzingaIsCurrent: { _ in probe.benzingaCurrent })
     }
     func load(_ idea: StockSageIdea) async {
         await evidence.load(for: idea, using: probe.publish)
