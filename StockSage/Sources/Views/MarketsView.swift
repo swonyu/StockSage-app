@@ -732,6 +732,16 @@ struct MarketsView: View {
     /// Honest feed status: the live (green) note once real quotes land, otherwise
     /// the sample/offline notice — surfacing `feedError` (web off, unreachable)
     /// when there is one so the message is actionable.
+    // Every Text in these three banners is line-capped, and that cap is load-bearing
+    // (2026-09-11). Each sits in an `HStack { icon; Text.fixedSize(vertical:); Spacer() }`.
+    // The Spacer takes all offered width, so in a sizing pass that offers no concrete width the
+    // Text answers with its FULLY WRAPPED height — measured 2185pt for the ~150-character live
+    // banner, roughly one character per line. That number became the NavigationSplitView's own
+    // height, and AppKit centred the oversized split view inside the real content area: the
+    // sidebar's whole Workspace group (Home, Research, Paper trading, Chat) sat above the top
+    // edge, the briefing started mid-list, and nothing scrolled to recover either end. It was
+    // invariant to window width, window height, page and sidebar visibility, which is what gave
+    // it away. The cap keeps normal wrapping at real widths and makes the degenerate pass finite.
     @ViewBuilder private var feedBanner: some View {
         if store.isSampleData { sampleBanner }
         else if store.loadedFromCache { cachedBanner }   // last-good disk cache is NOT live — say so
@@ -748,6 +758,7 @@ struct MarketsView: View {
             Text(cachedBannerText)
                 .font(.caption).foregroundStyle(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
             Spacer()
         }
         .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
@@ -794,6 +805,7 @@ struct MarketsView: View {
                 Text(text)
                     .font(.caption).foregroundStyle(.white.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(3)
                 Spacer()
             }
             if let err = store.feedError {
@@ -802,6 +814,7 @@ struct MarketsView: View {
                         .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
                     Text(err).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
                 }
             }
         }
@@ -1036,6 +1049,7 @@ struct MarketsView: View {
                  + (store.feedError.map { " \($0)" } ?? ""))
                 .font(.caption).foregroundStyle(.white.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
             Spacer()
         }
         .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
