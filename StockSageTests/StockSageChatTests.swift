@@ -140,12 +140,10 @@ struct StockSageChatTests {
         if state == "long-no-fill" { #expect(heights[0] > heights[1], "The complete saved reason must wrap at narrow width") }
     }
 
-    @Test(arguments: [false, true])
-    func renderDesktopSidebarWithIsolatedPreferences(collapsed: Bool) async throws {
+    @Test func renderDesktopSidebarWithoutTouchingPreferencesOrSelection() async throws {
         let suite = "stocksage.sidebar.fixture.\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
         defer { preferences.removePersistentDomain(forName: suite) }
-        preferences.set(collapsed, forKey: "stocksage.mac.sidebar.collapsed")
         let initialPreferences = preferences.persistentDomain(forName: suite) ?? [:]
         var selection: MarketSection = .catalysts
         var changes = 0
@@ -153,12 +151,12 @@ struct StockSageChatTests {
             set: { selection = $0; changes += 1 }))
             .defaultAppStorage(preferences)
             .environment(\.colorScheme, .dark)
-            .frame(height: 700)
-        let size = try await capture(sidebar, name: "stocksage-sidebar-\(collapsed)")
-        #expect(size.width == StockSageDesktop.sidebarWidth(collapsed: collapsed) && size.height == 700)
-        #expect(selection == .catalysts && changes == 0)
+            .frame(width: 260, height: 700)
+        let size = try await capture(sidebar, name: "stocksage-sidebar")
+        #expect(size.width == 260 && size.height == 700)
+        #expect(selection == .catalysts && changes == 0, "Rendering must not write the selection")
         #expect(NSDictionary(dictionary: preferences.persistentDomain(forName: suite) ?? [:])
-            .isEqual(to: initialPreferences))
+            .isEqual(to: initialPreferences), "The native sidebar keeps no preference of its own")
     }
 
     @Test(arguments: [360, 760], ["filtered", "loading", "empty", "failed-empty", "failed-retained", "sort"])
@@ -267,6 +265,123 @@ struct StockSageChatTests {
             #expect(size.height > 110, "The narrow first-run header needs room for its full description and Run action")
         }
         #expect(actions == 0, "Rendering either layout must not start, stop or switch a research scan")
+    }
+
+    @Test func researchSelectionClearsWhenFilteredOutOrHorizonChanges() async throws {
+        typealias R = StockSageHorizonResearch
+        let suite = "stocksage.research.presentation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let research = R()
+        func listing(_ symbol: String) -> R.Listing {
+            .init(ticker: symbol, name: "\(symbol) synthetic", market: "stocks", locale: "us", active: true,
+                  type: "CS", currency_name: "usd", primary_exchange: "XNAS")
+        }
+        let started = research.start(.week, allowed: { true }, universe: { [listing("AAPL"), listing("MSFT")] }, analyze: { item in
+            let verdict: StockSageAIAssessment.Verdict? = item.ticker == "AAPL"
+                ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
+                : nil
+            return .init(verdict: verdict, note: "Synthetic research only", model: verdict == nil ? "" : "fixture")
+        })
+        try #require(started)
+        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil && research.scans[.week]?.listings.count == 2)
+        let requestedAt = try #require(research.scans[.week]?.at)
+        let model = ResearchPresentationModel()
+        let host = NSHostingController(rootView: ResearchPresentationFixture(model: model, store: store, research: research)
+            .defaultAppStorage(defaults))
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 900, height: 800),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        func waitFor(_ ready: @MainActor () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready())
+        }
+        // Wider margin than a single render cycle: under heavy concurrent system load (e.g. a
+        // parallel xcodebuild) a 100ms settle was observed to read state before SwiftUI's
+        // coalesced re-render landed, producing a spurious failure — reproduced once in three
+        // isolated reruns confirmed the production logic itself was correct (2026-09-10).
+        func settle() async throws { for _ in 0..<15 { try await Task.sleep(for: .milliseconds(20)) } }
+        try await waitFor { model.appearances == 1 }
+        #expect(model.presentation.selected == nil && model.presentation.horizon == .week)
+
+        // A search that still matches keeps the selection (spec: clear only when filtered OUT).
+        model.presentation.selected = "AAPL"
+        model.presentation.search = "AAP"
+        try await settle()
+        #expect(model.presentation.selected == "AAPL", "A matching search must not close the detail")
+
+        // Filtered out by search → cleared.
+        model.presentation.search = "MSF"
+        try await waitFor { model.presentation.selected == nil }
+
+        // Buy-only filter removes a non-Buy selection → cleared.
+        model.presentation.search = ""
+        try await settle()
+        model.presentation.selected = "MSFT"
+        model.presentation.buysOnly = true
+        try await waitFor { model.presentation.selected == nil }
+
+        // Buy-only filter keeps a Buy selection.
+        model.presentation.buysOnly = false
+        try await settle()
+        model.presentation.selected = "AAPL"
+        model.presentation.buysOnly = true
+        try await settle()
+        #expect(model.presentation.selected == "AAPL", "Buy-only must not close a Buy's detail")
+
+        // Horizon change clears selection and filters.
+        model.presentation.horizon = .fortnight
+        try await waitFor { model.presentation.selected == nil && model.presentation.search == "" && !model.presentation.buysOnly }
+
+        #expect(research.running == nil && research.scans[.fortnight] == nil && research.scans[.week]?.at == requestedAt,
+                "Rendering and selection changes must never start, stop or replace a scan")
+        #expect(!window.isKeyWindow)
+    }
+
+    @Test func renderNativeWorkspaceWithResearchInspectorAsTrailingColumn() async throws {
+        typealias R = StockSageHorizonResearch
+        let suite = "stocksage.workspace.capture.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let research = R()
+        func listing(_ symbol: String) -> R.Listing {
+            .init(ticker: symbol, name: "\(symbol) synthetic", market: "stocks", locale: "us", active: true,
+                  type: "CS", currency_name: "usd", primary_exchange: "XNAS")
+        }
+        let started = research.start(.week, allowed: { true }, universe: { [listing("AAPL"), listing("MSFT")] }, analyze: { item in
+            .init(verdict: item.ticker == "AAPL"
+                    ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
+                    : nil, note: "Synthetic research only", model: "fixture")
+        })
+        try #require(started)
+        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil)
+        var presentation = StockSageResearchModesPanel.Presentation()
+        presentation.selected = "AAPL"
+        var selection: MarketSection = .research
+        // The production shape: sidebar column + detail ScrollView hosting the panel and its inspector.
+        let workspace = NavigationSplitView {
+            StockSageDesktopNavigation(selection: Binding(get: { selection }, set: { selection = $0 }))
+        } detail: {
+            ScrollView {
+                StockSageResearchModesPanel(store: store, research: research,
+                    presentation: Binding(get: { presentation }, set: { presentation = $0 }))
+                    .padding(24)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .frame(width: 1200, height: 800)
+        let size = try await capture(workspace, name: "stocksage-native-workspace-inspector")
+        #expect(size.width == 1200 && size.height == 800)
+        #expect(presentation.selected == "AAPL" && selection == .research, "Rendering must not alter selection state")
+        #expect(research.running == nil, "Rendering must not start a scan")
     }
 
     @Test func nativeQuestionFocusUsesActualFieldWithoutOwnerState() async throws {
@@ -565,6 +680,58 @@ struct StockSageChatTests {
         #expect(size.width == CGFloat(width) && size.height > 100)
     }
 
+    @Test func nativeChatDraftSurvivesNavigationWithoutSavingATurn() async throws {
+        let suite = "stocksage.chat.draft.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let selection = ChatNavigationSelection(), probe = ChatNavigationProbe()
+        let host = NSHostingController(rootView: ChatDraftNavigationFixture(selection: selection,
+            store: store, probe: probe).defaultAppStorage(defaults))
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
+            width: 850, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        // The production composer is a SwiftUI TextField (NSTextField on macOS); its editable
+        // NSTextView is the window field editor, which exists only while the field has focus.
+        func field(in view: NSView) -> NSTextField? {
+            if let text = view as? NSTextField, text.isEditable { return text }
+            return view.subviews.lazy.compactMap { field(in: $0) }.first
+        }
+        func waitFor(_ ready: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready())
+        }
+        // Wait without requiring, so a lost draft is recorded on the assertion below, not on a gate.
+        func settle(_ ready: () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        try await waitFor { field(in: host.view) != nil && probe.chatAppearances == 1 }
+        let composer = try #require(field(in: host.view))
+        window.makeFirstResponder(composer)
+        try await waitFor { window.firstResponder is NSTextView }
+        let editor = try #require(window.firstResponder as? NSTextView)
+        let draft = "Compare the evidence, not a price prediction."
+        editor.insertText(draft, replacementRange: NSRange(location: 0, length: 0))
+        try await waitFor { composer.stringValue == draft }
+        window.makeFirstResponder(nil)
+        try await waitFor { !(window.firstResponder is NSTextView) }
+        selection.isChat = false
+        try await waitFor { probe.otherAppearances == 1 && field(in: host.view) == nil }
+        selection.isChat = true
+        try await waitFor { probe.chatAppearances == 2 && field(in: host.view) != nil }
+        try await settle { field(in: host.view)?.stringValue == draft }
+        #expect(field(in: host.view)?.stringValue == draft, "The real composer must show the unsent draft again.")
+        #expect(probe.session?.draft == draft, "The draft belongs to the session that outlives the Chat page.")
+        #expect(probe.session?.turns.isEmpty == true && probe.session?.pending == nil,
+                "Typing and navigating must not submit inference or create a historical turn.")
+        #expect(!(window.firstResponder is NSTextView), "Returning to Chat must not steal focus by itself.")
+    }
+
     @Test(arguments: ["completed", "cancelled"])
     func nativeNavigationRetainsUnsavedChatSession(_ state: String) async throws {
         let files = FileManager.default
@@ -716,6 +883,9 @@ struct StockSageChatTests {
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
             width: 500, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // The app declares .preferredColorScheme(.dark) on its window; give the offscreen host the
+        // same AppKit appearance so system controls and label colours match what ships.
+        window.appearance = NSAppearance(named: .darkAqua)
         window.contentViewController = host
         window.orderBack(nil)
         defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
@@ -1082,6 +1252,32 @@ struct StockSageChatTests {
         #expect(try Data(contentsOf: blocker) == blockerBytes)
     }
 
+    @Test func chatDraftIsNeverPersistedAndOnlyASuccessfulSendClearsIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let chat = StockSageChatSession(historyURL: url)
+        let draft = "Unsent draft · مسودة غير مرسلة"
+        chat.draft = draft
+        #expect(!FileManager.default.fileExists(atPath: url.path), "Typing alone must not create or save history")
+        let id = try #require(chat.begin(question: "Explain risk", snapshot: snapshot(), model: "qwen"))
+        chat.finish(id: id, text: #"{"analysis":"Risk includes uncertainty and losses.","evidence":[]}"#)
+        #expect(chat.storageError == nil && chat.turns.count == 1)
+        #expect(chat.draft == draft, "Turns carry their own question; they never read or clear the draft")
+        let saved = try Data(contentsOf: url)
+        let text = String(decoding: saved, as: UTF8.self)
+        #expect(!text.contains("مسودة") && !text.contains("\"draft\""), "history.json is [Turn] only")
+        #expect(try JSONDecoder().decode([StockSageChatSession.Turn].self, from: saved).map(\.question) == ["Explain risk"])
+        let reloaded = StockSageChatSession(historyURL: url)
+        #expect(reloaded.turns.count == 1 && reloaded.draft == "", "A relaunch restores turns, never an unsent draft")
+        let second = try #require(chat.begin(question: "Second question", snapshot: snapshot(), model: "qwen"))
+        chat.cancel()
+        #expect(chat.pending == nil && chat.turns.last?.id == second && chat.draft == draft, "Cancel leaves the draft alone")
+        chat.clear()
+        #expect(chat.turns.isEmpty && chat.draft == draft,
+                "Delete history keeps the unsent draft; only ChatSection.send clears it, after begin succeeds")
+    }
+
     @Test func privatePersistenceReloadAndCorruptFileProtection() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1209,6 +1405,38 @@ struct StockSageChatTests {
             .padding(16).frame(width: 400)
             .onAppear { ready($fieldFocused, $question) }
             .onChange(of: question) { _, value in edited(value) }
+    }
+}
+
+@MainActor private struct ChatDraftNavigationFixture: View {
+    @ObservedObject var selection: ChatNavigationSelection
+    let store: StockSageStore
+    let probe: ChatNavigationProbe
+    var body: some View {
+        StockSageChatNavigation(isChat: selection.isChat, historyURL: nil) { session in
+            StockSageChatSection(store: store, openModelSettings: {}, chat: session)
+                .onAppear { probe.session = session; probe.chatAppearances += 1 }
+                .onDisappear { probe.chatDisappearances += 1 }
+        } other: {
+            Text("Other workspace").onAppear { probe.otherAppearances += 1 }
+        }
+    }
+}
+
+@MainActor private final class ResearchPresentationModel: ObservableObject {
+    @Published var presentation = StockSageResearchModesPanel.Presentation()
+    var appearances = 0
+}
+
+@MainActor private struct ResearchPresentationFixture: View {
+    @ObservedObject var model: ResearchPresentationModel
+    let store: StockSageStore
+    let research: StockSageHorizonResearch
+    var body: some View {
+        ScrollView {
+            StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
+                .onAppear { model.appearances += 1 }
+        }.frame(width: 900, height: 800)
     }
 }
 

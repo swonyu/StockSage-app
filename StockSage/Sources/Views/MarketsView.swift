@@ -24,15 +24,13 @@ struct MarketsView: View {
         .filter { StockSageAllocation.assetClass($0.symbol) == "Equity" }.count
 
     @State private var section: MarketSection
+    @State private var researchPresentation = StockSageResearchModesPanel.Presentation()
+
     #if os(macOS)
     @State private var desktopPortfolioPage: StockSageDesktop.PortfolioPage = .holdings
     @State private var desktopBriefingExpanded = false
     #endif
-    #if os(iOS)
-    /// iPhone left navigation drawer. Not persisted — a drawer left open across launches
-    /// would hide the board on cold start, which is the opposite of the fix.
-    @State private var navOpen = false
-    #endif
+
     @AppStorage("marketsWatchSort") private var sort: MarketSort = .feed
     @State private var showBrowseMarkets = false
     /// Ideas board ordering: by expected value, EV-per-day velocity, or signal rank.
@@ -410,12 +408,6 @@ struct MarketsView: View {
     @State private var hoveredAlertSymbol: String?
     @State private var hoveredHeatID: UUID?
     @State private var hoveredIdeaID: String?
-    /// Staggered entrance. Pre-set under `--qa` so the offscreen snapshot
-    /// (onAppear never fires) captures the settled layout, not the pre-entrance pose.
-    // STANDALONE FIX (2026-07-16, pixel-verified): the parent's fade-in gate left the whole
-    // board at opacity 0 in the standalone (entrance animation never completed; footer — the
-    // only ungated element — rendered alone). The fade is cosmetic; a visible board is not.
-    @State private var appeared = true
     /// Tracks symbols whose multi-timeframe fetch task has completed (success OR failure).
     /// Used to bound the weekly-timeframe spinner: once the task finishes, if the store
     /// still has no data for the symbol the fetch failed and we show "unavailable" instead
@@ -430,15 +422,15 @@ struct MarketsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `qaSection` lets the QA harness capture a specific sub-section (e.g. the
-    /// heatmap) offscreen; normal use defaults to the watchlist.
-    // Land on the EV-ranked Ideas board on open — the owner's "where's my best move?" answer,
-    // 0 taps in. (The QA harness passes an explicit section so its snapshots stay deterministic.)
+    /// heatmap) offscreen; normal use defaults to Home — both platforms land there on open
+    /// (iPhone's first native tab), so `--section <rawValue>` is the only way to start
+    /// elsewhere. (The QA harness passes an explicit section so its snapshots stay deterministic.)
     /// QA-only seam (mirrors `qaSection`): when set, `body` renders the idea-detail SHEET
     /// content for the matching `store.ideas` symbol directly — no `.sheet` presentation,
     /// so the harness can snapshot it pixel-stable and unclipped. nil (every non-QA
     /// construction site) is byte-identical to today's body; never set outside QASnapshots.
     private let qaDetailSymbol: String?
-    init(qaSection: MarketSection = .ideas, qaDetailSymbol: String? = nil) {
+    init(qaSection: MarketSection = .briefing, qaDetailSymbol: String? = nil) {
         // Sweep seam (mirrors --qa, 2026-07-27): `--section heatmap` drives the initial tab
         // from the command line so the iOS-simulator sweep can screenshot every section
         // without UI scripting. Absent argument = byte-identical to today.
@@ -483,92 +475,8 @@ struct MarketsView: View {
             #if os(macOS)
             desktopWorkspace
             #else
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    erasedOnIOS(feedBanner)
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 8)
-                        .animation(DS.Motion.lux.delay(0.05), value: appeared)
-                        .transition(.opacity.combined(with: .offset(y: -4)))
-                    // ── iPhone reading order (owner 2026-07-28: "wrong order — wrong things on
-                    // top"). The section the user actually SELECTED renders here, directly under
-                    // the freshness banner, instead of below five context cards. Previously
-                    // reaching your own ideas meant scrolling past regime → forward-test →
-                    // catalysts → money-velocity → CTA every single time.
-                    //
-                    // feedBanner stays above it: it states whether prices are live, and a
-                    // staleness claim must be read BEFORE the numbers it qualifies, never after.
-                    // Context cards still render — just below the thing you came for.
-                    #if os(iOS)
-                    sectionContent
-                    // Hierarchy (owner 2026-07-28: "cards look samey — no hierarchy"). Every
-                    // card is the same grey box at the same weight, so nothing reads as more
-                    // important than anything else. Rather than restyle 58 inline card-chrome
-                    // sites — a large diff with a large regression surface — the board is
-                    // GROUPED: what you selected sits above this rule, market-wide context
-                    // below it. One divider does what eight restyles would, and it survives
-                    // any later change to the individual cards.
-                    HStack(spacing: DS.Space.sm) {
-                        Text("MARKET CONTEXT")
-                            .font(.system(size: mvFont9, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .accessibilityAddTraits(.isHeader)
-                        Rectangle().fill(DS.Palette.hairline).frame(height: 1)
-                    }
-                    .padding(.top, DS.Space.xs)
-                    .opacity(appeared ? 1 : 0)
-                    .animation(DS.Motion.lux.delay(0.06), value: appeared)
-                    #endif
-                    erasedOnIOS(regimeCard)
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 8)
-                        .animation(DS.Motion.lux.delay(0.06), value: appeared)
-                    erasedOnIOS(forwardProgressStrip)
-                        .opacity(appeared ? 1 : 0)
-                        .animation(DS.Motion.lux.delay(0.06), value: appeared)
-                    erasedOnIOS(catalystCard)
-                        .opacity(appeared ? 1 : 0)
-                        .animation(DS.Motion.lux.delay(0.065), value: appeared)
-                    erasedOnIOS(moneyVelocityCard)
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 8)
-                        .animation(DS.Motion.lux.delay(0.07), value: appeared)
-                    // Always-visible best-move CTA (FASTMONEY_BACKLOG #3) — the single
-                    // highest-EV idea as a concrete, sizeable, copyable order ticket,
-                    // on EVERY section tab (unlike bestOpportunityCard, Ideas-tab only).
-                    // Hierarchy lens 2026-07-09: on the Ideas section, bestOpportunityCard is a
-                    // strict SUPERSET of this CTA (same order, same caveats, plus R:R/Win est./
-                    // Base size/Target) rendered one card below — the same ticket twice added
-                    // length, not decision content. The CTA's own doc says its purpose is the
-                    // OTHER tabs; it keeps serving them unchanged.
-                    if section != .ideas {
-                        erasedOnIOS(bestOpportunityCTA)
-                            .opacity(appeared ? 1 : 0)
-                            .offset(y: appeared ? 0 : 8)
-                            .animation(DS.Motion.lux.delay(0.075), value: appeared)
-                    }
-                    // iPhone: primary navigation moved OUT of the scroll to the pinned bottom
-                    // bar (`phoneTabBar`) — rendering the strip here as well would be the same
-                    // control twice, and burying it mid-scroll is the confusion being fixed.
-                    // macOS keeps the wide segmented picker inline, byte-identical to before.
-                    #if !os(iOS)
-                    sectionPicker
-                        .opacity(appeared ? 1 : 0)
-                        .offset(y: appeared ? 0 : 8)
-                        .animation(DS.Motion.lux.delay(0.08), value: appeared)
-                    #endif
-                    // macOS keeps the original reading order: context first, section last.
-                    // On iPhone `sectionContent` is rendered ABOVE, right under the banner.
-                    #if !os(iOS)
-                    sectionContent
-                    #endif
-                }
-                .animation(DS.Motion.smooth, value: store.isSampleData)
-                .padding(DS.Space.xl)
-                // Centered content column, same as the chat surfaces.
-                .frame(maxWidth: 780, alignment: .leading)
-                .frame(maxWidth: .infinity)
-            }
+            phoneWorkspace
+
             #endif
             }
             #if os(iOS)
@@ -643,66 +551,11 @@ struct MarketsView: View {
                     section = .alerts
                 }
             }
-            // Pinned frosted top toolbar (macOS 27 overhaul wave 2): identity +
-            // feed-provenance + session clocks stay visible while the board scrolls
-            // beneath — provenance is an honesty surface, so it should never scroll
-            // away. Fade-only entrance (an offset would slide a PINNED bar over
-            // content). Same auto-inset behavior as the bottom bar.
-            #if os(iOS)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                headerBody
-                    .opacity(appeared ? 1 : 0)
-                    .animation(DS.Motion.lux, value: appeared)
-                    .padding(.horizontal, DS.Space.xl)
-                    .padding(.vertical, DS.Space.sm)
-                    .frame(maxWidth: 780, alignment: .leading)
-                    .frame(maxWidth: .infinity)
-                    .background(.ultraThinMaterial)
-                    .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1),
-                             alignment: .bottom)
-            }
-            #endif
-            // Disclaimer footer REMOVED (owner directive 2026-07-27: private build,
-            // "not needed"). If this app ever ships publicly, restore from git history
-            // (MarketDisclaimerFooter + StockSageMini, deleted this commit).
-            #if os(iOS)
-            // Left slide-out navigation (2026-07-28, owner: "tabs on the left … with a slider
-            // thing"). The grip rides the leading edge, vertically centred so it sits under the
-            // thumb; the drawer slides over the board rather than insetting it, so the board
-            // keeps its full width when closed.
-            // Drawer first, grip SECOND: overlays stack in declaration order, so the grip must
-            // come last or the drawer's full-bleed layer sits on top of it and swallows the tap
-            // (verified on device 2026-07-28 — swipe opened the drawer, the grip did nothing).
-            .overlay(alignment: .leading) { phoneNavDrawer }
-            .overlay(alignment: .leading) {
-                phoneNavHandle
-                    .padding(.leading, 2)
-                    .opacity(appeared ? 1 : 0)
-                    .animation(DS.Motion.lux, value: appeared)
-            }
-            // Edge swipe to open — the drawer's expected gesture. Bounded to a pull that starts
-            // near the leading edge and is decisively horizontal, so it cannot fight the board's
-            // vertical scroll or the existing section swipe attached to `content`.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 20)
-                    .onEnded { g in
-                        let dx = g.translation.width, dy = g.translation.height
-                        guard abs(dx) > abs(dy) * 2 else { return }
-                        if dx > 60, g.startLocation.x < 40 {
-                            withAnimation(DS.Motion.smooth) { navOpen = true }
-                        } else if dx < -60, navOpen {
-                            withAnimation(DS.Motion.smooth) { navOpen = false }
-                        }
-                    }
-            )
-            #endif
+
         }
         // Canvas with atmosphere (macOS 27 overhaul): slate wash + faint crimson
         // aurora — the depth Liquid Glass materials sample. Was flat codeSurface.
         .background(DSCanvasBackground().ignoresSafeArea())
-        .onAppear {
-            appeared = true
-        }
         // Home-screen widget feed (2026-07-28). Written HERE rather than in the store because
         // every input — best opportunity, the account size heat needs, the paper book — is
         // already computed on this view; recomputing them in the store would be a second source
@@ -777,45 +630,52 @@ struct MarketsView: View {
     #if os(macOS)
     /// The changing page is INSIDE the common lifecycle owner, never another store/task root.
     private var desktopWorkspace: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             StockSageDesktopNavigation(selection: $section)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
+        } detail: {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(StockSageDesktop.title(for: section))
-                            .font(.system(size: 30, weight: .semibold)).accessibilityAddTraits(.isHeader)
-                        Text(StockSageDesktop.subtitle(for: section))
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 12)
-                    liveStreamIndicator
-                    refreshButton
-                }
-                .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 18)
-                feedBanner.padding(.horizontal, 28).padding(.bottom, 16)
-                Divider().opacity(0.5)
+                feedBanner.padding(.horizontal, 24).padding(.vertical, 12)
+                Divider()
+
                 StockSageChatNavigation(isChat: section == .chat,
                                        historyURL: StockSageChatSession.localHistoryURL) { session in
                     StockSageChatSection(store: store, openModelSettings: openDesktopModelSettings,
                                         chat: session)
                 } other: {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 22) {
-                                Color.clear.frame(height: 0).id("desktop-page-top")
-                                if section == .briefing { desktopHome }
-                                else { content }
+                    if section == .research {
+                        // Rendered directly, not nested in the shared page ScrollView below: the
+                        // panel owns its own scroll root on macOS so its `.inspector` detail
+                        // attaches to the detail column, not to a scroll position (see its
+                        // manual() for the pixel-verified reasoning).
+                        StockSageResearchModesPanel(store: store, presentation: $researchPresentation)
+                    } else {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 22) {
+                                    Color.clear.frame(height: 0).id("desktop-page-top")
+                                    if section == .briefing { desktopHome }
+                                    else { content }
+                                }
+                                .padding(28).frame(maxWidth: 1200, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .top)
                             }
-                            .padding(28).frame(maxWidth: 1200, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .top)
+                            .onChange(of: section) { _, _ in proxy.scrollTo("desktop-page-top", anchor: .top) }
                         }
-                        .onChange(of: section) { _, _ in proxy.scrollTo("desktop-page-top", anchor: .top) }
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .navigationTitle(StockSageDesktop.title(for: section))
+            .navigationSubtitle(StockSageDesktop.subtitle(for: section))
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    liveStreamIndicator
+                    refreshButton
+                }
+            }
         }
-        .background(Color(red: 0.094, green: 0.094, blue: 0.102))
+        .navigationSplitViewStyle(.balanced)
     }
 
     private func openDesktopModelSettings() {
@@ -1116,199 +976,8 @@ struct MarketsView: View {
         String(format: "Effective bets ≈ %.1f of %d — correlated positions count less", eb.nEff, eb.n)
     }
 
-    /// The section the user selected, plus the iPhone swipe-between-sections gesture.
-    /// Extracted 2026-07-28 so the phone can render it FIRST (directly under the freshness
-    /// banner) while macOS keeps it last — one definition, so the gesture and the entrance
-    /// animation cannot drift between the two orders.
-    @ViewBuilder private var sectionContent: some View {
-        erasedOnIOS(content)
-            #if os(iOS)
-            // SWIPE BETWEEN SECTIONS: attached to the section CONTENT, deliberately not the
-            // whole board — a board-level gesture fired while the user was merely scrolling
-            // a horizontal strip, changing section under their finger. Guarded so it cannot
-            // fight vertical scrolling or the heatmap grid: fires only when the drag is
-            // decisively horizontal (|dx| > 60 AND |dx| > 2*|dy|). No wrap-around.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 30)
-                    .onEnded { g in
-                        let dx = g.translation.width, dy = g.translation.height
-                        guard abs(dx) > 60, abs(dx) > abs(dy) * 2 else { return }
-                        // Leading-edge drags belong to the nav drawer: both gestures are
-                        // `simultaneous`, so without this guard one rightward edge swipe would
-                        // open the drawer AND step back a section — two navigations, one intent.
-                        guard g.startLocation.x > 44 else { return }
-                        if let next = section.neighbour(after: dx < 0) {
-                            withAnimation(DS.Motion.smooth) { section = next }
-                        }
-                    }
-            )
-            .sensoryFeedback(.selection, trigger: section)
-            #endif
-            .opacity(appeared ? 1 : 0)
-            .offset(y: appeared ? 0 : 6)
-            .animation(DS.Motion.lux.delay(0.12), value: appeared)
-    }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: DS.Space.sm) {
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous)
-                    .fill(DS.Gradient.brand)
-                    .frame(width: 36, height: 36)
-                    .dsShadow(DS.Elevation.accentGlow(0.35))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous)
-                            .stroke(LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.02)],
-                                                   startPoint: .top, endPoint: .bottom),
-                                    lineWidth: 0.75)
-                    )
-                if reduceMotion {
-                    // Reduce Motion: static icon (no scale bounce-in).
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.system(size: mvFont14, weight: .bold))
-                        .foregroundStyle(.white)
-                } else {
-                    KeyframeAnimator(initialValue: CGFloat(1.0), trigger: appeared) { scale in
-                        Image(systemName: "chart.line.uptrend.xyaxis")
-                            .font(.system(size: mvFont14, weight: .bold))
-                            .foregroundStyle(.white)
-                            .scaleEffect(scale)
-                    } keyframes: { _ in
-                        KeyframeTrack {
-                            LinearKeyframe(0.60, duration: 0.07)
-                            SpringKeyframe(1.18, duration: 0.28, spring: .snappy)
-                            SpringKeyframe(1.0, duration: 0.22, spring: .bouncy)
-                        }
-                    }
-                }
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text("Markets")
-                        .font(.system(size: mvFont17, weight: .semibold)).foregroundStyle(.white)
-                    // The "Signals & Portfolio" eyebrow is macOS-only (2026-07-28). On a 402pt
-                    // phone the header already carries an icon, title, subtitle, two market
-                    // clocks and three buttons; the eyebrow had no room and word-wrapped inside
-                    // its own pill — rendering as "SIGNAL / S & / PORTF / OLIO". It is pure
-                    // decoration, so the phone drops it rather than shrinking real content.
-                    #if !os(iOS)
-                    Eyebrow(text: "Signals & Portfolio")
-                    #endif
-                }
-                // W3: TimelineView ticks the LIVE branch's "updated Ns ago" every second
-                // (headerSubtitle(now:) — the stale/cached/sample branches recompute identically
-                // each tick since they don't read `now`, so this costs nothing extra for them).
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let text = headerSubtitle(now: context.date)
-                    Text(text)
-                        .font(.system(size: mvFont11)).foregroundStyle(.secondary)
-                        // Bound the wrap: this string grows to a full freshness sentence, and
-                        // unbounded it took three lines and shoved the clocks off the header.
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.85)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .contentTransition(.opacity)
-                        .animation(DS.Motion.smooth, value: text)
-                }
-                // Extension batch (2026-07-16): schedule-state clock for both markets — a
-                // SCHEDULE readout (holidays not modeled; the caveat is in its .help), never
-                // a data-freshness claim (that stays with the quote banner).
-                // iPhone renders the clocks BELOW this row at full width — see headerBody.
-                #if !os(iOS)
-                MarketSessionClockView()
-                #endif
-            }
-            Spacer()
-            liveStreamIndicator
-            refreshButton
-            #if os(iOS)
-            settingsButton
-            #endif
-        }
-    }
-
-    /// What the top bar actually renders. On iPhone the market clocks move out of the title
-    /// column onto their own full-width row (2026-07-28): sharing ~200pt with the refresh and
-    /// settings buttons truncated the Tadawul line to "Scheduled open 10:00 R…", eating the
-    /// countdown — which is the only actionable part of a schedule readout.
-    @ViewBuilder private var headerBody: some View {
-        #if os(iOS)
-        VStack(alignment: .leading, spacing: 3) {
-            header
-            MarketSessionClockView()
-        }
-        #else
-        header
-        #endif
-    }
-
-    #if os(iOS)
-    /// Gear beside refresh (owner directive 2026-07-27) — same visual family as refreshButton.
-    private var settingsButton: some View {
-        Button { showIOSSettings = true } label: {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: mvFont12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
-                .frame(width: 30, height: 30)
-                .background(Color.white.opacity(0.08), in: Circle())
-                .overlay(Circle().stroke(
-                    LinearGradient(colors: [Color.white.opacity(0.20), Color.white.opacity(0.04)],
-                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
-                .padding(7)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Settings")
-        .sheet(isPresented: $showIOSSettings) {
-            StockSageIOSSettingsSheet()
-                #if os(iOS)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                #endif
-        }
-    }
-    #endif
-
-    /// Dates the same accepted observation as the banner, with its actual source.
-    /// The refresh counter is separate from market age; neither certifies a live price.
-    private func headerSubtitle(now: Date) -> String {
-        if !store.isSampleData, let when = store.lastUpdated {
-            // Reuse the same FAIL-CLOSED staleness logic as liveBanner (review item Q8, 2026-07-28)
-            // so the header and banner never contradict, and an unknown asOf never reads as live.
-            let asOf = store.closeableQuoteAsOf ?? store.quoteAsOf
-            let source = StockSageStore.quoteSourceLabel(store.symbols, asOf: asOf)
-            if let asOf, !asOf.timeIntervalSince1970.isFinite || !now.timeIntervalSince1970.isFinite || asOf > now {
-                return "Price timestamp unverified · \(source)"
-            }
-            let stale = Self.freshnessStale(asOf: asOf, now: now)
-            if stale, let asOf {
-                return "Last quote · \(source) · as of \(asOf.formatted(date: .abbreviated, time: .shortened))"
-            } else if stale {
-                return "Price age unknown · \(StockSageUniverse.marketCount) market groups · refresh for live"
-            }
-            return "Quotes · \(source) · \(StockSageUniverse.marketCount) market groups · \(Self.updatedAgoLabel(since: when, now: now))"
-        }
-        if store.loadedFromCache, let saved = store.cacheSavedAt {
-            // Use a date-aware format so a Friday cache opened Monday isn't shown as just "16:42".
-            #if os(iOS)
-            // Phone-compact (2026-07-28): the long form broke across lines mid-date
-            // ("as of 28 Jul / 2026 at 9:53 AM"), which reads as two different timestamps.
-            // Day+month+time still distinguishes a Friday cache opened on Monday — the whole
-            // point of the date-aware format — and the word "Cached" plus the live-banner
-            // directly below keep the not-live claim explicit. Year is the only thing dropped.
-            return "Cached \(saved.formatted(.dateTime.day().month(.abbreviated).hour().minute())) · refresh for live"
-            #else
-            return "Last-good (cached) as of \(saved.formatted(date: .abbreviated, time: .shortened)) · refresh for live"
-            #endif
-        }
-        if store.isSampleData {
-            // Be unmistakable that these are NOT real prices — tap refresh for live data.
-            return "⚠︎ SAMPLE prices (not real) — tap ↻ to load live data"
-        }
-        return "Rule-based momentum signals · educational, not financial advice"
-    }
-
-    /// Pure formatter behind the ticking header "updated …" line (W3) — how long ago the last
+    /// Pure formatter behind the ticking "updated …" phrase (W3) — how long ago the last
     /// live quote landed, rounded down to whole seconds/minutes. `nonisolated static` and
     /// side-effect-free (no internal `Date()`) so it's directly unit-testable
     /// (MarketsUpdatedAgoLabelTests) without a running TimelineView or a real wall clock.
@@ -1332,36 +1001,25 @@ struct MarketsView: View {
             .foregroundStyle(live.isStreaming ? DS.Palette.successSoft : .orange)
             .accessibilityLabel(live.diagnosticText)
             .help(live.diagnosticText)
+            #if os(macOS)
+            // One toolbar item, one instance total — a popover here is fine. On iPhone this
+            // view is instantiated per loaded tab (up to 11) sharing one `showFeedDiagnostics`;
+            // presenting from whichever instance is offscreen risks a UIKit "not in the window
+            // hierarchy" presentation, so that platform hoists a single sheet onto the TabView
+            // root instead (see phoneWorkspace) and this button only toggles the flag.
             .popover(isPresented: $showFeedDiagnostics) {
                 Text(live.diagnosticText).font(.caption).padding().frame(maxWidth: 440)
             }
+            #endif
         }
     }
 
+    /// System-chrome toolbar item (SWIFT_PITFALLS #5/#8): the hand-drawn circle belonged to the
+    /// retired custom header; inside a system toolbar the platform draws the control.
     private var refreshButton: some View {
-        Button { Task { await store.refresh() } } label: {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: mvFont12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
-                // Reduce Motion: no spin — .disabled(store.isRefreshing) below already shows the state.
-                .rotationEffect(.degrees(store.isRefreshing && !reduceMotion ? 360 : 0))
-                .animation(store.isRefreshing && !reduceMotion
-                           ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-                           : .default, value: store.isRefreshing)
-                .frame(width: 30, height: 30)
-                .background(Color.white.opacity(0.08), in: Circle())
-                .overlay(Circle().stroke(
-                    LinearGradient(colors: [Color.white.opacity(0.20), Color.white.opacity(0.04)],
-                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
-                // Keep the 30pt visual circle but pad the tappable region to the
-                // 44pt a11y hit-target floor (the only sub-44pt control in this header).
-                .padding(7)
-                .contentShape(Circle())
-        }
-        .buttonStyle(LuxPressStyle())
-        .disabled(store.isRefreshing)
-        .help("Refresh live quotes")
-        .accessibilityLabel("Refresh live quotes")
+        Button("Refresh live quotes", systemImage: "arrow.clockwise") { Task { await store.refresh() } }
+            .disabled(store.isRefreshing)
+            .help("Refresh live quotes")
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1389,163 +1047,107 @@ struct MarketsView: View {
                                    startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 
-    private var sectionPicker: some View {
-        // iOS port: 7 full labels don't fit a 430pt phone — wrap the SAME fully-modified
-        // picker in a horizontal scroller there (labels stay complete, mac byte-identical).
-        #if os(iOS)
-        ScrollView(.horizontal, showsIndicators: false) { sectionPickerCore }
-        #else
-        sectionPickerCore
-        #endif
-    }
-
-    private var sectionPickerCore: some View {
-        DSSegmentPicker(cases: Array(MarketSection.allCases), selection: $section) { $0.title }
-            .frame(maxWidth: 520)
-            // Review fix 2026-07-17: the app's primary navigation was the one
-            // DSSegmentPicker call site without a container label — segments speak
-            // their titles but the group itself had no name for VoiceOver.
-            .accessibilityLabel("Markets section")
-            // ⌘1–⌘8 section jumps (2026-07-17, owner "improve"): the primary nav sits mid-scroll,
-            // so Portfolio/Alerts/Briefing are all scroll-and-click today. Number-key jumps collapse
-            // that to one keystroke. Zero-size hidden buttons carry the shortcuts (the app has no
-            // .commands menu — every shortcut lives on an in-view control, matching the 3 that ship).
-            // Digit+⌘ never collides with text entry, so no @FocusState scoping is needed.
-            .background(sectionShortcutKeys)
-    }
-
-    /// Hidden ⌘1–⌘8 accelerators for the eight MarketSection tabs. Rendered zero-size behind the
-    /// picker; each sets `$section` so the shortcut mirrors a tab click exactly.
-    private var sectionShortcutKeys: some View {
-        ForEach(Array(MarketSection.allCases.enumerated()), id: \.element.id) { i, sec in
-            Button("") { section = sec }
-                .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .accessibilityHidden(true)
-        }
-    }
-
     #if os(iOS)
-    /// iPhone primary navigation (2026-07-28, owner: "the app is confusing … improve tabs
-    /// layout"). REPLACES the mid-scroll horizontal strip: `sectionPicker` rendered BELOW six
-    /// preamble cards, so switching section meant scrolling down ~1.5 screens and then sideways
-    /// through labels that don't all fit 430pt. A pinned bottom bar is the platform idiom —
-    /// always visible, thumb-reachable, costs no scrolling.
-    ///
-    /// Nothing is sacrificed: four sections hold permanent slots, the other three live one tap
-    /// deep in the More menu, which highlights while one of them is active so the current
-    /// location is never ambiguous. macOS is untouched — it keeps the wide segmented picker.
-    private var phoneNavDrawer: some View {
-        ZStack(alignment: .leading) {
-            // Scrim. Only hit-testable while open, so it never eats board taps when closed.
-            // NOT .ignoresSafeArea(): that expanded the ZStack past its parent's leading edge
-            // and dragged the panel ~20pt off-screen, clipping the icons and the "Sections"
-            // heading (seen on device 2026-07-28).
-            Color.black.opacity(navOpen ? 0.35 : 0)
-                .allowsHitTesting(navOpen)
-                .onTapGesture { withAnimation(DS.Motion.smooth) { navOpen = false } }
-
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text("Sections")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, DS.Space.md)
-                        .padding(.top, DS.Space.lg)
-                        .padding(.bottom, DS.Space.xs)
-
-                    ForEach(MarketSection.allCases) { sec in
-                        Button {
-                            withAnimation(DS.Motion.smooth) { section = sec; navOpen = false }
-                        } label: {
-                            phoneNavRow(sec)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .frame(width: 232, alignment: .leading)
-                .frame(maxHeight: .infinity)
-                // Liquid Glass (iOS 26+): the drawer samples the board sliding beneath it
-                // instead of sitting on an opaque slab. Deployment target is 26.5, so the
-                // API is unconditional here.
-                .glassEffect(.regular, in: .rect(cornerRadius: 0))
-                .overlay(Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1),
-                         alignment: .trailing)
-                .offset(x: navOpen ? 0 : -232)
-
-                Spacer(minLength: 0)
+    /// Builds its content only while on screen (plus an opt-in keep-alive), so hidden tabs cost
+    /// nothing per store tick. Appearance is tracked by a zero-size sentinel, which fires whether the
+    /// tab is a bar item or a route pushed from the system More list.
+    private struct PhonePage<Content: View>: View {
+        let keepAlive: Bool
+        @ViewBuilder let content: () -> Content
+        @State private var visible = false
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: 0)
+                    .onAppear { visible = true }
+                    .onDisappear { visible = false }
+                if visible || keepAlive { content() }
             }
         }
-        .animation(DS.Motion.smooth, value: navOpen)
-        .sensoryFeedback(.selection, trigger: section)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Markets sections")
-        .accessibilityHidden(!navOpen)
     }
 
-    /// One drawer row. 44pt minimum height is the Apple touch-target floor — the
-    /// 2026-07-27 review flagged sub-44pt controls elsewhere in this file for that reason.
-    private func phoneNavRow(_ sec: MarketSection) -> some View {
-        let active = section == sec
-        return HStack(spacing: DS.Space.sm) {
-            // Selected marker: a solid left bar, so position is readable without relying
-            // on colour alone (the palette's accent on grey is not a safe sole channel).
-            RoundedRectangle(cornerRadius: 2)
-                .fill(active ? DS.Palette.accent : .clear)
-                .frame(width: 3, height: 20)
-                .padding(.leading, DS.Space.xs)
-            Image(systemName: sec.icon)
-                .font(.system(size: 15, weight: active ? .semibold : .regular))
-                .frame(width: 22, alignment: .center)
-            Text(sec.title)
-                .font(.system(size: 15, weight: active ? .semibold : .regular))
-                .lineLimit(1)
-                // Selected LABEL stays white, not accent (contrast audit 2026-07-28): accent
-                // measures 3.89:1 on the card surface — under WCAG AA 4.5:1 for sub-18pt text.
-                // Lightening accent to clear AA lands on (0.99,0.48,0.55), which is visually
-                // indistinguishable from dangerSoft (1.0,0.50,0.50) — that trades a contrast
-                // bug for a semantic one ("selected" reading as "danger"). Selection is already
-                // carried by the accent bar, the accent icon, the row tint and semibold weight;
-                // the label does not need to be the fourth channel.
-                .foregroundStyle(Color.primary)
-            Spacer(minLength: 0)
+    /// One tab's content: the feed banner, the visibility-gated page, and Home's extra context
+    /// cards. Not itself a navigation container — see `phoneWorkspace` for why.
+    private func phonePageBody(_ destination: MarketSection) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: DS.Space.lg) {
+                erasedOnIOS(feedBanner)
+                // Only a page that is actually on screen is built: page bodies run
+                // their board/ideas prologues at construction and the store
+                // invalidates at streaming rate. Visibility is the page's own
+                // appearance, not the tab selection — a route opened from the
+                // system More list appears before the selection binding catches up.
+                // Chat stays built so its iPhone session and unsent draft survive
+                // tab switches (its onDisappear still cancels an in-flight request).
+                PhonePage(keepAlive: destination == .chat) {
+                    VStack(alignment: .leading, spacing: DS.Space.lg) {
+                        erasedOnIOS(page(for: destination))
+                        if destination == .briefing {
+                            MarketSessionClockView()
+                            erasedOnIOS(regimeCard)
+                            erasedOnIOS(catalystCard)
+                            erasedOnIOS(forwardProgressStrip)
+                            erasedOnIOS(moneyVelocityCard)
+                            // The best-move ticket rode every phone page before native
+                            // tabs; Home owns market context now, so it lives here once.
+                            erasedOnIOS(bestOpportunityCTA)
+                        }
+                    }
+                }
+            }
+            .padding()
+            .frame(maxWidth: 780, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        // Icon + bar keep accent: non-text elements answer to the 3:1 bar, which accent clears.
-        .foregroundStyle(active ? DS.Palette.accent : Color.primary)
-        .padding(.trailing, DS.Space.md)
-        .frame(minHeight: 44)
-        .background(active ? DS.Palette.accent.opacity(0.10) : .clear)
-        .contentShape(Rectangle())
-        .accessibilityLabel(sec.title)
-        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+        .navigationTitle(destination.workspaceTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                liveStreamIndicator
+                refreshButton
+                Button("Settings", systemImage: "gearshape") { showIOSSettings = true }
+            }
+        }
     }
 
-    /// The "slider" handle: a slim always-visible grip pinned to the left edge. Tapping it
-    /// opens the drawer; it is the discoverable affordance for the edge swipe, since a
-    /// swipe-only drawer is invisible to anyone who doesn't already know it's there.
-    private var phoneNavHandle: some View {
-        // Deliberately NOT a Button: as a Button in an overlay above the board's ScrollView the
-        // tap never reached the action (verified twice on device 2026-07-28 — the edge swipe
-        // opened the drawer, the grip did nothing, before AND after fixing overlay order).
-        // An explicit contentShape + onTapGesture hit-tests reliably here.
-        Image(systemName: "chevron.right")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(.secondary)
-            .frame(width: 30, height: 60)
-            .glassEffect(.regular, in: .rect(cornerRadius: 15))
-            .contentShape(Rectangle())
-            .onTapGesture { withAnimation(DS.Motion.smooth) { navOpen = true } }
-            .opacity(navOpen ? 0 : 1)
-            .allowsHitTesting(!navOpen)
-            .accessibilityLabel("Open sections")
-            .accessibilityAddTraits(.isButton)
+    /// Native tabs own navigation; the store and its refresh tasks stay in normalBody.
+    ///
+    /// Every tab gets its own `NavigationStack`, including the seven routes reached only through
+    /// the system "More" tab. Tried removing it there on the theory that More's own navigation
+    /// controller would double the chrome (2026-09-10); pixel-verified that theory wrong twice
+    /// over — the back chevron above the title is More's own affordance either way (present
+    /// identically whether this tab owns a NavigationStack or not, so it was never this tab's
+    /// doing to remove), and dropping the NavigationStack lost `.navigationTitle` entirely with
+    /// nothing to bridge it. Keep the stack; the chevron-plus-title combination is the platform's
+    /// normal pattern for a pushed detail, not a bug.
+    private var phoneWorkspace: some View {
+        TabView(selection: $section) {
+            ForEach(MarketSection.phoneSections) { destination in
+                Tab(value: destination) {
+                    NavigationStack { phonePageBody(destination) }
+                } label: {
+                    Label(destination.workspaceTitle, systemImage: destination.icon)
+                }
+            }
+        }
+        // One sheet per presentation on the owner: every tab's Settings/diagnostics button
+        // shares these, and neither depends on the retired custom header being rendered.
+        .sheet(isPresented: $showIOSSettings) {
+            StockSageIOSSettingsSheet()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showFeedDiagnostics) {
+            Text(live.diagnosticText).font(.caption).padding()
+                .presentationDetents([.medium])
+        }
     }
     #endif
 
-    @ViewBuilder private var content: some View {
-        switch section {
+
+    private var content: some View { page(for: section) }
+
+    @ViewBuilder private func page(for destination: MarketSection) -> some View {
+        switch destination {
         case .watchlist: signalListView(watchlistOnly: true)
         case .all:       signalListView(watchlistOnly: false)
         case .ideas:           ideasSection
@@ -1554,6 +1156,17 @@ struct MarketsView: View {
         case .portfolio:       portfolioSection
         case .alerts:          alertsSection
         case .briefing:        briefingSection
+        case .research:        StockSageResearchModesPanel(store: store, presentation: $researchPresentation)
+        case .paper:
+            #if os(macOS)
+            StockSagePaperAutomationPanel()
+            #else
+            ContentUnavailableView {
+                Label("Paper trading runs on your Mac", systemImage: "desktopcomputer")
+            } description: {
+                Text("Use StockSage on your Mac to start or pause same-day simulation and inspect its account. This iPhone does not sync that paper account or monitor exits in the background. Research here never submits orders.")
+            }
+            #endif
         case .chat:
             #if os(macOS)
             // desktopWorkspace routes Chat before invoking content from its non-Chat branch.
@@ -2050,7 +1663,7 @@ struct MarketsView: View {
         #if os(macOS)
         VStack(alignment: .leading, spacing: 24) {
             Picker("Portfolio view", selection: $desktopPortfolioPage) {
-                ForEach(StockSageDesktop.PortfolioPage.allCases) { page in Text(page.rawValue).tag(page) }
+                ForEach(StockSageDesktop.PortfolioPage.allCases) { page in Text(page.title).tag(page) }
             }
             .pickerStyle(.segmented).frame(maxWidth: 510)
             .accessibilityIdentifier("desktop.portfolio.tabs")
@@ -9712,7 +9325,7 @@ struct MarketsView: View {
         return analysisStale || priceStale
     }
 
-    /// FAIL-CLOSED freshness predicate shared by `liveBanner` and `headerSubtitle` (review item
+    /// FAIL-CLOSED freshness predicate used by `liveBanner` (review item
     /// Q8, 2026-07-28): an unknown `asOf` can never be judged live, so nil maps to `true` (stale),
     /// not `false`. The prior `?? false` justified itself as "an all-crypto board is always live" —
     /// dead since the 2026-07-16 Tadawul+NASDAQ restriction removed crypto from the universe
@@ -9955,18 +9568,21 @@ struct MarketsView: View {
 
 /// Sections shown inside the single Markets tab.
 enum MarketSection: String, CaseIterable, Identifiable {
-    case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, chat, briefing
+    case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, chat, briefing, research, paper
     var id: String { rawValue }
-
-    /// Neighbour in tab order for swipe navigation (iOS). Deliberately does NOT wrap:
-    /// hitting a wall tells you where you are; silently teleporting from Briefing back to
-    /// Watchlist loses that orientation. nil at each end.
-    func neighbour(after: Bool) -> MarketSection? {
-        let all = Self.allCases
-        guard let i = all.firstIndex(of: self) else { return nil }
-        let j = after ? i + 1 : i - 1
-        return all.indices.contains(j) ? all[j] : nil
+    // Four primary phone destinations; the native More list retains every other route.
+    static let phoneSections: [Self] = [
+        .briefing, .research, .catalysts, .chat, .watchlist, .ideas, .all,
+        .heatmap, .portfolio, .alerts, .paper
+    ]
+    var workspaceTitle: String {
+        switch self {
+        case .briefing: "Home"
+        case .all: "Markets"
+        default: title
+        }
     }
+
     var title: String {
         switch self {
         case .watchlist: return "Watchlist"
@@ -9978,11 +9594,12 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .alerts:    return "Alerts"
         case .briefing:  return "Briefing"
         case .chat:      return "Chat"
+        case .research:  return "Research"
+        case .paper:     return "Paper trading"
         }
     }
 
-    /// SF Symbol for the iPhone bottom tab bar. macOS keeps the text-only segmented
-    /// picker, so this is read only by `phoneTabBar`.
+    /// SF Symbol for the iPhone tab bar; the Mac sidebar maps most routes to outline glyphs.
     var icon: String {
         switch self {
         case .watchlist: return "star.fill"
@@ -9994,6 +9611,8 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .alerts:    return "bell.fill"
         case .briefing:  return "doc.text.fill"
         case .chat:      return "bubble.left.and.bubble.right.fill"
+        case .research:  return "doc.text.magnifyingglass"
+        case .paper:     return "arrow.left.arrow.right"
         }
     }
 

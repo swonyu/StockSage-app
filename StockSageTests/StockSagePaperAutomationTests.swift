@@ -594,7 +594,7 @@ struct StockSagePaperAutomationTests {
     @Test func monitoringStatusDoesNotDependOnResearchAndLabelsClosedSessions() throws {
         let open = try Date("2026-09-09T12:00:00Z", strategy: .iso8601)
         let closed = try Date("2026-09-09T02:00:00Z", strategy: .iso8601)
-        #expect(StockSagePaperAutomationPanel.monitoringLabel(running: true, at: open) == "Position and exit monitoring active")
+        #expect(StockSagePaperAutomationPanel.monitoringLabel(running: true, at: open) == "Position and exit monitoring enabled")
         #expect(StockSagePaperAutomationPanel.monitoringLabel(running: true, at: closed) == "Monitoring enabled · waiting for the next supported session")
         #expect(StockSagePaperAutomationPanel.monitoringLabel(running: false, at: open) == "Position monitoring paused")
     }

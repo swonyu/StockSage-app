@@ -29,6 +29,10 @@ struct StockSagePaperAutomationPanel: View {
                         Button("Start day trading") { automation.start() }
                     }
                 }
+                if automation.isRunning {
+                    Text("Pausing stops both research and exit checks. Open paper positions remain.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let progress = automation.researchProgress {
                     Text(progress.isIndeterminate ? "Preparing market data and Qwen…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
                         .font(.callout).monospacedDigit()
@@ -458,7 +462,7 @@ struct StockSagePaperAutomationPanel: View {
     static func monitoringLabel(running: Bool, at date: Date) -> String {
         guard running else { return "Position monitoring paused" }
         return StockSagePaperAutomation.paperSessionOpen(date)
-            ? "Position and exit monitoring active"
+            ? "Position and exit monitoring enabled"
             : "Monitoring enabled · waiting for the next supported session"
     }
 

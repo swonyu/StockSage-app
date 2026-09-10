@@ -1,38 +1,44 @@
-#if os(macOS)
 import SwiftUI
 
 struct StockSageResearchModesPanel: View {
     @ObservedObject var store: StockSageStore
-    @ObservedObject private var research = StockSageHorizonResearch.shared
-    @ObservedObject private var automation = StockSagePaperAutomation.shared
-    @State private var mode = "Day trading"
-    @State private var search = ""
-    @State private var buysOnly = false
-    @State private var selected: String?
-
-    private var horizon: StockSageHorizonResearch.Horizon? { .init(rawValue: mode) }
+    @ObservedObject var research = StockSageHorizonResearch.shared
+    struct Presentation {
+        var horizon: StockSageHorizonResearch.Horizon = .week
+        var search = ""
+        var buysOnly = false
+        var selected: String?
+    }
+    @Binding var presentation: Presentation
+    private var selected: String? {
+        get { presentation.selected }
+        nonmutating set { presentation.selected = newValue }
+    }
+    private var search: String {
+        get { presentation.search }
+        nonmutating set { presentation.search = newValue }
+    }
+    private var buysOnly: Bool {
+        get { presentation.buysOnly }
+        nonmutating set { presentation.buysOnly = newValue }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Research & paper trading", systemImage: "chart.xyaxis.line").font(.title3.bold())
-            Picker("Trading horizon", selection: $mode) {
-                Text("Day trading").tag("Day trading")
-                ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value.rawValue) }
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Research horizon", selection: $presentation.horizon) {
+                ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
             }.pickerStyle(.segmented)
-                .onChange(of: mode) { _, _ in selected = nil; search = ""; buysOnly = false }
-            if let horizon {
-                manual(horizon)
-            } else {
-                Text("Continuous same-day simulation · up to 101 checks per cycle · runs until you pause it.")
-                    .font(.callout).foregroundStyle(.secondary)
-                StockSagePaperAutomationPanel()
-            }
-            if let running = research.running, running != horizon {
+                .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; buysOnly = false }
+            Text("First \(StockSageHorizonResearch.scanLimit) active US listings alphabetically — not a best-stock ranking. Research only; no orders.")
+                .font(.callout).foregroundStyle(.secondary)
+            manual(presentation.horizon)
+            if let running = research.running, running != presentation.horizon {
                 Self.runningScanControls(running: running,
-                    show: { mode = running.rawValue }, stop: { research.stop() })
+                    show: { presentation.horizon = running }, stop: { research.stop() })
             }
         }
     }
+
 
     private func manual(_ horizon: StockSageHorizonResearch.Horizon) -> some View {
         let scan = research.scans[horizon] ?? .init()
@@ -43,7 +49,7 @@ struct StockSageResearchModesPanel: View {
         let isRunning = research.running == horizon
         let buys = scan.results.values.filter { Self.isBuy($0.verdict?.action) }.count
         let incomplete = scan.results.values.filter { $0.verdict == nil }.count
-        return GroupBox {
+        let box = GroupBox {
             VStack(alignment: .leading, spacing: DS.Space.md) {
                 Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: research.running,
                     run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
@@ -78,12 +84,17 @@ struct StockSageResearchModesPanel: View {
                     }.frame(maxWidth: .infinity, minHeight: 180)
                 }
                 if !scan.listings.isEmpty {
-                    Self.filters(search: $search, buysOnly: $buysOnly)
+                    Self.filters(search: $presentation.search, buysOnly: $presentation.buysOnly)
+                        // Spec: clear the selection when it is filtered OUT, not on every keystroke.
+                        .onChange(of: rows.map(\.ticker)) { _, visible in
+                            if let selected, !visible.contains(selected) { self.selected = nil }
+                        }
                     Text("\(rows.count) shown · select a stock for evidence and price levels")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !rows.isEmpty {
-                    Table(rows, selection: $selected) {
+                    #if os(macOS)
+                    Table(rows, selection: $presentation.selected) {
                         TableColumn("Stock") { item in
                             VStack(alignment: .leading) {
                                 Text(item.ticker).fontWeight(.semibold)
@@ -95,27 +106,44 @@ struct StockSageResearchModesPanel: View {
                                 .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.success : .secondary)
                                 .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
                         }.width(min: 100, ideal: 130)
-                        TableColumn("Entry ref.") { item in
+                        TableColumn("Daily close") { item in
                             Text(Self.price(scan.results[item.ticker]?.levels?.entry)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Entry reference \(Self.price($0.entry))" } ?? "Entry reference not available")
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Daily close reference \(Self.price($0.entry))" } ?? "Daily close reference not available")
                         }.width(min: 72, ideal: 92, max: 110)
-                        TableColumn("Stop-loss") { item in
+                        TableColumn("Scenario stop") { item in
                             Text(Self.price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Stop-loss \(Self.price($0.stop))" } ?? "Stop-loss not available")
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Scenario stop \(Self.price($0.stop))" } ?? "Scenario stop not available")
                         }.width(min: 72, ideal: 92, max: 110)
-                        TableColumn("Target") { item in
+                        TableColumn("Scenario target") { item in
                             Text(Self.price(scan.results[item.ticker]?.levels?.target)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Target \(Self.price($0.target))" } ?? "Target not available")
+                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Scenario target \(Self.price($0.target))" } ?? "Scenario target not available")
                         }.width(min: 72, ideal: 92, max: 110)
-                    }.frame(height: 320)
-                }
-                if let selected, let item = rows.first(where: { $0.ticker == selected }) {
-                    Divider()
-                    Self.resultDetail(item, result: scan.results[selected])
+                    }.frame(minHeight: 360)
+                    #else
+                    LazyVStack(spacing: 0) {
+                        ForEach(rows) { item in
+                            Button {
+                                selected = item.ticker
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.ticker).font(.headline)
+                                        Text(item.name).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
+                                        .font(.callout)
+                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                                }
+                                .frame(minHeight: 44).contentShape(Rectangle()).padding(.vertical, 8)
+                            }.buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                    #endif
                 }
                 Divider()
-                Text(StockSagePaperAutomationPanel.monitoringLabel(running: automation.isRunning, at: Date())
-                    + " · Day trading is controlled separately.").font(.caption).foregroundStyle(.secondary)
+
                 Text("Reference prices, not executable orders. Stops and targets are scenarios, not forecasts.")
                     .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("Coverage & price assumptions") {
@@ -127,6 +155,48 @@ struct StockSageResearchModesPanel: View {
                     }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                 }.font(.caption).foregroundStyle(.secondary)
             }.padding(DS.Space.xs)
+        }
+        // Presented only while the selection is a currently visible row; dismissal clears it.
+        let presented = Binding<Bool>(
+            get: { selected.map { symbol in rows.contains { $0.ticker == symbol } } ?? false },
+            set: { if !$0 { selected = nil } })
+        #if os(macOS)
+        // `.inspector` splits the trailing column at the EXACT position it is applied — nesting
+        // it (or its host) inside another ScrollView's content means the split point scrolls
+        // with that content instead of pinning to the detail column (pixel-verified 2026-09-10:
+        // the panel is the caller's only child now, so this ScrollView is this page's own root,
+        // not nested inside a page-level one — see MarketsView.desktopWorkspace's `.research`
+        // branch, which renders this panel directly rather than wrapping it again).
+        return ScrollView { box.padding(28).frame(maxWidth: 1200, alignment: .leading) }
+            .frame(maxWidth: .infinity, alignment: .top)
+            .inspector(isPresented: presented) { detailPresentation(rows: rows, scan: scan) }
+        #else
+        // Not `.inspector` here: inside this scroll content its UIKit host ignored its layout offset
+        // on iPhone (pixel-verified 2026-09-10, it overdrew the coverage text). The spec's compact
+        // detail is a sheet — sheets present as an overlay regardless of scroll position, so this
+        // placement (unlike `.inspector` above) is unaffected by the page's own ScrollView.
+        return box.sheet(isPresented: presented) { detailPresentation(rows: rows, scan: scan) }
+        #endif
+    }
+
+    @ViewBuilder private func detailPresentation(rows: [StockSageHorizonResearch.Listing],
+                                                 scan: StockSageHorizonResearch.Scan) -> some View {
+        if let selected, let item = rows.first(where: { $0.ticker == selected }) {
+            let detail = ScrollView {
+                Self.resultDetail(item, result: scan.results[selected]).padding(20)
+            }
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button("Close details", systemImage: "xmark") { self.selected = nil }
+                }
+            }
+            #if os(macOS)
+            detail.inspectorColumnWidth(min: 300, ideal: 360, max: 450)
+            #else
+            NavigationStack { detail.navigationTitle(item.ticker).navigationBarTitleDisplayMode(.inline) }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            #endif
         }
     }
 
@@ -214,7 +284,10 @@ struct StockSageResearchModesPanel: View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             TextField("Find a symbol or company", text: search).textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Filter research by symbol or company")
-            Toggle("Buy / Strong Buy only", isOn: buysOnly).toggleStyle(.checkbox)
+            Toggle("Buy / Strong Buy only", isOn: buysOnly)
+                #if os(macOS)
+                .toggleStyle(.checkbox)
+                #endif
         }
     }
 
@@ -230,11 +303,12 @@ struct StockSageResearchModesPanel: View {
                     Text("Risk: \(verdict.risk)").foregroundStyle(.secondary)
                 }
                 if let levels = result.levels {
-                    HStack(spacing: 24) {
-                        level("Entry reference", value: levels.entry)
-                        level("Stop-loss", value: levels.stop)
-                        level("Target", value: levels.target)
-                    }
+                    Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 12) {
+                        GridRow { Text("Daily close"); Text(price(levels.entry)).monospacedDigit() }
+                        GridRow { Text("Scenario stop"); Text(price(levels.stop)).monospacedDigit() }
+                        GridRow { Text("Scenario target"); Text(price(levels.target)).monospacedDigit() }
+                    }.font(.callout)
+                    Text("Scenarios, not executable orders or forecasts.").font(.caption).foregroundStyle(.secondary)
                     Text("Daily bar: \(levels.at.formatted(date: .abbreviated, time: .omitted)) · USD · Massive split-adjusted history").font(.caption)
                     Text(levels.basis).font(.caption).foregroundStyle(.secondary)
                 } else if isBuy(result.verdict?.action) {
@@ -252,13 +326,7 @@ struct StockSageResearchModesPanel: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private static func level(_ title: String, value: Double) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(price(value)).font(.headline).monospacedDigit()
-        }
-    }
+
     private static func price(_ value: Double?) -> String { value.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "—" }
     private static func isBuy(_ action: TradeAdvice.Action?) -> Bool { action == .buy || action == .strongBuy }
 }
-#endif

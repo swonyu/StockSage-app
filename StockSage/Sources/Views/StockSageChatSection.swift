@@ -9,7 +9,8 @@ struct StockSageChatSection: View {
     #else
     @StateObject private var chat = StockSageChatSession(historyURL: StockSageChatSession.localHistoryURL)
     #endif
-    @State private var question = ""
+    /// The unsent draft lives on the session, so leaving Chat cannot discard it.
+    private var question: String { chat.draft }
     @State private var issue: String?
     @State private var request: Task<Void, Never>?
     @State private var opening: StockSageChat.Snapshot?
@@ -94,9 +95,7 @@ struct StockSageChatSection: View {
                     .disabled(chat.turns.isEmpty && chat.storageError == nil)
             }
             Text("Your briefing first. Ask Qwen when you want to go deeper.").foregroundStyle(.secondary)
-            #if os(macOS)
-            StockSageResearchModesPanel(store: store)
-            #endif
+
             if let opening {
                 GroupBox("App briefing · no model call") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -122,7 +121,7 @@ struct StockSageChatSection: View {
             ForEach(chat.turns) { turn in
                 #if os(macOS)
                 let edit: (() -> Void)? = chat.pending == nil && question.isEmpty ? {
-                    if Self.reuseQuestion(turn.question, question: $question, issue: $issue, pending: chat.pending != nil) {
+                    if Self.reuseQuestion(turn.question, question: $chat.draft, issue: $issue, pending: chat.pending != nil) {
                         questionFocused = true
                     }
                 } : nil
@@ -261,10 +260,10 @@ struct StockSageChatSection: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             #if os(macOS)
-            QuestionField(question: $question, issue: $issue)
+            QuestionField(question: $chat.draft, issue: $issue)
                 .focused($questionFocused)
             #else
-            TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $question, axis: .vertical)
+            TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $chat.draft, axis: .vertical)
                 .lineLimit(2...5).textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Question for Qwen")
             #endif
@@ -426,7 +425,7 @@ struct StockSageChatSection: View {
             !Task.isCancelled && chat.pending == id && StockSageAIAssessments.configuration == config
                 && StockSageLocalModelServer.settingsRevision() == revision
         }
-        question = ""; issue = nil
+        chat.draft = ""; issue = nil
         #if os(macOS)
         questionFocused = true
         #endif

@@ -6,7 +6,7 @@ import SwiftUI
 // Compact, one-line-per-market readout of StockSageMarketHours' SCHEDULE state — not a
 // live feed. Ticks every 60s off a plain Timer (phase boundaries are minute-granular, so
 // 60s is plenty; no need for anything finer). Secondary/caption styling to match the
-// header subtitle it sits beside (see MarketsView.swift `headerSubtitle`).
+// freshness banner it sits beside (see MarketsView.swift `feedBanner`).
 struct MarketSessionClockView: View {
     @State private var now = Date()
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()

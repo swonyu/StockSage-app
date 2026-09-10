@@ -46,13 +46,9 @@ struct StockSageApp: App {
                 // STRUCT, so every Debug build showed the error card instead of the app. Reverted
                 // to the direct view; its delegate-timing init() fix above was kept (it's better
                 // than the old onAppear wiring).
-                Group {
-                    #if os(macOS)
-                    MarketsView(qaSection: .briefing)
-                    #else
-                    MarketsView()
-                    #endif
-                }
+                // Both platforms open on Home: the iPhone's first native tab, never a route that
+                // lives behind the system More list.
+                Group { MarketsView(qaSection: .briefing) }
                     #if os(macOS)
                     .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
                                                             // a 900pt canvas onto a 430pt phone (clip)

@@ -289,6 +289,9 @@ final class StockSageChatSession: ObservableObject {
     @Published private(set) var turns: [Turn] = []
     @Published private(set) var pending: UUID?
     @Published private(set) var storageError: String?
+    /// Unsent composer text. Kept on the session so leaving Chat and returning restores it;
+    /// never encoded into `turns` or saved history, never sent on its own.
+    @Published var draft = ""
     private let historyURL: URL?
     private var unreadableHistory = false
     nonisolated static let historyLimit = 24
