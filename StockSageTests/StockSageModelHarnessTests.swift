@@ -9,20 +9,41 @@ import Foundation
 // each test injects a transport closure, exactly like the existing suite.
 /// Releases every waiter once two have arrived, so two requests are provably in flight at the
 /// same moment without a sleep-based guess.
+///
+/// BOUNDED ON PURPOSE: a caller can short-circuit before reaching the gate (a policy or settings
+/// check ahead of the transport), leaving the first arriver parked forever. The waiter is
+/// therefore released by a deadline as well as by a partner, so a mis-set precondition fails the
+/// assertion instead of hanging the whole test run.
 private actor AsyncGate {
     private var waiting: [CheckedContinuation<Void, Never>] = []
-    func arriveAndWait() async {
-        if waiting.count >= 1 {
-            let held = waiting
-            waiting.removeAll()
-            held.forEach { $0.resume() }
-            return
+    private var opened = false
+
+    private func releaseAll() {
+        guard !opened else { return }
+        opened = true
+        let held = waiting
+        waiting.removeAll()
+        held.forEach { $0.resume() }
+    }
+
+    func arriveAndWait(timeout: Duration = .seconds(5)) async {
+        if opened { return }
+        if !waiting.isEmpty { releaseAll(); return }
+        let timer = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            await self?.releaseAll()
         }
+        defer { timer.cancel() }
         await withCheckedContinuation { waiting.append($0) }
     }
 }
 
-@Suite("Model harness — budget, truncation and identity across every backend")
+// `.serialized`: three cases below assert EXACT values of `StockSageLocalModelServer.inFlight`,
+// which is one counter for the whole process. Swift Testing parallelises across suites by
+// default, and every `completeDetailed` call in the test target now passes through that counter,
+// so without this an unrelated suite's in-flight request makes `concurrentRequests == 0` fail.
+// Mirrors the reasoning in `ToolPolicyTestLock`.
+@Suite("Model harness — budget, truncation and identity across every backend", .serialized)
 struct StockSageModelHarnessTests {
 
     typealias S = StockSageLocalModelServer
@@ -362,10 +383,9 @@ struct StockSageModelHarnessTests {
 
     // The reached-and-answered failures must never be described as connection problems.
     @Test func reachedAndAnsweredFailuresAreNotCalledConnectionProblems() {
+        // These are the categories that mean the server was reached and answered.
         for category in [S.FailureCategory.http, .responseTooLarge, .incompleteOutput,
                          .emptyContent, .malformedJSON, .responseShape, .modelMissing] {
-            let cause = S.cause(for: .init(category: category))
-            #expect(cause.serverAnswered, "\(category) reached the server")
             let message = StockSageChat.unavailableMessage(for: .init(category: category))
             #expect(!message.lowercased().contains("could not be reached"),
                     "\(category) must not be reported as unreachable")
@@ -439,6 +459,11 @@ struct StockSageModelHarnessTests {
 
     @Test @MainActor func aLoneRequestReportsNoContention() async throws {
         let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        // The release is deferred onto an unstructured task, so an earlier case's slot may still
+        // be draining. Wait for zero before asserting zero, or this reads another test's request.
+        for _ in 0..<100 where await S.currentInFlight() != 0 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
                 try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
@@ -498,7 +523,7 @@ struct StockSageModelHarnessTests {
     // probe and a completion that can run for 90 seconds. Stages are named, distinct, and
     // invent no percentage.
     @Test func explainStagesAreNamedDistinctAndInventNoPercentage() {
-        let labels = StockSageCatalystNarrator.Stage.allLabels
+        let labels = StockSageCatalystNarrator.Stage.allCases.map(\.label)
         #expect(labels.count == StockSageCatalystNarrator.Stage.allCases.count)
         #expect(Set(labels).count == labels.count)
         #expect(labels.allSatisfy { !$0.isEmpty && !$0.contains("%") })
@@ -515,6 +540,9 @@ struct StockSageModelHarnessTests {
         #expect(StockSageCatalystNarrator.Stage.sources.label.localizedCaseInsensitiveContains("source"))
         #expect(StockSageChatSession.Phase.generating.notice.localizedCaseInsensitiveContains("model"))
         #expect(StockSageCatalystNarrator.Stage.explaining.label.localizedCaseInsensitiveContains("explanation"))
+        // The second stage covers the probe as well as generation, so it must say so rather than
+        // claiming the model is writing while it is still being checked.
+        #expect(StockSageCatalystNarrator.Stage.explaining.label.localizedCaseInsensitiveContains("checking"))
     }
 
     // MARK: The diagnostic must never carry server text

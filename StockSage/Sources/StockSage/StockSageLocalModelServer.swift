@@ -88,10 +88,16 @@ enum StockSageLocalModelServer {
     /// HYBRID architecture — `full_attention_interval` 4 over 64 layers, so only 16 layers hold
     /// a KV cache that grows with context; the other 48 are linear-attention (Gated DeltaNet)
     /// layers whose state is constant-size regardless of context length. With 4 KV heads and a
-    /// 256 head dim, the growing part is 2 x 16 x 4 x 256 = 64 KiB per token at fp16, so
-    /// 4,096 -> 16,384 costs about 768 MiB (about 384 MiB if the server keeps an 8-bit KV
-    /// cache). That is negligible on this 48 GB machine, which is why raising the request for
-    /// the evidence-heavy callers is safe rather than merely convenient.
+    /// 256 head dim, the growing part is 2 (K and V) x 16 layers x 4 heads x 256 dim = 32,768
+    /// elements per token, and the config's dtype is bfloat16, so at 2 bytes each that is
+    /// 64 KiB per token. 4,096 -> 16,384 therefore costs about 768 MiB, or about 384 MiB if the
+    /// server keeps an 8-bit KV cache. Negligible on this 48 GB machine.
+    ///
+    /// Scope of that derivation: it is the ARCHITECTURE's cost, not a measurement of any server.
+    /// A runtime that ignored the hybrid layout and allocated KV uniformly across all 64 layers
+    /// would pay roughly 4x more (~3 GiB), and LM Studio — which clamps this model to its own
+    /// 262,144 window regardless of the requested value — may not track `num_ctx` at all. The
+    /// conclusion holds either way at this scale; the arithmetic bounds the honest case.
     nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
@@ -148,7 +154,6 @@ enum StockSageLocalModelServer {
     nonisolated struct FittedPrompt: Sendable, Equatable {
         let optionalKept: Int
         let omitted: Int
-        let userBytes: Int
         var isComplete: Bool { omitted == 0 }
     }
 
@@ -168,8 +173,7 @@ enum StockSageLocalModelServer {
             let (system, user) = assemble(keep)
             if promptFits(system: system, user: user, outputTokens: outputTokens,
                           contextTokens: contextTokens) {
-                return FittedPrompt(optionalKept: keep, omitted: optionalCount - keep,
-                                    userBytes: user.precomposedStringWithCanonicalMapping.utf8.count)
+                return FittedPrompt(optionalKept: keep, omitted: optionalCount - keep)
             }
             guard keep > 0 else { return nil }
             keep -= 1
@@ -403,8 +407,9 @@ enum StockSageLocalModelServer {
     }
     private static let inFlight = InFlight()
 
-    /// How many model requests were already running when the most recent one started.
-    /// Test/diagnostic read; production callers get this on the completion's `Diagnostic`.
+    /// How many model requests are running right now. No production caller: production reads
+    /// the per-request value off the completion's `Diagnostic`. This exists because there is no
+    /// other way for a test to wait for the deferred releases to drain.
     static func currentInFlight() async -> Int { await inFlight.current }
 
     /// The distinct causes a caller must be able to tell apart when a model turn fails.
@@ -427,16 +432,11 @@ enum StockSageLocalModelServer {
         case unreadable         // malformed body, or an answer from a different model
         case unknown
 
-        /// True when the server was reached and responded. Callers must NOT tell the user to
-        /// check their connection in these cases.
-        var serverAnswered: Bool {
-            switch self {
-            case .serverRejected, .tooLarge, .unfinished, .emptyAnswer, .unreadable, .modelMissing:
-                return true
-            default:
-                return false
-            }
-        }
+        // A rule with no field: the causes above that mean "reached and answered"
+        // (serverRejected, tooLarge, unfinished, emptyAnswer, unreadable, modelMissing) must
+        // never be rendered as connection problems. That is enforced where it is observable —
+        // against the rendered strings, in
+        // `reachedAndAnsweredFailuresAreNotCalledConnectionProblems`.
     }
 
     nonisolated static func cause(for diagnostic: Diagnostic) -> FailureCause {

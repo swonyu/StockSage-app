@@ -245,15 +245,23 @@ final class StockSageHorizonResearch: ObservableObject {
         })
     }
 
-    /// `historyTransport` and `modelTransport` are injected for deterministic offline tests only,
-    /// exactly as `fetchUniverse` and `completeDetailed` already allow. Production passes neither
-    /// and reaches the real endpoints. Without them this function — which owns the evidence
-    /// budget, the freshness gates and the verdict acceptance — had no test at all.
+    /// The injected closures exist for deterministic offline tests only, exactly as
+    /// `fetchUniverse` and `completeDetailed` already allow. Production passes none of them and
+    /// reaches the real endpoints. Without them this function — which owns the evidence budget,
+    /// the freshness gates and the verdict acceptance — had no test at all.
+    ///
+    /// All FOUR are required for an offline test, not just the two transports: the Benzinga
+    /// client and the news service are singletons that consult the real web gate and the real
+    /// credentials, so a test that injected only the transports would still issue real PAID
+    /// requests. Measured 2026-09-10: it did — seven Benzinga pages came back "answered".
     static func analyze(_ item: Listing, horizon: Horizon, store: StockSageStore,
         config: StockSageLocalModelServer.Config, isOllama: Bool, key: String,
         allowed: @escaping @MainActor () -> Bool,
         historyTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
-        modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result {
+        modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
+        benzingaSnapshot: ((String, Date) async -> StockSageBenzinga.Snapshot)? = nil,
+        newsObservation: ((String, Date, StockSageBenzinga.Page?) async -> StockSageNewsService.Observation)? = nil,
+        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil) async -> Result {
         guard item.currency_name?.lowercased() == "usd" else {
             return .init(note: "USD price currency not confirmed; listing retained, no opinion.")
         }
@@ -277,13 +285,27 @@ final class StockSageHorizonResearch: ObservableObject {
         let ideas = await StockSageStore.buildIdeas(defs: [.init(symbol: item.ticker, market: "US · \(item.primary_exchange ?? "exchange unconfirmed")")], histories: [item.ticker: history])
         guard allowed(), !Task.isCancelled, let idea = ideas.first else { return .init(note: "Analysis interrupted or unsupported history.") }
         let newsAt = Date()
-        let benzinga = await StockSageBenzingaClient.shared.snapshot(for: item.ticker, now: newsAt)
-        let evidenceAllowed: @MainActor () -> Bool = {
-            allowed() && !Task.isCancelled && StockSageBenzingaClient.shared.isCurrent(benzinga)
+        let benzinga: StockSageBenzinga.Snapshot
+        if let benzingaSnapshot {
+            benzinga = await benzingaSnapshot(item.ticker, newsAt)
+        } else {
+            benzinga = await StockSageBenzingaClient.shared.snapshot(for: item.ticker, now: newsAt)
         }
+        let evidenceAllowed: @MainActor () -> Bool = {
+            allowed() && !Task.isCancelled
+                && (evidenceIsCurrent?(benzinga) ?? StockSageBenzingaClient.shared.isCurrent(benzinga))
+        }
+        // The check between the two fetches is deliberate: a revoked permission must stop the
+        // second one. Keeping them as separate seams preserves that ordering exactly.
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
-        let news = await StockSageNewsService.observation(for: item.ticker, limit: 3, now: newsAt,
-            benzingaPage: benzinga.pages.first { $0.query.product == .news })
+        let newsPage = benzinga.pages.first { $0.query.product == .news }
+        let news: StockSageNewsService.Observation
+        if let newsObservation {
+            news = await newsObservation(item.ticker, newsAt, newsPage)
+        } else {
+            news = await StockSageNewsService.observation(for: item.ticker, limit: 3, now: newsAt,
+                                                          benzingaPage: newsPage)
+        }
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[item.ticker],
             company: store.companyEventChecks[item.ticker] ?? [:], at: Date(), newsObservation: news, quotedInUSD: true, benzinga: benzinga)

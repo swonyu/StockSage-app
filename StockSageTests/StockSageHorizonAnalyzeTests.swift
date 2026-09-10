@@ -6,10 +6,18 @@ import Foundation
 //
 // `analyze()` owns the evidence budget, the freshness gates and the verdict acceptance, and it
 // previously had NO test: every existing horizon test injects a synthetic `analyze:` closure, so
-// the production function was never executed. Both of its network calls now take the same
-// optional transport seam `fetchUniverse` and `completeDetailed` already had, so the whole path
-// runs offline here. No live network, no real model, no clock dependence beyond `Date()`.
-@Suite("Horizon research — the real analyze() path")
+// the production function was never executed.
+//
+// WHY ALL FOUR SEAMS ARE INJECTED, not just the two transports: `StockSageBenzingaClient.shared`
+// and `StockSageNewsService` are singletons that consult the real web gate and the real
+// credentials. MEASURED 2026-09-10 on this machine — with only the transports injected, a run of
+// this suite came back with `isExternalAllowed=true`, a non-empty Massive key, and seven Benzinga
+// pages "answered". It was issuing real requests against the owner's PAID account on every run.
+// Injecting the evidence closures makes that structurally impossible rather than relying on a
+// process-global gate that another suite can reopen mid-test.
+//
+// So: no live network, no real model, no paid request, no dependence on any mutable global.
+@Suite("Horizon research — the real analyze() path", .serialized)
 @MainActor
 struct StockSageHorizonAnalyzeTests {
 
@@ -69,7 +77,12 @@ struct StockSageHorizonAnalyzeTests {
                      ) async -> Research.Result {
         let config = Server.config(url: Server.defaultURL, model: Server.defaultModel)!
         // Isolated defaults: never the real parent-app preference domain.
-        let defaults = UserDefaults(suiteName: "stocksage.horizon.analyze.\(UUID().uuidString)")!
+        let suiteName = "stocksage.horizon.analyze.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            Issue.record("could not create an isolated defaults suite"); return .init(note: "unavailable")
+        }
+        // The repo's convention: never leave a persistent domain behind on disk.
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         return await Research.analyze(
             listing, horizon: .week, store: store, config: config,
@@ -78,7 +91,14 @@ struct StockSageHorizonAnalyzeTests {
                 (history, HTTPURLResponse(url: request.url!, statusCode: historyStatus,
                                           httpVersion: nil, headerFields: nil)!)
             },
-            modelTransport: model)
+            modelTransport: model,
+            // Synthetic evidence: no client, no credential, no request.
+            benzingaSnapshot: { symbol, at in
+                StockSageBenzinga.Snapshot(symbol: symbol, capturedAt: at,
+                                           credentialGeneration: nil, pages: [])
+            },
+            newsObservation: { _, _, _ in StockSageNewsService.Observation(attempts: []) },
+            evidenceIsCurrent: { _ in true })
     }
 
     // MARK: The path runs, and what it sends is bounded
@@ -96,11 +116,15 @@ struct StockSageHorizonAnalyzeTests {
             #expect(options?["num_ctx"] as? Int == Server.researchContextTokens)
             return Self.ok(Self.verdictPayload(), request)
         })
+        // An oversized prompt is rejected at the seam, so a budget failure also surfaces here.
         #expect(!sentUser.isEmpty, "analyze() never reached the model")
+        // Note what this does and does not prove: `completeDetailed` already gates dispatch on
+        // exactly this predicate with exactly these arguments, so it cannot fail independently
+        // once the prompt arrived. It pins the invariant, not the packing. The packing is covered
+        // by `bothResearchCallersFitAFullTwelveKilobyteEvidenceSet`.
         #expect(Server.promptFits(system: sentSystem, user: sentUser,
                                   outputTokens: Research.researchOutputTokens,
-                                  contextTokens: Server.researchContextTokens),
-                "analyze() sent a prompt that exceeds its own declared budget")
+                                  contextTokens: Server.researchContextTokens))
         #expect(result.model == Server.defaultModel)
         #expect(!result.facts.isEmpty)
     }

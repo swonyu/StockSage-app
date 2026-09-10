@@ -42,11 +42,15 @@ enum StockSageCatalystNarrator {
 
     /// The stages one Explain request passes through, in order. Named rather than measured:
     /// the model's remaining output length is unknown, so a percentage here would be invented.
+    ///
+    /// Two stages for three waits, deliberately. `explain(_:)` performs the reachability probe
+    /// and the completion behind one call, so the view cannot observe the probe separately —
+    /// the second label therefore names BOTH rather than claiming the model is already writing
+    /// while it is still being checked.
     nonisolated enum Stage: String, Sendable, CaseIterable {
         case sources = "Collecting cited sources…"
-        case explaining = "Writing the explanation…"
+        case explaining = "Checking the model and writing the explanation…"
         var label: String { rawValue }
-        static var allLabels: [String] { allCases.map(\.label) }
     }
 
     // MARK: Availability

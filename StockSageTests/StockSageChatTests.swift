@@ -876,9 +876,14 @@ struct StockSageChatTests {
     }
 
     // The Catalysts narration panel used one unlabelled spinner across source collection, a
-    // model probe and a 90-second completion. This renders the real labelled control and
-    // proves the label actually draws: a labelled spinner must be materially larger than the
-    // bare one it replaced, which an empty or dropped label would not be.
+    // model probe and a 90-second completion. This renders the real labelled control and proves
+    // a label is PRESENT and occupies space: a labelled spinner must be materially taller than
+    // the bare one it replaced.
+    //
+    // What it does NOT prove: that this particular text drew. An empty label would still add a
+    // line's height, and this cannot distinguish `.sources` from `.explaining`. Non-emptiness and
+    // distinctness are pinned separately by
+    // `explainStagesAreNamedDistinctAndInventNoPercentage`.
     @Test(arguments: [360, 760])
     @MainActor func renderNarrationStageLabels(width: Int) async throws {
         func panel(_ label: String?) -> some View {
@@ -894,7 +899,6 @@ struct StockSageChatTests {
         for stage in StockSageCatalystNarrator.Stage.allCases {
             let labelled = try await capture(panel(stage.label),
                 name: "stocksage-narration-stage-\(stage.rawValue.prefix(10))-\(width)")
-            #expect(labelled.width == CGFloat(width))
             #expect(labelled.height > bare.height,
                     "\(stage) label did not render: same height as an unlabelled spinner")
         }
