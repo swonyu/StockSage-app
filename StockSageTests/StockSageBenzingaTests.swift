@@ -190,9 +190,19 @@ struct StockSageBenzingaTests {
         #expect(guidance.timeZone == nil && guidance.sourceText.contains("zone unknown"))
         let rating = try #require(try page(.ratings).records.first)
         #expect(rating.timeZone == "UTC" && rating.analystIDs == ["AnalystA"] && rating.firmIDs == ["FirmA"])
+        // The "must be a change" rule now applies to CATALYSTS only (2026-09-11). A maintained
+        // rating with an unchanged target is not news, but it IS what a named firm currently says,
+        // so Chat evidence keeps it — carrying its own date, so a weeks-old opinion cannot read as
+        // fresh. Both halves are asserted here; before, only the first existed and the evidence
+        // path silently inherited a rule written for catalysts.
         var unchanged = row(.ratings)
         unchanged["rating_action"] = "maintains"; unchanged["price_target"] = 100
-        #expect(try page(.ratings, rows: [unchanged]).records.isEmpty)
+        let keptAsEvidence = try page(.ratings, rows: [unchanged]).records
+        #expect(keptAsEvidence.count == 1, "Chat evidence must keep a maintained rating")
+        #expect(try #require(keptAsEvidence.first).sourceText.contains("maintains"))
+        let asCatalyst = try StockSageMassiveEvents.parse(
+            try body([unchanged]), feed: .ratings, symbol: "AAPL", now: now)
+        #expect(asCatalyst == nil, "a maintained rating with an unchanged target is still not a catalyst")
     }
 
     @Test func genuineTimesAndNumericMeaningAreNotInvented() throws {

@@ -145,11 +145,17 @@ enum StockSageMassiveEvents {
         guard text.count == 10, let date = dayFormatter.date(from: text), dayFormatter.string(from: date) == text else { return nil }
         return date
     }
-    nonisolated static func inWindow(_ date: Date, feed: Feed, now: Date) -> Bool {
+    /// `days` overrides the feed's catalyst window. Default nil keeps every existing caller
+    /// unchanged. The override exists because the Chat EVIDENCE path and the Catalysts path want
+    /// different things from the same rows: a catalyst is only interesting if it just happened,
+    /// while "what do analysts currently say" is still worth showing a few weeks later, clearly
+    /// dated. Sharing one 7-day window meant a month-quiet symbol looked like missing data.
+    nonisolated static func inWindow(_ date: Date, feed: Feed, now: Date, days: Int? = nil) -> Bool {
         guard date.timeIntervalSince1970.isFinite, now.timeIntervalSince1970.isFinite,
               let today = day(dayFormatter.string(from: now)) else { return false }
+        let span = Double(max(0, days ?? feed.days))
         let offset = date.timeIntervalSince(today) / 86_400
-        return feed == .dividends ? (0...Double(feed.days)).contains(offset) : (-Double(feed.days)...0).contains(offset)
+        return feed == .dividends ? (0...span).contains(offset) : (-span...0).contains(offset)
     }
 
     /// Bounds move together or the result is mixed; midpoint arithmetic can conceal widening.
@@ -183,12 +189,19 @@ enum StockSageMassiveEvents {
     }
 
     /// Single-response callers must still prove completeness; only fetch follows continuations.
-    nonisolated static func parse(_ data: Data, feed: Feed, symbol: String, now: Date) throws -> Event? {
-        let page = try parsePage(data, feed: feed, symbol: symbol, now: now)
+    /// `windowDays` widens the recency window and `requireMateriality` keeps or drops the
+    /// ratings "must be a change" rule. Both default to today's behaviour; only the Chat evidence
+    /// path overrides them. See `inWindow`.
+    nonisolated static func parse(_ data: Data, feed: Feed, symbol: String, now: Date,
+                                  windowDays: Int? = nil, requireMateriality: Bool = true) throws -> Event? {
+        let page = try parsePage(data, feed: feed, symbol: symbol, now: now,
+                                 windowDays: windowDays, requireMateriality: requireMateriality)
         guard page.next == nil else { throw Failure.incompleteResponse }
         return page.event
     }
-    private nonisolated static func parsePage(_ data: Data, feed: Feed, symbol: String, now: Date) throws -> (event: Event?, next: String?) {
+    private nonisolated static func parsePage(_ data: Data, feed: Feed, symbol: String, now: Date,
+                                              windowDays: Int? = nil,
+                                              requireMateriality: Bool = true) throws -> (event: Event?, next: String?) {
         guard data.count <= 2_000_000 else { throw Failure.responseTooLarge }
         guard StockSageMassive.covers(symbol), now.timeIntervalSince1970.isFinite,
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -207,8 +220,9 @@ enum StockSageMassiveEvents {
             let tickers = feed.pluralTicker ? row["tickers"] as? [String] : (row["ticker"] as? String).map { [$0] }
             guard tickers?.map({ $0.uppercased() }).contains(symbol.uppercased()) == true,
                   let text = row[feed.dateField] as? String, let date = day(text) else { throw Failure.invalidPayload }
-            guard inWindow(date, feed: feed, now: now) else { continue }
-            if let event = try event(row, feed: feed, symbol: symbol.uppercased(), date: date) { events.append(event) }
+            guard inWindow(date, feed: feed, now: now, days: windowDays) else { continue }
+            if let event = try event(row, feed: feed, symbol: symbol.uppercased(), date: date,
+                                     requireMateriality: requireMateriality) { events.append(event) }
         }
         return (selected(events, feed: feed), next)
     }
@@ -261,7 +275,8 @@ enum StockSageMassiveEvents {
         if feed.pluralTicker { return ["www.sec.gov", "sec.gov"].contains(host) ? url : nil }
         return host == "benzinga.com" || host.hasSuffix(".benzinga.com") ? url : nil
     }
-    private nonisolated static func event(_ row: [String: Any], feed: Feed, symbol: String, date: Date) throws -> Event? {
+    private nonisolated static func event(_ row: [String: Any], feed: Feed, symbol: String, date: Date,
+                                          requireMateriality: Bool = true) throws -> Event? {
         let dateText = StockSageCatalystWatch.dateStr(date)
         let idKey = feed.pluralTicker ? "accession_number" : (feed == .dividends ? "id" : "benzinga_id")
         // Benzinga IDs can be strings or integral numbers; never stringify an arbitrary object.
@@ -284,7 +299,10 @@ enum StockSageMassiveEvents {
             if let target, target <= 0 { throw Failure.invalidPayload }
             if let previous, previous <= 0 { throw Failure.invalidPayload }
             let targetChanged = target != nil && previous != nil && target != previous
-            guard changed || targetChanged else { return nil }
+            // A catalyst must be a CHANGE, so "maintains"/"reiterates" with an unchanged target is
+            // correctly not news. As Chat EVIDENCE the same row is useful: it is what a named firm
+            // currently says, and the reader can see its date. Hence the opt-out.
+            guard changed || targetChanged || !requireMateriality else { return nil }
             headline = "Analyst update · \(dateText)"
             details.append("\(firm): \(action.replacingOccurrences(of: "_", with: " ")); rating \(text(row, "previous_rating") ?? "not supplied") → \(text(row, "rating") ?? "not supplied").")
             if let target, let previous, let c = currency(row) {

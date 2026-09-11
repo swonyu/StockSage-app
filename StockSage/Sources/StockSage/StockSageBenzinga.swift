@@ -273,6 +273,20 @@ enum StockSageBenzinga {
                     records: records, excludedCount: excluded, hasMore: more)
     }
 
+    /// How far back Chat evidence will look for analyst ratings, as opposed to the 7 days that
+    /// define a ratings CATALYST.
+    ///
+    /// Forty-five, not thirty, and the extra fortnight is not padding. Analyst coverage refreshes
+    /// around earnings, so a quiet stretch between reports routinely exceeds a month: the owner's
+    /// own RKLB capture had its freshest action 31 days old, which a 30-day window would have
+    /// missed by a single day — reproducing the very "no analyst evidence" answer this change
+    /// exists to fix. Forty-five covers roughly half a reporting cycle.
+    ///
+    /// The cost is that a reader may see a six-week-old opinion. That is bounded rather than
+    /// hidden: every record carries its own date into the prompt, the model is told the evidence
+    /// is dated, and the status line now says how many records were skipped for being older.
+    nonisolated static let ratingsEvidenceDays = 45
+
     nonisolated static func projection(_ snapshot: Snapshot, maximumUTF8Bytes: Int, maximumRecords: Int = 27) -> Projection? {
         guard maximumUTF8Bytes >= 0, snapshot.capturedAt.timeIntervalSince1970.isFinite else { return nil }
         func usable(_ page: Page) -> Bool {
@@ -514,7 +528,18 @@ enum StockSageBenzinga {
         case .guidance, .ratings:
             let feed: StockSageMassiveEvents.Feed = product == .ratings ? .ratings : .guidance
             let envelope = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": [row]])
-            guard let event = try StockSageMassiveEvents.parse(envelope, feed: feed, symbol: symbol!, now: checkedAt) else { return nil }
+            // Chat EVIDENCE, not a catalyst. The feed's 7-day window and its change-only rule exist
+            // so Catalysts surfaces things that just happened; borrowing them here meant a symbol
+            // with no rating action in a week produced zero analyst evidence and a disclosure that
+            // read like missing data. Ratings evidence therefore looks back 30 days and keeps
+            // "maintains"/"reiterates" rows, which carry their own date into the prompt so the
+            // model can see they are weeks old. Guidance keeps the feed's own window: it is
+            // genuinely an event, not a standing opinion.
+            let event = try StockSageMassiveEvents.parse(
+                envelope, feed: feed, symbol: symbol!, now: checkedAt,
+                windowDays: product == .ratings ? StockSageBenzinga.ratingsEvidenceDays : nil,
+                requireMateriality: product != .ratings)
+            guard let event else { return nil }
             headline = event.headline
             details = event.details
             link = event.link

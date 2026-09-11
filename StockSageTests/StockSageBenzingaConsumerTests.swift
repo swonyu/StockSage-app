@@ -109,8 +109,11 @@ struct StockSageBenzingaConsumerTests {
     @Test func theDisclosureSeparatesNotEligibleFromTrimmed() throws {
         let now = Date()
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
-        // 40 days old: outside the ratings 7-day recency window, so the parser rejects it.
-        let stale = fmt.string(from: now.addingTimeInterval(-40 * 86_400))
+        // Older than the evidence window, DERIVED rather than a literal. A hard-coded 40 days was
+        // outside the window when this test was written and inside it an hour later, when the
+        // window was widened to 45 — the same rot that made three other fixtures go vacuous today.
+        let staleDays = Double(B.ratingsEvidenceDays + 15)
+        let stale = fmt.string(from: now.addingTimeInterval(-staleDays * 86_400))
         let row: [String: Any] = ["benzinga_id": "e1", "ticker": "ORCL", "date": stale,
             "last_updated": "\(stale)T11:00:00Z", "firm": "Fixture Firm", "rating_action": "upgrades",
             "rating": "buy", "previous_rating": "hold", "price_target": 110,
