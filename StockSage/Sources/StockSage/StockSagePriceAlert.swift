@@ -71,9 +71,11 @@ enum StockSagePriceAlertEngine {
 
     /// Validate a user-typed target. Returns the parsed price (or nil) + a reason.
     nonisolated static func validateTarget(_ raw: String) -> (price: Double?, error: String?) {
-        let s = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")
-        guard !s.isEmpty else { return (nil, "Enter a target price.") }
-        guard let v = Double(s), v > 0, v.isFinite else { return (nil, "Enter a positive number.") }
+        // Stripping every comma read the Saudi decimal "28,50" as 2850 — a 100x target on a
+        // market the owner actually trades. StockSageInput.positiveAmount is the one parser that
+        // already knows a comma may be a decimal separator, and it enforces finite and > 0.
+        guard !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return (nil, "Enter a target price.") }
+        guard let v = StockSageInput.positiveAmount(raw) else { return (nil, "Enter a positive number.") }
         return (v, nil)
     }
 }

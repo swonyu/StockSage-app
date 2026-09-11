@@ -1596,6 +1596,33 @@ struct MarketsView: View {
     /// is correct for risk semantics but wrong as a USD-conversion key for …USD=X pairs (using
     /// the exposure leg there would multiply an already-USD amount by the rate again — rate²).
     /// Non-=X symbols fall back to currencyForSymbol as before.
+    /// The ONE expression for open portfolio-heat legs. Extracted 2026-09-11 because it was NOT
+    /// one expression: the on-screen gauge FX-normalised every leg, while `writeWidgetSnapshot`
+    /// hand-rolled a `reduce` that summed NATIVE currency against a USD account. A 2222.SR leg
+    /// contributed ~100 SAR of risk counted as $100 — 3.75x overstated on the home screen, with
+    /// the widget rendering it red at the cap.
+    ///
+    /// That second copy was invisible to the 2026-07-12 FX audit, which found its other call
+    /// sites by grepping callers of `StockSagePortfolioHeat.compute`. A hand-rolled sum matches
+    /// no such grep. Both callers now route here; a third copy is the thing to refuse in review.
+    ///
+    /// Trades whose currency has no tracked rate are EXCLUDED rather than summed 1:1, so heat
+    /// reads low-and-known rather than wrong-and-confident.
+    private func portfolioHeatLegs(_ trades: [TradeRecord])
+        -> [(shares: Double, entry: Double, stop: Double)] {
+        trades.compactMap { t -> (shares: Double, entry: Double, stop: Double)? in
+            // Audit 2026-07-12 pass-2: key on the QUOTE leg — a …USD=X trade's entry/stop are
+            // already USD, so the exposure leg would re-multiply by the rate (rate²).
+            let ccy = conversionCurrencyForSymbol(t.symbol)
+            // Review fix 2026-07-16: one resolver, including the infraFX fallback. A private copy
+            // once dropped .SR trades entirely and the gauge read cooler than the real book.
+            guard let rate = fxRateToUSD(ccy) else { return nil }   // no rate — exclude, never 1:1
+            let e = StockSageCurrency.majorUnitValue(symbol: t.symbol, rawValue: t.entry) * rate
+            let s = StockSageCurrency.majorUnitValue(symbol: t.symbol, rawValue: t.stop) * rate
+            return (shares: t.shares, entry: e, stop: s)
+        }
+    }
+
     private func conversionCurrencyForSymbol(_ symbol: String, base: String = "USD") -> String {
         // Canonical, unit-tested logic lives in StockSageCurrency (extracted 2026-07-12 pass-2 so
         // every valuation call site shares one accessor). Kept as a thin instance method so the
@@ -2990,21 +3017,7 @@ struct MarketsView: View {
                     // untrackedFXCurrencies) rather than summed 1:1 against the USD account.
                     if let acct = StockSageInput.positiveAmount(sizerAccount),
                        let heat = StockSagePortfolioHeat.compute(
-                            openTrades: journal.open.compactMap { t -> (shares: Double, entry: Double, stop: Double)? in
-                                // Audit 2026-07-12 pass-2 (4th site, found by grepping every caller — NOT in
-                                // the audit's 3): key on the QUOTE leg — a …USD=X trade's entry/stop are already
-                                // USD, so the exposure leg would re-multiply by the rate (rate²), inflating open
-                                // heat and skewing the risk gate that feeds sizing. Same root cause as A/B/C.
-                                let ccy = conversionCurrencyForSymbol(t.symbol)
-                                // Review fix 2026-07-16 (DANGEROUS direction): this was a private
-                                // COPY of the rate resolution missing the infraFX fallback — post-
-                                // restriction an open .SR trade was silently EXCLUDED from heat
-                                // (the gauge read cooler than the real book). Now the ONE resolver.
-                                guard let rate = fxRateToUSD(ccy) else { return nil }   // no rate — exclude, never 1:1
-                                let e = StockSageCurrency.majorUnitValue(symbol: t.symbol, rawValue: t.entry) * rate
-                                let s = StockSageCurrency.majorUnitValue(symbol: t.symbol, rawValue: t.stop) * rate
-                                return (shares: t.shares, entry: e, stop: s)
-                            },
+                            openTrades: portfolioHeatLegs(journal.open),
                             accountSize: acct) {
                         let hc: Color = heat.level == .hot ? DS.Palette.danger
                             : (heat.level == .warm ? DS.Palette.warningSoft : DS.Palette.successSoft)
@@ -6345,11 +6358,16 @@ struct MarketsView: View {
             calibration: store.convictionCalibration)
         // Heat needs an account size the owner may never have entered. nil when it is unknown —
         // the widget then omits the line rather than printing a reassuring, false 0.0%.
-        let heatPct: Double? = parsedAccount.map { acct in
-            paperStore.open.reduce(0.0) { sum, t in
-                sum + (abs(t.entry - t.stop) * t.shares) / acct
-            } * 100
-        }
+        //
+        // It ALSO needs a book that actually loaded. If decoding failed, `paperStore.open` is empty
+        // for a reason that is not "no positions", and publishing 0 open / 0.0% would state a
+        // reassuring falsehood on the home screen while every in-app surface shows the error. The
+        // snapshot's own doc forbids exactly that, so an unloaded book publishes nothing.
+        let bookIsKnown = paperStore.hasLoadedRecords && paperStore.lastError == nil
+        let heatPct: Double? = bookIsKnown ? parsedAccount.flatMap { acct in
+            StockSagePortfolioHeat.compute(openTrades: portfolioHeatLegs(paperStore.open),
+                                           accountSize: acct).map { $0.heatPct * 100 }
+        } : nil
         StockSageWidgetSnapshot(
             asOf: Date(),
             bestSymbol: best?.idea.symbol,

@@ -43,6 +43,11 @@ struct StockSageStalenessTests {
         #expect(!StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(-24 * 3600), asOf: now))
         #expect(StockSageQuoteFreshness.isStale(symbol: "BTC-USD", marketTime: now.addingTimeInterval(-12 * 3600), asOf: now))
         #expect(!StockSageQuoteFreshness.isStale(symbol: "BTC-USD", marketTime: now.addingTimeInterval(-3 * 3600), asOf: now))
+        // A stamp in the FUTURE gave a negative age, which is never greater than the tolerance,
+        // so a fail-closed gate read it as fresh. Pinned from both sides so the skew allowance
+        // cannot be widened into a hole.
+        #expect(StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(3600), asOf: now))
+        #expect(!StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(-30), asOf: now))
         // nil market time → STALE (fail-closed, owner-signed 2026-07-27 — unverifiable
         // freshness must never pass the alert gate).
         #expect(StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: nil, asOf: now))

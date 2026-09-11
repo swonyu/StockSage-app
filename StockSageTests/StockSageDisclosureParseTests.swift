@@ -29,7 +29,11 @@ struct StockSageDisclosureParseTests {
                     "filingDate": ["2026-04-30", "2026-04-20", "2026-01-29"],
                     // Note the ET-evening acceptance on the FIRST row: accepted
                     // 2026-04-29T17:40 but stamped filingDate 2026-04-30.
-                    "acceptanceDateTime": ["2026-04-29T17:40:12Z",
+                    // Fractional seconds are the LIVE SEC shape (real AAPL 8-K, accession
+                    // 0000320193-26-000018). The bare-seconds formatter returned nil for every
+                    // one of them, so acceptedAt was nil for all filings and the disclosure clock
+                    // silently used the filing date. Row 2 stays bare-seconds so both parse.
+                    "acceptanceDateTime": ["2026-04-29T17:40:12.000Z",
                                            "2026-04-20T16:05:00Z",
                                            "2026-01-29T16:30:00Z"],
                     "items": ["2.02,9.01", "", "5.02"],

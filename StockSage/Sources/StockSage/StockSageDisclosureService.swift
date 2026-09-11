@@ -197,6 +197,12 @@ enum StockSageDisclosureService {
         day.formatOptions = [.withFullDate]
         let stamp = ISO8601DateFormatter()
         stamp.formatOptions = [.withInternetDateTime]
+        // SEC stamps acceptance with fractional seconds ("2026-07-30T20:30:28.000Z"), which a
+        // bare .withInternetDateTime formatter returns nil for — so `acceptedAt` was nil for
+        // EVERY filing and the disclosure clock silently fell back to the filing DATE. Both
+        // formatters are kept: .withFractionalSeconds alone returns nil on a bare-seconds stamp.
+        let fracStamp = ISO8601DateFormatter()
+        fracStamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         var out: [Filing] = []
         // Bound by the shortest column so a truncated feed can't index out of range.
@@ -219,7 +225,8 @@ enum StockSageDisclosureService {
                 accessionNumber: acc,
                 form: formCol[i],
                 filingDate: filed,
-                acceptedAt: i < acceptCol.count ? stamp.date(from: acceptCol[i]) : nil,
+                acceptedAt: i < acceptCol.count
+                    ? (fracStamp.date(from: acceptCol[i]) ?? stamp.date(from: acceptCol[i])) : nil,
                 items: items,
                 documentURL: docURL))
             if out.count >= limit { break }

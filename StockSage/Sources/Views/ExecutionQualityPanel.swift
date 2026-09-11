@@ -19,7 +19,10 @@ enum ExecutionQualityMath {
     /// here is always a leg counted in the same `legs` total shown alongside it.
     static func worstLegBps(_ trades: [TradeRecord]) -> Double? {
         var worst: Double?
-        for t in trades where !t.isOpen {
+        // isFinalized, not !isOpen: a record with a closureError is incoherent, and every sibling
+        // measure (entrySlippageBps, exitSlippageBps) already refuses it. This one did not, so the
+        // headline "worst leg" could be driven by a close the journal itself does not trust.
+        for t in trades where t.isFinalized {
             if let s = t.entrySlippageBps { worst = max(worst ?? s, s) }
             if let s = t.exitSlippageBps { worst = max(worst ?? s, s) }
         }

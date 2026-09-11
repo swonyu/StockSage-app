@@ -20,6 +20,22 @@ struct ExecutionQualityMathTests {
                     plannedExit: plannedExit, exitFill: exitFill)
     }
 
+    // Every sibling measure (entrySlippageBps, exitSlippageBps) gates on `isFinalized`, which
+    // excludes a close carrying a closureError. worstLegBps gated on `!isOpen`, so the headline
+    // "worst leg" figure could be driven by a record the journal itself does not trust.
+    @Test func closedButIncoherentRecordsAreExcludedLikeTheSiblingMeasures() {
+        let broken = TradeRecord(symbol: "X", side: .long, entry: 100, stop: 90, target: nil,
+                                 shares: 10, openedAt: Date(timeIntervalSince1970: 0),
+                                 exitPrice: nil, closedAt: Date(timeIntervalSince1970: 100),
+                                 plannedEntry: 100, entryFill: 105)   // +500 bps, but incoherent
+        #expect(!broken.isOpen && !broken.isFinalized, "the fixture must be the state under test")
+        #expect(ExecutionQualityMath.worstLegBps([broken]) == nil,
+                "an untrusted close drove the worst-leg headline")
+        // A coherent close in the same call is still measured.
+        let good = closedLong(entry: 100, plannedEntry: 100, entryFill: 100.5)
+        #expect(ExecutionQualityMath.worstLegBps([broken, good]) == 50)
+    }
+
     @Test func nilWithNoMeasuredLegs() {
         let trades = [closedLong(entry: 100, plannedEntry: nil, entryFill: nil)]
         #expect(ExecutionQualityMath.worstLegBps(trades) == nil)

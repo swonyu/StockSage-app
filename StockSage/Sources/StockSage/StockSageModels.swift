@@ -113,7 +113,13 @@ struct StockSageSymbol: Sendable, Equatable, Identifiable {
 enum StockSageQuoteFreshness {
     nonisolated static func isStale(symbol: String, marketTime: Date?, asOf now: Date = Date()) -> Bool {
         guard let t = marketTime else { return true }
+        // A stamp in the FUTURE gives a negative age, which is never greater than the tolerance,
+        // so the old comparison called it fresh — the one direction a fail-closed gate must not
+        // fail open. -60s mirrors acceptsQuote's already-ratified clock-skew allowance rather
+        // than introducing a second number.
+        let age = now.timeIntervalSince(t)
+        guard age.isFinite, age >= -60 else { return true }
         let tolerance: TimeInterval = StockSageAllocation.assetClass(symbol) == "Crypto" ? 6 * 3600 : 48 * 3600
-        return now.timeIntervalSince(t) > tolerance
+        return age > tolerance
     }
 }

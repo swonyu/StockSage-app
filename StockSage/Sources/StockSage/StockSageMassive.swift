@@ -123,9 +123,10 @@ enum StockSageMassive {
         guard !key.isEmpty, !chunk.isEmpty, var comps = URLComponents(string: host + snapshotPath) else { return nil }
         comps.queryItems = [URLQueryItem(name: "tickers", value: chunk.map { $0.uppercased() }.joined(separator: ","))]
         guard let url = comps.url else { return nil }
-        var req = URLRequest(url: url)
+        // Never serve market data from URLSession's cache: a 200 replayed from disk would present
+        // an old print as a current one, which is the precise failure the freshness gates exist for.
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 15
         return req
     }
 
@@ -297,9 +298,10 @@ enum StockSageMassive {
             URLQueryItem(name: "limit", value: "50000"),
         ]
         guard let url = comps.url else { return nil }
-        var req = URLRequest(url: url)
+        // Never serve market data from URLSession's cache: a 200 replayed from disk would present
+        // an old print as a current one, which is the precise failure the freshness gates exist for.
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 15
         return req
     }
 

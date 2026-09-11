@@ -98,6 +98,13 @@ struct StockSageMassiveTests {
         }
         #expect(seen.count == 872)
         #expect(Set(seen) == Set(universe))                       // every allowlist name is requested exactly once
+        // Market data must never be served from URLSession's on-disk cache: a replayed 200 would
+        // present an old print as a current one, which is what every freshness gate exists to stop.
+        // The default is .useProtocolCachePolicy, so this was the shipped behaviour until 2026-09-11.
+        for r in M.requests(for: ["AAPL", "MSFT"], key: "unit-test-key") {
+            #expect(r.cachePolicy == .reloadIgnoringLocalCacheData,
+                    "a quote request may be answered from disk")
+        }
         #expect(M.requests(for: [], key: "unit-test-key").isEmpty)
         #expect(M.requests(for: ["AAPL"], key: "").isEmpty)       // no key ⇒ no request can even be built
     }

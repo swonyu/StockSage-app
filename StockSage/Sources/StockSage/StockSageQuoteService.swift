@@ -122,9 +122,9 @@ enum StockSageQuoteService {
         guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=1d&interval=1d") else {
             return nil
         }
-        var req = URLRequest(url: url)
+        // See StockSageMassive: a cached 200 would replay a stale quote as live.
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 12
         guard let data = await get(req), let parsed = parseChart(data) else { return nil }
         // Preserve the symbol we *asked* for so it maps back to the curated market
         // label (Yahoo echoes its own canonical symbol, which can differ in case). Carry
@@ -216,9 +216,8 @@ enum StockSageQuoteService {
         // path-safe for all curated symbols, consistent with StockSageEarnings.fetchNextEarningsOutcome.
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
         guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=\(range)&interval=\(interval)") else { return nil }
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
         guard !Task.isCancelled, allowed(), let data = await yahoo(req),
               !Task.isCancelled, allowed() else { return nil }
         return parseHistory(data, symbol: symbol)

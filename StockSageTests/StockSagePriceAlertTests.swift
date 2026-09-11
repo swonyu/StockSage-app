@@ -166,6 +166,11 @@ struct StockSagePriceAlertTests {
         #expect(StockSagePriceAlertEngine.validateTarget("-5").price == nil)
         #expect(StockSagePriceAlertEngine.validateTarget("150").price == 150)
         #expect(StockSagePriceAlertEngine.validateTarget("1,500.5").price == 1500.5)
+        // A comma is a DECIMAL separator on the market the owner actually trades. Stripping it
+        // turned "28,50" into 2850 — a 100x price target, silently accepted.
+        #expect(StockSagePriceAlertEngine.validateTarget("28,50").price == 28.5)
+        #expect(StockSagePriceAlertEngine.validateTarget("2,5").price == 2.5)
+        #expect(StockSagePriceAlertEngine.validateTarget("1,000").price == 1000)
     }
 
     @Test func codableRoundTripAndUppercasing() throws {
