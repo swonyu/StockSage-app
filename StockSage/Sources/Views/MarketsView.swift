@@ -732,6 +732,21 @@ struct MarketsView: View {
     /// Honest feed status: the live (green) note once real quotes land, otherwise
     /// the sample/offline notice — surfacing `feedError` (web off, unreachable)
     /// when there is one so the message is actionable.
+    /// The ONE place a feed banner's sentence is styled, so the line cap cannot be reinstated in
+    /// two banners and forgotten in the third. Deliberately not `private`: the regression test
+    /// renders THIS, not a copy of it, at a degenerate width.
+    /// See the note on `feedBanner` for what an uncapped sentence did to the whole window.
+    static func bannerSentence(_ text: String) -> some View {
+        Text(text)
+            .font(.caption).foregroundStyle(.white.opacity(0.85))
+            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(bannerSentenceLineLimit)
+    }
+
+    /// Three lines covers the longest live-banner sentence down to the 900pt window floor;
+    /// the test pins that this stays finite, not that it stays 3.
+    static let bannerSentenceLineLimit = 3
+
     // Every Text in these three banners is line-capped, and that cap is load-bearing
     // (2026-09-11). Each sits in an `HStack { icon; Text.fixedSize(vertical:); Spacer() }`.
     // The Spacer takes all offered width, so in a sizing pass that offers no concrete width the
@@ -755,10 +770,7 @@ struct MarketsView: View {
         HStack(spacing: DS.Space.sm) {
             Image(systemName: "clock.arrow.circlepath").font(.system(size: mvFont11))
                 .foregroundStyle(DS.Palette.warningSoft)
-            Text(cachedBannerText)
-                .font(.caption).foregroundStyle(.white.opacity(0.85))
-                .fixedSize(horizontal: false, vertical: true)
-                .lineLimit(3)
+            Self.bannerSentence(cachedBannerText)
             Spacer()
         }
         .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
@@ -802,10 +814,7 @@ struct MarketsView: View {
             HStack(spacing: DS.Space.sm) {
                 Circle().fill(tint).frame(width: 7, height: 7)
                     .shadow(color: stale ? .clear : tint.opacity(0.7), radius: 4)
-                Text(text)
-                    .font(.caption).foregroundStyle(.white.opacity(0.85))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .lineLimit(3)
+                Self.bannerSentence(text)
                 Spacer()
             }
             if let err = store.feedError {
@@ -1045,11 +1054,8 @@ struct MarketsView: View {
             // D5 (rotation-3 triage): `feedError ?? sample` hid the sample-data truth whenever a
             // feed error was ALSO present — both facts are true simultaneously (on sample data
             // AND the live feed errored) and the reader needs both, not whichever one won ??.
-            Text("Sample data — connecting to the live Tadawul + NASDAQ feed… The signals show the engine running on illustrative prices."
+            Self.bannerSentence("Sample data — connecting to the live Tadawul + NASDAQ feed… The signals show the engine running on illustrative prices."
                  + (store.feedError.map { " \($0)" } ?? ""))
-                .font(.caption).foregroundStyle(.white.opacity(0.85))
-                .fixedSize(horizontal: false, vertical: true)
-                .lineLimit(3)
             Spacer()
         }
         .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
