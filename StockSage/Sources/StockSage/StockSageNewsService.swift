@@ -135,7 +135,14 @@ enum StockSageNewsService {
     static func observe(for symbol: String, limit: Int = 5, maxAgeDays: Double = 7, now: Date,
                         benzingaPage: StockSageBenzinga.Page? = nil,
                         loadBenzinga: (() async -> StockSageBenzinga.Page)? = nil,
-                        isCurrent: (String?) -> Bool = { _ in true },
+                        // @MainActor is required, not stylistic (2026-09-11). The production caller
+                        // passes `{ client.isCurrent($0) }`, and StockSageBenzingaClient is a
+                        // @MainActor class, so that closure is main-actor isolated. Left unannotated
+                        // the parameter is task-isolated, and `blocked()` below — main-actor isolated
+                        // under this target's MainActor default — captures it, which is the data race
+                        // Swift 6 rejects. Only whole-module compilation sees it, so Release failed to
+                        // build while Debug did. Matches StockSageBenzingaClient's own read* closures.
+                        isCurrent: @MainActor (String?) -> Bool = { _ in true },
                         allowed: () -> Bool, clock: () -> Date,
                         request: (Provider) -> URLRequest?,
                         transport: (URLRequest) async throws -> (Data, URLResponse)) async -> Observation {
