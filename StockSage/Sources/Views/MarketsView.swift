@@ -6271,20 +6271,37 @@ struct MarketsView: View {
 
     /// "You already own this bet" (2026-07-28). Correlates the open idea against the positions
     /// actually held — the gap StockSageCorrelationCluster left, since it only de-weights within
-    /// one proposed batch and never looks at the existing book. Uses the sparklines already on
-    /// the board, so it costs no network.
+    /// one proposed batch and never looks at the existing book.
+    ///
+    /// REBUILT 2026-09-11 on real daily closes. It previously correlated `idea.spark` — the board
+    /// sparkline, which is DOWN-SAMPLED and carries no dates — against other ideas' sparks, paired
+    /// by position from the end. Two defects compounded: a spark is not a daily return series, and
+    /// positional pairing compares different calendar days for a Tadawul/US pair, which is the
+    /// exact pair this row exists to catch. It then rendered that as a hard warning quoting a
+    /// specific percentage ("has moved 84% with this name").
+    ///
+    /// It now reads the DATE-TAGGED daily returns `refreshPrecheck` already cached for this sheet
+    /// (candidate + every held symbol, one fetch, no extra network) and correlates them date-
+    /// aligned. Consequence the owner will notice: the row is ABSENT until that fetch lands, and
+    /// absent for good when too few common trading days exist. That is deliberate — this row only
+    /// ever shows bad news, so silence is the honest state when the answer is unknown.
+    ///
+    /// It also reads `portfolio.positions` rather than `store.ideas` filtered by held symbol: a
+    /// holding that has dropped off the board is still a holding, and the old source silently
+    /// omitted it.
     @ViewBuilder private func holdingOverlapRow(_ idea: StockSageIdea) -> some View {
-        let heldSymbols = Set(portfolio.positions.map { $0.symbol.uppercased() })
-        if !heldSymbols.isEmpty {
-            let candidateReturns = StockSagePortfolioAnalytics.dailyReturns(idea.spark)
-            let heldReturns: [String: [Double]] = Dictionary(
-                uniqueKeysWithValues: store.ideas
-                    .filter { heldSymbols.contains($0.symbol.uppercased()) }
-                    .map { ($0.symbol.uppercased(), StockSagePortfolioAnalytics.dailyReturns($0.spark)) })
-            let overlaps = StockSageHoldingOverlap.overlaps(candidate: idea.symbol,
-                                                            candidateReturns: candidateReturns,
-                                                            heldReturns: heldReturns)
-            if let warning = StockSageHoldingOverlap.warning(for: overlaps) {
+        let up = idea.symbol.uppercased()
+        if let candidateReturns = store.precheckDatedReturns[up], !portfolio.positions.isEmpty {
+            let held = portfolio.positions.map { p -> (symbol: String, returns: [(date: Date, ret: Double)]) in
+                // Unfetched holdings are passed EMPTY so overlapsDated tallies them as unchecked,
+                // rather than being dropped here and silently shrinking the book.
+                (p.symbol, store.precheckDatedReturns[p.symbol.uppercased()] ?? [])
+            }
+            let result = StockSageHoldingOverlap.overlapsDated(candidate: idea.symbol,
+                                                               candidateReturns: candidateReturns,
+                                                               held: held)
+            if let result, let warning = StockSageHoldingOverlap.warning(for: result.overlaps,
+                                                                        skipped: result.skipped) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
@@ -8729,11 +8746,17 @@ struct MarketsView: View {
                     }
                 }
 
-                // Portfolio precheck
+                // Portfolio precheck.
+                // `.notComparable` (2026-09-11) takes a QUESTION MARK, not the neutral overlap
+                // glyph. "Some overlap" is a measured result; "couldn't compare" is the absence of
+                // one, and at a glance the same icon would have made the second read like the
+                // first. The gate below is unchanged — it already admits every case but the one
+                // where the owner genuinely has no book.
                 if let pc = store.precheck[idea.symbol.uppercased()], pc.verdict != .noHoldings {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: pc.isWarning ? "exclamationmark.triangle.fill"
-                              : (pc.verdict == .diversifying ? "checkmark.seal.fill" : "circle.grid.2x2.fill"))
+                              : (pc.verdict == .notComparable ? "questionmark.circle"
+                                 : (pc.verdict == .diversifying ? "checkmark.seal.fill" : "circle.grid.2x2.fill")))
                             .font(.system(size: mvFont11))
                             .foregroundStyle(pc.isWarning ? DS.Palette.danger
                                              : (pc.verdict == .diversifying ? DS.Palette.successSoft : DS.Palette.textSecondary))

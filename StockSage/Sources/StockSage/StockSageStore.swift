@@ -1913,16 +1913,26 @@ final class StockSageStore: ObservableObject {
         for (sym, h) in hists {
             precheckDatedReturns[sym] = StockSagePortfolioAnalytics.datedReturns(dates: h.dates, closes: h.closes)
         }
-        guard let cand = hists[up] else { return }
-        let candReturns = StockSagePortfolioAnalytics.dailyReturns(cand.closes)
-        let holdReturns: [(symbol: String, returns: [Double])] = positions.compactMap { p in
+        guard hists[up] != nil, let candReturns = precheckDatedReturns[up] else { return }
+        // DATE-ALIGNED (2026-09-11). This used positional `assess`, which paired the candidate and
+        // each holding by index from the END of each series. Tadawul trades Sun–Thu and US markets
+        // Mon–Fri, so index N from the end is a DIFFERENT CALENDAR DAY in each: the coefficient was
+        // computed across mismatched days. A genuinely concentrated pair could read "Diversifying"
+        // on the idea sheet — a false green on the exact question the row exists to answer. These
+        // are the same date-tagged series the sibling cluster check already correlates on, so the
+        // two rows in one sheet can no longer disagree with each other.
+        let holdDated: [(symbol: String, returns: [(date: Date, ret: Double)])] = positions.compactMap { p in
             let psym = p.symbol.uppercased()
-            guard psym != up, let h = hists[psym] else { return nil }
-            return (p.symbol, StockSagePortfolioAnalytics.dailyReturns(h.closes))
+            guard psym != up else { return nil }
+            // An unfetched holding is passed with an EMPTY series on purpose: assessDated skips it
+            // and TALLIES it. Dropping it here instead would shrink the book silently, and the
+            // sentence would claim to cover holdings it never looked at.
+            return (p.symbol, precheckDatedReturns[psym] ?? [])
         }
-        precheck[up] = await Task.detached {
-            StockSageCorrelationPrecheck.assess(candidate: candReturns, holdings: holdReturns)
-        }.value
+        // No Task.detached: this is a pure reduction over a few hundred doubles per holding, and the
+        // hop off the main actor cost more than the work. It also let the `precheck` write land in a
+        // later turn of the run loop than the fingerprint write below.
+        precheck[up] = StockSageCorrelationPrecheck.assessDated(candidate: candReturns, holdings: holdDated)
         precheckFingerprint[up] = fingerprint
     }
 
