@@ -2922,6 +2922,50 @@ Next research milestone: larger predeclared multi-archive walk-forward experimen
 with point-in-time/calendar/actual-cost controls; then Kronos/Chronos comparisons
 and prospective paper evaluation. This delivery does NOT add those models to the
 app or certify broker execution. Do not optimize this already-seen test day.
+## Main integration and publication gate — 2026-09-08 13:36 +03
+
+Owner explicitly requested "merge everything to main and fix issues and push to
+main" at13:29 +03, after wt/coverage c5af104 was pushed. This authorizes this
+publication to origin (private swonyu/StockSage-app), superseding earlier no-push
+notes for this operation. Work is inline in this session; no new agents/tasks.
+
+Merged candidate prepared on main in the isolated checkout
+/Users/saleh/StockSage-wt/main-integration.yPdibq. The normal checkout remains on
+review-followups-2026-09-06: its unrelated project.pbxproj reorder, untracked
+AGENTS.md and two review/architecture documents were not staged or altered.
+Existing stashes and all other worktrees/branches are retained.
+
+History audit: origin/main 5bb544d has18 commits beyond the common ancestor,
+wt/coverage has69. `git diff main bdb1284 -- . ':!HANDOFF.md'` is empty: main's
+application/test/configuration tree is exactly an earlier integrated coverage
+snapshot. Main-only handoff history (65 lines) is preserved in its original dated
+sections below. A three-way merge simulation identified22 conflicted paths from
+the earlier cherry-picks. After selecting the evolved coverage content, a full
+tree comparison caught231 obsolete/duplicate lines automatically replayed in
+Earnings, Store, CatalystsSection and LiveStreamTests. Removed only those merge
+artifacts; all files except HANDOFF.md now exactly match tested c5af104.
+
+Other branch audit: both iOS branch tips are ancestors of coverage; cov-a1,
+cov-a3, cov-stream, cov-tracked, cov-w2 and cov-w4 changes have identical
+cherry-picked patches already integrated. wt/ui's two code patches are also
+integrated; its handoff section is retained with the later fixes/dispositions.
+Those duplicate branch tips can be recorded without replaying their old code.
+
+Fresh serial canonical gates on the merged candidate, same three opt-in
+exclusions (CalibrationPersistRunTests, LiveUniverseVerificationTests,
+StrategyBaselineMeasurementTests), parallel testing disabled:
+
+- macOS:1830/1830 passed, zero selected failures/skips, xcodebuild exit0.
+- iPhone17Pro(gate):1827/1827 passed, zero selected failures/skips, exit0.
+- Both xcresulttool summaries independently checked. Artifacts:
+  /private/tmp/stocksage-main-gates.JgmhTj/{macos,ios}.{log,xcresult}.
+- Whitespace/conflict checks pass; a redacted credential-prefix/private-key/JWT
+  scan found zero hits in added lines of outgoing history and the merge candidate.
+
+This is a source integration, not a new app installation or full live-service
+acceptance. The installed80df123 app was left running; Qwen stays OFF. The native
+helper failure and remaining Chat/window-size visual checks below remain open.
+No broker orders, model startup, credential changes, or native-control retries.
 
 ## Desktop installation, route acceptance and Journal-tab copy — 2026-09-08 03:06 +03
 
@@ -5565,6 +5609,27 @@ Uncommitted `StockSage.xcodeproj/project.pbxproj` reorder (104+/91−, no semant
    see the wt/ui section above); its worktree `~/StockSage-wt/ui` can be removed once it has run the
    iOS test leg and pushed.
 
+## Owner directive — 2026-09-06 10:05 +03 (coverage: catalysts on file + live tracking)
+Verbatim: "i want every stock to have a catalyst on file and every stock tracking should be live" then
+"i dont care if it would cost" then "do it all". Interpreted as: for every TRACKED symbol (watchlist ∪
+board ∪ portfolio ∪ open journal trades) (a) a persisted, dated catalyst record — ≥1 sourced catalyst or
+an explicit "none known as of <date>" (never invented); (b) live quotes whenever its market is open, per
+the app's own fail-closed definition of live. The cost side of the budget/cadence owner-gates is WAIVED;
+provider rate limits + the honesty floor still bind. Work branch: `wt/coverage` (worktree
+`~/StockSage-wt/coverage`, cut from this branch). Design brief + worker tasks follow in this file.
+
+## Owner next-actions — dispositions (2026-09-06 14:55 +03, wt/ui session)
+1. DONE — `main` fast-forwarded to 76f14b5 (review-followups-2026-09-06 at that time) and pushed:
+   origin/main e6b645f → 76f14b5 (66 commits). Later coverage work lands via the pipeline-2 tab's integration.
+2. DONE — walked the Mac app: Ideas (896 priced, BPYPM top) → Catalysts Cards (September tendency / 63-day-high
+   items) → Calendar ("No dated catalysts yet" — honest: Yahoo 429-throttled this Mac all day) → Explain with
+   Backend=Auto (routed to Ollama qwen3.8: fenced paragraph, labelled "local server model qwen3.8") → Explain with
+   Backend=On-device only (Apple Intelligence: fenced paragraph, labelled "on-device"). Both stayed inside the facts.
+3. DECIDED — MLX server does NOT become the default (1–2 s/tap is not worth a hand-run server + launch agent;
+   Ollama already runs as a launch agent and Auto falls back on-device). Files: the Ollama tag `qwen3.8:27b-mlx`
+   (18 GB, A/B leftover, re-pullable) is deletable on owner go; the Hugging Face cache (15 GB) is IN USE by a
+   running `mlx_lm.lora` training job (started 14:35 +03) — do not delete while it runs; revisit after.
+
 ## W4 — local-model retrieval-first internet access (2026-09-06, worktree cov-w4, branch wt/cov-w4)
 Citable sources for the on-tap Catalyst "Explain" paragraph: EODHD news (`StockSageNewsService`,
 new), the last 8-K (`StockSageDisclosureService`, existing), and insider Form 4 activity
@@ -5590,3 +5655,47 @@ StockSageNewsService 12/12, StockSageCatalystNarratorTests 23/23; unfiltered sui
 tests in 177 suites, 0 failed (tools/runtests.sh, EXECUTED, 65.3s). No network hit in any test —
 all fixtures are hand-derived pure-parse inputs; `ToolPolicy.override` gating test uses the
 pre-existing `ToolPolicyTestLock` seam.
+
+## Pipelines 1+2 integrated — canonical gate green on both platforms at 3dd538f (2026-09-06 17:38 +03, pipeline-2 session cd9bd932)
+Cherry-picked `9b1f4fa..wt/coverage` (15 commits, oldest first) onto this branch: pipeline 1 (dc9a4c1 design brief,
+A1 bc21303, A3 3ca3e89, tracked-union aa309f4, B5 58d4a72, T4 544f68c, T5 9e3042b, T6 663e3f1, review fixes 777e9b5) and
+pipeline 2 (366ff56 follow-up scope, W1 f44155e catalyst chain, W3 f0cce3e 30 s seamless prices, d2feaf7 W2 dropped —
+owner does not want Tadawul live tracking, 75272e6 W4 retrieval-first Explain sources, bdb1284 review fixes). One
+conflict (HANDOFF.md, both sides appended at the same anchor) resolved by keeping both. Tree identical to wt/coverage
+bdb1284 except this file. The uncommitted `project.pbxproj` reorder was left untouched.
+
+Canonical gate (README command, session-local `-derivedDataPath`, HEAD 3dd538f before and after):
+- macOS `xcodebuild … -destination platform=macOS … test`: `Test run with 1639 tests in 183 suites passed after 56.326 seconds` — ** TEST SUCCEEDED ** (17:34:52–17:36:37 +03).
+- iOS `… -destination 'platform=iOS Simulator,id=3B0B0FE2-C39B-4B04-9E32-C8CCB93DA3AA'` (iPhone 17 Pro (gate)): `Test run with 1639 tests in 183 suites passed after 55.678 seconds` — ** TEST SUCCEEDED ** (17:36:37–17:38:18 +03).
+- Baseline before this integration: 1,476/171 at 9b1f4fa. tools/runtests.sh on wt/coverage at bdb1284: 1,639/183, 0 failed.
+Logs: `<session scratchpad>/gate/{macos,ios}_test_3dd538f.log`.
+
+Pipeline 2 review: two Opus lenses (honesty/fail-closed: REVISE, 2 blockers/6 majors/3 minors/1 note; correctness/
+concurrency: REVISE, 1 blocker/3 majors/4 minors/2 notes) → fix pass bdb1284 applied 11 of 12 blocker/major items
+(two pairs were duplicates). Deliberate NON-fix, evidence-backed: EODHD calendar `report_date` vs `date` semantics
+(StockSageEODHDCalendar.swift:21) — a live probe returned HTTP 401 from BOTH `/api/calendar/earnings` and
+`/api/fundamentals/*` with this account's key, so neither reading could be verified; fields documented UNVERIFIED with
+the 401 evidence in a file-level comment, nothing guessed.
+
+Visual QA (W3): macOS `--section watchlist` t0/t1 (~35 s apart) + iOS gate-simulator t0 screenshots under the design
+session's scratchpad `visual_qa/`. They prove no crash/layout regression from PriceFlash / TimelineView /
+applyPolledQuotes, but the watchlist on this machine is EMPTY and the header sat on the "Last-good (cached)" branch
+(Yahoo 429-throttled all day), so the flash fade, numeric transition and "updated N s ago" counter were NOT pixel-
+exercised — covered by MarketsPriceFlashDirectionTests, MarketsUpdatedAgoLabelTests, MarketsPolledQuoteMergeTests,
+MarketsRefreshIntervalTests (14/14). Pixel check on real data still owed once a tracked symbol exists.
+
+Owner directives recorded today, applied going forward:
+- 15:06 +03 (answer "2"): after this gate, ff-merge this branch into `main` and push `main` to origin
+  (github.com/swonyu/StockSage-app) — done in the next commit's push; never Salman-bot.
+- 17:19 +03 verbatim "i dont use eodhd anymore": EODHD is no longer a data source. Today every EODHD call path fails
+  closed (401 → Yahoo / `.unchecked` / `[]`). Pipeline 4 (Massive migration, saleh-36 tab) must make Massive the ONLY
+  US provider at its M5 cutover — not keep EODHD as a live fallback; deleting the EODHD code is a separate owner call.
+  Note: `StockSageEODHD.embeddedKey` still holds a hard-coded key value in source — revoke it on the EODHD side and
+  strip it from source at the cutover.
+- Pipeline 5 (execution assist: `stocksage-coverage-5-execution-assist.js`) is queued in this session to launch only
+  after pipeline 4 has actually landed on wt/coverage (Massive files committed + closed journal + clean, quiet tree);
+  its post-steps are the same as above but with NO push.
+
+Still open from pipeline 2 (honesty-scoped, not defects): Yahoo `earningsHistory` for `.SR` names unverified (429s);
+EODHD tier now known to be unauthorized (see above); `notApplicable` is driven by `assetClass != "Equity"` only —
+no ETF classifier exists in the codebase and none was invented.
