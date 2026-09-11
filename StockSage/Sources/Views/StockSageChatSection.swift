@@ -311,12 +311,33 @@ struct StockSageChatSection: View {
     }
 
     #if os(macOS)
+    /// Composer text wraps OUTSIDE the chat ScrollView. macOS `chatLayout` makes `composer` a
+    /// SIBLING of the scroll view, so its height sums into the NavigationSplitView's detail column
+    /// instead of scrolling — the same route that made the app unusable in 3392d17.
+    ///
+    /// Measured in place, inside a real split view in a 1300x840 window, with the feed banners
+    /// already capped:
+    ///
+    ///     chat page, no warning ....................... 223pt
+    ///     + 63-char "enable a loopback model" issue ... 1095pt
+    ///     + 95-char rejected-question issue ........... 1511pt
+    ///     + 141-char storage-failure warning .......... 2135pt
+    ///     + both warnings at once ..................... 3423pt
+    ///     capped ................................ 279-335pt
+    ///
+    /// 2135pt lands on the original defect's 2185pt, and is invariant to window width, which is the
+    /// fingerprint. Both states are ordinary: a rejected send, or a history file that cannot be
+    /// written. Four lines clears the longest warning at the 900pt window floor while keeping a
+    /// near-zero-width pass finite.
+    static let composerLineLimit = 4
+
     static let modelSetupGuidance = "Configure a local model in Model settings. Chat requires a server on this Mac."
 
     static func missingModelNotice(openModelSettings: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(modelSetupGuidance).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(composerLineLimit)
             Button("Model settings", systemImage: "gearshape", action: openModelSettings)
                 .controlSize(.small)
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -369,6 +390,7 @@ struct StockSageChatSection: View {
         return ForEach(warnings.indices, id: \.self) { index in
             Text(warnings[index]).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(composerLineLimit)
         }
     }
     #endif

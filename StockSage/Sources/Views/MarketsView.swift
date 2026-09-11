@@ -748,15 +748,27 @@ struct MarketsView: View {
     static let bannerSentenceLineLimit = 3
 
     // Every Text in these three banners is line-capped, and that cap is load-bearing
-    // (2026-09-11). Each sits in an `HStack { icon; Text.fixedSize(vertical:); Spacer() }`.
-    // The Spacer takes all offered width, so in a sizing pass that offers no concrete width the
-    // Text answers with its FULLY WRAPPED height — measured 2185pt for the ~150-character live
-    // banner, roughly one character per line. That number became the NavigationSplitView's own
-    // height, and AppKit centred the oversized split view inside the real content area: the
-    // sidebar's whole Workspace group (Home, Research, Paper trading, Chat) sat above the top
-    // edge, the briefing started mid-list, and nothing scrolled to recover either end. It was
-    // invariant to window width, window height, page and sidebar visibility, which is what gave
-    // it away. The cap keeps normal wrapping at real widths and makes the degenerate pass finite.
+    // (2026-09-11). MEASURED, so the mechanism is stated the way it actually behaves rather than
+    // the way it first looked:
+    //
+    //     uncapped sentence, no width offered ......................... 15pt
+    //     uncapped sentence, 24pt offered ............................ 660pt
+    //     the real HStack { icon; sentence; Spacer() }, 24pt ........ 2085pt
+    //     the same row at the real 1080pt detail width ................ 15pt
+    //
+    // So the trigger is a NEAR-ZERO CONCRETE width, not the absence of a proposal: an unbounded
+    // `.fixedSize(horizontal: false, vertical: true)` Text answers one with its fully wrapped
+    // height, roughly one character per line. The Spacer is an amplifier, not the cause — it
+    // starves the Text of what little width there is, which is why the shipped row measured 2085pt
+    // where the bare sentence measured 660pt, and why the live defect was 2185pt.
+    //
+    // What that height did: it became the NavigationSplitView's own height, and AppKit centred the
+    // oversized split view inside the real ~800pt window content area, spilling ~690pt off the top
+    // and the bottom. The sidebar's whole Workspace group (Home, Research, Paper trading, Chat) sat
+    // above the top edge, the briefing began mid-list, and nothing scrolled to recover either end.
+    // It was invariant to window width, window height, page and sidebar visibility, which is what
+    // gave it away. The cap keeps normal wrapping at real widths and makes the degenerate pass
+    // finite. Same fix, same reasoning, in StockSageChatSection.composerLineLimit.
     @ViewBuilder private var feedBanner: some View {
         if store.isSampleData { sampleBanner }
         else if store.loadedFromCache { cachedBanner }   // last-good disk cache is NOT live — say so

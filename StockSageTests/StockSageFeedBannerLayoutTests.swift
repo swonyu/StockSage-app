@@ -6,15 +6,27 @@ import AppKit
 
 // The feed banner's answer to a degenerate width (2026-09-11).
 //
-// WHAT THIS PINS, and why the whole app depended on it. Each feed banner is an
-// `HStack { icon; sentence; Spacer() }`. The Spacer claims all offered width, so when a sizing
-// pass offers no concrete width the sentence answers with its FULLY WRAPPED height — roughly one
-// character per line. For the ~150-character live banner that measured 2185 points. That number
-// became the height of the entire NavigationSplitView, and AppKit centred the oversized split view
-// inside the real ~800pt window content area, spilling ~690pt off the top and the bottom: the
-// sidebar rendered blank because its rows sat above the window's top edge, the page began
-// mid-sentence, and nothing scrolled to recover either end. The app was unusable at its normal
-// window size, and the owner could only read it by stretching the window to full screen.
+// WHAT THIS PINS, and why the whole app depended on it. An unbounded
+// `.fixedSize(horizontal: false, vertical: true)` Text answers a NEAR-ZERO CONCRETE width with its
+// fully wrapped height, roughly one character per line. Measured, because the mechanism is narrower
+// than it first appears:
+//
+//     uncapped sentence, no width offered ......................... 15pt
+//     uncapped sentence, 24pt offered ............................ 660pt
+//     the real HStack { icon; sentence; Spacer() }, 24pt ........ 2085pt
+//     the same row at the real 1080pt detail width ................ 15pt
+//
+// Offering NO width is harmless; offering almost none is what detonates. The adjacent Spacer is an
+// amplifier rather than the cause — it starves the Text of the little width there is, which is why
+// the shipped row measured 2085pt where the bare sentence measured 660pt. That is also why this
+// suite forces `.frame(width: 24)` instead of leaving the proposal unspecified: an unspecified
+// proposal would measure 15pt and prove nothing.
+//
+// The resulting height became the whole NavigationSplitView's, and AppKit centred the oversized
+// split view inside the real ~800pt window content area, spilling ~690pt off the top and the
+// bottom: the sidebar rendered blank because its rows sat above the window's top edge, the page
+// began mid-sentence, and nothing scrolled to recover either end. The app was unusable at its
+// normal window size.
 //
 // The existing 2220-test gate passed throughout. Nothing in it measured a view's answer to a
 // width-less proposal, which is why a defect this visible reached the owner.
@@ -102,6 +114,38 @@ struct StockSageFeedBannerLayoutTests {
         let limit = try #require(MarketsView.bannerSentenceLineLimit as Int?)
         #expect(limit > 0, "a non-positive line limit does not bound anything")
         #expect(limit <= 6, "a cap this loose stops bounding the degenerate wrap")
+    }
+
+    // MARK: The chat composer — the same escape route, found by sweeping for the pattern
+
+    // WHY THESE TWO. macOS `chatLayout` is `VStack { ScrollViewReader { ScrollView { conversation } }
+    // ; Divider(); composer }` — the composer is a SIBLING of the scroll view, not inside it. So its
+    // height contributes directly to the chat page, which is the NavigationSplitView's detail column:
+    // the exact path the feed banner's 2185pt took. Both views below sit in the composer and wrap
+    // without a cap.
+    //
+    // `connectionNotice` is deliberately NOT tested here. It carries a far longer sentence (584
+    // characters) but no `.fixedSize`, so a width-less proposal gets its one-line ideal instead of a
+    // wrapped height. Absence of the modifier is what makes it safe, and that is worth stating so a
+    // later reader does not "fix" it by adding one.
+
+    @Test func theMissingModelNoticeStaysBounded() throws {
+        let h = try height(StockSageChatSection.missingModelNotice(openModelSettings: {}))
+        #expect(h < Self.capCeiling,
+                """
+                missingModelNotice answered a \(Int(Self.degenerateWidth))pt width with \(Int(h))pt.                 It renders in the composer, which sits OUTSIDE the chat ScrollView, so this height                 reaches the detail column exactly as the feed banner's did.
+                """)
+    }
+
+    @Test func composerWarningsStayBounded() throws {
+        // The real string the send path produces for a rejected question.
+        let issue = "Use 1–2000 characters without credentials or account identifiers. Nothing was saved or sent."
+        let storage = "The latest turns could not be saved locally. Check any storage warning before closing Chat."
+        let h = try height(VStack { StockSageChatSection.composerWarnings(issue: issue, storageError: storage) })
+        #expect(h < Self.capCeiling * 2,
+                """
+                composerWarnings answered a \(Int(Self.degenerateWidth))pt width with \(Int(h))pt for                 two warnings. These render outside the chat ScrollView and add straight to the                 detail column's height.
+                """)
     }
 
     // The sample-data and cached-snapshot banners carry their own sentences. They share the
