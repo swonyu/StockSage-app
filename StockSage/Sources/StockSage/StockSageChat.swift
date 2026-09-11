@@ -159,7 +159,9 @@ enum StockSageChat {
                 : "recent observation — NOT an executable quote"
             facts.append(Fact(id: symbol.symbol + ".quote", subject: symbol.symbol, field: "observed price",
                 value: usable ? StockSageCurrency.adaptivePrice(StockSageCurrency.majorUnitValue(symbol: symbol.symbol, rawValue: quote!.price)) : "unknown",
-                unit: StockSageCurrency.conversionCurrencyForSymbol(symbol.symbol), asOf: time,
+                // Same rule as the assessment prompt: never print an unmapped exchange suffix as a unit.
+                unit: StockSageCurrency.knownQuoteCurrency(forSymbol: symbol.symbol)
+                    ?? StockSageCurrency.unconfirmedQuoteCurrencyClause, asOf: time,
                 source: quote?.priceSource?.label ?? "unknown", status: status))
             if let idea = ideas.first(where: { $0.symbol == symbol.symbol }) {
                 facts.append(Fact(id: symbol.symbol + ".rules", subject: symbol.symbol, field: "technical rules opinion",

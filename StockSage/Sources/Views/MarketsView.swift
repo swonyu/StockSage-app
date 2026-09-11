@@ -2489,7 +2489,7 @@ struct MarketsView: View {
                         Text("Copy CSV").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Copy the whole journal as CSV (Excel / Sheets / Python-ready)")
+                    .help("Copy the whole journal as CSV (Excel / Sheets / Python-ready). CSV is LOSSY — it omits conviction and every planned/fill price; the JSON backup keeps them.")
                 }
                 // Extension batch (2026-07-16): import/backup — every action reports an honest
                 // one-line result (added/skipped/error counts) via journalDataFeedback.
@@ -2507,10 +2507,15 @@ struct MarketsView: View {
                               let csv = try? String(contentsOf: url, encoding: .utf8) else { return }
                         let preview = StockSageJournalCSVImport.preview(csv, existing: journal.trades)
                         let result = journal.importNew(preview.trades)
-                        journalDataFeedback = "Imported \(result.added) trade\(result.added == 1 ? "" : "s")"
-                            + (preview.skipped > 0 ? ", skipped \(preview.skipped) duplicate\(preview.skipped == 1 ? "" : "s")" : "")
-                            + (preview.errors.isEmpty ? "." : "; \(preview.errors.count) row\(preview.errors.count == 1 ? "" : "s") failed (first: line \(preview.errors[0].line) — \(preview.errors[0].reason)).")
-                            + (result.rejected > 0 ? " \(result.rejected) parsed record(s) could not be saved." : "")
+                        var message = "Imported \(result.added) trade\(result.added == 1 ? "" : "s")"
+                        if preview.skipped > 0 { message += ", skipped \(preview.skipped) duplicate\(preview.skipped == 1 ? "" : "s")" }
+                        if preview.errors.isEmpty { message += "." }
+                        else { message += "; \(preview.errors.count) row\(preview.errors.count == 1 ? "" : "s") failed (first: line \(preview.errors[0].line) — \(preview.errors[0].reason))." }
+                        if result.rejected > 0 { message += " \(result.rejected) parsed record(s) could not be saved." }
+                        // CSV drops conviction and all four planned/fill prices; say so at the one
+                        // moment the owner is looking at freshly imported rows.
+                        if result.added > 0 { message += " Imported rows carry no conviction and no planned/fill prices — CSV omits them; Restore backup… (JSON) keeps them." }
+                        journalDataFeedback = message
                     }
                     Divider()
                     Button("Export backup…") {

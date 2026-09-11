@@ -111,7 +111,9 @@ struct StockSageJournalCSVImportTests {
         let trades = [
             TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: 124, shares: 10,
                        openedAt: Date(timeIntervalSince1970: 0), exitPrice: 120,
-                       closedAt: Date(timeIntervalSince1970: 86_400), note: "Bought dip, added size"),
+                       closedAt: Date(timeIntervalSince1970: 86_400), note: "Bought dip, added size",
+                       conviction: 0.72, plannedEntry: 99.5, entryFill: 100.4,
+                       plannedExit: 121.0, exitFill: 119.6),
             TradeRecord(symbol: "X", side: .short, entry: 50, stop: 55, target: nil, shares: 3,
                        openedAt: Date(timeIntervalSince1970: 1_000)),   // open, no exit/close/note
         ]
@@ -133,6 +135,21 @@ struct StockSageJournalCSVImportTests {
         #expect(parsed[0].note == "Bought dip, added size")
         #expect(parsed[0].realizedR == 2.0)          // derived, matches the export's realizedR column
         #expect(parsed[0].id != trades[0].id)         // new UUID on import
+
+        // CSV BOUNDARY (2026-09-11): the 11-column interchange format carries neither conviction
+        // nor ANY of the four planned/fill prices, so a round trip loses all five. The fixture
+        // pins come FIRST on purpose — a nil assertion passes whether or not the input ever held
+        // a value, so without these the five nil pins below would be vacuous.
+        #expect(trades[0].conviction == 0.72)
+        #expect(trades[0].plannedEntry == 99.5 && trades[0].entryFill == 100.4)
+        #expect(trades[0].plannedExit == 121.0 && trades[0].exitFill == 119.6)
+        #expect(!csv.contains("0.72") && !csv.contains("99.5") && !csv.contains("100.4"))
+        #expect(!csv.contains("121.0") && !csv.contains("119.6"))
+        #expect(parsed[0].conviction == nil)
+        #expect(parsed[0].plannedEntry == nil)
+        #expect(parsed[0].entryFill == nil)
+        #expect(parsed[0].plannedExit == nil)
+        #expect(parsed[0].exitFill == nil)
 
         #expect(parsed[1].symbol == "X")
         #expect(parsed[1].side == .short)

@@ -320,4 +320,24 @@ struct StockSageCurrencyTests {
         #expect(StockSageCurrency.signedAmount(150, symbol: "2222.SR") == "+150.00 SAR")
         #expect(StockSageCurrency.signedAmount(-4000, symbol: "SHEL.L") == "-40.00 GBP")
     }
+
+    // BATCH 10.3. Hand-derived from the suffix map at StockSageCurrency:175, never from the
+    // accessor. The VALUATION fallback ("FOO.ZZ" -> "ZZ") is deliberate and stays — no FX rate
+    // exists for "ZZ", so the holding correctly surfaces as unpriced. The PROSE accessor must
+    // return nil instead, because a suffix printed as a unit is a currency that does not exist.
+    @Test func knownQuoteCurrencyIsNilForSuffixesOutsideTheMap() {
+        #expect(CC.knownQuoteCurrency(forSymbol: "2222.SR") == "SAR")
+        #expect(CC.knownQuoteCurrency(forSymbol: "SHEL.L") == "GBP")
+        #expect(CC.knownQuoteCurrency(forSymbol: "7203.T") == "JPY")
+        #expect(CC.knownQuoteCurrency(forSymbol: "AAPL") == "USD")        // no suffix at all
+        #expect(CC.knownQuoteCurrency(forSymbol: "BTC-USD") == "USD")
+        #expect(CC.knownQuoteCurrency(forSymbol: "^GSPC") == "USD")
+        #expect(CC.knownQuoteCurrency(forSymbol: "000001.SZ") == nil)     // Shenzhen: unmapped
+        #expect(CC.knownQuoteCurrency(forSymbol: "035720.KQ") == nil)     // KOSDAQ: unmapped
+        #expect(CC.knownQuoteCurrency(forSymbol: "EQNR.OL") == nil)       // Oslo: unmapped
+        #expect(CC.knownQuoteCurrency(forSymbol: "FOO.ZZ") == nil)
+        #expect(CC.knownQuoteCurrency(forSymbol: "brk.b") == nil)         // a US share class is not a currency
+        // The valuation contract is untouched: the raw suffix still keys the FX lookup.
+        #expect(CC.conversionCurrencyForSymbol("000001.SZ") == "SZ")
+    }
 }

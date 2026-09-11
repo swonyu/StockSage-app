@@ -253,6 +253,46 @@ struct StockSageQwenDiagnosticsTests {
         }
     }
 
+    // MARK: - Numeric tickers are identifiers, not unbound figures (2026-09-11)
+
+    // Tadawul tickers ARE digits (2222.SR = Aramco), and `instructions` orders the model to name
+    // the company only by its ticker — so every Saudi assessment used to fail `.unboundNumber` on
+    // its own symbol, and the owner-facing reason pointed at the ticker as if it were a price.
+    // These pins exist to prove the mask is narrow: it is anchored to THIS idea's full symbol,
+    // it runs after the F/W loop and before BOTH number guards, and it disables nothing else.
+    @Test func numericTickerIsAnIdentifierNotAnUnboundNumber() {
+        // Hand-derived token sets, not read off the code: F1 -> {2222, 2026, 11, 04, 00}; F2 -> {32.10}.
+        let saudiFacts = ["Symbol: 2222.SR. Market: Saudi Exchange. Assessment snapshot: 2026-11-04T00:00:00Z.",
+                          "Observed quote: 32.10 SAR. Not a live fill quote."]
+        func reply(_ reason: String, evidence: String = "[\"F1\"]") -> String {
+            "{\"action\":\"Hold\",\"reason\":\"\(reason)\",\"risk\":\"A loss remains possible.\",\"evidence\":\(evidence)}"
+        }
+        let named = "2222.SR screens weak on the rules alone (F1)."
+        let expected = A.Verdict(action: .hold, reason: named,
+                                 risk: "A loss remains possible.", evidence: ["F1"])
+        // Symbol supplied: the ticker is masked and the verdict publishes the ORIGINAL prose.
+        #expect(A.validate(reply(named), facts: saudiFacts, symbol: "2222.SR") == .success(expected))
+        #expect(A.parse(reply(named), facts: saudiFacts, symbol: "2222.SR") == expected)
+        // Case-insensitive, literal match: a lower-cased ticker is the same identifier.
+        #expect(A.parse(reply("2222.sr screens weak on the rules alone (F1)."),
+                        facts: saudiFacts, symbol: "2222.SR") != nil)
+        // Symbol nil reproduces today's behaviour byte-for-byte; every other call site relies on it.
+        #expect(A.validate(reply(named), facts: saudiFacts) == .failure(.unboundNumber))
+        // The bare stem is NOT masked: "2222" on its own is still an unbound number.
+        #expect(A.validate(reply("2222 screens weak on the rules alone (F1)."),
+                           facts: saudiFacts, symbol: "2222.SR") == .failure(.unboundNumber))
+        // A DIFFERENT ticker is still foreign — 1120 is absent from F1's tokens, so the FIRST
+        // guard fires. A `.unboundNumber` here would mean the mask landed after the foreign guard.
+        #expect(A.validate(reply("1120.SR screens weak on the rules alone (F1)."),
+                           facts: saudiFacts, symbol: "2222.SR") == .failure(.foreignNumber))
+        // Masking the ticker must not let a genuine figure standing beside it through. This is the
+        // assertion that proves the fix did not blanket-disable the fence.
+        #expect(A.validate(reply("2222.SR trades at 32.10 (F1).", evidence: "[\"F1\",\"F2\"]"),
+                           facts: saudiFacts, symbol: "2222.SR") == .failure(.unboundNumber))
+        // A letter ticker changes nothing: the whole existing guard matrix stays put.
+        #expect(A.validate(text, facts: facts, symbol: "ORCL") == A.validate(text, facts: facts))
+    }
+
     @Test func acceptedVerdictsRetainAllFieldsAndEvidenceOrder() throws {
         for action in ["Strong Buy", "Buy", "Hold", "Avoid", "Reduce", "Sell"] {
             for evidence in [["F1"], ["F2", "F1"]] {

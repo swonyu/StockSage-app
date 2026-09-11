@@ -431,6 +431,40 @@ struct StockSageCatalystNarratorTests {
         }
     }
 
+    // 10.2 — a numeric ticker is not a figure. `instructions` orders the model to name the
+    // company only by its ticker, and this universe's Tadawul/Tokyo/HK tickers ARE digits, so
+    // before the mask every paragraph about "1120.SR" came back as an unverified draft whose
+    // stated reason ("Figures in prose…") pointed at the ticker itself.
+    @Test("the idea's own numeric ticker is masked before the prose digit scan, and nothing else is")
+    func numericTickerIsNotAProseFigure() {
+        let facts = ["Symbol: 1120.SR", "Also: 2222.SR", "Target: 92.10", "[1] Fixture"]
+        for text in ["1120.SR reports next week [1].", "1120.sr reports next week [1]."] {
+            #expect(N.checkedResponse(text, facts: facts, source: .onDevice, sourceCount: 1,
+                                      symbol: "1120.SR") == .text(text, .onDevice))
+        }
+        // No [n] at all, sourceCount 0 — the ticker alone must not fail the paragraph.
+        #expect(N.checkedResponse("1120.SR reports next week.", facts: facts, source: .onDevice,
+                                  sourceCount: 0, symbol: "1120.SR") == .text("1120.SR reports next week.", .onDevice))
+        // Everything the mask must NOT swallow. Each stays unverified AND names which guard fired,
+        // so a mask that leaks later cannot pass this silently. The Arabic-Indic digits are escaped
+        // (U+0669 U+066B U+0663 U+0665) so an RTL-unaware editor cannot mangle the fixture.
+        for (text, symbol, fragment) in [
+            ("1120.SR reports next week [1].", "", "Figures in prose"),                 // no symbol supplied
+            ("1120 reports next week [1].", "1120.SR", "Figures in prose"),             // bare numeric stem
+            ("2222.SR reports next week [1].", "1120.SR", "Figures in prose"),          // a DIFFERENT ticker
+            ("1120.SR target is 92.10 [1].", "1120.SR", "Figures in prose"),            // a real, on-facts figure
+            ("Yield \u{0669}\u{066B}\u{0663}\u{0665} percent [1].", "1120.SR", "Figures in prose"),
+            ("1120.SR target is 91.10 [1].", "1120.SR", "not in the supplied facts")    // off-facts number
+        ] {
+            guard case .unverified(let draft, _, let reason) =
+                N.checkedResponse(text, facts: facts, source: .onDevice, sourceCount: 1, symbol: symbol) else {
+                Issue.record("The ticker mask swallowed a figure it must not: \(text)")
+                continue
+            }
+            #expect(draft == text && reason.contains(fragment))
+        }
+    }
+
     @Test("Result compares by case and payload")
     func resultEqualityByValue() {
         #expect(N.Result.text("a", .onDevice) == .text("a", .onDevice))

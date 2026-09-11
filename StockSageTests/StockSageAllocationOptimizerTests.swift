@@ -5,7 +5,7 @@ import Foundation
 // MARK: - Sharpe-max, de-correlated capital allocator (ALLOC_BACKLOG #6, "stretch")
 //
 // The FIRST iterative/numerical engine in this codebase — see StockSageAllocationOptimizer.swift's
-// own header for the full derivation (units, why Frank-Wolfe, the lambda=1.0=half-Kelly anchor).
+// own header for the full derivation (units, why Frank-Wolfe, and why lambda is a free knob).
 // These tests hand-verify (python-first) both the pure-math primitives AND the end-to-end pipeline
 // for cases precise enough to compute exactly, plus structural/directional invariants (box cap,
 // heat cap, de-correlation direction) for cases too complex to hand-derive to the last digit.
@@ -202,5 +202,33 @@ struct StockSageAllocationOptimizerTests {
         #expect(!Opt.caveat.isEmpty)
         #expect(Opt.caveat.localizedCaseInsensitiveContains("local optimum"))
         #expect(Opt.caveat.localizedCaseInsensitiveContains("estimate"))
+    }
+
+    // MARK: - Fence (2026-09-11): the deleted "lambda = 1 is half-Kelly" claim must not come back
+
+    // The header asserted that lambda = 1 reproduces the app's shipped half-Kelly fraction, and the
+    // RUNTIME note repeated it — the copy that would reach the owner the moment anyone wires this as
+    // a third allocation strategy. It was false, so it is pinned deleted in the one place a test can
+    // see it.
+    @Test func theRuntimeNoteDoesNotClaimLambdaIsAnchoredToHalfKelly() throws {
+        let only = idea("SOLO", conviction: 0.5, entry: 100, stop: 90, target: 130, closes: lowVolCloses)
+        let result = try #require(Opt.optimizeSharpeDeCorrelated(ideas: [only], account: 10_000, heatCap: 0.5))
+        #expect(!result.note.localizedCaseInsensitiveContains("half-Kelly risk appetite"))
+        #expect(result.note.contains("NOT calibrated to half-Kelly"))
+    }
+
+    /// Hand-derived, not read off the code: W = 0.465, R = 3.0 ⇒ f* = W − (1−W)/R = 0.2866…,
+    /// half-Kelly = 0.14333… That equals mu/(2R) with mu = W·R − (1−W) = 0.86 — a DISCRETE binary-bet
+    /// quantity with no sigma in it. The optimizer's single-asset optimum is mu/(2·sigma²). The two
+    /// coincide only where sigma² == R, which nothing enforces: on this suite's own fixture sigma² is
+    /// ~5.8e-5 against R = 3.0. That gap is why the header claim was deleted rather than reworded.
+    @Test func shippedHalfKellyIsMuOverTwoRNotMuOverTwoSigmaSquared() throws {
+        let k = StockSageKelly.compute(winRate: 0.465, payoffRatio: 3.0, accountSize: 10_000)
+        #expect(abs(k.halfKelly - 0.143333333333333) < 1e-12)
+        #expect(abs(k.halfKelly - 0.86 / (2 * 3.0)) < 1e-12)          // == mu/(2R), exactly
+        let priceVol = try #require(StockSageIndicators.annualizedVolatility(lowVolCloses))
+        let sigma = priceVol / 0.10                                    // stopPct = |100-90|/100
+        #expect(abs(sigma * sigma - 3.0) > 2.9,
+                "sigma² == R is the ONLY case where lambda = 1 would reproduce half-Kelly; it is not this one")
     }
 }

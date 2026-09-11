@@ -283,7 +283,18 @@ enum StockSageCatalystNarrator {
     }
 
     /// Both backends pass their response through the same deterministic result boundary.
-    static func checkedResponse(_ text: String, facts: [String], source: Source, sourceCount: Int) -> Result {
+    ///
+    /// `symbol` — the idea's own ticker, masked out of `prose` before the digit scan below and
+    /// NOWHERE else. A numeric ticker is digits ("1120.SR", "2222.SR", "7203.T", "0700.HK" are
+    /// all in this universe) and `instructions` ORDERS the model to name the company only by its
+    /// ticker, so without the mask every paragraph about a Tadawul/Tokyo/HK name came back as an
+    /// unverified draft whose stated reason ("Figures in prose…") pointed at the ticker itself.
+    /// The fence is not weakened: the mask is the FULL literal symbol, so a bare "1120" in prose
+    /// is still a price-shaped claim and still fails; a symbol that is nothing but digits is never
+    /// masked (that IS the bare stem); and the default "" leaves any caller without a symbol on
+    /// exactly today's stricter behaviour.
+    static func checkedResponse(_ text: String, facts: [String], source: Source, sourceCount: Int,
+                                symbol: String = "") -> Result {
         // An unsupported [n] is an attribution error, not an invented financial figure.
         guard citationsValid(text, sourceCount: sourceCount) else {
             return .unverified(text, source, reason: "The model cited a source number that was not offered. Verify its attribution before relying on it.")
@@ -291,7 +302,14 @@ enum StockSageCatalystNarrator {
         if introducesForeignNumbers(text, facts: facts) {
             return .unverified(text, source, reason: "The model introduced a number that is not in the supplied facts. Verify it before relying on it.")
         }
-        let prose = text.replacingOccurrences(of: #"\[[0-9]+\]"#, with: "", options: .regularExpression)
+        var prose = text.replacingOccurrences(of: #"\[[0-9]+\]"#, with: "", options: .regularExpression)
+        // Literal, case-insensitive, and only for a symbol that is not purely digits. `.literal`
+        // (with no `.regularExpression`) is what makes the "." in "1120.SR" an ordinary dot; the
+        // model may echo the ticker lower-cased. Keep `\.isNumber` below — `numericTokens` is
+        // ASCII-gated, so this scan is the narrator's ONLY Arabic-Indic digit catch.
+        if symbol.contains(where: { !$0.isNumber }) {
+            prose = prose.replacingOccurrences(of: symbol, with: " ", options: [.caseInsensitive, .literal])
+        }
         if prose.contains(where: \.isNumber) {
             return .unverified(text, source, reason: "Figures in prose are not validated for subject, sign, unit or time. Use the original supplied facts.")
         }
@@ -385,7 +403,8 @@ enum StockSageCatalystNarrator {
                 to: prompt(facts: briefFacts),
                 options: GenerationOptions(temperature: 0.2, maximumResponseTokens: 200))
             let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return checkedResponse(text, facts: briefFacts, source: .onDevice, sourceCount: sources.count)
+            return checkedResponse(text, facts: briefFacts, source: .onDevice, sourceCount: sources.count,
+                                   symbol: brief.idea.symbol)
         } catch {
             #if DEBUG
             print("StockSageCatalystNarrator: on-device explain failed: \(error)")
@@ -429,7 +448,8 @@ enum StockSageCatalystNarrator {
             contextTokens: StockSageLocalModelServer.researchContextTokens, stillValid: stillValid)
         switch result {
         case .success(let text):
-            return checkedResponse(text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count)
+            return checkedResponse(text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count,
+                                   symbol: brief.idea.symbol)
         case .failure(let error):
             return .unavailable(humanServerError(error))
         }

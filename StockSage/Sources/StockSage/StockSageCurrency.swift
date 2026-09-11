@@ -132,6 +132,26 @@ enum StockSageCurrency {
         return currencyForSymbol(symbol, base: base)
     }
 
+    /// Prose-safe quote currency: the symbol's quote currency ONLY when we actually know it, nil
+    /// when the exchange suffix is outside `currencyForSuffix`. `currencyForSymbol` deliberately
+    /// falls back to the RAW SUFFIX ("000001.SZ" -> "SZ", "035720.KQ" -> "KQ"). That is right for
+    /// the VALUATION path — no FX rate exists for "SZ", so the holding surfaces as unpriced — and
+    /// wrong for any surface that PRINTS a unit: "12.34 SZ" states a currency that does not exist,
+    /// and a suffix can also name a US share class. Printing callers use this and say the currency
+    /// is unconfirmed on nil. The curated universe carries only mapped suffixes; a hand-added
+    /// ticker (`StockSageStore.validateNewSymbol` accepts any ticker the feed prices) is the way in.
+    nonisolated static func knownQuoteCurrency(forSymbol symbol: String, base: String = "USD") -> String? {
+        let s = symbol.uppercased()
+        let resolved = conversionCurrencyForSymbol(s, base: base)
+        guard !s.hasPrefix("^"), !s.hasSuffix("=X"), !s.hasSuffix("-USD"),
+              let dot = s.lastIndex(of: "."), s.index(after: dot) < s.endIndex else { return resolved }
+        return currencyForSuffix[String(s[s.index(after: dot)...])] == nil ? nil : resolved
+    }
+
+    /// The unit clause every prose surface prints when `knownQuoteCurrency` is nil — one string so
+    /// the assessment prompt and the Chat fact cannot drift apart.
+    nonisolated static let unconfirmedQuoteCurrencyClause = "in the listing's own currency; quote currency unconfirmed"
+
     /// L10N-01: format a figure in a SYMBOL's own quote currency (not converted) so it never
     /// misreads as USD. USD keeps the familiar "≈$188" prefix; any other currency renders
     /// "≈188 SAR"-style (code suffix) — a 1120.SR risk number in raw SAR shown with a bare "$"

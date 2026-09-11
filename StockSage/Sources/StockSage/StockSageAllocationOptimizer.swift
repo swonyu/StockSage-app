@@ -52,13 +52,17 @@ import Foundation
 // meaningfully complicate the linear oracle (it stops being a simple greedy sort). This is a
 // disclosed simplification, not an oversight.
 //
-// HONESTY: `lambda` (risk-aversion) defaults to 1.0 — not an arbitrary pick. For a SINGLE asset,
-// this exact objective's first-order condition (`mu - 2·lambda·sigma²·w = 0`) reduces to
-// `w* = mu/(2·lambda·sigma²)`; setting `lambda = 1` reproduces EXACTLY today's HALF-Kelly
-// fraction (`mu/(2·sigma²)`, the same halving `StockSageKelly.maxFraction`'s whole design already
-// applies) as the single-asset special case — so the multi-asset optimizer's default risk
-// tolerance is anchored to the SAME risk appetite the rest of the app already ships with, not an
-// invented number. `estPortfolioSharpe`/`estPortfolioVariance` describe the OPTIMIZED weights
+// HONESTY: `lambda` (risk-aversion) defaults to 1.0 as a CONVENTIONAL unit weight on the variance
+// term — it is NOT calibrated to anything this app already ships. An earlier version of this
+// header claimed `lambda = 1` reproduces today's half-Kelly fraction; that was false three times
+// over. (a) This objective's single-asset first-order condition (`mu - 2·lambda·sigma²·w = 0`)
+// gives `w* = mu/(2·lambda·sigma²)`, whereas `StockSageKelly`'s shipped half-Kelly is the DISCRETE
+// binary-bet formula `(W - (1-W)/R)/2` — no sigma in it at all (StockSageKelly.swift:83-84).
+// (b) `mu` is a PER-TRADE R multiple while `sigma` is ANNUALIZED (and sqrt(2)-inflated — see the
+// BASIS HAZARD note below), so `mu/(2·sigma²)` is not even a same-basis quantity. (c) The halving
+// was attributed to `StockSageKelly.maxFraction`; that is a hard 0.20 CAP (StockSageKelly.swift:66),
+// while the halving is `let half = fStar / 2` (:84). Treat `lambda` as a free knob that must be
+// tuned, not a derived default. `estPortfolioSharpe`/`estPortfolioVariance` describe the OPTIMIZED weights
 // under the model's own assumptions (winProbEstimate, spark-derived vol/correlation) — never a
 // forecast, and — like every other engine here — completely blind to spread/slippage/tax/min-lot.
 
@@ -81,6 +85,22 @@ enum StockSageAllocationOptimizer {
         "when de-correlation matters most. Ignores spread/slippage/tax/min-lot. A local optimum, not " +
         "a global guarantee."
 
+    // UNWIRED — verified 2026-09-11. ZERO production callers: grep for `optimizeSharpeDeCorrelated`
+    // finds only this file, StockSageTests/StockSageAllocationOptimizerTests.swift, and
+    // agent-docs/REVIEW_2026-07-28_claude.md (which tables it as 0-caller dead code).
+    // `stocksage.allocStrategy` ships exactly two cases — `greedyKnapsack` and uniform — and this
+    // is not one of them.
+    //
+    // BASIS HAZARD — fix all three BEFORE wiring this as a third allocation strategy:
+    //   1. sqrt(2) sigma. `sigma` below annualizes with periodsPerYear = 252, but `idea.spark` is
+    //      `SparkSeries.downsample(history.closes.suffix(63))` → 32 points exactly 2 trading days
+    //      apart (StockSageStore.swift:1410-1412), so every sigma is inflated by ~sqrt(2).
+    //   2. Mixed time bases. `mu` is a PER-TRADE R multiple; `sigma` is ANNUALIZED. `w·mu` and
+    //      `w'·Sigma·w` are therefore on different clocks, so `estPortfolioSharpe` is a ratio of
+    //      two incommensurable numbers — not a Sharpe ratio, and not comparable to one.
+    //   3. Zero-share rows. `StockSagePositionSizer.size` floors shares and admits raw == 0
+    //      (StockSagePositionSizer.swift:36-37), so a funded `riskFraction` can still emit a
+    //      0-share / 0-dollar position into `positions` and into `bindingConstraints`.
     /// Maximize `w·mu − lambda·w'·Sigma·w` over `0 ≤ w_i ≤ min(halfKelly_i, StockSageKelly.
     /// maxFraction)` and `Σw ≤ heatCap`, where `w_i` is each idea's RISK FRACTION (see the file
     /// header for the full unit derivation). Only buy-family, positive-EV ideas with a real
@@ -210,7 +230,7 @@ enum StockSageAllocationOptimizer {
         let estSharpe: Double? = estVariance > 1e-12 ? estEVR / estVariance.squareRoot() : nil
         if abs(w.reduce(0, +) - cap) < 1e-6 { bindingConstraints.append("heat") }
 
-        var note = "Frank-Wolfe local optimum over \(fundable.count) fundable idea(s), lambda=\(String(format: "%.2f", lambda)) (1.0 = today's half-Kelly risk appetite). "
+        var note = "Frank-Wolfe local optimum over \(fundable.count) fundable idea(s), lambda=\(String(format: "%.2f", lambda)) (a conventional unit weight on variance — NOT calibrated to half-Kelly). "
         note += converged
             ? "Converged in \(iterations) iteration(s)."
             : "Did NOT fully converge within \(maxIterations) iteration(s) — treat as a reasonable but unrefined estimate."
