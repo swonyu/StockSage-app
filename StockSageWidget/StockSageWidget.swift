@@ -29,12 +29,28 @@ struct StockSageProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<StockSageEntry>) -> Void) {
-        let entry = StockSageEntry(date: Date(), snapshot: StockSageWidgetSnapshot.load())
-        // Ask for a refresh in 30 minutes. iOS treats this as a HINT and routinely ignores it —
-        // which is exactly why every rendered figure carries its own age rather than trusting
-        // this cadence to keep it honest.
-        let next = Date().addingTimeInterval(30 * 60)
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        // A TIMELINE, not a single entry (2026-09-11). WidgetKit renders an entry once and keeps
+        // showing that bitmap; the view is NOT re-evaluated while it sits on screen. With one
+        // entry, the age text and the stale styling froze at render time, so a snapshot could read
+        // "12m ago" for hours — the widget asserting freshness it could not know. The 30-minute
+        // refresh below is a HINT iOS routinely ignores, so it cannot be relied on to correct it.
+        //
+        // Each entry's `date` is the moment iOS should display it, and the view ages every figure
+        // against that date rather than against `Date()`. The clock therefore advances correctly
+        // with no refresh at all. This half is useless without that one, and vice versa.
+        let now = Date()
+        let snapshot = StockSageWidgetSnapshot.load()
+        var dates: [Date] = []
+        for step in 0..<12 { dates.append(now.addingTimeInterval(Double(step) * 5 * 60)) }   // 1h, 5-min
+        for hour in 1...24 { dates.append(now.addingTimeInterval(Double(hour) * 3600)) }     // then hourly
+        // The exact moment this snapshot turns stale, computed from asOf so the styling flips on
+        // the boundary rather than at the next arbitrary step.
+        if let asOf = snapshot?.asOf {
+            let boundary = asOf.addingTimeInterval(StockSageWidgetSnapshot.staleAfter)
+            if boundary > now { dates.append(boundary) }
+        }
+        let entries = dates.sorted().map { StockSageEntry(date: $0, snapshot: snapshot) }
+        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60))))
     }
 }
 
@@ -86,7 +102,7 @@ struct StockSageWidgetView: View {
         .padding(family == .systemSmall ? 2 : 4)
         // Stale data is dimmed as well as labelled — a glance that skips the text still reads
         // "this is not live".
-        .opacity(s.isStale() ? 0.55 : 1)
+        .opacity(s.isStale(now: entry.date) ? 0.55 : 1)
     }
 
     @ViewBuilder private func header(_ s: StockSageWidgetSnapshot) -> some View {
@@ -129,8 +145,10 @@ struct StockSageWidgetView: View {
                 Text("Forward test \(s.forwardCloses)/\(s.forwardNeeded)")
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
-            Text(s.ageText()).font(.system(size: 9))
-                .foregroundStyle(s.isStale() ? .orange : .secondary)
+            // Aged against the ENTRY's date, not Date(): see getTimeline. A rendered bitmap is
+            // not re-evaluated, so Date() froze this text at render time.
+            Text(s.ageText(now: entry.date)).font(.system(size: 9))
+                .foregroundStyle(s.isStale(now: entry.date) ? .orange : .secondary)
         }
     }
 }
