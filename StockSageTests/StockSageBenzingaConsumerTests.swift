@@ -91,8 +91,43 @@ struct StockSageBenzingaConsumerTests {
             }
         }
         #expect(offered.count < records.count)
-        #expect(prepared.snapshot.researchStatus?.contains("\(records.count - offered.count) Benzinga records omitted.") == true)
+        // The disclosure must name the REASON, not just a count (2026-09-11). These records are
+        // dropped to fit the request, which is a different fact from "the provider had nothing
+        // recent" — and collapsing the two is what produced two wrong diagnoses in one session.
+        #expect(prepared.snapshot.researchStatus?.contains("\(records.count - offered.count) trimmed to fit.") == true,
+                "status did not attribute the drop: \(prepared.snapshot.researchStatus ?? "nil")")
+        #expect(prepared.snapshot.researchStatus?.contains("not eligible at capture") == true,
+                "the capture-time exclusion bucket must be stated even when it is zero")
         #expect(try encoded(captured) == before)
+    }
+
+    // A record the PARSER rejected and a record the REQUEST trimmed are different facts, and the
+    // disclosure must not merge them. Before 2026-09-11 only the second was counted, so a symbol
+    // with no recent analyst action read identically to a request that could not fit its evidence.
+    // On the owner's real RKLB capture that is 42 records that were simply not recent, reported as
+    // nothing at all, while the visible "47 omitted" came from the per-product cap and the budget.
+    @Test func theDisclosureSeparatesNotEligibleFromTrimmed() throws {
+        let now = Date()
+        let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"; fmt.timeZone = TimeZone(identifier: "UTC")
+        // 40 days old: outside the ratings 7-day recency window, so the parser rejects it.
+        let stale = fmt.string(from: now.addingTimeInterval(-40 * 86_400))
+        let row: [String: Any] = ["benzinga_id": "e1", "ticker": "ORCL", "date": stale,
+            "last_updated": "\(stale)T11:00:00Z", "firm": "Fixture Firm", "rating_action": "upgrades",
+            "rating": "buy", "previous_rating": "hold", "price_target": 110,
+            "previous_price_target": 100, "currency": "USD", "benzinga_analyst_id": "A",
+            "benzinga_firm_id": "F", "time": "07:00:00"]
+        let body = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": [row]])
+        let page = B.parse(body, query: .init(product: .ratings, subject: "ORCL", from: nil, through: nil),
+                           checkedAt: now, credentialGeneration: "epoch")
+        try #require(page.records.isEmpty && page.excludedCount == 1,
+                     "the fixture must actually be rejected by the recency window")
+
+        let snapshot = B.Snapshot(symbol: "ORCL", capturedAt: now, credentialGeneration: "epoch", pages: [page])
+        let projection = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000))
+        #expect(projection.notEligibleCount == 1, "a recency-rejected record must be counted as not eligible")
+        #expect(projection.trimmedRecordCount == 0, "nothing was trimmed; the budget was never the constraint")
+        #expect(projection.cappedRecordCount == 0)
+        #expect(projection.text.contains("Not eligible at capture: 1"))
     }
 
     @Test func completionIntersectsOfferedRecordsNotJustIDs() throws {

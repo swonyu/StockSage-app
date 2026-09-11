@@ -200,11 +200,26 @@ enum StockSageBenzinga {
     nonisolated struct Projection: Equatable, Codable, Sendable {
         let statusLines: [String]
         let records: [Record]
+        /// Records the capture KEPT but this request did not send: the per-product cap plus any
+        /// byte-budget trimming. Deliberately unchanged in meaning — `notEligibleCount` is the
+        /// separate bucket that used to be invisible.
         let omittedRecordCount: Int
+        /// Records the provider returned that never became evidence, because a parse rule rejected
+        /// them: the ratings 7-day and guidance 14-day recency windows, the ratings
+        /// change-or-price-move rule, and malformed rows. Added 2026-09-11 because collapsing this
+        /// into `omittedRecordCount` made "no recent analyst action" indistinguishable from "we
+        /// could not fit it", and that ambiguity produced two wrong diagnoses in one session.
+        var notEligibleCount: Int = 0
+        /// The share of `omittedRecordCount` caused by the 3-records-per-product storage cap.
+        var cappedRecordCount: Int = 0
+        var trimmedRecordCount: Int { max(0, omittedRecordCount - cappedRecordCount) }
         var text: String {
             (["Massive/Benzinga sample; unverified claims, not execution prices. Missing is not none."]
              + statusLines + records.map { "[" + $0.id + "] " + $0.sourceText }
-             + ["Omitted records: \(omittedRecordCount)"]).joined(separator: "\n")
+             + ["Omitted records: \(omittedRecordCount)",
+                "Not eligible at capture: \(notEligibleCount) (recency window or no rating change); "
+                + "capped per product: \(cappedRecordCount); trimmed to fit: \(trimmedRecordCount)."])
+                .joined(separator: "\n")
         }
     }
 
@@ -295,7 +310,9 @@ enum StockSageBenzinga {
                 return product.label + ": " + state + (count > 0 ? " \(shown)/\(count)" : "")
             }
             return Projection(statusLines: lines, records: selected,
-                              omittedRecordCount: addCount(snapshot.omittedRecordCount, max(0, total - selected.count)))
+                              omittedRecordCount: addCount(snapshot.omittedRecordCount, max(0, total - selected.count)),
+                              notEligibleCount: snapshot.pages.reduce(0) { addCount($0, $1.excludedCount) },
+                              cappedRecordCount: snapshot.omittedRecordCount)
         }
         var selected: [Record] = []
         guard make(selected).text.utf8.count <= maximumUTF8Bytes else { return nil }

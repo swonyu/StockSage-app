@@ -285,7 +285,15 @@ enum StockSageChat {
             let total = snapshot.sources?.count ?? 0
             let omittedFacts = snapshot.facts.count - offeredFacts.count
             let omittedSources = total - offeredSources.count
-            let benzingaDisclosure = projection.map { " \($0.omittedRecordCount) Benzinga records omitted." } ?? ""
+            // Name WHY records are absent. A single "N omitted" collapsed three unrelated causes,
+            // and on 2026-09-11 that ambiguity made "RKLB has had no analyst action in a week" look
+            // like "the request was too small" — twice. Absent evidence is still disclosed; what
+            // changes is that the reader can tell a quiet market from a starved request.
+            let benzingaDisclosure = projection.map { p in
+                " Benzinga: \(p.records.count) sent; \(p.notEligibleCount) not eligible at capture"
+                + " (outside the ratings 7-day or guidance 14-day recency window, or no rating change);"
+                + " \(p.cappedRecordCount) capped at 3 per product; \(p.trimmedRecordCount) trimmed to fit."
+            } ?? ""
             let disclosure = "Budget: \(omittedFacts) facts, \(omittedSources)/\(total) sources omitted." + benzingaDisclosure + " Context/research details and links remain in the original snapshot. Missing evidence is not evidence of absence. Full filings not retrieved."
             let offered = Snapshot(at: snapshot.at, facts: offeredFacts, context: snapshot.context,
                 sources: snapshot.sources == nil ? nil : offeredSources, researchStatus: disclosure,
