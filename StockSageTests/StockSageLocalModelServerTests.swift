@@ -192,7 +192,12 @@ struct StockSageLocalModelServerTests {
             let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
             if ollama {
                 let options = try #require(json["options"] as? [String: Any])
-                #expect(options["num_ctx"] as? Int == 4_096 && options["num_predict"] as? Int == 512)
+                // Assert the caller's value is FORWARDED VERBATIM rather than matching a literal:
+                // that is the property that matters, and the literal rotted when Chat's context
+                // was raised on 2026-09-11. On Ollama this becomes the server's real window, so a
+                // caller asking for more than it sends would be silently truncated server-side.
+                #expect(options["num_ctx"] as? Int == StockSageChat.contextTokens
+                        && options["num_predict"] as? Int == StockSageChat.outputTokens)
             } else {
                 #expect(json["max_tokens"] as? Int == 512 && json["options"] == nil)
             }

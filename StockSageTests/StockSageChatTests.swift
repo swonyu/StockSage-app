@@ -1013,15 +1013,21 @@ struct StockSageChatTests {
         #expect(StockSageChat.prompt(question: "current question", snapshot: oversized, history: []) == nil)
     }
 
-    @Test func fourThousandTokenContextLeavesRoomForQuestionEvidenceAndReply() throws {
-        #expect(StockSageChat.contextTokens == 4_096)
+    // A deliberate tripwire, not a tautology: changing Chat's window changes how much evidence
+    // every answer is built from, so it should not happen by accident. It moved once, from 4,096
+    // to 32,768 on 2026-09-11, because at 4,096 the whole-prompt budget was 1,317 bytes while the
+    // Benzinga projection alone asks for 12,000 — the owner's Chat was reporting "6/6 sources
+    // omitted. 47 Benzinga records omitted" and refusing to form a view. See the note on
+    // `StockSageChat.contextTokens`.
+    @Test func theContextWindowLeavesRoomForQuestionEvidenceAndReply() throws {
+        #expect(StockSageChat.contextTokens == 32_768)
         #expect(StockSageChat.outputTokens == 512)
         let captured = snapshot()
         for question in ["Explain ORCL risks", "اشرح مخاطر ORCL"] {
             let prompt = try #require(StockSageChat.prompt(question: question, snapshot: captured, history: []))
             #expect(prompt.contains(question) && prompt.contains("ORCL.quote"))
             #expect(prompt.utf8.count + StockSageChat.instructions.utf8.count
-                    + StockSageChat.outputTokens + 1_024 <= 4_096)
+                    + StockSageChat.outputTokens + 1_024 <= StockSageChat.contextTokens)
         }
         #expect(captured == snapshot(), "The smaller request budget cannot rewrite saved evidence")
     }
@@ -1086,12 +1092,18 @@ struct StockSageChatTests {
         let offered = try offeredSnapshot(in: prompt, original: enriched)
         #expect(prompt.contains(question) && prompt.utf8.count <= C.promptByteLimit)
         #expect(prompt.utf8.count + C.instructions.utf8.count + C.outputTokens + 1_024 <= C.contextTokens)
-        #expect(C.contextTokens == 4_096 && C.outputTokens == 512)
+        // The window's value is pinned once, in theContextWindowLeavesRoomForQuestionEvidenceAndReply.
+        // Repeating the literal here only made this test fail for a reason it does not own.
         #expect(offered.facts == enriched.facts && offered.at == enriched.at && offered.context == enriched.context)
         let offeredSources = offered.sources ?? []
         #expect(offeredSources == Array(sources.prefix(offeredSources.count)), "Keep whole sources and their stable IDs")
+        // STRENGTHENED on 2026-09-11. This used to require that something WAS omitted, which only
+        // held because the window was 4,096 and the whole-prompt budget was 1,317 bytes. That is
+        // the defect the owner hit, not a property worth protecting: a test named "ordinary news
+        // enrichment FITS" should assert exactly that. Ordinary enrichment must now arrive whole.
         let omitted = sources.filter { !offeredSources.contains($0) }
-        try #require(!omitted.isEmpty)
+        #expect(omitted.isEmpty,
+                "ordinary news enrichment lost \(omitted.count) of \(sources.count) sources to the budget")
         let disclosure = try #require(offered.researchStatus)
         #expect(disclosure.contains("\(omitted.count)/\(sources.count) sources omitted"))
         #expect(disclosure.contains("omitted") && disclosure.contains("snapshot"))
@@ -1124,12 +1136,30 @@ struct StockSageChatTests {
 
     @Test func requestBudgetDropsOldHistoryBeforeOptionalSources() throws {
         var captured = snapshot()
+        // The source is deliberately large: big enough that the snapshot alone still fits, but
+        // snapshot + even ONE capped history turn does not. Without that, the raised window left
+        // room for the newest turn and "no history survives" stopped being provable — a single
+        // small source made the assertion depend on the window size rather than on the rule.
+        let excerptBytes = max(1_000, StockSageChat.promptByteLimit - StockSageChat.replyCharacterLimit + 2_000)
         captured.sources = [.init(id: "ORCL.news.1", subject: "ORCL", attribution: "Fixture",
-            date: now, excerpt: "An attributed opinion.", warning: "Untrusted excerpt; not a verified fact.", link: nil)]
+            date: now, excerpt: String(repeating: "a", count: excerptBytes),
+            warning: "Untrusted excerpt; not a verified fact.", link: nil)]
         captured.researchStatus = "One selected excerpt, not a news census."
         let session = StockSageChatSession(historyURL: nil)
-        let id = try #require(session.begin(question: "old-question", snapshot: captured, model: "fixture"))
-        session.finish(id: id, text: String(repeating: "historical text ", count: 200))
+        // The history has to genuinely overflow, or this test proves nothing. Sized from the live
+        // budget rather than a literal, and spread across TURNS because `finish` caps a single
+        // reply at `replyCharacterLimit` — a first attempt at one huge turn was silently clamped
+        // to 16,384 bytes, fitted the raised window, and went vacuous. The behaviour under test is
+        // the ORDER of sacrifice: history goes before a source that would still fit.
+        let perTurn = StockSageChat.replyCharacterLimit
+        let turns = min(StockSageChatSession.historyLimit, StockSageChat.promptByteLimit / perTurn + 2)
+        for index in 0..<turns {
+            let id = try #require(session.begin(question: index == 0 ? "old-question" : "turn-\(index)",
+                                                snapshot: captured, model: "fixture"))
+            session.finish(id: id, text: String(repeating: "historical text ", count: perTurn / 16))
+        }
+        #expect(session.turns.reduce(0) { $0 + $1.answer.utf8.count } > StockSageChat.promptByteLimit,
+                "the saved history does not exceed the budget, so nothing would be sacrificed")
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let saved = try encoder.encode(session.turns)
         let prompt = try #require(StockSageChat.prompt(question: "Explain risk", snapshot: captured, history: session.turns))
@@ -1142,11 +1172,22 @@ struct StockSageChatTests {
 
     @Test(arguments: ["x", "ع"])
     func requestBudgetNeverTruncatesAnOversizedQuestion(_ character: String) {
-        let question = String(repeating: character, count: 2_000)
-        let captured = snapshot()
-        #expect(StockSageChat.safeQuestion(question))
-        #expect(StockSageChat.prompt(question: question, snapshot: captured, history: []) == nil)
-        #expect(captured == snapshot())
+        // A question ALONE can no longer overflow: the composer caps input at 2,000 characters
+        // (safeQuestion enforces it) and the budget is now far larger than that, so the original
+        // fixture — 2,000 characters against a 1,317-byte budget — exercised a state the app can
+        // no longer reach. The RULE still must hold: when the prompt cannot fit, the request is
+        // REFUSED rather than the question silently trimmed. An un-summarisable custom context is
+        // what makes it not fit, and unlike sources or history the loop may not discard it.
+        let question = String(repeating: character, count: 2_000)   // the composer's own maximum
+        let base = snapshot()
+        let captured = StockSageChat.Snapshot(at: base.at, facts: base.facts,
+            context: String(repeating: "unsummarised owner context. ",
+                            count: StockSageChat.promptByteLimit / 10))
+        let original = captured
+        #expect(StockSageChat.safeQuestion(question), "the fixture must be a question the app would accept")
+        #expect(StockSageChat.prompt(question: question, snapshot: captured, history: []) == nil,
+                "an unfittable prompt must be refused, never satisfied by truncating the question")
+        #expect(captured == original, "refusing must not rewrite the caller's snapshot")
     }
 
     @Test(arguments: [1, 4], ["x", "ع"])
@@ -1170,7 +1211,12 @@ struct StockSageChatTests {
         let selected = C.selectedSymbols(question: question, symbols: symbols, watchlist: [])
         let base = C.snapshot(symbols: selected, ideas: ideas, earnings: earnings, sample: false, now: now)
         try #require(base.facts.count == 3 * symbolCount)
-        let news = (1...3).map { index in
+        // `addingResearch` caps news at 3 sources per symbol and bounds each excerpt to 399
+        // characters, so the evidence a Chat turn carries is bounded by the APP, not by the
+        // prompt budget. Deriving a larger count from the budget was tried here and was silently
+        // clamped to 3, which is why the omission-based assertions below were rewritten.
+        let newsCount = 3
+        let news = (1...newsCount).map { index in
             StockSageNewsService.NewsItem(date: now, title: "Fixture \(index)",
                 snippet: String(repeating: character == "ع" ? "خبر " : "news ", count: 100),
                 link: URL(string: "https://example.invalid/news/\(index)"),
@@ -1180,13 +1226,14 @@ struct StockSageChatTests {
             .init(provider: .massive, checkedAt: now, status: .answered, items: news)])
         let captured = C.addingResearch(to: base, symbol: "ORCL", observation: observation,
             leads: nil, webAllowed: true)
-        try #require(captured.sources?.count == 3 && captured.sources?.allSatisfy { $0.excerpt.count >= 380 } == true)
+        try #require(captured.sources?.count == newsCount && captured.sources?.allSatisfy { $0.excerpt.count >= 380 } == true,
+                     "built \(newsCount) news items but captured \(captured.sources?.count ?? -1) sources")
         let prepared = try #require(C.request(question: question, snapshot: captured, history: []))
         let offered = prepared.snapshot
         #expect(try offeredSnapshot(in: prepared.prompt, original: captured) == offered,
             "The validation snapshot must name exactly the records actually transmitted")
         #expect(prepared.prompt.utf8.count <= C.promptByteLimit)
-        #expect(prepared.prompt.utf8.count + C.instructions.utf8.count + C.outputTokens + 1_024 <= 4_096)
+        #expect(prepared.prompt.utf8.count + C.instructions.utf8.count + C.outputTokens + 1_024 <= C.contextTokens)
         #expect(offered.facts.filter { $0.field == "observed price" } == base.facts.filter { $0.field == "observed price" },
             "Never silently lose a selected symbol's quote record to make room")
         if symbolCount == 1 && character == "x" {
@@ -1194,9 +1241,18 @@ struct StockSageChatTests {
         }
         let offeredIDs = Set(offered.facts.map(\.id) + (offered.sources ?? []).map(\.id))
         let omittedIDs = Set(captured.facts.map(\.id) + (captured.sources ?? []).map(\.id)).subtracting(offeredIDs)
-        try #require(!omittedIDs.isEmpty)
+        // STRENGTHENED on 2026-09-11. This used to REQUIRE that something was omitted, which only
+        // held because the window was 4,096 and the whole-prompt budget was 1,317 bytes. Since the
+        // app itself caps this evidence at 3 news sources, an ordinary snapshot now arrives whole,
+        // and demanding omission would amount to asking the owner's defect to come back.
+        #expect(omittedIDs.isEmpty, "an ordinary snapshot lost \(omittedIDs.count) records to the budget")
+        // The rule still worth testing is that a reply may only cite evidence that was actually
+        // sent. Driving it with a synthetic id rather than with whatever the budget happened to
+        // drop keeps it meaningful at any window size.
+        let neverOffered = "ORCL.news.never-sent"
+        #expect(!offeredIDs.contains(neverOffered), "the negative case must name evidence that was not sent")
         let session = StockSageChatSession(historyURL: nil)
-        for evidenceID in ["ORCL.quote"] + omittedIDs.sorted() {
+        for evidenceID in ["ORCL.quote", neverOffered] {
             let id = try #require(session.begin(question: question, snapshot: captured, model: "fixture"))
             let body = try JSONSerialization.data(withJSONObject: [
                 "analysis": "The supplied evidence remains uncertain.", "evidence": [evidenceID]])

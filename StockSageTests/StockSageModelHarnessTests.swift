@@ -133,8 +133,10 @@ struct StockSageModelHarnessTests {
         }
     }
 
-    // Conversational Chat deliberately keeps the owner's 4,096 interactive target. Its own
-    // prompt budget must stay strictly inside the seam's, or every Chat turn would fail.
+    // Chat's own prompt budget must stay strictly inside the seam's, or every Chat turn
+    // would fail. (Chat sat at a 4,096 interactive target until 2026-09-11; see the note on
+    // `StockSageChat.contextTokens` for why that bound was starving answers rather than
+    // protecting them, and `chatBudgetHoldsItsLargestRequiredInput` below for the floor.)
     @Test func chatOwnBudgetStaysInsideTheSeamBudget() {
         let allowance = S.maximumUserBytes(system: StockSageChat.instructions,
                                            outputTokens: StockSageChat.outputTokens,
@@ -142,6 +144,32 @@ struct StockSageModelHarnessTests {
         #expect(StockSageChat.promptByteLimit > 0)
         #expect(StockSageChat.promptByteLimit <= allowance,
                 "Chat packs \(StockSageChat.promptByteLimit) bytes into a \(allowance)-byte allowance")
+    }
+
+    // The ceiling has to clear the largest SINGLE required input, or the trimming loop in
+    // `StockSageChat.request` cannot converge without gutting the evidence it was given.
+    //
+    // This is the check that would have caught the defect the owner hit on 2026-09-11. At
+    // contextTokens 4,096 the whole-prompt budget resolved to 1,283 bytes while the Benzinga
+    // projection alone asks for up to 12,000, so the loop dropped every source and all but two
+    // facts, and the model then correctly refused to form a view: "Budget: 2 facts, 6/6 sources
+    // omitted. 47 Benzinga records omitted."
+    //
+    // The 12,000 is not a magic number here: it is `benzingaBudget`'s initial value in
+    // `StockSageChat.request`, so this asserts the two agree rather than restating a constant.
+    @Test func chatBudgetHoldsItsLargestRequiredInput() {
+        let benzingaProjectionBudget = 12_000   // StockSageChat.request's opening benzingaBudget
+        #expect(StockSageChat.promptByteLimit > benzingaProjectionBudget,
+                """
+                Chat's whole-prompt budget is \(StockSageChat.promptByteLimit) bytes, which cannot \
+                hold the \(benzingaProjectionBudget)-byte Benzinga projection it is asked to send. \
+                The trimming loop will drop sources and facts to converge, and the model will report \
+                the evidence as missing. Raise StockSageChat.contextTokens.
+                """)
+        // And leave room for the rest of the payload, not just that one input: sources, facts,
+        // the question and a few history turns all share this budget.
+        #expect(StockSageChat.promptByteLimit > benzingaProjectionBudget * 2,
+                "budget \(StockSageChat.promptByteLimit) leaves under 12,000 bytes for sources, facts, question and history")
     }
 
     // MARK: Research prompt fitting — the logic paper and horizon research both run

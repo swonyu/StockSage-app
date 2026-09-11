@@ -61,7 +61,12 @@ struct StockSageBenzingaConsumerTests {
     }
 
     @Test func chatOffersOnlyWholeCapturedRecordsAndKeepsNineStatuses() throws {
-        let records = (0..<3).map { record($0, details: String(repeating: "Attributed research opinion. ", count: 18)) }
+        // Each record is deliberately larger than a third of the 12,000-byte projection cap, so
+        // omission is forced by that cap rather than by the whole-prompt budget. Before
+        // 2026-09-11 a count of 18 sufficed only because Chat's prompt budget was 1,317 bytes;
+        // when the window was raised these records all fitted and the assertion below went
+        // vacuous. Tying the fixture to the projection cap keeps it honest across window changes.
+        let records = (0..<3).map { record($0, details: String(repeating: "Attributed research opinion. ", count: 200)) }
         let captured = C.addingBenzinga(to: chat(), evidence: evidence(records))
         let before = try encoded(captured)
         let prepared = try #require(C.request(question: "Explain ORCL", snapshot: captured, history: []))

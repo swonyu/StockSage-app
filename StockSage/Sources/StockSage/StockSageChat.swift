@@ -3,7 +3,24 @@ import Combine
 
 /// Foreground, local-only Q&A. History is never promoted to current market evidence.
 enum StockSageChat {
-    nonisolated static let contextTokens = 4_096
+    /// Raised from 4,096 on 2026-09-11 because that bound was starving the answer, not protecting
+    /// it. MEASURED at the old value: `promptByteLimit` resolved to 4,096 - 512 - 1,277 - 1,024 =
+    /// 1,283 bytes for the WHOLE prompt, while the Benzinga projection alone asks for up to 12,000.
+    /// The trimming loop below therefore could not converge without gutting the evidence, and the
+    /// owner saw the result: "Budget: 2 facts, 6/6 sources omitted. 47 Benzinga records omitted",
+    /// followed by the model correctly refusing to form a view on what was left.
+    ///
+    /// At 32,768 the same arithmetic gives 29,955 bytes, which holds the 12,000-byte projection,
+    /// six sources, the facts and a few history turns at once — so the loop trims because evidence
+    /// is genuinely too large, not because the ceiling was set below one required input.
+    ///
+    /// COST, on the same derivation as `StockSageLocalModelServer.researchContextTokens`: the
+    /// growing KV cache is 64 KiB per token for this hybrid model, so 4,096 -> 32,768 is about
+    /// 1.75 GiB, negligible on this 48 GB machine. That cost is only paid on the Ollama path,
+    /// where this value is sent verbatim as `num_ctx`. On the OpenAI-compatible path it is not
+    /// sent at all, and the LM Studio server this points at is already loaded with a 262,144
+    /// window (measured via /api/v0/models), so nothing server-side truncates at this size.
+    nonisolated static let contextTokens = 32_768
     nonisolated static let outputTokens = 512
     nonisolated static let requestTimeout: TimeInterval = 300
     nonisolated static let replyCharacterLimit = 16_384
