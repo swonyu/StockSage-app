@@ -159,6 +159,34 @@ struct StockSagePriceAlertTests {
         #expect(fired.map(\.symbol) == ["AAPL"])
     }
 
+    // BATCH 12.3 (2026-09-12) — a legacy lowercase alert must still fire.
+    //
+    // `PriceAlert.init` uppercases, but Codable synthesis does NOT call init, so a record written
+    // before that normalization keeps its spelling on disk. Every producer of `prices` keys
+    // uppercase (StockSageMonitor:371, StockSageQuoteService:87/:106), so the raw lookup missed
+    // and the alert silently never fired. The monitor's `?? a.target` fallback then pushed the
+    // alert's OWN TARGET as the observed price — a fabricated market observation.
+    //
+    // The fixture is built by DECODING RAW JSON on purpose. Constructing it with `PriceAlert(...)`
+    // would uppercase the symbol and this test would pass with or without the fix — the exact
+    // vacuity that let the defect survive `codableRoundTripAndUppercasing`.
+    @Test func aLegacyLowercaseAlertStillMatchesAnUppercasedQuote() throws {
+        let json = Data("""
+        {"id":"00000000-0000-0000-0000-0000000000AA","symbol":"nvda","target":200,"direction":"above"}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(PriceAlert.self, from: json)
+        // Premise: decoding really does bypass the uppercasing init. If this ever fails, the
+        // storage contract changed and the rest of this test is no longer measuring anything.
+        #expect(legacy.symbol == "nvda", "decode must bypass init, or this test is vacuous")
+
+        let fired = StockSagePriceAlertEngine.newlyTriggered([legacy], prices: ["NVDA": 201])
+        #expect(fired.count == 1, "a legacy lowercase alert must still match an uppercased quote")
+        // And it must still respect the level — normalizing the key cannot loosen the trigger.
+        #expect(StockSagePriceAlertEngine.newlyTriggered([legacy], prices: ["NVDA": 199]).isEmpty)
+        // An unrelated symbol is still no match.
+        #expect(StockSagePriceAlertEngine.newlyTriggered([legacy], prices: ["AAPL": 500]).isEmpty)
+    }
+
     @Test func validateTargetParsesAndRejects() {
         #expect(StockSagePriceAlertEngine.validateTarget("").price == nil)
         #expect(StockSagePriceAlertEngine.validateTarget("abc").price == nil)

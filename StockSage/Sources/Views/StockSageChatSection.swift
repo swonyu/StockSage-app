@@ -107,16 +107,16 @@ struct StockSageChatSection: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            if !store.alerts.isEmpty {
-                DisclosureGroup("Recent app events · \(min(store.alerts.count, 5)) shown") {
-                    ForEach(Array(store.alerts.prefix(5))) { event in
+            let eventLog = Self.eventLog(enabled: store.alertsEnabled, count: store.alerts.count)
+            if let shown = eventLog.shownCount {
+                DisclosureGroup(Self.eventLogHeader(eventLog)) {
+                    ForEach(Array(store.alerts.prefix(shown))) { event in
                         Text("\(event.symbol) · \(event.kind.rawValue) · rules-based event, occurrence time unavailable")
                             .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             } else {
-                Text(store.alertsEnabled ? "No events recorded in the app log. This is not proof of no market changes."
-                     : "Event logging is off. Chat does not enable alerts or background monitoring.").font(.caption).foregroundStyle(.secondary)
+                Text(Self.eventLogHeader(eventLog)).font(.caption).foregroundStyle(.secondary)
             }
             ForEach(chat.turns) { turn in
                 #if os(macOS)
@@ -307,6 +307,44 @@ struct StockSageChatSection: View {
             #else
             connectionNotice
             #endif
+        }
+    }
+
+    /// Which event-log branch Chat renders. Pure, so the precedence is testable without a view:
+    /// the FLAG is tested BEFORE emptiness, matching `MarketsView.alertsPanel`. A log retained
+    /// after the toggle went off stays visible but can never be labelled as a live one.
+    /// `StockSageStore.alerts` is memory-only, so after a relaunch with the flag on this is
+    /// `.onEmpty` — that means "nothing recorded this session", not "nothing happened".
+    enum EventLog: Equatable {
+        case off(retained: Int)
+        case onEmpty
+        case recorded(shown: Int)
+
+        /// Rows the disclosure list shows, or nil when there is no list — only a caption.
+        var shownCount: Int? {
+            switch self {
+            case .off(let retained): return retained == 0 ? nil : min(retained, 5)
+            case .onEmpty: return nil
+            case .recorded(let shown): return shown
+            }
+        }
+    }
+
+    static func eventLog(enabled: Bool, count: Int) -> EventLog {
+        guard enabled else { return .off(retained: count) }
+        return count == 0 ? .onEmpty : .recorded(shown: min(count, 5))
+    }
+
+    static func eventLogHeader(_ state: EventLog) -> String {
+        switch state {
+        case .off(let retained):
+            return retained == 0
+                ? "Event logging is off. Chat does not enable alerts or background monitoring."
+                : "Event logging is off — \(retained) recorded before it was turned off, no longer updating"
+        case .onEmpty:
+            return "No events recorded in the app log. This is not proof of no market changes."
+        case .recorded(let shown):
+            return "Recent app events · \(shown) shown"
         }
     }
 

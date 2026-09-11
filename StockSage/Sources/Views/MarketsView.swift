@@ -486,8 +486,9 @@ struct MarketsView: View {
             #endif
             // Refresh-landed tick (iOS haptic; silent no-op on macOS).
             .sensoryFeedback(.success, trigger: store.lastUpdated)
-            // Auto-refresh (owner cadence 2026-07-27 23:53: 4.75 minutes = 285s). task(id:)
-            // restarts the loop when the toggle flips; sleep is cancellation-aware.
+            // Catalyst rescan. (The stale "4.75 minutes = 285s" cadence note that used to sit here
+            // was deleted 2026-09-12: it described the auto-refresh loop, which now runs on
+            // `refreshIntervals`, and this task is the catalyst rescan, which has no timer at all.)
             // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
             // entire on-disk history, and lastUpdated now moves twice a second while streaming.
             .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }

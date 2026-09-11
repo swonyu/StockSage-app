@@ -391,7 +391,11 @@ final class StockSageMonitor: ObservableObject {
             // A user-set price alert is a ONE-SHOT the owner explicitly armed and it disarms on
             // trigger, so it is exempt from hysteresis and cooldown. It still respects the GLOBAL
             // hourly cap so a market-wide move cannot produce a flood.
-            let px = prices[a.symbol] ?? a.target
+            // Uppercased to match the key `prices` is built with (:371) — see
+            // StockSagePriceAlertEngine.newlyTriggered. Without it a legacy lowercase alert fell
+            // through to `?? a.target` and PUSHED ITS OWN TARGET as the observed price: a
+            // fabricated market observation, which is the worst failure this file can produce.
+            let px = prices[a.symbol.uppercased()] ?? a.target
             guard StockSageNotificationBudget.countWithinHour(budget.recentAlerts, now: Date())
                     < StockSageNotificationBudget.hourlyCap else { break }
             if await enqueue(a, px) {

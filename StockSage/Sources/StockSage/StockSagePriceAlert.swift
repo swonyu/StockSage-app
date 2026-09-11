@@ -62,9 +62,16 @@ struct PriceAlert: Sendable, Equatable, Identifiable, Codable {
 enum StockSagePriceAlertEngine {
     /// The ARMED alerts whose target is now met by the supplied prices (symbol→price,
     /// keys uppercased). Pure — the caller fires notifications and marks them triggered.
+    ///
+    /// The lookup UPPERCASES the alert's own symbol (2026-09-12). `PriceAlert.init` normalizes,
+    /// but decoding from storage does NOT call that init — a legacy record saved as "nvda" keeps
+    /// its spelling, and `prices` is keyed uppercase by every producer. The raw lookup missed, so
+    /// the alert silently never fired; worse, `StockSageMonitor`'s `?? a.target` fallback then
+    /// pushed the alert's OWN TARGET as the observed price. Normalizing here fixes every source of
+    /// non-canonical spelling at once, including records already on disk.
     nonisolated static func newlyTriggered(_ alerts: [PriceAlert], prices: [String: Double]) -> [PriceAlert] {
         alerts.filter { a in
-            guard a.isArmed, let p = prices[a.symbol] else { return false }
+            guard a.isArmed, let p = prices[a.symbol.uppercased()] else { return false }
             return a.isMet(by: p)
         }
     }

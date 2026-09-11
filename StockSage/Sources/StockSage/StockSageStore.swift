@@ -286,9 +286,17 @@ final class StockSageStore: ObservableObject {
 
     /// Signal alerts — events (flips, stop/target crossings) detected between
     /// successive Ideas refreshes. Opt-in (off by default); a capped event log.
-    @Published var alertsEnabled = false
+    ///
+    /// The FLAG is persisted (read back in `init(defaults:heldSymbols:)`) so the owner's choice
+    /// survives a relaunch. The LOG (`alerts`) is deliberately memory-only: after a relaunch with
+    /// the flag on, the card correctly reads "On — no events yet". Persisting the toggle must
+    /// never be read as persisting the events.
+    @Published var alertsEnabled = false {
+        didSet { defaults.set(alertsEnabled, forKey: Self.alertsEnabledKey) }
+    }
     @Published private(set) var alerts: [IdeaAlert] = []
     private static let maxAlerts = 50
+    private static let alertsEnabledKey = "stocksage.alerts.enabled"
 
     func clearAlerts() { alerts = [] }
 
@@ -344,6 +352,8 @@ final class StockSageStore: ObservableObject {
         self.heldSymbols = heldSymbols
         userSymbols = (defaults.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
         priceAlerts = Self.loadPriceAlerts(from: defaults)
+        // Absent key ⇒ false ⇒ the opt-in default is unchanged on a first run.
+        alertsEnabled = defaults.bool(forKey: Self.alertsEnabledKey)
     }
 
     private convenience init() {
