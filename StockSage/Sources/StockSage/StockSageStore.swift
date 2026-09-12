@@ -1543,14 +1543,36 @@ final class StockSageStore: ObservableObject {
         let vix = (await vixQuotes)["^VIX"]?.price
         let hists = await breadthHistories
 
+        // 7.1 — fail closed on an invalidation that landed mid-fetch. `fetchHistories` returns [:]
+        // the moment web access is revoked, and every leg nils once this task is cancelled — and
+        // the auto-gauge at MarketsView:586 sits in a `.task` SwiftUI cancels when the tab
+        // disappears, with the single-request index leg normally resolving long before the
+        // 14-name breadth fan-out. Publishing past that point stamps `regimeGaugedAt` fresh on a
+        // breadth computed from whatever subset arrived.
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else {
+            regimeError = ToolPolicy.webToolsDisabledReason() ?? "Gauge interrupted — try again."
+            return
+        }
+
         guard let idx else {
             regimeError = "Couldn't load the market index — try again."
             return
         }
         // Breadth: fraction of the sample above its own 200DMA (names without a
         // computable 200DMA are excluded from the denominator — see the helper).
+        //
+        // 7.2 (owner-approved 2026-09-11): that exclusion means a thin fetch still produces a
+        // confident percentage — 1 of 14 names reads as "100% of names above their 200DMA" — and
+        // breadth multiplies every Deploy-capital weight through `sizingBias`. Below the coverage
+        // floor, abstain and SAY SO. A nil breadth already abstains cleanly in `assess`, so sizing
+        // falls back to neutral rather than to a bias derived from half a sample.
         let priced = sample.compactMap { hists[$0.uppercased()] }
-        let breadth = StockSageRegime.breadth(priced)
+        let eligible = StockSageRegime.breadthEligibleCount(priced)
+        let hasCoverage = StockSageRegime.breadthHasCoverage(eligible: eligible, requested: sample.count)
+        let breadth = hasCoverage ? StockSageRegime.breadth(priced) : nil
+        if !hasCoverage {
+            regimeError = "Breadth unavailable — only \(eligible) of \(sample.count) sample names returned enough history. The regime below is gauged without it."
+        }
 
         regime = StockSageRegime.assess(indexCloses: idx.closes, vix: vix, breadthAbove200: breadth)
         regimeGaugedAt = Date()

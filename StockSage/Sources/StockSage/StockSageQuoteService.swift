@@ -232,21 +232,46 @@ enum StockSageQuoteService {
     nonisolated static let historyPacingInterval: Duration = .milliseconds(120)
 
     /// Fetch candle histories for many symbols concurrently (bounded fan-out),
-    /// keyed by uppercased requested symbol. `[:]` when external access is off.
+    /// keyed by uppercased requested symbol. `[:]` when external access is off — INCLUDING a
+    /// revocation that lands mid-fan-out. `fetchHistory` starts returning nil the instant the
+    /// policy flips, so without the re-checks below this handed back a map that is a silent
+    /// SUBSET of the request, indistinguishable from "those names had no bars":
+    /// `StockSageRegime.breadth` drops un-priced names from its OWN denominator, so one surviving
+    /// name of the 14-name sample reads as "100% of names above their 200DMA". Same fail-closed
+    /// shape `fetchQuotes` already uses above.
+    ///
+    /// NOT cancellation, deliberately: `StockSageStore.runChunkedScan`'s 120s per-chunk watchdog
+    /// cancels on purpose and today keeps the bars it did get while raising `throttled` —
+    /// returning [:] there would flip a cold chunk 0 to `firstChunkTotallyFailed` and discard the
+    /// whole scan. Cancellation is handled at the consumers instead.
     nonisolated static func fetchHistories(for symbols: [String], range: String = "1y", concurrency: Int = 6,
                                onProgress: ((Int) async -> Void)? = nil) async -> [String: StockSagePriceHistory] {
-        guard ToolPolicy.isExternalAllowed, !symbols.isEmpty else { return [:] }
+        await fetchHistories(for: symbols, range: range, concurrency: concurrency, onProgress: onProgress,
+            allowed: { ToolPolicy.isExternalAllowed },
+            fetch: { await fetchHistory($0, range: $1) })
+    }
+
+    /// Same fan-out as the public call; inject only external operations and permission (mirrors
+    /// `fetchHistory`'s seam above — and is the only way to test the revocation re-checks without
+    /// mutating the `ToolPolicy` process globals).
+    nonisolated static func fetchHistories(for symbols: [String], range: String, concurrency: Int,
+                               onProgress: ((Int) async -> Void)?,
+                               allowed: @Sendable () -> Bool,
+                               fetch: @escaping @Sendable (String, String) async -> StockSagePriceHistory?
+    ) async -> [String: StockSagePriceHistory] {
+        guard allowed(), !symbols.isEmpty else { return [:] }
         var out: [String: StockSagePriceHistory] = [:]
         let chunks = stride(from: 0, to: symbols.count, by: max(1, concurrency)).map {
             Array(symbols[$0 ..< min($0 + concurrency, symbols.count)])
         }
         var completed = 0
         for chunk in chunks {
+            guard allowed() else { return [:] }
             let results: [StockSagePriceHistory] = await withTaskGroup(of: StockSagePriceHistory?.self) { group in
                 for (slot, symbol) in chunk.enumerated() {
                     group.addTask {
                         if slot > 0 { try? await Task.sleep(for: historyPacingInterval * slot) }
-                        return await fetchHistory(symbol, range: range)
+                        return await fetch(symbol, range)
                     }
                 }
                 var acc: [StockSagePriceHistory] = []
@@ -257,6 +282,7 @@ enum StockSageQuoteService {
             completed += chunk.count
             await onProgress?(completed)
         }
+        guard allowed() else { return [:] }   // a flip inside the LAST chunk
         return out
     }
 

@@ -46,6 +46,33 @@ enum StockSageRegime {
     /// OWN 200-day average. Names without enough history to HAVE a 200DMA are
     /// excluded from BOTH numerator and denominator (counting them as "below"
     /// would understate breadth). nil when none are eligible. Pure + testable.
+    /// BATCH 7.2 (owner-approved 2026-09-11). Minimum share of the REQUESTED sample that must
+    /// produce a usable 200DMA reading before breadth is reported at all.
+    ///
+    /// `breadth` below excludes un-priced names from its own denominator — right, because counting
+    /// a name with no history as "below its 200DMA" would understate breadth. But it means a
+    /// fetch that returned 1 of 14 names publishes "100% of names above their 200DMA": a
+    /// market-wide claim the owner reads verbatim, built on one stock. That breadth then
+    /// multiplies every Deploy-capital weight through `sizingBias`, so the thin sample does not
+    /// just mislead, it sizes. Below this floor breadth is nil, and a nil breadth already abstains
+    /// cleanly in `assess` — sizing falls back to neutral rather than to a wrong bias.
+    nonisolated static let minBreadthCoverage = 0.60
+
+    /// Histories that can actually produce a 200DMA reading — `breadth`'s own denominator,
+    /// exposed so the caller can judge COVERAGE before trusting the fraction.
+    nonisolated static func breadthEligibleCount(_ histories: [StockSagePriceHistory]) -> Int {
+        histories.reduce(into: 0) { n, h in
+            if StockSageIndicators.sma(h.closes, period: 200) != nil, h.latestClose != nil { n += 1 }
+        }
+    }
+
+    /// Whether `eligible` of `requested` names clears `minBreadthCoverage`. Zero requested is
+    /// false: no sample is not full coverage.
+    nonisolated static func breadthHasCoverage(eligible: Int, requested: Int) -> Bool {
+        guard requested > 0 else { return false }
+        return Double(eligible) / Double(requested) >= minBreadthCoverage
+    }
+
     nonisolated static func breadth(_ histories: [StockSagePriceHistory]) -> Double? {
         var eligible = 0, above = 0
         for h in histories {
