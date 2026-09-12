@@ -555,7 +555,7 @@ enum StockSageLocalModelServer {
     /// servers receive an output limit only; the caller bounds input before sending it.
     nonisolated static func chatRequest(_ c: Config, system: String, user: String, isOllama: Bool,
                                         maxTokens: Int, contextTokens: Int = 4096,
-                                        timeout: TimeInterval = 90) -> URLRequest {
+                                        timeout: TimeInterval = 90, jsonSchema: Data? = nil) -> URLRequest {
         let path = isOllama ? "api/chat" : "v1/chat/completions"
         var request = URLRequest(url: c.baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
@@ -573,6 +573,11 @@ enum StockSageLocalModelServer {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
             if c.isLMStudio9B { body["ttl"] = 180 }
+            if c.isLMStudio9B, let jsonSchema,
+               let schema = try? JSONSerialization.jsonObject(with: jsonSchema) {
+                body["response_format"] = ["type": "json_schema", "json_schema": [
+                    "name": "assessment", "strict": true, "schema": schema]]
+            }
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         return request
@@ -806,6 +811,7 @@ enum StockSageLocalModelServer {
     static func completeDetailed(_ c: Config, isOllama: Bool, system: String, user: String,
                                  maxTokens: Int = 170, contextTokens: Int = 4096,
                                  timeout: TimeInterval = 90,
+                                 jsonSchema: Data? = nil,
                                  stillValid: @MainActor () -> Bool = { true },
                                  externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
                                  transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
@@ -845,7 +851,7 @@ enum StockSageLocalModelServer {
             guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
             if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return failed(failure) }
             let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
-                                      maxTokens: outputLimit, contextTokens: contextTokens, timeout: timeout)
+                                      maxTokens: outputLimit, contextTokens: contextTokens, timeout: timeout, jsonSchema: jsonSchema)
             do {
                 let (data, response) = try await Pending<(Data, URLResponse)>().run(
                     deadline: deadline, now: clock, sleepUntil: sleepUntil) {

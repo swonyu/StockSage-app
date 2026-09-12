@@ -128,12 +128,13 @@ enum StockSageInsider {
             func value(_ field: String) -> String? {
                 all("<\(field)>\\s*<value>(.*?)</value>", in: row).first
             }
-            guard let rawCode = all("<transactionCode>(.*?)</transactionCode>", in: row).first else { continue }
+            guard let rawCode = all("<transactionCode>(.*?)</transactionCode>", in: row).first else { return nil }
+            guard !rawCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             let code = Code(rawCode: rawCode)
             guard code.isDiscretionary else { excluded += 1; continue }
             // Catalyst citations render shares as Int; reject values that would trap there.
             guard let qty = value("transactionShares").flatMap(Double.init), qty.isFinite,
-                  qty > 0, qty < Double(Int.max) else { continue }
+                  qty > 0, qty < Double(Int.max) else { return nil }
             let price = value("transactionPricePerShare").flatMap(Double.init).flatMap {
                 $0.isFinite && $0 >= 0 ? $0 : nil
             }
@@ -185,10 +186,13 @@ enum StockSageInsider {
               let accessions = recent["accessionNumber"] as? [String], forms.count == accessions.count
         else { return nil }
 
-        let form4Accessions = zip(forms, accessions)
-            .filter { $0.0 == "4" }
+        let form4Window = zip(forms, accessions)
+            .filter { $0.0 == "4" || $0.0 == "4/A" }
             .prefix(maxFilingsPerSymbol)
-            .map { $0.1 }
+        // An amendment can replace an earlier trade, not add another one. The bounded
+        // summary cannot reconcile replacements yet; do not publish the original net.
+        guard !form4Window.contains(where: { $0.0 == "4/A" }) else { return nil }
+        let form4Accessions = form4Window.map { $0.1 }
         guard !form4Accessions.isEmpty else {
             return Summary(symbol: symbol.uppercased(), discretionary: [], nonDiscretionaryCount: 0)
         }

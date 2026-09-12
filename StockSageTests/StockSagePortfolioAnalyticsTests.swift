@@ -33,6 +33,10 @@ struct StockSagePortfolioAnalyticsTests {
         await store.applyPortfolioAnalytics(positions: splitLots, histories: ["2222.SR": holding], benchmark: nil)
         #expect(store.analytics == baseline, "Stored lots are not distinct investments")
         #expect(store.correlation == nil)
+        #expect(store.analyticsMatches(positions: splitLots))
+        #expect(store.analyticsMatches(positions: lots))
+        #expect(!store.analyticsMatches(positions: [PortfolioPosition(symbol: "OTHER", shares: 8, costBasis: 100)]))
+        #expect(!store.analyticsMatches(positions: [PortfolioPosition(symbol: "2222.SR", shares: 9, costBasis: 100)]))
     }
 
     @Test func dailyReturnsComputeCorrectly() {

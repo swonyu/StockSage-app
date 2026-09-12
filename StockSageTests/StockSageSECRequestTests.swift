@@ -205,6 +205,19 @@ struct StockSageSECRequestTests {
         #expect(paths.withLock { $0.count } == 5)
     }
 
+    @Test func amendedForm4WindowCannotSilentlyReportTheOriginalNet() async {
+        let calls = Mutex(0)
+        let result = await StockSageInsider.recentActivity(for: "TEST", lookup: { _ in "0000000123" }, transport: { req in
+            let n = calls.withLock { $0 += 1; return $0 }
+            let body = n == 1 ? #"{"filings":{"recent":{"form":["4/A","4"],"accessionNumber":["0000000123-26-000002","0000000123-26-000001"]}}}"#
+                : n == 2 ? #"{"directory":{"item":[{"name":"doc4.xml"}]}}"#
+                : "<ownershipDocument><issuerTradingSymbol>TEST</issuerTradingSymbol></ownershipDocument>"
+            return Self.response(req, Data(body.utf8))
+        }, allowed: { true })
+        #expect(result == nil, "Original and amendment require reconciliation, not omission or addition.")
+        #expect(calls.withLock { $0 } == 1)
+    }
+
     @Test func incompleteForm4WindowCannotReportASuccessfulEmptySummary() async {
         let calls = Mutex(0)
         let result = await StockSageInsider.recentActivity(for: "TEST", lookup: { _ in "0000000123" }, transport: { req in

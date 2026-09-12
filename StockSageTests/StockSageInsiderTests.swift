@@ -186,6 +186,10 @@ struct StockSageInsiderTests {
           </nonDerivativeTable>
         </ownershipDocument>
         """
+        if ["shares", "code"].contains(missing) {
+            #expect(I.parseForm4(xml) == nil, "A missing transaction can reverse the net; do not publish a partial summary.")
+            return
+        }
         let summary = try #require(I.parseForm4(xml))
         let second = try #require(summary.discretionary.last)
         #expect(second.code == .openMarketSale)
@@ -219,15 +223,14 @@ struct StockSageInsiderTests {
         #expect(summary.netBuyValue == nil)
     }
 
-    @Test("invalid prices stay unknown and invalid share quantities are dropped",
+    @Test("invalid prices stay unknown and invalid share quantities invalidate the summary",
           arguments: ["NaN", "inf", "-1"])
     func invalidAmountsAreNotMoney(_ invalid: String) throws {
         let badPrice = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "196.51", with: invalid)))
         #expect(badPrice.discretionary.count == 1)
         #expect(badPrice.discretionary.first?.pricePerShare == nil)
         #expect(badPrice.netBuyValue == nil)
-        let badShares = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "5000", with: invalid)))
-        #expect(badShares.discretionary.isEmpty)
+        #expect(I.parseForm4(purchaseFiling.replacingOccurrences(of: "5000", with: invalid)) == nil)
     }
 
     @Test("overflow cannot produce an infinite transaction or net dollar value")
@@ -243,8 +246,11 @@ struct StockSageInsiderTests {
         #expect(free.discretionary.first?.pricePerShare == 0)
         #expect(free.netBuyValue == 0)
         for qty in ["0", "1e308", String(Double(Int.max))] {
-            let summary = try #require(I.parseForm4(purchaseFiling.replacingOccurrences(of: "5000", with: qty)))
-            #expect(summary.discretionary.isEmpty)
+            #expect(I.parseForm4(purchaseFiling.replacingOccurrences(of: "5000", with: qty)) == nil)
+        }
+        for code in ["", " ", "\n"] {
+            #expect(I.parseForm4(purchaseFiling.replacingOccurrences(of: "<transactionCode>P</transactionCode>",
+                with: "<transactionCode>\(code)</transactionCode>")) == nil)
         }
     }
 

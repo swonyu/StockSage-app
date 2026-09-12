@@ -1,5 +1,93 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Main publication verification — September 12, after installation
+
+Owner explicitly requested commit and push to `main` in `swonyu/StockSage-app`.
+Fetched `origin/main`: `e576d70c6fd3d4cc3f5a94d47cb3f61635bb91fa` is an ancestor of
+the installed source. Publication includes the prior `ca0708f`/`bd8ea9c` commits and
+this R1–R10 batch. The existing `main-integration.yPdibq` worktree was verified clean;
+use fast-forward only and preserve all other worktrees. No force push or branch deletion.
+
+Fresh serial publication gates on unchanged app/source/test/widget aggregate
+`9f5dac27c3cc6c79879efa3e6da32fbff4ec17b21f7fca4561f90e72cf7032fb`:
+Mac **2409 passed, 1 existing opt-in skip, 0 failed**, 227 suites/95.504 test seconds;
+iPhone17Pro(gate)/iOS26.5 simulator **2328 passed, 0 skipped/failed**,
+223 suites/77.807 test seconds. Both xcodebuild processes exited0, Xcode26.6/17F113,
+host macOS27.0. Same README commands/exclusions and diagnostic-variable unsets as
+the review receipt; unique artifacts `/private/tmp/stocksage-main-publication-20260912.2H1TNl`.
+Simulator was already Shutdown after the iPhone gate. No extra excluded tests.
+
+Outgoing source/test/docs only: bounded eight-pattern credential scan and whitespace
+checks passed. No model files, local state backups, credentials or trading histories.
+Installed app stays open and untouched by this publication; its prior installation
+and remaining visual/quality limits are recorded below. Earlier uncommitted/unpushed
+statements below describe their own handoff times, not a failed publication receipt.
+
+## Review-2 update installed — September 12, later than the receipt below
+
+Owner authorized normal Stop/Quit/install. Native Stop ended the old 7–14-day scan at
+410/500; normal Quit confirmed PID48674 gone. Its temporary in-memory results do not resume
+after quit. Saved paper records, Chat JSON and protected preferences were backed up and
+compared; no record restoration or historical edit. Current installed app is now the exact
+review-2 candidate at `/Applications/StockSageX.app`, executable SHA256
+`5be7474b21fbe2240f1ad051fbd39eefee8eb58821bb9f168da5ab6c94a335ec`, reopened PID58100.
+Signature and recursive checksum comparison passed. Source SHA256 and HEAD remain the same
+as below; R1–R10 are still uncommitted/unpushed. No new tests or source edits in installation.
+
+Recoverable old/candidate bundles, pre/post-quit private state snapshots and full receipt:
+`/Users/saleh/Codex-Backups/stocksage-review2-install-20260912.Aoqdkx/INSTALL_RECEIPT.md`.
+After reopening, three protected preference keys unchanged; saved paper/Chat JSON byte-identical;
+paper automation preference unchanged. Do not restore these snapshots over newer records.
+
+Home and Research inspected using native tools, including an actual Research screenshot.
+A fresh scan was observed at2/500, SPY/MU Hold with dated close values, zero incomplete then.
+The installer did not press Run; its origin was not established. It was left running.
+This is not proof of whole-scan completion, full financial quality or remaining all-tab acceptance.
+No new crash report observed. The older installation-pending section below is historical.
+
+## Second model/app review — September 12, verified source; installation pending
+
+Worktree `/Users/saleh/StockSage-wt/opus-harness`, branch `claude/model-harness-2026-09-10`,
+HEAD `bd8ea9cd38ea3dc664f8d15f12b934dd5a599083` unchanged. This batch is uncommitted;
+no push/main merge. Lead sole writer/tester/installer; three bounded read-only reviewers finished
+and were closed. Good-spender remains removed. Other worktrees and owner records are preserved.
+
+Implemented R1–R10: schema-constrained Qwen assessment output; bounded exact-opinion evidence
+repair for horizon/paper research; preserved stop triggers across pending sells/expiry; aggregated
+lots for risk parity; captured analytics composition; app-owned multiwindow Chat with UUID-scoped
+cancellation; incomplete/amended insider-summary rejection; dated earnings confirmation and
+model-visible recheck caveats; independent daily-close display; explanatory validation messages.
+No model weights, strategy/risk limits, historical records or broker controls changed.
+
+Final executed gates, Xcode26.6/17F113, host macOS27.0: **Mac2409passed/1existingopt-in-skip/0failed**,
+227suites/94.969testseconds; **iPhone17Pro(gate)/iOS26.5 simulator2328passed/0skipped/0failed**,
+223suites/78.608testseconds. Both xcodebuild exit0, serial with only README's three exclusions.
+Final source/test/widget SHA256 stayed
+`9f5dac27c3cc6c79879efa3e6da32fbff4ec17b21f7fca4561f90e72cf7032fb` across both gates.
+
+Receipt/critique: `docs/superpowers/reviews/2026-09-12-review2-model-and-app.md`.
+Plan: `docs/superpowers/plans/2026-09-12-review2-research-recovery.md`.
+Artifacts: `/private/tmp/stocksage-review2-20260912.3sHFBU`.
+Exact candidate `Mac-release-StockSageX.app`, strict/deep signature verified, executable
+`5be7474b21fbe2240f1ad051fbd39eefee8eb58821bb9f168da5ab6c94a335ec`.
+
+**Installed app remains the previously published bd8ea9c**, executable
+`c8aee9dbb0d35ce3810f5e2c5eafc0e39e2f04718f1ecbb5d484df06e07d1353`, PID48674 observed.
+Prior installation receipt: `/Users/saleh/Codex-Backups/stocksage-install-bd8ea9c.JiCFex/INSTALL_RECEIPT.md`.
+That installation happened after the older entry below; do not mistake the older pre-install hash
+for current state. The owner-started 500-stock scan was still active at the last supported read
+(187/500), so it was not cancelled/replaced. Paper/Chat native inspection repeatedly breaks the
+CUA native pipe; reset recovered Research but not Paper. All-tab visual acceptance remains open.
+Updated synthetic native renders show dated daily closes for Hold/rejected results, not real trades.
+
+Eight controlled local 9B MLX6bit replies completed and passed the actual Swift validator; all
+four paired actions matched. No blanket quality/speed/profit or never-incomplete guarantee is made.
+Both variants passed the small synthetic set; production recovery-rate improvement remains unmeasured.
+Three protected preference keys, saved paper/account and Chat JSON, and automation choice remained
+unchanged against the prior install backup. Simulator returned to Shutdown; no gate left running.
+Next: recover native inspection and coordinate normal quit before reversible installation. Do not
+force-quit/discard the user scan, restore over current history, or enable broker submission.
+
 ## Complete-results reliability review — September 12, source publication; not installed
 
 Worktree `/Users/saleh/StockSage-wt/opus-harness`, branch `claude/model-harness-2026-09-10`,

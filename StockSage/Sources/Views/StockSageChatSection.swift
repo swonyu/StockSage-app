@@ -4,15 +4,11 @@ import SwiftUI
 struct StockSageChatSection: View {
     @ObservedObject var store: StockSageStore
     var openModelSettings: () -> Void
-    #if os(macOS)
     @ObservedObject var chat: StockSageChatSession
-    #else
-    @StateObject private var chat = StockSageChatSession(historyURL: StockSageChatSession.localHistoryURL)
-    #endif
     /// The unsent draft lives on the session, so leaving Chat cannot discard it.
     private var question: String { chat.draft }
     @State private var issue: String?
-    @State private var request: Task<Void, Never>?
+    @State private var ownedRequestID: UUID?
     @State private var opening: StockSageChat.Snapshot?
     @State private var confirmClear = false
     #if os(macOS)
@@ -34,7 +30,7 @@ struct StockSageChatSection: View {
             .onChange(of: settings) { _, _ in cancel() }
             .onDisappear { cancel() }
             .confirmationDialog("Delete local Chat history?", isPresented: $confirmClear) {
-                Button("Delete history", role: .destructive) { request?.cancel(); request = nil; chat.clear() }
+                Button("Delete history", role: .destructive) { chat.clear() }
             } message: { Text("Deletes this conversation, including unsaved turns and source snapshots. It cannot erase screenshots or server logs.") }
     }
 
@@ -277,9 +273,9 @@ struct StockSageChatSection: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .help("Send your question with Command-Return.")
                     #endif
-                if chat.pending != nil {
+                if let pending = chat.pending {
                     Button("Cancel") {
-                        cancel()
+                        chat.cancel(id: pending)
                         #if os(macOS)
                         questionFocused = true
                         #endif
@@ -470,7 +466,10 @@ struct StockSageChatSection: View {
     }
 
     private func refreshOpening() { opening = snapshot(for: "", followUp: false) }
-    private func cancel() { request?.cancel(); request = nil; chat.cancel() }
+    private func cancel() {
+        if let id = ownedRequestID { chat.cancel(id: id) }
+        ownedRequestID = nil
+    }
 
     private func send() {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -492,7 +491,9 @@ struct StockSageChatSection: View {
         #if os(macOS)
         questionFocused = true
         #endif
-        request = Task {
+        ownedRequestID = id
+        let request = Task {
+            defer { if ownedRequestID == id { ownedRequestID = nil } }
             var enriched = facts
             if let ticker = researchTicker {
                 chat.advance(id: id, to: .sources)
@@ -568,22 +569,23 @@ struct StockSageChatSection: View {
                             requestSnapshot: prepared.snapshot)
             }
         }
+        chat.attachTask(request, id: id)
     }
 }
 
 #if os(macOS)
 /// Keep memory-only turns above the page switch when a local history save fails.
-/// Window lifetime only; leaving Chat still cancels its request in ChatSection.
+/// The App owns the conversation across windows; each section owns only its request ID.
 struct StockSageChatNavigation<Chat: View, Other: View>: View {
     let isChat: Bool
-    @StateObject private var session: StockSageChatSession
+    let session: StockSageChatSession
     let chat: (StockSageChatSession) -> Chat
     let other: () -> Other
-    init(isChat: Bool, historyURL: URL?,
+    init(isChat: Bool, session: StockSageChatSession,
          @ViewBuilder chat: @escaping (StockSageChatSession) -> Chat,
          @ViewBuilder other: @escaping () -> Other) {
         self.isChat = isChat
-        _session = StateObject(wrappedValue: StockSageChatSession(historyURL: historyURL))
+        self.session = session
         self.chat = chat
         self.other = other
     }

@@ -72,10 +72,12 @@ struct StockSageHorizonAnalyzeTests {
     private func run(listing: Research.Listing = StockSageHorizonAnalyzeTests.listing(),
                      history: Data = StockSageHorizonAnalyzeTests.historyPayload(),
                      historyStatus: Int = 200,
+                     isOllama: Bool = true,
                      allowed: @escaping @MainActor () -> Bool = { true },
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
                      ) async -> Research.Result {
-        let config = Server.config(url: Server.defaultURL, model: Server.defaultModel)!
+        let config = Server.config(url: isOllama ? Server.defaultURL : Server.lmStudioURL,
+                                   model: isOllama ? Server.defaultModel : Server.lmStudioModel)!
         // Isolated defaults: never the real parent-app preference domain.
         let suiteName = "stocksage.horizon.analyze.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
@@ -86,7 +88,7 @@ struct StockSageHorizonAnalyzeTests {
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         return await Research.analyze(
             listing, horizon: .week, store: store, config: config,
-            isOllama: true, key: "fixture-key", allowed: allowed,
+            isOllama: isOllama, key: "fixture-key", allowed: allowed,
             historyTransport: { request in
                 (history, HTTPURLResponse(url: request.url!, statusCode: historyStatus,
                                           httpVersion: nil, headerFields: nil)!)
@@ -102,6 +104,78 @@ struct StockSageHorizonAnalyzeTests {
     }
 
     // MARK: The path runs, and what it sends is bounded
+
+    @Test func lmStudioResearchConstrainsTheRequiredAnswerShape() async throws {
+        var dispatched = false
+        _ = await run(isOllama: false, model: { request in
+            dispatched = true
+            let object = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let format = try #require(object["response_format"] as? [String: Any])
+            #expect(format["type"] as? String == "json_schema")
+            let specification = try #require(format["json_schema"] as? [String: Any])
+            let schema = try #require(specification["schema"] as? [String: Any])
+            #expect(Set(schema["required"] as? [String] ?? []) == ["evidence", "action", "reason", "risk"])
+            #expect(schema["additionalProperties"] as? Bool == false)
+            let properties = try #require(schema["properties"] as? [String: Any])
+            let evidence = try #require(properties["evidence"] as? [String: Any])
+            let items = try #require(evidence["items"] as? [String: Any])
+            let ids = try #require(items["enum"] as? [String])
+            #expect(ids.first == "F1" && !ids.contains("W1"))
+            let reason = try #require(properties["reason"] as? [String: Any])
+            let pattern = try #require(reason["pattern"] as? String)
+            #expect("Qualitative case".range(of: pattern, options: .regularExpression) != nil)
+            #expect("Gains of 50%".range(of: pattern, options: .regularExpression) == nil)
+            throw URLError(.cancelled) // No inventory or real network needed for this request-boundary test.
+        })
+        #expect(dispatched)
+    }
+
+    @Test func missingEvidenceIsRepairedWithoutChangingTheOpinion() async throws {
+        var calls = 0
+        let draft = #"{"action":"Hold","reason":"qualitative case","risk":"qualitative counter-case"}"#
+        let result = await run(model: { request in
+            calls += 1
+            if calls == 1 {
+                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                    "message": ["content": draft], "done_reason": "stop"]), request)
+            }
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            #expect(messages.last?["content"]?.contains("Copy action, reason and risk EXACTLY") == true)
+            return Self.ok(Self.verdictPayload(), request)
+        })
+        #expect(calls == 2)
+        #expect(result.verdict?.action == .hold)
+        #expect(result.referenceClose != nil, "A valid daily close is independent of the opinion or its scenario levels")
+        #expect(result.verdict?.reason == "qualitative case")
+    }
+
+    @Test(arguments: ["changed action", "changed prose", "numeric claim", "cancelled"])
+    func recoveryCannotLaunderAnInvalidOrObsoleteOpinion(_ scenario: String) async throws {
+        var calls = 0, allowed = true
+        let reason = scenario == "numeric claim" ? "Expected profit 999%" : "qualitative case"
+        let draft = try JSONSerialization.data(withJSONObject: ["action": "Hold", "reason": reason,
+                                                               "risk": "qualitative counter-case"])
+        let result = await run(allowed: { allowed }, model: { request in
+            calls += 1
+            if calls == 1 {
+                if scenario == "cancelled" { allowed = false }
+                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                    "message": ["content": String(decoding: draft, as: UTF8.self)], "done_reason": "stop"]), request)
+            }
+            let repaired = try JSONSerialization.data(withJSONObject: ["evidence": ["F1"],
+                "action": scenario == "changed action" ? "Buy" : "Hold",
+                "reason": scenario == "changed prose" ? "rewritten case" : "qualitative case",
+                "risk": "qualitative counter-case"])
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                "message": ["content": String(decoding: repaired, as: UTF8.self)], "done_reason": "stop"]), request)
+        })
+        #expect(result.verdict == nil)
+        #expect(calls == ((scenario == "numeric claim" || scenario == "cancelled") ? 1 : 2))
+        if scenario != "cancelled" {
+            #expect(result.referenceClose != nil, "Rejected opinions must not erase the observed daily close")
+        }
+    }
 
     @Test func theRealPathProducesAResultAndNeverSendsAnOversizedPrompt() async throws {
         var sentSystem = "", sentUser = ""
@@ -238,4 +312,3 @@ struct StockSageHorizonAnalyzeTests {
         #expect(result.note.localizedCaseInsensitiveContains("unvalidated"))
     }
 }
-

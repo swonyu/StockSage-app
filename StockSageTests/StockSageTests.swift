@@ -555,6 +555,13 @@ struct StockSageStoreTests {
         let (holdings, dropped) = StockSageStore.splitRiskParityHoldings(positions: positions, histories: histories)
         #expect(holdings.map(\.symbol) == ["GOOD"])
         #expect(Set(dropped) == ["NOHIST", "FLAT"])
+        let split = [PortfolioPosition(symbol: "GOOD", shares: 4, costBasis: 50),
+                     PortfolioPosition(symbol: "GOOD", shares: 6, costBasis: 50)]
+        let merged = StockSageStore.splitRiskParityHoldings(positions: [positions[0]], histories: histories).holdings
+        let lots = StockSageStore.splitRiskParityHoldings(positions: split, histories: histories).holdings
+        #expect(lots.count == 1, "Risk allocation is per instrument, not per storage lot.")
+        #expect(lots.map(\.currentValue) == merged.map(\.currentValue))
+        #expect(lots.map(\.volatility) == merged.map(\.volatility))
     }
 
     // Finding 3: the low-coverage guard used to only fire when `!isSampleData` — i.e. only AFTER

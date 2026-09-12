@@ -171,8 +171,11 @@ enum StockSageCatalystWatch {
             let daysUntil = inputs.earnings?.daysUntil
                 ?? StockSageEarnings.proximity(now: inputs.now, earnings: date).daysUntil
             let severity = inputs.earnings?.severity ?? StockSageEarnings.severity(daysUntil: daysUntil)
+            let age = inputs.earningsCheckedAt.map { inputs.now.timeIntervalSince($0) }
+            let current = age.map { $0 >= 0 && $0 < StockSageStore.earningsCheckTTL } ?? false
             let item = earningsItem(idea: idea, date: date, daysUntil: daysUntil, severity: severity,
-                                    confirmed: inputs.catalystConfirmed, source: inputs.catalystSource)
+                                    confirmed: current ? inputs.catalystConfirmed : nil, source: inputs.catalystSource,
+                                    caveat: current ? nil : "Schedule check is missing or out of date; recheck before relying on its confirmation.")
             switch severity {
             case .imminent, .soon: earningsSlot1 = item
             case .clear:           earningsSlot3 = item
@@ -261,7 +264,7 @@ enum StockSageCatalystWatch {
 
     private nonisolated static func earningsItem(idea: StockSageIdea, date: Date, daysUntil: Int,
                                                  severity: EarningsProximity.Severity,
-                                                 confirmed: Bool?, source: String) -> Item {
+                                                 confirmed: Bool?, source: String, caveat: String?) -> Item {
         let dateStr = Self.dateStr(date)
         // W1 (2026-09-06): nil (no source supplied a flag) appends NOTHING — byte-identical to
         // the pre-W1 headline, which every existing pinned test still checks.
@@ -301,7 +304,7 @@ enum StockSageCatalystWatch {
         case .clear:    weight = .low
         }
         return Item(symbol: idea.symbol, kind: .earnings, headline: headline, date: date, why: why,
-                   watch: watch, weight: weight, source: source, caveat: nil)
+                   watch: watch, weight: weight, source: source, caveat: caveat)
     }
 
     private nonisolated static func volumeMoveItem(idea: StockSageIdea, signal: StockSageCatalyst.Signal,

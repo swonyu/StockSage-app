@@ -140,8 +140,8 @@ struct StockSageResearchModesPanel: View {
                                 .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
                         }.width(min: 100, ideal: 130)
                         TableColumn("Daily close") { item in
-                            Text(Self.price(scan.results[item.ticker]?.levels?.entry)).monospacedDigit()
-                                .accessibilityLabel(scan.results[item.ticker]?.levels.map { "Daily close reference \(Self.price($0.entry))" } ?? "Daily close reference not available")
+                            Text(Self.price(scan.results[item.ticker]?.referenceClose?.value)).monospacedDigit()
+                                .accessibilityLabel(scan.results[item.ticker]?.referenceClose.map { "Daily close reference \(Self.price($0.value)), \($0.at.formatted(date: .abbreviated, time: .omitted))" } ?? "Daily close reference not available")
                         }.width(min: 72, ideal: 92, max: 110)
                         TableColumn("Scenario stop") { item in
                             Text(Self.price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
@@ -338,14 +338,16 @@ struct StockSageResearchModesPanel: View {
                     Text("\(verdict.action.rawValue) · \(verdict.reason)")
                     Text("Risk: \(verdict.risk)").foregroundStyle(.secondary)
                 }
+                if let close = result.referenceClose {
+                    Text("Daily close: \(price(close.value)) · \(close.at.formatted(date: .abbreviated, time: .omitted)) · USD · Massive split-adjusted history")
+                        .font(.callout).monospacedDigit()
+                }
                 if let levels = result.levels {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 12) {
-                        GridRow { Text("Daily close"); Text(price(levels.entry)).monospacedDigit() }
                         GridRow { Text("Scenario stop"); Text(price(levels.stop)).monospacedDigit() }
                         GridRow { Text("Scenario target"); Text(price(levels.target)).monospacedDigit() }
                     }.font(.callout)
                     Text("Scenarios, not executable orders or forecasts.").font(.caption).foregroundStyle(.secondary)
-                    Text("Daily bar: \(levels.at.formatted(date: .abbreviated, time: .omitted)) · USD · Massive split-adjusted history").font(.caption)
                     Text(levels.basis).font(.caption).foregroundStyle(.secondary)
                 } else if isBuy(result.verdict?.action) {
                     Text("No valid ATR-based entry/stop/target plan could be calculated. Do not treat this opinion as an order plan.")

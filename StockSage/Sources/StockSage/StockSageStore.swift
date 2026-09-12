@@ -1578,7 +1578,7 @@ final class StockSageStore: ObservableObject {
         }
         isComputingParity = true
         parityError = nil
-        let histories = await StockSageQuoteService.fetchHistories(for: positions.map(\.symbol))
+        let histories = await StockSageQuoteService.fetchHistories(for: Array(Set(positions.map(\.symbol))).sorted())
         isComputingParity = false
 
         let (holdings, dropped) = Self.splitRiskParityHoldings(positions: positions, histories: histories)
@@ -1600,7 +1600,7 @@ final class StockSageStore: ObservableObject {
         -> (holdings: [RiskParityHolding], dropped: [String]) {
         var holdings: [RiskParityHolding] = []
         var dropped: [String] = []
-        for p in positions {
+        for p in StockSagePortfolio.holdingBySymbol(in: positions).values.sorted(by: { $0.symbol < $1.symbol }) {
             guard let history = histories[p.symbol.uppercased()],
                   let vol = StockSageIndicators.annualizedVolatility(history.closes), vol > 0,
                   let price = history.latestClose else {
@@ -1970,6 +1970,11 @@ final class StockSageStore: ObservableObject {
     /// price×shares but does NOT FX-convert cross-currency (this path fetches no =X rates). True when
     /// the analyzed holdings span >1 quote currency → the panel discloses the weights are approximate.
     @Published private(set) var analyticsWeightsApproximate = false
+    private var analyticsComposition: [String: Double]?
+
+    func analyticsMatches(positions: [PortfolioPosition]) -> Bool {
+        analytics != nil && analyticsComposition == StockSagePortfolio.holdingBySymbol(in: positions).mapValues(\.shares)
+    }
 
     /// Fetch each holding's history and compute the portfolio risk/return suite
     /// (Sharpe/Sortino/Calmar, max drawdown, VaR, correlation → diversification).
@@ -2044,6 +2049,7 @@ final class StockSageStore: ObservableObject {
             StockSagePortfolioAnalytics.compute(holdings: alignedHoldings, attempted: attemptedCount)
         }.value
         analytics = computed
+        analyticsComposition = StockSagePortfolio.holdingBySymbol(in: positions).mapValues(\.shares)
         // Disclose (finding ③): weights are pence-normalized but NOT FX-converted, so a book spanning
         // >1 quote currency has approximate weights — the panel shows a caveat instead of implying the
         // blend is exact. Keyed on the ANALYZED symbols (those that loaded), not all positions.

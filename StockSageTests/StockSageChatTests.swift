@@ -19,6 +19,23 @@ struct StockSageChatTests {
         StockSageChat.snapshot(symbols: symbols ?? [symbol()], ideas: [], earnings: [:], sample: sample, now: now)
     }
 
+    @Test func cancellationOnlyOwnsItsRequestAndCancelsTheActualTask() throws {
+        let chat = StockSageChatSession(historyURL: nil)
+        let old = try #require(chat.begin(question: "Old", snapshot: snapshot(), model: "fixture"))
+        chat.cancel(id: old)
+        let current = try #require(chat.begin(question: "Current", snapshot: snapshot(), model: "fixture"))
+        let work = Task { _ = try? await Task.sleep(for: .seconds(30)) }
+        defer { work.cancel() }
+        chat.attachTask(work, id: current)
+        chat.cancel(id: old)
+        #expect(chat.pending == current && !work.isCancelled)
+        chat.cancel(id: current)
+        #expect(chat.pending == nil && work.isCancelled)
+        let late = Task { _ = try? await Task.sleep(for: .seconds(30)) }
+        chat.attachTask(late, id: current)
+        #expect(late.isCancelled)
+    }
+
     #if os(macOS)
     @Test(arguments: [360, 760])
     func renderNetworkControlsWithoutSettingsOrPreferences(width: Int) async throws {
@@ -225,7 +242,8 @@ struct StockSageChatTests {
             levels: state == "ordinary" || large ? levels : nil,
             facts: ["Synthetic fixture only; no live quote or order."],
             note: "Synthetic display values, not market observations.", at: now.addingTimeInterval(3600),
-            model: state == "incomplete" ? "" : "fixture")
+            model: state == "incomplete" ? "" : "fixture",
+            referenceClose: (value: levels.entry, at: levels.at))
         let content = GroupBox {
             StockSageResearchModesPanel.resultDetail(listing, result: state == "unchecked" ? nil : result)
                 .padding(DS.Space.xs)
@@ -834,7 +852,7 @@ struct StockSageChatTests {
 
         selection.isChat = false
         try await waitFor { probe.otherAppearances == 1 && probe.chatDisappearances == 1 }
-        selection.isChat = true // Never replace host.rootView or supply an externally owned Session.
+        selection.isChat = true // Never replace host.rootView; the fixture retains the App-level owner.
         try await waitFor { probe.chatAppearances == 2 }
         #expect(probe.session != nil && probe.session === original, "The production navigation owner must retain the same Session.")
         #expect(probe.session?.pending == nil && probe.session?.storageError == error)
@@ -849,6 +867,39 @@ struct StockSageChatTests {
         #expect(try Data(contentsOf: blocker) == blockerBytes)
         #expect(!files.fileExists(atPath: historyURL.path), "Retention must not be explained by disk reload.")
         #expect(probe.chatAppearances == 2 && probe.chatDisappearances == 1 && probe.otherAppearances == 1)
+    }
+
+    @Test func windowsSharingHistoryCannotOverwriteOrResurrectTurns() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("history.json")
+        let sharedSession = StockSageChatSession(historyURL: url)
+        let probes = [ChatNavigationProbe(), ChatNavigationProbe()]
+        let selections = [ChatNavigationSelection(), ChatNavigationSelection()]
+        var windows: [NSWindow] = []
+        defer { for window in windows { window.orderOut(nil); window.contentViewController = nil; window.close() } }
+        for i in 0..<2 {
+            let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 180),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: ChatNavigationFixture(selection: selections[i], historyURL: url, probe: probes[i], session: sharedSession))
+            windows.append(window); window.orderBack(nil)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while probes.contains(where: { $0.session == nil }), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let first = try #require(probes[0].session), second = try #require(probes[1].session)
+        let a = try #require(first.begin(question: "First question", snapshot: snapshot(), model: "fixture"))
+        first.finish(id: a, text: "First answer")
+        let b = try #require(second.begin(question: "Second question", snapshot: snapshot(), model: "fixture"))
+        second.finish(id: b, text: "Second answer")
+        #expect(StockSageChatSession(historyURL: url).turns.map(\.id) == [a, b])
+        let pending = try #require(second.begin(question: "Pending question", snapshot: snapshot(), model: "fixture"))
+        first.clear()
+        second.finish(id: pending, text: "Late answer must not resurrect anything")
+        #expect(StockSageChatSession(historyURL: url).turns.isEmpty)
+        #expect(first === second)
     }
 
     @Test func benzingaPresentationKeepsChecksDistinctFromUndatedRecords() throws {
@@ -1536,11 +1587,17 @@ struct StockSageChatTests {
 
 @MainActor private struct ChatNavigationFixture: View {
     @ObservedObject var selection: ChatNavigationSelection
-    let historyURL: URL
+    @StateObject private var session: StockSageChatSession
     let probe: ChatNavigationProbe
 
+    init(selection: ChatNavigationSelection, historyURL: URL, probe: ChatNavigationProbe,
+         session: StockSageChatSession? = nil) {
+        self.selection = selection; self.probe = probe
+        _session = StateObject(wrappedValue: session ?? StockSageChatSession(historyURL: historyURL))
+    }
+
     var body: some View {
-        StockSageChatNavigation(isChat: selection.isChat, historyURL: historyURL) { session in
+        StockSageChatNavigation(isChat: selection.isChat, session: session) { session in
             Text("Inert Chat child")
                 .onAppear { [weak session] in
                     probe.session = session; probe.chatAppearances += 1
@@ -1571,10 +1628,11 @@ struct StockSageChatTests {
 
 @MainActor private struct ChatDraftNavigationFixture: View {
     @ObservedObject var selection: ChatNavigationSelection
+    @StateObject private var session = StockSageChatSession(historyURL: nil)
     let store: StockSageStore
     let probe: ChatNavigationProbe
     var body: some View {
-        StockSageChatNavigation(isChat: selection.isChat, historyURL: nil) { session in
+        StockSageChatNavigation(isChat: selection.isChat, session: session) { session in
             StockSageChatSection(store: store, openModelSettings: {}, chat: session)
                 .onAppear { probe.session = session; probe.chatAppearances += 1 }
                 .onDisappear { probe.chatDisappearances += 1 }

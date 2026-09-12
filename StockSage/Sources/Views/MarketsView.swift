@@ -432,7 +432,9 @@ struct MarketsView: View {
     /// so the harness can snapshot it pixel-stable and unclipped. nil (every non-QA
     /// construction site) is byte-identical to today's body; never set outside QASnapshots.
     private let qaDetailSymbol: String?
-    init(qaSection: MarketSection = .briefing, qaDetailSymbol: String? = nil) {
+    private let chatSession: StockSageChatSession
+    init(chatSession: StockSageChatSession, qaSection: MarketSection = .briefing, qaDetailSymbol: String? = nil) {
+        self.chatSession = chatSession
         // Sweep seam (mirrors --qa, 2026-07-27): `--section heatmap` drives the initial tab
         // from the command line so the iOS-simulator sweep can screenshot every section
         // without UI scripting. Absent argument = byte-identical to today.
@@ -654,7 +656,7 @@ struct MarketsView: View {
                 Divider()
 
                 StockSageChatNavigation(isChat: section == .chat,
-                                       historyURL: StockSageChatSession.localHistoryURL) { session in
+                                       session: chatSession) { session in
                     StockSageChatSection(store: store, openModelSettings: openDesktopModelSettings,
                                         chat: session)
                 } other: {
@@ -1233,7 +1235,7 @@ struct MarketsView: View {
             // desktopWorkspace routes Chat before invoking content from its non-Chat branch.
             EmptyView()
             #else
-            StockSageChatSection(store: store, openModelSettings: { section = .catalysts })
+            StockSageChatSection(store: store, openModelSettings: { section = .catalysts }, chat: chatSession)
             #endif
         }
     }
@@ -3883,8 +3885,7 @@ struct MarketsView: View {
                     // after Analyze fabricated "N had no history" or impossible "3 of 2"
                     // copy. Live-count drift gets its own honest line instead.
                     let excludedCount = max(0, a.holdingsAttempted - a.holdingsAnalyzed)
-                    let liveCount = StockSagePortfolio.shared.positions.count
-                    Text("\(a.observations) days · \(a.holdingsAnalyzed) of \(a.holdingsAttempted) holdings\(excludedCount > 0 ? " — \(excludedCount) had no history and are excluded" : "")\(liveCount != a.holdingsAttempted ? " · book changed since this analysis — re-run Analyze" : "") · \(a.caveat)")
+                    Text("\(a.observations) days · \(a.holdingsAnalyzed) of \(a.holdingsAttempted) holdings\(excludedCount > 0 ? " — \(excludedCount) had no history and are excluded" : "")\(!store.analyticsMatches(positions: portfolio.positions) ? " · book changed since this analysis — re-run Analyze" : "") · \(a.caveat)")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -6443,11 +6444,9 @@ struct MarketsView: View {
         } else if let s = detailEvidence.insiderSummary {
             VStack(alignment: .leading, spacing: 3) {
                 if s.discretionary.isEmpty {
-                    // "Nothing filed" and "filings exist, none of them a decision" are different
-                    // facts and must read differently.
                     Text(s.nonDiscretionaryCount > 0
-                         ? "Insiders: \(s.nonDiscretionaryCount) recent filing\(s.nonDiscretionaryCount == 1 ? "" : "s"), none an open-market trade (option exercises / tax withholding)."
-                         : "Insiders: no recent Form 4 filings.")
+                         ? "Insiders: \(s.nonDiscretionaryCount) excluded transaction\(s.nonDiscretionaryCount == 1 ? "" : "s"); no open-market share trades in the reviewed filings."
+                         : "Insiders: no open-market share trades in the reviewed filings.")
                         .font(.system(size: mvFont9)).foregroundStyle(.secondary)
                 } else {
                     let buys = s.discretionary.filter { $0.code == .openMarketPurchase }

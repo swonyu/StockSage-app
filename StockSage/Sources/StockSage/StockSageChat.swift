@@ -359,6 +359,7 @@ final class StockSageChatSession: ObservableObject {
     /// never encoded into `turns` or saved history, never sent on its own.
     @Published var draft = ""
     private let historyURL: URL?
+    private var requestTask: Task<Void, Never>?
     private var unreadableHistory = false
     nonisolated static let historyLimit = 24
     private static let historyByteLimit = 2_000_000
@@ -424,6 +425,7 @@ final class StockSageChatSession: ObservableObject {
                 requestSnapshot: StockSageChat.Snapshot? = nil, truncated: Bool = false) {
         guard pending == id, let index = turns.firstIndex(where: { $0.id == id }) else { return }
         pending = nil
+        requestTask = nil
         let captured = turns[index].snapshot
         if let text {
             // Only records both captured and offered may validate; request selection cannot
@@ -474,7 +476,18 @@ final class StockSageChatSession: ObservableObject {
     }
 
     func cancel() {
-        if let id = pending { finish(id: id, text: nil, unavailable: "Request cancelled. Ask again for a fresh snapshot.") }
+        if let id = pending { cancel(id: id) }
+    }
+
+    func attachTask(_ task: Task<Void, Never>, id: UUID) {
+        guard pending == id else { task.cancel(); return }
+        requestTask = task
+    }
+
+    func cancel(id: UUID) {
+        guard pending == id else { return }
+        requestTask?.cancel()
+        finish(id: id, text: nil, unavailable: "Request cancelled. Ask again for a fresh snapshot.")
     }
 
     func clear() {

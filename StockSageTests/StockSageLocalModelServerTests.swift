@@ -238,6 +238,7 @@ struct StockSageLocalModelServerTests {
             #expect(request.timeoutInterval == 300)
             let body = try #require(request.httpBody)
             let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(json["response_format"] == nil, "Free-form Chat must not receive an assessment schema")
             if ollama {
                 let options = try #require(json["options"] as? [String: Any])
                 // Assert the caller's value is FORWARDED VERBATIM rather than matching a literal:

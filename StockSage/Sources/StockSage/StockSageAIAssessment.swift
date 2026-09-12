@@ -192,6 +192,50 @@ enum StockSageAIAssessment {
         facts.enumerated().map { "F\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
     }
 
+    /// Constrain generation to the existing contract; the Swift validator still owns acceptance.
+    /// Figures remain in captured facts. No action, evidence or financial claim is filled in by code.
+    nonisolated static func responseSchema(facts: [String]) -> Data? {
+        guard !facts.isEmpty else { return nil }
+        let prose: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 600,
+                                    "pattern": #"^[^0-9<>\[\]]+$"#]
+        return try? JSONSerialization.data(withJSONObject: [
+            "type": "object", "additionalProperties": false,
+            "properties": [
+                "evidence": ["type": "array", "minItems": 1, "maxItems": facts.count,
+                             "items": ["type": "string", "enum": facts.indices.map { "F\($0 + 1)" }]],
+                "action": ["type": "string", "enum": [TradeAdvice.Action.strongBuy, .buy, .hold, .avoid, .reduce, .sell].map(\.rawValue)],
+                "reason": prose, "risk": prose
+            ], "required": ["evidence", "action", "reason", "risk"]
+        ])
+    }
+
+    /// Research consumers share one exact-opinion format repair and the original time budget.
+    /// A failed/changed repair returns the original rejected answer, never a replacement opinion.
+    @MainActor static func complete(_ config: StockSageLocalModelServer.Config, isOllama: Bool,
+        system: String, user: String, facts: [String], maxTokens: Int,
+        stillValid: @MainActor () -> Bool,
+        transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> StockSageLocalModelServer.CompletionResult {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(90))
+        func generate(_ prompt: String) async -> StockSageLocalModelServer.CompletionResult {
+            let remaining = ContinuousClock.now.duration(to: deadline).components
+            let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
+            guard seconds > 0 else { return .failure(.init(diagnostic: .init(category: .timeout))) }
+            return await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
+                system: system, user: prompt, maxTokens: maxTokens,
+                contextTokens: StockSageLocalModelServer.researchContextTokens, timeout: seconds,
+                jsonSchema: responseSchema(facts: facts), stillValid: stillValid, transport: transport)
+        }
+        let reply = await generate(user)
+        guard !Task.isCancelled, stillValid(), case .success(let draft) = reply,
+              !StockSageLocalModelServer.rejectsTruncatedOutput(draft),
+              let repair = evidenceRepairPrompt(draft.text, facts: facts) else { return reply }
+        let repaired = await generate(repair)
+        guard !Task.isCancelled, stillValid(), case .success(let candidate) = repaired,
+              !StockSageLocalModelServer.rejectsTruncatedOutput(candidate),
+              let verdict = parse(candidate.text, facts: facts), preservesOpinion(verdict, draft: draft.text) else { return reply }
+        return repaired
+    }
+
     /// What actually gets sent for one research turn, after fitting evidence to the model's
     /// real context budget.
     ///
@@ -237,6 +281,21 @@ enum StockSageAIAssessment {
         case emptyEvidence, tooManyEvidence, duplicateEvidence, unknownEvidence
         case emptyProse, oversizedProse, bracketContent, nonASCIINumber, unknownReference, foreignNumber
         case referencePattern, changedOpinion, unboundNumber
+
+        var explanation: String {
+            switch self {
+            case .foreignNumber, .unboundNumber, .nonASCIINumber:
+                "Qwen included numerical claims in its opinion. Use the captured figures below; this opinion did not pass validation."
+            case .emptyEvidence, .tooManyEvidence, .duplicateEvidence, .unknownEvidence, .unknownReference:
+                "Qwen did not provide valid references to the supplied evidence. No opinion was accepted."
+            case .changedOpinion:
+                "The repair changed the original opinion, so it was not accepted."
+            case .emptyFacts:
+                "No usable evidence was supplied. Check data access before retrying."
+            default:
+                "Qwen did not return the required complete answer format. Retry this research; no partial opinion was accepted."
+            }
+        }
     }
 
     nonisolated static func parse(_ text: String, facts: [String], leadCount: Int = 0, symbol: String? = nil) -> Verdict? {
@@ -445,6 +504,7 @@ final class StockSageAIAssessments: ObservableObject {
             return await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
                 system: StockSageAIAssessment.instructions, user: prompt, maxTokens: 240,
                 contextTokens: StockSageLocalModelServer.researchContextTokens,
+                jsonSchema: StockSageAIAssessment.responseSchema(facts: context.facts),
                 stillValid: evidenceActive)
         })
     }
@@ -571,7 +631,8 @@ final class StockSageAIAssessments: ObservableObject {
                 category = draft.map { StockSageAIAssessment.preservesOpinion(verdict, draft: $0) } == false
                     ? StockSageAIAssessment.ValidationFailure.changedOpinion.rawValue : "accepted"
             }
-            return "validation=\(category) " + completion.diagnostic.summary
+            let explanation = StockSageAIAssessment.ValidationFailure(rawValue: category)?.explanation
+            return (explanation.map { $0 + "\n" } ?? "") + "validation=\(category) " + completion.diagnostic.summary
         }
     }
 

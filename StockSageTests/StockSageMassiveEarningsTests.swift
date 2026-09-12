@@ -142,7 +142,7 @@ struct StockSageMassiveEarningsTests {
         #expect(out.source == "Massive/Benzinga earnings" && out.sourcesAsked == [out.source])
         #expect(out.anySourceAnswered && out.projectionBasis == nil)
         let brief = StockSageCatalystWatch.brief(for: SageFix.idea("AAPL", conviction: 0.5),
-            inputs: .init(earningsDate: out.earningsDate, now: today,
+            inputs: .init(earningsDate: out.earningsDate, earningsCheckedAt: today, now: today,
                           catalystConfirmed: out.confirmed, catalystSource: out.source))
         #expect(brief.primary.source == out.source)
         #expect(brief.primary.headline.contains("(estimated)") && !brief.primary.headline.contains("(confirmed)"))

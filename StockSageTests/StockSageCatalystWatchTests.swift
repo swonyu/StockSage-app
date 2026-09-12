@@ -31,6 +31,21 @@ struct StockSageCatalystWatchTests {
 
     // MARK: (a) precedence
 
+    @Test(arguments: [-1.0, 0.0, 86399.0, 86400.0, 1209600.0])
+    func earningsConfirmationDisclosesExpiredOrFutureCheck(_ age: Double) {
+        let idea = SageFix.idea("CHECK", conviction: 0.6)
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2),
+            earningsCheckedAt: Self.now.addingTimeInterval(-age), now: Self.now, catalystConfirmed: true))
+        let item = brief.primary
+        if (0..<86400).contains(age) {
+            #expect(item.headline.contains("(confirmed)"))
+        } else {
+            #expect(!item.headline.contains("(confirmed)"))
+            #expect(item.caveat?.contains("recheck") == true)
+            #expect(StockSageCatalystNarrator.facts(for: brief).joined().contains("recheck"))
+        }
+    }
+
     @Test("earnings soon (rank 1) beats a major volume move (rank 2)")
     func earningsSoonBeatsVolumeMove() {
         let idea = SageFix.idea("SOON", conviction: 0.6)
@@ -341,7 +356,7 @@ struct StockSageCatalystWatchTests {
     @Test("dateKnown + confirmed:true appends '(confirmed)' to the existing earnings headline")
     func confirmedTrueAppendsConfirmedSuffix() {
         let idea = SageFix.idea("CONF", conviction: 0.6)
-        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), now: Self.now,
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), earningsCheckedAt: Self.now, now: Self.now,
                                                         catalystConfirmed: true))
         #expect(brief.primary.kind == .earnings)
         #expect(brief.primary.headline == "Earnings in ~2 days (Sep 6, 2025) (confirmed)")
@@ -350,7 +365,7 @@ struct StockSageCatalystWatchTests {
     @Test("dateKnown + confirmed:false appends '(estimated)'")
     func confirmedFalseAppendsEstimatedSuffix() {
         let idea = SageFix.idea("EST", conviction: 0.6)
-        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), now: Self.now,
+        let brief = W.brief(for: idea, inputs: W.Inputs(earningsDate: days(2), earningsCheckedAt: Self.now, now: Self.now,
                                                         catalystConfirmed: false))
         #expect(brief.primary.headline == "Earnings in ~2 days (Sep 6, 2025) (estimated)")
     }

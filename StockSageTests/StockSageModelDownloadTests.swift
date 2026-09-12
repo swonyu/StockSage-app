@@ -88,11 +88,17 @@ struct StockSageModelDownloadTests {
         var active = true
         var posts = 0
         let context = scenario == "tight" ? 500 : 4096
+        let schema = StockSageAIAssessment.responseSchema(facts: ["same facts"])
         let result = await S.completeDetailed(config, isOllama: false, system: "same instructions", user: "same facts",
-            maxTokens: 192, contextTokens: context, timeout: 10, stillValid: { active }, transport: { request in
+            maxTokens: 192, contextTokens: context, timeout: 10, jsonSchema: schema, stillValid: { active }, transport: { request in
                 if request.httpMethod == "POST" {
                     posts += 1
                     let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                    let format = try #require(body["response_format"] as? [String: Any])
+                    let sent = try #require(format["json_schema"] as? [String: Any])
+                    let actual = try JSONSerialization.data(withJSONObject: sent["schema"]!, options: .sortedKeys)
+                    let expected = try JSONSerialization.data(withJSONObject: JSONSerialization.jsonObject(with: schema!), options: .sortedKeys)
+                    #expect(actual == expected)
                     #expect(body["max_tokens"] as? Int == (posts == 1 ? 192 : 384))
                     #expect(body["messages"] as? [[String: String]] == [
                         ["role": "system", "content": "same instructions"], ["role": "user", "content": "same facts"]])

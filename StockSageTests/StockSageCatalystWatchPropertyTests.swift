@@ -257,7 +257,9 @@ struct StockSageCatalystWatchPropertyTests {
                     let sev = ins.earnings?.severity ?? StockSageEarnings.severity(daysUntil: daysUntil)
                     let want: W.Weight = sev == .imminent ? .high : (sev == .soon ? .medium : .low)
                     #expect(item.weight == want, "\(c)")
-                    #expect(item.caveat == nil && item.source == "Yahoo calendarEvents")
+                    let age = ins.earningsCheckedAt.map { ins.now.timeIntervalSince($0) }
+                    let fresh = age.map { $0 >= 0 && $0 < StockSageStore.earningsCheckTTL } ?? false
+                    #expect((item.caveat == nil) == fresh && item.source == "Yahoo calendarEvents")
                     #expect(item.headline.hasPrefix("Earnings in ~\(daysUntil) day"))
                 case .volumeMove:
                     let tier = ins.volumeMove!.tier

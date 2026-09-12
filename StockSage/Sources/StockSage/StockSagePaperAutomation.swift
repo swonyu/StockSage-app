@@ -708,7 +708,10 @@ final class StockSagePaperAutomation: ObservableObject {
         guard active() else { return false }
         let held = Array(Set(book.open.map(\.symbol) + book.pending.map(\.symbol))).sorted()
         let identities = Dictionary(uniqueKeysWithValues: book.open.map { ($0.symbol, $0.id) })
-        let after = Dictionary(uniqueKeysWithValues: book.pending.map { ($0.symbol, $0.at) })
+        // Held-position triggers may use any qualified post-open observation. Only fills
+        // require a post-request timestamp, independently enforced by Book.settle.
+        let after = Dictionary(uniqueKeysWithValues: book.pending.filter { identities[$0.symbol] == nil }
+            .map { ($0.symbol, $0.at) })
         let latest = await Self.fetchPaperQuotes(for: held, after: after, at: fixedTime,
             externalAllowed: active, received: { q in
                 guard active(), let original = identities[q.symbol],
@@ -918,11 +921,12 @@ final class StockSagePaperAutomation: ObservableObject {
                          at: Date(), facts: facts)
             _ = save(trimmed)
         }
-        let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: fitted.system, user: fitted.user,
+        let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
+            system: fitted.system, user: fitted.user, facts: facts,
             maxTokens: Self.researchOutputTokens,
-            contextTokens: StockSageLocalModelServer.researchContextTokens,
-            stillValid: evidenceActive)
+            // The captured quote is revalidated separately after inference; its original
+            // age must not discard an answer that can use a fresh replacement quote.
+            stillValid: { evidenceActive() && context.canAssess(at: Date()) && intraday.fresh(at: Date()) })
         guard evidenceActive() else { return }
         guard case .success(let completion) = response else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)

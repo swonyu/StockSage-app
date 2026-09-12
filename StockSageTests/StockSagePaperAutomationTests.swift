@@ -243,6 +243,39 @@ struct StockSagePaperAutomationTests {
         #expect(book.pending.map(\.symbol) == ["AAPL"])
     }
 
+    @Test func pendingSellCannotHideAQualifiedStopBeforeItsRequestTime() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let name = "stop-before-request-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        let url = root.appendingPathComponent("account.json")
+        let state = A(url: url, defaults: defaults)
+        defer { state.stop(); try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: name) }
+        try #require(state.acquire())
+        var seeded = A.Book()
+        seeded.propose(symbol: "AAPL", action: .buy, at: now)
+        seeded.settle(quotes: ["AAPL": quote(at: now.addingTimeInterval(1))], at: now.addingTimeInterval(1))
+        let holding = try #require(seeded.open.first)
+        let requested = now.addingTimeInterval(5)
+        seeded.propose(symbol: "AAPL", action: .sell, at: requested)
+        try #require(state.save(seeded))
+        let observed = requested.addingTimeInterval(1)
+        _ = await state.pollPositions(allowed: { true }, at: observed, tick: { _, _ in
+            quote(price: holding.stop - 0.01, at: requested.addingTimeInterval(-1))
+        })
+        #expect(state.book.open.count == 1, "The trigger is not a fill after the order.")
+        #expect(state.book.pending.first?.protectiveTradeID == holding.id)
+        let expired = observed.addingTimeInterval(121)
+        _ = await state.pollPositions(allowed: { true }, at: expired, tick: { _, _ in nil })
+        #expect(state.book.pending.first?.protectiveTradeID == holding.id)
+        let loaded = try JSONDecoder().decode(A.Book.self, from: Data(contentsOf: url))
+        #expect(loaded.pending.first?.protectiveTradeID == holding.id)
+        _ = await state.pollPositions(allowed: { true }, at: expired.addingTimeInterval(1), tick: { _, at in
+            quote(price: 100, at: at)
+        })
+        #expect(state.book.open.isEmpty)
+        #expect(state.book.trades.count == 1)
+    }
+
     @Test func readyExitDoesNotWaitForSlowPeerQuote() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let name = "monitor-arrival-\(UUID())"

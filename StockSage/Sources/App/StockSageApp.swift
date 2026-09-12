@@ -68,6 +68,8 @@ enum StockSageLauncher {
 // scene (launch-at-login, monitor autostart, menu bar), first-run onboarding sheet (the
 // first-trade checklist + parent-app data import), App Intents (Shortcuts/Spotlight).
 struct StockSageApp: App {
+    @StateObject private var chatSession = StockSageChatSession(
+        historyURL: StockSageStore.isRunningTests ? nil : StockSageChatSession.localHistoryURL)
     // Review 2026-07-27: the App-scope @ObservedObject store was UNUSED in this body yet
     // re-evaluated the whole scene on every store publish (each quote tick). MarketsView
     // owns its own observation; the App struct needs none.
@@ -105,7 +107,7 @@ struct StockSageApp: App {
                 // than the old onAppear wiring).
                 // Both platforms open on Home: the iPhone's first native tab, never a route that
                 // lives behind the system More list.
-                Group { MarketsView(qaSection: .briefing) }
+                Group { MarketsView(chatSession: chatSession, qaSection: .briefing) }
                     .tint(DS.Palette.accent)
                     #if os(macOS)
                     .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced

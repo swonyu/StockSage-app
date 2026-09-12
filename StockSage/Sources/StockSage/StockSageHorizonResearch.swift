@@ -47,6 +47,7 @@ final class StockSageHorizonResearch: ObservableObject {
         var note: String
         var at: Date = Date()
         var model: String = ""
+        var referenceClose: (value: Double, at: Date)? = nil
     }
     struct Scan {
         var listings: [Listing] = []
@@ -299,6 +300,7 @@ final class StockSageHorizonResearch: ObservableObject {
               let history = completedHistory(raw, at: Date()) else {
             return .init(note: "Need at least 30 valid, completed daily bars and a bar within four days. History missing, stale or malformed; no opinion.")
         }
+        let referenceClose = (value: history.closes.last!, at: history.dates.last!) // completedHistory checked both arrays.
         let ideas = await StockSageStore.buildIdeas(defs: [.init(symbol: item.ticker, market: "US · \(item.primary_exchange ?? "exchange unconfirmed")")], histories: [item.ticker: history])
         guard allowed(), !Task.isCancelled, let idea = ideas.first else { return .init(note: "Analysis interrupted or unsupported history.") }
         let newsAt = Date()
@@ -341,29 +343,28 @@ final class StockSageHorizonResearch: ObservableObject {
                 system: { _ in horizon.instructions },
                 outputTokens: Self.researchOutputTokens) else {
             return .init(facts: horizonFacts,
-                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.")
+                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.", referenceClose: referenceClose)
         }
         let facts = fitted.facts
         let trimmedNote = fitted.isComplete
             ? ""
             : " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
-        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion." + trimmedNote) }
-        let response = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
-            system: fitted.system, user: fitted.user,
+        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion." + trimmedNote, referenceClose: referenceClose) }
+        let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
+            system: fitted.system, user: fitted.user, facts: facts,
             maxTokens: Self.researchOutputTokens,
-            contextTokens: StockSageLocalModelServer.researchContextTokens,
-            stillValid: evidenceAllowed, transport: modelTransport)
+            stillValid: { evidenceAllowed() && context.canAssess(at: Date()) }, transport: modelTransport)
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         // A verdict truncated at the output limit is refused, exactly as in paper research.
         if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
             return .init(facts: facts,
-                         note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote)
+                         note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote, referenceClose: referenceClose)
         }
         guard context.canAssess(at: Date()), case .success(let completion) = response,
               case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
-            return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote)
+            return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, referenceClose: referenceClose)
         }
         return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
-            facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote, model: config.model)
+            facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote, model: config.model, referenceClose: referenceClose)
     }
 }
