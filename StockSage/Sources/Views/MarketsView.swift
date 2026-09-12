@@ -968,6 +968,22 @@ struct MarketsView: View {
         regime == nil || isStale
     }
 
+    /// 5.2 (2026-09-12): the empty-plan sentence must count only the positions that were actually
+    /// SIZED. Under `.greedyKnapsack` — the shipped default — the heat cap truncates the qualified
+    /// board BEFORE sizing, so `fundableCandidateCount` (now the pre-truncation population) is no
+    /// longer the number that floored to zero shares; saying "all 12 are below the 1-share
+    /// minimum" when only 5 were ever sized is false in the opposite direction. Pure/testable.
+    nonisolated static func emptyPlanSentence(fundableCandidateCount: Int, truncatedForHeat: Int,
+                                              maxHeat: Double, account: Double) -> String {
+        let sized = Swift.max(0, fundableCandidateCount - truncatedForHeat)
+        var s = "Deploy capital — all \(sized) sized position\(sized == 1 ? "" : "s") \(sized == 1 ? "is" : "are") below the 1-share minimum at this $\(String(format: "%.0f", account)) account size."
+        if truncatedForHeat > 0 {
+            s += " A further \(truncatedForHeat) qualified idea\(truncatedForHeat == 1 ? " was" : "s were") cut by the \(String(format: "%.0f%%", maxHeat * 100)) heat cap before sizing."
+        }
+        s += " Raise the account size or pick fewer/cheaper names to see an allocation plan."
+        return s
+    }
+
     /// F7 (rotation-3 triage, first-run honesty): non-nil ONLY during the FIRST-EVER scan — a
     /// later re-scan already has `ideasUpdated` committed and the board keeps showing the PRIOR
     /// results while the new ones stream in (see the "re-scan in progress" line the scan button
@@ -6000,7 +6016,9 @@ struct MarketsView: View {
             if plan.positions.isEmpty, plan.fundableCandidateCount > 0 {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
-                    Text("Deploy capital — all \(plan.fundableCandidateCount) fundable position\(plan.fundableCandidateCount == 1 ? "" : "s") are below the 1-share minimum at this $\(String(format: "%.0f", acct)) account size. Raise the account size or pick fewer/cheaper names to see an allocation plan.")
+                    Text(Self.emptyPlanSentence(fundableCandidateCount: plan.fundableCandidateCount,
+                                                truncatedForHeat: plan.truncatedForHeat.count,
+                                                maxHeat: plan.maxHeat, account: acct))
                         .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
@@ -6010,6 +6028,9 @@ struct MarketsView: View {
             }
             if !plan.positions.isEmpty {
                 let heatColor: Color = plan.totalHeat > plan.maxHeat * 0.75 ? DS.Palette.warningSoft : DS.Palette.successSoft
+                // 5.2: hoisted out of the header HStack below — this body carries a documented
+                // type-checker budget, so the new chip must not add an expression inside it.
+                let capCutLabel = plan.truncatedForHeat.isEmpty ? nil : "\(plan.truncatedForHeat.count) not funded"
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: DS.Space.sm) {
                         Image(systemName: "chart.pie.fill").font(.system(size: mvFont13)).foregroundStyle(DS.Palette.accent)
@@ -6021,6 +6042,11 @@ struct MarketsView: View {
                         ideaMetric("Planned heat", String(format: "%.1f%% of %.0f%% cap", plan.totalHeat * 100, plan.maxHeat * 100), color: heatColor)
                         if plan.scaleApplied < 1 {
                             ideaMetric("Cap scale", String(format: "%.0f%%", plan.scaleApplied * 100), color: DS.Palette.warningSoft)
+                        } else if let capCutLabel {
+                            // 5.2: knapsack mode does NOT scale — it DROPS names at the cap, so
+                            // `scaleApplied` stays 1 and this header was indistinguishable from an
+                            // unconstrained plan. Mutually exclusive with "Cap scale".
+                            ideaMetric("Cap cut", capCutLabel, color: DS.Palette.warningSoft)
                         }
                     }
                     // Honesty-disclosure gap fix: the allocator's regime step silently no-ops when

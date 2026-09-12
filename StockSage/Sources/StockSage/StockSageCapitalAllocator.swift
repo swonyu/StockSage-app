@@ -37,6 +37,14 @@ struct CapitalAllocation: Sendable, Equatable {
     /// plan than "nothing qualified", which the view can now name instead of just vanishing.
     let fundableCandidateCount: Int
     let unpricedSymbols: [String]        // qualified ideas excluded for missing/invalid FX
+    /// 5.2 (2026-09-12): symbols that cleared every qualitative gate but were NEVER SIZED because
+    /// `.greedyKnapsack` hit the heat cap first — the velocity-ordered slice after the last kept
+    /// name. Always empty under `.uniformScale` (which shrinks everyone instead of dropping
+    /// anyone). Disjoint from `positions` by construction. An ARRAY, not a Set: this file
+    /// deliberately does not dedup symbols. NOTE the companion contract change:
+    /// `fundableCandidateCount` is now the PRE-truncation qualified population in both strategies,
+    /// so `fundableCandidateCount - truncatedForHeat.count` is what actually reached the sizer.
+    let truncatedForHeat: [String]
 }
 
 enum StockSageCapitalAllocator {
@@ -66,7 +74,7 @@ enum StockSageCapitalAllocator {
         func empty() -> CapitalAllocation {
             CapitalAllocation(positions: [], totalHeat: 0, requestedHeat: 0, scaleApplied: 1,
                               account: account, maxHeat: cap, caveat: caveat, fundableCandidateCount: 0,
-                              unpricedSymbols: unpriced.sorted())
+                              unpricedSymbols: unpriced.sorted(), truncatedForHeat: [])
         }
         guard account > 0, account.isFinite, cap > 0, maxHeat.isFinite else { return empty() }
 
@@ -144,6 +152,11 @@ enum StockSageCapitalAllocator {
         }
 
         // Step 3: fit Σ pre-floor heat under the cap, by the selected strategy.
+        // 5.2 (2026-09-12): capture the PRE-TRUNCATION population. `.greedyKnapsack` shrinks
+        // `fundable` below, so reading `fundable.count` after it reported the KEPT slice as if it
+        // were the whole qualified board — a 12-idea board reported 5.
+        let qualifiedCount = fundable.count
+        var truncatedForHeat: [String] = []
         let requestedHeat = fundable.reduce(0) { $0 + $1.weight }
         var scaleApplied = requestedHeat > cap ? cap / requestedHeat : 1
         if strategy == .greedyKnapsack, requestedHeat > cap {
@@ -152,7 +165,8 @@ enum StockSageCapitalAllocator {
             // the uniform mode's diversification trade-off is the owner's Settings choice).
             var cum = 0.0
             var kept: [Fundable] = []
-            for f in fundable.sorted(by: { $0.velocity > $1.velocity }) {
+            let ordered = fundable.sorted(by: { $0.velocity > $1.velocity })
+            for f in ordered {
                 if cum + f.weight <= cap + 1e-12 {
                     kept.append(f); cum += f.weight
                 } else if cap - cum > 1e-9 {
@@ -164,6 +178,9 @@ enum StockSageCapitalAllocator {
                 } else { break }
             }
             fundable = kept
+            // Never-sized names as the velocity-ordered SLICE after the last kept one — NOT a Set
+            // difference, which would collapse the duplicate tickers this file deliberately keeps.
+            truncatedForHeat = ordered.dropFirst(kept.count).map(\.symbol)
             scaleApplied = 1   // knapsack truncates instead of scaling
         }
 
@@ -205,13 +222,19 @@ enum StockSageCapitalAllocator {
         if !rejectedForCosts.isEmpty {
             finalCaveat += " Excluded after final-size cost check: " + rejectedForCosts.sorted().joined(separator: ", ") + ". Released risk stays in cash."
         }
+        if !truncatedForHeat.isEmpty {
+            // Sorted for a stable rendering: `truncatedForHeat` is velocity-ordered and
+            // `sorted(by:)` is not stable, so on velocity ties the slice order is unspecified.
+            finalCaveat += " Heat cap reached: \(truncatedForHeat.count) qualified idea(s) were NOT funded — " + truncatedForHeat.sorted().joined(separator: ", ") + ". This plan is the fastest-velocity slice that fits the \(String(format: "%.0f%%", cap * 100)) cap, not the whole board."
+        }
         if deweightedForCorrelation { finalCaveat += " A correlated cluster was de-weighted to count as ~one bet, not several." }
         if let regime, abs(regime.sizingBias - 1) > 0.01 {
             finalCaveat += String(format: " Sized ×%.2f for the %@ regime.", regime.sizingBias, regime.state.rawValue)
         }
         return CapitalAllocation(positions: sorted, totalHeat: totalHeat, requestedHeat: requestedHeat,
                                  scaleApplied: scaleApplied, account: account, maxHeat: cap, caveat: finalCaveat,
-                                 fundableCandidateCount: fundable.count - rejectedForCosts.count, unpricedSymbols: unpriced.sorted())
+                                 fundableCandidateCount: qualifiedCount - rejectedForCosts.count,
+                                 unpricedSymbols: unpriced.sorted(), truncatedForHeat: truncatedForHeat)
     }
 
     /// #8 (BUGHUNT_NEWENGINES): the position sort is a TOTAL order, not just (risk desc, symbol
