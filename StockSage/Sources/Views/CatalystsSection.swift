@@ -62,6 +62,12 @@ struct CatalystsSection: View {
     @State private var narrationBaseFacts: [String: [String]] = [:]
     @State private var narrationBenzinga: [String: StockSageBenzinga.Snapshot] = [:]
     @State private var narrationSettings: [String: [String]] = [:]
+    /// Why the LAST "Explain" press on each symbol stopped without publishing. A press that is
+    /// superseded (settings changed), whose evidence capture aged out, or that lost external
+    /// access mid-run publishes nothing — without this, the panel either kept showing the
+    /// PREVIOUS paragraph as if it were current, or (with no previous paragraph) rendered nothing
+    /// at all and the press looked like a dead button.
+    @State private var narrationAborted: [String: String] = [:]
     @State private var narrating: Set<String> = []
     /// Which stage each in-flight explanation is at. The panel showed one unlabelled spinner
     /// across source collection, a model probe and a completion that can run for 90 seconds,
@@ -684,6 +690,13 @@ struct CatalystsSection: View {
     @ViewBuilder
     private func narrationPanel(_ brief: StockSageCatalystWatch.Brief) -> some View {
         let symbol = brief.idea.symbol
+        // Outside the `narrations[symbol]` binding on purpose: a press that aborted before it ever
+        // published must say so even when there is no previous paragraph to annotate.
+        if !narrating.contains(symbol), let abortReason = narrationAborted[symbol] {
+            Text(abortReason)
+                .font(.system(size: font11, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         if narrating.contains(symbol) {
             ProgressView(narratingStage[symbol]?.label ?? StockSageCatalystNarrator.Stage.sources.label)
                 .controlSize(.small)
@@ -765,6 +778,20 @@ struct CatalystsSection: View {
         return nil
     }
 
+    /// Why an in-flight "Explain" stopped before it published anything — pure, so both branches
+    /// are pinnable without a running app. A superseded press is the viewer's own doing and says
+    /// so; every other abort (the evidence capture aged out, external access was turned off) must
+    /// NOT be reported as a settings change it wasn't. Neither branch claims the paragraph below
+    /// is gone: it is retained on purpose, so the copy names it as the PREVIOUS one.
+    nonisolated static func narrationAbortReason(settingsChanged: Bool) -> String {
+        if settingsChanged {
+            return "Explanation stopped — model settings changed while it was running. "
+                + "Any explanation shown below is the PREVIOUS one. Tap Explain to run it with the current settings."
+        }
+        return "Explanation stopped before it finished — the cited sources or external access changed while it was "
+            + "running. Any explanation shown below is the PREVIOUS one. Tap Explain to try again."
+    }
+
     /// The numbered "[n] title · date · link" list the paragraph above may have cited — one row
     /// per source, in the SAME order `facts(for:sources:)` numbered them, so "[2]" in the text
     /// always matches the 2nd row here. A source with no link renders its title/date only (never
@@ -820,6 +847,7 @@ struct CatalystsSection: View {
         let symbol = brief.idea.symbol
         guard !narrating.contains(symbol) else { return }
         narrating.insert(symbol)
+        narrationAborted[symbol] = nil
         narratingStage[symbol] = .sources
         let facts = StockSageCatalystNarrator.facts(for: brief)
         let settings = Self.narrationCacheSettings(explanationSettings,
@@ -830,17 +858,27 @@ struct CatalystsSection: View {
             let active: @MainActor () -> Bool = {
                 !Task.isCancelled && requestSettings == explanationRequestSettings
             }
-            guard let (sources, news, evidence) = await Self.citedSources(for: symbol, stillValid: active) else { return }
+            // Every bare return below abandons a press the viewer made. Record WHY, so the panel
+            // can say the paragraph on screen is the previous one — or that there is none — rather
+            // than leaving an abandoned press looking like a finished, current explanation.
+            let markAborted: @MainActor () -> Void = {
+                guard !Task.isCancelled else { return }
+                narrationAborted[symbol] = Self.narrationAbortReason(
+                    settingsChanged: requestSettings != explanationRequestSettings)
+            }
+            guard let (sources, news, evidence) = await Self.citedSources(for: symbol, stillValid: active) else {
+                markAborted(); return
+            }
             // Freeze both the source capture and settings across probe/inference/publication.
             let allowed: @MainActor () -> Bool = {
                 active() && StockSageBenzingaClient.shared.isCurrent(evidence)
                     && (sources.isEmpty || ToolPolicy.isExternalAllowed)
             }
-            guard allowed() else { return }
+            guard allowed() else { markAborted(); return }
             let suppliedFacts = StockSageCatalystNarrator.facts(for: brief, sources: sources, benzinga: evidence)
             narratingStage[symbol] = .explaining
             let result = await StockSageCatalystNarrator.explain(brief, sources: sources, benzinga: evidence, stillValid: allowed)
-            guard allowed() else { return }
+            guard allowed() else { markAborted(); return }
             // Publish the response and its ORIGINAL context together, after the last await.
             // Retain prior snapshots; never publish a cancelled generation for new settings.
             narrationBaseFacts[symbol] = facts
@@ -1022,7 +1060,7 @@ struct CatalystsSection: View {
                         // Same eager-render concern as cards mode (up to ~450 rows combined
                         // across buckets) — LazyVStack here too (fix pass 2026-09-06).
                         LazyVStack(alignment: .leading, spacing: DS.Space.xs) {
-                            ForEach(rows) { calendarRow($0) }
+                            ForEach(rows) { calendarRow($0, now: now) }
                         }
                     }
                     .padding(DS.Space.lg)
@@ -1062,14 +1100,17 @@ struct CatalystsSection: View {
                 if let firstWhy = entry.item.why.first {
                     Text(firstWhy).font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
                 }
-                #if os(macOS)
-                if let now, !entry.isNegativeRecord {
+                // Cross-platform since 2026-09-12. The `entry.item.date != nil` guard is NOT
+                // cosmetic: the iOS bucket list includes `.undated` ("No date on file"), and for a
+                // dateless entry `eventStatus` falls through every guard and returns
+                // "Scheduled / estimated" — a schedule claim about an item with no date. macOS was
+                // protected by `periodEntries`' own `guard let date`, which this path has not got.
+                if let now, !entry.isNegativeRecord, entry.item.date != nil {
                     Text(Self.eventStatus(entry, now: now))
                         .font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
                     Text("Source: \(entry.item.source)")
                         .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
                 }
-                #endif
                 // Honesty floor: the RVOL detector is "unvalidated" and regime/seasonality carry
                 // their own caveats — the primary card already shows this (line ~165); the
                 // calendar row was the one path that dropped it (fix pass 2026-09-06). Stays
@@ -1131,6 +1172,49 @@ struct CatalystsSection: View {
 
     // MARK: - Pure helpers (nonisolated, unit-tested — CatalystsSectionTests)
 
+    // CROSS-PLATFORM (2026-09-12). These five were inside the `#if os(macOS)` below, so iOS
+    // rendered `item.headline` verbatim for a past-dated event: an earnings bar at now-45,000s
+    // showed "Earnings in ~0 days" under the "Today" heading, present tense, for a report that had
+    // already happened. `StockSageCatalystWatch` admits any date with
+    // `timeIntervalSince(now) >= -86_400`, so a report 0-24h past that fell on an earlier UTC
+    // civil day lands here. None of them touches AppKit or `Period`, so nothing else moves.
+    nonisolated static var catalystCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        return calendar
+    }
+
+    private nonisolated static func isReported(_ kind: StockSageCatalystWatch.Kind) -> Bool {
+        [.filing8K, .ratingChange, .guidanceChange, .insiderTrade].contains(kind)
+    }
+
+    private nonisolated static func isPastDay(_ date: Date, now: Date) -> Bool {
+        catalystCalendar.startOfDay(for: date) < catalystCalendar.startOfDay(for: now)
+    }
+
+    nonisolated static func eventStatus(_ entry: StockSageCatalystWatch.CalendarEntry,
+                                        now: Date) -> String {
+        if isReported(entry.item.kind) { return "Reported" }
+        if entry.isProjected {
+            return entry.item.date.map { isPastDay($0, now: now) } == true
+                ? "Projected from history — not announced · Date passed — outcome unverified"
+                : "Projected from history — not announced"
+        }
+        if entry.item.date.map({ isPastDay($0, now: now) }) == true {
+            return "Date passed — outcome unverified"
+        }
+        return "Scheduled / estimated"
+    }
+
+    nonisolated static func periodHeadline(_ item: StockSageCatalystWatch.Item, now: Date) -> String {
+        guard let date = item.date, isPastDay(date, now: now) else { return item.headline }
+        if item.kind == .earnings { return "Earnings date" }
+        if item.kind == .projectedEarnings { return "Projected earnings date" }
+        return item.headline
+    }
+
     #if os(macOS)
     nonisolated static func periodCountLabel(_ entries: [StockSageCatalystWatch.CalendarEntry]) -> String {
         let projected = entries.filter(\.isProjected).count
@@ -1142,14 +1226,6 @@ struct CatalystsSection: View {
         var scheduled: [StockSageCatalystWatch.CalendarEntry]
         var reported: [StockSageCatalystWatch.CalendarEntry]
         nonisolated var id: Date { day }
-    }
-
-    nonisolated static var catalystCalendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
-        calendar.firstWeekday = 2
-        calendar.minimumDaysInFirstWeek = 4
-        return calendar
     }
 
     nonisolated static func periodInterval(_ period: Period, now: Date) -> DateInterval {
@@ -1230,35 +1306,6 @@ struct CatalystsSection: View {
         return groups
     }
 
-    private nonisolated static func isReported(_ kind: StockSageCatalystWatch.Kind) -> Bool {
-        [.filing8K, .ratingChange, .guidanceChange, .insiderTrade].contains(kind)
-    }
-
-    private nonisolated static func isPastDay(_ date: Date, now: Date) -> Bool {
-        catalystCalendar.startOfDay(for: date) < catalystCalendar.startOfDay(for: now)
-    }
-
-    nonisolated static func eventStatus(_ entry: StockSageCatalystWatch.CalendarEntry,
-                                        now: Date) -> String {
-        if isReported(entry.item.kind) { return "Reported" }
-        if entry.isProjected {
-            return entry.item.date.map { isPastDay($0, now: now) } == true
-                ? "Projected from history — not announced · Date passed — outcome unverified"
-                : "Projected from history — not announced"
-        }
-        if entry.item.date.map({ isPastDay($0, now: now) }) == true {
-            return "Date passed — outcome unverified"
-        }
-        return "Scheduled / estimated"
-    }
-
-    nonisolated static func periodHeadline(_ item: StockSageCatalystWatch.Item, now: Date) -> String {
-        guard let date = item.date, isPastDay(date, now: now) else { return item.headline }
-        if item.kind == .earnings { return "Earnings date" }
-        if item.kind == .projectedEarnings { return "Projected earnings date" }
-        return item.headline
-    }
-
     private nonisolated static func periodAccessibilityLabel(
         _ entry: StockSageCatalystWatch.CalendarEntry, now: Date) -> String {
         [entry.idea.symbol, entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "No date",
@@ -1269,9 +1316,10 @@ struct CatalystsSection: View {
 
     nonisolated static func cardHeadline(_ item: StockSageCatalystWatch.Item,
                                          displayNow: Date?) -> String {
-        #if os(macOS)
+        // The `#if os(macOS)` that used to wrap this was the whole iOS defect: `periodHeadline`
+        // is pure and now cross-platform, so iOS printed the raw present-tense headline for an
+        // event whose date had already passed.
         if let displayNow { return periodHeadline(item, now: displayNow) }
-        #endif
         return item.headline
     }
 
