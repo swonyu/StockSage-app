@@ -2352,8 +2352,18 @@ struct MarketsView: View {
                               sub: "\(sb.openMarked) open marked", tint: .white)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
-                Text("The truth sits between the two. Only \(String(format: "%.0f%%", sb.resolvedFrac * 100)) has closed, and stops resolve before targets, so “closed only” over-states the loss; the full-book mark counts open positions at their current price (unrealized — they can still reverse). Both are typically ≈0 — the engine's value is risk-discipline, not a proven edge.")
+                Text("The truth sits between the two. Only \(String(format: "%.0f%%", sb.resolvedFrac * 100)) has closed, and stops resolve before targets, so “closed only” over-states the loss; the full-book mark counts open positions at their latest daily close (unrealized — they can still reverse). Both are typically ≈0 — the engine's value is risk-discipline, not a proven edge.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // DATE the full-book bound. The marks are daily closes, so on a weekend, a holiday,
+                // or a cache-served symbol one can be a week old — "current price" was simply false.
+                // Nil as-of fails CLOSED (says it cannot be verified) rather than implying today.
+                if let markLine = MarketsView.markAsOfLine(oldest: sb.oldestMarkAsOf,
+                                                           unknownCount: sb.marksWithUnknownAsOf,
+                                                           marked: sb.openMarked, now: Date()) {
+                    Text(markLine).font(.caption2)
+                        .foregroundStyle(sb.marksWithUnknownAsOf > 0 ? DS.Palette.warningSoft : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 // Week-over-week digest (owner request 2026-07-26 "more features"; the repeated
                 // "fake money update" question, answered where the numbers live). Same realized
                 // set and the same selection-bias caveat as the closed-only bound above.
@@ -5588,6 +5598,30 @@ struct MarketsView: View {
     /// the sheet's Copy-plan button uses — the card export can never disagree with the sheet.
     private func copyIdeaPlan(_ idea: StockSageIdea) {
                 PlatformClipboard.copy(fullPlanText(for: idea))
+    }
+
+    /// Dates the paper scoreboard's full-book bound. nil when there is nothing marked to date.
+    ///
+    /// The marks are DAILY CLOSES, not live prices: on a weekend, a holiday, or a cache-served
+    /// symbol (`isCacheFreshForToday` accepts a bar up to the 7-day staleness limit) the newest
+    /// close can be days old. An unknown as-of fails CLOSED — it says the age is unverified rather
+    /// than letting silence imply "today".
+    nonisolated static func markAsOfLine(oldest: Date?, unknownCount: Int, marked: Int,
+                                         now: Date) -> String? {
+        guard marked > 0 else { return nil }
+        if unknownCount >= marked {
+            return "Marked at each position's latest daily close — bar dates unavailable, so the age of this bound is unverified."
+        }
+        guard let oldest else { return nil }
+        let days = Int(now.timeIntervalSince(oldest) / 86_400)
+        let age: String
+        if days <= 0 { age = "today's close" }
+        else if days == 1 { age = "a close 1 day old" }
+        else { age = "a close \(days) days old" }
+        let unknownClause = unknownCount > 0
+            ? " \(unknownCount) of \(marked) mark(s) carried no bar date, so the book may be older still."
+            : ""
+        return "Oldest mark is \(age)." + unknownClause
     }
 
     /// The Signal-alerts panel's "held back" sentence, or nil when nothing was withheld.

@@ -1163,10 +1163,19 @@ final class StockSageStore: ObservableObject {
         // closed-only selection bias (fast stop-outs resolve first) is corrected. Latest close per
         // symbol, from THIS scan's histories.
         var latestClose: [String: Double] = [:]
+        var firstBarAt: [String: Date] = [:]
+        var markAsOf: [String: Date] = [:]
         for (sym, h) in histories {
             if let c = h.closes.last, c > 0 { latestClose[sym.uppercased()] = c }
+            // Oldest bar we have for this symbol: a position opened before it has an unverifiable
+            // entry basis, so the scoreboard leaves it unmarked rather than marking a dead basis.
+            if let first = h.dates.first { firstBarAt[sym.uppercased()] = first }
+            // As-of for the MARK itself: the date of the bar `latestClose` came from. NOT the scan
+            // clock and NOT the cache's savedAt — a cache-served symbol can carry a bar up to 7
+            // days old, which is exactly the class of defect already reported at MarketsView:799.
+            if let c = h.closes.last, c > 0, let last = h.dates.last { markAsOf[sym.uppercased()] = last }
         }
-        store.updateScoreboard(latestClose: latestClose)
+        store.updateScoreboard(latestClose: latestClose, firstBarAt: firstBarAt, markAsOf: markAsOf)
     }
 
     /// Re-fetch ONLY the symbols the last scan couldn't price and merge them in, re-ranking.

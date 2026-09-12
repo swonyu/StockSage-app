@@ -84,9 +84,18 @@ enum StockSagePaperTrader {
             // scale-invariant. Persisted via the returned record, so it happens once.
             // ponytail: raw ratio, not the exact split factor — residual intraday delta is a
             // few %, vs the 1300% error it prevents; exact factors would need a splits feed.
+            // UNVERIFIABLE BASIS: when `startIdx == 0` this window has NO bar at or before the
+            // open — every bar is later, so `closes[0]` is not the entry bar and the stored entry
+            // has nothing to be checked against. A genuine >=50% move since the open then reads as
+            // a split and rebases a REAL position onto a price it never traded at, stamping a
+            // corporate action that never happened. Falling through WITHOUT rebasing is worse:
+            // `simulateExit` walks from `j = entryIdx = 0` with stale-basis levels (the CLBK
+            // -13.5R fabrication) and counts the time stop from the window's start, not the open.
+            // Nothing about this trade is knowable from this history, so return it EXACTLY as it
+            // is — the same "unknown, nothing fabricated" contract as the guard above.
+            guard startIdx > 0 else { return t }
             var pos = t
-            let entryBarIdx = Swift.max(0, startIdx - 1)
-            let entryBarClose = closes[entryBarIdx]
+            let entryBarClose = closes[startIdx - 1]
             if entryBarClose > 0 {
                 let ratio = pos.entry / entryBarClose
                 if ratio > 1.5 || ratio < 0.67 {
@@ -181,22 +190,48 @@ enum StockSagePaperTrader {
     /// PURE + testable: `latestClose` (symbol→latest close) is passed in — the store builds it from
     /// the scan's histories. Unrealized R for a long = (close − entry) / (entry − stop). nil under 4
     /// evaluable trades (too thin for any read).
+    ///
+    /// `firstBarAt` (symbol -> the OLDEST bar date in that scan history) carries the basis check
+    /// `markToMarket` cannot make: a position opened BEFORE its own history window has no bar to
+    /// verify its stored entry against, so a corporate action in that gap would mark a dead basis
+    /// to a live close and fabricate a catastrophic unrealized R. Without it the fabrication just
+    /// relocates out of the rebase and into this optimistic bound. Unknown => the position is left
+    /// UNMARKED (dropped from the full-book bound), never marked on a guess. A symbol absent from
+    /// `firstBarAt` is treated as markable, exactly as before.
     nonisolated static func scoreboard(_ trades: [TradeRecord],
-                                       latestClose: [String: Double]) -> PaperForwardScoreboard? {
+                                       latestClose: [String: Double],
+                                       firstBarAt: [String: Date] = [:],
+                                       markAsOf: [String: Date] = [:]) -> PaperForwardScoreboard? {
         let realized = trades.filter { !$0.isOpen }.compactMap { $0.realizedR }
         var full = realized
         var marked = 0
+        // PROVENANCE OF THE MARKS. Each mark is a DAILY CLOSE as of its own bar's date — NOT a live
+        // price and not the scan clock. On a weekend, a holiday, or a cache-served symbol
+        // (StockSageScanChunking.isCacheFreshForToday accepts a bar up to HistoryCache.isStale's
+        // 7 days) that close can be a week old. Carry the OLDEST dated mark plus a count of marks
+        // that arrived with no date, so every surface DATES this bound instead of calling it a
+        // current price. Unknown stays unknown — never a guessed or substituted date.
+        var oldestAsOf: Date?
+        var unknownAsOf = 0
         for t in trades where t.isOpen && t.side == .long {
             guard let c = latestClose[t.symbol.uppercased()], c > 0, t.entry != t.stop else { continue }
+            // Opened BEFORE this symbol's oldest bar => the entry basis is unverifiable (see above).
+            if let first = firstBarAt[t.symbol.uppercased()], t.openedAt < first { continue }
             full.append((c - t.entry) / (t.entry - t.stop))   // unrealized R at the latest close
             marked += 1
+            if let asOf = markAsOf[t.symbol.uppercased()] {
+                oldestAsOf = oldestAsOf.map { Swift.min($0, asOf) } ?? asOf
+            } else {
+                unknownAsOf += 1
+            }
         }
         guard full.count >= 4 else { return nil }
         func avg(_ a: [Double]) -> Double { a.isEmpty ? 0 : a.reduce(0, +) / Double(a.count) }
         func win(_ a: [Double]) -> Double { a.isEmpty ? 0 : Double(a.filter { $0 > 0 }.count) / Double(a.count) }
         return PaperForwardScoreboard(realizedN: realized.count, realizedAvgR: avg(realized),
                                       realizedWinRate: win(realized), fullN: full.count,
-                                      fullAvgR: avg(full), fullWinRate: win(full), openMarked: marked)
+                                      fullAvgR: avg(full), fullWinRate: win(full), openMarked: marked,
+                                      oldestMarkAsOf: oldestAsOf, marksWithUnknownAsOf: unknownAsOf)
     }
 }
 
@@ -211,6 +246,13 @@ struct PaperForwardScoreboard: Sendable, Equatable {
     let fullAvgR: Double
     let fullWinRate: Double
     let openMarked: Int
+    /// Oldest BAR DATE among the still-open marks — nil when no marked open carried a date. The marks
+    /// are daily closes, so this is the honest as-of for the full-book bound; a surface that cannot
+    /// read a date here must say the age is unverified rather than implying a live price.
+    let oldestMarkAsOf: Date?
+    /// How many of `openMarked` arrived with NO bar date. > 0 ⇒ the book may be older than
+    /// `oldestMarkAsOf` suggests, and the surface must disclose that rather than round it off.
+    let marksWithUnknownAsOf: Int
     /// Fraction of the evaluable book that has actually RESOLVED (closed). Low ⇒ the closed-only read
     /// is heavily selection-biased and the full-book mark carries most of the weight.
     nonisolated var resolvedFrac: Double { fullN > 0 ? Double(realizedN) / Double(fullN) : 0 }
@@ -278,9 +320,13 @@ final class StockSagePaperTradeStore: ObservableObject {
 
     /// Recompute the scoreboard from the latest per-symbol closes (the scan's histories). Called from
     /// `StockSageStore.updatePaperTrades` where those histories are in hand.
-    func updateScoreboard(latestClose: [String: Double]) {
+    /// No default on `firstBarAt` deliberately: the one live call site must not be able to forget
+    /// the basis check and silently reintroduce the fabricated mark.
+    func updateScoreboard(latestClose: [String: Double], firstBarAt: [String: Date],
+                          markAsOf: [String: Date]) {
         guard hasLoadedRecords else { scoreboard = nil; return }
-        scoreboard = StockSagePaperTrader.scoreboard(trades, latestClose: latestClose)
+        scoreboard = StockSagePaperTrader.scoreboard(trades, latestClose: latestClose,
+                                                     firstBarAt: firstBarAt, markAsOf: markAsOf)
     }
 
     func hasOpen(symbol: String) -> Bool {
