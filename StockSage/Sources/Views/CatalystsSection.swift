@@ -79,7 +79,9 @@ struct CatalystsSection: View {
     /// `label(for:sourceCount:)`) alongside the paragraph it actually backed.
     @State private var narrationSources: [String: [StockSageCatalystNarrator.CitedSource]] = [:]
     @State private var narrationNews: [String: StockSageNewsService.Observation] = [:]
-    @State private var filings: [String: [StockSageDisclosureService.Filing]] = [:]
+    /// The OUTCOME of the last filings check per symbol, not just its rows: a denied or failed
+    /// fetch also yields zero filings, and this view must not print that as "nothing was filed".
+    @State private var filingsOutcome: [String: StockSageDisclosureService.FilingsObservation] = [:]
     @State private var filingsLoading: Set<String> = []
     @State private var filingsFetched: Set<String> = []
 
@@ -668,14 +670,24 @@ struct CatalystsSection: View {
     private func filingsPanel(_ symbol: String) -> some View {
         if filingsLoading.contains(symbol) {
             ProgressView().controlSize(.small)
-        } else if let items = filings[symbol] {
-            if items.isEmpty {
+        } else if let observation = filingsOutcome[symbol] {
+            // The FAILED branch is tested FIRST on purpose: a denied or never-completed fetch
+            // returns the same zero rows as a company that filed nothing, so ordering the
+            // empty-list branch ahead of it would print a negative finding for a check that did
+            // not run. "SEC EDGAR" names the direct submissions feed, distinct from the
+            // "Massive/SEC 8-K" line `companyFeedCoverage` renders over a different window.
+            if case .unavailable(let failure) = observation.outcome {
+                Text("SEC EDGAR 8-K: unavailable at \(StockSageCatalystWatch.dateStr(observation.checkedAt)), "
+                     + "not an empty result. " + failure.message)
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if observation.filings.isEmpty {
                 Text("No 8-K found in the window we looked at — that is not evidence that nothing was filed.")
                     .font(.system(size: font11)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(items.prefix(5)) { filing in
+                    ForEach(observation.filings.prefix(5)) { filing in
                         let when = StockSageDisclosureService.publicFor(filing)
                             ?? filing.filingDate.formatted(date: .abbreviated, time: .omitted)
                         Text("8-K · \(filing.itemDescriptions.joined(separator: ", ")) · \(when)")
@@ -836,10 +848,15 @@ struct CatalystsSection: View {
         filingsLoading.insert(symbol)
         Task {
             defer { filingsLoading.remove(symbol) }
-            let found = await StockSageDisclosureService.recentFilings(for: symbol, forms: ["8-K"], limit: 5)
-            guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
-            filings[symbol] = found
-            filingsFetched.insert(symbol)
+            let observation = await StockSageDisclosureService.recentFilingsObservation(
+                for: symbol, forms: ["8-K"], limit: 5)
+            guard !Task.isCancelled else { return }
+            // Always publish the outcome — INCLUDING the policy denial, which is why the button
+            // used to do nothing at all. Only an ANSWERED check is cached: an unavailable one
+            // leaves `filingsFetched` alone so the next expand retries, instead of freezing a
+            // failure into a permanent "nothing was filed".
+            filingsOutcome[symbol] = observation
+            if case .answered = observation.outcome { filingsFetched.insert(symbol) }
         }
     }
 

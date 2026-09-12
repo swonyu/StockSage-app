@@ -151,12 +151,70 @@ enum StockSageDisclosureService {
 
     // MARK: Public fetch
 
-    /// Recent public filings for a symbol, newest first.
+    /// What a filings check actually DID. `recentFilings` cannot express this: a policy denial,
+    /// a dead network and "this company filed no 8-K in the window" all arrive as `[]`, and a UI
+    /// that renders the first two as the third states a check it never made.
+    struct FilingsObservation: Sendable, Equatable {
+        enum Outcome: Sendable, Equatable { case answered, unavailable(Failure) }
+        /// Only fixed categories may reach the UI — never a raw error, URL or response body.
+        /// `get` collapses status codes, transport errors and oversize bodies into one nil, so
+        /// this taxonomy says exactly what is knowable here and no more.
+        enum Failure: Sendable, Equatable {
+            case externalAccessDisabled, cancelled, noCIK, unreachable, invalidPayload
+            var message: String {
+                switch self {
+                case .externalAccessDisabled: StockSageMassiveEvents.Failure.externalAccessDisabled.message
+                case .cancelled: StockSageMassiveEvents.Failure.cancelled.message
+                case .noCIK: "No SEC CIK for this ticker, or the CIK map could not be loaded; no filings were read."
+                case .unreachable: "The SEC submissions request did not return a usable response."
+                case .invalidPayload: StockSageMassiveEvents.Failure.invalidPayload.message
+                }
+            }
+        }
+        let checkedAt: Date
+        let outcome: Outcome
+        let filings: [Filing]
+    }
+
+    /// Recent public filings for a symbol, newest first, WITH the outcome of the check.
     ///
-    /// Returns `[]` — never throws — when external access is off, the ticker has no
-    /// CIK (non-US listings are absent from the SEC map), or the feed is unreachable.
-    /// An empty list means "nothing to show", NOT "nothing was filed": callers must
-    /// not render absence as evidence that a company has disclosed nothing.
+    /// Never throws. An `.answered` observation with an empty `filings` means "we looked and found
+    /// nothing in the window" — still not proof that nothing was filed. Every other outcome is
+    /// `.unavailable`, which callers must render as a failed check, never as a negative result,
+    /// and must not cache as a completed one.
+    static func recentFilingsObservation(for symbol: String,
+                                         forms: Set<String> = ["8-K"],
+                                         limit: Int = 20,
+                                         map: CIKMap = .shared,
+                                         transport: @escaping Transport = Self.transport,
+                                         allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed },
+                                         now: Date = Date()) async -> FilingsObservation {
+        func unavailable(_ failure: FilingsObservation.Failure) -> FilingsObservation {
+            FilingsObservation(checkedAt: now, outcome: .unavailable(failure), filings: [])
+        }
+        guard !Task.isCancelled else { return unavailable(.cancelled) }
+        guard allowed() else { return unavailable(.externalAccessDisabled) }
+        guard limit > 0, !forms.isEmpty else { return unavailable(.noCIK) }
+        guard let cik = await map.cik(for: symbol, allowed: allowed),
+              let url = URL(string: "https://data.sec.gov/submissions/CIK\(cik).json")
+        else {
+            if Task.isCancelled { return unavailable(.cancelled) }
+            return unavailable(allowed() ? .noCIK : .externalAccessDisabled)
+        }
+        guard let data = await get(url, transport: transport, allowed: allowed) else {
+            if Task.isCancelled { return unavailable(.cancelled) }
+            return unavailable(allowed() ? .unreachable : .externalAccessDisabled)
+        }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return unavailable(.invalidPayload)
+        }
+        return FilingsObservation(checkedAt: now, outcome: .answered,
+                                  filings: parseFilings(root, cik: cik, forms: forms, limit: limit))
+    }
+
+    /// Thin wrapper kept UNCHANGED in signature and contract: `hasDisclosure` calls it, and
+    /// StockSageSECRequestTests:153 asserts `.isEmpty` on failure. Anything that must tell a
+    /// failed check from an empty one uses `recentFilingsObservation` instead.
     static func recentFilings(for symbol: String,
                               forms: Set<String> = ["8-K"],
                               limit: Int = 20,
