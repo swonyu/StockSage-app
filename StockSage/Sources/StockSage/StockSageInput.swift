@@ -19,6 +19,12 @@ import Foundation
 //     multiple periods) → nil (reject honestly rather than fabricate a number).
 
 enum StockSageInput {
+    nonisolated static func journalTargetIsValid(_ text: String, entry: Double, isLong: Bool) -> Bool {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        guard let target = positiveAmount(text) else { return false }
+        return isLong ? target > entry : target < entry
+    }
+
     /// Normalize a numeric string to a `Double`-parseable form, or nil if its comma usage is
     /// ambiguous/malformed. Grouping-aware (see the F10 note above). Non-comma input is returned
     /// unchanged (period-decimal, sign, and malformed strings are left for `Double`/`Int` to judge).

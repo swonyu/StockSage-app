@@ -8,6 +8,31 @@ struct StockSageEarningsTests {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @MainActor @Test func changedCredentialRechecksFreshCatalystAndDiscardsLatePublication() async throws {
+        let suite = "earnings.credential.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let key = "stocksage.massive.credentialRevision"
+        let answer = StockSageCatalystChain.Outcome(earningsDate: now.addingTimeInterval(86400), dateRangeEnd: nil,
+            confirmed: true, status: .dateKnown, source: "synthetic", sourcesAsked: ["synthetic"],
+            projectionBasis: nil, anySourceAnswered: true)
+        defaults.set("A", forKey: key)
+        await store.refreshCatalyst(symbol: "AAPL", now: now, allowed: { true }, resolve: { _, _ in answer })
+        var calls = 0
+        await store.refreshCatalyst(symbol: "AAPL", now: now, allowed: { true }, resolve: { _, _ in calls += 1; return answer })
+        #expect(calls == 0)
+        defaults.set("B", forKey: key)
+        await store.refreshCatalyst(symbol: "AAPL", now: now, allowed: { true }, resolve: { _, _ in
+            calls += 1; defaults.set("C", forKey: key); return answer
+        })
+        #expect(calls == 1 && store.catalystChain["AAPL"]?.credentialRevision == "A")
+        await store.refreshCatalyst(symbol: "AAPL", now: now, allowed: { true }, resolve: { _, _ in calls += 1; return answer })
+        #expect(calls == 2 && store.catalystChain["AAPL"]?.credentialRevision == "C")
+        let data = try JSONEncoder().encode(#require(store.catalystChain["AAPL"]))
+        #expect(try JSONDecoder().decode(StockSageCatalystRecordCache.Record.self, from: data).credentialRevision == "C")
+    }
+
     @Test @MainActor func laterStartedCatalystRequestOwnsPublication() async throws {
         let suite = "earnings.ownership.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

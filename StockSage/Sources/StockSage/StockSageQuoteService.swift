@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // MARK: - StockSageQuoteService
 //
@@ -130,7 +131,7 @@ enum StockSageQuoteService {
         // See StockSageMassive: a cached 200 would replay a stale quote as live.
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
         req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        guard let data = await get(req), let parsed = parseChart(data) else { return nil }
+        guard let data = await get(req), let parsed = parseChart(data, requestedSymbol: symbol) else { return nil }
         // Preserve the symbol we *asked* for so it maps back to the curated market
         // label (Yahoo echoes its own canonical symbol, which can differ in case). Carry
         // marketTime through — dropping it silently disabled ALL downstream staleness/banner
@@ -172,12 +173,13 @@ enum StockSageQuoteService {
     /// with a `chartPreviousClose` fallback (indices often carry only the latter).
     /// A non-positive or non-finite previousClose is treated exactly like a MISSING
     /// one (falls back to `price`, sets `isNewListing`) — never fabricated as a real 0%.
-    static func parseChart(_ data: Data) -> LiveQuote? {
+    static func parseChart(_ data: Data, requestedSymbol: String? = nil) -> LiveQuote? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let chart = root["chart"] as? [String: Any],
               let results = chart["result"] as? [[String: Any]],
               let meta = results.first?["meta"] as? [String: Any],
               let symbol = meta["symbol"] as? String else { return nil }
+        if let requestedSymbol, symbol.uppercased() != requestedSymbol.uppercased() { return nil }
 
         guard let price = number(meta["regularMarketPrice"]), price > 0 else { return nil }
         // A non-positive previousClose (a feed row carrying 0, or corrupt negative data) is exactly
@@ -308,6 +310,11 @@ enum StockSageQuoteService {
               let highs = quote["high"] as? [Any],
               let lows = quote["low"] as? [Any],
               let closes = quote["close"] as? [Any] else { return nil }
+        // Legacy cached fixtures may omit identity; an explicit identity must never contradict
+        // the requested instrument before its bars are labelled with that request.
+        if let raw = (result["meta"] as? [String: Any])?["symbol"] {
+            guard let echoed = raw as? String, echoed.uppercased() == symbol.uppercased() else { return nil }
+        }
         let volumes = (quote["volume"] as? [Any]) ?? []
         let n = timestamps.count
         guard n > 0, opens.count == n, highs.count == n, lows.count == n, closes.count == n else { return nil }
@@ -335,6 +342,7 @@ enum StockSageQuoteService {
     /// Double — `JSONSerialization` hands numbers back as `NSNumber`, and a few
     /// fields occasionally arrive as strings.
     private nonisolated static func number(_ any: Any?) -> Double? {
+        if let number = any as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
         let value: Double?
         switch any {
         case let d as Double:   value = d

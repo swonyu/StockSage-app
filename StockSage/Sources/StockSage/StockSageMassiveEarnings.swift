@@ -23,10 +23,7 @@ enum StockSageMassiveEarnings {
         return f
     }()
     private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
-    private static var unavailableUntil: Date? {
-        get { UserDefaults.standard.object(forKey: "stocksage.massive.earningsUnavailableUntil") as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: "stocksage.massive.earningsUnavailableUntil") }
-    }
+    private static let gateKey = "stocksage.massive.earningsUnavailableUntil"
 
     nonisolated static func request(symbol: String, now: Date, key: String, limit: Int = 100) -> URLRequest? {
         guard StockSageMassive.covers(symbol), !key.isEmpty, (1...100).contains(limit),
@@ -87,28 +84,33 @@ enum StockSageMassiveEarnings {
     /// rejection is cached. No response, request URL, token or headers are logged.
     static func probeAvailability() async {
         let now = Date()
+        let revision = StockSageMassive.credentialRevision()
         guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              isAvailable(unavailableUntil: unavailableUntil, now: now),
+              isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey, defaults: .standard), now: now),
               let req = request(symbol: "AAPL", now: now, key: StockSageMassive.apiKey, limit: 1) else { return }
-        _ = await get(req)
+        _ = await get(req, revision: revision)
     }
 
     static func fetch(_ symbol: String, now: Date = Date()) async -> StockSageCatalystChain.Answer<Row?> {
+        let revision = StockSageMassive.credentialRevision()
         guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              isAvailable(unavailableUntil: unavailableUntil, now: now),
+              isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey, defaults: .standard), now: now),
               let req = request(symbol: symbol, now: now, key: StockSageMassive.apiKey),
-              let (data, status) = await get(req), status == 200 else { return .unavailable }
+              let (data, status) = await get(req, revision: revision), status == 200 else { return .unavailable }
         do { return .answered(try parseNext(data, symbol: symbol, now: now)) }
         catch { return .unavailable }
     }
 
-    private static func get(_ request: URLRequest) async -> (Data, Int)? {
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              let (data, response) = try? await session.data(for: request),
-              !Task.isCancelled, ToolPolicy.isExternalAllowed,
+    static func get(_ request: URLRequest, revision: String?, defaults: UserDefaults = .standard,
+                    allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+                    transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> (Data, Int)? {
+        guard allowed(), !Task.isCancelled, revision == StockSageMassive.credentialRevision(defaults),
+              isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey, defaults: defaults), now: Date()),
+              let (data, response) = try? await (transport ?? { try await session.data(for: $0) })(request),
+              !Task.isCancelled, allowed(), revision == StockSageMassive.credentialRevision(defaults),
               let response = response as? HTTPURLResponse else { return nil }
         if let until = availabilityOutcome(statusCode: response.statusCode, now: Date()) {
-            unavailableUntil = until
+            StockSageMassiveCredential.recordDenial(until, gate: gateKey, revision: revision, defaults: defaults)
         }
         return (data, response.statusCode)
     }

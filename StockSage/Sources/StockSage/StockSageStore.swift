@@ -309,6 +309,8 @@ final class StockSageStore: ObservableObject {
 
     // User-set price alerts (target levels), persisted as JSON.
     @Published private(set) var priceAlerts: [PriceAlert] = []
+    @Published private(set) var priceAlertsPersistenceError: String?
+    private var pendingPriceAlertTriggers: [UUID: Date] = [:]
     private static let priceAlertsKey = "stocksage_price_alerts"
 
     /// Single home for "what symbols are tracked" (board ∪ watchlist ∪ portfolio ∪ open
@@ -351,7 +353,8 @@ final class StockSageStore: ObservableObject {
         self.defaults = defaults
         self.heldSymbols = heldSymbols
         userSymbols = (defaults.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
-        priceAlerts = Self.loadPriceAlerts(from: defaults)
+        do { priceAlerts = try Self.loadPriceAlerts(from: defaults) }
+        catch { priceAlertsPersistenceError = "Saved price alerts could not be read. They were preserved; recover the saved alerts before editing or monitoring." }
         // Absent key ⇒ false ⇒ the opt-in default is unchanged on a first run.
         alertsEnabled = defaults.bool(forKey: Self.alertsEnabledKey)
     }
@@ -410,11 +413,11 @@ final class StockSageStore: ObservableObject {
 
     // MARK: Price alerts (user-set target levels)
 
-    private static func loadPriceAlerts(from defaults: UserDefaults) -> [PriceAlert] {
+    private static func loadPriceAlerts(from defaults: UserDefaults) throws -> [PriceAlert] {
         // Preserve baseline loading: backup validation must not hide decodable saved records.
-        guard let data = defaults.data(forKey: priceAlertsKey),
-              let decoded = try? JSONDecoder().decode([PriceAlert].self, from: data) else { return [] }
-        return decoded
+        guard let stored = defaults.object(forKey: priceAlertsKey) else { return [] }
+        guard let data = stored as? Data else { throw CocoaError(.fileReadCorruptFile) }
+        return try JSONDecoder().decode([PriceAlert].self, from: data)
     }
 
     private static func readPriceAlerts(from defaults: UserDefaults) throws -> [PriceAlert] {
@@ -427,43 +430,91 @@ final class StockSageStore: ObservableObject {
         return decoded
     }
 
-    private func savePriceAlerts() {
-        if let data = try? JSONEncoder().encode(priceAlerts) {
-            defaults.set(data, forKey: Self.priceAlertsKey)
+    private func applyingPendingTriggers(to records: [PriceAlert]) -> [PriceAlert] {
+        records.map { record in
+            var updated = record
+            if updated.triggeredAt == nil, let date = pendingPriceAlertTriggers[updated.id] { updated.triggeredAt = date }
+            return updated
         }
     }
 
-    func addPriceAlert(symbol: String, target: Double, direction: PriceAlert.Direction) {
+    /// Read the committed collection before any edit. Corruption is not an empty collection.
+    private func mutatePriceAlerts(_ change: (inout [PriceAlert]) -> Bool) -> Bool {
+        do {
+            var records = applyingPendingTriggers(to: try Self.loadPriceAlerts(from: defaults))
+            let changed = change(&records)
+            let data = try JSONEncoder().encode(records)
+            defaults.set(data, forKey: Self.priceAlertsKey)
+            priceAlerts = records
+            pendingPriceAlertTriggers = [:]
+            priceAlertsPersistenceError = nil
+            return changed
+        } catch {
+            priceAlertsPersistenceError = "Price alerts could not be saved. Existing storage was preserved; recover saved alerts before editing or monitoring."
+            return false
+        }
+    }
+
+    func priceAlertsForMonitoring() -> [PriceAlert] {
+        do {
+            let records = try Self.loadPriceAlerts(from: defaults)
+            if !pendingPriceAlertTriggers.isEmpty {
+                // Recovery must save accepted deliveries before resuming, not wait for an Add.
+                guard mutatePriceAlerts({ _ in true }) else { return [] }
+                return priceAlerts
+            }
+            if priceAlerts != records { priceAlerts = records }
+            if priceAlertsPersistenceError != nil { priceAlertsPersistenceError = nil }
+            return records
+        }
+        catch {
+            let message = "Saved price alerts could not be read. Monitoring these alerts is paused; existing storage was preserved."
+            // Background retries must not reopen the same modal. User mutations still report each failure.
+            if priceAlertsPersistenceError != message { priceAlertsPersistenceError = message }
+            return []
+        }
+    }
+
+    @discardableResult func addPriceAlert(symbol: String, target: Double, direction: PriceAlert.Direction) -> Bool {
         let up = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !up.isEmpty, target > 0 else { return }
+        guard !up.isEmpty, target > 0, target.isFinite else { return false }
         // Dedupe: don't stack an identical armed alert (a card's bell can be tapped twice).
-        guard !priceAlerts.contains(where: {
-            $0.isArmed && $0.symbol == up && $0.target == target && $0.direction == direction
-        }) else { return }
-        priceAlerts.append(PriceAlert(symbol: up, target: target, direction: direction))
-        savePriceAlerts()
+        return mutatePriceAlerts { records in
+            guard !records.contains(where: {
+                $0.isArmed && $0.symbol == up && $0.target == target && $0.direction == direction
+            }) else { return false }
+            records.append(PriceAlert(symbol: up, target: target, direction: direction))
+            return true
+        }
     }
 
     func removePriceAlert(_ id: UUID) {
-        priceAlerts.removeAll { $0.id == id }
-        savePriceAlerts()
+        _ = mutatePriceAlerts { records in
+            let count = records.count
+            records.removeAll { $0.id == id }
+            return records.count != count
+        }
     }
 
     /// Re-arm with a new one-shot ID so an old in-flight cycle cannot fire or latch this arm.
     func resetPriceAlert(_ id: UUID) {
-        guard let i = priceAlerts.firstIndex(where: { $0.id == id }) else { return }
-        priceAlerts[i] = priceAlerts[i].rearmed()
-        savePriceAlerts()
+        _ = mutatePriceAlerts { records in
+            guard let i = records.firstIndex(where: { $0.id == id }) else { return false }
+            records[i] = records[i].rearmed()
+            return true
+        }
     }
 
     /// Mark alerts triggered (one-shot). Called by the Monitor after it fires them.
     func markPriceAlertsTriggered(_ ids: [UUID], at when: Date = Date()) {
         guard !ids.isEmpty else { return }
         let set = Set(ids)
+        for id in ids { pendingPriceAlertTriggers[id] = when }
+        // Delivery already happened: retain its latch even if the disk becomes unreadable.
         for i in priceAlerts.indices where set.contains(priceAlerts[i].id) {
             priceAlerts[i].triggeredAt = when
         }
-        savePriceAlerts()
+        _ = mutatePriceAlerts { _ in true }
     }
 
     /// Pure reconcile step for the new-listing badge set (L3-03, 2026-07-07 audit). Given the
@@ -750,7 +801,7 @@ final class StockSageStore: ObservableObject {
     /// Memory-only IDs may have been deleted/rearmed by another writer, so never resurrect them.
     func preparePriceAlertBackupImport(_ incoming: [PriceAlert]) throws -> (added: Int, apply: () -> Void) {
         let disk = try Self.readPriceAlerts(from: defaults)
-        var merged = disk
+        var merged = applyingPendingTriggers(to: disk)
         var ids = Set(merged.map(\.id))
         let additions = incoming.filter { ids.insert($0.id).inserted }
         merged.append(contentsOf: additions)
@@ -759,6 +810,8 @@ final class StockSageStore: ObservableObject {
         return (additions.count, {
             self.defaults.set(data, forKey: Self.priceAlertsKey)
             self.priceAlerts = records
+            self.pendingPriceAlertTriggers = [:]
+            self.priceAlertsPersistenceError = nil
         })
     }
 
@@ -997,8 +1050,7 @@ final class StockSageStore: ObservableObject {
         updatePaperTrades(ideas: finalRanked, histories: paperHistories)
         // Populate earnings for EVERY tracked symbol (non-blocking), not just the board's top
         // names (A4, 2026-09-06) — TTL-cached per symbol, so this is cheap after the first sweep.
-        earningsSweepTask?.cancel()
-        earningsSweepTask = Task { [weak self] in await self?.refreshEarningsForTracked() }
+        restartEarningsSweep()
         // Same for seasonality — the TOM rank tilt must not depend on which sheets were opened.
         Task { await refreshSeasonalityForTopIdeas() }
         ideasUpdated = Date()
@@ -1939,14 +1991,20 @@ final class StockSageStore: ObservableObject {
         analyticsError = nil
 
         async let gspcHistory = StockSageQuoteService.fetchHistory("^GSPC", range: "1y")
-        let histories = await StockSageQuoteService.fetchHistories(for: positions.map(\.symbol))
+        let histories = await StockSageQuoteService.fetchHistories(for: StockSagePortfolio.holdingBySymbol(in: positions).keys.sorted())
+        await applyPortfolioAnalytics(positions: positions, histories: histories, benchmark: gspcHistory)
+    }
 
+    /// Shared assembly seam: tests supply histories, never owner holdings or provider requests.
+    func applyPortfolioAnalytics(positions: [PortfolioPosition], histories: [String: StockSagePriceHistory],
+                                 benchmark: StockSagePriceHistory?) async {
+        let holdings = StockSagePortfolio.holdingBySymbol(in: positions).values.sorted { $0.symbol < $1.symbol }
         // Build DATED returns per holding so co-movement stats can align by calendar
         // day, not array position — holdings span exchanges with different holidays.
         var symbols: [String] = []
         var weights: [Double] = []
         var datedHoldingReturns: [[(date: Date, ret: Double)]] = []
-        for p in positions {
+        for p in holdings {
             guard let h = histories[p.symbol.uppercased()], let price = h.latestClose else { continue }
             let dr = StockSagePortfolioAnalytics.datedReturns(dates: h.dates, closes: h.closes)
             guard !dr.isEmpty else { continue }
@@ -1964,24 +2022,24 @@ final class StockSageStore: ObservableObject {
             return
         }
 
-        let marketDated = (await gspcHistory).map {
+        let marketDated = benchmark.map {
             StockSagePortfolioAnalytics.datedReturns(dates: $0.dates, closes: $0.closes)
         } ?? []
 
-        // Align every holding (and the market when present) to their common days.
-        let toAlign = marketDated.isEmpty ? datedHoldingReturns : datedHoldingReturns + [marketDated]
-        let aligned = StockSagePortfolioAnalytics.alignByDate(toAlign)
-        let holdingVecs = marketDated.isEmpty ? aligned : Array(aligned.dropLast())
-        let marketVec = marketDated.isEmpty ? [] : (aligned.last ?? [])
+        // A benchmark's holidays must not erase a holding's real returns from risk statistics.
+        let holdingVecs = StockSagePortfolioAnalytics.alignByDate(datedHoldingReturns)
 
         // Analytics suite over date-aligned data: rebuild pseudo-closes (cumulative
         // product of 1+ret) so compute()'s closes path runs on the aligned returns.
-        let alignedHoldings: [(weight: Double, closes: [Double])] = zip(weights, holdingVecs).map { w, rets in
-            var closes: [Double] = [100]
-            for r in rets { closes.append(closes[closes.count - 1] * (1 + r)) }
-            return (weight: w, closes: closes)
+        func weightedCloses(_ vectors: [[Double]]) -> [(weight: Double, closes: [Double])] {
+            zip(weights, vectors).map { w, rets in
+                var closes: [Double] = [100]
+                for r in rets { closes.append(closes[closes.count - 1] * (1 + r)) }
+                return (weight: w, closes: closes)
+            }
         }
-        let attemptedCount = positions.count   // capture the Int, not the array, in the detached task
+        let alignedHoldings = weightedCloses(holdingVecs)
+        let attemptedCount = holdings.count   // Unique instruments, not storage lots.
         let computed = await Task.detached {
             StockSagePortfolioAnalytics.compute(holdings: alignedHoldings, attempted: attemptedCount)
         }.value
@@ -2006,7 +2064,9 @@ final class StockSageStore: ObservableObject {
         }
 
         // Beta: value-weighted portfolio vs the SAME-DAY market vector.
-        let port = StockSagePortfolioAnalytics.portfolioReturns(holdings: alignedHoldings)
+        let betaAligned = StockSagePortfolioAnalytics.alignByDate(datedHoldingReturns + [marketDated])
+        let marketVec = betaAligned.last ?? []
+        let port = StockSagePortfolioAnalytics.portfolioReturns(holdings: weightedCloses(Array(betaAligned.dropLast())))
         portfolioBeta = (port.isEmpty || marketVec.isEmpty)
             ? nil : StockSagePortfolioAnalytics.beta(portfolio: port, market: marketVec)
     }
@@ -2174,33 +2234,35 @@ final class StockSageStore: ObservableObject {
     /// in flight, five serial feed passes; earnings never wait for this independent sweep.
     func refreshCompanyEvents() async {
         guard !Self.isRunningTests, ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        let revision = StockSageMassive.credentialRevision(defaults) ?? ""
+        func current() -> Bool { revision == (StockSageMassive.credentialRevision(defaults) ?? "") }
         let generation = UUID()
         companyEventGeneration = generation
         let symbols = trackedSymbolsUnion.filter(StockSageMassive.covers)
         let allowed = Set(symbols)
         companyEventChecks = companyEventChecks.filter { allowed.contains($0.key) }
         defer {
-            if companyEventGeneration == generation {
+            if companyEventGeneration == generation, current() {
                 companyEventCacheSaved = StockSageCompanyEventCache(entries: companyEventChecks.values.flatMap { $0.values }).save()
             }
         }
         for feed in StockSageMassiveEvents.Feed.allCases {
             let now = Date()
-            let due = symbols.filter { companyEventChecks[$0]?[feed]?.fresh(at: now) != true }
+            let due = symbols.filter { companyEventChecks[$0]?[feed]?.fresh(at: now, credentialRevision: revision) != true }
             guard !due.isEmpty else { continue }
             let failure = await StockSageMassiveEvents.probe(feed)
-            guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
+            guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation, current() else { return }
             if let failure {
                 var updated = companyEventChecks
                 for symbol in due {
                     updated[symbol, default: [:]][feed] = .init(symbol: symbol, feed: feed, checkedAt: now,
-                                                              outcome: .unavailable, event: nil, failure: failure)
+                                                              outcome: .unavailable, event: nil, failure: failure, credentialRevision: revision)
                 }
                 companyEventChecks = updated
                 continue
             }
             for start in stride(from: 0, to: due.count, by: 4) {
-                guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
+                guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation, current() else { return }
                 let chunk = Array(due[start..<min(start + 4, due.count)])
                 let records = await withTaskGroup(of: StockSageMassiveEvents.Observation.self, returning: [StockSageMassiveEvents.Observation].self) { group in
                     for symbol in chunk { group.addTask { await StockSageMassiveEvents.fetch(feed, symbol: symbol) } }
@@ -2208,7 +2270,7 @@ final class StockSageStore: ObservableObject {
                     for await record in group { results.append(record) }
                     return results
                 }
-                guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation else { return }
+                guard !Task.isCancelled, ToolPolicy.isExternalAllowed, companyEventGeneration == generation, current() else { return }
                 var updated = companyEventChecks
                 for record in records { updated[record.symbol, default: [:]][feed] = record }
                 companyEventChecks = updated
@@ -2296,7 +2358,11 @@ final class StockSageStore: ObservableObject {
             }
             return
         }
-        guard Self.shouldRefreshEarnings(checkedAt: catalystChain[up]?.checkedAt, now: now) else { return }
+        let revision = StockSageMassive.credentialRevision(defaults) ?? ""
+        let isUS = StockSageMassive.covers(up)
+        func current() -> Bool { revision == (StockSageMassive.credentialRevision(defaults) ?? "") }
+        guard (isUS && catalystChain[up]?.credentialRevision != revision)
+            || Self.shouldRefreshEarnings(checkedAt: catalystChain[up]?.checkedAt, now: now) else { return }
         guard allowed() else { return }   // never stamp on a request never made
         let request = UUID()
         catalystRequests[up] = request
@@ -2304,12 +2370,11 @@ final class StockSageStore: ObservableObject {
 
         if let resolve {
             let outcome = await resolve(up, now)
-            guard catalystRequests[up] == request else { return }
-            publishCatalyst(outcome, symbol: up, checkedAt: now, allowed: allowed)
+            guard catalystRequests[up] == request, current() else { return }
+            publishCatalyst(outcome, symbol: up, checkedAt: now, credentialRevision: revision, allowed: allowed)
             return
         }
 
-        let isUS = StockSageMassive.covers(up)
         let history: (() async -> StockSageCatalystChain.Answer<[Date]>)?
         if isUS {
             // The retired US fundamentals leg had no transport. Do not silently add Yahoo US history.
@@ -2329,7 +2394,7 @@ final class StockSageStore: ObservableObject {
         }
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
-            stillValid: { allowed() && self.catalystRequests[up] == request },
+            stillValid: { allowed() && self.catalystRequests[up] == request && current() },
             massiveCalendar: { await StockSageMassiveEarnings.fetch(up, now: now) },
             yahooCalendar: {
                 switch await StockSageEarnings.fetchEarningsCalendarOutcome(for: up) {
@@ -2339,12 +2404,13 @@ final class StockSageStore: ObservableObject {
             },
             history: history
         )
-        guard catalystRequests[up] == request else { return }
-        publishCatalyst(outcome, symbol: up, checkedAt: now, allowed: allowed)
+        guard catalystRequests[up] == request, current() else { return }
+        publishCatalyst(outcome, symbol: up, checkedAt: now, credentialRevision: revision, allowed: allowed)
     }
 
     /// Shared synchronous publication of a completed chain; no cache I/O here.
     func publishCatalyst(_ outcome: StockSageCatalystChain.Outcome, symbol: String, checkedAt now: Date,
+                         credentialRevision: String? = nil,
                          allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) {
         guard !Task.isCancelled, allowed() else { return }
         let up = symbol.uppercased()
@@ -2357,7 +2423,8 @@ final class StockSageStore: ObservableObject {
         catalystChain[up] = .init(symbol: up, earningsDate: outcome.earningsDate, checkedAt: now,
                                   source: outcome.source, status: outcome.status,
                                   confirmed: outcome.confirmed, dateRangeEnd: outcome.dateRangeEnd,
-                                  sourcesAsked: outcome.sourcesAsked, projectionBasis: outcome.projectionBasis)
+                                  sourcesAsked: outcome.sourcesAsked, projectionBasis: outcome.projectionBasis,
+                                  credentialRevision: credentialRevision)
         // Keep the legacy dicts in sync for the existing earnings-proximity/rank-penalty
         // machinery — ONLY a genuinely KNOWN date feeds them; a `.projected` guess must never be
         // mistaken for an announced report (that machinery demotes rank on an announced one).
@@ -2379,17 +2446,25 @@ final class StockSageStore: ObservableObject {
     /// way. Symbols this sweep hasn't reached yet are simply absent from `earningsCheckedAt` —
     /// UNCHECKED, never fabricated as "none known" (honesty floor). The shared Massive/Benzinga
     /// availability probe remains once per sweep; no retired-provider probe is performed.
+    func restartEarningsSweep() {
+        earningsSweepTask?.cancel()
+        guard !Self.isRunningTests else { return }
+        earningsSweepTask = Task { [weak self] in await self?.refreshEarningsForTracked() }
+    }
+
     func refreshEarningsForTracked() async {
         defer { saveCatalystRecords() }
         guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        let revision = StockSageMassive.credentialRevision(defaults)
         let all = trackedSymbolsUnion
         if all.contains(where: StockSageMassive.covers) {
             await StockSageMassiveEarnings.probeAvailability()
         }
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
+              revision == StockSageMassive.credentialRevision(defaults) else { return }
         let chunks = stride(from: 0, to: all.count, by: 4).map { Array(all[$0 ..< min($0 + 4, all.count)]) }
         for (index, chunk) in chunks.enumerated() {
-            if Task.isCancelled { return }
+            if Task.isCancelled || revision != StockSageMassive.credentialRevision(defaults) { return }
             await withTaskGroup(of: Void.self) { group in
                 for symbol in chunk { group.addTask { await self.refreshCatalyst(symbol: symbol) } }
                 for await _ in group { }

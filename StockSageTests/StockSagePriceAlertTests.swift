@@ -1,10 +1,98 @@
 import Testing
 import Foundation
+import Combine
 @testable import StockSage
 
 // MARK: - User-set price alerts (async race replay + pure rules)
 
 struct StockSagePriceAlertTests {
+    @MainActor @Test func everyFailedSavePublishesFeedbackEvenWhenTheMessageIsUnchanged() throws {
+        let name = "alerts.repeated-error.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        defaults.set("invalid", forKey: "stocksage_price_alerts")
+        var failures = 0
+        let subscription = store.$priceAlertsPersistenceError.sink { if $0 != nil { failures += 1 } }
+        defer { subscription.cancel() }
+        for _ in 0..<2 { #expect(!store.addPriceAlert(symbol: "AAPL", target: 100, direction: .above)) }
+        #expect(failures == 2)
+        #expect(store.priceAlertsForMonitoring().isEmpty)
+        #expect(store.priceAlertsForMonitoring().isEmpty)
+        #expect(failures == 3, "Unchanged background errors notify once; user edits still notify each time")
+        #expect(defaults.string(forKey: "stocksage_price_alerts") == "invalid")
+    }
+    @MainActor @Test func recoveredStorageUpdatesVisibleAlertsBeforeAnyUserMutation() throws {
+        let name = "alerts.read-recovery.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("invalid", forKey: "stocksage_price_alerts")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let records = [PriceAlert(symbol: "RECOVERED", target: 100, direction: .above)]
+        defaults.set(try JSONEncoder().encode(records), forKey: "stocksage_price_alerts")
+        #expect(store.priceAlertsForMonitoring() == records)
+        #expect(store.priceAlerts == records && store.priceAlertsPersistenceError == nil)
+    }
+    @MainActor @Test func acceptedDeliverySurvivesCorruptStorageWithoutResending() async throws {
+        let name = "alerts.accepted-corrupt.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(store.addPriceAlert(symbol: "FIRST", target: 100, direction: .above))
+        #expect(store.addPriceAlert(symbol: "SECOND", target: 100, direction: .above))
+        let records = store.priceAlerts
+        let saved = try JSONEncoder().encode(records)
+        let corrupt = Data("[{".utf8)
+        var sent: [UUID] = []
+        let monitor = StockSageMonitor(defaults: defaults)
+        func cycle() async {
+            await monitor.checkPriceAlerts(currentAlerts: { store.priceAlertsForMonitoring() }, fetchQuotes: { symbols in
+                Dictionary(uniqueKeysWithValues: symbols.map {
+                    ($0, .init(symbol: $0, price: 110, previousClose: 100, marketTime: Date()))
+                })
+            }, enqueue: { alert, _ in
+                sent.append(alert.id)
+                defaults.set(corrupt, forKey: "stocksage_price_alerts")
+                await Task.yield()
+                return true
+            }, markTriggered: { store.markPriceAlertsTriggered($0) })
+        }
+        await cycle()
+        await cycle()
+        #expect(sent == [records[0].id])
+        #expect(store.priceAlerts.first?.isArmed == false)
+        #expect(store.priceAlertsPersistenceError != nil)
+        #expect(defaults.data(forKey: "stocksage_price_alerts") == corrupt)
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 1)
+        defaults.set(saved, forKey: "stocksage_price_alerts") // Synthetic recovery, not owner data.
+        #expect(store.priceAlertsForMonitoring().first?.isArmed == false)
+        #expect(store.priceAlertsPersistenceError == nil)
+        let recovered = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(recovered.priceAlerts.first?.isArmed == false, "Recovery must persist the accepted delivery without another Add")
+        #expect(store.addPriceAlert(symbol: "THIRD", target: 100, direction: .above))
+        let restarted = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(restarted.priceAlerts.first?.isArmed == false)
+        #expect(restarted.priceAlerts.count == 3)
+    }
+
+    @MainActor @Test(arguments: ["add", "remove", "rearm"])
+    func corruptStorageRefusesUserEditsWithoutOptimisticChanges(edit: String) throws {
+        let name = "alerts.edit-corrupt.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(store.addPriceAlert(symbol: "AAPL", target: 100, direction: .above))
+        let before = store.priceAlerts
+        defaults.set("invalid", forKey: "stocksage_price_alerts")
+        switch edit {
+        case "add": #expect(!store.addPriceAlert(symbol: "MSFT", target: 200, direction: .above))
+        case "remove": store.removePriceAlert(before[0].id)
+        default: store.resetPriceAlert(before[0].id)
+        }
+        #expect(store.priceAlerts == before)
+        #expect(store.priceAlertsPersistenceError != nil)
+        #expect(defaults.string(forKey: "stocksage_price_alerts") == "invalid")
+    }
     @MainActor @Test(arguments: ["removed", "muted", "triggered", "edited", "replaced", "rearmed", "cancelled", "unchanged"])
     func changesDuringQuoteFetchInvalidateTheCapturedAlert(change: String) async throws {
         let name = "price-alert.fetch.\(UUID().uuidString)"

@@ -179,6 +179,33 @@ struct StockSageMonitorTests {
         #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 1)
     }
 
+    @MainActor @Test func mutingDuringIdeaDeliveryPreventsAndConsumesRemainingCrossings() async throws {
+        let name = "monitor.idea-mute.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let monitor = Monitor(defaults: defaults)
+        let ideas = ["FIRST", "SECOND"].map { symbol in
+            StockSageIdea(symbol: symbol, market: "US", price: 100,
+                advice: TradeAdvice(action: .buy, conviction: 0.5, regime: .range, rationale: [],
+                    stopPrice: 90, targetPrice: 120, suggestedWeight: 0, caveat: "fixture"),
+                spark: [], realizedVol: 0.2, generatedAt: Date())
+        }
+        var sent: [String] = []
+        let enqueue: (StockSageAlert, AggregatedHolding?) async -> Bool = { alert, _ in
+            sent.append(alert.symbol)
+            defaults.set(false, forKey: StockSageNotifyPrefs.ideaAlertsKey)
+            await Task.yield()
+            return true
+        }
+        await monitor.checkIdeaAlerts(prices: ["FIRST": 100, "SECOND": 100], ideas: ideas, holdings: [:], send: enqueue)
+        await monitor.checkIdeaAlerts(prices: ["FIRST": 89, "SECOND": 89], ideas: ideas, holdings: [:], send: enqueue)
+        #expect(sent == ["FIRST"])
+        #expect(StockSageNotificationBudget(loadingFrom: defaults).recentAlerts.count == 1)
+        defaults.set(true, forKey: StockSageNotifyPrefs.ideaAlertsKey)
+        await monitor.checkIdeaAlerts(prices: ["FIRST": 89, "SECOND": 89], ideas: ideas, holdings: [:], send: enqueue)
+        #expect(sent == ["FIRST"], "A muted crossing must not replay after enabling alerts")
+    }
+
     // MARK: Finding 1 — strong-signal push must never fire on a STALE quote
 
     @Test func staleQuoteNeverPushesEvenOnABrandNewStrongSignal() {

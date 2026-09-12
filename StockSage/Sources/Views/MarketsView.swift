@@ -297,13 +297,14 @@ struct MarketsView: View {
     /// Live streaming toggle (Settings). Default ON: the owner asked for live tracking rather
     /// than a refresh button.
     @AppStorage("stocksage.liveStream") private var liveStreamEnabled = true
+    @AppStorage("stocksage.massive.credentialRevision") private var massiveCredentialRevision = ""
     /// Recompute the subscription only when the SET of TRACKED symbols changes — not on every
     /// price tick, which would tear the socket down and rebuild it continuously. B4 (owner:
     /// "every stock tracking should be live"): built from `trackedSymbolsUnion` (board ∪
     /// watchlist ∪ portfolio ∪ open journal trades), not `store.symbols` (board-only) — a US
     /// watchlist/portfolio/journal ticker that never made the board still gets a live stream.
     private var streamSubscriptionKey: String {
-        liveStreamEnabled ? StockSageLiveStream.streamable(store.trackedSymbolsUnion).joined(separator: ",") : ""
+        liveStreamEnabled ? massiveCredentialRevision + "|" + StockSageLiveStream.streamable(store.trackedSymbolsUnion).joined(separator: ",") : ""
     }
 
     /// Auto-refresh while the app is open (B3, 2026-09-06: split from one 285s sweep into a 30s
@@ -388,6 +389,7 @@ struct MarketsView: View {
     @State private var paTarget = ""
     @State private var paDirection: PriceAlert.Direction = .above
     @State private var paError = ""
+    @State private var showPriceAlertFailure = false
     /// True when macOS notification permission is DENIED — the price-alert panel shows an
     /// honest banner instead of letting green "armed" rows imply pushes can deliver
     /// (review fix 2026-07-17). Re-checked whenever the panel appears.
@@ -479,6 +481,14 @@ struct MarketsView: View {
 
             #endif
             }
+            .onReceive(store.$priceAlertsPersistenceError) { error in
+                if error != nil { showPriceAlertFailure = true }
+            }
+            .alert("Price alerts need attention", isPresented: $showPriceAlertFailure) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(store.priceAlertsPersistenceError ?? "The alert was not saved. Check Alerts for details.")
+            }
             #if os(iOS)
             // Native pull-to-refresh (review 2026-07-27): same live-quote refresh as the header
             // button — stdlib .refreshable, replacing the unwired custom PullToRefresh file.
@@ -502,7 +512,9 @@ struct MarketsView: View {
                     await aiAssessments.assess(idea, store: store)
                 }
             }
-            .task(id: StockSageMassiveEvents.RefreshKey(symbols: store.trackedSymbolsUnion.sorted(), refreshedAt: store.lastFullRefreshAt)) {
+            .onChange(of: massiveCredentialRevision, initial: true) { _, _ in store.restartEarningsSweep() }
+            .task(id: StockSageMassiveEvents.RefreshKey(symbols: store.trackedSymbolsUnion.sorted(), refreshedAt: store.lastFullRefreshAt,
+                                                     credentialRevision: massiveCredentialRevision)) {
                 guard !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshCompanyEvents()
             }
@@ -1374,6 +1386,10 @@ struct MarketsView: View {
                 Text(paError).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
                     .transition(.opacity)
             }
+            if let error = store.priceAlertsPersistenceError {
+                Text(error).font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !store.priceAlerts.isEmpty {
                 VStack(spacing: 1) {
                     ForEach(store.priceAlerts) { priceAlertRow($0) }
@@ -1483,7 +1499,10 @@ struct MarketsView: View {
             paError = "Already met — \(sym) is \(adaptivePrice(px)) now, so this would fire instantly and disarm. Pick a level the price hasn't crossed."
             return
         }
-        store.addPriceAlert(symbol: sym, target: p, direction: paDirection)
+        guard store.addPriceAlert(symbol: sym, target: p, direction: paDirection) else {
+            paError = store.priceAlertsPersistenceError ?? "Already armed — this alert is already active."
+            return
+        }
         paSymbol = ""; paTarget = ""; paError = ""
     }
 
@@ -3353,9 +3372,7 @@ struct MarketsView: View {
               (draftSide == .long ? st < e : st > e) else { return false }
         // Target (optional) must be on the PROFIT side — a long with target below entry yields a
         // false "TARGET HIT" alert on any price under entry (engine openActions isLong ? px >= tgt).
-        if let tgt = StockSageInput.positiveAmount(draftTarget) {
-            guard draftSide == .long ? tgt > e : tgt < e else { return false }
-        }
+        guard StockSageInput.journalTargetIsValid(draftTarget, entry: e, isLong: draftSide == .long) else { return false }
         // Optional realized-cost fields: blank is fine (never fabricated), but a TYPED,
         // unparseable value blocks save rather than silently dropping to nil.
         let plannedEntryOK = draftPlannedEntry.trimmingCharacters(in: .whitespaces).isEmpty

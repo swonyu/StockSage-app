@@ -7,6 +7,17 @@ import Foundation
 struct StockSageInputTests {
     typealias I = StockSageInput
 
+    @Test func journalTargetOnlyTreatsBlankAsOmitted() {
+        for text in ["120..5", "0", "-1", "NaN"] {
+            #expect(!I.journalTargetIsValid(text, entry: 100, isLong: true))
+        }
+        #expect(I.journalTargetIsValid("  ", entry: 100, isLong: true))
+        #expect(I.journalTargetIsValid("120", entry: 100, isLong: true))
+        #expect(I.journalTargetIsValid("80", entry: 100, isLong: false))
+        #expect(!I.journalTargetIsValid("80", entry: 100, isLong: true))
+        #expect(!I.journalTargetIsValid("120", entry: 100, isLong: false))
+    }
+
     @Test func positiveAmountAcceptsGoodRejectsBad() {
         #expect(I.positiveAmount("10000") == 10000)
         #expect(I.positiveAmount("10,000") == 10000)        // thousands separator

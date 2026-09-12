@@ -7,6 +7,21 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @MainActor @Test(arguments: [false, true], [false, true])
+    func normalAlertMutationPreservesUnreadableCommittedStorage(wrongType: Bool, afterLoad: Bool) throws {
+        let name = "alerts.corrupt.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let corrupt: Any = wrongType ? "unreadable alerts" : Data("[{".utf8)
+        if !afterLoad { defaults.set(corrupt, forKey: "stocksage_price_alerts") }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        if afterLoad { defaults.set(corrupt, forKey: "stocksage_price_alerts") }
+        let before = defaults.persistentDomain(forName: name) ?? [:]
+        store.addPriceAlert(symbol: "AAPL", target: 100, direction: .above)
+        #expect(store.priceAlerts.isEmpty)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: name) ?? [:]))
+    }
+
     @MainActor @Test(arguments: ["journal", "portfolio", "watchlist", "journal-type", "portfolio-type",
         "price-alerts", "price-alerts-type", "price-alerts-invalid"], [false, true])
     func fullBackupRejectsUnreadableCommittedSource(fault: String, changedAfterLoad: Bool) throws {

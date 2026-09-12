@@ -371,7 +371,7 @@ final class StockSageMonitor: ObservableObject {
     /// close won't fire a push while the market is shut and the owner can't act.
     private func checkPriceAlerts() async {
         await checkPriceAlerts(
-            currentAlerts: { StockSageStore.shared.priceAlerts },
+            currentAlerts: { StockSageStore.shared.priceAlertsForMonitoring() },
             fetchQuotes: { await StockSageQuoteService.fetchQuotes(for: $0) },
             enqueue: { await self.sendPriceAlert($0, price: $1) },
             markTriggered: { StockSageStore.shared.markPriceAlertsTriggered($0) })
@@ -419,7 +419,6 @@ final class StockSageMonitor: ObservableObject {
         // correct — the owner has not yet been notified — and delivers the moment
         // permission returns. The latch remains the truthful record of pushes that
         // actually went out.
-        var delivered: [UUID] = []
         for a in fired {
             guard !Task.isCancelled,
                   StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { break }
@@ -437,11 +436,10 @@ final class StockSageMonitor: ObservableObject {
             guard StockSageNotificationBudget.countWithinHour(budget.recentAlerts, now: Date())
                     < StockSageNotificationBudget.hourlyCap else { break }
             if await enqueue(a, px) {
-                delivered.append(a.id)
                 budgetRecord(symbol: a.symbol, price: px)
+                markTriggered([a.id]) // Record accepted delivery before the next suspension.
             }
         }
-        if !delivered.isEmpty { markTriggered(delivered) }
     }
 
     /// Drive stop-breach/target-hit pushes for TRACKED IDEAS via the tested
@@ -454,16 +452,22 @@ final class StockSageMonitor: ObservableObject {
     /// UPPERCASED ticker → this cycle's live price, already staleness-filtered by the caller, so
     /// this never fires off a price it didn't just observe fresh.
     private func checkIdeaAlerts(prices: [String: Double]) async {
+        await checkIdeaAlerts(prices: prices, ideas: StockSageStore.shared.ideas,
+            holdings: StockSagePortfolio.holdingBySymbol(in: StockSagePortfolio.shared.positions),
+            send: { [weak self] alert, held in await self?.sendIdeaAlert(alert, held: held) ?? false })
+    }
+
+    /// Inject only source snapshots and notification delivery, retaining the production loop.
+    func checkIdeaAlerts(prices: [String: Double], ideas: [StockSageIdea],
+                         holdings: [String: AggregatedHolding],
+                         send: (StockSageAlert, AggregatedHolding?) async -> Bool) async {
         guard !prices.isEmpty else { return }
         // Same board every other idea-derived surface draws from (the Sharia screen that used
         // to filter this was removed 2026-07-28).
-        let ideas = StockSageStore.shared.ideas
         guard !ideas.isEmpty else { return }
         // ALERT-HELD-1: looked up ONCE per cycle (not per idea) — a stop-breach/target-hit push
         // is the single most decision-relevant alert, so it should say whether the owner actually
         // has a position on. Idea alerts ONLY — sendPriceAlert (user-set price alerts) is untouched.
-        let holdingBySymbol = StockSagePortfolio.holdingBySymbol(in: StockSagePortfolio.shared.positions)
-        let ideaAlertsOn = StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.ideaAlertsKey, defaults: defaults)
         for idea in ideas {
             // CONCURRENCY #2 (review 2026-07-27): same cooperative-cancellation guard as the
             // strong-signal and price-alert loops — stop() must halt idea pushes mid-batch too.
@@ -471,7 +475,9 @@ final class StockSageMonitor: ObservableObject {
             guard let price = prices[idea.symbol.uppercased()], price > 0 else { continue }
             // Muted type: keep the crossing baseline advancing (else re-enabling would fire a
             // flood of stale crossings), just never push.
-            guard ideaAlertsOn else { lastIdeaPrice[idea.symbol] = price; continue }
+            guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.ideaAlertsKey, defaults: defaults) else {
+                lastIdeaPrice[idea.symbol] = price; continue
+            }
             // First sighting this session: seed the baseline rather than claim a crossing that
             // may not be real (mirrors `lastAlerted`'s "no alert on first appearance" rule).
             let priorPrice = lastIdeaPrice[idea.symbol] ?? price
@@ -497,7 +503,7 @@ final class StockSageMonitor: ObservableObject {
                 }
                 continue
             }
-            if await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()]) {
+            if await send(alert, holdings[idea.symbol.uppercased()]) {
                 lastIdeaPrice[idea.symbol] = price
                 budgetRecord(symbol: idea.symbol, price: price)
             }

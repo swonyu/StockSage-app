@@ -4,6 +4,19 @@ import Security
 /// One local, non-synchronizing credential. Injectable operations keep regression tests out of the
 /// owner's Keychain; no synchronized item, URL, log, or plaintext preference write.
 nonisolated enum StockSageMassiveCredential {
+    static func denialUntil(_ gate: String, defaults: UserDefaults) -> Date? {
+        guard let record = defaults.dictionary(forKey: gate),
+              record["revision"] as? String == (StockSageMassive.credentialRevision(defaults) ?? ""),
+              let until = record["until"] as? Date, until.timeIntervalSince1970.isFinite else { return nil }
+        return until
+    }
+
+    static func recordDenial(_ until: Date, gate: String, revision: String?, defaults: UserDefaults) {
+        guard revision == StockSageMassive.credentialRevision(defaults),
+              until.timeIntervalSince1970.isFinite else { return }
+        defaults.set(["revision": revision ?? "", "until": until], forKey: gate)
+    }
+
     enum Failure: Error { case unavailable, verification }
     struct Storage {
         let read: () throws -> String?
@@ -75,6 +88,23 @@ nonisolated enum StockSageMassiveCredential {
             guard try storage.read() == trimmed else { throw Failure.verification }
         }
         defaults.removeObject(forKey: StockSageMassive.keyDefaultsKey)
+    }
+
+    /// Called by app startup, not request dispatch. Environment values are never persisted or
+    /// fingerprinted; revalidate that fallback on each launch rather than inheriting a denial.
+    static func beginLaunch(defaults: UserDefaults, storage: Storage, environment: String?) throws {
+        let hasEnvironment = !StockSageMassive.resolvedKey(saved: nil, environment: environment).isEmpty
+        do {
+            try migrate(defaults: defaults, storage: storage)
+            if try saved(defaults: defaults, storage: storage) == nil, hasEnvironment {
+                defaults.set(UUID().uuidString, forKey: "stocksage.massive.credentialRevision")
+            }
+        } catch {
+            // A later unlock can expose a different environment fallback. Invalidate ownership
+            // now, but never bypass inaccessible secure storage to resolve that fallback.
+            if hasEnvironment { defaults.set(UUID().uuidString, forKey: "stocksage.massive.credentialRevision") }
+            throw error
+        }
     }
 
     @discardableResult static func set(_ value: String, defaults: UserDefaults, storage: Storage) throws -> Bool {

@@ -7,8 +7,69 @@ struct StockSageMassiveEarningsTests {
     private typealias E = StockSageMassiveEarnings
     private let today = Date(timeIntervalSince1970: 1_788_652_800) // 2026-09-06 00:00 UTC
 
+    @Test func denialBelongsToItsCredentialRevisionIncludingLateResponses() throws {
+        let name = "provider.denial.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let gate = "synthetic.denial"
+        let revisionKey = "stocksage.massive.credentialRevision"
+        let until = today.addingTimeInterval(86400)
+        defaults.set("A", forKey: revisionKey)
+        StockSageMassiveCredential.recordDenial(until, gate: gate, revision: "A", defaults: defaults)
+        #expect(StockSageMassiveCredential.denialUntil(gate, defaults: defaults) == until)
+        defaults.set("B", forKey: revisionKey)
+        #expect(StockSageMassiveCredential.denialUntil(gate, defaults: defaults) == nil)
+        StockSageMassiveCredential.recordDenial(until.addingTimeInterval(100), gate: gate, revision: "A", defaults: defaults)
+        #expect(StockSageMassiveCredential.denialUntil(gate, defaults: defaults) == nil)
+        StockSageMassiveCredential.recordDenial(until, gate: gate, revision: "B", defaults: defaults)
+        #expect(StockSageMassiveCredential.denialUntil(gate, defaults: defaults) == until)
+        defaults.set(until, forKey: gate)
+        #expect(StockSageMassiveCredential.denialUntil(gate, defaults: defaults) == nil,
+                "Legacy denial dates have no verifiable credential ownership")
+    }
+
     private func body(_ rows: String, tail: String = "") -> Data {
         Data("{\"status\":\"OK\",\"results\":[\(rows)]\(tail)}".utf8)
+    }
+
+    @MainActor @Test(arguments: [200, 403])
+    func credentialChangesDiscardInFlightEarningsAndEventResponses(status: Int) async throws {
+        let name = "provider.flight.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let revisionKey = "stocksage.massive.credentialRevision"
+        let request = try #require(E.request(symbol: "AAPL", now: today, key: "fixture-only"))
+        let url = try #require(request.url)
+        let response = try #require(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil))
+        for events in [false, true] {
+            defaults.set("A", forKey: revisionKey)
+            let old: (URLRequest) async throws -> (Data, URLResponse) = { _ in
+                defaults.set("B", forKey: revisionKey)
+                return (Data("{}".utf8), response)
+            }
+            if events {
+                let result = await StockSageMassiveEvents.get(.ratings, request: request, now: Date(), revision: "A",
+                    defaults: defaults, allowed: { true }, transport: old)
+                guard case .failure(.cancelled) = result else { Issue.record("Old event response escaped"); return }
+            } else {
+                let result = await E.get(request, revision: "A", defaults: defaults, allowed: { true }, transport: old)
+                #expect(result == nil)
+            }
+            var requests = 0
+            let good: (URLRequest) async throws -> (Data, URLResponse) = { _ in
+                requests += 1
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            if events {
+                let result = await StockSageMassiveEvents.get(.ratings, request: request, now: Date(), revision: "B",
+                    defaults: defaults, allowed: { true }, transport: good)
+                guard case .success = result else { Issue.record("New event credential incorrectly gated"); return }
+            } else {
+                let result = await E.get(request, revision: "B", defaults: defaults, allowed: { true }, transport: good)
+                #expect(result?.1 == 200)
+            }
+            #expect(requests == 1)
+        }
     }
 
     @Test func requestIsBoundedAndHeaderAuthenticated() throws {

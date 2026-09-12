@@ -444,21 +444,15 @@ enum StockSageLocalModelServer {
                     return object
                 }
                 if c.baseURL.port == 1234 {
-                    func instances(_ inventory: [String: Any]) throws -> [String] {
+                    @MainActor func instances(_ inventory: [String: Any]) throws -> [String] {
                         guard let rows = inventory["models"] as? [[String: Any]],
                               rows.allSatisfy({ $0["key"] is String }) else { throw URLError(.cannotParseResponse) }
                         let selected = rows.filter { $0["key"] as? String == c.model }
-                        guard selected.count <= 1 else { throw URLError(.cannotParseResponse) }
-                        guard let row = selected.first else { return [] }
-                        guard row["type"] as? String == "llm",
-                              let loaded = row["loaded_instances"] as? [[String: Any]], loaded.count <= 16 else {
+                        guard selected.count <= 1 || (c.isLMStudio9B && managedInventory(inventory)?.hasModel == true),
+                              let loaded = loadedInstances(selected) else {
                             throw URLError(.cannotParseResponse)
                         }
-                        let ids = loaded.compactMap { $0["id"] as? String }
-                        guard ids.count == loaded.count, ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }) else {
-                            throw URLError(.cannotParseResponse)
-                        }
-                        return Array(Set(ids))
+                        return loaded.compactMap { $0["id"] as? String }
                     }
                     let ids = try instances(await json("api/v1/models"))
                     if ids.isEmpty { return !inferenceWasActive } // An accepted JIT load may still be unresolved.
@@ -492,7 +486,7 @@ enum StockSageLocalModelServer {
                   return ["llm", "embedding"].contains(type)
               }) else { return nil }
         let matches = rows.filter { $0["key"] as? String == lmStudioModel }
-        let compatible = matches.count == 1 && matches.allSatisfy {
+        let compatible = !matches.isEmpty && matches.allSatisfy {
             $0["type"] as? String == "llm" && $0["format"] as? String == "mlx"
                 && $0["architecture"] as? String == "qwen3_5" && $0["params_string"] as? String == "9B"
                 && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 6
@@ -503,6 +497,25 @@ enum StockSageLocalModelServer {
                 : matches.isEmpty ? "Qwen3.5 9B is missing. Download the current 6-bit release in Model settings."
                 : "The model key exists but its 9B MLX 6-bit compatibility is not verified. Check the variant in LM Studio; no replacement downloaded.",
             canDownload: matches.isEmpty)
+    }
+
+    /// LM Studio can list multiple compatible copies under one key. Resolve instances across
+    /// all copies; malformed or duplicate IDs cannot identify a serving/unload target safely.
+    private static func loadedInstances(_ rows: [[String: Any]]) -> [[String: Any]]? {
+        var instances: [[String: Any]] = []
+        var ids = Set<String>()
+        for row in rows {
+            guard row["type"] as? String == "llm",
+                  let loaded = row["loaded_instances"] as? [[String: Any]],
+                  instances.count + loaded.count <= 16 else { return nil }
+            for instance in loaded {
+                guard let id = instance["id"] as? String, !id.isEmpty, id.utf8.count <= 512,
+                      id.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+                      ids.insert(id).inserted else { return nil }
+                instances.append(instance)
+            }
+        }
+        return instances
     }
 
     /// Only real AI-use callers prepare missing models; passive probes remain read-only.
@@ -526,8 +539,8 @@ enum StockSageLocalModelServer {
     static func verifiedContext(_ inventory: [String: Any], model: String) -> Int? {
         guard managedInventory(inventory)?.hasModel == true,
               let rows = inventory["models"] as? [[String: Any]],
-              let row = rows.first(where: { $0["key"] as? String == model }),
-              let instances = row["loaded_instances"] as? [[String: Any]] else { return nil }
+              model == lmStudioModel,
+              let instances = loadedInstances(rows.filter { $0["key"] as? String == model }) else { return nil }
         let matching = instances.filter { $0["id"] as? String == model }
         guard matching.count == 1, let config = matching[0]["config"] as? [String: Any],
               let context = config["context_length"] as? Int, context > 0 else { return nil }
@@ -581,6 +594,7 @@ enum StockSageLocalModelServer {
         var promptTokens: Int? = nil
         var completionTokens: Int? = nil
         var malformedUsage = false
+        var outputLimitRetries = 0
         /// How many OTHER model requests were already running when this one started.
         /// 0 means this request had the local model to itself. Non-zero is the measurement the
         /// admission-policy decision needs: it shows real cross-caller contention rather than
@@ -593,7 +607,7 @@ enum StockSageLocalModelServer {
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown")"
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries)"
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -712,7 +726,7 @@ enum StockSageLocalModelServer {
         return number.intValue
     }
 
-    nonisolated static func parseCompletion(_ data: Data, isOllama: Bool) -> CompletionResult {
+    nonisolated static func parseCompletion(_ data: Data, isOllama: Bool, allowEmptyTruncated: Bool = false) -> CompletionResult {
         var diagnostic = Diagnostic(bodyBytes: boundedCount(data.count), oversizedBody: data.count > maximumResponseBytes)
         guard !diagnostic.oversizedBody else {
             diagnostic.category = .responseTooLarge
@@ -754,7 +768,7 @@ enum StockSageLocalModelServer {
         }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         diagnostic.textBytes = boundedCount(trimmed.utf8.count)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty || (allowEmptyTruncated && diagnostic.finish == .tokenLimit) else {
             diagnostic.category = .emptyContent
             return .failure(.init(diagnostic: diagnostic))
         }
@@ -811,8 +825,6 @@ enum StockSageLocalModelServer {
         guard timeout.isFinite, timeout > 0 else {
             return .failure(.init(diagnostic: .init(category: .invalidConfig)))
         }
-        let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
-                                  maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
         let started = DispatchTime.now()
         func elapsedMilliseconds() -> Int {
             Int((DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds) / 1_000_000)
@@ -821,102 +833,118 @@ enum StockSageLocalModelServer {
         // cancellation, so an abandoned request can never inflate the observed concurrency.
         var concurrent = 0
         let deadline = clock().advanced(by: .seconds(timeout))
-        do {
-            let (data, response) = try await Pending<(Data, URLResponse)>().run(
-                deadline: deadline, now: clock, sleepUntil: sleepUntil) {
-                    concurrent = await inFlight.enter()
-                    let result: Result<(Data, URLResponse), Error>
-                    do {
-                        guard lifecycle == lifecycleRevision, !isShuttingDown else { throw CancellationError() }
-                        if let transport { result = .success(try await transport(request)) }
-                        else { result = .success(try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: maximumResponseBytes)) }
-                    } catch { result = .failure(error) }
-                    await inFlight.leave()
-                    return try result.get()
-                }
-            guard lifecycle == lifecycleRevision else { return .failure(.init(diagnostic: .init(category: .cancelled))) }
-            if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
-                return .failure(failure)
-            }
-            guard data.count <= maximumResponseBytes else {
-                return .failure(.init(diagnostic: .init(category: .responseTooLarge,
-                    bodyBytes: boundedCount(data.count), oversizedBody: true)))
-            }
-            guard let http = response as? HTTPURLResponse else {
-                return .failure(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
-                                                        oversizedBody: data.count > 1_048_576)))
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                // Preserve the legacy model-missing detection; never retain/emit the body.
-                let missing = (String(data: data, encoding: .utf8) ?? "").lowercased().contains("not found")
-                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-                let code = (object?["error"] as? [String: Any])?["code"] as? String
-                let category: FailureCategory = (missing || code == "model_not_found") ? .modelMissing
-                    : (code == "unsupported_model" ? .unsupportedModel : .http)
-                return .failure(.init(diagnostic: .init(category: category,
-                    httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
-                    bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
-            }
-            switch parseCompletion(data, isOllama: isOllama) {
-            case .success(let reply):
-                // No backend may publish another model's answer under the selected ID. Ollama
-                // serves a model as "name:latest" while a viewer types the bare name, so both
-                // sides are compared with the suffix stripped. A server that reports no model at
-                // all stays acceptable off the strict profile — absent metadata is not a mismatch.
-                let identityMismatch = reply.model.map {
-                    stripLatestSuffix($0) != stripLatestSuffix(c.model)
-                } ?? c.isLMStudio9B
-                if identityMismatch {
-                    return .failure(.init(diagnostic: .init(category: .responseShape,
-                                                            httpStatus: http.statusCode,
-                                                            concurrentRequests: concurrent,
-                                                            elapsedMilliseconds: elapsedMilliseconds())))
-                }
-                // Truncation stays OBSERVATIONAL here, as this seam has always documented:
-                // `finish` is reported, never used to reject text outside the strict profile.
-                // That contract is deliberate and correct — a truncated Chat answer is still
-                // worth showing, while a truncated financial verdict is not. The decision
-                // therefore belongs to each caller, and lives in `rejectsTruncatedOutput` /
-                // `StockSageAIAssessment.validate`, not here.
-                if c.isLMStudio9B, reply.diagnostic.finish != .stop {
-                    var diagnostic = reply.diagnostic
-                    diagnostic.category = .incompleteOutput
-                    diagnostic.httpStatus = http.statusCode
-                    diagnostic.elapsedMilliseconds = elapsedMilliseconds()
-                diagnostic.concurrentRequests = concurrent
-                    return .failure(.init(diagnostic: diagnostic))
-                }
-                if c.isLMStudio9B {
-                    let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
-                        transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
-                    guard clock() < deadline else { return .failure(.init(diagnostic: .init(category: .timeout))) }
-                    guard lifecycle == lifecycleRevision else { return .failure(.init(diagnostic: .init(category: .cancelled))) }
-                    if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return .failure(failure) }
-                    guard let inventory, let model = reply.model,
-                          let context = verifiedContext(inventory, model: model), context >= contextTokens else {
-                        return .failure(.init(diagnostic: .init(category: .contextBudget)))
-                    }
-                }
-                var diagnostic = reply.diagnostic
-                diagnostic.httpStatus = http.statusCode
-                diagnostic.elapsedMilliseconds = elapsedMilliseconds()
-                diagnostic.concurrentRequests = concurrent
-                return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
-            case .failure(let failure):
+        var outputLimit = maxTokens
+        for attempt in 0...1 {
+            func failed(_ failure: CompletionFailure) -> CompletionResult {
                 var diagnostic = failure.diagnostic
-                diagnostic.httpStatus = http.statusCode
+                diagnostic.outputLimitRetries = attempt
                 diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                 diagnostic.concurrentRequests = concurrent
                 return .failure(.init(diagnostic: diagnostic))
             }
-        } catch {
-            var failure = transportFailure(error)
-            var diagnostic = failure.diagnostic
-            diagnostic.elapsedMilliseconds = elapsedMilliseconds()
-            diagnostic.concurrentRequests = concurrent
-            failure = .init(diagnostic: diagnostic)
-            return .failure(failure)
+            guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
+            if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return failed(failure) }
+            let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
+                                      maxTokens: outputLimit, contextTokens: contextTokens, timeout: timeout)
+            do {
+                let (data, response) = try await Pending<(Data, URLResponse)>().run(
+                    deadline: deadline, now: clock, sleepUntil: sleepUntil) {
+                        concurrent = await inFlight.enter()
+                        let result: Result<(Data, URLResponse), Error>
+                        do {
+                            guard lifecycle == lifecycleRevision, !isShuttingDown else { throw CancellationError() }
+                            if let transport { result = .success(try await transport(request)) }
+                            else { result = .success(try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: maximumResponseBytes)) }
+                        } catch { result = .failure(error) }
+                        await inFlight.leave()
+                        return try result.get()
+                    }
+                guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
+                if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
+                    return failed(failure)
+                }
+                guard data.count <= maximumResponseBytes else {
+                    return failed(.init(diagnostic: .init(category: .responseTooLarge,
+                        bodyBytes: boundedCount(data.count), oversizedBody: true)))
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    return failed(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
+                                                            oversizedBody: data.count > 1_048_576)))
+                }
+                guard (200..<300).contains(http.statusCode) else {
+                    // Preserve the legacy model-missing detection; never retain/emit the body.
+                    let missing = (String(data: data, encoding: .utf8) ?? "").lowercased().contains("not found")
+                    let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    let code = (object?["error"] as? [String: Any])?["code"] as? String
+                    let category: FailureCategory = (missing || code == "model_not_found") ? .modelMissing
+                        : (code == "unsupported_model" ? .unsupportedModel : .http)
+                    return failed(.init(diagnostic: .init(category: category,
+                        httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
+                        bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
+                }
+                switch parseCompletion(data, isOllama: isOllama, allowEmptyTruncated: c.isLMStudio9B) {
+                case .success(let reply):
+                    // No backend may publish another model's answer under the selected ID. Ollama
+                    // serves a model as "name:latest" while a viewer types the bare name, so both
+                    // sides are compared with the suffix stripped. A server that reports no model at
+                    // all stays acceptable off the strict profile — absent metadata is not a mismatch.
+                    let identityMismatch = reply.model.map {
+                        stripLatestSuffix($0) != stripLatestSuffix(c.model)
+                    } ?? c.isLMStudio9B
+                    if identityMismatch {
+                        return failed(.init(diagnostic: .init(category: .responseShape,
+                                                                httpStatus: http.statusCode,
+                                                                concurrentRequests: concurrent,
+                                                                elapsedMilliseconds: elapsedMilliseconds())))
+                    }
+                    // One same-evidence restart for a confirmed output limit, never a continuation
+                    // stitched onto an unfinished verdict. Reserve the extra output before sending;
+                    // both attempts and context verification retain the ORIGINAL caller deadline.
+                    if c.isLMStudio9B, attempt == 0, reply.diagnostic.finish == .tokenLimit,
+                       (1...512).contains(maxTokens), clock() < deadline,
+                       promptFits(system: system, user: user, outputTokens: maxTokens * 2, contextTokens: contextTokens) {
+                        outputLimit = maxTokens * 2
+                        continue
+                    }
+                    // Truncation stays OBSERVATIONAL here, as this seam has always documented:
+                    // `finish` is reported, never used to reject text outside the strict profile.
+                    // That contract is deliberate and correct — a truncated Chat answer is still
+                    // worth showing, while a truncated financial verdict is not. The decision
+                    // therefore belongs to each caller, and lives in `rejectsTruncatedOutput` /
+                    // `StockSageAIAssessment.validate`, not here.
+                    if c.isLMStudio9B, reply.diagnostic.finish != .stop {
+                        var diagnostic = reply.diagnostic
+                        diagnostic.category = .incompleteOutput
+                        diagnostic.httpStatus = http.statusCode
+                        return failed(.init(diagnostic: diagnostic))
+                    }
+                    if c.isLMStudio9B {
+                        let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
+                            transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
+                        guard clock() < deadline else { return failed(.init(diagnostic: .init(category: .timeout))) }
+                        guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
+                        if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return failed(failure) }
+                        guard let inventory, let model = reply.model,
+                              let context = verifiedContext(inventory, model: model), context >= contextTokens else {
+                            return failed(.init(diagnostic: .init(category: .contextBudget)))
+                        }
+                    }
+                    var diagnostic = reply.diagnostic
+                    diagnostic.httpStatus = http.statusCode
+                    diagnostic.elapsedMilliseconds = elapsedMilliseconds()
+                    diagnostic.concurrentRequests = concurrent
+                    diagnostic.outputLimitRetries = attempt
+                    return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
+                case .failure(let failure):
+                    var diagnostic = failure.diagnostic
+                    diagnostic.httpStatus = http.statusCode
+                    return failed(.init(diagnostic: diagnostic))
+                }
+            } catch {
+                return failed(transportFailure(error))
+            }
         }
+        return .failure(.init(diagnostic: .init(category: .incompleteOutput)))
     }
 
     static func complete(_ c: Config, isOllama: Bool, system: String, user: String,

@@ -8,6 +8,22 @@ import Foundation
 
 struct StockSageQuoteServiceParsingTests {
 
+    @Test func requestedQuoteIdentityMustMatchAndNumericStringsRemainSupported() {
+        let data = Data(#"{"chart":{"result":[{"meta":{"symbol":"AAPL","regularMarketPrice":"150.25","previousClose":"148.50"}}]}}"#.utf8)
+        #expect(StockSageQuoteService.parseChart(data, requestedSymbol: "MSFT") == nil)
+        #expect(StockSageQuoteService.parseChart(data, requestedSymbol: "aapl")?.price == 150.25)
+    }
+
+    @Test func booleansAreNotPricesBaselinesOrBars() {
+        let quote = #"{"chart":{"result":[{"meta":{"symbol":"AAPL","regularMarketPrice":150,"previousClose":148}}]}}"#
+        #expect(StockSageQuoteService.parseChart(Data(quote.replacingOccurrences(of: "150", with: "true").utf8)) == nil)
+        let missing = StockSageQuoteService.parseChart(Data(quote.replacingOccurrences(of: "148", with: "true").utf8))
+        #expect(missing?.isNewListing == true && missing?.previousCloseSource == nil)
+        let history = #"{"chart":{"result":[{"meta":{"symbol":"AAPL"},"timestamp":[1,2],"indicators":{"quote":[{"open":[1,1],"high":[2,2],"low":[1,1],"close":[true,1]}]}}]}}"#
+        #expect(StockSageQuoteService.parseHistory(Data(history.utf8), symbol: "AAPL") == nil)
+        #expect(StockSageQuoteService.parseHistory(Data(history.replacingOccurrences(of: "true", with: "1").utf8), symbol: "MSFT") == nil)
+    }
+
     @Test func parseChartCapturesMarketTimeWhenPresent() {
         let withTime = #"{"chart":{"result":[{"meta":{"symbol":"AAPL","regularMarketPrice":150,"previousClose":148,"regularMarketTime":1700000000}}]}}"#
         let q = StockSageQuoteService.parseChart(Data(withTime.utf8))

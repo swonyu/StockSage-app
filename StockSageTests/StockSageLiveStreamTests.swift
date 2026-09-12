@@ -7,6 +7,19 @@ struct StockSageLiveStreamTests {
     typealias L = StockSageLiveStream
     typealias ExchangeContinuation = CheckedContinuation<[Int64: StockSageMassiveTicks.Exchange], Never>
 
+    @MainActor @Test func connectionOwnershipChangesWithoutOpeningASocket() {
+        var revision: String? = nil
+        let first = StockSageLiveStreamConnection(currentRevision: { revision })
+        #expect(first.isCurrent)
+        revision = "replacement"
+        #expect(!first.isCurrent)
+        let replacement = StockSageLiveStreamConnection(currentRevision: { revision })
+        #expect(replacement.isCurrent)
+        revision = "removed"
+        #expect(!first.isCurrent && !replacement.isCurrent)
+        first.close(); replacement.close()
+    }
+
     @MainActor
     private func waitForContinuation(_ pending: @MainActor () -> ExchangeContinuation?) async throws -> ExchangeContinuation {
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))

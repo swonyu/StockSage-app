@@ -12,6 +12,63 @@ struct StockSageModelDownloadTests {
         (Data(json.utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
 
+    @Test(arguments: [false, true])
+    func compatibleCopiesResolveTheLoadedInstanceRegardlessOfOrder(reverse: Bool) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let inventory = try JSONSerialization.jsonObject(with: Data(Self.installed.utf8)) as! [String: Any]
+        let empty = (inventory["models"] as! [[String: Any]])[0]
+        var loaded = empty
+        loaded["loaded_instances"] = [["id": config.model, "config": ["context_length": 71680]]]
+        var other = empty
+        other["key"] = "other"
+        other["loaded_instances"] = [["id": "other_instance"]]
+        let rows = (reverse ? [loaded, empty] : [empty, loaded]) + [other]
+        let object: [String: Any] = ["models": rows]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        let probe = await S.probe(config, transport: { request in
+            #expect(request.httpMethod == "GET" && request.url!.path == "/api/v1/models")
+            return Self.response(request, json)
+        })
+        #expect(probe.hasModel && !probe.canDownload)
+        #expect(S.verifiedContext(object, model: config.model) == 71680)
+        var posts = 0
+        let stopped = await S.unloadOnQuit(config, transport: { request in
+            if request.httpMethod == "POST" {
+                posts += 1
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: String]
+                #expect(body == ["instance_id": config.model])
+                return Self.response(request, #"{"instance_id":"qwen3.5-9b"}"#)
+            }
+            let current = posts == 0 ? rows : [empty, empty, other]
+            return Self.response(request, String(decoding: try JSONSerialization.data(withJSONObject: ["models": current]), as: UTF8.self))
+        })
+        #expect(stopped && posts == 1)
+    }
+
+    @Test(arguments: ["variant", "duplicate-instance", "malformed", "custom"])
+    func ambiguousCopiesNeverConfirmContextOrUnload(scenario: String) async throws {
+        let inventory = try JSONSerialization.jsonObject(with: Data(Self.installed.utf8)) as! [String: Any]
+        var first = (inventory["models"] as! [[String: Any]])[0]
+        let model = scenario == "custom" ? "custom" : S.lmStudioModel
+        first["key"] = model
+        first["loaded_instances"] = [["id": model, "config": ["context_length": 71680]]]
+        var second = first
+        if scenario == "variant" { second["quantization"] = ["bits_per_weight": 4] }
+        if scenario == "malformed" { second["loaded_instances"] = "invalid" }
+        let object: [String: Any] = ["models": [first, second]]
+        #expect(S.verifiedContext(object, model: model) == nil)
+        if scenario == "variant" {
+            #expect(S.managedInventory(object)?.hasModel == false)
+            #expect(S.managedInventory(object)?.canDownload == false)
+        }
+        let config = try #require(S.config(url: S.lmStudioURL, model: model))
+        let stopped = await S.unloadOnQuit(config, transport: { request in
+            #expect(request.httpMethod == "GET")
+            return Self.response(request, String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self))
+        })
+        #expect(!stopped)
+    }
+
     @Test func unloadedNativeInventoryIsPresentWithoutLoadingOrDownloading() async throws {
         let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
         var paths: [String] = []
@@ -22,6 +79,45 @@ struct StockSageModelDownloadTests {
         })
         #expect(probe.reachable && probe.hasModel)
         #expect(paths == ["/api/v1/models"])
+    }
+
+    @Test(arguments: ["complete", "empty", "repeated", "settings", "deadline", "tight", "secondDeadline", "secondHTTP", "secondModel", "secondContext"])
+    func outputLimitRecoveryIsBoundedAndUsesTheSameEvidence(scenario: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        var instant = ContinuousClock.now
+        var active = true
+        var posts = 0
+        let context = scenario == "tight" ? 500 : 4096
+        let result = await S.completeDetailed(config, isOllama: false, system: "same instructions", user: "same facts",
+            maxTokens: 192, contextTokens: context, timeout: 10, stillValid: { active }, transport: { request in
+                if request.httpMethod == "POST" {
+                    posts += 1
+                    let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                    #expect(body["max_tokens"] as? Int == (posts == 1 ? 192 : 384))
+                    #expect(body["messages"] as? [[String: String]] == [
+                        ["role": "system", "content": "same instructions"], ["role": "user", "content": "same facts"]])
+                    if scenario == "settings" { active = false }
+                    if scenario == "deadline" { instant = instant.advanced(by: .seconds(11)) }
+                    if scenario == "secondDeadline" { instant = instant.advanced(by: .seconds(posts == 1 ? 8 : 3)) }
+                    if scenario == "secondHTTP", posts == 2 { return Self.response(request, "{}", status: 503) }
+                    let finish = posts == 2 && scenario != "repeated" ? "stop" : "length"
+                    let text = scenario == "empty" && posts == 1 ? "" : "fixture"
+                    let model = scenario == "secondModel" && posts == 2 ? "wrong-model" : "qwen3.5-9b"
+                    return Self.response(request, #"{"model":"\#(model)","choices":[{"message":{"content":"\#(text)"},"finish_reason":"\#(finish)"}]}"#)
+                }
+                return Self.response(request, Self.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+                    with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":\#(scenario == "secondContext" ? 512 : 4096)}}]"#))
+            }, clock: { instant })
+        #expect(posts == (["settings", "deadline", "tight"].contains(scenario) ? 1 : 2))
+        switch result {
+        case .success(let reply):
+            #expect(["complete", "empty"].contains(scenario) && reply.text == "fixture")
+            #expect(reply.diagnostic.outputLimitRetries == 1)
+        case .failure(let failure):
+            #expect(!["complete", "empty"].contains(scenario))
+            #expect(failure.diagnostic.outputLimitRetries == posts - 1)
+            if scenario == "secondDeadline" { #expect(failure.diagnostic.category == .timeout) }
+        }
     }
 
     @Test func nativeAbsenceIsNotInferredFromMalformedOrIncompatibleInventory() throws {

@@ -1,5 +1,49 @@
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
+## Complete-results reliability review — September 12, source publication; not installed
+
+Worktree `/Users/saleh/StockSage-wt/opus-harness`, branch `claude/model-harness-2026-09-10`,
+Reviewed base `ca0708f90680bfc0eefe7c09ca032ea767b81e74`. Owner subsequently authorized
+commit/push of N1–N11 to `origin/claude/model-harness-2026-09-10`
+(`https://github.com/swonyu/StockSage-app.git`); no merge into main or other worktrees.
+Lead sole writer/tester/installer; read-only reviewers completed. Good-spender remains removed.
+
+Implemented N1–N11: compatible model-inventory copies and bounded output-limit recovery;
+boolean/ticker parser admission; credential-scoped provider denial/response/cache/stream
+lifecycles; corruption-preserving price alerts, visible recovery and accepted-delivery latches;
+mid-batch mute; invalid journal targets; portfolio calendar and duplicate-lot analytics.
+Strategy/risk limits, historical records, model weights and broker controls were not changed.
+
+Review-pass native gates (Xcode26.6/17F113, Mac host27.0): Mac **2400 passed, 1 opt-in skip,
+0 failed**,227 suites/79.516s; iPhone17Pro(gate)/iOS26.5 **2320 passed, 0 skipped/failed**,
+223 suites/71.034s. Both process exit0, only README's three opt-in suite exclusions.
+Offline Python:46passed/2optional-LightGBM-skipped out of48. Runner exit-status self-check passed.
+Source/test/widget aggregate stayed
+`1b7d22e4ec8ff2976258e6647615a42b4b64a22c15a1a95268290543ee111a12` across final native gates.
+
+Full critique, regression evidence, exact exclusions, artifacts and limitations:
+`docs/superpowers/reviews/2026-09-12-reliability-review.md`.
+Plan: `docs/superpowers/plans/2026-09-12-complete-results.md`.
+Artifacts: `/private/tmp/stocksage-reliability-20260912.ZYOL3y`.
+`Mac-tested-StockSageX.app` passed strict/deep signature verification and is retained separately.
+
+**Installed app untouched:** `/Applications/StockSageX.app`, executable hash
+`ee3de94d6b8b53d818d2cc059ac0f823d7131172623a87dc44655fcec62c2e11`.
+No quit/install/reopen, merge, real orders, relay activation, paid provisioning or model
+download. Native inspection reached Home/Research then failed with the CUA native-pipe
+error; every remaining tab and changed modal still require actual visual acceptance. Do not
+claim the tested candidate is installed or every app screen has been inspected. After the
+inspection connection recovers, complete that coverage and the reversible normal-Quit install
+workflow; recheck source/app identity and preserve existing work first.
+
+Publication follow-up: a fresh exact-path inspection retry and supported connection reset
+still returned `Sky Computer Use native pipe closed before response`. Do not bypass this
+using an alternate UI-control technology or replace the app without its remaining acceptance.
+Fresh serial publication-gate artifacts: `/private/tmp/stocksage-publication-20260912.vcm7U3`.
+Both full gates repeated successfully on the same frozen source: Mac2400passed/1skip/0failed,
+227suites/79.685s; iPhone2320passed/0skips/0failed,223suites/69.642s; both exits0.
+See the review receipt's publication section for the rerun and retained candidate identity.
+
 ## Publication checkpoint — September 10, one commit; not an installation
 
 Owner requested commit/push, then explicitly requested one combined commit. Target:

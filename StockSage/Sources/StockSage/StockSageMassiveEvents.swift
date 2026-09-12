@@ -80,9 +80,12 @@ enum StockSageMassiveEvents {
         let outcome: Outcome
         let event: Event?
         var failure: Failure? = nil
+        var credentialRevision: String? = nil
         var key: String { symbol + "|" + feed.rawValue }
 
-        func fresh(at now: Date) -> Bool {
+        func fresh(at now: Date, credentialRevision expected: String? = nil) -> Bool {
+            // Dated successful facts survive rotation; a failed request cannot delay a new key.
+            if outcome == .unavailable, let expected, credentialRevision != expected { return false }
             let age = now.timeIntervalSince(checkedAt)
             guard age.isFinite, age >= 0, age < (outcome == .answered ? 86_400 : 900) else { return false }
             // A selected ex-date can pass at midnight: re-query for the NEXT date, not an
@@ -93,6 +96,7 @@ enum StockSageMassiveEvents {
     nonisolated struct RefreshKey: Equatable {
         let symbols: [String]
         let refreshedAt: Date?
+        var credentialRevision: String? = nil
     }
     nonisolated enum Direction: String { case raised, lowered, unchanged, mixed, unknown }
     nonisolated static func statusLine(_ feed: Feed, observation: Observation?, now: Date) -> String {
@@ -371,8 +375,8 @@ enum StockSageMassiveEvents {
     }
 
     private static func gateKey(_ feed: Feed) -> String { "stocksage.massive.\(feed.rawValue).unavailableUntil" }
-    private static func available(_ feed: Feed, now: Date) -> Bool {
-        StockSageMassiveEarnings.isAvailable(unavailableUntil: UserDefaults.standard.object(forKey: gateKey(feed)) as? Date, now: now)
+    private static func available(_ feed: Feed, now: Date, defaults: UserDefaults = .standard) -> Bool {
+        StockSageMassiveEarnings.isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey(feed), defaults: defaults), now: now)
     }
     /// One status-only probe per due feed BEFORE the four-wide sweep; nil means HTTP200,
     /// not validated data. Preserve the same safe reason on every skipped symbol.
@@ -381,9 +385,12 @@ enum StockSageMassiveEvents {
         return nil
     }
     static func fetch(_ feed: Feed, symbol: String, now: Date = Date()) async -> Observation {
-        await fetch(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey) {
-            await get(feed, request: $0, now: Date())
+        let revision = StockSageMassive.credentialRevision()
+        var result = await fetch(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey) {
+            await get(feed, request: $0, now: Date(), revision: revision)
         }
+        result.credentialRevision = revision ?? ""
+        return result
     }
     /// Injectable transport keeps the real request/response path testable without credentials or network.
     static func fetch(_ feed: Feed, symbol: String, now: Date, key: String,
@@ -429,22 +436,26 @@ enum StockSageMassiveEvents {
         }
     }
     private static func get(_ feed: Feed, symbol: String, now: Date, limit: Int = 100) async -> Result<Data, Failure> {
-        await get(feed, request: request(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey, limit: limit), now: now)
+        let revision = StockSageMassive.credentialRevision()
+        return await get(feed, request: request(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey, limit: limit), now: now, revision: revision)
     }
-    private static func get(_ feed: Feed, request: URLRequest?, now: Date) async -> Result<Data, Failure> {
-        guard ToolPolicy.isExternalAllowed else { return .failure(.externalAccessDisabled) }
-        guard !Task.isCancelled else { return .failure(.cancelled) }
-        guard available(feed, now: now) else { return .failure(.cooldown) }
+    static func get(_ feed: Feed, request: URLRequest?, now: Date, revision: String?, defaults: UserDefaults = .standard,
+                    allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+                    transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result<Data, Failure> {
+        guard allowed() else { return .failure(.externalAccessDisabled) }
+        guard !Task.isCancelled, revision == StockSageMassive.credentialRevision(defaults) else { return .failure(.cancelled) }
+        guard available(feed, now: now, defaults: defaults) else { return .failure(.cooldown) }
         guard let request else {
             return .failure(.requestUnavailable)
         }
         do {
-            let (data, response) = try await session.data(for: request)
-            guard !Task.isCancelled else { return .failure(.cancelled) }
-            guard ToolPolicy.isExternalAllowed else { return .failure(.externalAccessDisabled) }
+            let (data, response) = try await (transport ?? { try await session.data(for: $0) })(request)
+            guard !Task.isCancelled, revision == StockSageMassive.credentialRevision(defaults) else { return .failure(.cancelled) }
+            guard allowed() else { return .failure(.externalAccessDisabled) }
             guard let response = response as? HTTPURLResponse else { return .failure(.transport) }
             if let until = StockSageMassiveEarnings.availabilityOutcome(statusCode: response.statusCode, now: Date()) {
-                UserDefaults.standard.set(until, forKey: gateKey(feed))
+                StockSageMassiveCredential.recordDenial(until, gate: gateKey(feed),
+                    revision: revision, defaults: defaults)
             }
             return response.statusCode == 200 ? .success(data) : .failure(.http(response.statusCode))
         } catch {

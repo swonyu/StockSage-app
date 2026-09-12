@@ -11,6 +11,35 @@ struct StockSageMassiveTests {
 
     typealias M = StockSageMassive
 
+    @Test func environmentFallbackLaunchDoesNotInheritAnotherLaunchDenial() throws {
+        typealias C = StockSageMassiveCredential
+        let suite = "Massive.environment-launch.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var saved: String?
+        let storage = C.Storage(read: { saved }, write: { saved = $0 })
+        try C.beginLaunch(defaults: defaults, storage: storage, environment: "synthetic-A")
+        let first = try #require(M.credentialRevision(defaults))
+        C.recordDenial(Date().addingTimeInterval(86400), gate: "denial", revision: first, defaults: defaults)
+        #expect(C.denialUntil("denial", defaults: defaults) != nil)
+        try C.beginLaunch(defaults: defaults, storage: storage, environment: "synthetic-B")
+        #expect(M.credentialRevision(defaults) != first)
+        #expect(C.denialUntil("denial", defaults: defaults) == nil)
+        let second = M.credentialRevision(defaults)
+        saved = "synthetic-secure"
+        try C.beginLaunch(defaults: defaults, storage: storage, environment: "synthetic-C")
+        #expect(M.credentialRevision(defaults) == second, "An unchanged saved credential retains its gate")
+        #expect(defaults.string(forKey: M.keyDefaultsKey) == nil)
+        saved = nil
+        C.recordDenial(Date().addingTimeInterval(86400), gate: "denial", revision: second, defaults: defaults)
+        let locked = C.Storage(read: { throw C.Failure.unavailable }, write: { _ in Issue.record("Must not write while locked") })
+        #expect(throws: C.Failure.self) {
+            try C.beginLaunch(defaults: defaults, storage: locked, environment: "synthetic-D")
+        }
+        #expect(C.denialUntil("denial", defaults: defaults) == nil)
+        #expect(try C.resolve(defaults: defaults, storage: storage, environment: "synthetic-D") == "synthetic-D")
+    }
+
     @Test func inaccessibleStorageDoesNotSelectAnEnvironmentCredential() throws {
         typealias C = StockSageMassiveCredential
         let suite = "Massive.locked.\(UUID().uuidString)"
@@ -322,6 +351,14 @@ struct StockSageMassiveTests {
       {"o":74.2875,"h":75.145,"l":74.125,"c":74.3575,"v":146535512,"t":1578027600000}
     ],"status":"OK","ticker":"AAPL"}
     """.data(using: .utf8)!
+
+    @Test func restIdentityCannotBeRelabelledOrCaseFolded() throws {
+        #expect(M.parseHistory(Self.aggregateSample, symbol: "MSFT") == nil)
+        let snapshot = #"{"tickers":[{"ticker":"APTVpA","lastTrade":{"p":20,"t":1700000000000000000},"prevDay":{"c":19}}]}"#
+        #expect(M.parseSnapshot(Data(snapshot.utf8), requestedSymbols: ["APTVPA"]).isEmpty)
+        #expect(M.parseSnapshot(Data(snapshot.utf8), requestedSymbols: ["APTVpA"]).isEmpty,
+                "The legacy uppercase board must not merge case-sensitive instruments")
+    }
 
     @Test("split-adjusted aggregate bars map byte-for-byte into the existing history shape")
     func parsesAggregateHistory() throws {

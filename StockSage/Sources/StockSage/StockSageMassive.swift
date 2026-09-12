@@ -155,11 +155,15 @@ enum StockSageMassive {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rows = obj["tickers"] as? [[String: Any]] else { return [:] }
         var wanted: [String: String] = [:]                       // UPPER → requested spelling (first wins)
-        for s in requestedSymbols where wanted[s.uppercased()] == nil { wanted[s.uppercased()] = s }
+        for s in requestedSymbols where wanted[s.uppercased()] == nil {
+            // This board has uppercase IDs; native mixed-case securities stay in the exact-ID feed.
+            guard StockSageLiveStream.stockSymbol(s) == s.uppercased() else { continue }
+            wanted[s.uppercased()] = s
+        }
         var out: [String: StockSageQuoteService.LiveQuote] = [:]
         for row in rows {
             guard let ticker = row["ticker"] as? String,
-                  let requested = wanted[ticker.uppercased()],
+                  let requested = wanted[ticker],
                   let q = parseTicker(row, requestedSymbol: requested) else { continue }
             out[ticker.uppercased()] = q
         }
@@ -339,6 +343,10 @@ enum StockSageMassive {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK",
               let rows = root["results"] as? [[String: Any]], !rows.isEmpty else { return nil }
+        if let raw = root["ticker"] {
+            guard let echoed = raw as? String,
+                  echoed == (StockSageLiveStream.stockSymbol(symbol) ?? symbol) else { return nil }
+        }
         // Requests require adjusted=true. Older payloads may omit this metadata, but
         // an explicit false or malformed flag must not feed split discontinuities into ATR.
         if let raw = root["adjusted"] {

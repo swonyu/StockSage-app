@@ -8,6 +8,20 @@ struct StockSageMassiveEventsTests {
     private typealias W = StockSageCatalystWatch
     private let now = Date(timeIntervalSince1970: 1_788_652_800) // 2026-09-06 UTC
 
+    @Test func credentialRotationReopensFailedObservationWithoutDiscardingDatedFacts() throws {
+        var failure = E.Observation(symbol: "AAPL", feed: .ratings, checkedAt: now, outcome: .unavailable,
+                                    event: nil, failure: .cooldown, credentialRevision: "A")
+        #expect(failure.fresh(at: now, credentialRevision: "A"))
+        #expect(!failure.fresh(at: now, credentialRevision: "B"))
+        failure.credentialRevision = nil
+        #expect(!failure.fresh(at: now, credentialRevision: "B"))
+        let good = E.Observation(symbol: "AAPL", feed: .ratings, checkedAt: now, outcome: .answered, event: nil)
+        #expect(good.fresh(at: now, credentialRevision: "B"))
+        #expect(try JSONDecoder().decode(E.Observation.self, from: JSONEncoder().encode(failure)) == failure)
+        #expect(E.RefreshKey(symbols: ["AAPL"], refreshedAt: now, credentialRevision: "A") !=
+                E.RefreshKey(symbols: ["AAPL"], refreshedAt: now, credentialRevision: "B"))
+    }
+
     private func body(_ rows: String, tail: String = "") -> Data {
         Data("{\"status\":\"OK\",\"results\":[\(rows)]\(tail)}".utf8)
     }

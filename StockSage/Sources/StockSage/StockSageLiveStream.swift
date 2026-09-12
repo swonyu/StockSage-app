@@ -192,6 +192,7 @@ final class StockSageLiveStream: ObservableObject {
 
     func start(symbols _: [String]) {
         guard ToolPolicy.isExternalAllowed, StockSageMassive.isConfigured else { stop(); return }
+        if connection?.isCurrent == false { stop() }
         // Viewing a different board never changes the wildcard subscription or reconnects.
         guard connection == nil else { return }
         let current = StockSageLiveStreamConnection()
@@ -200,9 +201,9 @@ final class StockSageLiveStream: ObservableObject {
         publication = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.connection === current else { return }
-                guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+                guard ToolPolicy.isExternalAllowed, current.isCurrent else { self.stop(); return }
                 self.refreshReferences(stillValid: { [weak self, weak current] in
-                    current != nil && self?.connection === current && ToolPolicy.isExternalAllowed
+                    current?.isCurrent == true && self?.connection === current && ToolPolicy.isExternalAllowed
                 })
                 if let ingress = current.ingress {
                     let store = StockSageStore.shared
@@ -215,7 +216,7 @@ final class StockSageLiveStream: ObservableObject {
                         ? self.quotes.filter { selected.contains($0.key) } : [:]
                     let snapshot = await ingress.snapshot(symbols: selection.picked, retainingQuotes: retained)
                     guard !Task.isCancelled, self.connection === current, current.ingress === ingress else { continue }
-                    guard ToolPolicy.isExternalAllowed else { self.stop(); return }
+                    guard ToolPolicy.isExternalAllowed, current.isCurrent else { self.stop(); return }
                     guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)) else {
                         self.publicationCursor = 0 // A selection changed while the worker was capturing.
                         continue
@@ -374,7 +375,15 @@ final class StockSageLiveStream: ObservableObject {
 }
 
 @MainActor
-private final class StockSageLiveStreamConnection {
+final class StockSageLiveStreamConnection {
+    private let revision: String?
+    private let currentRevision: @MainActor () -> String?
+    var isCurrent: Bool { revision == currentRevision() }
+
+    init(currentRevision: @escaping @MainActor () -> String? = { StockSageMassive.credentialRevision() }) {
+        self.currentRevision = currentRevision
+        revision = currentRevision()
+    }
     private(set) var ingress: StockSageFeedIngress?
     private var socket: URLSessionWebSocketTask?
     private var reconnectAttempt = 0
@@ -384,16 +393,18 @@ private final class StockSageLiveStreamConnection {
     private var pingDeadline: Task<Void, Never>?
 
     func open() {
-        guard active, ToolPolicy.isExternalAllowed else { close(); return }
+        guard active, ToolPolicy.isExternalAllowed, isCurrent else { close(); return }
         let key = StockSageMassive.apiKey
         guard !key.isEmpty, let url = URL(string: StockSageLiveStream.massiveHost) else { return }
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = StockSageFeedIngress.Limits().frameBytes
-        let ingress = StockSageFeedIngress(authorized: { source in
+        let ingress = StockSageFeedIngress(authorized: { [weak self] source in
             // One auth transition may hop to MainActor to recheck policy; data frames never do.
             Task { @MainActor in
                 guard source.isActive else { return }
-                guard ToolPolicy.isExternalAllowed else { source.invalidate("External access disabled"); return }
+                guard ToolPolicy.isExternalAllowed, self?.isCurrent == true else {
+                    source.invalidate("Feed configuration changed; reconnect required"); return
+                }
                 guard let text = StockSageLiveStream.massiveSubscription() else { return }
                 socket.send(.string(text)) { error in
                     if error != nil { source.invalidate("Feed subscription send failed; gap and reconnect") }
@@ -422,7 +433,7 @@ private final class StockSageLiveStreamConnection {
     }
 
     func retry() {
-        guard active else { return }
+        guard active, isCurrent else { close(); return }
         ingress?.invalidate(); ingress = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         watchdog?.cancel(); watchdog = nil
@@ -432,7 +443,7 @@ private final class StockSageLiveStreamConnection {
         reconnect?.cancel()
         reconnect = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled, let self, self.active, ToolPolicy.isExternalAllowed else { return }
+            guard !Task.isCancelled, let self, self.active, self.isCurrent, ToolPolicy.isExternalAllowed else { return }
             self.open()
         }
     }
@@ -442,9 +453,10 @@ private final class StockSageLiveStreamConnection {
         watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(15))
             guard !Task.isCancelled, let self, self.socket === socket, ingress.isActive else { return }
-            guard ToolPolicy.isExternalAllowed else { self.close(); return }
+            guard ToolPolicy.isExternalAllowed, self.isCurrent else { self.close(); return }
             let snapshot = await ingress.snapshot(symbols: [])
             guard !Task.isCancelled, self.socket === socket else { return }
+            guard ToolPolicy.isExternalAllowed, self.isCurrent else { self.close(); return }
             guard snapshot.authorized else { ingress.invalidate("Feed authentication timed out; gap and reconnect"); return }
             self.reconnectAttempt = 0
             self.pingDeadline = Task {
@@ -455,6 +467,7 @@ private final class StockSageLiveStreamConnection {
             socket.sendPing { [weak self] error in
                 Task { @MainActor in
                     guard let self, self.socket === socket, ingress.isActive else { return }
+                    guard ToolPolicy.isExternalAllowed, self.isCurrent else { self.close(); return }
                     self.pingDeadline?.cancel(); self.pingDeadline = nil
                     if error != nil { ingress.invalidate("Feed ping failed; gap and reconnect") }
                     else { self.armWatchdog(socket, ingress: ingress) }

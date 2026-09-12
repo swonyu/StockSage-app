@@ -56,10 +56,11 @@ nonisolated struct StockSageCatalystRecordCache: Codable, Sendable, Equatable {
         /// Human-readable derivation for a `.projected` date, e.g. "median gap of last 6 reports =
         /// 91 d from 2026-07-30" — always present when `status == .projected`, always nil otherwise.
         var projectionBasis: String?
+        var credentialRevision: String?
 
         init(symbol: String, earningsDate: Date?, checkedAt: Date, source: String,
              status: Status = .unchecked, confirmed: Bool? = nil, dateRangeEnd: Date? = nil,
-             sourcesAsked: [String] = [], projectionBasis: String? = nil) {
+             sourcesAsked: [String] = [], projectionBasis: String? = nil, credentialRevision: String? = nil) {
             self.symbol = symbol.uppercased()
             self.earningsDate = earningsDate
             self.checkedAt = checkedAt
@@ -69,6 +70,7 @@ nonisolated struct StockSageCatalystRecordCache: Codable, Sendable, Equatable {
             self.dateRangeEnd = dateRangeEnd
             self.sourcesAsked = sourcesAsked
             self.projectionBasis = projectionBasis
+            self.credentialRevision = credentialRevision
         }
 
         /// Hand-written, not synthesized: verified empirically (2026-09-06) that Swift's
@@ -88,6 +90,7 @@ nonisolated struct StockSageCatalystRecordCache: Codable, Sendable, Equatable {
             dateRangeEnd = try c.decodeIfPresent(Date.self, forKey: .dateRangeEnd)
             sourcesAsked = try c.decodeIfPresent([String].self, forKey: .sourcesAsked) ?? []
             projectionBasis = try c.decodeIfPresent(String.self, forKey: .projectionBasis)
+            credentialRevision = try c.decodeIfPresent(String.self, forKey: .credentialRevision)
         }
     }
 

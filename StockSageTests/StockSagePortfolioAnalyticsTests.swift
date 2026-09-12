@@ -8,6 +8,33 @@ struct StockSagePortfolioAnalyticsTests {
 
     typealias PA = StockSagePortfolioAnalytics
 
+    @MainActor @Test func benchmarkCannotEraseHoldingLossAndLotsCannotCreateDiversification() async throws {
+        let name = "analytics.assembly.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let calendar = Calendar(identifier: .gregorian)
+        let start = ISO8601DateFormatter().date(from: "2026-08-23T12:00:00Z")!
+        let days = [0, 1, 2, 3, 4, 7, 8, 9, 10, 11].map { start.addingTimeInterval(Double($0) * 86400) }
+        func history(_ symbol: String, _ dates: [Date], _ closes: [Double]) -> StockSagePriceHistory {
+            .init(symbol: symbol, dates: dates, opens: closes, highs: closes, lows: closes, closes: closes,
+                  volumes: Array(repeating: 100, count: closes.count))
+        }
+        let holding = history("2222.SR", days, [100, 100, 100, 100, 100, 50, 50, 50, 50, 50])
+        let lots = [PortfolioPosition(symbol: "2222.SR", shares: 8, costBasis: 100)]
+        await store.applyPortfolioAnalytics(positions: lots, histories: ["2222.SR": holding], benchmark: nil)
+        let baseline = try #require(store.analytics)
+        #expect(baseline.maxDrawdown == 50)
+        let usDays = days.filter { calendar.component(.weekday, from: $0) != 1 }
+        let market = history("^GSPC", usDays, Array(repeating: 100, count: usDays.count))
+        await store.applyPortfolioAnalytics(positions: lots, histories: ["2222.SR": holding], benchmark: market)
+        #expect(store.analytics == baseline, "An optional benchmark must affect beta only")
+        let splitLots = (0..<8).map { _ in PortfolioPosition(symbol: "2222.SR", shares: 1, costBasis: 100) }
+        await store.applyPortfolioAnalytics(positions: splitLots, histories: ["2222.SR": holding], benchmark: nil)
+        #expect(store.analytics == baseline, "Stored lots are not distinct investments")
+        #expect(store.correlation == nil)
+    }
+
     @Test func dailyReturnsComputeCorrectly() {
         let r = PA.dailyReturns([100, 110, 99])
         #expect(r.count == 2)
