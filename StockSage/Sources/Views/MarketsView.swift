@@ -6605,9 +6605,15 @@ struct MarketsView: View {
                         Text(String(format: "%+.1f%%", c.priceChangePct))
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(Self.signedMetricColor(positive: c.priceChangePct >= 0))
-                        if c.likelyMechanicalFlow {
+                        // `== true` and a separate unknown chip: nil means the ADV was never
+                        // measured for this name (the whole-board path passes none), and silence
+                        // would read as "checked, it is information".
+                        if c.likelyMechanicalFlow == true {
                             Text("index flow?")
                                 .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
+                        } else if c.likelyMechanicalFlow == nil {
+                            Text("ADV n/a")
+                                .font(.system(size: mvFont9)).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
                         Text(c.tier.rawValue).font(.system(size: mvFont9, weight: .semibold))

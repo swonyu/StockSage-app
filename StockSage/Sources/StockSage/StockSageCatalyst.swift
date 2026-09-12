@@ -41,8 +41,19 @@ enum StockSageCatalyst {
         /// True when the name's average dollar volume is large enough that spikes are routinely
         /// mechanical (index rebalances, passive flows) rather than informational — the report's
         /// own caution. Not a rejection: a flag the reader weighs.
-        let likelyMechanicalFlow: Bool
+        ///
+        /// OPTIONAL (2026-09-12): nil means the ADV is UNKNOWN for this name, which is the normal
+        /// case on the whole-board path — `liquidity` is in-memory and empty until a detail sheet
+        /// is opened. It used to collapse to `false` via `(advDollar ?? 0) >= threshold`, so
+        /// "never measured" rendered identically to "measured, and it is information". They are
+        /// different facts and only one of them is a finding.
+        let likelyMechanicalFlow: Bool?
         let caveat: String
+        /// Calendar day of the bar the spike was measured on — nil when the caller supplied no
+        /// `dates` (or a ragged one that cannot be aligned to `closes`). A `var` with a default so
+        /// every existing `Signal(...)` literal keeps compiling, and so an undated signal renders
+        /// exactly as it did before this field existed.
+        var barDate: Date? = nil
     }
 
     /// Baseline length in bars (the report's "20 or 50 day ADV"; 20 is the responsive choice).
@@ -54,6 +65,19 @@ enum StockSageCatalyst {
     /// Above this average dollar volume, spikes are commonly passive/mechanical (report: large
     /// caps trading ~$5B/day rebalance on schedule).
     nonisolated static let mechanicalFlowADVDollar = 5_000_000_000.0
+    /// A measured bar older than this many full days is HISTORY, not a move happening now. Mirrors
+    /// `StockSageHistoryCache.isStale`'s default `maxAgeDays` (7 ≈ 5 trading days) AND its
+    /// truncating `Int(interval / 86_400) > maxAgeDays` arithmetic, so the two never disagree
+    /// about the same bar.
+    nonisolated static let staleBarDays = 7
+
+    /// Whether a measured bar is too old to describe as something happening now.
+    nonisolated static func isStaleBar(_ barDate: Date?, now: Date) -> Bool {
+        guard let barDate else { return false }   // undated: unknown, not stale
+        let secs = now.timeIntervalSince(barDate)
+        guard secs.isFinite, secs >= 0 else { return false }
+        return Int(secs / 86_400) > staleBarDays
+    }
 
     nonisolated static let caveat =
         "UNVALIDATED detector: unusual volume alongside an unusual move. It describes what just "
@@ -66,6 +90,7 @@ enum StockSageCatalyst {
     nonisolated static func detect(symbol: String,
                                    closes: [Double],
                                    volumes: [Double],
+                                   dates: [Date] = [],
                                    advDollar: Double? = nil,
                                    minRVOL: Double = minRVOL,
                                    minAbsPriceMovePct: Double = minAbsPriceMovePct) -> Signal? {
@@ -90,15 +115,22 @@ enum StockSageCatalyst {
               let tier = Tier.forRVOL(rvol) else { return nil }
 
         return Signal(symbol: symbol, rvol: rvol, priceChangePct: changePct, tier: tier,
-                      likelyMechanicalFlow: (advDollar ?? 0) >= mechanicalFlowADVDollar,
-                      caveat: caveat)
+                      // nil ADV stays nil: `(advDollar ?? 0) >= threshold` made "never measured"
+                      // indistinguishable from "measured, below the bar". A non-finite ADV is
+                      // likewise unknown, not "small".
+                      likelyMechanicalFlow: advDollar.flatMap { $0.isFinite ? $0 >= mechanicalFlowADVDollar : nil },
+                      caveat: caveat,
+                      // Equal-length ONLY: a ragged `dates` cannot be aligned to `closes`, and a
+                      // dateless caller must keep detecting — a guard-return-nil here would
+                      // silently kill the detector for every caller that has no dates.
+                      barDate: dates.count == closes.count ? dates.last : nil)
     }
 
     /// Scan many symbols, strongest volume confirmation first. Pure: no I/O, no network.
     nonisolated static func scan(_ histories: [String: StockSagePriceHistory],
                                  advDollarBySymbol: [String: Double] = [:]) -> [Signal] {
         histories.compactMap { symbol, h in
-            detect(symbol: symbol, closes: h.closes, volumes: h.volumes,
+            detect(symbol: symbol, closes: h.closes, volumes: h.volumes, dates: h.dates,
                    advDollar: advDollarBySymbol[symbol])
         }
         .sorted { $0.rvol > $1.rvol }

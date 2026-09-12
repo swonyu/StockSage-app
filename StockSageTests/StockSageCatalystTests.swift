@@ -126,15 +126,73 @@ struct StockSageCatalystTests {
 
     // MARK: mechanical-flow flag
 
+    // DELIBERATE CONTRACT CHANGE (2026-09-12): `likelyMechanicalFlow` is now `Bool?`, so these two
+    // assertions become explicit `== true` / `== false`. They previously read as bare Bools, which
+    // is exactly what hid the defect: `(advDollar ?? 0) >= threshold` collapsed "never measured"
+    // into "measured, below the bar", and the whole-board path measures nothing.
     @Test("mega-cap spikes are flagged as possibly mechanical, not silently trusted")
     func mechanicalFlowFlag() throws {
         let (closes, volumes) = series(spikeMultiple: 6, movePct: 6)
         let mega = try #require(C.detect(symbol: "MEGA", closes: closes, volumes: volumes,
                                          advDollar: 8_000_000_000))
-        #expect(mega.likelyMechanicalFlow)
+        #expect(mega.likelyMechanicalFlow == true)
         let small = try #require(C.detect(symbol: "SMALL", closes: closes, volumes: volumes,
                                           advDollar: 40_000_000))
-        #expect(!small.likelyMechanicalFlow)
+        #expect(small.likelyMechanicalFlow == false)
+        // The threshold stays INCLUSIVE and still decides whenever the number is real.
+        let atFloor = try #require(C.detect(symbol: "AT", closes: closes, volumes: volumes,
+                                            advDollar: C.mechanicalFlowADVDollar))
+        #expect(atFloor.likelyMechanicalFlow == true)
+        let underFloor = try #require(C.detect(symbol: "UNDER", closes: closes, volumes: volumes,
+                                               advDollar: C.mechanicalFlowADVDollar.nextDown))
+        #expect(underFloor.likelyMechanicalFlow == false)
+    }
+
+    @Test("an unknown or non-finite ADV is nil — never a confident 'not mechanical'")
+    func unknownADVIsNotAVerdict() throws {
+        let (closes, volumes) = series(spikeMultiple: 6, movePct: 6)
+        // The whole-board path passed NO ADV at all; that must not read as "checked: information".
+        let unknown = try #require(C.detect(symbol: "UNK", closes: closes, volumes: volumes))
+        #expect(unknown.likelyMechanicalFlow == nil)
+        for bad in [Double.nan, .infinity, -.infinity] {
+            let s = try #require(C.detect(symbol: "BAD", closes: closes, volumes: volumes, advDollar: bad))
+            #expect(s.likelyMechanicalFlow == nil, "non-finite ADV is unknown, not 'below the bar'")
+        }
+    }
+
+    // MARK: barDate — a measured bar must say WHEN
+
+    @Test("detect dates the bar only when dates align with closes")
+    func barDateRequiresAlignedDates() throws {
+        let (closes, volumes) = series(spikeMultiple: 6, movePct: 6)
+        let days = (0..<closes.count).map { Date(timeIntervalSince1970: Double($0) * 86_400) }
+        let dated = try #require(C.detect(symbol: "D", closes: closes, volumes: volumes, dates: days))
+        #expect(dated.barDate == days.last)
+        // No dates at all: still detects, undated. A guard-return-nil here would kill the
+        // detector for every caller that has no dates.
+        let undated = try #require(C.detect(symbol: "U", closes: closes, volumes: volumes))
+        #expect(undated.barDate == nil)
+        // Ragged dates cannot be aligned to closes, so they are not trusted.
+        let ragged = try #require(C.detect(symbol: "R", closes: closes, volumes: volumes,
+                                           dates: Array(days.dropLast())))
+        #expect(ragged.barDate == nil)
+    }
+
+    @Test("staleness mirrors the history cache's own 7-day truncating arithmetic")
+    func staleBarStraddlesTheBoundary() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func at(_ daysAgo: Double) -> Date { now.addingTimeInterval(-daysAgo * 86_400) }
+        // The arithmetic is TRUNCATING, exactly like StockSageHistoryCache.isStale:
+        // stale iff Int(seconds / 86_400) > 7, so the first stale age is 8 full days, not 7.0001.
+        #expect(C.staleBarDays == 7)
+        #expect(!C.isStaleBar(at(7), now: now))
+        #expect(!C.isStaleBar(at(7.9), now: now), "still 7 whole days after truncation")
+        #expect(C.isStaleBar(at(8), now: now), "the first stale age")
+        #expect(C.isStaleBar(at(30), now: now))
+        #expect(!C.isStaleBar(at(0), now: now))
+        // Unknown and forward-dated are not stale — unknown is not a finding either way.
+        #expect(!C.isStaleBar(nil, now: now))
+        #expect(!C.isStaleBar(at(-1), now: now))
     }
 
     // MARK: scan ordering

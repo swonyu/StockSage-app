@@ -70,6 +70,30 @@ enum StockSageLiquidity {
         return LiquidityProfile(avgDollarVolume: adv, tier: tier(adv))
     }
 
+    /// ADV in dollars for every symbol whose price x volume is genuinely USD, preferring an
+    /// already-measured profile over a recomputation.
+    ///
+    /// BATCH 9.2 (2026-09-12). `StockSageStore.refreshCatalysts` fed the mechanical-flow flag from
+    /// `liquidity`, which is in-memory and stays EMPTY until the owner opens a detail sheet — so
+    /// in a normal session the flag was inert for every name on the board. The histories the
+    /// catalyst scan already holds are enough to compute it.
+    ///
+    /// The `isUSDPriced` guard is load-bearing: a London listing quotes in PENCE, so pence x
+    /// shares would produce a confidently wrong dollar ADV and could cross the $5B mechanical-flow
+    /// threshold on a mid-cap. A non-USD name is left absent, which now reads as "unknown".
+    nonisolated static func advDollarBySymbol(histories: [String: StockSagePriceHistory],
+                                              known: [String: Double] = [:]) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for (symbol, h) in histories {
+            let key = symbol.uppercased()
+            if let k = known[key] ?? known[symbol] { out[key] = k; continue }
+            guard isUSDPriced(symbol) else { continue }
+            guard let p = profile(closes: h.closes, volumes: h.volumes) else { continue }
+            out[key] = p.avgDollarVolume
+        }
+        return out
+    }
+
     nonisolated static func humanDollars(_ v: Double) -> String {
         switch v {
         case 1_000_000_000...: return String(format: "$%.1fB", v / 1_000_000_000)

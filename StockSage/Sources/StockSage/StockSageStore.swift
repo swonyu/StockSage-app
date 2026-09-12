@@ -2521,7 +2521,11 @@ final class StockSageStore: ObservableObject {
         guard let histories = cache?.priceHistories(), !histories.isEmpty else {
             catalysts = []; return
         }
-        let advBySymbol = liquidity.mapValues(\.avgDollarVolume)
+        // 9.2: `liquidity` is in-memory and empty until a detail sheet is opened, so feeding the
+        // mechanical-flow flag from it alone left the flag inert for the whole board in a normal
+        // session. Compute ADV from the histories already in hand, preferring a measured profile.
+        let advBySymbol = StockSageLiquidity.advDollarBySymbol(
+            histories: histories, known: liquidity.mapValues(\.avgDollarVolume))
         let found = await Task.detached {
             StockSageCatalyst.scan(histories, advDollarBySymbol: advBySymbol)
         }.value

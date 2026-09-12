@@ -179,7 +179,7 @@ enum StockSageCatalystWatch {
             }
         }
 
-        let volumeSlot = inputs.volumeMove.map { volumeMoveItem(idea: idea, signal: $0) }
+        let volumeSlot = inputs.volumeMove.map { volumeMoveItem(idea: idea, signal: $0, now: inputs.now) }
 
         // W1 (2026-09-06): a PROJECTED date only applies when there's no genuinely known one
         // (`inputs.earningsDate` above is nil in that case — dateKnown and projected are mutually
@@ -304,25 +304,48 @@ enum StockSageCatalystWatch {
                    watch: watch, weight: weight, source: source, caveat: nil)
     }
 
-    private nonisolated static func volumeMoveItem(idea: StockSageIdea, signal: StockSageCatalyst.Signal) -> Item {
+    private nonisolated static func volumeMoveItem(idea: StockSageIdea, signal: StockSageCatalyst.Signal,
+                                                   now: Date) -> Item {
+        // "on the latest cached bar" said WHERE the bar came from but never WHEN. A freshly
+        // fetched history whose newest bar is weeks old (a halted or thinly traded name) produced
+        // a present-tense headline about a move that finished a month ago — and, being a .major
+        // tier, outranked a clear upcoming earnings date for the primary slot.
+        let stale = StockSageCatalyst.isStaleBar(signal.barDate, now: now)
+        let whenPart = signal.barDate == nil ? "on the latest cached bar" : "on the bar below"
         let headline = "\(String(format: "%.1f", signal.rvol))× volume, "
-            + "\(String(format: "%+.1f%%", signal.priceChangePct)) on the latest cached bar — "
+            + "\(String(format: "%+.1f%%", signal.priceChangePct)) \(whenPart) — "
             + "\(signal.tier.rawValue.capitalized)"
         var why = ["Order flow confirmed that something happened; the direction is a description, not a forecast — the same spike marks a takeover and a collapse."]
-        if signal.likelyMechanicalFlow {
+        switch signal.likelyMechanicalFlow {
+        case .some(true):
             why.append("Average dollar volume is large enough that this may be passive/index flow rather than information.")
+        case .none:
+            // Silence here would read as "checked, and it is information" — the flag's whole point
+            // is that a mega-cap spike is often mechanical, so an unknown must say so.
+            why.append("Average dollar volume is not known for this name, so whether this is passive/index flow rather than information was not checked.")
+        case .some(false):
+            break
         }
         let watch = idea.advice.stopPrice != nil
             ? "Follow-through next session versus a reversal; a close through the stop invalidates the idea, not the catalyst."
             : "Follow-through next session versus a reversal."
-        let weight: Weight
+        var weight: Weight
         switch signal.tier {
         case .major:       weight = .high
         case .significant: weight = .medium
         case .notable:     weight = .low
         }
-        return Item(symbol: idea.symbol, kind: .volumeMove, headline: headline, date: nil, why: why,
-                   watch: watch, weight: weight, source: "on-disk history (latest bar)", caveat: StockSageCatalyst.caveat)
+        var caveat = StockSageCatalyst.caveat
+        if stale, let barDate = signal.barDate {
+            let days = Int(now.timeIntervalSince(barDate) / 86_400)
+            caveat = "This spike is \(days) days old — history, not a move happening now. " + caveat
+            // Demoted so a stale spike cannot outrank a dated, upcoming catalyst for the primary
+            // slot. It is still SHOWN: it happened, and hiding it would be its own dishonesty.
+            weight = .low
+        }
+        return Item(symbol: idea.symbol, kind: .volumeMove, headline: headline, date: signal.barDate,
+                   why: why, watch: watch, weight: weight,
+                   source: "on-disk history (latest bar)", caveat: caveat)
     }
 
     private nonisolated static func extremeItem(idea: StockSageIdea, extreme: SparkSeries.Extreme) -> Item {
