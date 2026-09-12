@@ -1,5 +1,43 @@
 import SwiftUI
 import UserNotifications
+#if os(macOS)
+import AppKit
+
+@MainActor final class StockSageQuitDelegate: NSObject, NSApplicationDelegate {
+    private var quitting = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !StockSageStore.isRunningTests else { return .terminateNow }
+        guard !quitting else { return .terminateLater }
+        let defaults = UserDefaults.standard
+        let backend = StockSageCatalystNarrator.selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
+        guard backend == .auto || backend == .localServerOnly,
+              defaults.string(forKey: StockSageLocalModelServer.modelKey) != nil else { return .terminateNow }
+        quitting = true
+        let config = StockSageLocalModelServer.config(
+            url: UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey) ?? StockSageLocalModelServer.defaultURL,
+            model: UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey) ?? StockSageLocalModelServer.defaultModel)
+        Task {
+            let wasBusy = await StockSageLocalModelServer.beginShutdown()
+            let unloaded: Bool
+            if let config { unloaded = await StockSageLocalModelServer.unloadOnQuit(config, inferenceWasActive: wasBusy) }
+            else { unloaded = true }
+            var shouldQuit = true
+            if !unloaded {
+                let alert = NSAlert()
+                alert.messageText = "Model unload could not be confirmed"
+                alert.informativeText = "StockSage stopped sending AI requests, but the model server did not confirm unloading. You can unload it in LM Studio or Ollama. Model files and your records are kept."
+                alert.addButton(withTitle: "Quit Anyway")
+                alert.addButton(withTitle: "Keep StockSage Open")
+                shouldQuit = alert.runModal() == .alertFirstButtonReturn
+            }
+            if !shouldQuit { StockSageLocalModelServer.cancelShutdown(); quitting = false }
+            sender.reply(toApplicationShouldTerminate: shouldQuit)
+        }
+        return .terminateLater
+    }
+}
+#endif
 
 /// Reject the retired capture flag before SwiftUI constructs any preference-backed
 /// App properties, scenes or shared stores. Component fixtures run in the test host.
@@ -35,6 +73,7 @@ struct StockSageApp: App {
     // owns its own observation; the App struct needs none.
     @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
     #if os(macOS)
+    @NSApplicationDelegateAdaptor(StockSageQuitDelegate.self) private var quitDelegate
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     #endif
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false

@@ -59,7 +59,7 @@ final class StockSageHorizonResearch: ObservableObject {
     @Published private(set) var running: Horizon?
     @Published private(set) var activeSymbol: String?
     private var task: Task<Void, Never>?
-    private enum ScanFailure: Error { case modelUnavailable }
+    enum ScanFailure: Error { case modelUnavailable(String) }
     private static let session = URLSession(configuration: .ephemeral, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
 
     // Vendor contract: massive.com/docs/rest/stocks/tickers/all-tickers, checked 2026-09-09.
@@ -168,6 +168,7 @@ final class StockSageHorizonResearch: ObservableObject {
     }
 
     func start(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
+        interruptionReason: @escaping @MainActor () -> String? = { nil },
                universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
                analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
         guard task == nil, allowed() else { return false }
@@ -204,9 +205,12 @@ final class StockSageHorizonResearch: ObservableObject {
                 // A failed preflight is not a replacement run; restore captured data and its dates.
                 if !didStart, let previousScan { scans[horizon] = previousScan }
                 if !valid() {
-                    scans[horizon]?.status = "Scan stopped · completed results retained; remaining listings were not checked."
-                } else if error is ScanFailure {
-                    scans[horizon]?.status = "Local Qwen could not be reached or the selected model is missing. Check Model settings and retry; no scan started."
+                    let reason = Task.isCancelled ? "Stop requested" : (interruptionReason() ?? "Model settings or access changed")
+                    let count = scans[horizon]?.results.count ?? 0
+                    let retained = count == 0 ? "No stocks were checked; no results to retain." : "\(count) completed results retained; remaining listings were not checked."
+                    scans[horizon]?.status = "Scan stopped · \(reason). \(retained) Run again when ready."
+                } else if case ScanFailure.modelUnavailable(let detail) = error {
+                    scans[horizon]?.status = "\(detail) No scan started. Open Catalysts → Explanation model, finish setup, then Run again."
                 } else {
                     scans[horizon]?.status = "Scan incomplete: US directory or dated market activity could not be verified. Check Massive settings and retry."
                 }
@@ -233,15 +237,23 @@ final class StockSageHorizonResearch: ObservableObject {
         let key = StockSageMassive.apiKey
         let credentialRevision = StockSageMassive.credentialRevision()
         let revision = StockSageLocalModelServer.settingsRevision()
-        let allowed: @MainActor () -> Bool = {
-            ToolPolicy.isExternalAllowed && !store.isSampleData && StockSageMassive.apiKey == key
-                && StockSageMassive.credentialRevision() == credentialRevision
-                && StockSageAIAssessments.configuration == config && StockSageLocalModelServer.settingsRevision() == revision
+        let interruptionReason: @MainActor () -> String? = {
+            if StockSageLocalModelServer.isShuttingDown { return "StockSage is closing" }
+            if !ToolPolicy.isExternalAllowed { return "Web access was disabled" }
+            if store.isSampleData { return "The app switched to sample data" }
+            if StockSageMassive.apiKey != key || StockSageMassive.credentialRevision() != credentialRevision {
+                return "Massive credentials changed"
+            }
+            if StockSageAIAssessments.configuration != config || StockSageLocalModelServer.settingsRevision() != revision {
+                return "Model settings changed"
+            }
+            return nil
         }
+        let allowed: @MainActor () -> Bool = { interruptionReason() == nil }
         var isOllama = false
-        _ = start(horizon, allowed: allowed, universe: {
-            let probe = await StockSageLocalModelServer.probe(config, stillValid: allowed)
-            guard probe.reachable, probe.hasModel else { throw ScanFailure.modelUnavailable }
+        _ = start(horizon, allowed: allowed, interruptionReason: interruptionReason, universe: {
+            let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
+            guard probe.reachable, probe.hasModel else { throw ScanFailure.modelUnavailable(probe.detail) }
             isOllama = probe.isOllama
             return try await StockSageResearchUniverse.fetch(key: key, allowed: allowed)
         }, analyze: { item in

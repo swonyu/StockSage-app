@@ -24,6 +24,39 @@ struct StockSageResearchModesPanel: View {
     }
 
     var body: some View {
+        manual(presentation.horizon)
+    }
+
+    private var visibleListings: [StockSageHorizonResearch.Listing] {
+        let scan = research.scans[presentation.horizon] ?? .init()
+        return scan.listings.filter { item in
+            (search.isEmpty || item.ticker.localizedCaseInsensitiveContains(search) || item.name.localizedCaseInsensitiveContains(search))
+                && (!buysOnly || Self.isBuy(scan.results[item.ticker]?.verdict?.action))
+        }
+    }
+
+    var detailPresented: Binding<Bool> {
+        Binding(get: { selected.map { symbol in visibleListings.contains { $0.ticker == symbol } } ?? false },
+                set: { if !$0 { selected = nil } })
+    }
+
+    var selectedDetail: some View {
+        ObservedDetail(research: research, panel: self)
+    }
+
+    /// The window owns presentation; this consumer observes arriving results without
+    /// rebuilding the entire market workspace or capturing a permanently unchecked snapshot.
+    private struct ObservedDetail: View {
+        @ObservedObject var research: StockSageHorizonResearch
+        let panel: StockSageResearchModesPanel
+
+        var body: some View {
+            panel.detailPresentation(rows: panel.visibleListings,
+                scan: research.scans[panel.presentation.horizon] ?? .init())
+        }
+    }
+
+    private var horizonControls: some View {
         VStack(alignment: .leading, spacing: 16) {
             Picker("Research horizon", selection: $presentation.horizon) {
                 ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
@@ -31,7 +64,6 @@ struct StockSageResearchModesPanel: View {
                 .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; buysOnly = false }
             Text("Up to \(StockSageHorizonResearch.scanLimit) US listings selected by recent trading activity, then researched for your chosen horizon. Research only; no orders.")
                 .font(.callout).foregroundStyle(.secondary)
-            manual(presentation.horizon)
             if let running = research.running, running != presentation.horizon {
                 Self.runningScanControls(running: running,
                     show: { presentation.horizon = running }, stop: { research.stop() })
@@ -42,10 +74,7 @@ struct StockSageResearchModesPanel: View {
 
     private func manual(_ horizon: StockSageHorizonResearch.Horizon) -> some View {
         let scan = research.scans[horizon] ?? .init()
-        let rows = scan.listings.filter { item in
-            (search.isEmpty || item.ticker.localizedCaseInsensitiveContains(search) || item.name.localizedCaseInsensitiveContains(search))
-                && (!buysOnly || Self.isBuy(scan.results[item.ticker]?.verdict?.action))
-        }
+        let rows = visibleListings
         let isRunning = research.running == horizon
         let buys = scan.results.values.filter { Self.isBuy($0.verdict?.action) }.count
         let incomplete = scan.results.values.filter { $0.verdict == nil }.count
@@ -163,26 +192,21 @@ struct StockSageResearchModesPanel: View {
                 }.font(.caption).foregroundStyle(.secondary)
             }.padding(DS.Space.xs)
         }
-        // Presented only while the selection is a currently visible row; dismissal clears it.
-        let presented = Binding<Bool>(
-            get: { selected.map { symbol in rows.contains { $0.ticker == symbol } } ?? false },
-            set: { if !$0 { selected = nil } })
         #if os(macOS)
-        // `.inspector` splits the trailing column at the EXACT position it is applied — nesting
-        // it (or its host) inside another ScrollView's content means the split point scrolls
-        // with that content instead of pinning to the detail column (pixel-verified 2026-09-10:
-        // the panel is the caller's only child now, so this ScrollView is this page's own root,
-        // not nested inside a page-level one — see MarketsView.desktopWorkspace's `.research`
-        // branch, which renders this panel directly rather than wrapping it again).
-        return ScrollView { box.padding(28).frame(maxWidth: 1200, alignment: .leading) }
+        // The desktop workspace owns the inspector, outside its NavigationSplitView. Nesting
+        // it here below the feed banner gives AppKit a second, overlapping toolbar boundary.
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 16) { horizonControls; box }
+                .padding(28).frame(maxWidth: 1200, alignment: .leading)
+        }
             .frame(maxWidth: .infinity, alignment: .top)
-            .inspector(isPresented: presented) { detailPresentation(rows: rows, scan: scan) }
         #else
         // Not `.inspector` here: inside this scroll content its UIKit host ignored its layout offset
         // on iPhone (pixel-verified 2026-09-10, it overdrew the coverage text). The spec's compact
         // detail is a sheet — sheets present as an overlay regardless of scroll position, so this
         // placement (unlike `.inspector` above) is unaffected by the page's own ScrollView.
-        return box.sheet(isPresented: presented) { detailPresentation(rows: rows, scan: scan) }
+        return VStack(alignment: .leading, spacing: 16) { horizonControls; box }
+            .sheet(isPresented: detailPresented) { selectedDetail }
         #endif
     }
 

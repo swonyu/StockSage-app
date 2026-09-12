@@ -58,7 +58,7 @@ enum StockSageChat {
         case .tooLarge:
             body = "The model returned more data than this app will read."
         case .contextBudget:
-            body = "This question and its evidence exceed the model's context budget. Ask a shorter question or use fewer tickers."
+            body = "The question does not fit, or the loaded model's context size could not be verified. In LM Studio, load Qwen with at least 32,768 context tokens; retry with fewer tickers if needed."
         case .unfinished:
             body = "The model stopped before finishing its answer, so it was withheld rather than shown half-formed. Retry, or ask a narrower question."
         case .emptyAnswer:

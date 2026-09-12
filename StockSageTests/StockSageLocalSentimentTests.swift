@@ -17,7 +17,12 @@ struct StockSageLocalSentimentTests {
     }
     func response(_ request: URLRequest, text: String = "positive", finish: String = "stop") throws -> (Data, URLResponse) {
         let body: [String: Any]
-        if request.url!.path == "/v1/models" { body = ["data": [["id": config.model]]] }
+        if request.url!.path == "/api/v1/models" {
+            body = ["models": [["type": "llm", "key": config.model, "format": "mlx", "architecture": "qwen3_5",
+                "params_string": "9B", "quantization": ["bits_per_weight": 6],
+                "loaded_instances": [["id": config.model, "config": ["context_length": 32768]]]]]]
+        }
+        else if request.url!.path == "/v1/models" { body = ["data": [["id": config.model]]] }
         else { body = ["model": config.model, "choices": [["message": ["content": text], "finish_reason": finish]]] }
         return (try JSONSerialization.data(withJSONObject: body),
                 HTTPURLResponse(url: request.url!, statusCode: request.url!.path == "/api/tags" ? 404 : 200, httpVersion: nil, headerFields: nil)!)

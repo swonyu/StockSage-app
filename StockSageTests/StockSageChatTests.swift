@@ -344,7 +344,8 @@ struct StockSageChatTests {
         #expect(!window.isKeyWindow)
     }
 
-    @Test func renderNativeWorkspaceWithResearchInspectorAsTrailingColumn() async throws {
+    @Test(arguments: [900, 1200], [false, true])
+    func renderNativeWorkspaceWithResearchInspectorAsTrailingColumn(width: Int, showsDetail: Bool) async throws {
         typealias R = StockSageHorizonResearch
         let suite = "stocksage.workspace.capture.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -367,23 +368,78 @@ struct StockSageChatTests {
         for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         try #require(research.running == nil)
         var presentation = StockSageResearchModesPanel.Presentation()
-        presentation.selected = "AAPL"
+        presentation.selected = showsDetail ? "AAPL" : nil
         var selection: MarketSection = .research
-        // Match desktopWorkspace: the Research panel owns its scroll root and trailing inspector.
+        let panel = StockSageResearchModesPanel(store: store, research: research,
+            presentation: Binding(get: { presentation }, set: { presentation = $0 }))
+        // Match desktopWorkspace, including the banner above the panel and window-level inspector.
         let workspace = NavigationSplitView {
             StockSageDesktopNavigation(selection: Binding(get: { selection }, set: { selection = $0 }))
         } detail: {
-            StockSageResearchModesPanel(store: store, research: research,
-                presentation: Binding(get: { presentation }, set: { presentation = $0 }))
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Synthetic feed observation · not live").padding(24)
+                Divider()
+                panel
+            }
+                .navigationTitle("Research")
+                .navigationSubtitle("One-time research. Separate from day trading.")
         }
+        .inspector(isPresented: panel.detailPresented) { panel.selectedDetail }
         .preferredColorScheme(.dark)
-        .frame(width: 1200, height: 800)
-        let size = try await capture(workspace, name: "stocksage-native-workspace-inspector",
-                                     viewport: CGSize(width: 1200, height: 800))
-        #expect(size.width == 1200 && size.height == 800)
-        #expect(presentation.selected == "AAPL" && selection == .research, "Rendering must not alter selection state")
+        .frame(width: CGFloat(width), height: 700)
+        let size = try await capture(workspace, name: "stocksage-native-workspace-inspector-\(width)-\(showsDetail)",
+                                     viewport: CGSize(width: width, height: 700))
+        #expect(size.width == CGFloat(width) && size.height == 700)
+        #expect(presentation.selected == (showsDetail ? "AAPL" : nil) && selection == .research, "Rendering must not alter selection state")
         #expect(research.running == nil, "Rendering must not start a scan")
         #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
+    }
+
+    @Test func openResearchDetailUpdatesWithoutReselectionOrRemount() async throws {
+        let suite = "stocksage.detail.live.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let research = StockSageHorizonResearch()
+        var held: CheckedContinuation<Void, Never>?
+        let started = research.start(.week, allowed: { true }, universe: {
+            .init([.init(ticker: "AAPL", name: "Synthetic Apple", market: "stocks", locale: "us",
+                         active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")])
+        }, analyze: { _ in
+            await withCheckedContinuation { held = $0 }
+            return .init(note: "Synthetic research finished. The open detail must now show this completed result.")
+        })
+        try #require(started)
+        defer { research.stop(); held?.resume() }
+        for _ in 0..<2000 where held == nil { await Task.yield() }
+        try #require(held != nil)
+        var presentation = StockSageResearchModesPanel.Presentation()
+        presentation.selected = "AAPL"
+        let panel = StockSageResearchModesPanel(store: store, research: research,
+            presentation: Binding(get: { presentation }, set: { presentation = $0 }))
+        var appeared = false
+        let host = NSHostingController(rootView: panel.selectedDetail.frame(width: 400, height: 400)
+            .onAppear { appeared = true })
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        for _ in 0..<100 where !appeared { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(appeared)
+        func pixels() throws -> Data {
+            host.view.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+            host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        let before = try pixels()
+        let release = held; held = nil; release?.resume()
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<15 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(research.scans[.week]?.results["AAPL"] != nil && presentation.selected == "AAPL")
+        #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 
     @Test func nativeQuestionFocusUsesActualFieldWithoutOwnerState() async throws {
@@ -906,6 +962,20 @@ struct StockSageChatTests {
             #expect(labelled.height > bare.height,
                     "\(stage) label did not render: same height as an unlabelled spinner")
         }
+    }
+
+    @Test(arguments: ["missing", "downloading", "uncertain"])
+    func renderModelAcquisitionControlsWithoutRuntimeActions(state: String) async throws {
+        var actions = 0
+        let message = state == "missing" ? "The 6-bit model is missing. Download the current release."
+            : state == "downloading" ? "Downloading Qwen3.5 9B · 20%."
+            : "Download acceptance is unknown. Check LM Studio Downloads; another transfer was not submitted."
+        let view = CatalystsSection.modelDownloadControls(message: message, working: state == "downloading",
+            fraction: state == "downloading" ? 0.2 : nil,
+            check: { actions += 1 }, open: { actions += 1 })
+            .padding(20).frame(width: 500).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-model-download-\(state)")
+        #expect(size.width == 500 && size.height > 0 && actions == 0)
     }
 
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil) async throws -> CGSize {

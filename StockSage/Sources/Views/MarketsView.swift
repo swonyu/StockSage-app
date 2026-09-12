@@ -632,7 +632,8 @@ struct MarketsView: View {
     #if os(macOS)
     /// The changing page is INSIDE the common lifecycle owner, never another store/task root.
     private var desktopWorkspace: some View {
-        NavigationSplitView {
+        let researchPanel = StockSageResearchModesPanel(store: store, presentation: $researchPresentation)
+        return NavigationSplitView {
             StockSageDesktopNavigation(selection: $section)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
@@ -646,11 +647,7 @@ struct MarketsView: View {
                                         chat: session)
                 } other: {
                     if section == .research {
-                        // Rendered directly, not nested in the shared page ScrollView below: the
-                        // panel owns its own scroll root on macOS so its `.inspector` detail
-                        // attaches to the detail column, not to a scroll position (see its
-                        // manual() for the pixel-verified reasoning).
-                        StockSageResearchModesPanel(store: store, presentation: $researchPresentation)
+                        researchPanel
                     } else {
                         ScrollViewReader { proxy in
                             ScrollView {
@@ -678,6 +675,13 @@ struct MarketsView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        // A window-level inspector shares the real toolbar. Putting it inside the Research
+        // panel below feedBanner creates a second titlebar strip that covers its controls.
+        .inspector(isPresented: Binding(
+            get: { section == .research && researchPanel.detailPresented.wrappedValue },
+            set: { researchPanel.detailPresented.wrappedValue = $0 })) {
+                researchPanel.selectedDetail
+        }
     }
 
     private func openDesktopModelSettings() {

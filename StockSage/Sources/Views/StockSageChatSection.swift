@@ -531,15 +531,13 @@ struct StockSageChatSection: View {
                 return
             }
             chat.advance(id: id, to: .checkingModel)
-            let probe = await StockSageLocalModelServer.probe(config, stillValid: allowed)
+            let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
             guard allowed() else {
                 if chat.pending == id { chat.cancel() }
                 return
             }
             guard probe.reachable && probe.hasModel else {
-                chat.finish(id: id, text: nil, unavailable: probe.reachable
-                    ? "The server is reachable, but the configured model was not found. Check its model ID in Model settings."
-                    : "The model server could not be verified. Check that it is running, then use Test connection in Model settings.",
+                chat.finish(id: id, text: nil, unavailable: probe.detail,
                     requestSnapshot: prepared.snapshot)
                 return
             }

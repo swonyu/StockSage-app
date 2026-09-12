@@ -69,7 +69,7 @@ enum StockSageLocalSentiment {
             case .ambiguous: "Sentiment unavailable: the model did not return one clear label. Try again."
             case .serverRejected: "Sentiment unavailable: the model server rejected the request. The server is running; check its model and settings."
             case .tooLarge: "Sentiment unavailable: the model returned more data than this app will read."
-            case .contextBudget: "Sentiment unavailable: this headline exceeds the model's context budget. Use a shorter excerpt."
+            case .contextBudget: "Sentiment unavailable: the excerpt does not fit, or the loaded model's context size could not be verified. Check the model's context setting and retry with a shorter excerpt."
             case .emptyAnswer: "Sentiment unavailable: the model returned an empty answer. Try again."
             case .unreadable: "Sentiment unavailable: the model server returned a response this app could not read, or one from a different model."
             case .notAllowed: "Sentiment unavailable: network access to a non-loopback model server is turned off."
@@ -111,7 +111,7 @@ enum StockSageLocalSentiment {
         if let reason = failure() { return .unavailable(reason) }
         guard StockSageLocalModelServer.isLoopback(config.baseURL) else { return .unavailable(.modelUnavailable) }
         let active: @MainActor () -> Bool = { failure() == nil }
-        let probe = await StockSageLocalModelServer.probe(config, stillValid: active, transport: transport)
+        let probe = await StockSageLocalModelServer.prepare(config, stillValid: active, transport: transport)
         if let reason = failure() { return .unavailable(reason) }
         guard probe.reachable, probe.hasModel else { return .unavailable(.modelUnavailable) }
         let reply = await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,

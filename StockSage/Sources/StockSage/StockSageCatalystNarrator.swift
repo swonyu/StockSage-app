@@ -525,7 +525,7 @@ enum StockSageCatalystNarrator {
         }
         func fetchProbe(_ config: StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe {
             if let checkServer { return await checkServer(config) }
-            return await StockSageLocalModelServer.probe(config, stillValid: active)
+            return await StockSageLocalModelServer.prepare(config, stillValid: active)
         }
 
         switch backend {

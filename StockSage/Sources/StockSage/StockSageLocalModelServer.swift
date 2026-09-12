@@ -26,7 +26,27 @@ import Synchronization
 // network path just isn't loopback there.
 enum StockSageLocalModelServer {
     /// Facts go only to the configured endpoint, never to a redirect target; no shared cookies.
-    private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+    private static var session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+    private(set) static var isShuttingDown = false
+    private static var lifecycleRevision = UUID()
+
+    static func beginShutdown() async -> Bool {
+        lifecycleRevision = UUID()
+        isShuttingDown = true
+        if !StockSageStore.isRunningTests { UserDefaults.standard.set(UUID().uuidString, forKey: revisionKey) }
+        StockSageAIAssessments.shared.cancelActiveAssessment(reason: "StockSage is closing; reassess after reopening.")
+        StockSageModelDownload.shared.stopChecking()
+        let wasBusy = await inFlight.current > 0
+        session.invalidateAndCancel()
+        return wasBusy
+    }
+
+    static func cancelShutdown() {
+        lifecycleRevision = UUID()
+        if !StockSageStore.isRunningTests { UserDefaults.standard.set(UUID().uuidString, forKey: revisionKey) }
+        session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+        isShuttingDown = false
+    }
 
     typealias NoRedirect = StockSageHTTP.NoRedirect
 
@@ -302,6 +322,7 @@ enum StockSageLocalModelServer {
         /// One-line human status, ready to render as-is — e.g. "Reachable · Ollama · model
         /// qwen3.8 present" or "Unreachable: <error>".
         let detail: String
+        var canDownload = false
     }
 
     /// Ollama tags a locally-served model "name:latest" (e.g. "qwen3.8:latest") while a viewer
@@ -313,7 +334,7 @@ enum StockSageLocalModelServer {
 
     private static func requestFailure(_ c: Config, stillValid: @MainActor () -> Bool,
                                       externalAllowed: @MainActor () -> Bool) -> CompletionFailure? {
-        if Task.isCancelled { return .init(diagnostic: .init(category: .cancelled)) }
+        if Task.isCancelled || isShuttingDown { return .init(diagnostic: .init(category: .cancelled)) }
         if !stillValid() { return .init(diagnostic: .init(category: .obsoleteRequest)) }
         guard config(url: c.baseURL.absoluteString, model: c.model) == c else {
             return .init(diagnostic: .init(category: .invalidConfig))
@@ -325,14 +346,19 @@ enum StockSageLocalModelServer {
     }
 
     private static func fetchJSONObject(_ url: URL,
-        transport: ((URLRequest) async throws -> (Data, URLResponse))?) async -> [String: Any]? {
+        transport: ((URLRequest) async throws -> (Data, URLResponse))?,
+        deadline: ContinuousClock.Instant? = nil,
+        clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
+        sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }) async -> [String: Any]? {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.5
+        let limit = clock().advanced(by: .milliseconds(2500))
+        let requestSession = session
         do {
             let (data, response) = try await Pending<(Data, URLResponse)>().run(
-                deadline: ContinuousClock.now.advanced(by: .milliseconds(2500))) {
+                deadline: min(deadline ?? limit, limit), now: clock, sleepUntil: sleepUntil) {
                     if let transport { return try await transport(request) }
-                    return try await StockSageHTTP.data(for: request, session: session, maximumBytes: 262_144)
+                    return try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: 262_144)
                 }
             guard data.count <= 262_144, let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else { return nil }
@@ -348,9 +374,16 @@ enum StockSageLocalModelServer {
     static func probe(_ c: Config, stillValid: @MainActor () -> Bool = { true },
                       externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
                       transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Probe {
-        func denied() -> Bool { requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) != nil }
+        let lifecycle = lifecycleRevision
+        func denied() -> Bool { lifecycle != lifecycleRevision || requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) != nil }
         let stopped = Probe(reachable: false, isOllama: false, models: [], hasModel: false,
                             detail: "Model check stopped: request cancelled, settings changed, or network access disabled.")
+        guard !denied() else { return stopped }
+        if c.isLMStudio9B,
+           let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport),
+           let native = managedInventory(inventory) {
+            return denied() ? stopped : native
+        }
         guard !denied() else { return stopped }
         if let tags = await fetchJSONObject(c.baseURL.appendingPathComponent("api/tags"), transport: transport),
            let rawModels = tags["models"] as? [[String: Any]] {
@@ -379,6 +412,127 @@ enum StockSageLocalModelServer {
     }
 
     // MARK: Chat
+
+    /// Normal Mac quit unloads only the selected local model, never the server or weight files.
+    /// A separate short-lived session works after beginShutdown cancels inference transports.
+    static func unloadOnQuit(_ c: Config, inferenceWasActive: Bool = false,
+                             transport: (@MainActor (URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Bool {
+        guard transport != nil || !StockSageStore.isRunningTests else { return false }
+        guard isLoopback(c.baseURL), ["", "/"].contains(c.baseURL.path),
+              let port = c.baseURL.port, [1234, 11434].contains(port) else { return false }
+        let cleanupSession = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+        defer { cleanupSession.invalidateAndCancel() }
+        do {
+            return try await Pending<Bool>().run(deadline: ContinuousClock.now.advanced(by: .seconds(8))) {
+                func json(_ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+                    try Task.checkCancellation()
+                    var request = URLRequest(url: c.baseURL.appendingPathComponent(path))
+                    request.timeoutInterval = 2
+                    if let body {
+                        request.httpMethod = "POST"
+                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                    }
+                    let (data, response): (Data, URLResponse)
+                    if let transport { (data, response) = try await transport(request) }
+                    else { (data, response) = try await StockSageHTTP.data(for: request, session: cleanupSession, maximumBytes: 262_144) }
+                    guard data.count <= 262_144, let response = response as? HTTPURLResponse,
+                          (200..<300).contains(response.statusCode),
+                          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        throw URLError(.badServerResponse)
+                    }
+                    return object
+                }
+                if c.baseURL.port == 1234 {
+                    func instances(_ inventory: [String: Any]) throws -> [String] {
+                        guard let rows = inventory["models"] as? [[String: Any]],
+                              rows.allSatisfy({ $0["key"] is String }) else { throw URLError(.cannotParseResponse) }
+                        let selected = rows.filter { $0["key"] as? String == c.model }
+                        guard selected.count <= 1 else { throw URLError(.cannotParseResponse) }
+                        guard let row = selected.first else { return [] }
+                        guard row["type"] as? String == "llm",
+                              let loaded = row["loaded_instances"] as? [[String: Any]], loaded.count <= 16 else {
+                            throw URLError(.cannotParseResponse)
+                        }
+                        let ids = loaded.compactMap { $0["id"] as? String }
+                        guard ids.count == loaded.count, ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }) else {
+                            throw URLError(.cannotParseResponse)
+                        }
+                        return Array(Set(ids))
+                    }
+                    let ids = try instances(await json("api/v1/models"))
+                    if ids.isEmpty { return !inferenceWasActive } // An accepted JIT load may still be unresolved.
+                    for id in ids {
+                        let result = try await json("api/v1/models/unload", body: ["instance_id": id])
+                        guard result["instance_id"] as? String == id else { return false }
+                    }
+                    return try instances(await json("api/v1/models")).isEmpty
+                }
+                func loaded(_ inventory: [String: Any]) throws -> Bool {
+                    guard let rows = inventory["models"] as? [[String: Any]],
+                          rows.allSatisfy({ $0["name"] is String }) else { throw URLError(.cannotParseResponse) }
+                    return rows.contains { ($0["name"] as? String).map { stripLatestSuffix($0) == stripLatestSuffix(c.model) } == true }
+                }
+                guard try loaded(await json("api/ps")) else { return !inferenceWasActive }
+                // Empty prompt + keep_alive=0 unloads; checking /api/ps first avoids loading a missing model.
+                _ = try await json("api/generate", body: ["model": c.model, "prompt": "", "stream": false, "keep_alive": 0])
+                return try !loaded(await json("api/ps"))
+            }
+        } catch { return false }
+    }
+
+    /// A native inventory includes downloaded-but-unloaded models. Wrong variants are not
+    /// missing: downloading over the same key would not safely select the right weights.
+    static func managedInventory(_ json: [String: Any]) -> Probe? {
+        guard let rows = json["models"] as? [[String: Any]],
+              rows.allSatisfy({
+                  guard let key = $0["key"] as? String, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        key.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+                        key.utf8.count <= 512, let type = $0["type"] as? String else { return false }
+                  return ["llm", "embedding"].contains(type)
+              }) else { return nil }
+        let matches = rows.filter { $0["key"] as? String == lmStudioModel }
+        let compatible = matches.count == 1 && matches.allSatisfy {
+            $0["type"] as? String == "llm" && $0["format"] as? String == "mlx"
+                && $0["architecture"] as? String == "qwen3_5" && $0["params_string"] as? String == "9B"
+                && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 6
+        }
+        return Probe(reachable: true, isOllama: false, models: rows.compactMap { $0["key"] as? String },
+            hasModel: compatible, detail: compatible
+                ? "Reachable · LM Studio · Qwen3.5 9B MLX 6-bit downloaded (loads on demand)."
+                : matches.isEmpty ? "Qwen3.5 9B is missing. Download the current 6-bit release in Model settings."
+                : "The model key exists but its 9B MLX 6-bit compatibility is not verified. Check the variant in LM Studio; no replacement downloaded.",
+            canDownload: matches.isEmpty)
+    }
+
+    /// Only real AI-use callers prepare missing models; passive probes remain read-only.
+    /// Return immediately so a long download never replays an old market snapshot.
+    static func prepare(_ c: Config, stillValid: @MainActor () -> Bool = { true },
+                        transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Probe {
+        var result = await probe(c, stillValid: stillValid, transport: transport)
+        #if os(macOS)
+        if transport == nil, stillValid(), !Task.isCancelled, result.canDownload {
+            StockSageModelDownload.shared.start(c)
+            result = Probe(reachable: result.reachable, isOllama: false, models: result.models,
+                hasModel: false, detail: StockSageModelDownload.shared.message, canDownload: true)
+        }
+        #endif
+        return result
+    }
+
+    /// The model maximum is not the serving instance's actual window. Ambiguous instances
+    /// do not establish context for the response identity. This is a current-state check,
+    /// not an attestation against an external unload/reload during generation.
+    static func verifiedContext(_ inventory: [String: Any], model: String) -> Int? {
+        guard managedInventory(inventory)?.hasModel == true,
+              let rows = inventory["models"] as? [[String: Any]],
+              let row = rows.first(where: { $0["key"] as? String == model }),
+              let instances = row["loaded_instances"] as? [[String: Any]] else { return nil }
+        let matching = instances.filter { $0["id"] as? String == model }
+        guard matching.count == 1, let config = matching[0]["config"] as? [String: Any],
+              let context = config["context_length"] as? Int, context > 0 else { return nil }
+        return context
+    }
 
     /// Builds the POST request for one chat turn — Ollama's native `/api/chat` (with
     /// `"think": false`, matching the owner's smoke test: Ollama defaults qwen3.8 to emitting a
@@ -643,6 +797,8 @@ enum StockSageLocalModelServer {
                                  transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
                                  clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
                                  sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }) async -> CompletionResult {
+        let lifecycle = lifecycleRevision
+        let requestSession = session
         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
             return .failure(failure)
         }
@@ -671,12 +827,14 @@ enum StockSageLocalModelServer {
                     concurrent = await inFlight.enter()
                     let result: Result<(Data, URLResponse), Error>
                     do {
+                        guard lifecycle == lifecycleRevision, !isShuttingDown else { throw CancellationError() }
                         if let transport { result = .success(try await transport(request)) }
-                        else { result = .success(try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumResponseBytes)) }
+                        else { result = .success(try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: maximumResponseBytes)) }
                     } catch { result = .failure(error) }
                     await inFlight.leave()
                     return try result.get()
                 }
+            guard lifecycle == lifecycleRevision else { return .failure(.init(diagnostic: .init(category: .cancelled))) }
             if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
                 return .failure(failure)
             }
@@ -727,6 +885,17 @@ enum StockSageLocalModelServer {
                     diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                 diagnostic.concurrentRequests = concurrent
                     return .failure(.init(diagnostic: diagnostic))
+                }
+                if c.isLMStudio9B {
+                    let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
+                        transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
+                    guard clock() < deadline else { return .failure(.init(diagnostic: .init(category: .timeout))) }
+                    guard lifecycle == lifecycleRevision else { return .failure(.init(diagnostic: .init(category: .cancelled))) }
+                    if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return .failure(failure) }
+                    guard let inventory, let model = reply.model,
+                          let context = verifiedContext(inventory, model: model), context >= contextTokens else {
+                        return .failure(.init(diagnostic: .init(category: .contextBudget)))
+                    }
                 }
                 var diagnostic = reply.diagnostic
                 diagnostic.httpStatus = http.statusCode

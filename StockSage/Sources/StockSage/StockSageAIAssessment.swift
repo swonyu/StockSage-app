@@ -345,12 +345,16 @@ final class StockSageAIAssessments: ObservableObject {
     @discardableResult func setModelSetting(_ value: String, for key: String,
                                             defaults: UserDefaults = .standard) -> Bool {
         guard StockSageLocalModelServer.setSetting(value, for: key, defaults: defaults) else { return false }
+        cancelActiveAssessment(reason: "Model settings changed; reassess this idea.")
+        return true
+    }
+
+    func cancelActiveAssessment(reason: String) {
         let request = activeRequest
-        if let symbol = activeSymbol { errors[symbol] = "Model settings changed; reassess this idea." }
+        if let symbol = activeSymbol { errors[symbol] = reason }
         activeRequest = nil
         activeSymbol = nil
         request?.cancel()
-        return true
     }
 
     static var configuration: StockSageLocalModelServer.Config? {
@@ -432,7 +436,7 @@ final class StockSageAIAssessments: ObservableObject {
             return context.matches(idea: current, earnings: store.catalystChain[idea.symbol],
                                    company: store.companyEventChecks[idea.symbol] ?? [:])
         }, generateDetailed: { config, prompt in
-            let probe = await StockSageLocalModelServer.probe(config, stillValid: evidenceActive)
+            let probe = await StockSageLocalModelServer.prepare(config, stillValid: evidenceActive)
             guard evidenceActive(), probe.reachable, probe.hasModel else {
                 let category: StockSageLocalModelServer.FailureCategory = Task.isCancelled ? .cancelled
                     : (!evidenceActive() ? .obsoleteRequest : (!probe.reachable ? .unavailable : .modelMissing))

@@ -1,12 +1,23 @@
 # Handoff — StockSage critique fix-plan, 25 of 26 findings landed
 
-**Current Codex continuation:** D4, 22 further source-verified reliability findings and
-date-relevant 500-name research selection are implemented. Read the **Research-selection
-and release continuation** receipt at the end and
-`agent-docs/FULL_APP_REVIEW_2026-09-12.md` for current results and limits. The original
-committed/pushed state, "D4 open" status and gate caveats below are preserved as history,
-not current release status. The owner authorized commit, merge to main and push after
-verification. The installed app remains unchanged; source publication is not installation.
+**Current Codex continuation:** D4, the reliability review and date-relevant research
+selection were previously published at `e576d70c6fd3d4cc3f5a94d47cb3f61635bb91fa`.
+The owner's subsequent missing-model recovery, normal-quit model unloading and Research
+screenshot fixes are now implemented, verified and reversibly installed. The owner then
+requested commit and push of this continuation on `claude/model-harness-2026-09-10` to
+`swonyu/StockSage-app`; no new merge to main is part of that request. Worktree:
+`/Users/saleh/StockSage-wt/opus-harness`; preserve sole writer/tester/installer ownership.
+Use current Git history and the remote branch to verify publication, not an older receipt.
+Read `agent-docs/MODEL_DOWNLOAD_2026-09-12.md` for the current receipt and explicit limits:
+Mac **2,381 tests / 227 suites**, iPhone simulator **2,300 / 223**, both passed after the
+final source change. `/Applications/StockSageX.app` now matches the final Mac-tested bundle;
+the blank Research toolbar strip was checked in the running app and both horizons exercised.
+Protected preferences, paper records and chat history were unchanged across replacement.
+Rollback copies and the installation receipt are in
+`/Users/saleh/Codex-Backups/stocksage-model-update-20260912.pes0mT`.
+The earlier "D4 open", installed-app-unchanged and reduced-gate sections below are preserved
+as history, not current release status. Do not repeat an earlier push or restore old data
+over the current app state by inference.
 
 Written 2026-09-12 by the Claude Code session that did the work, for whoever picks this up next
 (Codex or another agent). Everything below is verified, not assumed; where something is unproven

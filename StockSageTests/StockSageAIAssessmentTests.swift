@@ -82,7 +82,8 @@ struct StockSageAIAssessmentTests {
         #expect(state.activeSymbol == nil && state.errors["ORCL"] == nil && state.records["ORCL"] != nil)
     }
 
-    @Test func settingsCancelSourceCollectionThroughTheSameOwner() async throws {
+    @Test(arguments: [false, true])
+    func settingsCancelSourceCollectionThroughTheSameOwner(lifecycle: Bool) async throws {
         let suite = "assessment.prepare.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -96,9 +97,25 @@ struct StockSageAIAssessmentTests {
         defer { task.cancel(); held?.resume() }
         for _ in 0..<2000 where held == nil { await Task.yield() }
         try #require(held != nil)
-        #expect(state.setModelSetting("off", for: StockSageLocalModelServer.backendKey, defaults: defaults))
+        if lifecycle { state.cancelActiveAssessment(reason: "StockSage is closing") }
+        else { #expect(state.setModelSetting("off", for: StockSageLocalModelServer.backendKey, defaults: defaults)) }
         for _ in 0..<2000 where !returned { await Task.yield() }
         #expect(returned && state.activeSymbol == nil && held != nil)
+        var replacementWire: CheckedContinuation<Void, Never>?
+        let replacement = Task { @MainActor in
+            await state.withAssessment(symbol: "MSFT") { _ in
+                await withCheckedContinuation { replacementWire = $0 }
+            }
+        }
+        defer { replacement.cancel(); replacementWire?.resume() }
+        for _ in 0..<2000 where replacementWire == nil { await Task.yield() }
+        try #require(replacementWire != nil && state.activeSymbol == "MSFT")
+        let release = held; held = nil; release?.resume()
+        await task.value
+        #expect(state.activeSymbol == "MSFT", "An old request must not release the replacement slot")
+        let finish = replacementWire; replacementWire = nil; finish?.resume()
+        await replacement.value
+        #expect(state.activeSymbol == nil)
     }
 
     @Test(arguments: ["analysis", "quote"])

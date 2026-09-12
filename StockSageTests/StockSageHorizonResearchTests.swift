@@ -172,6 +172,43 @@ import Testing
         try await Task.sleep(for: .milliseconds(10))
         #expect(seen.count == count) // no timer or automatic repeat
     }
+    @Test(arguments: [false, true])
+    func firstPreflightStopDoesNotClaimRetainedResults(cancel: Bool) async throws {
+        let r = R()
+        var permitted = true
+        var held: CheckedContinuation<Void, Never>?
+        var analyzed = false
+        let started = r.start(.week, allowed: { permitted }, universe: {
+            await withCheckedContinuation { held = $0 }
+            return .init([listing()])
+        }, analyze: { _ in analyzed = true; return .init(note: "Must not run") })
+        #expect(started)
+        defer { r.stop(); held?.resume() }
+        for _ in 0..<2000 where held == nil { await Task.yield() }
+        try #require(held != nil)
+        if cancel { r.stop() } else { permitted = false }
+        let release = held; held = nil; release?.resume()
+        for _ in 0..<2000 where r.running != nil { await Task.yield() }
+        let scan = try #require(r.scans[.week])
+        #expect(r.running == nil && !analyzed && scan.listings.isEmpty && scan.results.isEmpty)
+        #expect(!scan.status.contains("completed results retained"))
+        #expect(scan.status.contains(cancel ? "Stop requested" : "settings or access changed"))
+        #expect(scan.status.contains("No stocks were checked"))
+    }
+
+    @Test func modelPreparationMessageSurvivesPreflightFailure() async throws {
+        let r = R()
+        var analyzed = false
+        let started = r.start(.week, allowed: { true }, universe: {
+            throw R.ScanFailure.modelUnavailable("Downloading Qwen3.5 9B · 20%.")
+        }, analyze: { _ in analyzed = true; return .init(note: "Must not run") })
+        #expect(started)
+        for _ in 0..<2000 where r.running != nil { await Task.yield() }
+        let scan = try #require(r.scans[.week])
+        #expect(!analyzed && scan.listings.isEmpty && r.running == nil)
+        #expect(scan.status.contains("Downloading Qwen3.5 9B · 20%") && scan.status.contains("Run again"))
+    }
+
     @Test(arguments: ["unreachable", "invalid", "cancel", "settings"])
     func failedPreflightRetryRetainsCompletedResearch(outcome: String) async throws {
         let r = R()

@@ -772,9 +772,9 @@ final class StockSagePaperAutomation: ObservableObject {
                 && !store.isSampleData && StockSageAIAssessments.configuration == config
                 && StockSageLocalModelServer.settingsRevision() == revision
         }
-        let probe = await StockSageLocalModelServer.probe(config, stillValid: active)
+        let probe = await StockSageLocalModelServer.prepare(config, stillValid: active)
         guard active() else { return }
-        guard probe.reachable, probe.hasModel else { recordFailure("Local Qwen server is unavailable.", at: Date()); return }
+        guard probe.reachable, probe.hasModel else { recordFailure(probe.detail, at: Date()); return }
         researchProgress?.totalUnitCount = Int64(targets.count)
         status = "Qwen research 0/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
         var finished = 0
