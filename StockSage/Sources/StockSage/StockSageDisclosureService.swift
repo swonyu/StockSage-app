@@ -205,11 +205,12 @@ enum StockSageDisclosureService {
             if Task.isCancelled { return unavailable(.cancelled) }
             return unavailable(allowed() ? .unreachable : .externalAccessDisabled)
         }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let filings = validatedFilings(root, cik: cik, forms: forms, limit: limit) else {
             return unavailable(.invalidPayload)
         }
         return FilingsObservation(checkedAt: now, outcome: .answered,
-                                  filings: parseFilings(root, cik: cik, forms: forms, limit: limit))
+                                  filings: filings)
     }
 
     /// Thin wrapper kept UNCHANGED in signature and contract: `hasDisclosure` calls it, and
@@ -239,20 +240,29 @@ enum StockSageDisclosureService {
                                          cik: String,
                                          forms: Set<String> = ["8-K"],
                                          limit: Int = 20) -> [Filing] {
+        validatedFilings(root, cik: cik, forms: forms, limit: limit) ?? []
+    }
+
+    /// nil means a malformed/partial feed, not an answered empty selection.
+    nonisolated static func validatedFilings(_ root: [String: Any], cik: String,
+                                            forms: Set<String>, limit: Int) -> [Filing]? {
         guard limit > 0, let filings = root["filings"] as? [String: Any],
-              let recent = filings["recent"] as? [String: Any]
-        else { return [] }
+              let recent = filings["recent"] as? [String: Any],
+              let formCol = recent["form"] as? [String],
+              let accCol = recent["accessionNumber"] as? [String],
+              let dateCol = recent["filingDate"] as? [String],
+              formCol.count == accCol.count, formCol.count == dateCol.count,
+              !formCol.contains(where: { $0.isEmpty }), !accCol.contains(where: { $0.isEmpty })
+        else { return nil }
 
         // The feed is column-oriented: parallel arrays sharing one index.
-        let formCol = recent["form"] as? [String] ?? []
-        let accCol = recent["accessionNumber"] as? [String] ?? []
-        let dateCol = recent["filingDate"] as? [String] ?? []
         let acceptCol = recent["acceptanceDateTime"] as? [String] ?? []
         let itemsCol = recent["items"] as? [String] ?? []
         let docCol = recent["primaryDocument"] as? [String] ?? []
 
         let day = ISO8601DateFormatter()
         day.formatOptions = [.withFullDate]
+        guard dateCol.allSatisfy({ day.date(from: $0).map { day.string(from: $0) } == $0 }) else { return nil }
         let stamp = ISO8601DateFormatter()
         stamp.formatOptions = [.withInternetDateTime]
         // SEC stamps acceptance with fractional seconds ("2026-07-30T20:30:28.000Z"), which a
@@ -263,8 +273,7 @@ enum StockSageDisclosureService {
         fracStamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         var out: [Filing] = []
-        // Bound by the shortest column so a truncated feed can't index out of range.
-        let n = min(formCol.count, accCol.count, dateCol.count)
+        let n = formCol.count
         for i in 0..<n where forms.contains(formCol[i]) {
             guard let filed = day.date(from: dateCol[i]) else { continue }
             let acc = accCol[i]

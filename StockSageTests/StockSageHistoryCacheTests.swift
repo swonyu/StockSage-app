@@ -89,6 +89,19 @@ struct StockSageHistoryCacheTests {
         #expect(entry?.dates.count == 252)   // dates trimmed in lock-step with closes
     }
 
+    @Test func defaultRoundTripPreservesTheFullMomentumLookbackAndItsAnchor() throws {
+        let source = history("AAA", bars: 253, base: 1_000)
+        let falling = StockSagePriceHistory(symbol: source.symbol, dates: source.dates,
+            opens: source.opens.reversed(), highs: source.highs.reversed(), lows: source.lows.reversed(),
+            closes: source.closes.reversed(), volumes: source.volumes, priceSource: .massiveSIP)
+        let cache = HC.from(histories: ["AAA": falling], universe: ["AAA"], savedAt: source.dates.last!)
+        let restored = try #require(HC.decode(JSONEncoder().encode(cache))?.priceHistories()["AAA"])
+        #expect(restored.closes.count == 253)
+        #expect(StockSageIndicators.trendOK(falling.closes) == false)
+        #expect(StockSageIndicators.trendOK(restored.closes) == false)
+        #expect(!StockSageAdvisor.oversoldBounceIsBuyable(restored.closes))
+    }
+
     // 3. Universe eviction: a symbol absent from `universe` is dropped; a present one survives.
     @Test func fromDropsSymbolsNotInUniverse() {
         let hs = ["AAA": history("AAA", bars: 5), "BBB": history("BBB", bars: 5)]

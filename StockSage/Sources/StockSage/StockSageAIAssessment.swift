@@ -9,7 +9,8 @@ enum StockSageAIAssessment {
         let company: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation]
         let news: [StockSageNewsService.NewsItem]?
         let newsObservation: StockSageNewsService.Observation?
-        let research: StockSageResearchLeads.Snapshot?
+        var research: StockSageResearchLeads.Snapshot?
+        var omittedResearchLeads = 0
         let benzinga: StockSageBenzinga.Snapshot?
         let asOf: Date
         /// Only for a provider-confirmed USD listing; suffixes can name US share classes.
@@ -106,6 +107,24 @@ enum StockSageAIAssessment {
             return (0...4 * 86_400).contains(now.timeIntervalSince(priceTime))
                 && (0...4 * 3600).contains(now.timeIntervalSince(analysisTime))
                 && facts.joined(separator: "\n").utf8.count <= 12_000
+        }
+
+        /// Preserve every compiled fact; fit only whole optional messages and capture exactly
+        /// which W IDs were offered so omitted claims cannot pass later validation.
+        func fittedPrompt() -> (context: Self, user: String)? {
+            let numbered = StockSageAIAssessment.prompt(facts: facts)
+            func leads(_ count: Int) -> StockSageResearchLeads.Snapshot? {
+                research.map { .init(importedAt: $0.importedAt, timezone: $0.timezone,
+                                    messages: Array($0.messages.prefix(count))) }
+            }
+            func user(_ count: Int) -> String { numbered + "\n\n" + (leads(count)?.prompt ?? "") }
+            guard let fitted = StockSageLocalModelServer.fit(optionalCount: research?.messages.count ?? 0,
+                outputTokens: 240, contextTokens: StockSageLocalModelServer.researchContextTokens,
+                assemble: { (StockSageAIAssessment.instructions, user($0)) }) else { return nil }
+            var captured = self
+            captured.research = leads(fitted.optionalKept)
+            captured.omittedResearchLeads += fitted.omitted
+            return (captured, user(fitted.optionalKept))
         }
 
         @MainActor func matches(idea current: StockSageIdea, earnings: StockSageCatalystRecordCache.Record?,
@@ -305,6 +324,34 @@ final class StockSageAIAssessments: ObservableObject {
     @Published private(set) var drafts: [String: StockSageAIAssessment.Draft] = [:]
     @Published private(set) var errors: [String: String] = [:]
     @Published private(set) var activeSymbol: String?
+    typealias Request = StockSageLocalModelServer.Pending<Void>
+    private var activeRequest: Request?
+
+    /// Source collection, probing and generation share one cancellable owner. A late
+    /// worker may finish, but it cannot publish into or clear a replacement's slot.
+    func withAssessment(symbol: String, operation: @escaping @MainActor (Request) async -> Void) async {
+        guard activeRequest == nil, !Task.isCancelled else { return }
+        let request = Request()
+        activeRequest = request
+        activeSymbol = symbol
+        errors[symbol] = "Assessment did not complete. Reassess to try again."
+        defer {
+            if activeRequest === request { activeRequest = nil; activeSymbol = nil }
+        }
+        do { try await request.run { await operation(request) } }
+        catch { /* the visible incomplete/settings message is already owned by this request */ }
+    }
+
+    @discardableResult func setModelSetting(_ value: String, for key: String,
+                                            defaults: UserDefaults = .standard) -> Bool {
+        guard StockSageLocalModelServer.setSetting(value, for: key, defaults: defaults) else { return false }
+        let request = activeRequest
+        if let symbol = activeSymbol { errors[symbol] = "Model settings changed; reassess this idea." }
+        activeRequest = nil
+        activeSymbol = nil
+        request?.cancel()
+        return true
+    }
 
     static var configuration: StockSageLocalModelServer.Config? {
         let defaults = UserDefaults.standard
@@ -355,19 +402,22 @@ final class StockSageAIAssessments: ObservableObject {
             return
         }
         let revision = StockSageLocalModelServer.settingsRevision()
-        let active: @MainActor @Sendable () -> Bool = {
-            !Task.isCancelled && Self.configuration == config && !store.isSampleData
-                && StockSageLocalModelServer.settingsRevision() == revision
+        await withAssessment(symbol: idea.symbol) { [self] request in
+            await prepareAssessment(idea, store: store, config: config, revision: revision, request: request)
         }
-        // An interrupted replacement leaves the previous record readable, never current again.
-        errors[idea.symbol] = "Assessment did not complete. Reassess to try again."
-        activeSymbol = idea.symbol
+    }
+
+    private func prepareAssessment(_ idea: StockSageIdea, store: StockSageStore,
+        config: StockSageLocalModelServer.Config, revision: String?, request: Request) async {
+        let active: @MainActor @Sendable () -> Bool = { [self] in
+            !Task.isCancelled && Self.configuration == config && !store.isSampleData
+                && StockSageLocalModelServer.settingsRevision() == revision && activeRequest === request
+        }
         let newsAt = Date()
         let benzinga = await StockSageBenzingaClient.shared.snapshot(for: idea.symbol, now: newsAt)
-        guard active(), StockSageBenzingaClient.shared.isCurrent(benzinga) else { activeSymbol = nil; return }
+        guard active(), StockSageBenzingaClient.shared.isCurrent(benzinga) else { return }
         let news = await StockSageNewsService.observation(for: idea.symbol, limit: 3, now: newsAt,
             benzingaPage: benzinga.pages.first { $0.query.product == .news })
-        activeSymbol = nil
         let evidenceActive: @MainActor @Sendable () -> Bool = {
             active() && StockSageBenzingaClient.shared.isCurrent(benzinga)
         }
@@ -376,7 +426,7 @@ final class StockSageAIAssessments: ObservableObject {
         let context = StockSageAIAssessment.Context(idea: current, earnings: store.catalystChain[idea.symbol],
             company: store.companyEventChecks[idea.symbol] ?? [:],
             research: StockSageResearchLeads.load(symbol: idea.symbol), at: Date(), newsObservation: news, benzinga: benzinga)
-        await assess(context, config: config, now: Date(), revision: revision, clock: { Date() }, stillValid: {
+        await performAssessment(context, config: config, now: Date(), revision: revision, clock: { Date() }, request: request, stillValid: {
             guard evidenceActive(),
                   let current = store.ideas.first(where: { $0.symbol == idea.symbol }) else { return false }
             return context.matches(idea: current, earnings: store.catalystChain[idea.symbol],
@@ -404,8 +454,8 @@ final class StockSageAIAssessments: ObservableObject {
 
     /// Same production seam used by tests; injected completion avoids real networks/model loads.
     func assess(_ context: StockSageAIAssessment.Context, config: StockSageLocalModelServer.Config,
-                now: Date, stillValid: () -> Bool,
-                generate: (StockSageLocalModelServer.Config, String) async -> String?) async {
+                now: Date, stillValid: @escaping () -> Bool,
+                generate: @escaping (StockSageLocalModelServer.Config, String) async -> String?) async {
         await assess(context, config: config, now: now, stillValid: stillValid, generateDetailed: { config, prompt in
             guard let text = await generate(config, prompt) else {
                 return .failure(.init(diagnostic: .init(category: .unavailable)))
@@ -416,21 +466,35 @@ final class StockSageAIAssessments: ObservableObject {
 
     // Omitted clock preserves the explicit synthetic time; the live caller supplies Date().
     func assess(_ context: StockSageAIAssessment.Context, config: StockSageLocalModelServer.Config,
-                now: Date, revision: String? = nil, clock: (() -> Date)? = nil, stillValid: () -> Bool,
+                now: Date, revision: String? = nil, clock: (() -> Date)? = nil, stillValid: @escaping () -> Bool,
+                generateDetailed: @escaping (StockSageLocalModelServer.Config, String) async -> StockSageLocalModelServer.CompletionResult) async {
+        guard stillValid() else { return }
+        await withAssessment(symbol: context.idea.symbol) { [self] request in
+            await performAssessment(context, config: config, now: now, revision: revision, clock: clock,
+                request: request, stillValid: stillValid, generateDetailed: generateDetailed)
+        }
+    }
+
+    private func performAssessment(_ context: StockSageAIAssessment.Context, config: StockSageLocalModelServer.Config,
+                now: Date, revision: String?, clock: (() -> Date)?, request: Request, stillValid: () -> Bool,
                 generateDetailed: (StockSageLocalModelServer.Config, String) async -> StockSageLocalModelServer.CompletionResult) async {
         let symbol = context.idea.symbol
-        guard activeSymbol == nil, !Task.isCancelled, stillValid() else { return }
+        guard activeRequest === request, !Task.isCancelled, stillValid() else { return }
         guard context.canAssess(at: now) else {
             errors[symbol] = "AI not assessed: a known-source dated quote and recent analysis are required; refresh this idea."
             return
         }
+        guard let fitted = context.fittedPrompt() else {
+            errors[symbol] = "Mandatory evidence exceeds the model context budget; refresh a smaller evidence snapshot."
+            return
+        }
+        let context = fitted.context
         // ponytail: one request globally, no queue; revisit only if measured inference capacity allows more.
-        activeSymbol = symbol
-        errors[symbol] = "Assessment did not complete. Reassess to try again."
-        defer { activeSymbol = nil }
         let facts = context.facts
         // Group claims remain OUTSIDE facts: their numbers cannot whitelist an unsupported assertion.
-        let reply = await generateDetailed(config, StockSageAIAssessment.prompt(facts: facts) + "\n\n" + (context.research?.prompt ?? ""))
+        let reply = await generateDetailed(config, fitted.user)
+        guard activeRequest === request, !Task.isCancelled else { return }
+        guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
         // A verdict cut off at the output limit is refused, as in paper and horizon research.
         // Measured 2026-09-10: a truncated P/L answer stated a headline figure its own
         // unfinished working contradicted, while still parsing as well-formed JSON.
@@ -439,8 +503,6 @@ final class StockSageAIAssessments: ObservableObject {
             return
         }
         let text = try? reply.get().text
-        guard !Task.isCancelled else { return }
-        guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
         if let text {
             if drafts.count >= 100, drafts[symbol] == nil,
                let oldest = drafts.min(by: { $0.value.context.asOf < $1.value.context.asOf })?.key { drafts[oldest] = nil }
@@ -461,9 +523,14 @@ final class StockSageAIAssessments: ObservableObject {
         if verdict == nil, let repair = StockSageAIAssessment.evidenceRepairPrompt(text, facts: facts, leadCount: leadCount, symbol: symbol) {
             // ponytail: one schema-only repair, no retry loop or opinion changes; failed checks leave a visible draft.
             let repairedReply = await generateDetailed(config, repair)
-            let repaired = try? repairedReply.get().text
-            guard !Task.isCancelled else { return }
+            guard activeRequest === request, !Task.isCancelled else { return }
             guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
+            if case .success(let completion) = repairedReply,
+               StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
+                errors[symbol] = "Unverified draft: evidence repair stopped before finishing; " + completion.diagnostic.summary
+                return
+            }
+            let repaired = try? repairedReply.get().text
             guard let repaired, let candidate = StockSageAIAssessment.parse(repaired, facts: facts, leadCount: leadCount, symbol: symbol),
                   StockSageAIAssessment.preservesOpinion(candidate, draft: text) else {
                 errors[symbol] = "Unverified draft: evidence repair failed; " + Self.failureSummary(repairedReply, facts: facts, leadCount: leadCount, draft: text, symbol: symbol)

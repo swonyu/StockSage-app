@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 import intraday_research as r
@@ -27,6 +28,13 @@ def payload(rows, symbol="AAPL"):
 
 
 class ResearchTests(unittest.TestCase):
+    def test_credential_requires_explicit_environment_without_app_storage(self):
+        with mock.patch.dict(r.os.environ, {}, clear=True):
+            with self.assertRaisesRegex(r.ResearchError, "MASSIVE_API_KEY"):
+                r.credential()
+        with mock.patch.dict(r.os.environ, {"MASSIVE_API_KEY": " synthetic-fixture-not-a-real-key "}, clear=True):
+            self.assertEqual(r.credential(), "synthetic-fixture-not-a-real-key")
+
     def test_payload_contract(self):
         bars = fixture()
         self.assertEqual(len(r.validate_payload(payload(bars), "AAPL", "2026-08-31", "2026-09-04")),390)

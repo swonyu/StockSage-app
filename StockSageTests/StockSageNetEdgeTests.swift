@@ -7,6 +7,17 @@ import Foundation
 struct StockSageNetEdgeTests {
     typealias NE = StockSageNetEdge
 
+    @Test(arguments: ["VOD.L", "SBK.JO"])
+    func majorCurrencyMinimumIsConvertedToRawQuoteUnits(symbol: String) throws {
+        let advice = TradeAdvice(action: .buy, conviction: 0.7, regime: .bullTrend,
+            rationale: [], stopPrice: 90, targetPrice: 140, suggestedWeight: 0.1, caveat: "")
+        let idea = StockSageIdea(symbol: symbol, market: "intl", price: 100, advice: advice, spark: [100])
+        let result = try #require(NE.evaluate(for: idea, orderNotional: 100))
+        let bps = NE.defaultCosts(forSymbol: symbol).roundTripBps
+        // One share at 100 minor units; two 1.30-major-unit minimums = 260 minor units.
+        #expect(abs(result.costPerShare - (260 + bps / 100)) < 1e-9)
+    }
+
     @Test func breakEvenWinRateIsTheAfterCostBar() {
         // Clean 3:1, zero cost → netRR 3 → break-even p* = 1/(1+3) = 0.25.
         let e = NE.evaluate(entry: 100, stop: 90, target: 130)!

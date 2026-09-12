@@ -47,6 +47,9 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
     /// Only Massive T-channel sequence for this symbol; never a quote-channel/provider ID.
     let massiveTradeSequence: Int64?
     let priceSource: StockSagePriceSource?
+    let previousCloseSource: StockSagePriceSource?
+    /// Timestamp of the provider quote carrying the previous-close field, NOT the closing session.
+    let previousCloseQuoteTime: Date?
 
     // `nonisolated` (W3): plain value-struct construction, no MainActor state touched — mirrors
     // `StockSageIdea`'s own `nonisolated init`/`withLivePrice` precedent just above in
@@ -54,7 +57,8 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
     // (StockSageStore.mergedPolledQuotes) can build fresh quotes without hopping actors.
     nonisolated init(id: UUID = UUID(), price: Double, previousPrice: Double, time: Date = Date(),
                      marketTime: Date? = nil, massiveTradeSequence: Int64? = nil,
-                     priceSource: StockSagePriceSource? = nil) {
+                     priceSource: StockSagePriceSource? = nil,
+                     previousCloseSource: StockSagePriceSource? = nil, previousCloseQuoteTime: Date? = nil) {
         self.id = id
         self.price = price
         self.previousPrice = previousPrice
@@ -62,6 +66,25 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
         self.marketTime = marketTime
         self.massiveTradeSequence = massiveTradeSequence
         self.priceSource = priceSource
+        self.previousCloseSource = previousCloseSource
+        self.previousCloseQuoteTime = previousCloseQuoteTime
+    }
+
+    nonisolated func hasSessionBaseline(symbol: String, at marketTime: Date?) -> Bool {
+        guard priceSource != .sample, previousPrice.isFinite, previousPrice > 0,
+              previousCloseSource == .massiveSIP || previousCloseSource == .yahoo,
+              let baseline = previousCloseQuoteTime, let marketTime,
+              baseline.timeIntervalSince1970.isFinite, marketTime.timeIntervalSince1970.isFinite,
+              baseline <= marketTime else { return false }
+        if StockSageMassive.covers(symbol) {
+            guard StockSageMarketHours.nasdaqDay(at: baseline)?.trading == true,
+                  StockSageMarketHours.nasdaqDay(at: marketTime)?.trading == true else { return false }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "America/New_York")!
+            return calendar.isDate(baseline, inSameDayAs: marketTime)
+        }
+        // Foreign listings have no US-stream carry-forward: accept only the direct provider pair.
+        return baseline == marketTime
     }
 
     /// Percent change vs the previous price. Guards divide-by-zero (a brand-new
@@ -93,6 +116,14 @@ struct StockSageSymbol: Sendable, Equatable, Identifiable {
 
     /// Most recent quote, if any.
     var latest: StockSageQuote? { quotes.last }
+    var sessionChangePercent: Double? {
+        guard let latest, latest.price.isFinite, latest.price > 0 else { return nil }
+        // Keep explicitly labelled illustrative previews; sample numbers cannot establish
+        // a baseline for a real stream tick (hasSessionBaseline rejects them).
+        if latest.priceSource == .sample { return latest.changePercent }
+        guard latest.hasSessionBaseline(symbol: symbol, at: latest.marketTime) else { return nil }
+        return latest.changePercent
+    }
 
     /// Is the latest quote materially old for this asset class? Crypto trades 24/7 so a quote should
     /// be fresh; equities/FX/indices close, so tolerate an overnight gap but flag a multi-day

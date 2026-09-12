@@ -16,9 +16,11 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     /// Bumped when the on-disk shape or its semantics change; a file whose version != current
     /// decodes to nil (one clean re-fetch), never a partial / guessed read (the `isNewListing`
     /// precedent in `StockSageQuoteCache`).
-    static let currentSchemaVersion = 1
-    /// One year of daily bars — matches `StockSageQuoteService.fetchHistories`' default range.
-    static let defaultMaxBars = 252
+    // v1 truncated away the starting observation of the active 252-period momentum guard.
+    // Re-fetch that disposable cache rather than changing genuine short-history behavior.
+    static let currentSchemaVersion = 2
+    /// Longest active daily lookback (252 periods) plus its starting observation.
+    static let defaultMaxBars = 253
 
     /// Codable mirror of `StockSagePriceHistory` (which is only Sendable/Equatable, not Codable).
     /// Parallel arrays stay equal-length (enforced at build time); newest LAST, as the source.
@@ -82,8 +84,13 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     func isStale(symbol: String, asOf: Date, maxAgeDays: Int = 7) -> Bool {
         guard let e = entries.first(where: { $0.symbol.uppercased() == symbol.uppercased() }),
               let newest = e.dates.last else { return true }
-        let ageDays = Int(asOf.timeIntervalSince(newest) / 86_400)
-        return ageDays > maxAgeDays
+        return Self.isStale(newest: newest, asOf: asOf, maxAgeDays: maxAgeDays)
+    }
+
+    static func isStale(newest: Date, asOf: Date, maxAgeDays: Int = 7) -> Bool {
+        let age = asOf.timeIntervalSince(newest)
+        guard age.isFinite, age >= 0 else { return true }
+        return floor(age / 86_400) > Double(maxAgeDays)
     }
 
     // MARK: Thin file I/O (Application Support) — mirrors StockSageQuoteCache

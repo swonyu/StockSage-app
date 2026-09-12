@@ -8,6 +8,35 @@ struct StockSageEarningsTests {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test @MainActor func laterStartedCatalystRequestOwnsPublication() async throws {
+        let suite = "earnings.ownership.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let pause = EarningsPause()
+        let negative = StockSageCatalystChain.Outcome(earningsDate: nil, dateRangeEnd: nil,
+            confirmed: nil, status: .unchecked, source: "synthetic", sourcesAsked: ["synthetic"],
+            projectionBasis: nil, anySourceAnswered: true)
+        let date = now.addingTimeInterval(86_400)
+        let positive = StockSageCatalystChain.Outcome(earningsDate: date, dateRangeEnd: nil,
+            confirmed: true, status: .dateKnown, source: "synthetic", sourcesAsked: ["synthetic"],
+            projectionBasis: nil, anySourceAnswered: true)
+        let older = Task { @MainActor in
+            await store.refreshCatalyst(symbol: "AAPL", now: now, allowed: { true }, resolve: { _, _ in
+                await pause.suspend(); return negative
+            })
+        }
+        defer { older.cancel(); pause.release() }
+        try await pause.waitUntilSuspended()
+        await store.refreshCatalyst(symbol: "aapl", now: now.addingTimeInterval(1), allowed: { true },
+                                   resolve: { _, _ in positive })
+        pause.release()
+        await older.value
+        #expect(store.catalystChain["AAPL"]?.earningsDate == date)
+        #expect(store.earningsDates["AAPL"] == date)
+        #expect(store.earningsCheckedAt["AAPL"] == now.addingTimeInterval(1))
+    }
+
     @MainActor private final class EarningsPause {
         private var released = false
         private var continuation: CheckedContinuation<Void, Never>?

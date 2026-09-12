@@ -43,6 +43,9 @@ struct StockSageApp: App {
     
     init() {
         guard !StockSageStore.isRunningTests else { return }
+        // Readback precedes legacy deletion. Settings surfaces any Keychain failure and
+        // permits retry; a failed migration must not destroy a working credential.
+        try? StockSageMassiveCredential.migrate(defaults: .standard, storage: StockSageMassiveCredential.keychain)
         #if os(iOS)
         // Set delegate BEFORE the app finishes launching so foreground banners work
         UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared

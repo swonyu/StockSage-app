@@ -278,7 +278,7 @@ struct StockSageChatTests {
             .init(ticker: symbol, name: "\(symbol) synthetic", market: "stocks", locale: "us", active: true,
                   type: "CS", currency_name: "usd", primary_exchange: "XNAS")
         }
-        let started = research.start(.week, allowed: { true }, universe: { [listing("AAPL"), listing("MSFT")] }, analyze: { item in
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAPL"), listing("MSFT")]) }, analyze: { item in
             let verdict: StockSageAIAssessment.Verdict? = item.ticker == "AAPL"
                 ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
                 : nil
@@ -355,7 +355,10 @@ struct StockSageChatTests {
             .init(ticker: symbol, name: "\(symbol) synthetic", market: "stocks", locale: "us", active: true,
                   type: "CS", currency_name: "usd", primary_exchange: "XNAS")
         }
-        let started = research.start(.week, allowed: { true }, universe: { [listing("AAPL"), listing("MSFT")] }, analyze: { item in
+        let receipt = StockSageResearchUniverse.Receipt(session: "2026-09-11", requestedAt: now,
+            returnedCount: 2, eligibleCount: 2, directoryCount: 2, partialSession: false,
+            dollarVolume: ["AAPL": 900, "MSFT": 100])
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAPL"), listing("MSFT")], receipt: receipt) }, analyze: { item in
             .init(verdict: item.ticker == "AAPL"
                     ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
                     : nil, note: "Synthetic research only", model: "fixture")
@@ -380,6 +383,7 @@ struct StockSageChatTests {
         #expect(size.width == 1200 && size.height == 800)
         #expect(presentation.selected == "AAPL" && selection == .research, "Rendering must not alter selection state")
         #expect(research.running == nil, "Rendering must not start a scan")
+        #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
     }
 
     @Test func nativeQuestionFocusUsesActualFieldWithoutOwnerState() async throws {
@@ -388,7 +392,7 @@ struct StockSageChatTests {
         var edited = ""
         let host = NSHostingController(rootView: ChatFocusFixture(ready: { focus = $0; text = $1 },
                                                                  edited: { edited = $0 }))
-        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 150),
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 150),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = host

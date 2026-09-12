@@ -132,7 +132,7 @@ struct CatalystsSection: View {
     }
 
     private func updateModelSetting(_ value: String, key: String) {
-        if StockSageLocalModelServer.setSetting(value, for: key) {
+        if StockSageAIAssessments.shared.setModelSetting(value, for: key) {
             StockSagePaperAutomation.shared.cancelResearchForSettingsChange()
         }
     }
@@ -295,7 +295,7 @@ struct CatalystsSection: View {
             return StockSageCatalystWatch.brief(for: idea, inputs: .init(
                 earnings: earnings[sym], earningsDate: store.earningsDates[sym],
                 earningsCheckedAt: store.earningsCheckedAt[sym],
-                volumeMove: catalystsBySymbol[sym], regime: store.regime, regimeGaugedAt: store.regimeGaugedAt,
+                volumeMove: catalystsBySymbol[sym], regime: store.regimeIsStale ? nil : store.regime, regimeGaugedAt: store.regimeGaugedAt,
                 seasonality: store.seasonality[sym], now: now,
                 catalystConfirmed: record?.confirmed,
                 catalystSource: record?.source ?? "Source unavailable",
@@ -390,7 +390,9 @@ struct CatalystsSection: View {
                 Text("Regime: \(regime.state.rawValue) · sizing bias ×\(String(format: "%.2f", regime.sizingBias)) · gauged \(gaugedStr)")
                     .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .help(regime.caveat)
+                    .help(regime.caveat + " " + store.regimeEvidenceText)
+                Text(store.regimeIsStale ? "Stale gauge — re-gauge before relying on it." : store.regimeEvidenceText)
+                    .font(.caption2).foregroundStyle(store.regimeIsStale ? DS.Palette.warningSoft : DS.Palette.textSecondary)
             }
             // Honesty-floor label — always visible, never collapsible.
             Text(StockSageCatalystWatch.caveat)

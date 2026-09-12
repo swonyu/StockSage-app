@@ -37,6 +37,115 @@ struct StockSagePaperTraderTests {
 
     // MARK: open() gating
 
+    @Test @MainActor func offCatalogHoldingGetsExitHistoryWithoutJoiningTheEntryUniverse() async throws {
+        let suite = "paper.coverage.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let trade = try #require(StockSagePaperTrader.open(
+            from: idea("OFFCAT", price: 100, .buy, stop: 90, target: 120), at: d(0)))
+        paper.add(trade)
+        let bar = history("OFFCAT", dates: [d(0), d(1)], opens: [100, 100], highs: [100, 101], lows: [100, 89], closes: [100, 95])
+        let originalSymbols = store.symbols, originalIdeas = store.ideas
+        let supplemented = await store.paperExitHistories(existing: [:], paper: paper, allowed: { true }, fetch: { names in
+            #expect(names == ["OFFCAT"])
+            return ["OFFCAT": bar]
+        })
+        let result = StockSagePaperTrader.step(current: paper.trades, ideas: [], histories: supplemented,
+            openDate: d(2), costsFor: { _ in costs })
+        #expect(result.closes.count == 1 && result.opens.isEmpty)
+        #expect(store.symbols == originalSymbols && store.ideas == originalIdeas)
+        paper.apply(closes: result.closes, opens: result.opens)
+        let restored = StockSagePaperTradeStore(defaults: defaults)
+        #expect(restored.trades.count == 1 && restored.closed.first?.id == trade.id)
+        #expect(restored.closed.first?.exitPrice == result.closes.first?.exitPrice)
+        #expect(restored.closed.first?.modeledPaperCostPerShare == result.closes.first?.modeledPaperCostPerShare)
+        let again = await store.paperExitHistories(existing: [:], paper: paper, allowed: { true }, fetch: { _ in
+            Issue.record("Closed positions must not trigger supplementary requests"); return [:]
+        })
+        #expect(again.isEmpty)
+    }
+
+    @Test @MainActor func missingExitCoverageRotatesAndIgnoresRemovedHoldingsAtPublication() async throws {
+        let suite = "paper.rotation.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        for i in 0..<8 {
+            paper.add(try #require(StockSagePaperTrader.open(
+                from: idea("TEST\(i)", price: 100, .buy, stop: 90, target: 120), at: d(0))))
+        }
+        var batches: [[String]] = []
+        for _ in 0..<2 {
+            _ = await store.paperExitHistories(existing: [:], paper: paper, allowed: { true }, fetch: {
+                batches.append($0); return [:]
+            })
+        }
+        #expect(batches.allSatisfy { $0.count <= 6 })
+        #expect(Set(batches.flatMap { $0 }).count == 8, "Failures must not starve the tail")
+        let result = await store.paperExitHistories(existing: [:], paper: paper, allowed: { true }, fetch: { names in
+            paper.reset()
+            return Dictionary(uniqueKeysWithValues: names.map {
+                ($0, history($0, dates: [d(1)], opens: [100], highs: [101], lows: [89], closes: [95]))
+            })
+        })
+        #expect(result.isEmpty, "A removed holding wins over the in-flight exit-history request")
+    }
+
+    @Test @MainActor func cancelledSupplementCannotPublishReturnedHistory() async throws {
+        let suite = "paper.cancel.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        paper.add(try #require(StockSagePaperTrader.open(from: idea("TEST", price: 100, .buy, stop: 90, target: 120), at: d(0))))
+        var wire: CheckedContinuation<Void, Never>?
+        let task = Task { @MainActor in
+            await store.paperExitHistories(existing: [:], paper: paper, allowed: { true }, fetch: { _ in
+                await withCheckedContinuation { wire = $0 }
+                return ["TEST": history("TEST", dates: [d(0), d(1)], opens: [100, 100], highs: [100, 101], lows: [100, 89], closes: [100, 95])]
+            })
+        }
+        defer { task.cancel(); wire?.resume() }
+        for _ in 0..<2000 where wire == nil { await Task.yield() }
+        try #require(wire != nil)
+        task.cancel()
+        let pending = wire; wire = nil; pending?.resume()
+        #expect(await task.value.isEmpty)
+        #expect(paper.open.count == 1 && paper.closed.isEmpty)
+    }
+
+    @Test @MainActor func severeGapLossSurvivesPersistenceAndForwardStatistics() throws {
+        let suite = "paper.gap.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSagePaperTradeStore(defaults: defaults)
+        let opened = try #require(StockSagePaperTrader.open(
+            from: idea("GAP", price: 100, .buy, stop: 90, target: 120), at: d(0)))
+        store.add(opened)
+        let h = history("GAP", dates: [d(0), d(1)], opens: [100, 0.05],
+                        highs: [100, 0.06], lows: [100, 0.04], closes: [100, 0.05])
+        let closed = try #require(StockSagePaperTrader.markToMarket([opened], history: h, costs: costs).first)
+        #expect(closed.closureError == nil)
+        #expect(abs((closed.realizedR ?? .nan) - (-10.005)) < 1e-9)
+        store.applyClose(closed)
+        let restored = try #require(StockSagePaperTradeStore(defaults: defaults).closed.first)
+        #expect(restored == closed)
+        #expect(restored.ownerJournalError != nil)
+        #expect(throws: StockSageJournalCSV.ExportError.self) { try StockSageJournalCSV.csv([restored]) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        #expect(!journal.add(restored))
+        #expect(throws: StockSageBackup.BackupError.self) { try journal.prepareBackupImport([restored]) }
+        var native = StockSagePaperAutomation.Book()
+        native.trades = [restored]
+        #expect(!native.valid)
+        let stats = try #require(StockSagePaperTrader.forwardStats([restored, closedR(2), closedR(1), closedR(-1)]))
+        #expect(stats.closed == 4 && stats.winRate == 0.5)
+        #expect(abs(stats.avgR - (-8.005 / 4)) < 1e-9)
+    }
+
     @Test func openOnlyForLongActionableWithDefinedRisk() {
         // Buy-side with stop+target+risk>0 → a long paper trade with the idea's numbers.
         let t = StockSagePaperTrader.open(from: idea("TST", price: 100, .buy, stop: 90, target: 120), at: d(0))
@@ -75,7 +184,7 @@ struct StockSagePaperTraderTests {
         let out = StockSagePaperTrader.markToMarket([t], history: h, costs: costs).first!
         #expect(out.isOpen == false)
         #expect(out.closedAt == d(2))
-        #expect(abs((out.exitPrice ?? 0) - 119.90) < 1e-9)
+        #expect(out.exitPrice == 120 && out.modeledPaperCostPerShare == 0.10)
         #expect(abs((out.realizedR ?? 0) - 1.99) < 1e-9)
     }
 
@@ -94,7 +203,7 @@ struct StockSagePaperTraderTests {
         let out = StockSagePaperTrader.markToMarket([t], history: h, costs: costs).first!
         #expect(out.isOpen == false)
         #expect(out.closedAt == d(1))
-        #expect(abs((out.exitPrice ?? 0) - 87.90) < 1e-9)
+        #expect(out.exitPrice == 88 && out.modeledPaperCostPerShare == 0.10)
         #expect(abs((out.realizedR ?? 0) - (-1.21)) < 1e-9)
     }
 
@@ -112,7 +221,7 @@ struct StockSagePaperTraderTests {
                         closes: [100, 110])
         let out = StockSagePaperTrader.markToMarket([t], history: h, costs: costs).first!
         #expect(out.isOpen == false)
-        #expect(abs((out.exitPrice ?? 0) - 89.90) < 1e-9)   // stop fill, not the 120 target
+        #expect(out.exitPrice == 90 && out.modeledPaperCostPerShare == 0.10)   // stop fill, not target
         #expect(abs((out.realizedR ?? 0) - (-1.01)) < 1e-9)
     }
 
@@ -131,7 +240,7 @@ struct StockSagePaperTraderTests {
         let out = StockSagePaperTrader.markToMarket([t], history: h, costs: costs, maxHoldingBars: 2).first!
         #expect(out.isOpen == false)
         #expect(out.closedAt == d(3))
-        #expect(abs((out.exitPrice ?? 0) - 104.90) < 1e-9)
+        #expect(out.exitPrice == 105 && out.modeledPaperCostPerShare == 0.10)
         #expect(abs((out.realizedR ?? 0) - 0.49) < 1e-9)
     }
 
@@ -261,7 +370,7 @@ struct StockSagePaperTraderTests {
     /// (no two tests share a global key). Caller removes the suite in a defer.
     private func isolatedStore() -> (store: StockSagePaperTradeStore, defaults: UserDefaults, suite: String) {
         let suite = "papertrader.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
         return (StockSagePaperTradeStore(defaults: defaults, key: "stocksage.papertrades.v1"), defaults, suite)
     }
 
@@ -678,7 +787,8 @@ struct StockSagePaperTraderTests {
         #expect(!p.isOpen)
         let r = p.realizedR ?? .nan
         #expect(r < -1.0 && r > -1.1)
-        #expect(abs((p.exitPrice ?? 0) - 10.439) < 1e-9)
+        #expect(abs((p.exitPrice ?? 0) - 10.45) < 1e-9)
+        #expect(abs((p.modeledPaperCostPerShare ?? 0) - 0.011) < 1e-9)
     }
 
     @Test func normalBasisIsNeverRebased() {

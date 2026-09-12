@@ -62,7 +62,7 @@ struct StockSageFeedBannerLayoutTests {
     /// Height the view reports when hosted at `degenerateWidth`, the same way the app hosts it.
     private func height(_ view: some View) throws -> CGFloat {
         let host = NSHostingController(rootView: view.frame(width: Self.degenerateWidth))
-        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 400),
+        let window = FeedBannerFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         // The app declares .preferredColorScheme(.dark); match it so metrics match what ships.
@@ -156,5 +156,9 @@ struct StockSageFeedBannerLayoutTests {
         let h = try height(MarketsView.bannerSentence(sample))
         #expect(h < Self.capCeiling, "the sample-data sentence measured \(Int(h))pt at a degenerate width")
     }
+}
+@MainActor private final class FeedBannerFixtureWindow: NSWindow {
+    override var canBecomeMain: Bool { false }
+    override var canBecomeKey: Bool { false }
 }
 #endif

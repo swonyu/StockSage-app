@@ -242,7 +242,7 @@ struct StockSageSlippageTests {
 
     private func isolatedStore() -> (store: StockSageJournalStore, defaults: UserDefaults, suite: String) {
         let suite = "journal.slippage.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
         return (StockSageJournalStore(defaults: defaults, key: "stocksage.journal.v1"), defaults, suite)
     }
 

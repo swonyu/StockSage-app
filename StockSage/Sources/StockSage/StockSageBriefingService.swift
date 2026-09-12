@@ -54,6 +54,9 @@ enum StockSageBriefingService {
         // join off the signal engine — "on-device briefing" implied model inference that never
         // happens in this target (honesty floor: provenance must not overstate).
         var out = "📊 Market briefing — rules-based (\(symbols.count) symbols)\n"
+        let missing = symbols.count - signals.count
+        if missing > 0 { out += "\n\(missing) of \(symbols.count) symbols lack a verified previous-close basis; excluded from this assessment." }
+        guard !signals.isEmpty else { return out + "\nNo evaluable daily moves — market tone is unassessed." }
         if !gainers.isEmpty {
             out += "\nStrength: " + gainers.map(label).joined(separator: ", ")
         }
@@ -61,9 +64,9 @@ enum StockSageBriefingService {
             out += "\nWeakness: " + losers.map(label).joined(separator: ", ")
         }
         if gainers.isEmpty && losers.isEmpty {
-            out += "\nAll tracked symbols are consolidating — no strong signals."
+            out += "\nNo directional rules signal among the \(signals.count) evaluated symbols."
         }
-        out += "\n\nTone: \(gainers.count > losers.count ? "Constructive" : losers.count > gainers.count ? "Defensive" : "Neutral")"
+        out += "\n\nTone of evaluated symbols: \(gainers.count > losers.count ? "Constructive" : losers.count > gainers.count ? "Defensive" : "Neutral")"
         return out
     }
 }

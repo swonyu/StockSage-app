@@ -124,8 +124,8 @@ import Testing
         }
         #expect(label(.massiveSIP, now) == "Massive SIP · just now")
         #expect(label(.massiveDaily, now.addingTimeInterval(-86_400)) == "Massive daily bars · 1d")
-        #expect(label(.yahoo, now, cached: true) == "cached · Yahoo")
-        #expect(label(nil, now, cached: true) == "cached")
+        #expect(label(.yahoo, now, cached: true) == "cached · Yahoo · just now")
+        #expect(label(nil, now, cached: true) == "cached · source unknown · just now")
         #expect(label(.sample, nil) == "sample")
         #expect(label(.yahoo, nil) == "Yahoo · time unknown")
         #expect(label(.massiveSIP, Date(timeIntervalSince1970: .nan)) == "Massive SIP · time unverified")

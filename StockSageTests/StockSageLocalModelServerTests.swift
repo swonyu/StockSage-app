@@ -12,6 +12,54 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    @Test(arguments: [false, true]) @MainActor
+    func totalDeadlineAndCancellationSettleBeforeAnUncooperativeTransport(cancel: Bool) async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        var instant = ContinuousClock.now
+        var wire: CheckedContinuation<(Data, URLResponse), Error>?
+        var timer: CheckedContinuation<Void, Error>?
+        var settled = false
+        let task = Task { @MainActor in
+            let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
+                transport: { _ in try await withCheckedThrowingContinuation { wire = $0 } },
+                clock: { instant }, sleepUntil: { _ in try await withCheckedThrowingContinuation { timer = $0 } })
+            settled = true
+            return result
+        }
+        defer {
+            task.cancel()
+            wire?.resume(throwing: CancellationError()); wire = nil
+            timer?.resume(throwing: CancellationError()); timer = nil
+        }
+        for _ in 0..<2000 where wire == nil || timer == nil { await Task.yield() }
+        try #require(wire != nil && timer != nil)
+        if cancel { task.cancel() }
+        else { instant = instant.advanced(by: .seconds(10)); timer?.resume(); timer = nil }
+        for _ in 0..<2000 where !settled { await Task.yield() }
+        try #require(settled, "Caller must finish without releasing the transport")
+        let result = await task.value
+        if case .failure(let failure) = result {
+            #expect(failure.diagnostic.category == (cancel ? .cancelled : .timeout))
+        } else { Issue.record("Expected a deadline/cancellation failure") }
+        #expect(wire != nil)
+    }
+
+    @Test(arguments: [false, true]) @MainActor func resultAfterDeadlineCannotBeatADelayedTimer(throwsError: Bool) async throws {
+        let start = ContinuousClock.now
+        var instant = start
+        let pending = S.Pending<Int>()
+        let result: Result<Int, Error>
+        do {
+            result = .success(try await pending.run(deadline: start.advanced(by: .seconds(1)), now: { instant }) {
+                instant = start.advanced(by: .seconds(1))
+                if throwsError { throw URLError(.cannotConnectToHost) }
+                return 7
+            })
+        } catch { result = .failure(error) }
+        if case .failure(let error) = result { #expect((error as? URLError)?.code == .timedOut) }
+        else { Issue.record("An overdue result was accepted") }
+    }
+
     @Test @MainActor func lmStudioProfileBoundsTheEntirePromptBeforeDispatch() async throws {
         let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
         // Output and both messages must fit together, including non-thinking chat framing.

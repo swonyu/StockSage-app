@@ -8,8 +8,10 @@ struct MarketSortTests {
 
     /// A symbol whose latest quote yields the given percent change (prev = 100).
     private func sym(_ s: String, _ changePct: Double) -> StockSageSymbol {
-        StockSageSymbol(symbol: s, market: "M",
-                        quotes: [StockSageQuote(price: 100 * (1 + changePct / 100), previousPrice: 100)])
+        let time = Date(timeIntervalSince1970: 1_789_052_400) // 2026 trading-day fixture, never a live observation
+        return StockSageSymbol(symbol: s, market: "M",
+                        quotes: [StockSageQuote(price: 100 * (1 + changePct / 100), previousPrice: 100,
+                            marketTime: time, priceSource: .yahoo, previousCloseSource: .yahoo, previousCloseQuoteTime: time)])
     }
     private func tickers(_ xs: [StockSageSymbol]) -> [String] { xs.map(\.symbol) }
 

@@ -70,9 +70,11 @@ struct StockSageSignalEngineTests {
     }
 
     @Test func generateFromSymbolUsesLatestQuote() {
+        let time = ISO8601DateFormatter().date(from: "2026-09-10T15:00:00Z")!
         let sym = StockSageSymbol(symbol: "X", market: "TASI", quotes: [
             StockSageQuote(price: 10, previousPrice: 10),
-            StockSageQuote(price: 11, previousPrice: 10),   // +10% → strong buy
+            StockSageQuote(price: 11, previousPrice: 10, marketTime: time, priceSource: .yahoo,
+                          previousCloseSource: .yahoo, previousCloseQuoteTime: time),   // +10% → strong buy
         ])
         #expect(StockSageSignalEngine.generateSignal(for: sym)?.recommendation == .strongBuy)
     }
@@ -102,6 +104,19 @@ struct StockSageQuoteTests {
 // belongs in an integration test, not a pure unit test.
 
 struct StockSageBriefingTests {
+    private let at = ISO8601DateFormatter().date(from: "2026-01-02T15:00:00Z")!
+
+    @Test func unverifiedBaselineIsNotAConsolidationFinding() {
+        let unknown = StockSageSymbol(symbol: "UNKNOWN", market: "US", quotes: [
+            .init(price: 111, previousPrice: 100, marketTime: at, priceSource: .massiveSIP)])
+        let empty = StockSageBriefingService.deterministicSummary(for: [unknown])
+        #expect(empty.contains("unassessed") && !empty.contains("Neutral") && !empty.contains("consolidating"))
+        let hold = StockSageSymbol(symbol: "HOLD", market: "US", quotes: [
+            .init(price: 100, previousPrice: 100, marketTime: at, priceSource: .yahoo,
+                  previousCloseSource: .yahoo, previousCloseQuoteTime: at)])
+        let mixed = StockSageBriefingService.deterministicSummary(for: [unknown, hold])
+        #expect(mixed.contains("1 of 2") && mixed.contains("1 evaluated") && !mixed.contains("All tracked"))
+    }
 
     @Test func emptySymbolsReportsNothingTracked() {
         #expect(StockSageBriefingService.deterministicSummary(for: []) == "No symbols are being tracked yet.")
@@ -111,11 +126,13 @@ struct StockSageBriefingTests {
         let symbols = [
             StockSageSymbol(symbol: "UP", market: "TASI", quotes: [
                 StockSageQuote(price: 100, previousPrice: 100),
-                StockSageQuote(price: 110, previousPrice: 100),   // +10% strong buy
+                StockSageQuote(price: 110, previousPrice: 100, marketTime: at, priceSource: .yahoo,
+                    previousCloseSource: .yahoo, previousCloseQuoteTime: at),   // +10% strong buy
             ]),
             StockSageSymbol(symbol: "DN", market: "TASI", quotes: [
                 StockSageQuote(price: 100, previousPrice: 100),
-                StockSageQuote(price: 92, previousPrice: 100),    // -8% strong sell
+                StockSageQuote(price: 92, previousPrice: 100, marketTime: at, priceSource: .yahoo,
+                    previousCloseSource: .yahoo, previousCloseQuoteTime: at),    // -8% strong sell
             ]),
         ]
         let summary = StockSageBriefingService.deterministicSummary(for: symbols)
@@ -131,7 +148,8 @@ struct StockSageBriefingTests {
         // +10% move makes it a strong buy — the Strength line must carry the stale marker.
         let stale = [StockSageSymbol(symbol: "OLD", market: "TASI", quotes: [
             StockSageQuote(price: 100, previousPrice: 100, marketTime: Date(timeIntervalSince1970: 0)),
-            StockSageQuote(price: 110, previousPrice: 100, marketTime: Date(timeIntervalSince1970: 0)),
+            StockSageQuote(price: 110, previousPrice: 100, marketTime: at, priceSource: .yahoo,
+                previousCloseSource: .yahoo, previousCloseQuoteTime: at),
         ])]
         let out = StockSageBriefingService.deterministicSummary(for: stale)
         #expect(out.contains("OLD") && out.contains("stale quote"))
@@ -141,9 +159,10 @@ struct StockSageBriefingTests {
     @Test func allConsolidatingReportsNoStrongSignals() {
         let flat = [StockSageSymbol(symbol: "FLAT", market: "TASI", quotes: [
             StockSageQuote(price: 100, previousPrice: 100),
-            StockSageQuote(price: 100.5, previousPrice: 100),     // +0.5% hold
+            StockSageQuote(price: 100.5, previousPrice: 100, marketTime: at, priceSource: .yahoo,
+                previousCloseSource: .yahoo, previousCloseQuoteTime: at),     // +0.5% hold
         ])]
-        #expect(StockSageBriefingService.deterministicSummary(for: flat).contains("consolidating"))
+        #expect(StockSageBriefingService.deterministicSummary(for: flat).contains("No directional rules signal"))
     }
 }
 

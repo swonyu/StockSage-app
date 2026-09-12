@@ -29,7 +29,7 @@ struct StockSageResearchModesPanel: View {
                 ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
             }.pickerStyle(.segmented)
                 .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; buysOnly = false }
-            Text("First \(StockSageHorizonResearch.scanLimit) active US listings alphabetically — not a best-stock ranking. Research only; no orders.")
+            Text("Up to \(StockSageHorizonResearch.scanLimit) US listings selected by recent trading activity, then researched for your chosen horizon. Research only; no orders.")
                 .font(.callout).foregroundStyle(.secondary)
             manual(presentation.horizon)
             if let running = research.running, running != presentation.horizon {
@@ -55,6 +55,10 @@ struct StockSageResearchModesPanel: View {
                     run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Self.scanStatus(scan.status, isRunning: isRunning)
+                    if let selection = scan.selection {
+                        Text(selection.summary).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if isRunning, let symbol = research.activeSymbol {
                         Text("\(symbol) · daily history, news and Qwen").font(.caption).monospaced()
                         ProgressView().progressViewStyle(.linear).accessibilityLabel("\(symbol) research in progress")
@@ -99,7 +103,7 @@ struct StockSageResearchModesPanel: View {
                             VStack(alignment: .leading) {
                                 Text(item.ticker).fontWeight(.semibold)
                                 Text(item.name).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-                            }.help("\(item.name) · \(item.type ?? "instrument type unconfirmed")")
+                            }.help("\(item.name) · \(item.type ?? "instrument type unconfirmed")\n\(scan.selection?.detail(for: item.ticker) ?? "Selection activity not recorded.")")
                         }.width(min: 100, ideal: 160)
                         TableColumn("Check / opinion") { item in
                             Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
@@ -148,7 +152,10 @@ struct StockSageResearchModesPanel: View {
                     .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("Coverage & price assumptions") {
                     VStack(alignment: .leading, spacing: DS.Space.xs) {
-                        Text("First \(StockSageHorizonResearch.scanLimit) active US listings in Massive’s alphabetical directory, including ETFs and other listed stock-market instruments; no OTC. This is a size limit, not a best-stock ranking or the S&P 500. One manual worker checks them in order.")
+                        Text("Ranked by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment, a Buy ranking or the S&P 500. Confirmed USD listings, including ETFs and share classes; no OTC. Missing observations are not filled alphabetically. One manual worker researches the selected list in order.")
+                        if let selection = scan.selection {
+                            Text("\(selection.directoryCount) active US directory entries considered. Selection requested \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)). \(selection.summary)")
+                        }
                         Text("Results stay in this app session. A new run replaces this horizon’s results; quitting clears them. No paper positions or real orders are created.")
                         Text("Reference prices are completed split-adjusted daily closes, not current executable quotes. Neither horizon has an independently validated profitable strategy.")
                         if let at = scan.at { Text("Run requested \(at.formatted(date: .abbreviated, time: .shortened))") }
@@ -183,7 +190,12 @@ struct StockSageResearchModesPanel: View {
                                                  scan: StockSageHorizonResearch.Scan) -> some View {
         if let selected, let item = rows.first(where: { $0.ticker == selected }) {
             let detail = ScrollView {
-                Self.resultDetail(item, result: scan.results[selected]).padding(20)
+                VStack(alignment: .leading, spacing: 12) {
+                    if let activity = scan.selection?.detail(for: selected) {
+                        Text(activity).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Self.resultDetail(item, result: scan.results[selected])
+                }.padding(20)
             }
             .toolbar {
                 ToolbarItem(placement: .automatic) {

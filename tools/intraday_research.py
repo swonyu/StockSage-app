@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 import sqlite3
 import statistics
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -91,12 +90,11 @@ def check_request(symbols, start, end):
 
 
 def credential():
-    # Same setting and precedence as StockSageMassive.apiKey. Never put it in argv.
-    saved = subprocess.run(["/usr/bin/defaults", "read", "SA.StockSage", "stocksage.massive.key"],
-                           capture_output=True, text=True, check=False)
-    key = (saved.stdout.strip() if saved.returncode == 0 else "") or os.environ.get("MASSIVE_API_KEY", "").strip()
+    # The app key lives in its private Keychain. CLI collection requires an explicit
+    # environment credential; never extract app secrets or place them in argv.
+    key = os.environ.get("MASSIVE_API_KEY", "").strip()
     if not 12 <= len(key) <= 256 or any(not 33 <= ord(c) <= 126 for c in key):
-        raise ResearchError("No usable Massive credential; configure the existing app setting or environment variable.")
+        raise ResearchError("No usable Massive credential; configure MASSIVE_API_KEY for this command. The app’s private Keychain is not read.")
     return key
 
 

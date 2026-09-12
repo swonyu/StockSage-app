@@ -38,6 +38,8 @@ enum StockSageQuoteService {
         /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
         let massiveTradeSequence: Int64?
         let priceSource: StockSagePriceSource?
+        let previousCloseSource: StockSagePriceSource?
+        let previousCloseQuoteTime: Date?
         /// Only the qualified tape adapter sets this after checking conditions, correction,
         /// size and participant/SIP clocks. A display snapshot is not execution evidence.
         let paperTradeQualified: Bool
@@ -49,13 +51,16 @@ enum StockSageQuoteService {
         let isNewListing: Bool
         init(symbol: String, price: Double, previousClose: Double, marketTime: Date? = nil,
              isNewListing: Bool = false, massiveTradeSequence: Int64? = nil,
-             priceSource: StockSagePriceSource? = nil, paperTradeQualified: Bool = false) {
+             priceSource: StockSagePriceSource? = nil, paperTradeQualified: Bool = false,
+             previousCloseSource: StockSagePriceSource? = nil, previousCloseQuoteTime: Date? = nil) {
             self.symbol = symbol; self.price = price
             self.previousClose = previousClose; self.marketTime = marketTime
             self.isNewListing = isNewListing
             self.massiveTradeSequence = massiveTradeSequence
             self.priceSource = priceSource
             self.paperTradeQualified = paperTradeQualified
+            self.previousCloseSource = previousCloseSource
+            self.previousCloseQuoteTime = previousCloseQuoteTime
         }
     }
 
@@ -132,7 +137,8 @@ enum StockSageQuoteService {
         // honesty (quoteAsOf, per-row isStale) since fetchQuotes is built on fetchOne.
         return LiveQuote(symbol: symbol, price: parsed.price, previousClose: parsed.previousClose,
                          marketTime: parsed.marketTime, isNewListing: parsed.isNewListing,
-                         priceSource: parsed.priceSource)
+                         priceSource: parsed.priceSource, previousCloseSource: parsed.previousCloseSource,
+                         previousCloseQuoteTime: parsed.previousCloseQuoteTime)
     }
 
     /// GET a request, returning the 200 body. On a 429/503 (Yahoo's keyless endpoint
@@ -186,7 +192,9 @@ enum StockSageQuoteService {
         // The quote's market time (Unix seconds) — lets the UI distinguish live from a stale close.
         let marketTime = number(meta["regularMarketTime"]).map { Date(timeIntervalSince1970: $0) }
         return LiveQuote(symbol: symbol, price: price, previousClose: previousClose, marketTime: marketTime,
-                         isNewListing: realPreviousClose == nil, priceSource: .yahoo)
+                         isNewListing: realPreviousClose == nil, priceSource: .yahoo,
+                         previousCloseSource: realPreviousClose == nil ? nil : .yahoo,
+                         previousCloseQuoteTime: realPreviousClose == nil ? nil : marketTime)
     }
 
     // MARK: Candle history (for indicators / the advisor)

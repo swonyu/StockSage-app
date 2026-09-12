@@ -32,10 +32,12 @@ struct MarketsSourceTagLabelTests {
         #expect(M.sourceTagLabel(isSampleData: true, loadedFromCache: false, priceAsOf: nil, now: Self.now) == "sample")
     }
 
-    @Test func cachedWinsOverLivePriceAsOf() {
-        // isSampleData false, loadedFromCache true -> "cached", ignoring priceAsOf entirely.
-        #expect(M.sourceTagLabel(isSampleData: false, loadedFromCache: true, priceAsOf: Self.now, now: Self.now) == "cached")
-        #expect(M.sourceTagLabel(isSampleData: false, loadedFromCache: true, priceAsOf: nil, now: Self.now) == "cached")
+    @Test func cachedKeepsProvenanceAndActualObservationAge() {
+        #expect(M.sourceTagLabel(isSampleData: false, loadedFromCache: true, priceAsOf: Self.now, now: Self.now) == "cached · source unknown · just now")
+        #expect(M.sourceTagLabel(isSampleData: false, loadedFromCache: true, priceAsOf: nil, now: Self.now) == "cached · source unknown · time unknown")
+        #expect(M.sourceTagLabel(isSampleData: false, loadedFromCache: true,
+                                priceAsOf: Self.now.addingTimeInterval(-172_800), now: Self.now,
+                                priceSource: .massiveSIP) == "cached · Massive SIP · 2d")
     }
 
     @Test func nilPriceAsOfOnALiveBoardRendersNothing() {

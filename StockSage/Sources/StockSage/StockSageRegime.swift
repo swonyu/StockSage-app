@@ -33,6 +33,25 @@ struct MarketRegime: Sendable, Equatable {
 }
 
 enum StockSageRegime {
+    /// Evidence for current daily-history research, not a new trading-session policy.
+    /// Preserve the cache's seven-full-calendar-day allowance (weekends included).
+    nonisolated static func historyAsOf(_ h: StockSagePriceHistory, now: Date, coveringDailyDate: Date? = nil) -> Date? {
+        guard h.priceSource == .massiveDaily || h.priceSource == .yahooBars,
+              !h.closes.isEmpty, h.dates.count == h.closes.count,
+              h.closes.allSatisfy({ $0.isFinite && $0 > 0 }),
+              h.dates.allSatisfy({ $0.timeIntervalSince1970.isFinite && $0 <= now }),
+              zip(h.dates, h.dates.dropFirst()).allSatisfy({ $0 < $1 }),
+              let at = h.dates.last else { return nil }
+        if let dailyDate = coveringDailyDate {
+            // Yahoo weekly stamps denote period starts, not a new daily observation.
+            // Compare covered weeks to the validated latest daily bar (holidays included).
+            // Anchor at the provider's period start, not the device/US weekday: foreign
+            // exchange weekly bars may begin on Sunday in New York.
+            guard dailyDate <= now, dailyDate >= at,
+                  dailyDate.timeIntervalSince(at) < 7 * 86_400 else { return nil }
+        } else if StockSageHistoryCache.isStale(newest: at, asOf: now) { return nil }
+        return at
+    }
     /// A liquid global large-cap sample for the breadth read (fraction above 200DMA).
     /// ⚠️ Bias: 8 of 14 names are US (6 mega-cap tech) — breadth signal skews with Nasdaq sentiment.
     nonisolated static let breadthSample: [String] = [

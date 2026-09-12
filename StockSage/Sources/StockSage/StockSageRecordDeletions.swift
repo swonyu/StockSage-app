@@ -11,13 +11,20 @@ struct StockSageRecordDeletions {
     let recordKey: String
 
     private func marker(_ id: UUID) -> String { recordKey + ".deleted." + id.uuidString }
-    func contains(_ id: UUID) -> Bool { defaults.bool(forKey: marker(id)) }
-    func mark(_ ids: Set<UUID>) { for id in ids { defaults.set(true, forKey: marker(id)) } }
+    func contains(_ id: UUID) -> Bool { StockSageRecordWriter.mayRead(defaults) && defaults.bool(forKey: marker(id)) }
+    func mark(_ ids: Set<UUID>) throws {
+        try StockSageRecordWriter.require(defaults)
+        for id in ids { defaults.set(true, forKey: marker(id)) }
+    }
     /// Only the explicit, fully validated JSON restore path may revive an old ID.
-    func restore(_ ids: Set<UUID>) { for id in ids { defaults.removeObject(forKey: marker(id)) } }
+    func restore(_ ids: Set<UUID>) throws {
+        try StockSageRecordWriter.require(defaults)
+        for id in ids { defaults.removeObject(forKey: marker(id)) }
+    }
 
     /// A corrupt/wrongly typed saved book is not an empty book to overwrite.
     func read<Record: Decodable>(_ type: Record.Type) throws -> [Record] {
+        guard StockSageRecordWriter.mayRead(defaults) else { throw StockSageFileLock.Failure.unavailable }
         guard let stored = defaults.object(forKey: recordKey) else { return [] }
         guard let data = stored as? Data else { throw CocoaError(.fileReadCorruptFile) }
         return try JSONDecoder().decode([Record].self, from: data)

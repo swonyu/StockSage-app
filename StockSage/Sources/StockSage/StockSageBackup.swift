@@ -134,8 +134,8 @@ enum StockSageBackup {
                 let symbols = try store.prepareBackupImport(payload.userSymbols)
                 let alerts = try payload.priceAlerts.map { try store.preparePriceAlertBackupImport($0) }
                 // All decoding, reconciliation and encoding succeeded; no await between writes.
-                trades.apply()
-                positions.apply()
+                try trades.apply()
+                try positions.apply()
                 symbols.apply()
                 alerts?.apply()
                 let alertCount = payload.priceAlerts?.count ?? 0
@@ -172,7 +172,7 @@ enum StockSageBackup {
                 return .failure(.unsupportedSchemaVersion(found: payload.schemaVersion, supported: currentSchemaVersion))
             }
             for (index, trade) in payload.trades.enumerated() {
-                if let error = trade.closureError { return .failure(.invalidJournalRecord(index: index + 1, reason: error)) }
+                if let error = trade.ownerJournalError { return .failure(.invalidJournalRecord(index: index + 1, reason: error)) }
                 guard !trade.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       [trade.entry, trade.stop, trade.shares].allSatisfy({ $0 > 0 && $0.isFinite }),
                       [trade.target, trade.plannedEntry, trade.entryFill, trade.plannedExit, trade.exitFill]

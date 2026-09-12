@@ -496,15 +496,15 @@ final class StockSageStore: ObservableObject {
     func mergeLiveQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote]) -> Bool {
         guard !quotes.isEmpty else { return false }
         let merged = Self.mergedPolledQuotes(symbols: symbols, ideas: ideas, symbolIndex: symbolIndex, quotes: quotes)
-        guard !merged.acceptedKeys.isEmpty else { return false }
+        guard !merged.acceptedKeys.isEmpty || !merged.baselineKeys.isEmpty else { return false }
         symbols = merged.symbols
         ideas = merged.ideas
-        let priced = quotes.filter { merged.acceptedKeys.contains($0.key.uppercased()) }
+        let priced = quotes.filter { merged.acceptedKeys.union(merged.baselineKeys).contains($0.key.uppercased()) }
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: priced)
         if let newest = merged.newestMarketTime {
             quoteAsOf = [quoteAsOf, newest].compactMap { $0 }.max()
         }
-        return true
+        return !merged.acceptedKeys.isEmpty
     }
 
     /// Pure: which disk-cache entries survive Q11 retention — only symbols still in `tracked`
@@ -562,10 +562,10 @@ final class StockSageStore: ObservableObject {
     /// stays a pure function of its three inputs, directly unit-testable without touching the
     /// wall clock or `StockSageLiveStream.shared`.
     nonisolated static func streamGapCandidates(
-        tracked: [String], subscribed: Set<String>, isTrading: (String) -> Bool
+        tracked: [String], subscribed: Set<String>, needsBaseline: Set<String> = [], isTrading: (String) -> Bool
     ) -> [String] {
         let subscribedUpper = Set(subscribed.map { $0.uppercased() })
-        return tracked.filter { !subscribedUpper.contains($0.uppercased()) && isTrading($0) }
+        return tracked.filter { (!subscribedUpper.contains($0.uppercased()) || needsBaseline.contains($0.uppercased())) && isTrading($0) }
     }
 
     /// The FX pairs the engine needs for currency conversions of KEPT-universe names
@@ -655,6 +655,7 @@ final class StockSageStore: ObservableObject {
             let candidates = Self.streamGapCandidates(
                 tracked: trackedSymbolsUnion,
                 subscribed: StockSageLiveStream.shared.subscribed,
+                needsBaseline: Set(symbols.filter { $0.sessionChangePercent == nil }.map { $0.symbol.uppercased() }),
                 isTrading: { Self.marketIsTrading(symbol: $0) }
             )
             let knownLabels = Dictionary(symbols.map { ($0.symbol.uppercased(), $0.market) }, uniquingKeysWith: { a, _ in a })
@@ -704,7 +705,8 @@ final class StockSageStore: ObservableObject {
             StockSageQuote(price: q.previousClose, previousPrice: q.previousClose, time: Date(timeIntervalSinceNow: -86_400)),
             // Carry the feed's market timestamp (review Q6) — without it the new row is fail-closed STALE.
             StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
-                           massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource),
+                           massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource,
+                           previousCloseSource: q.previousCloseSource, previousCloseQuoteTime: q.previousCloseQuoteTime),
         ])
         symbols = symbols.filter { $0.symbol.uppercased() != symbol } + [added]
         rebuildSymbolIndex()
@@ -865,9 +867,15 @@ final class StockSageStore: ObservableObject {
                                         benchmark: benchmark, calibration: cal, journalTrades: journalTrades,
                                         onThrottle: { [weak self] in self?.scanThrottled = true })
 
+        // Exit coverage is independent of watchlist/entry membership. Do not expand the
+        // scan universe or feed these supplemental histories into ranking/calibration.
+        let paperHistories: [String: StockSagePriceHistory]
+        if !scan.wasCancelled, !scan.firstChunkTotallyFailed, !scanThrottled, !Task.isCancelled {
+            paperHistories = await paperExitHistories(existing: scan.accumulatedHistories)
+        } else { paperHistories = scan.accumulatedHistories }
         let historyUniverse = Set(universe.map { $0.symbol.uppercased() })
 
-        if scan.wasCancelled {
+        if scan.wasCancelled || Task.isCancelled {
             lastScanCancelled = true
             // CANCEL-01 (post-ship critique fleet, orchestrator-confirmed; round-2 fix,
             // 2026-07-08): a cancel throws away every chunk history the scan already paid
@@ -951,6 +959,7 @@ final class StockSageStore: ObservableObject {
         let stillTracked = Set(trackedDefs().map { $0.symbol.uppercased() })
         let finalRanked = ranked.filter { stillTracked.contains($0.symbol.uppercased()) }
             .sorted { Self.rankScore($0.advice) > Self.rankScore($1.advice) }
+        invalidateDerivedResearch()
         // Detect alert events vs the PRE-SCAN snapshot (taken before the loop's mid-scan
         // publishes) — once, vs the full board. Using `ideas` here would compare the
         // just-published finalRanked to itself (see preScanBoard's doc comment above).
@@ -985,7 +994,7 @@ final class StockSageStore: ObservableObject {
         // FORWARD PAPER TRADING: auto-open a fake-money position for each long-actionable idea and mark
         // existing open paper trades to the fresh histories (net-of-cost). Separate store, never conflated
         // with the real journal; does NOT feed win-rate calibration (F01/F02). Best-effort, synchronous.
-        updatePaperTrades(ideas: finalRanked, histories: accumulatedHistories)
+        updatePaperTrades(ideas: finalRanked, histories: paperHistories)
         // Populate earnings for EVERY tracked symbol (non-blocking), not just the board's top
         // names (A4, 2026-09-06) — TTL-cached per symbol, so this is cheap after the first sweep.
         earningsSweepTask?.cancel()
@@ -1150,9 +1159,36 @@ final class StockSageStore: ObservableObject {
     /// journal). Disabled ⇒ byte-identical to no paper trading. Pure orchestration lives in
     /// `StockSagePaperTrader.step`; this is only the thin persistence boundary. F01/F02 fence: paper
     /// outcomes never feed `convictionCalibration`.
+    private var paperExitCursor: String?
+
+    func paperExitHistories(existing: [String: StockSagePriceHistory],
+        paper: StockSagePaperTradeStore = .shared,
+        allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+        fetch: ([String]) async -> [String: StockSagePriceHistory] = {
+            await StockSageQuoteService.fetchHistories(for: $0, range: "1y", concurrency: 6)
+        }
+    ) async -> [String: StockSagePriceHistory] {
+        guard paper.enabled, paper.canWrite, !Task.isCancelled, allowed() else { return existing }
+        let held = Set(paper.open.filter { $0.side == .long && $0.target != nil }.map { $0.symbol.uppercased() })
+        let missing = held.subtracting(existing.keys.map { $0.uppercased() }).sorted()
+        let ordered = missing.filter { $0 > (paperExitCursor ?? "") } + missing.filter { $0 <= (paperExitCursor ?? "") }
+        // ponytail: at most six extra symbols per completed scan; rotate even failed requests.
+        let batch = Array(ordered.prefix(6))
+        guard let last = batch.last else { return existing }
+        paperExitCursor = last
+        let histories = await fetch(batch)
+        guard paper.enabled, paper.canWrite, !Task.isCancelled, allowed() else { return existing }
+        let stillHeld = Set(paper.open.map { $0.symbol.uppercased() })
+        var result = existing
+        for symbol in batch where stillHeld.contains(symbol) {
+            if let h = histories[symbol], h.symbol.uppercased() == symbol { result[symbol] = h }
+        }
+        return result
+    }
+
     private func updatePaperTrades(ideas: [StockSageIdea], histories: [String: StockSagePriceHistory]) {
         let store = StockSagePaperTradeStore.shared
-        guard store.enabled else { return }
+        guard store.enabled, store.canWrite else { return }
         let (closes, opens) = StockSagePaperTrader.step(
             current: store.trades, ideas: ideas, histories: histories, openDate: Date(),
             costsFor: { StockSageNetEdge.defaultCosts(forSymbol: $0) })
@@ -1529,14 +1565,23 @@ final class StockSageStore: ObservableObject {
     @Published private(set) var regimeGaugedAt: Date?
     @Published private(set) var isLoadingRegime = false
     @Published private(set) var regimeError: String?
+    @Published private(set) var regimeEvidence: [String: (source: StockSagePriceSource, asOf: Date)] = [:]
 
     /// Gauge the market regime: the S&P 500 vs its 200DMA + index momentum, the
     /// VIX level, and breadth (fraction of a large-cap sample above their own
     /// 200DMA). User-triggered; non-destructive on failure.
-    func refreshRegime() async {
+    func refreshRegime(now: () -> Date = Date.init,
+        allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+        load: () async -> (StockSagePriceHistory?, StockSageQuoteService.LiveQuote?, [String: StockSagePriceHistory]) = {
+            async let index = StockSageQuoteService.fetchHistory("^GSPC", range: "1y")
+            async let quotes = StockSageQuoteService.fetchQuotes(for: ["^VIX"])
+            async let breadth = StockSageQuoteService.fetchHistories(for: StockSageRegime.breadthSample)
+            return await (index, quotes["^VIX"], breadth)
+        }
+    ) async {
         guard !isLoadingRegime else { return }
-        if let reason = ToolPolicy.webToolsDisabledReason() {
-            regimeError = reason
+        if !allowed() {
+            regimeError = "Web access unavailable — gauge not refreshed."
             return
         }
         isLoadingRegime = true
@@ -1544,13 +1589,8 @@ final class StockSageStore: ObservableObject {
         regimeError = nil
 
         let sample = StockSageRegime.breadthSample
-        async let indexHistory = StockSageQuoteService.fetchHistory("^GSPC", range: "1y")
-        async let vixQuotes = StockSageQuoteService.fetchQuotes(for: ["^VIX"])
-        async let breadthHistories = StockSageQuoteService.fetchHistories(for: sample)
-
-        let idx = await indexHistory
-        let vix = (await vixQuotes)["^VIX"]?.price
-        let hists = await breadthHistories
+        let (idx, vixQuote, hists) = await load()
+        let checkedAt = now()
 
         // 7.1 — fail closed on an invalidation that landed mid-fetch. `fetchHistories` returns [:]
         // the moment web access is revoked, and every leg nils once this task is cancelled — and
@@ -1558,13 +1598,14 @@ final class StockSageStore: ObservableObject {
         // disappears, with the single-request index leg normally resolving long before the
         // 14-name breadth fan-out. Publishing past that point stamps `regimeGaugedAt` fresh on a
         // breadth computed from whatever subset arrived.
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else {
+        guard allowed(), !Task.isCancelled else {
             regimeError = ToolPolicy.webToolsDisabledReason() ?? "Gauge interrupted — try again."
             return
         }
 
-        guard let idx else {
-            regimeError = "Couldn't load the market index — try again."
+        guard let idx, idx.symbol.uppercased() == "^GSPC",
+              let indexAt = StockSageRegime.historyAsOf(idx, now: checkedAt) else {
+            regimeError = "Market index evidence is missing, invalid or stale — previous gauge retained. Try again."
             return
         }
         // Breadth: fraction of the sample above its own 200DMA (names without a
@@ -1575,7 +1616,11 @@ final class StockSageStore: ObservableObject {
         // breadth multiplies every Deploy-capital weight through `sizingBias`. Below the coverage
         // floor, abstain and SAY SO. A nil breadth already abstains cleanly in `assess`, so sizing
         // falls back to neutral rather than to a bias derived from half a sample.
-        let priced = sample.compactMap { hists[$0.uppercased()] }
+        let priced = sample.compactMap { symbol -> StockSagePriceHistory? in
+            guard let h = hists[symbol], h.symbol.uppercased() == symbol,
+                  StockSageRegime.historyAsOf(h, now: checkedAt) != nil else { return nil }
+            return h
+        }
         let eligible = StockSageRegime.breadthEligibleCount(priced)
         let hasCoverage = StockSageRegime.breadthHasCoverage(eligible: eligible, requested: sample.count)
         let breadth = hasCoverage ? StockSageRegime.breadth(priced) : nil
@@ -1583,15 +1628,46 @@ final class StockSageStore: ObservableObject {
             regimeError = "Breadth unavailable — only \(eligible) of \(sample.count) sample names returned enough history. The regime below is gauged without it."
         }
 
+        var evidence: [String: (source: StockSagePriceSource, asOf: Date)] = ["^GSPC": (idx.priceSource!, indexAt)]
+        if hasCoverage {
+            for h in priced where StockSageRegime.breadthEligibleCount([h]) == 1 {
+                evidence[h.symbol.uppercased()] = (h.priceSource!, h.dates.last!)
+            }
+        }
+        var vix: Double?
+        if let q = vixQuote, q.symbol.uppercased() == "^VIX", q.price.isFinite, q.price > 0,
+           q.priceSource == .yahoo || q.priceSource == .massiveSIP,
+           !StockSageQuoteFreshness.isStale(symbol: "^VIX", marketTime: q.marketTime, asOf: checkedAt),
+           let at = q.marketTime, let source = q.priceSource {
+            vix = q.price
+            evidence["^VIX"] = (source, at)
+        } else {
+            regimeError = [regimeError, "VIX unavailable — no fresh attributed observation; gauge excludes this vote."].compactMap { $0 }.joined(separator: " ")
+        }
         regime = StockSageRegime.assess(indexCloses: idx.closes, vix: vix, breadthAbove200: breadth)
-        regimeGaugedAt = Date()
+        regimeEvidence = evidence
+        regimeGaugedAt = checkedAt
     }
 
     /// True when the regime is older than ~6 trading hours (or never gauged) — a
     /// signal that any regime-derived sizing should be treated cautiously.
     var regimeIsStale: Bool {
-        guard let at = regimeGaugedAt else { return true }
-        return Date().timeIntervalSince(at) > 6 * 3600
+        regimeIsStale(at: Date())
+    }
+
+    func regimeIsStale(at now: Date) -> Bool {
+        guard let at = regimeGaugedAt, now >= at, now.timeIntervalSince(at) <= 6 * 3600,
+              regimeEvidence["^GSPC"] != nil else { return true }
+        return regimeEvidence.contains { symbol, input in
+            symbol == "^VIX" ? StockSageQuoteFreshness.isStale(symbol: symbol, marketTime: input.asOf, asOf: now)
+                : StockSageHistoryCache.isStale(newest: input.asOf, asOf: now)
+        }
+    }
+
+    var regimeEvidenceText: String {
+        guard let oldest = regimeEvidence.values.map(\.asOf).min() else { return "Input dates unverified" }
+        let sources = Set(regimeEvidence.values.map { $0.source.label }).sorted().joined(separator: ", ")
+        return "Inputs: \(sources) · oldest observation \(oldest.formatted(date: .abbreviated, time: .shortened))"
     }
 
     var ideasIsStale: Bool {
@@ -1601,15 +1677,38 @@ final class StockSageStore: ObservableObject {
 
     // Multi-timeframe — daily+weekly trend agreement, cached per symbol.
     @Published private(set) var multiTimeframe: [String: MultiTimeframeTrend] = [:]
+    @Published private(set) var derivedResearchRevision = UUID()
+    private var derivedRequests: [String: UUID] = [:]
+
+    func invalidateDerivedResearch() {
+        multiTimeframe.removeAll(); liquidity.removeAll(); trailingStop.removeAll()
+        derivedRequests.removeAll()
+        derivedResearchRevision = UUID()
+    }
 
     /// Fetch a daily (1y) AND a weekly (2y, interval=1wk) history for one symbol and
-    /// cache whether the two timeframes' trends agree. Computed once per symbol.
-    func refreshMultiTimeframe(symbol: String) async {
+    /// replace the detail study using attributed input dates, never an indefinite cache hit.
+    func refreshMultiTimeframe(symbol: String,
+        allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+        now: () -> Date = Date.init,
+        history: @MainActor @Sendable (String, String, String) async -> StockSagePriceHistory? = {
+            await StockSageQuoteService.fetchHistory($0, range: $1, interval: $2)
+        }
+    ) async {
         let up = symbol.uppercased()
-        guard multiTimeframe[up] == nil, ToolPolicy.isExternalAllowed else { return }
-        async let dailyHistory = StockSageQuoteService.fetchHistory(symbol, range: "1y", interval: "1d")
-        async let weeklyHistory = StockSageQuoteService.fetchHistory(symbol, range: "2y", interval: "1wk")
-        guard let d = await dailyHistory, let w = await weeklyHistory else { return }
+        guard !Task.isCancelled else { return }
+        let key = "mtf:" + up, request = UUID()
+        derivedRequests[key] = request
+        multiTimeframe.removeValue(forKey: up)
+        defer { if derivedRequests[key] == request { derivedRequests.removeValue(forKey: key) } }
+        guard allowed() else { return }
+        async let dailyHistory = history(symbol, "1y", "1d")
+        async let weeklyHistory = history(symbol, "2y", "1wk")
+        guard let d = await dailyHistory, let w = await weeklyHistory,
+              !Task.isCancelled, allowed(), derivedRequests[key] == request,
+              d.symbol.uppercased() == up, w.symbol.uppercased() == up,
+              let dailyDate = StockSageRegime.historyAsOf(d, now: now()),
+              StockSageRegime.historyAsOf(w, now: now(), coveringDailyDate: dailyDate) != nil else { return }
         multiTimeframe[up] = StockSageMultiTimeframe.assess(dailyCloses: d.closes, weeklyCloses: w.closes)
     }
 
@@ -2063,6 +2162,7 @@ final class StockSageStore: ObservableObject {
     /// `refreshCatalyst(symbol:)`, persisted/restored alongside the legacy dicts (see
     /// `loadCatalystRecords`/`saveCatalystRecords` below).
     @Published private(set) var catalystChain: [String: StockSageCatalystRecordCache.Record] = [:]
+    private var catalystRequests: [String: UUID] = [:]
 
     /// Independent of earnings: empty success, unavailable and never/stale remain distinct.
     @Published private(set) var companyEventChecks: [String: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation]] = [:]
@@ -2184,20 +2284,31 @@ final class StockSageStore: ObservableObject {
     /// classification, assigned once and left alone (no network, no TTL: it can't go stale).
     /// TTL-gated 24h off `catalystChain[symbol]?.checkedAt`, same constant and same "never
     /// checked ⇒ due now" rule as the legacy `shouldRefreshEarnings` this replaces in the sweep.
-    func refreshCatalyst(symbol: String) async {
+    func refreshCatalyst(symbol: String, now: Date = Date(),
+                         allowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
+                         resolve: ((String, Date) async -> StockSageCatalystChain.Outcome)? = nil) async {
         guard !Task.isCancelled else { return }
         let up = symbol.uppercased()
         guard StockSageAllocation.assetClass(up) == "Equity" else {
             if catalystChain[up]?.status != .notApplicable {
-                catalystChain[up] = .init(symbol: up, earningsDate: nil, checkedAt: Date(),
+                catalystChain[up] = .init(symbol: up, earningsDate: nil, checkedAt: now,
                                           source: "—", status: .notApplicable)
             }
             return
         }
-        guard Self.shouldRefreshEarnings(checkedAt: catalystChain[up]?.checkedAt) else { return }
-        guard ToolPolicy.isExternalAllowed else { return }   // never stamp on a request never made
+        guard Self.shouldRefreshEarnings(checkedAt: catalystChain[up]?.checkedAt, now: now) else { return }
+        guard allowed() else { return }   // never stamp on a request never made
+        let request = UUID()
+        catalystRequests[up] = request
+        defer { if catalystRequests[up] == request { catalystRequests[up] = nil } }
 
-        let now = Date()
+        if let resolve {
+            let outcome = await resolve(up, now)
+            guard catalystRequests[up] == request else { return }
+            publishCatalyst(outcome, symbol: up, checkedAt: now, allowed: allowed)
+            return
+        }
+
         let isUS = StockSageMassive.covers(up)
         let history: (() async -> StockSageCatalystChain.Answer<[Date]>)?
         if isUS {
@@ -2218,7 +2329,7 @@ final class StockSageStore: ObservableObject {
         }
         let outcome = await StockSageCatalystChain.resolve(
             now: now,
-            stillValid: { ToolPolicy.isExternalAllowed },
+            stillValid: { allowed() && self.catalystRequests[up] == request },
             massiveCalendar: { await StockSageMassiveEarnings.fetch(up, now: now) },
             yahooCalendar: {
                 switch await StockSageEarnings.fetchEarningsCalendarOutcome(for: up) {
@@ -2228,7 +2339,8 @@ final class StockSageStore: ObservableObject {
             },
             history: history
         )
-        publishCatalyst(outcome, symbol: up, checkedAt: now)
+        guard catalystRequests[up] == request else { return }
+        publishCatalyst(outcome, symbol: up, checkedAt: now, allowed: allowed)
     }
 
     /// Shared synchronous publication of a completed chain; no cache I/O here.
@@ -2496,10 +2608,13 @@ final class StockSageStore: ObservableObject {
     func applyLiveTicks(_ ticks: [String: StockSageLiveStream.Tick]) {
         var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
         for (key, tick) in Self.liveTicksForStore(ticks) {
-            let previous = symbolIndex[key].flatMap { symbols[$0].latest?.previousPrice } ?? tick.price
-            quotes[key] = .init(symbol: key, price: tick.price, previousClose: previous,
+            let prior = symbolIndex[key].flatMap { symbols[$0].latest }
+            let carry = prior?.hasSessionBaseline(symbol: key, at: tick.timestamp) == true
+            quotes[key] = .init(symbol: key, price: tick.price, previousClose: carry ? prior!.previousPrice : tick.price,
                 marketTime: tick.timestamp, isNewListing: newListings.contains(key),
-                massiveTradeSequence: tick.sequence, priceSource: .massiveSIP)
+                massiveTradeSequence: tick.sequence, priceSource: .massiveSIP,
+                previousCloseSource: carry ? prior?.previousCloseSource : nil,
+                previousCloseQuoteTime: carry ? prior?.previousCloseQuoteTime : nil)
         }
         applyPolledQuotes(quotes)
     }
@@ -2542,12 +2657,17 @@ final class StockSageStore: ObservableObject {
         }
     ) async {
         let up = symbol.uppercased()
-        guard liquidity[up] == nil else { return }
         // USD-priced only: a foreign listing's local-currency volume mislabeled "$"
         // (and London's pence quotes) would give a wrong tier/number. FX/index too.
         guard StockSageLiquidity.isUSDPriced(symbol) else { return }
-        guard !Task.isCancelled, allowed() else { return }
-        guard let h = await history(symbol, "3mo"), !Task.isCancelled, allowed() else { return }
+        guard !Task.isCancelled else { return }
+        let key = "liquidity:" + up, request = UUID()
+        derivedRequests[key] = request
+        liquidity.removeValue(forKey: up)
+        defer { if derivedRequests[key] == request { derivedRequests.removeValue(forKey: key) } }
+        guard allowed() else { return }
+        guard let h = await history(symbol, "3mo"), !Task.isCancelled, allowed(), derivedRequests[key] == request,
+              h.symbol.uppercased() == up, StockSageRegime.historyAsOf(h, now: Date()) != nil else { return }
         if let p = StockSageLiquidity.profile(closes: h.closes, volumes: h.volumes) {
             liquidity[up] = p
         }
@@ -2563,9 +2683,14 @@ final class StockSageStore: ObservableObject {
         }
     ) async {
         let up = symbol.uppercased()
-        guard trailingStop[up] == nil else { return }
-        guard !Task.isCancelled, allowed() else { return }
-        guard let h = await history(symbol, "6mo"), !Task.isCancelled, allowed() else { return }
+        guard !Task.isCancelled else { return }
+        let key = "trailing:" + up, request = UUID()
+        derivedRequests[key] = request
+        trailingStop.removeValue(forKey: up)
+        defer { if derivedRequests[key] == request { derivedRequests.removeValue(forKey: key) } }
+        guard allowed() else { return }
+        guard let h = await history(symbol, "6mo"), !Task.isCancelled, allowed(), derivedRequests[key] == request,
+              h.symbol.uppercased() == up, StockSageRegime.historyAsOf(h, now: Date()) != nil else { return }
         if let ts = StockSageTrailingStop.suggest(highs: h.highs, lows: h.lows, closes: h.closes) {
             trailingStop[up] = ts
         }
@@ -2824,14 +2949,37 @@ final class StockSageStore: ObservableObject {
     /// arrays plus the newest market time actually observed (nil if none did) so the caller can
     /// stamp `quoteAsOf` honestly. `nonisolated static` and side-effect-free — testable without
     /// the `@MainActor` singleton, a live stream, or the network (MarketsPolledQuoteMergeTests).
+    /// Price ordering and previous-close evidence have distinct clocks. A REST observation
+    /// may repair the latter without replacing a newer streamed trade or refreshing its age.
+    nonisolated static func mergedQuote(_ q: StockSageQuoteService.LiveQuote, after current: StockSageQuote?,
+                                       symbol: String, acceptPrice: Bool, now: Date) -> StockSageQuote? {
+        let incoming = StockSageQuote(price: q.price, previousPrice: q.previousClose, time: now,
+            marketTime: q.marketTime, massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource,
+            previousCloseSource: q.previousCloseSource, previousCloseQuoteTime: q.previousCloseQuoteTime)
+        let destination = acceptPrice ? incoming : current
+        guard let destination else { return nil }
+        let previousValid = current?.hasSessionBaseline(symbol: symbol, at: destination.marketTime) == true
+        let incomingValid = incoming.hasSessionBaseline(symbol: symbol, at: q.marketTime)
+            && incoming.hasSessionBaseline(symbol: symbol, at: destination.marketTime)
+        let newer = (incoming.previousCloseQuoteTime ?? .distantPast) > (current?.previousCloseQuoteTime ?? .distantPast)
+        let baseline = incomingValid && (!previousValid || newer) ? incoming : (previousValid ? current : nil)
+        guard acceptPrice || baseline != nil else { return current }
+        return StockSageQuote(id: destination.id, price: destination.price,
+            previousPrice: baseline?.previousPrice ?? q.previousClose, time: destination.time,
+            marketTime: destination.marketTime, massiveTradeSequence: destination.massiveTradeSequence,
+            priceSource: destination.priceSource, previousCloseSource: baseline?.previousCloseSource,
+            previousCloseQuoteTime: baseline?.previousCloseQuoteTime)
+    }
+
     nonisolated static func mergedPolledQuotes(
         symbols: [StockSageSymbol], ideas: [StockSageIdea], symbolIndex: [String: Int],
         quotes: [String: StockSageQuoteService.LiveQuote], now: Date = Date()
-    ) -> (symbols: [StockSageSymbol], ideas: [StockSageIdea], newestMarketTime: Date?, acceptedKeys: Set<String>) {
+    ) -> (symbols: [StockSageSymbol], ideas: [StockSageIdea], newestMarketTime: Date?, acceptedKeys: Set<String>, baselineKeys: Set<String>) {
         var symbols = symbols
         var ideas = ideas
         var newestMarketTime: Date?
         var acceptedKeys: Set<String> = []
+        var baselineKeys: Set<String> = []
         let ideaIndex = Dictionary(ideas.enumerated().map { ($0.element.symbol.uppercased(), $0.offset) },
                                    uniquingKeysWith: { first, _ in first })
         for (key, q) in quotes {
@@ -2845,18 +2993,19 @@ final class StockSageStore: ObservableObject {
             guard i != nil || j != nil else { continue }
             let row = i.flatMap { symbols[$0].quotes.last }
             let idea = j.map { ideas[$0] }
-            guard acceptsQuote(q.marketTime, after: row?.marketTime, massiveTradeSequence: q.massiveTradeSequence,
+            let accepted = acceptsQuote(q.marketTime, after: row?.marketTime, massiveTradeSequence: q.massiveTradeSequence,
                                afterMassiveTradeSequence: row?.massiveTradeSequence,
-                               priceSource: q.priceSource, afterPriceSource: row?.priceSource, now: now),
-                  acceptsQuote(q.marketTime, after: idea?.priceAsOf, massiveTradeSequence: q.massiveTradeSequence,
+                               priceSource: q.priceSource, afterPriceSource: row?.priceSource, now: now)
+                && acceptsQuote(q.marketTime, after: idea?.priceAsOf, massiveTradeSequence: q.massiveTradeSequence,
                                afterMassiveTradeSequence: idea?.massiveTradeSequence,
-                               priceSource: q.priceSource, afterPriceSource: idea?.priceSource, now: now) else { continue }
-            if let i { symbols[i].quotes = [
-                StockSageQuote(price: q.previousClose, previousPrice: q.previousClose,
-                               time: now.addingTimeInterval(-86_400)),
-                StockSageQuote(price: q.price, previousPrice: q.previousClose, time: now, marketTime: q.marketTime,
-                               massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource),
-            ] }
+                               priceSource: q.priceSource, afterPriceSource: idea?.priceSource, now: now)
+            if let i, let updated = mergedQuote(q, after: row, symbol: upper, acceptPrice: accepted, now: now) {
+                if !accepted, updated != row { baselineKeys.insert(upper) }
+                if accepted { symbols[i].quotes = [StockSageQuote(price: updated.previousPrice,
+                    previousPrice: updated.previousPrice, time: now.addingTimeInterval(-86_400)), updated] }
+                else if !symbols[i].quotes.isEmpty { symbols[i].quotes[symbols[i].quotes.count - 1] = updated }
+            }
+            guard accepted else { continue }
             if let j {
                 ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime, massiveTradeSequence: q.massiveTradeSequence,
                                                 priceSource: q.priceSource)
@@ -2864,7 +3013,7 @@ final class StockSageStore: ObservableObject {
             acceptedKeys.insert(upper)
             if let mt = q.marketTime, newestMarketTime == nil || mt > newestMarketTime! { newestMarketTime = mt }
         }
-        return (symbols, ideas, newestMarketTime, acceptedKeys)
+        return (symbols, ideas, newestMarketTime, acceptedKeys, baselineKeys)
     }
 
     /// Apply a batch of polled quotes — the `.streamGap` timer's 30s top-up (MarketsView) for
@@ -2902,22 +3051,30 @@ final class StockSageStore: ObservableObject {
 
         // Merge each curated symbol (keeps the friendly market label) with its
         // live quote; drop any the feed couldn't price.
+        var baselineRepairKeys: Set<String> = []
         let live: [StockSageSymbol] = universe.compactMap { sym in
             let key = sym.symbol.uppercased()
             guard let q = quotes[key], q.symbol.uppercased() == key,
                   q.price > 0, q.price.isFinite, q.previousClose.isFinite else { return nil }
             let existing = symbolIndex[key].map { symbols[$0] }
-            guard Self.acceptsQuote(q.marketTime, after: existing?.latest?.marketTime,
+            let accepted = Self.acceptsQuote(q.marketTime, after: existing?.latest?.marketTime,
                 massiveTradeSequence: q.massiveTradeSequence,
                 afterMassiveTradeSequence: existing?.latest?.massiveTradeSequence,
-                priceSource: q.priceSource, afterPriceSource: existing?.latest?.priceSource) else { return existing }
+                priceSource: q.priceSource, afterPriceSource: existing?.latest?.priceSource)
+            guard let updated = Self.mergedQuote(q, after: existing?.latest, symbol: key,
+                                                acceptPrice: accepted, now: Date()) else { return existing }
+            if !accepted {
+                guard var existing, updated != existing.latest else { return existing }
+                existing.quotes[existing.quotes.count - 1] = updated
+                baselineRepairKeys.insert(key)
+                return existing
+            }
             return StockSageSymbol(id: existing?.id ?? UUID(), symbol: sym.symbol, market: sym.market, quotes: [
                 StockSageQuote(price: q.previousClose, previousPrice: q.previousClose,
                                time: Date(timeIntervalSinceNow: -86_400)),
                 // Carry the real MARKET time separately so per-row staleness can flag a days-old
                 // weekend/holiday close; `time` stays the observation time. nil marketTime ⇒ not judged.
-                StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
-                               massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource),
+                updated,
             ])
         }
         guard !live.isEmpty else {
@@ -2992,7 +3149,9 @@ final class StockSageStore: ObservableObject {
                     massiveTradeSequence: q.massiveTradeSequence, afterMassiveTradeSequence: current?.massiveTradeSequence,
                     priceSource: q.priceSource, afterPriceSource: current?.priceSource)
         }
-        newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: acceptedQuotes)
+        let baselineRepairs = quotes.filter { baselineRepairKeys.contains($0.key) }
+        newListings = Self.reconcileNewListings(current: newListings,
+            pricedQuotes: acceptedQuotes.merging(baselineRepairs) { _, repaired in repaired })
         replaceAll(committed, isSample: false)
         // Mirror this sweep's live prices onto the matching ideas — same invariant applyLiveTick
         // and mergeLiveQuote already hold ("the card and the row can never disagree", review

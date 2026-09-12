@@ -310,7 +310,7 @@ final class StockSageMonitor: ObservableObject {
     /// delivery and its dedupe commit together makes failed-enqueue retries testable without
     /// a live quote request, shared board mutations or real system notifications.
     func evaluateWatchlistQuotes(_ watch: [String], quotes: [String: StockSageQuoteService.LiveQuote],
-                                notify: Bool = true) async
+                                now: Date = Date(), notify: Bool = true) async
         -> (signals: [StockSageSignal], examined: Int, freshPrices: [String: Double]) {
         var strong: [StockSageSignal] = []
         var nowStrong: [String: StockSageRecommendation] = [:]
@@ -327,11 +327,12 @@ final class StockSageMonitor: ObservableObject {
                 // Carry the real MARKET time (was omitted here) so this synthetic symbol's own
                 // `isStale()` can flag a days-old weekend/holiday close, same as the board path.
                 StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
-                               massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource),
+                               massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource,
+                               previousCloseSource: q.previousCloseSource, previousCloseQuoteTime: q.previousCloseQuoteTime),
             ])
             // Collect the fresh price for the idea stop/target check below regardless of
             // whether THIS ticker's momentum signal is currently strong.
-            let fresh = !sym.isStale()
+            let fresh = !sym.isStale(asOf: now)
             if fresh { freshPrices[ticker.uppercased()] = q.price }
             guard let signal = StockSageSignalEngine.generateSignal(for: sym) else { continue }
             guard signal.recommendation == .strongBuy || signal.recommendation == .strongSell else { continue }

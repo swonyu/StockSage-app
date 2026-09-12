@@ -11,7 +11,7 @@ struct StockSageBackupTests {
         "price-alerts", "price-alerts-type", "price-alerts-invalid"], [false, true])
     func fullBackupRejectsUnreadableCommittedSource(fault: String, changedAfterLoad: Bool) throws {
         let suite = "stocksage-backup-source-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
         defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
@@ -51,7 +51,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func fullBackupRoundTripsLatestCommittedPriceAlertsAndReportsCount() throws {
         let sourceSuite = "stocksage-backup-alert-source-\(UUID().uuidString)"
-        let sourceDefaults = try #require(UserDefaults(suiteName: sourceSuite))
+        let sourceDefaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: sourceSuite))
         defer { sourceDefaults.removePersistentDomain(forName: sourceSuite) }
         let displayed = fixturePriceAlert(target: 100)
         sourceDefaults.set(try JSONEncoder().encode([displayed]), forKey: "stocksage_price_alerts")
@@ -70,7 +70,7 @@ struct StockSageBackupTests {
         #expect(NSDictionary(dictionary: sourceBefore).isEqual(to: sourceDefaults.persistentDomain(forName: sourceSuite) ?? [:]))
 
         let targetSuite = "stocksage-backup-alert-target-\(UUID().uuidString)"
-        let targetDefaults = try #require(UserDefaults(suiteName: targetSuite))
+        let targetDefaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: targetSuite))
         defer { targetDefaults.removePersistentDomain(forName: targetSuite) }
         let targetStore = StockSageStore(defaults: targetDefaults, heldSymbols: { [] })
         let summary = try StockSageBackup.restore(from: data,
@@ -83,7 +83,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func oldBackupWithoutPriceAlertsPreservesExistingAlerts() throws {
         let suite = "stocksage-backup-alert-legacy-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = fixturePriceAlert()
         defaults.set(try JSONEncoder().encode([existing]), forKey: "stocksage_price_alerts")
@@ -101,7 +101,7 @@ struct StockSageBackupTests {
     @MainActor @Test(arguments: [false, true], [false, true])
     func alertRestoreDoesNotResurrectStaleMemory(rearmed: Bool, includesAddition: Bool) throws {
         let suite = "stocksage-backup-alert-stale-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let old = fixturePriceAlert(triggeredAt: nil)
         defaults.set(try JSONEncoder().encode([old]), forKey: "stocksage_price_alerts")
@@ -127,7 +127,7 @@ struct StockSageBackupTests {
     @MainActor @Test(arguments: [String(repeating: "A", count: 21), "NV DA"])
     func authoredAlertSymbolsRemainLoadableAndBackupCompatible(symbol: String) throws {
         let suite = "stocksage-backup-alert-authored-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let author = StockSageStore(defaults: defaults, heldSymbols: { [] })
         author.addPriceAlert(symbol: symbol, target: 100, direction: .above)
@@ -144,7 +144,7 @@ struct StockSageBackupTests {
         let data = try StockSageBackup.export(journal: StockSageJournalStore(defaults: defaults),
             portfolio: StockSagePortfolio(userDefaults: defaults), store: reloaded)
         let targetSuite = "stocksage-backup-alert-compatible-\(UUID().uuidString)"
-        let targetDefaults = try #require(UserDefaults(suiteName: targetSuite))
+        let targetDefaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: targetSuite))
         defer { targetDefaults.removePersistentDomain(forName: targetSuite) }
         let target = StockSageStore(defaults: targetDefaults, heldSymbols: { [] })
         let summary = try StockSageBackup.restore(from: data,
@@ -158,7 +158,7 @@ struct StockSageBackupTests {
     @MainActor @Test(arguments: ["nvda", " NVDA "])
     func legacyDecodedAlertSymbolsRoundTripWithoutNormalization(symbol: String) throws {
         let suite = "stocksage-backup-alert-spelling-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let encoded = try JSONEncoder().encode([fixturePriceAlert()])
         var rows = try #require(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
@@ -176,7 +176,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func normalAlertLoadRetainsDecodableValuesWhenCheckedBackupRejectsThem() throws {
         let suite = "stocksage-backup-alert-load-policy-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let records = [fixturePriceAlert(target: 0), fixturePriceAlert(id: UUID(), symbol: "KEEP")]
         let stored = try JSONEncoder().encode(records)
@@ -195,7 +195,7 @@ struct StockSageBackupTests {
     @MainActor @Test(arguments: [false, true])
     func omittedOrNullAlertFieldLeavesUnreadableDestinationUntouched(explicitNull: Bool) throws {
         let suite = "stocksage-backup-alert-untouched-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = fixturePriceAlert()
         defaults.set(try JSONEncoder().encode([existing]), forKey: "stocksage_price_alerts")
@@ -217,7 +217,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func fullBackupReadsCommittedUpdatesAndDeletionMarkersWithoutChangingViews() throws {
         let suite = "stocksage-backup-current-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var open = fixtureTrade()
         open.exitPrice = nil; open.closedAt = nil
@@ -236,8 +236,8 @@ struct StockSageBackupTests {
         defaults.set(try JSONEncoder().encode([fixtureTrade(), deleted, foreign]), forKey: "stocksage.journal.v1")
         defaults.set(try JSONEncoder().encode([fixturePosition(), lot]), forKey: "stocksage_portfolio_v1")
         defaults.set(["NVDA"], forKey: "stocksage_user_symbols")
-        StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1").mark([deleted.id])
-        StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1").mark([fixturePosition().id])
+        try StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1").mark([deleted.id])
+        try StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1").mark([fixturePosition().id])
         let before = defaults.persistentDomain(forName: suite) ?? [:]
         let data = try StockSageBackup.export(journal: journal, portfolio: portfolio, store: store)
         let payload = try StockSageBackup.restore(from: data).get()
@@ -250,7 +250,7 @@ struct StockSageBackupTests {
     @MainActor @Test(arguments: [false, true])
     func fullBackupAllowsMissingOrValidEmptySources(explicitEmpty: Bool) throws {
         let suite = "stocksage-backup-empty-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         if explicitEmpty {
             defaults.set(Data("[]".utf8), forKey: "stocksage.journal.v1")
@@ -269,7 +269,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func fullBackupRetainsDecodableInvalidClosuresForRecovery() throws {
         let suite = "stocksage-backup-recovery-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var invalid = fixtureTrade(); invalid.closedAt = nil
         #expect(invalid.closureError != nil)
@@ -333,7 +333,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func deletionMarkersSurviveLegacyWritesAndOnlySuccessfulExplicitRestoreRevivesIDs() throws {
         let suite = "stocksage-backup-deletions-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -374,7 +374,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func deletionMarkersAreIndependentAndScopedByStoreAndCustomKey() throws {
         let suite = "stocksage-deletion-scope-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let trade = fixtureTrade()
         let journal = StockSageJournalStore(defaults: defaults)
@@ -386,16 +386,16 @@ struct StockSageBackupTests {
         #expect(StockSagePaperTradeStore(defaults: defaults).trades == [trade])
         #expect(StockSageJournalStore(defaults: defaults, key: "custom.journal").trades == [trade])
         let ledgerA = StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1")
-        let ledgerB = StockSageRecordDeletions(defaults: try #require(UserDefaults(suiteName: suite)), recordKey: "stocksage.journal.v1")
+        let ledgerB = StockSageRecordDeletions(defaults: try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite)), recordKey: "stocksage.journal.v1")
         let second = UUID(), third = UUID()
-        ledgerA.mark([second]); ledgerB.mark([third])
+        try ledgerA.mark([second]); try ledgerB.mark([third])
         #expect(ledgerA.contains(trade.id) && ledgerA.contains(second) && ledgerA.contains(third))
         #expect(ledgerB.contains(trade.id) && ledgerB.contains(second) && ledgerB.contains(third))
     }
 
     @MainActor @Test func unreadableBooksCannotBeOverwrittenOrAcquireDeletionMarkers() throws {
         let suite = "stocksage-deletion-read-failure-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -418,7 +418,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func failedEncodingDoesNotTurnAnUncommittedDeleteIntoADurableOne() throws {
         let suite = "stocksage-deletion-encode-failure-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -439,7 +439,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func nativeRestorePersistsAllThreeCollectionsAndIsRepeatable() throws {
         let suite = "stocksage-backup-test-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -465,7 +465,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func restoreKeepsExistingAndForeignRecordsAndDistinctLots() throws {
         let suite = "stocksage-backup-merge-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var original = fixtureTrade()
         original.closedAt = nil; original.exitPrice = nil
@@ -500,7 +500,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func identicalPriceAlertIDsRestoreOnceAndCountTheDuplicate() throws {
         let suite = "stocksage-backup-alert-duplicate-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         let alert = fixturePriceAlert()
@@ -516,7 +516,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func conflictingPriceAlertIDsRejectTheWholeRestore() throws {
         let suite = "stocksage-backup-alert-conflict-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -538,7 +538,7 @@ struct StockSageBackupTests {
 
     @MainActor @Test func existingPriceAlertIDWinsWithoutChangingItsValues() throws {
         let suite = "stocksage-backup-alert-existing-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = fixturePriceAlert(symbol: "KEEP", target: 75, direction: .below,
             triggeredAt: Date(timeIntervalSince1970: 1_700_900_000))
@@ -562,7 +562,7 @@ struct StockSageBackupTests {
         "schema", "truncated", "corrupt"])
     func invalidBackupCannotChangeAnyCollection(fault: String) throws {
         let suite = "stocksage-backup-invalid-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -612,7 +612,7 @@ struct StockSageBackupTests {
         "journal-type", "portfolio-type", "journal-encode", "portfolio-encode", "journal-conflict"])
     func preparationFailureCannotPartiallyApplyAValidBackup(fault: String) throws {
         let suite = "stocksage-backup-prepare-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let journal = StockSageJournalStore(defaults: defaults)
         let portfolio = StockSagePortfolio(userDefaults: defaults)
@@ -778,7 +778,7 @@ struct StockSageBackupTests {
     @Test(arguments: [false, true])
     func importFromParentAppNilWhenDomainEmpty(explicitEmpty: Bool) throws {
         let suite = "stocksage-parent-empty-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         if explicitEmpty {
             defaults.set(Data("[]".utf8), forKey: "stocksage.journal.v1")
@@ -793,7 +793,7 @@ struct StockSageBackupTests {
     @Test(arguments: ["journal", "portfolio", "journal-type", "portfolio-type"])
     func parentImportReportsUnreadableCollectionWithoutChangingSource(fault: String) throws {
         let suite = "stocksage-parent-corrupt-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
         defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
@@ -814,13 +814,13 @@ struct StockSageBackupTests {
     @Test(arguments: [false, true])
     func parentImportPreservesRecordsAndHonorsDeletionMarkers(deleted: Bool) throws {
         let suite = "stocksage-parent-records-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
         defaults.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
         if deleted {
-            StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1").mark([fixtureTrade().id])
-            StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1").mark([fixturePosition().id])
+            try StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage.journal.v1").mark([fixtureTrade().id])
+            try StockSageRecordDeletions(defaults: defaults, recordKey: "stocksage_portfolio_v1").mark([fixturePosition().id])
         }
         let before = defaults.persistentDomain(forName: suite) ?? [:]
         let result = try StockSageBackup.importFromParentApp(defaults: defaults)

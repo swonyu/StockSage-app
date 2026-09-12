@@ -159,11 +159,11 @@ import Testing
         let r = R()
         let names = (0..<150).map { listing("S\($0)") }
         var seen: [String] = []
-        let started = r.start(.week, allowed: { true }, universe: { names }, analyze: { value in
+        let started = r.start(.week, allowed: { true }, universe: { .init(names) }, analyze: { value in
             seen.append(value.ticker); return .init(note: "Synthetic research only")
         })
         #expect(started)
-        let overlapped = r.start(.fortnight, allowed: { true }, universe: { [] }, analyze: { _ in .init(note: "must not run") })
+        let overlapped = r.start(.fortnight, allowed: { true }, universe: { .init([]) }, analyze: { _ in .init(note: "must not run") })
         #expect(!overlapped)
         for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         #expect(r.running == nil && seen == names.map(\.ticker))
@@ -176,7 +176,9 @@ import Testing
     func failedPreflightRetryRetainsCompletedResearch(outcome: String) async throws {
         let r = R()
         let levels = R.Levels(entry: 100, stop: 90, target: 120, at: now, basis: "Synthetic fixture")
-        let first = r.start(.week, allowed: { true }, universe: { [listing()] },
+        let receipt = StockSageResearchUniverse.Receipt(session: "2026-09-08", requestedAt: now,
+            returnedCount: 1, eligibleCount: 1, directoryCount: 1, partialSession: false, dollarVolume: ["AAPL": 100])
+        let first = r.start(.week, allowed: { true }, universe: { .init([listing()], receipt: receipt) },
             analyze: { _ in .init(levels: levels, facts: ["Synthetic retained evidence"],
                 note: "Earlier result", at: now, model: "synthetic-model") })
         #expect(first)
@@ -190,9 +192,9 @@ import Testing
         let retry = r.start(.week, allowed: { permitted }, universe: {
             if outcome == "cancel" || outcome == "settings" {
                 await withCheckedContinuation { resume = $0 }
-                return [listing("NEW")]
+                return .init([listing("NEW")])
             }
-            if outcome == "invalid" { return [listing(), listing()] }
+            if outcome == "invalid" { return .init([listing(), listing()]) }
             throw URLError(.cannotConnectToHost)
         }, analyze: { _ in analyzed = true; return .init(note: "Must not run") })
         #expect(retry)
@@ -208,12 +210,13 @@ import Testing
         #expect(!analyzed)
         #expect(retained.listings == previous.listings)
         #expect(retained.at == previous.at)
+        #expect(retained.selection == receipt && retained.selection == previous.selection)
         #expect(retained.results["AAPL"]?.note == "Earlier result")
         #expect(retained.results["AAPL"]?.facts == ["Synthetic retained evidence"])
         #expect(retained.results["AAPL"]?.at == now)
         #expect(retained.results["AAPL"]?.levels == levels && retained.results["AAPL"]?.model == "synthetic-model")
         #expect(retained.status.contains("Earlier scan data retained; no new listings checked."))
-        #expect(retained.status.contains(outcome == "cancel" || outcome == "settings" ? "Scan stopped" : "directory could not be verified"))
+        #expect(retained.status.contains(outcome == "cancel" || outcome == "settings" ? "Scan stopped" : "could not be verified"))
     }
 
     @Test func firstPreflightFailureDoesNotInventPreviousResults() async throws {
@@ -226,20 +229,20 @@ import Testing
         try #require(r.running == nil)
         let scan = try #require(r.scans[.week])
         #expect(scan.at != nil && scan.listings.isEmpty && scan.results.isEmpty && !analyzed)
-        #expect(scan.status.contains("directory could not be verified") && !scan.status.contains("Earlier"))
+        #expect(scan.status == "Scan incomplete: US directory or dated market activity could not be verified. Check Massive settings and retry.")
     }
 
     @Test(arguments: [false, true])
     func acceptedDirectoryReplacesPreviousScan(empty: Bool) async throws {
         let r = R()
-        let first = r.start(.week, allowed: { true }, universe: { [listing("OLD")] },
+        let first = r.start(.week, allowed: { true }, universe: { .init([listing("OLD")]) },
             analyze: { _ in .init(note: "Earlier") })
         #expect(first)
         for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         try #require(r.running == nil && r.scans[.week]?.results["OLD"] != nil)
         let requestedAfter = Date()
         let names = empty ? [] : [listing("NEW")]
-        let second = r.start(.week, allowed: { true }, universe: { names },
+        let second = r.start(.week, allowed: { true }, universe: { .init(names) },
             analyze: { _ in .init(note: "New") })
         #expect(second)
         for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
@@ -254,7 +257,7 @@ import Testing
     @Test(arguments: [true, false], [true, false])
     func stoppedAcceptedRetryKeepsNewPartialResultsNotOldScan(cancel: Bool, completedFirst: Bool) async throws {
         let r = R()
-        let first = r.start(.week, allowed: { true }, universe: { [listing("OLD")] },
+        let first = r.start(.week, allowed: { true }, universe: { .init([listing("OLD")]) },
             analyze: { _ in .init(note: "Earlier") })
         #expect(first)
         for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
@@ -262,7 +265,7 @@ import Testing
         var permitted = true
         var resume: CheckedContinuation<Void, Never>?
         let names = completedFirst ? [listing("NEW"), listing("LATE")] : [listing("LATE")]
-        let retry = r.start(.week, allowed: { permitted }, universe: { names }, analyze: { item in
+        let retry = r.start(.week, allowed: { permitted }, universe: { .init(names) }, analyze: { item in
             if item.ticker == "LATE" { await withCheckedContinuation { resume = $0 } }
             return .init(note: item.ticker)
         })
@@ -283,7 +286,7 @@ import Testing
         let r = R()
         let names = (0..<13_000).map { listing(String(format: "S%05d", $0)) }
         var seen: [String] = []
-        let started = r.start(horizon, allowed: { true }, universe: { names }, analyze: { item in
+        let started = r.start(horizon, allowed: { true }, universe: { .init(names) }, analyze: { item in
             seen.append(item.ticker)
             return .init(note: "Synthetic research only")
         })
@@ -304,7 +307,7 @@ import Testing
             var resume: CheckedContinuation<Void, Never>?
             defer { r.stop(); resume?.resume() }
             var analyzed: [String] = []
-            let started = r.start(.week, allowed: { permitted }, universe: { [listing(), listing("MSFT")] }, analyze: { item in
+            let started = r.start(.week, allowed: { permitted }, universe: { .init([listing(), listing("MSFT")]) }, analyze: { item in
                 analyzed.append(item.ticker)
                 if item.ticker == "AAPL" { await withCheckedContinuation { resume = $0 } }
                 return .init(note: "late")
@@ -321,7 +324,7 @@ import Testing
             #endif
             if cancel { r.stop() } else { permitted = false }
             #expect(r.running == .week, "The first request still owns the scan until it unwinds")
-            let overlap = r.start(.fortnight, allowed: { true }, universe: { [] },
+            let overlap = r.start(.fortnight, allowed: { true }, universe: { .init([]) },
                 analyze: { _ in .init(note: "must not run") })
             #expect(!overlap && r.running == .week && r.scans[.fortnight] == nil)
             #if os(macOS)

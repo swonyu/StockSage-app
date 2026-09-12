@@ -32,7 +32,7 @@ These files exist on disk but need to be manually added to Xcode project:
 - `TradePnLTests.swift` - 22+ unit tests for P&L math (NEW)
 
 **Widget:**
-- `PortfolioWidget.swift` - Home screen widget (NEW, needs widget extension)
+- `PortfolioWidget.swift` - UNWIRED app-target prototype; retained and currency-repaired (D4, 2026-09-12). The shipped extension is `StockSageWidget/StockSageWidget.swift`; this prototype is not in its bundle.
 
 **Documentation:**
 - `IMPLEMENTATION_SUMMARY.md` - Full technical details

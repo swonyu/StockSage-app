@@ -114,7 +114,7 @@ final class StockSagePaperAutomation: ObservableObject {
                         && t.entry.isFinite && t.entry > 0 && t.stop.isFinite && t.stop > 0 && t.stop < t.entry
                         && t.target.map { $0.isFinite && $0 > t.entry } == true
                         && t.shares.isFinite && t.shares >= 1 && t.shares.rounded(.down) == t.shares
-                        && t.shares <= 1_000_000 && t.closureError == nil
+                        && t.shares <= 1_000_000 && t.closureError == nil && t.modeledPaperCostPerShare == nil
                 }
                 && pending.allSatisfy { order in
                     StockSagePaperAutomation.validSymbol(order.symbol) && order.at.timeIntervalSince1970.isFinite
@@ -274,7 +274,7 @@ final class StockSagePaperAutomation: ObservableObject {
     @Published private(set) var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
     private let url: URL
     private let defaults: UserDefaults
-    private var lease: Int32 = -1
+    private var lease: StockSageFileLock?
     private var loop: Task<Void, Never>?
     private var research: Task<Void, Never>?
     private var generation = UUID()
@@ -547,30 +547,25 @@ final class StockSagePaperAutomation: ObservableObject {
 
     /// One process holds this account lease for its whole run. Atomic saves include decisions and fills together.
     @discardableResult func acquire() -> Bool {
-        guard lease < 0 else { return true }
+        guard lease == nil else { return true }
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            let fd = Darwin.open(url.appendingPathExtension("lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-            guard fd >= 0 else { throw CocoaError(.fileWriteUnknown) }
-            guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-                Darwin.close(fd); error = "This paper account is running in another StockSage process."; return false
-            }
-            lease = fd
+            lease = try StockSageFileLock(url: url.appendingPathExtension("lock"))
             book = try read()
             hasLoadedBook = true
             error = nil
             return true
+        } catch StockSageFileLock.Failure.busy {
+            error = "This paper account is running in another StockSage process."; return false
         } catch {
             hasLoadedBook = false
             release(); self.error = "Paper account unavailable or corrupt. Existing data has been preserved."; return false
         }
     }
     private func release() {
-        if lease >= 0 { flock(lease, LOCK_UN); Darwin.close(lease); lease = -1 }
+        lease = nil
     }
     @discardableResult func save(_ next: Book, beforeAccountCommit: (() throws -> Void)? = nil) -> Bool {
-        guard lease >= 0 else { error = "Paper account has no writer lease."; return false }
+        guard lease != nil else { error = "Paper account has no writer lease."; return false }
         do {
             // A stale caller must not erase a committed archive manifest.
             guard next.audit == book.audit else { throw CocoaError(.fileWriteInvalidFileName) }
@@ -623,7 +618,7 @@ final class StockSagePaperAutomation: ObservableObject {
         isRunning = false; isResearching = false; status = "Paused; paper positions retained"
         researchProgress = nil
         researchingSymbols.removeAll()
-        if lease >= 0 {
+        if lease != nil {
             var next = book
             next.pending.removeAll { $0.protectiveTradeID == nil }
             next.note(action: "Paused", reason: "Ordinary pending orders cancelled. Holdings and triggered protective exits retained; no attempts while paused.", at: Date())

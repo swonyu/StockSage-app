@@ -1,0 +1,205 @@
+import Foundation
+import Testing
+@testable import StockSage
+
+@Suite(.serialized) @MainActor struct StockSageResearchUniverseTests {
+    typealias U = StockSageResearchUniverse
+    let now = ISO8601DateFormatter().date(from: "2026-09-12T15:00:00Z")!
+    let day = "2026-09-11"
+    func listing(_ symbol: String, currency: String = "usd") -> U.Listing {
+        .init(ticker: symbol, name: symbol, market: "stocks", locale: "us", active: true,
+              type: "CS", currency_name: currency, primary_exchange: "XNAS")
+    }
+    func payload(_ symbols: [String], date: String = "2026-09-11", volumes: [Double]? = nil) throws -> Data {
+        let stamp = ISO8601DateFormatter().date(from: date + "T04:00:00Z")!.timeIntervalSince1970 * 1000
+        return try JSONSerialization.data(withJSONObject: ["status": "OK", "adjusted": true,
+            "resultsCount": symbols.count, "results": symbols.enumerated().map { i, symbol in
+                ["T": symbol, "t": stamp, "v": volumes?[i] ?? Double(i + 1), "vw": 100] as [String: Any]
+            }])
+    }
+    @Test func activityNotAlphabetSelectsThe500AndPreservesShareClasses() throws {
+        let names = (0..<501).map { String(format: "S%05d", $0) }
+        let selected = try U.select(directory: names.map { listing($0) }, data: payload(names), session: day, at: now)
+        #expect(selected.listings.count == 500)
+        #expect(selected.listings.first?.ticker == "S00500")
+        #expect(!selected.listings.contains { $0.ticker == "S00000" })
+        let classes = ["AAA", "BRK.B", "ZZZ"]
+        let ranked = try U.select(directory: classes.map { listing($0) }, data: payload(classes), session: day, at: now)
+        #expect(ranked.listings.map(\.ticker) == ["ZZZ", "BRK.B", "AAA"])
+        #expect(ranked.receipt?.dollarVolume["BRK.B"] == 200)
+    }
+
+    @Test func sessionChoiceUsesExchangeDatesHolidaysDSTAndSupportedCalendar() throws {
+        for (clock, primary, previous) in [
+            ("2026-09-12T15:00:00Z", "2026-09-11", nil),
+            ("2026-09-07T15:00:00Z", "2026-09-04", nil),
+            ("2026-09-08T07:59:00Z", "2026-09-04", nil),
+            ("2026-09-08T08:00:00Z", "2026-09-08", "2026-09-04"),
+            ("2026-11-02T08:59:00Z", "2026-10-30", nil),
+            ("2026-11-02T09:00:00Z", "2026-11-02", "2026-10-30"),
+            ("2026-11-27T19:00:00Z", "2026-11-27", "2026-11-25")
+        ] as [(String, String, String?)] {
+            let dates = try U.sessions(at: ISO8601DateFormatter().date(from: clock)!)
+            #expect(dates.primary == primary && dates.previous == previous)
+        }
+        for clock in ["2027-01-04T15:00:00Z", "2026-01-02T08:00:00Z"] {
+            #expect(throws: (any Error).self) { try U.sessions(at: ISO8601DateFormatter().date(from: clock)!) }
+        }
+        #expect(throws: (any Error).self) { try U.sessions(at: Date(timeIntervalSince1970: .nan)) }
+        let request = try #require(U.request(key: "synthetic-only", session: day))
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-only")
+        #expect(request.url?.host == "api.massive.com" && request.url?.query == "adjusted=true&include_otc=false")
+        #expect(request.url?.absoluteString.contains("synthetic-only") == false)
+        for bad in ["../secret", "2026-09-12", "2026-9-11", "2027-01-04"] { #expect(U.request(key: "x", session: bad) == nil) }
+    }
+
+    @Test func malformedEnvelopeAndDuplicateIdentityDoNotBecomeEmptySuccess() throws {
+        let base = try #require(JSONSerialization.jsonObject(with: payload(["AAA", "ZZZ"])) as? [String: Any])
+        for (key, value) in [("status", "ERROR" as Any), ("adjusted", false as Any), ("adjusted", 1 as Any),
+                             ("resultsCount", 3 as Any), ("resultsCount", true as Any), ("next_url", "https://example.test/next" as Any)] {
+            var bad = base; bad[key] = value
+            #expect(throws: (any Error).self) { try U.select(directory: [listing("AAA"), listing("ZZZ")],
+                data: JSONSerialization.data(withJSONObject: bad), session: day, at: now) }
+        }
+        var duplicate = base
+        var rows = base["results"] as! [[String: Any]]
+        rows[0]["v"] = 0; rows[1]["T"] = "AAA"; duplicate["results"] = rows
+        #expect(throws: (any Error).self) { try U.select(directory: [listing("AAA")],
+            data: JSONSerialization.data(withJSONObject: duplicate), session: day, at: now) }
+    }
+
+    @Test func onlyVerifiedDatedDollarActivityQualifiesAndTiesAreDeterministic() throws {
+        let names = ["AAA", "ZZZ"]
+        let base = try #require(JSONSerialization.jsonObject(with: payload(names)) as? [String: Any])
+        let duringSession = ISO8601DateFormatter().date(from: "2026-09-11T12:00:00Z")!
+        for (key, value) in [("v", 0 as Any), ("v", true as Any), ("vw", "NaN" as Any),
+                             ("v", 1e308 as Any), ("t", 1_789_099_200 as Any),
+                             ("t", 1_789_099_200_000_000_000 as Any), ("t", 1_789_156_800_000 as Any),
+                             ("otc", true as Any), ("otc", 1 as Any)] {
+            var bad = base; var rows = base["results"] as! [[String: Any]]
+            rows[0][key] = value; bad["results"] = rows
+            let result = try U.select(directory: names.map { listing($0) }, data: JSONSerialization.data(withJSONObject: bad), session: day, at: duringSession)
+            #expect(result.listings.map(\.ticker) == ["ZZZ"], "Invalid field \(key) must not enter the ranking")
+            #expect(result.receipt?.eligibleCount == 1 && result.receipt?.returnedCount == 2)
+        }
+        let tie = try U.select(directory: [listing("ZZZ"), listing("AAA")], data: payload(names, volumes: [2, 2]), session: day, at: now)
+        #expect(tie.listings.map(\.ticker) == names)
+        let foreign = try U.select(directory: [listing("AAA", currency: "gbp"), listing("ZZZ")], data: payload(names), session: day, at: now)
+        #expect(foreign.listings.map(\.ticker) == ["ZZZ"])
+        let empty = try U.select(directory: [], data: payload([]), session: day, at: now)
+        #expect(empty.listings.isEmpty && empty.receipt?.eligibleCount == 0)
+        for field in ["vw", "v", "t"] {
+            var missing = base; var rows = base["results"] as! [[String: Any]]
+            rows[0].removeValue(forKey: field); missing["results"] = rows
+            let result = try U.select(directory: names.map { listing($0) },
+                data: JSONSerialization.data(withJSONObject: missing), session: day, at: now)
+            #expect(result.listings.map(\.ticker) == ["ZZZ"])
+        }
+    }
+
+    func directoryPayload(_ names: [String]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["status": "OK", "count": names.count,
+            "results": names.map { ["ticker": $0, "name": $0, "market": "stocks", "locale": "us",
+                "active": true, "type": "CS", "currency_name": "usd", "primary_exchange": "XNAS"] as [String: Any] }])
+    }
+    func response(_ request: URLRequest, _ data: Data, code: Int = 200) -> (Data, URLResponse) {
+        (data, HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: nil)!)
+    }
+
+    @Test func currentCoverageFallbackAndTiesUseOneSessionAndCompareBeforeTheCap() async throws {
+        let clock = ISO8601DateFormatter().date(from: "2026-09-09T15:00:00Z")!
+        let names = (0..<501).map { String(format: "S%05d", $0) }
+        for (current, prior) in [(499, 501), (500, 501), (499, 499), (0, 501)] {
+            var paths: [String] = []
+            let selected = try await U.fetch(key: "synthetic-only", allowed: { true }, at: clock, transport: { request in
+                let path = request.url!.path; paths.append(path)
+                if path == "/v3/reference/tickers" { return try response(request, directoryPayload(names)) }
+                let date = request.url!.lastPathComponent
+                return try response(request, payload(Array(names.prefix(date == "2026-09-09" ? current : prior)), date: date))
+            })
+            let usedPrior = current < 500 && prior > current
+            #expect(selected.receipt?.session == (usedPrior ? "2026-09-08" : "2026-09-09"))
+            #expect(selected.receipt?.fallback == usedPrior)
+            #expect(selected.receipt?.eligibleCount == (usedPrior ? prior : current))
+            #expect(selected.listings.count == min(500, usedPrior ? prior : current))
+            #expect(paths.count == (current < 500 ? 3 : 2))
+        }
+    }
+
+    @Test func closedDayNeverWalksFurtherBackAndFailedFallbackRetainsUsableCurrentEvidence() async throws {
+        for weekend in [true, false] {
+            let clock = weekend ? now : ISO8601DateFormatter().date(from: "2026-09-11T15:00:00Z")!
+            var requests = 0
+            let selected = try await U.fetch(key: "synthetic-only", allowed: { true }, at: clock, transport: { request in
+                requests += 1
+                if request.url!.path == "/v3/reference/tickers" { return try response(request, directoryPayload(["AAA", "ZZZ"])) }
+                if request.url!.lastPathComponent != "2026-09-11" { return response(request, Data(), code: 503) }
+                return try response(request, payload(["AAA", "ZZZ"]))
+            })
+            #expect(requests == (weekend ? 2 : 3))
+            #expect(selected.receipt?.session == "2026-09-11" && selected.receipt?.fallback == false)
+            #expect(selected.listings.map(\.ticker) == ["ZZZ", "AAA"])
+        }
+    }
+
+    @Test(arguments: [false, true]) func cancelledOrRevokedSelectionCannotIssueFallback(cancel: Bool) async throws {
+        let control = SelectionControl()
+        let operation = Task { @MainActor in
+            try await U.fetch(key: "synthetic-only", allowed: { control.allowed },
+                at: ISO8601DateFormatter().date(from: "2026-09-11T15:00:00Z")!, transport: { request in
+                    control.calls += 1
+                    if request.url!.path == "/v3/reference/tickers" { return try response(request, directoryPayload(["AAA"])) }
+                    await withCheckedContinuation { control.resume = $0 }
+                    return try response(request, payload(["AAA"]))
+                })
+        }
+        for _ in 0..<100 where control.resume == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let resume = try #require(control.resume)
+        if cancel { operation.cancel() } else { control.allowed = false }
+        resume.resume(); control.resume = nil
+        do { _ = try await operation.value; Issue.record("Cancelled selection published") }
+        catch { #expect(error is CancellationError) }
+        #expect(control.calls == 2)
+    }
+
+    @Test func invalidOrEmptyPrimaryCannotInventSelectionAndFallbackCancellationPropagates() async throws {
+        for mode in ["bad-primary", "empty", "cancel-fallback"] {
+            var requests = 0
+            do {
+                _ = try await U.fetch(key: "synthetic-only", allowed: { true },
+                    at: ISO8601DateFormatter().date(from: "2026-09-11T15:00:00Z")!, transport: { request in
+                        requests += 1
+                        if request.url!.path == "/v3/reference/tickers" { return try response(request, directoryPayload(["AAA"])) }
+                        if mode == "bad-primary" { return response(request, Data(), code: 503) }
+                        if mode == "cancel-fallback", request.url!.lastPathComponent != day { throw URLError(.cancelled) }
+                        return try response(request, payload(mode == "empty" ? [] : ["AAA"], date: request.url!.lastPathComponent))
+                    })
+                Issue.record("Failed or cancelled selection published in \(mode)")
+            } catch {
+                if mode == "cancel-fallback" { #expect((error as? URLError)?.code == .cancelled) }
+                else { #expect((error as? URLError)?.code == (mode == "empty" ? .zeroByteResource : .badServerResponse)) }
+            }
+            #expect(requests == (mode == "bad-primary" ? 2 : 3))
+        }
+    }
+
+    @Test(arguments: StockSageHorizonResearch.Horizon.allCases)
+    func bothHorizonsConsumeRankedSelectionAndKeepTheReceipt(_ horizon: StockSageHorizonResearch.Horizon) async throws {
+        let selected = try U.select(directory: [listing("AAA"), listing("ZZZ")], data: payload(["AAA", "ZZZ"]), session: day, at: now)
+        let research = StockSageHorizonResearch()
+        var seen: [String] = []
+        let started = research.start(horizon, allowed: { true }, universe: { selected }, analyze: { item in
+            seen.append(item.ticker); return .init(note: "Synthetic research only")
+        })
+        #expect(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(research.running == nil && seen == ["ZZZ", "AAA"])
+        #expect(research.scans[horizon]?.selection == selected.receipt)
+    }
+}
+
+@MainActor private final class SelectionControl {
+    var allowed = true
+    var calls = 0
+    var resume: CheckedContinuation<Void, Never>?
+}

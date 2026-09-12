@@ -496,8 +496,9 @@ struct MarketsView: View {
                 guard !store.isLoadingIdeas, !store.isSampleData,
                       !CommandLine.arguments.contains("--qa") else { return }
                 // ponytail: at most three serial assessments per completed scan; detail handles other names.
+                let revision = StockSageLocalModelServer.settingsRevision()
                 for idea in displayedIdeas.prefix(3) {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, StockSageLocalModelServer.settingsRevision() == revision else { return }
                     await aiAssessments.assess(idea, store: store)
                 }
             }
@@ -794,15 +795,8 @@ struct MarketsView: View {
     }
 
     private var cachedBannerText: String {
-        let age: String = {
-            guard let saved = store.cacheSavedAt else { return "" }
-            let secs = Date().timeIntervalSince(saved)
-            if secs < 3600 { return " (\(Int(secs / 60))m old)" }
-            if secs < 86_400 { return " (\(Int(secs / 3600))h old)" }
-            return " (\(Int(secs / 86_400))d old)"
-        }()
         let reason = store.feedError.map { " \($0)" } ?? " Refreshing live quotes…"
-        return "Last-good (cached) prices\(age) — NOT live.\(reason)"
+        return "Cached prices — NOT live. See each stock’s observation age; saving the cache does not refresh its quotes.\(reason)"
     }
 
     private var liveBanner: some View {
@@ -920,6 +914,8 @@ struct MarketsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(r.caveat).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(store.regimeEvidenceText).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let at = store.regimeGaugedAt {
                     Text(store.regimeIsStale
                          ? "⚠︎ Gauged \(at.formatted(.relative(presentation: .named))) — stale, re-gauge."
@@ -2510,8 +2506,8 @@ struct MarketsView: View {
                 Spacer()
                 if !journal.trades.isEmpty {
                     Button {
-                        let csv = StockSageJournalCSV.csv(journal.trades)
-                                                PlatformClipboard.copy(csv)
+                        do { PlatformClipboard.copy(try StockSageJournalCSV.csv(journal.trades)) }
+                        catch { journalDataFeedback = error.localizedDescription }
                     } label: {
                         Text("Copy CSV").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                     }
@@ -2599,9 +2595,13 @@ struct MarketsView: View {
                 // equivalent — journal CSV and the full JSON backup travel via AirDrop/Files/
                 // Messages. JSON restoration uses the native document picker below.
                 Menu {
-                    ShareLink(item: StockSageJournalCSV.csv(journal.trades),
-                              preview: SharePreview("StockSage journal (CSV)")) {
-                        Label("Share journal CSV", systemImage: "square.and.arrow.up")
+                    switch Result(catching: { try StockSageJournalCSV.csv(journal.trades) }) {
+                    case .success(let csv):
+                        ShareLink(item: csv, preview: SharePreview("StockSage journal (CSV)")) {
+                            Label("Share journal CSV", systemImage: "square.and.arrow.up")
+                        }
+                    case .failure(let error):
+                        Button("CSV export unavailable") { journalDataFeedback = error.localizedDescription }
                     }
                     switch Result(catching: {
                         try StockSageBackup.export(journal: journal,
@@ -3895,7 +3895,8 @@ struct MarketsView: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
                     ForEach(store.symbols) { sym in
-                        let change = sym.latest?.changePercent ?? 0
+                        let verifiedChange = sym.sessionChangePercent
+                        let change = verifiedChange ?? 0
                         let heatHovered = hoveredHeatID == sym.id
                         // Per-row freshness: a days-old weekend/holiday close (or a stale crypto
                         // feed) is dimmed + clock-flagged so it isn't read as a live price.
@@ -3907,7 +3908,7 @@ struct MarketsView: View {
                             Text(sym.symbol)
                                 .font(.system(size: mvFont13, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
-                            Text(isNew ? "N/A (new)" : String(format: "%+.1f%%", change))
+                            Text(isNew ? "N/A (new)" : verifiedChange.map { String(format: "%+.1f%%", $0) } ?? "Basis pending")
                                 .font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.white.opacity(0.92))
                                 .contentTransition(.numericText())
                                 .animation(DS.Motion.smooth, value: change)
@@ -3916,7 +3917,7 @@ struct MarketsView: View {
                         // borderline — a subtle dark shadow lifts the text on any shade.
                         .shadow(color: .black.opacity(0.35), radius: 1, y: 0.5)
                         .frame(maxWidth: .infinity).frame(height: 66)
-                        .background(isNew ? Color.white.opacity(0.10) : heatColor(change),
+                        .background(isNew || verifiedChange == nil ? Color.white.opacity(0.10) : heatColor(change),
                                    in: RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous))
                         .overlay(alignment: .topTrailing) {
                             if stale {
@@ -4126,7 +4127,8 @@ struct MarketsView: View {
 
     private func signalCard(_ sym: StockSageSymbol, idea: StockSageIdea? = nil) -> some View {
         let signal = StockSageSignalEngine.generateSignal(for: sym)
-        let change = sym.latest?.changePercent ?? 0
+        let verifiedChange = sym.sessionChangePercent
+        let change = verifiedChange ?? 0
         // A 0.00% day is FLAT, not a green gain — match the ±0.05% neutral band heatColor/sparkColor
         // already use, so the same field never reads as an up-move here and neutral elsewhere.
         let flat = abs(change) <= 0.05
@@ -4196,12 +4198,12 @@ struct MarketsView: View {
                         .priceFlash(p)
                 }
                 HStack(spacing: 3) {
-                    if !isNew {
+                    if !isNew && verifiedChange != nil {
                         Image(systemName: flat ? "minus" : (up ? "arrow.up.right" : "arrow.down.right")).font(.system(size: mvFont9, weight: .bold))
                             .contentTransition(.symbolEffect(.replace))
                             .animation(DS.Motion.smooth, value: up)
                     }
-                    Text(isNew ? "N/A (new)" : String(format: "%+.2f%%", change))
+                    Text(isNew ? "N/A (new)" : verifiedChange.map { String(format: "%+.2f%%", $0) } ?? "Previous close pending")
                         .font(.system(size: mvFont12, weight: .medium))
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: change)
@@ -6462,6 +6464,7 @@ struct MarketsView: View {
     /// second way. A widget that disagrees with the app it came from is worse than no widget.
     private func writeWidgetSnapshot() {
         #if os(iOS)
+        guard let asOf = store.ideasUpdated else { return }
         let best = StockSageExpectedValue.bestOpportunity(
             store.ideas, regime: store.regime, earnings: store.earnings,
             liquidity: store.liquidity, seasonality: store.seasonality,
@@ -6479,16 +6482,17 @@ struct MarketsView: View {
                                            accountSize: acct).map { $0.heatPct * 100 }
         } : nil
         StockSageWidgetSnapshot(
-            asOf: Date(),
+            asOf: asOf,
             bestSymbol: best?.idea.symbol,
             bestAction: best.map { "Rules: " + $0.idea.advice.action.rawValue },
             bestStrength: best.map { Self.ordinalStrengthLevel($0.idea.advice.conviction) },
-            openPositions: paperStore.open.count,
+            openPositions: bookIsKnown ? paperStore.open.count : nil,
             portfolioHeatPct: heatPct,
             heatCapPct: 8,
-            forwardCloses: paperStore.closed.compactMap(\.realizedR).count,
+            forwardCloses: bookIsKnown ? paperStore.closed.compactMap(\.realizedR).count : nil,
             forwardNeeded: 4,
-            isSampleData: store.isSampleData
+            isSampleData: store.isSampleData,
+            isCachedData: store.loadedFromCache
         ).save()
         WidgetCenter.shared.reloadAllTimelines()
         #endif
@@ -9211,7 +9215,7 @@ struct MarketsView: View {
             RoundedRectangle(cornerRadius: DS.Radius.modal, style: .continuous)
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1)
         )
-        .task(id: idea.symbol) {
+        .task(id: idea.symbol + store.derivedResearchRevision.uuidString) {
             guard !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
             // Invalidate any prior completion mark for THIS symbol FIRST — before the debounce
             // sleep, so a revisited symbol whose earlier fetch completed without data
@@ -9495,9 +9499,10 @@ struct MarketsView: View {
     static func sourceTagLabel(isSampleData: Bool, loadedFromCache: Bool, priceAsOf: Date?, now: Date,
                                priceSource: StockSagePriceSource? = nil) -> String? {
         if isSampleData || priceSource == .sample { return "sample" }
-        if loadedFromCache { return priceSource.map { "cached · \($0.label)" } ?? "cached" }
-        guard let priceAsOf else { return priceSource.map { "\($0.label) · time unknown" } }
-        let source = priceSource?.label ?? "source unknown"
+        let source = (loadedFromCache ? "cached · " : "") + (priceSource?.label ?? "source unknown")
+        guard let priceAsOf else {
+            return loadedFromCache || priceSource != nil ? "\(source) · time unknown" : nil
+        }
         let secs = now.timeIntervalSince(priceAsOf)
         guard secs.isFinite, secs >= 0, secs < Double(Int.max) else { return "\(source) · time unverified" }
         let age: String
@@ -9785,13 +9790,13 @@ enum MarketSort: String, CaseIterable, Identifiable {
         switch self {
         case .feed:   return syms
         case .symbol: return syms.sorted { $0.symbol.localizedCaseInsensitiveCompare($1.symbol) == .orderedAscending }
-        case .change: return syms.sorted { ($0.latest?.changePercent ?? 0) > ($1.latest?.changePercent ?? 0) }
+        case .change: return syms.sorted { ($0.sessionChangePercent ?? -.infinity) > ($1.sessionChangePercent ?? -.infinity) }
         case .signal:
             return syms.sorted { a, b in
                 let ra = StockSageSignalEngine.generateSignal(for: a).map { MarketSort.rank($0.recommendation) } ?? -1
                 let rb = StockSageSignalEngine.generateSignal(for: b).map { MarketSort.rank($0.recommendation) } ?? -1
                 if ra != rb { return ra > rb }
-                return abs(a.latest?.changePercent ?? 0) > abs(b.latest?.changePercent ?? 0)
+                return (a.sessionChangePercent.map { abs($0) } ?? -.infinity) > (b.sessionChangePercent.map { abs($0) } ?? -.infinity)
             }
         }
     }

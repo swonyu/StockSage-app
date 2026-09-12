@@ -843,7 +843,7 @@ struct StockSageJournalStoreQASeedTests {
 
     private func isolatedJournal() -> (a: StockSageJournalStore, defaults: UserDefaults, suite: String) {
         let suite = "journal.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
         return (StockSageJournalStore(defaults: defaults, key: "stocksage.journal.v1"), defaults, suite)
     }
 
@@ -999,6 +999,29 @@ struct StockSageJournalStoreQASeedTests {
         #expect(aaa?.isOpen == false)
         #expect(aaa?.exitPrice == 118)
         #expect(final.trades.contains { $0.symbol == "BBB" })
+    }
+
+    @Test func competingCloseRequiresReloadAndUnrelatedSaveKeepsDiskClosure() throws {
+        let (a, defaults, suite) = isolatedJournal()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let trade = journalTrade("AAA", day: 0)
+        #expect(a.add(trade))
+        let b = StockSageJournalStore(defaults: defaults)
+        #expect(a.close(trade.id, exitPrice: 118, at: trade.openedAt))
+        let saved = defaults.data(forKey: "stocksage.journal.v1")
+        #expect(!b.close(trade.id, exitPrice: 80, at: trade.openedAt))
+        #expect(defaults.data(forKey: "stocksage.journal.v1") == saved)
+        #expect(b.lastError != nil)
+        let staleClosed = StockSageJournalStore(defaults: defaults)
+        // An explicit amendment with a current original remains permitted.
+        #expect(a.close(trade.id, exitPrice: 119, at: trade.openedAt))
+        #expect(staleClosed.add(journalTrade("BBB", day: 1)))
+        #expect(staleClosed.trades.first { $0.id == trade.id }?.exitPrice == 119)
+        let beforeRestore = StockSageJournalStore(defaults: defaults)
+        #expect(a.close(trade.id, exitPrice: 120, at: trade.openedAt))
+        let prepared = try beforeRestore.prepareBackupImport([journalTrade("CCC", day: 2)])
+        try prepared.apply()
+        #expect(StockSageJournalStore(defaults: defaults).trades.first { $0.id == trade.id }?.exitPrice == 120)
     }
 
     @Test func journalForeignAddsSurviveAStaleSave() {

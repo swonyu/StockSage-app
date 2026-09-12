@@ -9,12 +9,12 @@ struct StockSageJournalCSVImportTests {
     @MainActor @Test(arguments: ["\n", "\r", "\r\n"])
     func lineEndingsAndQuotedNotesRoundTripIntoIsolatedJournal(ending: String) throws {
         let suite = "stocksage-csv-lines-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let original = TradeRecord(symbol: "LINES", side: .long, entry: 100, stop: 90,
             target: nil, shares: 2, openedAt: Date(timeIntervalSince1970: 0),
             note: "first\(ending)second, قال \"انتظر\"")
-        let row = String(StockSageJournalCSV.csv([original]).dropFirst(StockSageJournalCSV.header.count + 1))
+        let row = String(try StockSageJournalCSV.csv([original]).dropFirst(StockSageJournalCSV.header.count + 1))
         let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + ending + row + ending)
         #expect(preview.errors.isEmpty)
         #expect(preview.imported == 1 && preview.skipped == 0)
@@ -26,10 +26,10 @@ struct StockSageJournalCSVImportTests {
     }
 
     @Test(arguments: ["\n", "\r", "\r\n"])
-    func errorAfterMultilineNoteNamesThePhysicalFileLine(ending: String) {
+    func errorAfterMultilineNoteNamesThePhysicalFileLine(ending: String) throws {
         let original = TradeRecord(symbol: "LINES", side: .long, entry: 100, stop: 90,
             target: nil, shares: 2, openedAt: Date(timeIntervalSince1970: 0), note: "first\(ending)second")
-        let row = String(StockSageJournalCSV.csv([original]).dropFirst(StockSageJournalCSV.header.count + 1))
+        let row = String(try StockSageJournalCSV.csv([original]).dropFirst(StockSageJournalCSV.header.count + 1))
         let bad = "BAD,Long,-100,90,,2,1970-01-01T00:00:00Z,,,,"
         let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + ending + row + ending + bad)
         #expect(preview.imported == 1)
@@ -38,11 +38,11 @@ struct StockSageJournalCSVImportTests {
     }
 
     @Test(arguments: [100.0, 1e-6, 1e20])
-    func exporterNumberNotationRoundTripsAllNumericFields(scale: Double) {
+    func exporterNumberNotationRoundTripsAllNumericFields(scale: Double) throws {
         let original = TradeRecord(symbol: "NUMBERS", side: .long, entry: scale, stop: scale / 2,
             target: scale * 2, shares: scale, openedAt: Date(timeIntervalSince1970: 0),
             exitPrice: scale * 1.1, closedAt: Date(timeIntervalSince1970: 60))
-        let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.csv([original]))
+        let preview = StockSageJournalCSVImport.preview(try StockSageJournalCSV.csv([original]))
         #expect(preview.errors.isEmpty)
         #expect(preview.imported == 1)
         #expect(preview.trades.first?.entry == original.entry)
@@ -75,7 +75,7 @@ struct StockSageJournalCSVImportTests {
 
     @MainActor @Test func inBatchDuplicatesDoNotCreateDuplicateJournalRecords() throws {
         let suite = "stocksage-csv-duplicates-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let csv = StockSageJournalCSV.header + "\n" +
             "AAPL,Long,100,90,,1,1970-01-01T00:00:00Z,110,,,invalid closure\n" +
@@ -107,7 +107,7 @@ struct StockSageJournalCSVImportTests {
         #expect(result.errors.map(\.line) == [3, 4, 5])
     }
 
-    @Test func roundTripsExportedTrades() {
+    @Test func roundTripsExportedTrades() throws {
         let trades = [
             TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: 124, shares: 10,
                        openedAt: Date(timeIntervalSince1970: 0), exitPrice: 120,
@@ -117,7 +117,7 @@ struct StockSageJournalCSVImportTests {
             TradeRecord(symbol: "X", side: .short, entry: 50, stop: 55, target: nil, shares: 3,
                        openedAt: Date(timeIntervalSince1970: 1_000)),   // open, no exit/close/note
         ]
-        let csv = StockSageJournalCSV.csv(trades)
+        let csv = try StockSageJournalCSV.csv(trades)
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv)
 
         #expect(errors.isEmpty)
@@ -159,10 +159,10 @@ struct StockSageJournalCSVImportTests {
         #expect(parsed[1].note == nil)
     }
 
-    @Test func quotedCommaNoteRoundTrips() {
+    @Test func quotedCommaNoteRoundTrips() throws {
         let t = TradeRecord(symbol: "MSFT", side: .long, entry: 200, stop: 190, target: nil, shares: 5,
                             openedAt: Date(timeIntervalSince1970: 0), note: "Earnings beat, raised guidance")
-        let csv = StockSageJournalCSV.csv([t])
+        let csv = try StockSageJournalCSV.csv([t])
         #expect(csv.contains("\"Earnings beat, raised guidance\""))   // sanity: export really quotes it
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv)
         #expect(errors.isEmpty)
@@ -170,10 +170,10 @@ struct StockSageJournalCSVImportTests {
         #expect(parsed[0].note == "Earnings beat, raised guidance")
     }
 
-    @Test func quotedNewlineAndDoubledQuoteNoteRoundTrips() {
+    @Test func quotedNewlineAndDoubledQuoteNoteRoundTrips() throws {
         let t = TradeRecord(symbol: "TSLA", side: .short, entry: 300, stop: 310, target: nil, shares: 2,
                             openedAt: Date(timeIntervalSince1970: 0), note: "Line one\nLine two, said \"sell\"")
-        let csv = StockSageJournalCSV.csv([t])
+        let csv = try StockSageJournalCSV.csv([t])
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv)
         #expect(errors.isEmpty)
         #expect(parsed.count == 1)
@@ -260,11 +260,11 @@ struct StockSageJournalCSVImportTests {
         #expect(errors[0].line == 3)   // header=1, AAPL=2, BAD=3
     }
 
-    @Test func duplicateOfExistingTradeIsFlaggedAndSkipped() {
+    @Test func duplicateOfExistingTradeIsFlaggedAndSkipped() throws {
         let opened = Date(timeIntervalSince1970: 0)
         let existing = TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: nil,
                                    shares: 10, openedAt: opened)
-        let csv = StockSageJournalCSV.csv([TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90,
+        let csv = try StockSageJournalCSV.csv([TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90,
                                                         target: nil, shares: 10, openedAt: opened)])
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv, existing: [existing])
         #expect(parsed.isEmpty)
@@ -272,13 +272,13 @@ struct StockSageJournalCSVImportTests {
         #expect(errors[0].reason.contains("duplicate"))
     }
 
-    @Test func duplicateMatchIsToTheMinuteNotToTheSecond() {
+    @Test func duplicateMatchIsToTheMinuteNotToTheSecond() throws {
         let existingOpened = Date(timeIntervalSince1970: 0)
         let existing = TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: nil,
                                    shares: 10, openedAt: existingOpened)
         // 45 seconds later — same MINUTE — should still be flagged a duplicate.
         let sameMinute = Date(timeIntervalSince1970: 45)
-        let csv = StockSageJournalCSV.csv([TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90,
+        let csv = try StockSageJournalCSV.csv([TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90,
                                                         target: nil, shares: 10, openedAt: sameMinute)])
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv, existing: [existing])
         #expect(parsed.isEmpty)
@@ -286,12 +286,12 @@ struct StockSageJournalCSVImportTests {
         #expect(errors[0].reason.contains("duplicate"))
     }
 
-    @Test func differentTradeIsNotFlaggedAsDuplicate() {
+    @Test func differentTradeIsNotFlaggedAsDuplicate() throws {
         let opened = Date(timeIntervalSince1970: 0)
         let existing = TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: nil,
                                    shares: 10, openedAt: opened)
         // Different symbol → not a duplicate.
-        let csv = StockSageJournalCSV.csv([TradeRecord(symbol: "MSFT", side: .long, entry: 100, stop: 90,
+        let csv = try StockSageJournalCSV.csv([TradeRecord(symbol: "MSFT", side: .long, entry: 100, stop: 90,
                                                         target: nil, shares: 10, openedAt: opened)])
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv, existing: [existing])
         #expect(parsed.count == 1)

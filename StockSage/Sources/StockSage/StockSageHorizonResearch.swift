@@ -5,7 +5,7 @@ import Combine
 @MainActor
 final class StockSageHorizonResearch: ObservableObject {
     static let shared = StockSageHorizonResearch()
-    static let scanLimit = 500
+    nonisolated static let scanLimit = 500
     /// Shared by the fit() budget and the dispatched output limit; see PaperAutomation.
     nonisolated static let researchOutputTokens = 192
     nonisolated enum Horizon: String, CaseIterable, Identifiable, Sendable {
@@ -53,6 +53,7 @@ final class StockSageHorizonResearch: ObservableObject {
         var results: [String: Result] = [:]
         var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) US listings once."
         var at: Date?
+        var selection: StockSageResearchUniverse.Receipt?
     }
     @Published private(set) var scans: [Horizon: Scan] = [:]
     @Published private(set) var running: Horizon?
@@ -167,24 +168,26 @@ final class StockSageHorizonResearch: ObservableObject {
     }
 
     func start(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
-               universe: @escaping @MainActor () async throws -> [Listing],
+               universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
                analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
         guard task == nil, allowed() else { return false }
         let previousScan = scans[horizon]
         running = horizon
-        scans[horizon] = Scan(status: "Loading US directory · research capped at \(Self.scanLimit)…", at: Date())
+        scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) US listings by dated trading activity…", at: Date())
         task = Task {
             var didStart = false
             defer { activeSymbol = nil; running = nil; task = nil }
             @MainActor func valid() -> Bool { !Task.isCancelled && allowed() }
             do {
-                let directory = try await universe()
+                let selection = try await universe()
                 guard valid() else { throw CancellationError() }
+                let directory = selection.listings
                 guard Set(directory.map(\.ticker)).count == directory.count, directory.count <= 50_000 else { throw URLError(.cannotParseResponse) }
                 didStart = true
-                // Preserve directory order; this cap is not an investment ranking or an index.
+                // Selection is activity-ranked BEFORE this safety cap; never sort it alphabetically.
                 let names = Array(directory.prefix(Self.scanLimit))
                 scans[horizon]?.listings = names
+                scans[horizon]?.selection = selection.receipt
                 // ponytail: one manual worker limits additional local-model load while the independent
                 // four-worker day scanner runs. No automatic repeat; parallelize only if model capacity allows.
                 for item in names {
@@ -205,7 +208,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 } else if error is ScanFailure {
                     scans[horizon]?.status = "Local Qwen could not be reached or the selected model is missing. Check Model settings and retry; no scan started."
                 } else {
-                    scans[horizon]?.status = "Scan incomplete: listing directory could not be verified. Check Massive settings and retry."
+                    scans[horizon]?.status = "Scan incomplete: US directory or dated market activity could not be verified. Check Massive settings and retry."
                 }
                 if !didStart, previousScan != nil {
                     scans[horizon]?.status += " Earlier scan data retained; no new listings checked."
@@ -228,9 +231,11 @@ final class StockSageHorizonResearch: ObservableObject {
             return
         }
         let key = StockSageMassive.apiKey
+        let credentialRevision = StockSageMassive.credentialRevision()
         let revision = StockSageLocalModelServer.settingsRevision()
         let allowed: @MainActor () -> Bool = {
             ToolPolicy.isExternalAllowed && !store.isSampleData && StockSageMassive.apiKey == key
+                && StockSageMassive.credentialRevision() == credentialRevision
                 && StockSageAIAssessments.configuration == config && StockSageLocalModelServer.settingsRevision() == revision
         }
         var isOllama = false
@@ -238,7 +243,7 @@ final class StockSageHorizonResearch: ObservableObject {
             let probe = await StockSageLocalModelServer.probe(config, stillValid: allowed)
             guard probe.reachable, probe.hasModel else { throw ScanFailure.modelUnavailable }
             isOllama = probe.isOllama
-            return try await Self.fetchUniverse(key: key, allowed: allowed)
+            return try await StockSageResearchUniverse.fetch(key: key, allowed: allowed)
         }, analyze: { item in
             await Self.analyze(item, horizon: horizon, store: store, config: config,
                 isOllama: isOllama, key: key, allowed: allowed)

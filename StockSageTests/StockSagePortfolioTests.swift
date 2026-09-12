@@ -10,9 +10,9 @@ import Foundation
 struct StockSagePortfolioTests {
 
     private func freshStore(_ tag: String) -> StockSagePortfolio {
-        let name = "test.portfolio.\(tag)"
+        let name = "test.portfolio.\(tag).\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: name)
-        let ud = UserDefaults(suiteName: name)!
+        let ud = StockSageRecordWriter.fixtureDefaults(suiteName: name)!
         ud.removePersistentDomain(forName: name)
         return StockSagePortfolio(userDefaults: ud)
     }
@@ -24,7 +24,7 @@ struct StockSagePortfolioTests {
     @Test(arguments: [false, true])
     func corruptPortfolioLoadReportsFailureAndMutationsPreserveRecords(wrongType: Bool) throws {
         let suite = "portfolio.corrupt.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = "stocksage_portfolio_v1"
         let store = StockSagePortfolio(userDefaults: defaults)
@@ -105,9 +105,9 @@ struct StockSagePortfolioTests {
     }
 
     @Test func holdingsPersistAcrossInstances() {
-        let name = "test.portfolio.persist"
+        let name = "test.portfolio.persist.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: name)
-        let ud = UserDefaults(suiteName: name)!
+        let ud = StockSageRecordWriter.fixtureDefaults(suiteName: name)!
         ud.removePersistentDomain(forName: name)
         StockSagePortfolio(userDefaults: ud).add(symbol: "AAPL", shares: 10, costBasis: 150)
         let reloaded = StockSagePortfolio(userDefaults: ud)
@@ -117,9 +117,9 @@ struct StockSagePortfolioTests {
     }
 
     @Test func qaSeedAssignsInMemoryWithoutTouchingUserDefaults() {
-        let name = "test.portfolio.qaseed"
+        let name = "test.portfolio.qaseed.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: name)
-        let ud = UserDefaults(suiteName: name)!
+        let ud = StockSageRecordWriter.fixtureDefaults(suiteName: name)!
         ud.removePersistentDomain(forName: name)
         let p = StockSagePortfolio(userDefaults: ud)
         p.qaSeed([PortfolioPosition(symbol: "AAPL", shares: 30, costBasis: 100)])
@@ -233,7 +233,7 @@ struct StockSagePortfolioAggregationTests {
 
     @Test func foreignLotSurvivesAStaleProcessSave() {
         let suite = "portfolio.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let a = StockSagePortfolio(userDefaults: defaults)
         let b = StockSagePortfolio(userDefaults: defaults)   // second instance, loads empty
@@ -245,7 +245,7 @@ struct StockSagePortfolioAggregationTests {
 
     @Test func removeAndClearStillDeleteDespiteTheReconcilingSave() {
         let suite = "portfolio.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let a = StockSagePortfolio(userDefaults: defaults)
         a.add(symbol: "AAA", shares: 10, costBasis: 100)
@@ -259,7 +259,7 @@ struct StockSagePortfolioAggregationTests {
 
     @Test(arguments: [false, true]) func deletionSurvivesStalePortfolioSave(clearAll: Bool) throws {
         let suite = "portfolio.deletion.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let a = StockSagePortfolio(userDefaults: defaults)
         a.add(symbol: "GONE", shares: 1, costBasis: 100)

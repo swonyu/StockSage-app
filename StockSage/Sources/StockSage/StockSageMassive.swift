@@ -39,7 +39,7 @@ import CoreFoundation
 ///
 /// KEY — by NAME only: `MASSIVE_API_KEY` (the env var the vendor's own https://massive.com/docs/llms.txt
 /// names: "Have the user put it in the MASSIVE_API_KEY env var and read it from there") or the
-/// Settings field persisted under UserDefaults `keyDefaultsKey`. Never embedded, never logged.
+/// Settings field persisted in the device Keychain. Never embedded, never logged.
 ///
 /// HONESTY FLOOR: `marketTime` is the SIP trade timestamp — the existing `freshnessStale` /
 /// `StockSageQuoteFreshness` rules decide "Live" vs stale from it (nil ⇒ stale stays). A payload
@@ -49,7 +49,7 @@ import CoreFoundation
 @MainActor
 enum StockSageMassive {
 
-    /// UserDefaults key behind the Settings field (both platforms): "stocksage.massive" + ".key".
+    /// Legacy preference name, read only for reversible migration to the device Keychain.
     nonisolated static let keyDefaultsKey = "stocksage.massive." + "key"
     /// Environment-variable NAME the vendor's llms.txt tells clients to read. Name only — never a value.
     nonisolated static let keyEnvName = "MASSIVE_API_KEY"
@@ -58,11 +58,9 @@ enum StockSageMassive {
     nonisolated static func credentialRevision(_ defaults: UserDefaults = .standard) -> String? {
         defaults.string(forKey: "stocksage.massive.credentialRevision")
     }
-    @discardableResult nonisolated static func setAPIKey(_ value: String, defaults: UserDefaults = .standard) -> Bool {
-        guard defaults.string(forKey: keyDefaultsKey) != value else { return false }
-        defaults.set(UUID().uuidString, forKey: "stocksage.massive.credentialRevision")
-        defaults.set(value, forKey: keyDefaultsKey)
-        return true
+    @discardableResult nonisolated static func setAPIKey(_ value: String, defaults: UserDefaults = .standard,
+        storage: StockSageMassiveCredential.Storage = StockSageMassiveCredential.keychain) throws -> Bool {
+        try StockSageMassiveCredential.set(value, defaults: defaults, storage: storage)
     }
 
     nonisolated static let host = "https://api.massive.com"
@@ -71,11 +69,16 @@ enum StockSageMassive {
     /// Settings field first (trimmed), then the `MASSIVE_API_KEY` environment variable; "" when neither
     /// is set. Read on every call so a key typed into Settings takes effect without a restart.
     nonisolated static var apiKey: String {
-        let fromSettings = UserDefaults.standard.string(forKey: keyDefaultsKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !fromSettings.isEmpty { return fromSettings }
-        return ProcessInfo.processInfo.environment[keyEnvName]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Test hosts use explicit environment/injected fixtures, never the owner's Keychain.
+        let environment = ProcessInfo.processInfo.environment[keyEnvName]
+        if StockSageStore.isRunningTests { return resolvedKey(saved: nil, environment: environment) }
+        return (try? StockSageMassiveCredential.resolve(defaults: .standard,
+            storage: StockSageMassiveCredential.keychain, environment: environment)) ?? ""
+    }
+
+    nonisolated static func resolvedKey(saved: String?, environment: String?) -> String {
+        let saved = saved?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return saved.isEmpty ? (environment?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") : saved
     }
 
     /// Whether the Massive path is available at all. With no key the router sends every symbol down
@@ -176,7 +179,9 @@ enum StockSageMassive {
         return StockSageQuoteService.LiveQuote(symbol: requestedSymbol, price: price,
                                                previousClose: realPreviousClose ?? price,
                                                marketTime: marketTime,
-                                               isNewListing: realPreviousClose == nil, priceSource: .massiveSIP)
+                                               isNewListing: realPreviousClose == nil, priceSource: .massiveSIP,
+                                               previousCloseSource: realPreviousClose == nil ? nil : .massiveSIP,
+                                               previousCloseQuoteTime: realPreviousClose == nil ? nil : marketTime)
     }
 
     nonisolated static func finite(_ any: Any?) -> Double? {

@@ -30,12 +30,16 @@ final class StockSagePortfolio: ObservableObject {
 
     private init() {
         self.defaults = .standard
+        let ownership = Result { try StockSageRecordWriter.require(defaults) }
         load()
+        if case .failure(let error) = ownership, lastError == nil { lastError = error.localizedDescription }
     }
 
     init(userDefaults: UserDefaults) {
         self.defaults = userDefaults
+        let ownership = Result { try StockSageRecordWriter.require(defaults) }
         load()
+        if case .failure(let error) = ownership, lastError == nil { lastError = error.localizedDescription }
     }
 
     /// Add a position. No-ops on a blank symbol or non-positive share count, so a
@@ -69,7 +73,8 @@ final class StockSagePortfolio: ObservableObject {
 
     /// Validated backup lots keep their IDs. Never call add() here: it creates a fresh ID,
     /// which would duplicate every holding on repeat restore and erase lot provenance.
-    func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> (added: Int, apply: () -> Void) {
+    func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> (added: Int, apply: () throws -> Void) {
+        try StockSageRecordWriter.require(defaults)
         let disk = try deletions.read(PortfolioPosition.self)
         var merged = positions.filter { !deletions.contains($0.id) }
         var ids = Set(merged.map(\.id))
@@ -79,7 +84,7 @@ final class StockSagePortfolio: ObservableObject {
         let data = try JSONEncoder().encode(merged)
         let records = merged
         return (additions.count, {
-            self.deletions.restore(Set(additions.map(\.id)))
+            try self.deletions.restore(Set(additions.map(\.id)))
             self.defaults.set(data, forKey: Self.key)
             self.positions = records
             self.hasLoadedRecords = true
@@ -94,6 +99,8 @@ final class StockSagePortfolio: ObservableObject {
     /// another instance's lot: reconcile by preserving foreign ids; per-id conflicts are
     /// impossible. Deletes retain markers; `qaSeed` never touches disk.
     private func save(removing: Set<UUID> = [], clearAll: Bool = false) -> Bool {
+        do { try StockSageRecordWriter.require(defaults) }
+        catch { lastError = error.localizedDescription; return false }
         guard let disk = try? deletions.read(PortfolioPosition.self) else {
             hasLoadedRecords = false
             lastError = "Couldn't read the saved portfolio; no records were changed."; return false
@@ -107,7 +114,8 @@ final class StockSagePortfolio: ObservableObject {
         guard let data = try? JSONEncoder().encode(records) else {
             lastError = "Couldn't encode the portfolio; the previous saved records were kept."; return false
         }
-        deletions.mark(removed)
+        do { try deletions.mark(removed) }
+        catch { lastError = error.localizedDescription; return false }
         defaults.set(data, forKey: Self.key)
         positions = records
         hasLoadedRecords = true

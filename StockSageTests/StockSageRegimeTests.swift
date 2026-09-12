@@ -6,6 +6,43 @@ import Foundation
 
 struct StockSageRegimeTests {
 
+    @Test @MainActor func gaugeUsesEvidenceDatesAndRetainsLastResultOnInvalidIndex() async throws {
+        let suite = "regime.evidence.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let now = Date(timeIntervalSince1970: 1_789_000_000)
+        func bars(_ symbol: String, age: Double = 2 * 86_400) -> StockSagePriceHistory {
+            let closes = (1...250).map(Double.init)
+            return .init(symbol: symbol, dates: (0..<250).map { now.addingTimeInterval(-age - Double(249 - $0) * 86_400) },
+                         opens: closes, highs: closes, lows: closes, closes: closes,
+                         volumes: Array(repeating: 100, count: 250), priceSource: .yahooBars)
+        }
+        let index = bars("^GSPC")
+        let vix = StockSageQuoteService.LiveQuote(symbol: "^VIX", price: 50, previousClose: 49,
+            marketTime: now.addingTimeInterval(-47 * 3600), priceSource: .yahoo)
+        for n in [8, 9] {
+            let breadth = Dictionary(uniqueKeysWithValues: StockSageRegime.breadthSample.enumerated().map {
+                ($0.element, bars($0.element, age: $0.offset < n ? 2 * 86_400 : 8 * 86_400))
+            })
+            await store.refreshRegime(now: { now }, allowed: { true }, load: { (index, vix, breadth) })
+            #expect(store.regime?.state == .crisis)
+            #expect((store.regimeError?.contains("Breadth unavailable") ?? false) == (n == 8))
+            #expect(!store.regimeIsStale(at: now))
+        }
+        #expect(store.regimeIsStale(at: now.addingTimeInterval(2 * 3600)), "An expired used VIX must not stay current behind a fresh computation stamp")
+        let prior = store.regime, stamped = store.regimeGaugedAt
+        await store.refreshRegime(now: { now.addingTimeInterval(1) }, allowed: { true }, load: {
+            (bars("^GSPC", age: 8 * 86_400), vix, [:])
+        })
+        #expect(store.regime == prior && store.regimeGaugedAt == stamped)
+        #expect(store.regimeError?.contains("index") == true)
+        #expect(StockSageRegime.historyAsOf(bars("X", age: 7.9 * 86_400), now: now) != nil)
+        #expect(StockSageRegime.historyAsOf(bars("X", age: -1), now: now) == nil)
+        var unknown = index; unknown.priceSource = nil
+        #expect(StockSageRegime.historyAsOf(unknown, now: now) == nil)
+    }
+
     @Test func calmUptrendWithBroadStrengthIsRiskOnBull() {
         let r = StockSageRegime.assess(
             indexCloses: (1...250).map(Double.init),   // clean uptrend → above 200DMA, RSI high

@@ -35,14 +35,16 @@ nonisolated struct StockSageWidgetSnapshot: Codable, Sendable, Equatable {
     /// `portfolioHeatPct` is OPTIONAL because heat is only meaningful against an account size the
     /// owner has actually entered. Writing 0 when it is unknown would render "0.0% of 8%" — a
     /// specific, reassuring, and false claim. nil renders nothing instead.
-    let openPositions: Int
+    let openPositions: Int?
     let portfolioHeatPct: Double?
     let heatCapPct: Double
     /// Resolved paper closes toward a first Deflated-Sharpe reading, and how many that takes.
-    let forwardCloses: Int
+    let forwardCloses: Int?
     let forwardNeeded: Int
     /// True when the board behind this was the built-in sample, not live quotes.
     let isSampleData: Bool
+    /// nil for older snapshots that did not capture cache provenance.
+    var isCachedData: Bool? = nil
 
     /// Beyond this, the widget stops presenting the figures as current.
     nonisolated static let staleAfter: TimeInterval = 3600 * 6
@@ -53,20 +55,37 @@ nonisolated struct StockSageWidgetSnapshot: Codable, Sendable, Equatable {
     /// us. "Somehow newer than now" is not evidence of freshness.
     nonisolated func isStale(now: Date = Date()) -> Bool {
         let a = age(now: now)
-        return a < 0 || a > Self.staleAfter
+        return !a.isFinite || a < 0 || a >= Self.staleAfter
     }
 
     /// Age in the plain words a person reads at a glance. Never renders negative time.
     nonisolated func ageText(now: Date = Date()) -> String {
         let secs = age(now: now)
+        guard secs.isFinite else { return "time unverified" }
         guard secs >= 0 else { return "clock changed" }
-        let mins = Int(secs / 60)
+        guard let mins = Int(exactly: (secs / 60).rounded(.towardZero)) else { return "time unverified" }
         if mins < 1 { return "just now" }
         if mins < 60 { return "\(mins)m ago" }
         let hours = mins / 60
         if hours < 24 { return "\(hours)h ago" }
         let days = hours / 24
         return days == 1 ? "yesterday" : "\(days)d ago"
+    }
+
+    nonisolated var sourceText: String {
+        if isSampleData { return "SAMPLE" }
+        guard let isCachedData else { return "SNAPSHOT" }
+        return isCachedData ? "CACHED" : "LAST SCAN"
+    }
+
+    nonisolated var paperPositionsText: String {
+        guard let openPositions else { return "Paper records unavailable" }
+        return "Paper · \(openPositions) open"
+    }
+
+    nonisolated var forwardProgressText: String? {
+        guard let forwardCloses else { return "Forward record unavailable" }
+        return forwardCloses < forwardNeeded ? "Paper forward test \(forwardCloses)/\(forwardNeeded)" : nil
     }
 
     /// Heat as a fraction of the cap, clamped to [0, 1] for a progress bar. Returns nil rather

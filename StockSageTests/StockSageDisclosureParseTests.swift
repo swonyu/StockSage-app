@@ -94,7 +94,7 @@ struct StockSageDisclosureParseTests {
         #expect(!url.contains("0000320193-26-000011/"))
     }
 
-    @Test("ragged columns cannot index out of range")
+    @Test("ragged columns are rejected, never partially called an answered filing check")
     func raggedColumnsAreSafe() {
         var f = fixture()
         var filings = f["filings"] as! [String: Any]
@@ -104,7 +104,7 @@ struct StockSageDisclosureParseTests {
         filings["recent"] = recent
         f["filings"] = filings
         let out = StockSageDisclosureService.parseFilings(f, cik: "0000320193")
-        #expect(out.count == 1)
+        #expect(out.isEmpty)
     }
 
     @Test("limit is honored")

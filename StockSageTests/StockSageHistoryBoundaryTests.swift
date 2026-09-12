@@ -18,10 +18,65 @@ struct StockSageHistoryBoundaryTests {
         (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
     nonisolated private static func bars(_ symbol: String) -> StockSagePriceHistory {
-        .init(symbol: symbol, dates: (0..<32).map { Date(timeIntervalSince1970: 1_700_000_000 + Double($0) * 86_400) },
+        let end = Date()
+        return .init(symbol: symbol, dates: (0..<32).map { end.addingTimeInterval(-Double(31 - $0) * 86_400) },
               opens: Array(repeating: 100, count: 32), highs: Array(repeating: 101, count: 32),
               lows: Array(repeating: 99, count: 32), closes: Array(repeating: 100, count: 32),
               volumes: Array(repeating: 100_000, count: 32), priceSource: .massiveDaily)
+    }
+
+    @Test @MainActor func revisitedStudiesReplaceOldInputsAndInvalidationWinsInFlight() async throws {
+        let suite = "derived.refresh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let h = Self.bars("AAPL")
+        await store.refreshLiquidity(symbol: "AAPL", allowed: { true }, history: { _, _ in h })
+        #expect(store.liquidity["AAPL"] != nil)
+        var requests = 0
+        await store.refreshLiquidity(symbol: "AAPL", allowed: { true }, history: { _, _ in requests += 1; return nil })
+        #expect(requests == 1 && store.liquidity["AAPL"] == nil, "A failed fresh check cannot leave the old result looking current")
+        await store.refreshTrailingStop(symbol: "AAPL", allowed: { true }, history: { _, _ in
+            store.invalidateDerivedResearch()
+            return h
+        })
+        #expect(store.trailingStop["AAPL"] == nil, "Older work cannot repopulate studies after a new scan")
+        await store.refreshMultiTimeframe(symbol: "AAPL", allowed: { true }, history: { _, _, _ in
+            store.invalidateDerivedResearch()
+            return h
+        })
+        #expect(store.multiTimeframe["AAPL"] == nil)
+        await store.refreshLiquidity(symbol: "AAPL", allowed: { true }, history: { _, _ in h })
+        await store.refreshTrailingStop(symbol: "AAPL", allowed: { true }, history: { _, _ in h })
+        await store.refreshLiquidity(symbol: "MSFT", allowed: { true }, history: { _, _ in Self.bars("MSFT") })
+        await store.refreshLiquidity(symbol: "AAPL", allowed: { false }, history: { _, _ in Issue.record("Denied fetch"); return h })
+        await store.refreshTrailingStop(symbol: "AAPL", allowed: { false }, history: { _, _ in Issue.record("Denied fetch"); return h })
+        #expect(store.liquidity["AAPL"] == nil && store.trailingStop["AAPL"] == nil && store.liquidity["MSFT"] != nil)
+    }
+
+    @Test @MainActor func weeklyPeriodStartRemainsUsableAcrossMondayHoliday() async throws {
+        let suite = "weekly.coverage.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        func date(_ s: String) -> Date { ISO8601DateFormatter().date(from: s)! }
+        let now = date("2026-09-08T12:00:00Z")
+        func bars(end: Date, step: Double) -> StockSagePriceHistory {
+            let c = (1...250).map(Double.init)
+            return .init(symbol: "AAPL", dates: (0..<250).map { end.addingTimeInterval(-Double(249 - $0) * step) },
+                opens: c, highs: c, lows: c, closes: c, volumes: Array(repeating: 1, count: 250), priceSource: .yahooBars)
+        }
+        let daily = bars(end: date("2026-09-04T13:30:00Z"), step: 86_400)
+        let weekly = bars(end: date("2026-08-31T04:00:00Z"), step: 7 * 86_400)
+        #expect(StockSageRegime.historyAsOf(weekly, now: now) == nil, "Daily-age rule is intentionally too strict for a weekly start")
+        await store.refreshMultiTimeframe(symbol: "AAPL", allowed: { true }, now: { now }, history: { _, _, interval in
+            interval == "1wk" ? weekly : daily
+        })
+        #expect(store.multiTimeframe["AAPL"] != nil)
+        await store.refreshMultiTimeframe(symbol: "AAPL", allowed: { false }, now: { now }, history: { _, _, _ in
+            Issue.record("Denied fetch"); return nil
+        })
+        #expect(store.multiTimeframe["AAPL"] == nil)
     }
 
     @Test(arguments: [false, true])

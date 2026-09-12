@@ -435,23 +435,28 @@ enum StockSageCatalystNarrator {
     }
 
     /// The local-server counterpart of `explainOnDevice(_:)`: same facts/prompt/number-fence
-    /// contract, over `StockSageLocalModelServer.complete(_:)` instead of a local session.
-    private static func explainViaServer(_ brief: StockSageCatalystWatch.Brief,
+    /// contract, preserving finish metadata instead of treating a truncated reply as complete.
+    static func explainViaServer(_ brief: StockSageCatalystWatch.Brief,
                                          config: StockSageLocalModelServer.Config,
                                          isOllama: Bool,
                                          sources: [CitedSource] = [],
                                          benzinga: StockSageBenzinga.Snapshot? = nil,
-                                         stillValid: @MainActor () -> Bool = { true }) async -> Result {
+                                         stillValid: @MainActor () -> Bool = { true },
+                                         transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result {
         let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
-        let result = await StockSageLocalModelServer.complete(
+        let result = await StockSageLocalModelServer.completeDetailed(
             config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts),
-            contextTokens: StockSageLocalModelServer.researchContextTokens, stillValid: stillValid)
+            contextTokens: StockSageLocalModelServer.researchContextTokens, stillValid: stillValid, transport: transport)
         switch result {
-        case .success(let text):
-            return checkedResponse(text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count,
+        case .success(let completion):
+            if StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
+                return .unverified(completion.text, .localServer(model: config.model),
+                    reason: "Incomplete explanation: the model stopped at its output limit. Verify this partial draft against the supplied sources.")
+            }
+            return checkedResponse(completion.text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count,
                                    symbol: brief.idea.symbol)
         case .failure(let error):
-            return .unavailable(humanServerError(error))
+            return .unavailable(humanServerError(error.legacyError))
         }
     }
 

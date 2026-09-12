@@ -63,6 +63,18 @@ struct StockSageFilingsObservationTests {
         #expect(obs.outcome == .unavailable(.invalidPayload))
     }
 
+    @Test(arguments: [#"{}"#,
+        #"{"filings":{}}"#,
+        #"{"filings":{"recent":{"form":["8-K"],"accessionNumber":[],"filingDate":["2026-09-08"]}}}"#,
+        #"{"filings":{"recent":{"form":["8-K"],"accessionNumber":["0000000123-26-000001"],"filingDate":["not-a-date"]}}}"#])
+    @MainActor func malformedColumnsCannotBecomeAnsweredEmpty(json: String) async {
+        let t = Self.wire(Data(json.utf8))
+        let obs = await D.recentFilingsObservation(for: "TEST", map: D.CIKMap(transport: t),
+            transport: t, allowed: { true }, now: now)
+        #expect(obs.outcome == .unavailable(.invalidPayload))
+        #expect(obs.filings.isEmpty)
+    }
+
     @Test @MainActor func aTickerWithNoCIKIsNotAnEmptyResult() async {
         let t = Self.wire(Self.filingsJSON)
         let obs = await D.recentFilingsObservation(for: "NOSUCH", map: D.CIKMap(transport: t),

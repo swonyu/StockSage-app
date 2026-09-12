@@ -41,17 +41,22 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     var plannedExit: Double?
     /// The actual exit fill (set at close time). Optional + defaulted.
     var exitFill: Double?
+    /// New legacy PAPER closes keep the observed gross fill separate from modeled costs.
+    /// nil preserves older netted-exit records and real journal accounting unchanged.
+    var modeledPaperCostPerShare: Double?
 
     init(id: UUID = UUID(), symbol: String, side: Side, entry: Double, stop: Double,
          target: Double?, shares: Double, openedAt: Date,
          exitPrice: Double? = nil, closedAt: Date? = nil, note: String? = nil, conviction: Double? = nil,
-         plannedEntry: Double? = nil, entryFill: Double? = nil, plannedExit: Double? = nil, exitFill: Double? = nil) {
+         plannedEntry: Double? = nil, entryFill: Double? = nil, plannedExit: Double? = nil, exitFill: Double? = nil,
+         modeledPaperCostPerShare: Double? = nil) {
         self.id = id; self.symbol = symbol; self.side = side
         self.entry = entry; self.stop = stop; self.target = target
         self.shares = shares; self.openedAt = openedAt
         self.exitPrice = exitPrice; self.closedAt = closedAt; self.note = note; self.conviction = conviction
         self.plannedEntry = plannedEntry; self.entryFill = entryFill
         self.plannedExit = plannedExit; self.exitFill = exitFill
+        self.modeledPaperCostPerShare = modeledPaperCostPerShare
     }
 
     nonisolated var isOpen: Bool { closedAt == nil }
@@ -60,6 +65,11 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     /// are allowed (exports have second precision); calibration imposes its stricter time split.
     nonisolated var closureError: String? {
         guard openedAt.timeIntervalSinceReferenceDate.isFinite else { return "The journal open time must be finite." }
+        if let cost = modeledPaperCostPerShare {
+            guard cost.isFinite, cost >= 0, closedAt != nil, exitPrice != nil else {
+                return "Modeled paper costs require a closed fill and a nonnegative finite amount."
+            }
+        }
         switch (exitPrice, closedAt) {
         case (nil, nil): return nil
         case let (exit?, close?):
@@ -73,6 +83,10 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
     }
 
     nonisolated var isFinalized: Bool { !isOpen && closureError == nil }
+
+    nonisolated var ownerJournalError: String? {
+        modeledPaperCostPerShare != nil ? "Modeled paper fills cannot be imported into the owner journal." : closureError
+    }
 
     /// Cost-positive, direction-adjusted slippage in bps of the planned price for one execution
     /// leg. Positive = you paid more than planned (a buy filled higher, or a sell filled lower);
@@ -129,11 +143,13 @@ struct TradeRecord: Codable, Sendable, Equatable, Identifiable {
 
     nonisolated var realizedProfit: Double? {
         guard isFinalized, let exitPrice else { return nil }
-        let value = profit(at: exitPrice)
+        let value = profit(at: exitPrice) - (modeledPaperCostPerShare ?? 0) * shares
         return value.isFinite ? value : nil
     }
     nonisolated var realizedR: Double? {
-        guard isFinalized, let exitPrice, let value = rMultiple(at: exitPrice), value.isFinite else { return nil }
+        guard isFinalized, let exitPrice, let gross = rMultiple(at: exitPrice) else { return nil }
+        let value = gross - (modeledPaperCostPerShare ?? 0) / riskPerShare
+        guard value.isFinite else { return nil }
         return value
     }
 
@@ -1028,8 +1044,11 @@ final class StockSageJournalStore: ObservableObject {
     /// `.standard`/the v1 key; `internal` init so `@testable` can build isolated stores.
     init(defaults: UserDefaults = .standard, key: String = "stocksage.journal.v1") {
         self.defaults = defaults
+        // Acquire before loading; a denied process cannot later take over with stale arrays.
+        let ownership = Result { try StockSageRecordWriter.require(defaults) }
         self.key = key
         load()
+        if case .failure(let error) = ownership, lastError == nil { lastError = error.localizedDescription }
     }
 
     var open: [TradeRecord] { trades.filter { $0.isOpen } }
@@ -1056,7 +1075,7 @@ final class StockSageJournalStore: ObservableObject {
         guard !deletions.contains(t.id) else {
             lastError = "This journal record was deleted. Use JSON Restore to restore its original ID."; return false
         }
-        if let error = t.closureError { lastError = error; return false }
+        if let error = t.ownerJournalError { lastError = error; return false }
         let before = trades
         trades.insert(t, at: 0)
         guard save() else { trades = before; return false }
@@ -1088,7 +1107,11 @@ final class StockSageJournalStore: ObservableObject {
 
     /// Backup has already validated every incoming record. Prepare a single batch without
     /// changing memory/defaults, so a later portfolio/watchlist failure changes nothing.
-    func prepareBackupImport(_ incoming: [TradeRecord]) throws -> (added: Int, apply: () -> Void) {
+    func prepareBackupImport(_ incoming: [TradeRecord]) throws -> (added: Int, apply: () throws -> Void) {
+        try StockSageRecordWriter.require(defaults)
+        if let error = incoming.compactMap(\.ownerJournalError).first {
+            throw StockSageBackup.BackupError.restoreFailed(error)
+        }
         let disk = try deletions.read(TradeRecord.self)
         guard var merged = reconciled(trades, disk: disk) else {
             throw StockSageBackup.BackupError.restoreFailed(lastError ?? "Conflicting journal records.")
@@ -1099,7 +1122,7 @@ final class StockSageJournalStore: ObservableObject {
         let data = try JSONEncoder().encode(merged)
         let records = merged
         return (additions.count, {
-            self.deletions.restore(Set(additions.map(\.id)))
+            try self.deletions.restore(Set(additions.map(\.id)))
             self.defaults.set(data, forKey: self.key)
             self.trades = records
             self.hasLoadedRecords = true
@@ -1113,7 +1136,7 @@ final class StockSageJournalStore: ObservableObject {
         var candidate = trades[i]
         candidate.exitPrice = exitPrice
         candidate.closedAt = date
-        if let error = candidate.closureError { lastError = error; return false }
+        if let error = candidate.ownerJournalError { lastError = error; return false }
         guard [plannedExit, exitFill].compactMap({ $0 }).allSatisfy({ $0 > 0 && $0.isFinite }) else {
             lastError = "Journal planned/fill prices must be positive and finite when supplied."; return false
         }
@@ -1154,6 +1177,8 @@ final class StockSageJournalStore: ObservableObject {
     /// (a close is terminal), foreign ids (another process's adds) are preserved. Deletions
     /// exclude only deleted IDs. `qaSeed` still bypasses save() entirely (in-memory only).
     private func save(removing: Set<UUID> = [], replacing original: TradeRecord? = nil) -> Bool {
+        do { try StockSageRecordWriter.require(defaults) }
+        catch { lastError = error.localizedDescription; return false }
         guard let disk = try? deletions.read(TradeRecord.self) else {
             hasLoadedRecords = false
             lastError = "Couldn't read the saved journal; no records were changed."; return false
@@ -1164,7 +1189,8 @@ final class StockSageJournalStore: ObservableObject {
             return false
         }
         // Encode first: a failed save must not leave a deletion marker behind.
-        deletions.mark(removing)
+        do { try deletions.mark(removing) }
+        catch { lastError = error.localizedDescription; return false }
         defaults.set(data, forKey: key)
         trades = records
         hasLoadedRecords = true
@@ -1179,11 +1205,15 @@ final class StockSageJournalStore: ObservableObject {
         var ids = Set(merged.map(\.id))
         for d in disk where !removing.contains(d.id) && !deletions.contains(d.id) {
             if let i = merged.firstIndex(where: { $0.id == d.id }) {
+                if let original, original.id == d.id, original != d {
+                    lastError = "This journal record changed on disk. Nothing was saved; reload before amending its close."
+                    return nil
+                }
                 if d.closureError != nil, merged[i] != d, original != d {
                     lastError = "Conflicting journal closure data changed on disk. Nothing was saved; reload and review the original record."
                     return nil
                 }
-                if merged[i].isOpen && !d.isOpen { merged[i] = d }
+                if !d.isOpen, original?.id != d.id { merged[i] = d }
             } else if ids.insert(d.id).inserted {
                 merged.append(d)
             }

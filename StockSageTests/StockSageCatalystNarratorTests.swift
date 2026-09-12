@@ -11,6 +11,28 @@ struct StockSageCatalystNarratorTests {
 
     typealias N = StockSageCatalystNarrator
 
+    @Test @MainActor func serverExplanationPreservesTheFinishStatus() async throws {
+        let config = try #require(StockSageLocalModelServer.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        for finish in ["stop", "length"] {
+            let result = await N.explainViaServer(brief(symbol: "AAPL"), config: config,
+                isOllama: true, transport: { request in
+                    let body: [String: Any] = ["model": "fixture", "done_reason": finish,
+                        "message": ["content": "AAPL faces uncertainty because"]]
+                    return (try JSONSerialization.data(withJSONObject: body),
+                        HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+            if finish == "length" {
+                guard case .unverified(let text, .localServer(let model), let reason) = result else {
+                    Issue.record("A truncated explanation was presented as complete"); continue
+                }
+                #expect(text == "AAPL faces uncertainty because" && model == "fixture")
+                #expect(reason.contains("Incomplete explanation"))
+            } else {
+                #expect(result == .text("AAPL faces uncertainty because", .localServer(model: "fixture")))
+            }
+        }
+    }
+
     @Test @MainActor func callerCancellationCoversSourceFetchProbeAndBackend() async throws {
         typealias S = StockSageLocalModelServer
         let suite = "StockSageCallerFixture.\(UUID())"

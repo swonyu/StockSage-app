@@ -81,6 +81,10 @@ struct StockSageAIAssessmentPanel: View {
                 Text(verbatim: draft.displayText).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Text("Model: \(draft.config.model) · snapshot \(draft.context.asOf.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if draft.context.omittedResearchLeads > 0 {
+                    Text("\(draft.context.omittedResearchLeads) optional WhatsApp leads omitted to fit the model context. Verified facts retained.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if let captured = draft.context.benzinga {
                     StockSageBenzingaEvidenceView(capturedSnapshot: captured)
                 }
@@ -117,6 +121,10 @@ struct StockSageAIAssessmentPanel: View {
                 Text("Model: " + record.config.model).font(.caption).foregroundStyle(.secondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Text("Cited facts: " + record.verdict.evidence.joined(separator: ", ")).font(.caption)
+                if record.context.omittedResearchLeads > 0 {
+                    Text("\(record.context.omittedResearchLeads) optional WhatsApp leads omitted to fit the model context. Verified facts retained.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 DisclosureGroup("Facts supplied to this assessment") {
                     ForEach(Array(record.context.facts.enumerated()), id: \.offset) { index, fact in
                         Text("F\(index + 1): \(fact)").font(.caption).textSelection(.enabled)

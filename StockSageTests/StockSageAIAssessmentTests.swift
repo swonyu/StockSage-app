@@ -27,6 +27,80 @@ struct StockSageAIAssessmentTests {
         .init(baseURL: URL(string: "http://127.0.0.1:8765")!, model: "fixture-qwen")
     }
 
+    @Test(arguments: ["answer", "repair"], ["success", "failure", "truncated"])
+    func settingsReleaseObsoleteSlotAndLateResultCannotTouchReplacement(phase: String, result: String) async throws {
+        let suite = "assessment.settings.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = StockSageAIAssessments()
+        let key = StockSageLocalModelServer.modelKey
+        #expect(state.setModelSetting("A", for: key, defaults: defaults))
+        var oldWire: CheckedContinuation<Void, Never>?
+        var newWire: CheckedContinuation<Void, Never>?
+        var oldSettled = false
+        var oldReturned = false
+        var calls = 0
+        let old = Task { @MainActor in
+            await state.assess(context, config: config, now: now, stillValid: { true }, generateDetailed: { _, _ in
+                calls += 1
+                if phase == "repair", calls == 1 {
+                    return .success(.init(text: json.replacingOccurrences(of: ",\"evidence\":[\"F1\"]", with: ""), diagnostic: .init()))
+                }
+                await withCheckedContinuation { oldWire = $0 }
+                oldReturned = true
+                if result == "failure" { return .failure(.init(diagnostic: .init(category: .network))) }
+                return .success(.init(text: json, diagnostic: .init(finish: result == "truncated" ? .tokenLimit : .stop)))
+            })
+            oldSettled = true
+        }
+        defer { old.cancel(); oldWire?.resume(); newWire?.resume() }
+        for _ in 0..<2000 where oldWire == nil { await Task.yield() }
+        try #require(oldWire != nil)
+        #expect(!state.setModelSetting("A", for: key, defaults: defaults) && state.activeSymbol == "ORCL")
+        #expect(state.setModelSetting("B", for: key, defaults: defaults))
+        #expect(state.activeSymbol == nil)
+        #expect(state.setModelSetting("A", for: key, defaults: defaults))
+        for _ in 0..<2000 where !oldSettled { await Task.yield() }
+        try #require(oldSettled, "Old caller must settle before the transport cooperates")
+        let replacement = Task { @MainActor in
+            await state.assess(context, config: config, now: now, stillValid: { true }, generate: { _, _ in
+                await withCheckedContinuation { newWire = $0 }
+                return json
+            })
+        }
+        defer { replacement.cancel() }
+        for _ in 0..<2000 where newWire == nil { await Task.yield() }
+        try #require(newWire != nil)
+        let error = state.errors["ORCL"], draft = state.drafts["ORCL"]?.text
+        let released = oldWire; oldWire = nil; released?.resume()
+        for _ in 0..<2000 where !oldReturned { await Task.yield() }
+        try #require(oldReturned)
+        #expect(state.activeSymbol == "ORCL" && state.errors["ORCL"] == error)
+        #expect(state.records["ORCL"] == nil && state.drafts["ORCL"]?.text == draft)
+        let finish = newWire; newWire = nil; finish?.resume()
+        await replacement.value
+        #expect(state.activeSymbol == nil && state.errors["ORCL"] == nil && state.records["ORCL"] != nil)
+    }
+
+    @Test func settingsCancelSourceCollectionThroughTheSameOwner() async throws {
+        let suite = "assessment.prepare.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = StockSageAIAssessments()
+        var held: CheckedContinuation<Void, Never>?
+        var returned = false
+        let task = Task { @MainActor in
+            await state.withAssessment(symbol: "ORCL") { _ in await withCheckedContinuation { held = $0 } }
+            returned = true
+        }
+        defer { task.cancel(); held?.resume() }
+        for _ in 0..<2000 where held == nil { await Task.yield() }
+        try #require(held != nil)
+        #expect(state.setModelSetting("off", for: StockSageLocalModelServer.backendKey, defaults: defaults))
+        for _ in 0..<2000 where !returned { await Task.yield() }
+        #expect(returned && state.activeSymbol == nil && held != nil)
+    }
+
     @Test(arguments: ["analysis", "quote"])
     func currentBadgeRespectsCapturedEvidenceAge(evidence: String) throws {
         let captured = idea(analysisAge: evidence == "analysis" ? 4 * 3600 - 1 : 0,
@@ -419,6 +493,28 @@ struct StockSageAIAssessmentTests {
     }
 
     @Test(arguments: [false, true])
+    func callerCancellationWithoutYieldCannotPublish(duringRepair: Bool) async {
+        let state = StockSageAIAssessments()
+        var caller: Task<Void, Never>?
+        var calls = 0
+        var draftBeforeCancel: String?
+        caller = Task { @MainActor in
+            await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in
+                calls += 1
+                if duringRepair && calls == 1 {
+                    return json.replacingOccurrences(of: ",\"evidence\":[\"F1\"]", with: "")
+                }
+                draftBeforeCancel = state.drafts["ORCL"]?.text
+                caller?.cancel()
+                return json
+            }
+        }
+        await caller?.value
+        #expect(state.records.isEmpty && state.drafts["ORCL"]?.text == draftBeforeCancel && state.activeSymbol == nil)
+        #expect(calls == (duringRepair ? 2 : 1))
+    }
+
+    @Test(arguments: [false, true])
     func cancelledReassessmentKeepsOlderRecordPreviousOnly(duringRepair: Bool) async throws {
         let state = StockSageAIAssessments()
         await state.assess(context, config: config, now: now, stillValid: { true }) { _, _ in json }
@@ -469,6 +565,32 @@ struct StockSageAIAssessmentTests {
         #expect(state.errors["ORCL"]?.contains("SECRET") == false)
     }
 
+    @Test func largeOptionalLeadsFitTheActualPromptWithoutDroppingFacts() async throws {
+        typealias R = StockSageResearchLeads
+        typealias S = StockSageLocalModelServer
+        let messages = (0..<3).map { R.Message(id: "fixture-\($0)", date: now,
+            source: "Synthetic group", text: "QCOM \($0) " + String(repeating: "界", count: 2_300)) }
+        let selected = try #require(R.select(.init(schema: 1, importedAt: now, timezone: "UTC",
+            messages: messages), symbol: "QCOM", now: now))
+        let captured = A.Context(idea: idea("QCOM"), earnings: nil, company: [:], research: selected, at: now)
+        try #require(captured.canAssess(at: now))
+        let state = StockSageAIAssessments()
+        var dispatched = ""
+        await state.assess(captured, config: config, now: now, stillValid: { true }) { _, prompt in
+            dispatched = prompt
+            #expect(S.promptFits(system: A.instructions, user: prompt, outputTokens: 240,
+                                 contextTokens: S.researchContextTokens))
+            return #"{"action":"Hold","reason":"Evidence remains mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        }
+        let record = try #require(state.records["QCOM"])
+        #expect(record.context.facts == captured.facts)
+        #expect(record.context.omittedResearchLeads > 0)
+        #expect(record.context.research?.messages.count ?? 0 < 3)
+        #expect(!dispatched.contains("W3:"))
+        #expect(A.parse(#"{"action":"Hold","reason":"W3 supports caution.","risk":"Uncertainty remains.","evidence":["F1"]}"#,
+            facts: captured.facts, leadCount: record.context.research?.messages.count ?? 0, symbol: "QCOM") == nil)
+    }
+
     @Test func detailedFailuresAndRepairKeepSafeMetadata() async {
         typealias S = StockSageLocalModelServer
         let initial = StockSageAIAssessments()
@@ -480,10 +602,12 @@ struct StockSageAIAssessmentTests {
         let draft = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible."}"#
         let changed = #"{"action":"Buy","reason":"Outlook mixed.","risk":"Loss possible.","evidence":["F1"]}"#
         let invalid = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible.","evidence":["F999"]}"#
+        let valid = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible.","evidence":["F1"]}"#
         let outcomes: [(S.CompletionResult, String)] = [
             (.failure(.init(diagnostic: .init(category: .cancelled))), "server=cancelled"),
             (.success(.init(text: changed, diagnostic: .init(finish: .stop))), "validation=changedOpinion"),
-            (.success(.init(text: invalid, diagnostic: .init(finish: .tokenLimit))), "validation=unknownEvidence")]
+            (.success(.init(text: invalid, diagnostic: .init(finish: .tokenLimit))), "finish=tokenLimit"),
+            (.success(.init(text: valid, diagnostic: .init(finish: .tokenLimit))), "finish=tokenLimit")]
         for (reply, expected) in outcomes {
             let state = StockSageAIAssessments()
             var calls = 0

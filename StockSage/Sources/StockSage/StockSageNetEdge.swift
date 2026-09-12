@@ -152,7 +152,8 @@ enum StockSageNetEdge {
         return evaluate(entry: idea.price, stop: stop, target: target,
                         spreadBps: c.spreadBps, slippageBps: c.slippageBps, takerFeeBps: c.takerFeeBps,
                         annualFinancingRate: rate, holdDays: days, winProb: winProb,
-                        perOrderMinimum: c.perOrderMinimum, orderNotional: orderNotional)
+                        perOrderMinimum: c.perOrderMinimum / StockSageCurrency.majorUnitValue(symbol: idea.symbol, rawValue: 1),
+                        orderNotional: orderNotional)
     }
 
     /// Conservative retail-honest annualized borrow/margin-cost ESTIMATE for a general-collateral

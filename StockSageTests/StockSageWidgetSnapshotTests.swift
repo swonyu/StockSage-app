@@ -47,6 +47,8 @@ struct StockSageWidgetSnapshotTests {
         let s = snapshot()
         let cutoff = StockSageWidgetSnapshot.staleAfter
         #expect(!s.isStale(now: asOf.addingTimeInterval(cutoff - 1)))
+        #expect(s.isStale(now: asOf.addingTimeInterval(cutoff)),
+                "The explicitly scheduled stale-boundary timeline entry must already render stale")
         #expect(s.isStale(now: asOf.addingTimeInterval(cutoff + 1)))
     }
 
@@ -56,6 +58,21 @@ struct StockSageWidgetSnapshotTests {
         let s = snapshot()
         #expect(s.isStale(now: asOf.addingTimeInterval(-3600)))
         #expect(s.ageText(now: asOf.addingTimeInterval(-3600)) == "clock changed")
+    }
+
+    @Test func invalidClockCannotLookFresh() {
+        for offset in [Double.nan, .infinity, -.infinity, .greatestFiniteMagnitude] {
+            let invalid = Date(timeIntervalSince1970: offset)
+            #expect(snapshot().isStale(now: invalid))
+            #expect(snapshot().ageText(now: invalid) == "time unverified")
+        }
+    }
+
+    @Test func corruptedFiniteSnapshotDateCannotOverflowTheWidgetAgeLabel() throws {
+        let data = Data(#"{"asOf":-1e300,"heatCapPct":8,"forwardNeeded":4,"isSampleData":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(StockSageWidgetSnapshot.self, from: data)
+        #expect(decoded.isStale(now: asOf))
+        #expect(decoded.ageText(now: asOf) == "time unverified")
     }
 
     // MARK: The bar must not make "undrawable" look like "empty"
@@ -80,5 +97,28 @@ struct StockSageWidgetSnapshotTests {
         #expect(unknown.heatFractionOfCap == nil)
         let zero = snapshot(heat: 0)
         #expect(zero.heatFractionOfCap == 0, "a genuine zero is drawable and must not be confused with unknown")
+    }
+
+    @Test func unavailablePaperBookAndCacheProvenanceRemainExplicitAfterRoundTrip() throws {
+        var unknown = StockSageWidgetSnapshot(asOf: asOf, bestSymbol: nil, bestAction: nil,
+            bestStrength: nil, openPositions: nil, portfolioHeatPct: nil, heatCapPct: 8,
+            forwardCloses: nil, forwardNeeded: 4, isSampleData: false, isCachedData: true)
+        let restored = try JSONDecoder().decode(StockSageWidgetSnapshot.self, from: JSONEncoder().encode(unknown))
+        #expect(restored == unknown)
+        #expect(restored.paperPositionsText == "Paper records unavailable")
+        #expect(restored.forwardProgressText == "Forward record unavailable")
+        #expect(restored.sourceText == "CACHED")
+        unknown.isCachedData = false
+        #expect(unknown.sourceText == "LAST SCAN")
+        #expect(snapshot(sample: true).sourceText == "SAMPLE")
+        #expect(snapshot().paperPositionsText == "Paper · 2 open")
+        #expect(snapshot().forwardProgressText == "Paper forward test 1/4")
+    }
+
+    @Test func olderSnapshotsKeepCountsWithoutInventingLiveProvenance() throws {
+        let old = Data(#"{"asOf":721692800,"bestSymbol":"AAPL","bestAction":"Rules: Buy","bestStrength":3,"openPositions":2,"portfolioHeatPct":4,"heatCapPct":8,"forwardCloses":1,"forwardNeeded":4,"isSampleData":false}"#.utf8)
+        let restored = try JSONDecoder().decode(StockSageWidgetSnapshot.self, from: old)
+        #expect(restored.openPositions == 2 && restored.forwardCloses == 1)
+        #expect(restored.isCachedData == nil && restored.sourceText == "SNAPSHOT")
     }
 }

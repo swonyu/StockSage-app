@@ -108,10 +108,8 @@ struct StockSageWidgetView: View {
     @ViewBuilder private func header(_ s: StockSageWidgetSnapshot) -> some View {
         HStack(spacing: 4) {
             Text("Best opportunity").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            if s.isSampleData {
-                // A demo board must never be mistaken for a real one, at any size.
-                Text("SAMPLE").font(.system(size: 8, weight: .bold)).foregroundStyle(.orange)
-            }
+            Text(s.sourceText).font(.system(size: 8, weight: .bold))
+                .foregroundStyle(s.isSampleData || s.isCachedData == true ? .orange : .secondary)
         }
     }
 
@@ -121,10 +119,10 @@ struct StockSageWidgetView: View {
                 // Heat only prints when an account size made it computable — see the snapshot's
                 // own note on why a 0 here would be a false reassurance.
                 if let heat = s.portfolioHeatPct {
-                    Text("Heat \(String(format: "%.1f", heat))% of \(String(format: "%.0f", s.heatCapPct))%")
+                    Text("Paper heat \(String(format: "%.1f", heat))% of \(String(format: "%.0f", s.heatCapPct))%")
                         .font(.caption2).foregroundStyle(s.isAtHeatCap ? .red : .secondary)
                 }
-                Text("\(s.openPositions) open").font(.caption2).foregroundStyle(.secondary)
+                Text(s.paperPositionsText).font(.caption2).foregroundStyle(.secondary)
             }
             if let f = s.heatFractionOfCap {
                 GeometryReader { geo in
@@ -141,8 +139,8 @@ struct StockSageWidgetView: View {
 
     @ViewBuilder private func footer(_ s: StockSageWidgetSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            if s.forwardCloses < s.forwardNeeded {
-                Text("Forward test \(s.forwardCloses)/\(s.forwardNeeded)")
+            if let progress = s.forwardProgressText {
+                Text(progress)
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
             // Aged against the ENTRY's date, not Date(): see getTimeline. A rendered bitmap is
@@ -162,7 +160,7 @@ struct StockSageWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("StockSageX")
-        .description("The best opportunity from your last scan, and how much of the account is already at risk.")
+        .description("A rule-based idea from your last scan, and simulated paper-account risk.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

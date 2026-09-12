@@ -55,8 +55,8 @@ enum StockSagePaperTrader {
     /// Mark each OPEN long paper trade to the given symbol's history and close any that crossed
     /// stop / target / the time-stop backstop. PURE + deterministic (dates come from the bars, no
     /// `Date.now`). Exit selection is delegated to `StockSageBacktester.simulateExit`; the round-trip
-    /// cost is netted into the stored `exitPrice` so `TradeRecord.realizedR` == the backtester's net R:
-    ///   costPerShare = max(0, roundTripBps)/10_000 · entry ;  exitPrice = grossExit − costPerShare.
+    /// cost is recorded separately from the gross `exitPrice`, so `TradeRecord.realizedR`
+    /// matches the backtester even when costs exceed the exit proceeds.
     /// A trade whose symbol ≠ this history, that is already closed, or that has no bar after `openedAt`
     /// is returned UNCHANGED (still open — honesty: no new data ⇒ no close).
     static func markToMarket(_ open: [TradeRecord], history: StockSagePriceHistory,
@@ -108,7 +108,8 @@ enum StockSagePaperTrader {
                 mode: .timeStop(maxBars: maxHoldingBars))
             guard outcome != .openAtEnd else { return pos }   // neither level nor time-stop reached → hold (rebased fields persist)
             var closed = pos
-            closed.exitPrice = grossExit - costFactor * pos.entry   // long: net proceeds per share
+            closed.exitPrice = grossExit
+            closed.modeledPaperCostPerShare = costFactor * pos.entry
             closed.closedAt = dates[exitIdx]
             return closed
         }
@@ -296,11 +297,14 @@ final class StockSagePaperTradeStore: ObservableObject {
     /// production (`.shared`) uses `.standard` + the paper key, byte-identical to a fixed private init.
     init(defaults: UserDefaults = .standard, key: String = "stocksage.papertrades.v1") {
         self.defaults = defaults
+        let ownership = Result { try StockSageRecordWriter.require(defaults) }
         self.key = key
         load()
+        if case .failure(let error) = ownership, lastError == nil { lastError = error.localizedDescription }
     }
 
     var open: [TradeRecord] { trades.filter { $0.isOpen } }
+    var canWrite: Bool { hasLoadedRecords && (try? StockSageRecordWriter.require(defaults)) != nil }
     var closed: [TradeRecord] { trades.filter { !$0.isOpen } }
 
     // Reused analytics (labeled PAPER at the eventual UI) — the same honest machinery the real journal uses.
@@ -395,6 +399,8 @@ final class StockSagePaperTradeStore: ObservableObject {
     ///   • ids this process has never seen (another process's opens) are preserved, appended.
     /// Deleted IDs are filtered from both snapshots; clear/reset includes current disk IDs.
     private func save(removing: Set<UUID> = [], clearAll: Bool = false) -> Bool {
+        do { try StockSageRecordWriter.require(defaults) }
+        catch { lastError = error.localizedDescription; return false }
         guard let disk = try? deletions.read(TradeRecord.self) else {
             hasLoadedRecords = false
             scoreboard = nil
@@ -405,7 +411,7 @@ final class StockSagePaperTradeStore: ObservableObject {
         var ids = Set(records.map(\.id))
         for d in disk where !removed.contains(d.id) && !deletions.contains(d.id) {
             if let i = records.firstIndex(where: { $0.id == d.id }) {
-                if records[i].isOpen && !d.isOpen { records[i] = d }
+                if !d.isOpen { records[i] = d }
             } else if ids.insert(d.id).inserted {
                 records.append(d)
             }
@@ -427,7 +433,8 @@ final class StockSagePaperTradeStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(records) else {
             lastError = "Couldn't encode the paper history; the previous saved records were kept."; return false
         }
-        deletions.mark(removed)
+        do { try deletions.mark(removed) }
+        catch { lastError = error.localizedDescription; return false }
         defaults.set(data, forKey: key)
         trades = records
         hasLoadedRecords = true

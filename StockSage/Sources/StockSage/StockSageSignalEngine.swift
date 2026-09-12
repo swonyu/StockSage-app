@@ -66,7 +66,7 @@ enum StockSageSignalEngine {
     /// Convenience: derive a signal straight from a symbol's latest quote.
     /// Returns nil when the symbol has no quote to evaluate.
     static func generateSignal(for symbol: StockSageSymbol) -> StockSageSignal? {
-        guard let latest = symbol.latest else { return nil }
+        guard let latest = symbol.latest, symbol.sessionChangePercent != nil else { return nil }
         return generateSignal(symbol: symbol.symbol,
                               currentPrice: latest.price,
                               previousPrice: latest.previousPrice)

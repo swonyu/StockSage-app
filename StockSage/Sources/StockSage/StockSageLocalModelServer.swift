@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+import Synchronization
 
 // MARK: - StockSageLocalModelServer
 //
@@ -28,6 +29,81 @@ enum StockSageLocalModelServer {
     private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
 
     typealias NoRedirect = StockSageHTTP.NoRedirect
+
+    /// A caller deadline must not wait for a cancelled transport to cooperate. The worker
+    /// retains its own lifetime; one terminal result releases the waiter and ignores late data.
+    @MainActor final class Pending<Value: Sendable> {
+        private var result: Result<Value, Error>?
+        private var waiter: CheckedContinuation<Value, Error>?
+        private var worker: Task<Void, Never>?
+        private var timer: Task<Void, Never>?
+        nonisolated private let cancellation = Mutex((cancelled: false, worker: Task<Void, Never>?.none))
+
+        nonisolated private func cancelWorker() {
+            let task = cancellation.withLock { state in
+                state.cancelled = true
+                return state.worker
+            }
+            task?.cancel()
+        }
+
+        func run(deadline: ContinuousClock.Instant? = nil,
+                 now: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
+                 sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) },
+                 operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await withCheckedThrowingContinuation { continuation in
+                    if let result { continuation.resume(with: result); return }
+                    waiter = continuation
+                    worker = Task { @MainActor in
+                        do {
+                            try Task.checkCancellation()
+                            if let deadline, now() >= deadline { throw URLError(.timedOut) }
+                            let value = try await operation()
+                            try Task.checkCancellation()
+                            if let deadline, now() >= deadline { throw URLError(.timedOut) }
+                            finish(.success(value))
+                        } catch {
+                            if Task.isCancelled { finish(.failure(CancellationError())) }
+                            else if let deadline, now() >= deadline { finish(.failure(URLError(.timedOut))) }
+                            else { finish(.failure(error)) }
+                        }
+                    }
+                    let wasCancelled = cancellation.withLock { state in
+                        state.worker = worker
+                        return state.cancelled
+                    }
+                    if wasCancelled { worker?.cancel() }
+                    if let deadline {
+                        timer = Task { @MainActor in
+                            do {
+                                try await sleepUntil(deadline)
+                                try Task.checkCancellation()
+                                finish(.failure(URLError(.timedOut)))
+                            } catch { /* cancellation after another terminal result */ }
+                        }
+                    }
+                }
+            } onCancel: {
+                self.cancelWorker() // synchronous: no publication window before the MainActor hop
+                Task { @MainActor in self.cancel() }
+            }
+        }
+
+        func cancel() { cancelWorker(); finish(.failure(CancellationError())) }
+
+        private func finish(_ result: Result<Value, Error>) {
+            guard self.result == nil else { return }
+            self.result = result
+            let continuation = waiter
+            waiter = nil
+            timer?.cancel(); timer = nil
+            worker?.cancel(); worker = nil
+            cancellation.withLock { $0.worker = nil }
+            continuation?.resume(with: result)
+        }
+    }
 
     // MARK: Backend selection
 
@@ -253,9 +329,11 @@ enum StockSageLocalModelServer {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.5
         do {
-            let (data, response): (Data, URLResponse)
-            if let transport { (data, response) = try await transport(request) }
-            else { (data, response) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: 262_144) }
+            let (data, response) = try await Pending<(Data, URLResponse)>().run(
+                deadline: ContinuousClock.now.advanced(by: .milliseconds(2500))) {
+                    if let transport { return try await transport(request) }
+                    return try await StockSageHTTP.data(for: request, session: session, maximumBytes: 262_144)
+                }
             guard data.count <= 262_144, let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else { return nil }
             return try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -562,7 +640,9 @@ enum StockSageLocalModelServer {
                                  timeout: TimeInterval = 90,
                                  stillValid: @MainActor () -> Bool = { true },
                                  externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
-                                 transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> CompletionResult {
+                                 transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
+                                 clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
+                                 sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }) async -> CompletionResult {
         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
             return .failure(failure)
         }
@@ -572,6 +652,9 @@ enum StockSageLocalModelServer {
         if !promptFits(system: system, user: user, outputTokens: maxTokens, contextTokens: contextTokens) {
             return .failure(.init(diagnostic: .init(category: .contextBudget)))
         }
+        guard timeout.isFinite, timeout > 0 else {
+            return .failure(.init(diagnostic: .init(category: .invalidConfig)))
+        }
         let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
                                   maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout)
         let started = DispatchTime.now()
@@ -580,12 +663,20 @@ enum StockSageLocalModelServer {
         }
         // Counted for the whole transport, and released on EVERY exit path including a thrown
         // cancellation, so an abandoned request can never inflate the observed concurrency.
-        let concurrent = await inFlight.enter()
-        defer { Task { await inFlight.leave() } }
+        var concurrent = 0
+        let deadline = clock().advanced(by: .seconds(timeout))
         do {
-            let (data, response): (Data, URLResponse)
-            if let transport { (data, response) = try await transport(request) }
-            else { (data, response) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumResponseBytes) }
+            let (data, response) = try await Pending<(Data, URLResponse)>().run(
+                deadline: deadline, now: clock, sleepUntil: sleepUntil) {
+                    concurrent = await inFlight.enter()
+                    let result: Result<(Data, URLResponse), Error>
+                    do {
+                        if let transport { result = .success(try await transport(request)) }
+                        else { result = .success(try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumResponseBytes)) }
+                    } catch { result = .failure(error) }
+                    await inFlight.leave()
+                    return try result.get()
+                }
             if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
                 return .failure(failure)
             }

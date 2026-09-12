@@ -11,22 +11,87 @@ struct StockSageMassiveTests {
 
     typealias M = StockSageMassive
 
+    @Test func inaccessibleStorageDoesNotSelectAnEnvironmentCredential() throws {
+        typealias C = StockSageMassiveCredential
+        let suite = "Massive.locked.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var writes = 0
+        let storage = C.Storage(read: { throw C.Failure.unavailable }, write: { _ in writes += 1 })
+        for legacy in [nil, "synthetic-legacy"] as [String?] {
+            defaults.set(legacy, forKey: M.keyDefaultsKey)
+            #expect(throws: C.Failure.self) {
+                try C.resolve(defaults: defaults, storage: storage, environment: "synthetic-environment")
+            }
+            #expect(defaults.string(forKey: M.keyDefaultsKey) == legacy && writes == 0)
+        }
+    }
+
+    @Test func failedVerificationAfterEffectiveWritesStillInvalidatesEvidence() throws {
+        typealias C = StockSageMassiveCredential
+        let suite = "Massive.partial-write.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var value: String? = "synthetic-A"
+        var failRead = false
+        let storage = C.Storage(read: {
+            if failRead { failRead = false; throw C.Failure.unavailable }
+            return value
+        }, write: { value = $0; failRead = true })
+        defaults.set("synthetic-legacy", forKey: M.keyDefaultsKey)
+        let before = M.credentialRevision(defaults)
+        #expect(throws: C.Failure.self) { try M.setAPIKey("synthetic-B", defaults: defaults, storage: storage) }
+        let changed = M.credentialRevision(defaults)
+        #expect(changed != before && value == "synthetic-B")
+        #expect(throws: C.Failure.self) { try M.setAPIKey("synthetic-A", defaults: defaults, storage: storage) }
+        #expect(M.credentialRevision(defaults) != before && M.credentialRevision(defaults) != changed)
+        #expect(value == "synthetic-A" && defaults.string(forKey: M.keyDefaultsKey) == "synthetic-legacy")
+    }
+
     @Test func credentialRoundTripDoesNotReviveOldEvidence() throws {
         let suite = "StockSageMassiveTests.credentials." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
+        var saved: String?
+        let storage = StockSageMassiveCredential.Storage(read: { saved }, write: { saved = $0 })
         #expect(M.credentialRevision(defaults) == nil)
-        #expect(M.setAPIKey("synthetic-A", defaults: defaults))
+        #expect(try M.setAPIKey("synthetic-A", defaults: defaults, storage: storage))
         let first = M.credentialRevision(defaults)
         #expect(first != nil)
-        #expect(!M.setAPIKey("synthetic-A", defaults: defaults))
+        #expect(try !M.setAPIKey("synthetic-A", defaults: defaults, storage: storage))
         #expect(M.credentialRevision(defaults) == first)
-        #expect(M.setAPIKey("synthetic-B", defaults: defaults))
+        #expect(try M.setAPIKey("synthetic-B", defaults: defaults, storage: storage))
         let second = M.credentialRevision(defaults)
         #expect(second != first)
-        #expect(M.setAPIKey("synthetic-A", defaults: defaults))
+        #expect(try M.setAPIKey("synthetic-A", defaults: defaults, storage: storage))
         #expect(M.credentialRevision(defaults) != first && M.credentialRevision(defaults) != second)
-        #expect(defaults.string(forKey: M.keyDefaultsKey) == "synthetic-A")
+        #expect(defaults.string(forKey: M.keyDefaultsKey) == nil && saved == "synthetic-A")
+        #expect(try M.setAPIKey("", defaults: defaults, storage: storage))
+        #expect(saved == nil && defaults.string(forKey: M.keyDefaultsKey) == nil)
+    }
+
+    @Test func legacyCredentialMigrationRequiresVerifiedSecureStorage() throws {
+        typealias C = StockSageMassiveCredential
+        let suite = "StockSageMassiveTests.migration." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for mode in ["success", "existing", "failed-write", "failed-readback"] {
+            defaults.set("synthetic-legacy", forKey: M.keyDefaultsKey)
+            var saved: String? = mode == "existing" ? "synthetic-secure" : nil
+            let storage = C.Storage(read: { saved }, write: { value in
+                if mode == "failed-write" { throw C.Failure.unavailable }
+                if mode != "failed-readback" { saved = value }
+            })
+            do {
+                try C.migrate(defaults: defaults, storage: storage)
+                #expect(mode == "success" || mode == "existing")
+                #expect(defaults.string(forKey: M.keyDefaultsKey) == nil)
+                #expect(saved == (mode == "existing" ? "synthetic-secure" : "synthetic-legacy"))
+            } catch {
+                #expect(mode == "failed-write" || mode == "failed-readback")
+                #expect(defaults.string(forKey: M.keyDefaultsKey) == "synthetic-legacy")
+            }
+        }
     }
 
     // MARK: Coverage / routing
@@ -233,28 +298,11 @@ struct StockSageMassiveTests {
 
     @Test("apiKey: Settings field (trimmed) wins; blank/whitespace falls back to the MASSIVE_API_KEY env var; never printed")
     func apiKeyResolution() {
-        ToolPolicyTestLock.lock.lock()
-        defer { ToolPolicyTestLock.lock.unlock() }
-        let d = UserDefaults.standard
-        let priorArguments = d.volatileDomain(forName: UserDefaults.argumentDomain)
-        defer { d.setVolatileDomain(priorArguments, forName: UserDefaults.argumentDomain) }
         #expect(M.keyDefaultsKey == "stocksage.massive." + "key")
         #expect(M.keyEnvName == "MASSIVE_API_KEY")
-        // The env fallback on THIS machine, trimmed — compared, never printed.
-        let envFallback = ProcessInfo.processInfo.environment[M.keyEnvName]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        ToolPolicyTestLock.set("", forKey: M.keyDefaultsKey)
-        let blankUsesFallback = M.apiKey == envFallback
-        #expect(blankUsesFallback)
-        #expect(M.isConfigured == !envFallback.isEmpty)
-        ToolPolicyTestLock.set("  settings-key-123  ", forKey: M.keyDefaultsKey)
-        let settingsOverrideIsTrimmed = M.apiKey == "settings-key-123"
-        #expect(settingsOverrideIsTrimmed)
-        #expect(M.isConfigured)
-        ToolPolicyTestLock.set("   ", forKey: M.keyDefaultsKey)
-        let whitespaceUsesFallback = M.apiKey == envFallback
-        #expect(whitespaceUsesFallback)
+        #expect(M.resolvedKey(saved: nil, environment: nil).isEmpty)
+        #expect(M.resolvedKey(saved: "  ", environment: " synthetic-env ") == "synthetic-env")
+        #expect(M.resolvedKey(saved: " synthetic-saved ", environment: "synthetic-env") == "synthetic-saved")
     }
 
     @Test("an empty symbol list never builds a request (fetchSnapshots is a no-op without work)")

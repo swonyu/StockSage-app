@@ -7,10 +7,15 @@ import Foundation
 // Notes are escaped correctly so a comma or quote in a note can't corrupt the file.
 
 enum StockSageJournalCSV {
+    enum ExportError: LocalizedError {
+        case modeledPaperRecord
+        var errorDescription: String? { "CSV cannot preserve modeled paper costs. Use a lossless JSON backup; do not import paper fills into the owner journal." }
+    }
     nonisolated static let header =
         "symbol,side,entry,stop,target,shares,openedAt,exitPrice,closedAt,realizedR,note"
 
-    nonisolated static func csv(_ trades: [TradeRecord]) -> String {
+    nonisolated static func csv(_ trades: [TradeRecord]) throws -> String {
+        guard trades.allSatisfy({ $0.modeledPaperCostPerShare == nil }) else { throw ExportError.modeledPaperRecord }
         let iso = ISO8601DateFormatter()
         var rows = [header]
         for t in trades {
