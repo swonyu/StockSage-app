@@ -41,8 +41,17 @@ struct StockSageNotificationBudget: Sendable {
 
     private(set) var perSymbol: [String: AlertRecord] = [:]
     private(set) var recentAlerts: [Date] = []
-    /// How many pushes the budget has withheld since the last one it allowed.
+    /// How many pushes the budget has withheld since the last one it allowed. Counts ATTEMPTS and
+    /// is pinned as such at StockSageNotificationBudgetTests:104 — deliberately unchanged.
     private(set) var suppressedSinceLastAllowed = 0
+    /// DISTINCT `SYMBOL|reason` pairs withheld since the last delivered push. The attempt counter
+    /// above is the wrong number to SHOW: the monitor re-evaluates every 180s, so one symbol
+    /// sitting inside its 1800s cooldown adds ~20 to it per hour without a single new event. That
+    /// inflation gets worse under D1, which deliberately stops latching cap-refused signals. This
+    /// is what the Signal-alerts panel renders.
+    private(set) var suppressedKeys: Set<String> = []
+    /// Held-back alerts the owner would recognise as distinct — see `suppressedKeys`.
+    var distinctSuppressedCount: Int { suppressedKeys.count }
 
     // MARK: - Persistence
     //
@@ -108,15 +117,39 @@ struct StockSageNotificationBudget: Sendable {
 
     // MARK: - Stateful use
 
-    /// Ask permission for one push. Mutates only the suppression counter on refusal.
-    mutating func allow(symbol: String, price: Double, now: Date = Date()) -> Bool {
+    /// Ask permission for one push, returning WHY it was refused (nil = allowed). Callers that
+    /// must tell a GLOBAL capacity refusal apart from a per-symbol brake use this; `allow` is the
+    /// Bool-only wrapper every existing caller keeps using.
+    mutating func refuse(symbol: String, price: Double, now: Date = Date()) -> Refusal? {
         recentAlerts.removeAll { now.timeIntervalSince($0) > 3600 }
         let key = symbol.uppercased()
         let refusal = Self.refusal(last: perSymbol[key],
                                    alertsInLastHour: Self.countWithinHour(recentAlerts, now: now),
                                    price: price, now: now)
-        if refusal != nil { suppressedSinceLastAllowed += 1; return false }
-        return true
+        if let refusal {
+            suppressedSinceLastAllowed += 1
+            suppressedKeys.insert("\(key)|\(refusal.rawValue)")
+        }
+        return refusal
+    }
+
+    /// Ask permission for one push. Mutates only the suppression counters on refusal.
+    mutating func allow(symbol: String, price: Double, now: Date = Date()) -> Bool {
+        refuse(symbol: symbol, price: price, now: now) == nil
+    }
+
+    /// D1 (owner-approved 2026-09-11). Whether a refusal should advance the caller's dedupe /
+    /// crossing baseline.
+    ///
+    /// A PER-SYMBOL brake (cooldown, hysteresis) is a judgement about this symbol: advance, or the
+    /// same alert re-queues every cycle and floods the moment the cooldown expires — the spam this
+    /// budget exists to stop. The GLOBAL hourly cap is a capacity limit and says nothing about the
+    /// symbol. Advancing on it moved `lastIdeaPrice` to the far side of the stop, so
+    /// `StockSageAlertDecision.evaluate` could never see that breach again: the crossing was not
+    /// delayed, it was destroyed, and the owner was never told his stop was hit. Mirrors
+    /// `checkPriceAlerts`, which already leaves a user-set alert ARMED when the cap is exhausted.
+    nonisolated static func shouldAdvanceBaseline(after refusal: Refusal?) -> Bool {
+        refusal != .hourlyCapReached
     }
 
     /// Record a push that was actually ACCEPTED by the system. Never call this for a push that
@@ -125,6 +158,7 @@ struct StockSageNotificationBudget: Sendable {
         perSymbol[symbol.uppercased()] = AlertRecord(at: now, price: price)
         recentAlerts.append(now)
         suppressedSinceLastAllowed = 0
+        suppressedKeys.removeAll()
     }
 
     /// Wipe state for a symbol (e.g. the owner re-armed a price alert by hand — an explicit

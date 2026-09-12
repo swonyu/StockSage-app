@@ -9,6 +9,42 @@ import SwiftUI
 // bypasses the app's gates: no order placement, no sizing mutation, no settings writes.
 // Honesty: a sample/cached board is disclosed in the dialog, never spoken as live.
 
+/// Spoken/glanceable provenance for the OFF-BOARD surfaces (Shortcuts + Spotlight dialog, menu
+/// bar). Same precedence the idea card's `MarketsView.sourceTagLabel` uses — sample beats cached
+/// beats age — and the same thresholds (60s / 3600s / 86400s), so an answer spoken about an idea
+/// can never contradict the tag rendered beside it. Words, not the card's compact "3h": these
+/// strings are read aloud. Same honesty rule as everywhere else — an unknown, future or
+/// non-finite timestamp renders NOTHING, never a false "now", and never a refusal to answer.
+enum StockSageSpokenProvenance {
+
+    /// Age in the words a person hears, or nil when it cannot be judged. nil is deliberate:
+    /// `priceAsOf` is legitimately absent on older/test-built ideas, and a missing clock must
+    /// cost the caveat, not the answer.
+    nonisolated static func spokenAge(from asOf: Date?, now: Date) -> String? {
+        guard let asOf else { return nil }
+        let secs = now.timeIntervalSince(asOf)
+        guard secs.isFinite, secs >= 0, secs < Double(Int.max) else { return nil }
+        if secs < 60 { return "less than a minute old" }
+        if secs < 3_600 { return plural(Int(secs / 60), "minute") }
+        if secs < 86_400 { return plural(Int(secs / 3_600), "hour") }
+        return plural(Int(secs / 86_400), "day")
+    }
+
+    /// The parenthetical the intent appends to its answer. The sample and cached wordings are the
+    /// shipped strings, byte-identical; only the third branch is new.
+    nonisolated static func ageClause(isSampleData: Bool, loadedFromCache: Bool,
+                                      asOf: Date?, now: Date) -> String {
+        if isSampleData { return " (SAMPLE data — not live prices)" }
+        if loadedFromCache { return " (last-session prices — not live)" }
+        guard let age = spokenAge(from: asOf, now: now) else { return "" }
+        return " (prices \(age))"
+    }
+
+    private nonisolated static func plural(_ n: Int, _ noun: String) -> String {
+        "\(n) \(noun)\(n == 1 ? "" : "s") old"
+    }
+}
+
 struct BestOpportunityIntent: AppIntent {
     static let title: LocalizedStringResource = "Best Opportunity Now"
     static let description = IntentDescription(
@@ -20,21 +56,35 @@ struct BestOpportunityIntent: AppIntent {
         guard !store.ideas.isEmpty else {
             return .result(dialog: "No ideas on the board yet — open StockSage and run Find ideas.")
         }
-        var provenance = ""
-        if store.isSampleData { provenance = " (SAMPLE data — not live prices)" }
-        else if store.loadedFromCache { provenance = " (last-session prices — not live)" }
+        // A board refreshed on Friday and asked on Sunday is NEITHER sample NOR cached
+        // (`loadedFromCache` clears on the next successful refresh), so the two flags alone let a
+        // days-old answer be spoken as if it were current.
+        //
+        // CLOSEABLE clock, not `quoteAsOf`: that one is the max across ALL symbols
+        // (StockSageStore.swift:216-217 says so explicitly), so a single always-on crypto ticker
+        // keeps it ~now and would make a two-day-stale equity board speak "prices less than a
+        // minute old". MarketsView.swift:818 — the shipped banner — uses this same expression.
+        let now = Date()
+        let boardProvenance = StockSageSpokenProvenance.ageClause(
+            isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
+            asOf: store.closeableQuoteAsOf ?? store.quoteAsOf, now: now)
 
         guard let best = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime,
                                                                 earnings: store.earnings,
                                                                 liquidity: store.liquidity,
                                                                 calibration: store.convictionCalibration) else {
-            return .result(dialog: "No positive-EV buy candidate right now\(provenance).")
+            return .result(dialog: "No positive-EV buy candidate right now\(boardProvenance).")
         }
         let idea = best.idea
         let name = StockSageTadawulNames.name(for: idea.symbol).map { " (\($0.english))" } ?? ""
         let evText = String(format: "estimated EV %+.2fR gross", best.ev.evR)
+        // This answer QUOTES one idea, so it is dated by that idea's OWN clock — matching the tag
+        // rendered beside it on the card — not by the board-wide one.
+        let ideaProvenance = StockSageSpokenProvenance.ageClause(
+            isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
+            asOf: idea.priceAsOf, now: now)
         return .result(dialog: IntentDialog(stringLiteral:
-            "\(idea.symbol)\(name): \(idea.advice.action.rawValue), \(evText)\(provenance). "
+            "\(idea.symbol)\(name): \(idea.advice.action.rawValue), \(evText)\(ideaProvenance). "
             + "An estimate from conviction, not a forecast — details and sizing in StockSage."))
     }
 }

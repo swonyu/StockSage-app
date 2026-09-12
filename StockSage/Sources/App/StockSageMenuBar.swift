@@ -33,10 +33,17 @@ struct StockSageMenuBarContent: View {
 
     var body: some View {
         // Provenance first — never let a stale/sample board read as live in the menu bar.
-        if store.isSampleData {
-            Text("Sample data — open the app and run a scan")
-        } else if store.loadedFromCache {
-            Text("Last-session prices — NOT live")
+        // Same helper, same precedence and thresholds as the Shortcuts dialog and the idea card's
+        // source tag, so the three surfaces cannot disagree about one board. The third branch
+        // (plain age) is what was missing: a board refreshed on Friday and glanced at on Sunday is
+        // neither sample nor cached, and used to show three tickers with no date at all.
+        // CLOSEABLE clock — an always-on crypto ticker must not mask a days-old equity close.
+        let provenance = StockSageSpokenProvenance.ageClause(
+            isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
+            asOf: store.closeableQuoteAsOf ?? store.quoteAsOf, now: Date())
+        if !provenance.isEmpty {
+            // Trim the leading space and the wrapping parens the spoken form carries.
+            Text(provenance.trimmingCharacters(in: CharacterSet(charactersIn: " ()")))
         }
 
         if store.ideas.isEmpty {

@@ -5590,6 +5590,21 @@ struct MarketsView: View {
                 PlatformClipboard.copy(fullPlanText(for: idea))
     }
 
+    /// The Signal-alerts panel's "held back" sentence, or nil when nothing was withheld.
+    /// Pure + `nonisolated` so the copy is pinned by test without a live monitor or a view.
+    /// Names ALL THREE brakes and interpolates their constants: the count also covers per-symbol
+    /// cooldown and hysteresis refusals, so blaming the hourly cap alone would be a false
+    /// statement, and hardcoding "8/hour" would silently rot if the constant moves.
+    nonisolated static func suppressedPushSentence(held: Int) -> String? {
+        guard held > 0 else { return nil }
+        let noun = held == 1 ? "push alert was" : "push alerts were"
+        let cooldownMinutes = Int((StockSageNotificationBudget.symbolCooldown / 60).rounded())
+        let movePercent = String(format: "%.1f", StockSageNotificationBudget.hysteresisFraction * 100)
+        return "\(held) \(noun) held back since the last one delivered — the hourly cap "
+            + "(\(StockSageNotificationBudget.hourlyCap)/hour), the \(cooldownMinutes)-minute "
+            + "per-symbol cooldown, or a move smaller than \(movePercent)%."
+    }
+
     // Signal alerts — opt-in event log of flips / stop / target crossings.
     private var alertsPanel: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
@@ -5615,7 +5630,10 @@ struct MarketsView: View {
                 Text("Off — turn on, then refresh ideas to start detecting events. Events fire on a crossing, so they don't repeat every refresh.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else if store.alerts.isEmpty {
-                Text("On — no events yet. They'll appear here when an idea flips or a stop/target is crossed on a future refresh.")
+                // "no events yet" must not stand unqualified beside a non-zero held-back count.
+                Text(monitor.suppressedAlertCount > 0
+                     ? "On — no events in this log yet. They'll appear here when an idea flips or a stop/target is crossed on a future refresh."
+                     : "On — no events yet. They'll appear here when an idea flips or a stop/target is crossed on a future refresh.")
                     .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(Array(store.alerts.prefix(12).enumerated()), id: \.offset) { _, alert in
@@ -5635,6 +5653,15 @@ struct MarketsView: View {
                 Button { store.clearAlerts() } label: {
                     Text("Clear").font(.system(size: mvFont11, weight: .semibold)).foregroundStyle(.secondary)
                 }.buttonStyle(.plain).touchHitArea()
+            }
+            // Honesty floor: the notification budget silently dropped these. Deliberately NOT
+            // gated on `store.alertsEnabled` — that toggle controls this in-app event log
+            // (StockSageAlerts.detect), not the monitor's pushes, so hiding withheld pushes
+            // behind it would be the same silent drop in a new place.
+            if let heldBack = MarketsView.suppressedPushSentence(held: monitor.suppressedAlertCount) {
+                Text(heldBack)
+                    .font(.caption2).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(DS.Space.sm)

@@ -51,9 +51,36 @@ final class StockSageMonitor: ObservableObject {
     /// in-memory-only budget is wiped by every OS app kill, which is exactly when the cold-start
     /// alert burst happens.
     private var budget: StockSageNotificationBudget
-    /// Pushes the budget withheld since the last delivered one — surfaced so suppression is
-    /// visible to the owner rather than silent.
-    var suppressedAlertCount: Int { budget.suppressedSinceLastAllowed }
+    /// Distinct (symbol x reason) pushes the budget withheld since the last delivered one —
+    /// rendered in the Signal-alerts panel so suppression is visible rather than silent.
+    /// STORED, not computed: `budget` is not `@Published`, so a computed property over it would
+    /// never fire `objectWillChange` and the panel would paint once and never update again.
+    @Published private(set) var suppressedAlertCount = 0
+
+    /// The ONLY permitted way to ask the budget for permission — it keeps the published count in
+    /// step with every refusal, and returns the REASON so callers can apply D1's baseline rule.
+    /// Calling `budget.allow`/`budget.refuse` directly reintroduces the silent drop.
+    private func budgetRefusal(symbol: String, price: Double) -> StockSageNotificationBudget.Refusal? {
+        let refusal = budget.refuse(symbol: symbol, price: price)
+        publishSuppressionCount()
+        return refusal
+    }
+
+    /// The ONLY permitted way to record a DELIVERED push: persists the brakes and clears the
+    /// published held-back count in one place.
+    private func budgetRecord(symbol: String, price: Double) {
+        budget.record(symbol: symbol, price: price)
+        budget.save(to: defaults)
+        publishSuppressionCount()
+    }
+
+    private func publishSuppressionCount() {
+        let n = budget.distinctSuppressedCount
+        // Write only on change: `@Published` fires objectWillChange on every assignment and
+        // MarketsView observes this object, so an unconditional write would re-render the whole
+        // Markets tab on every 180s cycle for no visible reason.
+        if suppressedAlertCount != n { suppressedAlertCount = n }
+    }
     /// Rolling-hour timestamps, so the price-alert path can honour the GLOBAL cap while staying
     /// exempt from the per-symbol hysteresis/cooldown a one-shot alert should not face.
     private var budgetRecentAlerts: [Date] { budget.recentAlerts }
@@ -216,9 +243,16 @@ final class StockSageMonitor: ObservableObject {
                                                         isFresh: fresh) {
                 // Budget gate (2026-07-28): hysteresis + per-symbol cooldown + rolling hourly cap.
                 let alertPrice = symbol.latest?.price ?? 0
-                if budget.allow(symbol: signal.symbol, price: alertPrice) {
+                let refusal = budgetRefusal(symbol: signal.symbol, price: alertPrice)
+                if refusal == nil {
                     delivered = await sendAlert(signal: signal, market: symbol.market)
-                    if delivered { budget.record(symbol: signal.symbol, price: alertPrice); budget.save(to: defaults) }
+                    if delivered { budgetRecord(symbol: signal.symbol, price: alertPrice) }
+                } else if !StockSageNotificationBudget.shouldAdvanceBaseline(after: refusal) {
+                    // D1: the global cap is capacity, not a verdict on this symbol. Latching the
+                    // dedupe here destroyed the signal permanently — an unflipped Strong Buy never
+                    // re-queues — so a crash-day alert was lost, not delayed. The cap still bounds
+                    // the rate to 8/hour and the per-symbol brakes below still latch.
+                    delivered = false
                 }
                 // A budget REFUSAL is not a delivery failure: `delivered` stays true so the dedup
                 // state still advances. Otherwise the same alert re-queues every cycle and floods
@@ -311,9 +345,12 @@ final class StockSageMonitor: ObservableObject {
                                                     lastAlerted: lastAlerted[signal.symbol],
                                                     isFresh: fresh) {
                 let px = q.price
-                if budget.allow(symbol: signal.symbol, price: px) {
+                let refusal = budgetRefusal(symbol: signal.symbol, price: px)
+                if refusal == nil {
                     delivered = await sendAlert(signal: signal, market: sym.market)
-                    if delivered { budget.record(symbol: signal.symbol, price: px); budget.save(to: defaults) }
+                    if delivered { budgetRecord(symbol: signal.symbol, price: px) }
+                } else if !StockSageNotificationBudget.shouldAdvanceBaseline(after: refusal) {
+                    delivered = false   // D1, same rule as runCycle
                 }
             }
             // Match runCycle: failed enqueue keeps the previous recommendation retryable;
@@ -400,7 +437,7 @@ final class StockSageMonitor: ObservableObject {
                     < StockSageNotificationBudget.hourlyCap else { break }
             if await enqueue(a, px) {
                 delivered.append(a.id)
-                budget.record(symbol: a.symbol, price: px); budget.save(to: defaults)
+                budgetRecord(symbol: a.symbol, price: px)
             }
         }
         if !delivered.isEmpty { markTriggered(delivered) }
@@ -449,14 +486,19 @@ final class StockSageMonitor: ObservableObject {
             ), Self.isPushableIdeaAlert(alert) else { lastIdeaPrice[idea.symbol] = price; continue }
             // Review 2026-07-27: advance the crossing baseline only when the push was ACCEPTED —
             // a failed push keeps the prior baseline so the same crossing re-fires next cycle.
-            guard budget.allow(symbol: idea.symbol, price: price) else {
-                // Refused by the budget — advance the baseline anyway so this crossing is not
-                // re-detected and queued on every subsequent cycle.
-                lastIdeaPrice[idea.symbol] = price; continue
+            if let refusal = budgetRefusal(symbol: idea.symbol, price: price) {
+                // A PER-SYMBOL brake advances the baseline so this crossing is not re-detected and
+                // queued every cycle. D1: a global-cap refusal must NOT — advancing moves
+                // `priorPrice` to the far side of the stop, so StockSageAlertDecision.evaluate can
+                // never see the breach again and the owner is never told his stop was hit.
+                if StockSageNotificationBudget.shouldAdvanceBaseline(after: refusal) {
+                    lastIdeaPrice[idea.symbol] = price
+                }
+                continue
             }
             if await sendIdeaAlert(alert, held: holdingBySymbol[idea.symbol.uppercased()]) {
                 lastIdeaPrice[idea.symbol] = price
-                budget.record(symbol: idea.symbol, price: price); budget.save(to: defaults)
+                budgetRecord(symbol: idea.symbol, price: price)
             }
         }
     }
