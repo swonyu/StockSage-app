@@ -14,6 +14,11 @@ struct MarketsTodayActionsCard: View {
     /// True when the on-screen prices are the seed/sample set, not live quotes — carried into
     /// the copied plan (same honesty rule as `StockSageTodayPlan.build`'s `isSample`).
     let isSampleData: Bool
+    /// True when the board was restored from the last-good disk cache rather than a live fetch
+    /// (`StockSageStore.loadedFromCache`) — the SAME global truth the top `cachedBanner` and the
+    /// idea card's source tag key on, so a row here can never contradict them. Defaulted false
+    /// so any call site unaware of this parameter keeps compiling.
+    var loadedFromCache: Bool = false
     /// Called with the tapped row's symbol; the caller resolves it to a `StockSageIdea` (e.g.
     /// `store.ideas.first { $0.symbol == symbol }`) and opens its detail sheet.
     let onSelectSymbol: (String) -> Void
@@ -110,7 +115,7 @@ struct MarketsTodayActionsCard: View {
                         Label("Copy all \(shownPlans.count)", systemImage: "doc.on.doc").font(.system(size: font9, weight: .medium))
                     }
                     .buttonStyle(.plain).foregroundStyle(DS.Palette.accent).disabled(shownPlans.isEmpty)
-                    .help("Copy the ranked plan — entry/stop/target, size, and each gate verdict — to the clipboard. Estimates, not advice.")
+                    .help("Copy the ranked plan — entry/stop/target, size, and each gate verdict — to the clipboard. A row whose price is sample data, undated, future-dated, or more than 60 seconds old exports as \"Draft only — refresh price\" with NO order line — a wider check than the prior-day cue shown on the row itself. Estimates, not advice.")
                 }
                 if let weekly = weeklyExecutedVsBlockedMetric {
                     Text(weekly)
@@ -318,9 +323,19 @@ struct MarketsTodayActionsCard: View {
     @ViewBuilder
     private func rowOpenButton(_ rank: Int, _ plan: TodayActionPlan) -> some View {
         let blocked = plan.gate?.decision == .blocked
-        // D1 (rotation-3 triage): same utcDayKey staleness check `copyAllText` already gates
-        // its "⚠ PRICE NOT LIVE" line on — nil priceAsOf ⇒ unknown, renders nothing.
+        // D1 (rotation-3 triage); comment corrected 2026-09-12 — it claimed this was the same
+        // check `copyAllText` gates on, and it is not. THIS is the row's own prior-UTC-day cue
+        // (MarketsView.staleAsOfPrice): nil priceAsOf ⇒ unknown, renders nothing. The EXPORT
+        // gates on StockSageTradePlan.draftOnlyStatus instead — sample, undated, future-dated,
+        // non-finite, or older than 60 seconds — which is strictly wider. So a same-UTC-day price
+        // 61s old exports "Draft only" while this row shows no stale cue.
         let staleAsOf = MarketsView.staleAsOfPrice(plan.priceAsOf, now: Date())
+        // The SAME provenance call the idea card makes, so this row can never name a different
+        // source or age for the same symbol. nil ⇒ unknown, renders nothing.
+        let sourceTag = MarketsView.sourceTagLabel(isSampleData: isSampleData,
+                                                   loadedFromCache: loadedFromCache,
+                                                   priceAsOf: plan.priceAsOf, now: Date(),
+                                                   priceSource: plan.priceSource)
         Button { onSelectSymbol(plan.symbol) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: DS.Space.sm) {
@@ -342,6 +357,12 @@ struct MarketsTodayActionsCard: View {
                     }
                     if plan.isLowConviction {
                         Text("low conviction").font(.system(size: font8)).foregroundStyle(DS.Palette.warningSoft)
+                    }
+                    // Provenance, bare like the sibling chips. accessibilityHidden: the Button's
+                    // explicit accessibilityLabel below replaces every child label and speaks it.
+                    if let sourceTag {
+                        Text(sourceTag).font(.system(size: font8)).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
                     }
                     Spacer(minLength: 0)
                     gateBadge(plan.gate)
@@ -451,6 +472,9 @@ struct MarketsTodayActionsCard: View {
             if let staleAsOf {
                 label += ". Price as of \(staleAsOf.formatted(.relative(presentation: .named))) — not live; re-price before ordering"
             }
+            // The explicit label replaces every child label, so the visible provenance tag would
+            // otherwise be silent to VoiceOver. Same " (src)" shape the ideas board's a11y uses.
+            if let sourceTag { label += " (\(sourceTag))" }
             // F04-parity: nil gate ⇒ risk % wasn't supplied — mirror the sheet chip's a11y wording
             // ("Pre-trade gate: risk percent not set", MarketsView.swift ~5993) instead of forcing
             // a verdict sentence with no verdict to report.

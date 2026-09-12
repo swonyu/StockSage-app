@@ -141,16 +141,61 @@ struct StockSageSlippageTests {
         #expect(abs((evenResult?.medianBps ?? .nan) - 25.0) < 1e-6)  // {10,20,30,40} => (20+30)/2 = 25
     }
 
+    // DELIBERATE SPEC CHANGE (2026-09-12). This test used to pin the DEFECT: it compared a
+    // median measured from planned-vs-fill PRICES against half a FEE-INCLUSIVE round trip. A
+    // commission never moves a fill price, so the assumed side was charging the owner's fills for
+    // a leg no fill price can contain — flattering them on every fee-carrying book. BTC's assumed
+    // per-leg therefore drops 35.0 -> 25.0 and the 2-leg median 20.75 -> 15.75.
+    //
+    // Re-derived BY HAND from StockSageNetEdge.defaultCosts's ratified table (spec-fidelity: read
+    // from the table, never from the code under test's output):
+    //   US large-cap (AAPL): spread 8 + slippage 5 = 13 price-visible => 6.5/leg; takerFee 0 => 0.0 fee/leg.
+    //   crypto (BTC-USD):    spread 30 + slippage 20 = 50 price-visible => 25.0/leg; takerFee 20 => 10.0 fee/leg.
+    //   Tadawul (2222.SR):   spread 20 + slippage 10 = 30 price-visible => 15.0/leg; takerFee 30 => 15.0 fee/leg.
+    // The two halves still SUM to the old fee-inclusive figure (25.0 + 10.0 = 35.0), so the split
+    // is lossless — nothing was dropped, it was separated.
     @Test func assumedComparisonHandDerivedAAPLAndBTC() {
-        // Assumed round-trip bps pinned against StockSageNetEdge.defaultCosts's ratified table
-        // (spec-fidelity — read from the spec, not the code under test's output):
-        //   US large-cap (AAPL): spread 8 + slippage 5 = 13 bps round-trip => 6.5 bps/leg.
-        //   crypto (-USD, BTC-USD): spread 30 + slippage 20 + takerFee 20 = 70 bps round-trip => 35.0 bps/leg.
         let aapl = trade(symbol: "AAPL", plannedEntry: 100, entryFill: 100.10)
         let btc = trade(symbol: "BTC-USD", plannedEntry: 100, entryFill: 100.20)
         let m = StockSageJournal.measuredSlippage([aapl, btc])
         #expect(m?.legs == 2)
-        #expect(abs((m?.assumedMedianBpsPerLeg ?? .nan) - 20.75) < 1e-9)   // (6.5 + 35.0) / 2
+        #expect(abs((m?.assumedMedianBpsPerLeg ?? .nan) - 15.75) < 1e-9)      // (6.5 + 25.0) / 2
+        #expect(abs((m?.assumedFeeMedianBpsPerLeg ?? .nan) - 5.0) < 1e-9)     // (0.0 + 10.0) / 2
+        // Lossless: price-visible + fee reproduces the pre-split figure exactly.
+        #expect(abs(((m?.assumedMedianBpsPerLeg ?? 0) + (m?.assumedFeeMedianBpsPerLeg ?? 0)) - 20.75) < 1e-9)
+    }
+
+    // The owner's book is Saudi-first, and .SR carries the largest fee leg in the table — so this
+    // is the case where the old figure was most wrong: 30.0 assumed became 15.0 price-visible.
+    @Test func aSaudiLegSplitsItsCostInHalfBetweenPriceAndFees() {
+        let sr = trade(symbol: "2222.SR", plannedEntry: 100, entryFill: 100.05)
+        let one = StockSageJournal.measuredSlippage([sr])
+        #expect(one?.legs == 1)
+        #expect(abs((one?.assumedMedianBpsPerLeg ?? .nan) - 15.0) < 1e-9)
+        #expect(abs((one?.assumedFeeMedianBpsPerLeg ?? .nan) - 15.0) < 1e-9)
+        #expect(abs(((one?.assumedMedianBpsPerLeg ?? 0) + (one?.assumedFeeMedianBpsPerLeg ?? 0)) - 30.0) < 1e-9)
+
+        // Three legs, odd count: sorted {6.5, 15.0, 25.0} => 15.0; fees {0.0, 10.0, 15.0} => 10.0.
+        let three = StockSageJournal.measuredSlippage([
+            trade(symbol: "AAPL", plannedEntry: 100, entryFill: 100.10),
+            trade(symbol: "BTC-USD", plannedEntry: 100, entryFill: 100.20),
+            sr])
+        #expect(three?.legs == 3)
+        #expect(abs((three?.assumedMedianBpsPerLeg ?? .nan) - 15.0) < 1e-9)
+        #expect(abs((three?.assumedFeeMedianBpsPerLeg ?? .nan) - 10.0) < 1e-9)
+    }
+
+    // `roundTripBps` must stay byte-identical — it is the gate/NetEdge number, consumed by the
+    // paper trader, the backtester and NetCostSim, with ~15 pins across other suites.
+    @Test func theRoundTripNumberTheGateUsesIsUnchanged() {
+        #expect(StockSageNetEdge.defaultCosts(forSymbol: "AAPL").roundTripBps == 13)
+        #expect(StockSageNetEdge.defaultCosts(forSymbol: "BTC-USD").roundTripBps == 70)
+        #expect(StockSageNetEdge.defaultCosts(forSymbol: "2222.SR").roundTripBps == 60)
+        // …and the new one is exactly it minus the fee leg.
+        for sym in ["AAPL", "BTC-USD", "2222.SR", "SHEL.L", "^GSPC", "EURUSD=X"] {
+            let c = StockSageNetEdge.defaultCosts(forSymbol: sym)
+            #expect(abs(c.priceVisibleRoundTripBps - (c.roundTripBps - c.takerFeeBps)) < 1e-12, "\(sym)")
+        }
     }
 
     @Test func openTradeContributesZeroLegs() {

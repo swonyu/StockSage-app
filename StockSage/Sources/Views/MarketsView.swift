@@ -3096,8 +3096,8 @@ struct MarketsView: View {
         let slip = StockSageJournal.measuredSlippage(journal.trades)
         let text: String
         if let slip, slip.meetsFloor {
-            text = String(format: "Measured slippage: median %+.1f bps/leg over %d legs (your fills) — assumed: %.1f bps/leg (half the asset-class round-trip table).",
-                          slip.medianBps, slip.legs, slip.assumedMedianBpsPerLeg)
+            text = String(format: "Measured slippage: median %+.1f bps/leg over %d legs (your fills) — assumed: %.1f bps/leg (half the asset-class spread + slippage). Commissions never move a fill price, so they are in neither figure; this book assumes a further %.1f bps/leg in fees.",
+                          slip.medianBps, slip.legs, slip.assumedMedianBpsPerLeg, slip.assumedFeeMedianBpsPerLeg)
         } else {
             let n = slip?.legs ?? 0
             text = "Not enough fill data — enter fill prices to measure your real costs (\(n) of 5 legs)."
@@ -7288,7 +7288,8 @@ struct MarketsView: View {
         // when it names a different symbol than this list's own #1 row — the SAME bestOpportunity
         // call bestOpportunityCTA already makes (byte-identical inputs), just for its symbol.
         let globalBestSymbol = StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime, earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality, calibration: store.convictionCalibration)?.idea.symbol
-        MarketsTodayActionsCard(plans: plans, isSampleData: store.isSampleData, onSelectSymbol: { symbol in
+        MarketsTodayActionsCard(plans: plans, isSampleData: store.isSampleData,
+                                loadedFromCache: store.loadedFromCache, onSelectSymbol: { symbol in
             if let idea = store.ideas.first(where: { $0.symbol == symbol }) { selectedIdea = idea }
         }, globalBestSymbol: globalBestSymbol,
         // FASTMONEY (owner, 2026-07-17): one-tap "Log" on each plan row — resolve the row's

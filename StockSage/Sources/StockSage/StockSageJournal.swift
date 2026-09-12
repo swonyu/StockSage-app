@@ -380,7 +380,17 @@ struct JournalRisk: Sendable, Equatable {
 /// the fence on `StockSageJournal.measuredSlippage`.
 struct MeasuredSlippage: Sendable, Equatable {
     let medianBps: Double               // median SIGNED bps/leg over the owner's fills (negative = price improvement)
-    let assumedMedianBpsPerLeg: Double   // median of defaultCosts(symbol).roundTripBps/2 over the SAME legs — apples-to-apples
+    /// Median of `defaultCosts(symbol).priceVisibleRoundTripBps/2` over the SAME legs — the
+    /// PRICE-VISIBLE half (spread + slippage) ONLY. `medianBps` above is measured from
+    /// planned-vs-fill PRICES, and a commission never moves a fill price, so half a fee-inclusive
+    /// round trip was not apples-to-apples: it charged the owner's fills for a leg no fill price
+    /// can contain (.SR/EM 30 -> 15 bps/leg, crypto 35 -> 25; zero-fee classes unchanged).
+    let assumedMedianBpsPerLeg: Double
+    /// Median of `defaultCosts(symbol).takerFeeBps/2` over the SAME legs — the commission the
+    /// owner ALSO pays but which no fill price shows. Displayed BESIDE, never inside,
+    /// `assumedMedianBpsPerLeg`: the two sum to the pre-2026-09-12 fee-inclusive figure, so the
+    /// split is lossless.
+    let assumedFeeMedianBpsPerLeg: Double
     let legs: Int
     let minLegs: Int                    // 5
     /// Total execution cost across all measured legs, in R — the unit the rest of the journal
@@ -955,18 +965,32 @@ enum StockSageJournal {
     // NetEdge/defaultCosts/trade-gate behavior is byte-identical. Feeding measured costs into the
     // gate is a future evidence-gated change.
     /// The owner's realized per-leg execution cost (entry + exit legs of CLOSED trades) vs. the
-    /// asset-class ASSUMED cost for those same legs (half the round-trip table — one leg). nil
+    /// asset-class ASSUMED cost for those same legs — half the PRICE-VISIBLE round trip
+    /// (spread + slippage), with the fee half reported separately as
+    /// `assumedFeeMedianBpsPerLeg`, because the measurement is planned-vs-fill PRICES. nil
     /// with zero legs; `meetsFloor` (n >= minLegs, default 5) gates whether the UI trusts it.
     nonisolated static func measuredSlippage(_ trades: [TradeRecord], minLegs: Int = 5) -> MeasuredSlippage? {
         var measured: [Double] = []
         var assumed: [Double] = []
+        var assumedFee: [Double] = []
         var totalR = 0.0
         var contributingTrades = 0
         var rLegs = 0
         for t in trades where t.isFinalized {
-            let assumedPerLeg = StockSageNetEdge.defaultCosts(forSymbol: t.symbol).roundTripBps / 2
-            if let s = t.entrySlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
-            if let s = t.exitSlippageBps { measured.append(s); assumed.append(assumedPerLeg) }
+            let costs = StockSageNetEdge.defaultCosts(forSymbol: t.symbol)
+            // PRICE-VISIBLE half only (2026-09-12). `measured` is planned-vs-fill PRICES and a
+            // commission never moves a fill price, so half a FEE-INCLUSIVE round trip was not
+            // apples-to-apples — it flattered the fills on every fee-carrying book (.SR/EM
+            // 30 -> 15, crypto 35 -> 25; zero-fee classes unchanged). The fee half is carried
+            // alongside, never folded in. `roundTripBps` is untouched: it is the gate/NetEdge
+            // number and must stay byte-identical.
+            let assumedPerLeg = costs.priceVisibleRoundTripBps / 2
+            let assumedFeePerLeg = costs.takerFeeBps / 2
+            // Appended in EXACT lockstep with `measured`, so the `guard !measured.isEmpty` below
+            // also protects `median(assumedFee)` — `median` indexes `sorted[n/2 - 1]` and traps
+            // on an empty array.
+            if let s = t.entrySlippageBps { measured.append(s); assumed.append(assumedPerLeg); assumedFee.append(assumedFeePerLeg) }
+            if let s = t.exitSlippageBps { measured.append(s); assumed.append(assumedPerLeg); assumedFee.append(assumedFeePerLeg) }
             // R cost accrues per LEG (each leg has its own planned/fill + the trade's risk).
             // Counted separately from `measured`: an R-leg also needs risk > 0 (see rLegs doc).
             let legR = (t.entrySlippageR ?? 0) + (t.exitSlippageR ?? 0)
@@ -978,6 +1002,7 @@ enum StockSageJournal {
         }
         guard !measured.isEmpty else { return nil }
         return MeasuredSlippage(medianBps: median(measured), assumedMedianBpsPerLeg: median(assumed),
+                                assumedFeeMedianBpsPerLeg: median(assumedFee),
                                 legs: measured.count, minLegs: minLegs,
                                 totalR: totalR,
                                 perTradeR: contributingTrades > 0 ? totalR / Double(contributingTrades) : 0,

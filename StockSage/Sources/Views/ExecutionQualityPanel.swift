@@ -66,7 +66,7 @@ struct ExecutionQualityPanel: View {
                                 .help("Median signed slippage per leg. Positive = you paid WORSE than planned (a buy filled higher, or a sell filled lower); negative = price improvement.")
                             statCell(title: "Assumed (this book)", value: String(format: "%+.1f bps", m.assumedMedianBpsPerLeg),
                                      tint: .secondary)
-                                .help("The engine's flat per-leg cost assumption for the SAME legs (half the symbol's round-trip table) — apples-to-apples with the median at left.")
+                                .help(String(format: "The engine's assumed PRICE-VISIBLE cost for the SAME legs — half the symbol's spread + slippage, apples-to-apples with the median at left. Commissions are excluded because they never move a fill price: this book assumes a further %.1f bps/leg in fees on top.", m.assumedFeeMedianBpsPerLeg))
                             statCell(title: "Legs measured", value: "\(m.legs)", tint: .white)
                                 .help("Entry + exit legs across closed trades with both a planned price and a fill logged. Floor: \(m.minLegs) legs before this panel trusts the median.")
                         }
@@ -110,7 +110,7 @@ struct ExecutionQualityPanel: View {
             .help("Median signed slippage per leg. Positive = you paid WORSE than planned (a buy filled higher, or a sell filled lower); negative = price improvement.")
         statCell(title: "Assumed (this book)", value: String(format: "%+.1f bps", m.assumedMedianBpsPerLeg),
                  tint: .secondary)
-            .help("The engine's flat per-leg cost assumption for the SAME legs (half the symbol's round-trip table) — apples-to-apples with the median at left.")
+            .help(String(format: "The engine's assumed PRICE-VISIBLE cost for the SAME legs — half the symbol's spread + slippage, apples-to-apples with the median at left. Commissions are excluded because they never move a fill price: this book assumes a further %.1f bps/leg in fees on top.", m.assumedFeeMedianBpsPerLeg))
         statCell(title: "Legs measured", value: "\(m.legs)", tint: .white)
             .help("Entry + exit legs across closed trades with both a planned price and a fill logged. Floor: \(m.minLegs) legs before this panel trusts the median.")
         if let worst {

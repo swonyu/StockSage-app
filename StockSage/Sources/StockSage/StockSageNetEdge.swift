@@ -54,6 +54,13 @@ enum StockSageNetEdge {
         /// with the band-bottom discipline; an FX-aware minimum would be a future revision.
         let perOrderMinimum: Double
         nonisolated var roundTripBps: Double { spreadBps + slippageBps + takerFeeBps }
+        /// The PRICE-VISIBLE half of the round trip — spread + slippage, NO fees. A commission
+        /// never moves a fill price, so anything comparing a measured planned-vs-fill price
+        /// against the cost table must use THIS, not `roundTripBps` (see
+        /// `StockSageJournal.measuredSlippage`). `roundTripBps` stays the gate/NetEdge number and
+        /// is byte-identical: ~15 pins plus StockSagePaperTrader, StockSageBacktester and
+        /// StockSageNetCostSim consume it.
+        nonisolated var priceVisibleRoundTripBps: Double { spreadBps + slippageBps }
         nonisolated init(spreadBps: Double, slippageBps: Double, assetClass: String,
                          takerFeeBps: Double = 0, perOrderMinimum: Double = 0) {
             self.spreadBps = spreadBps; self.slippageBps = slippageBps

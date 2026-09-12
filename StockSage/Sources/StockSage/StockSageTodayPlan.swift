@@ -206,7 +206,7 @@ enum StockSageTodayPlan {
                                        isCrypto: idea.symbol.uppercased().hasSuffix("-USD"),
                                        netCostFloorFlag: floorFlag, isLowConviction: lowConviction,
                                        heldShares: heldShares, closedTradeCount: closedTradeCount,
-                                       priceAsOf: idea.priceAsOf,
+                                       priceAsOf: idea.priceAsOf, priceSource: idea.priceSource,
                                        action: idea.advice.action, regime: idea.advice.regime,
                                        daysToEarnings: daysToEarnings,
                                        scaledRiskFraction: scaledRiskFraction,
@@ -381,6 +381,10 @@ struct TodayActionPlan: Sendable, Equatable, Identifiable {
     var closedTradeCount: Int? = nil
     /// The price's own timestamp, rechecked at export time. nil ⇒ draft only.
     var priceAsOf: Date? = nil
+    /// The price observation's own provenance, carried so the ranked row's source tag reads the
+    /// SAME "Massive SIP · 3h" / "cached" / "sample" the idea card shows for this symbol.
+    /// nil ⇒ unknown, never inferred from configuration.
+    var priceSource: StockSagePriceSource? = nil
     /// Execution-timing input carried from the ranked idea (display-only for recommendations).
     var action: TradeAdvice.Action = .hold
     /// Execution-timing input carried from the ranked idea (display-only for recommendations).
