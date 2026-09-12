@@ -345,11 +345,22 @@ struct StockSageExpectedValueTests {
     @Test func expectedWeeklyDollarsScalesWeeklyRByRiskDollar() {
         let equity = idea("AAPL", conviction: 0.9, stop: 90, target: 130)
         let crypto = idea("BTC-USD", conviction: 0.9, stop: 90, target: 130)
-        // weekly-R = (1.228/3 + 1.228/12)·5 ; $ per 1R = 10000·0.01 = 100.
+        // MOVED PIN (finding 5.1, 2026-09-12). The velocity sum is unchanged — same two ideas,
+        // same holds: 1.228/3 (crypto, 3-day hold) + 1.228/12 (equity, 12-day hold) = 1.228·5/12
+        // = 0.5116666667 R/day. What moved is the MULTIPLIER, and only that.
+        //   Cadence = tradingDaysForLane(lane:) = (5 + 2·crypto/count).rounded().
+        //   The basket actually summed is the top-N = {AAPL, BTC-USD}: crypto 1 of 2
+        //   ⇒ 5 + 2·(1/2) = 6.0 ⇒ 6.  (The old default was a flat 5, describing no basket at all.)
+        // ⇒ weekly-R = 0.5116666667 · 6 = 3.07 ; $ per 1R = 10000·0.01 = 100 ⇒ $307.00.
         let dollars = EV.expectedWeeklyDollars([equity, crypto], account: 10000, riskFraction: 0.01)!
-        let wkR = (1.228 / 3 + 1.228 / 12) * 5
-        #expect(abs(dollars - wkR * 100) < 1e-6)
-        #expect(abs(dollars - 255.8333333) < 1e-4)
+        let perDay = 1.228 / 3 + 1.228 / 12
+        #expect(abs(perDay - 0.5116666667) < 1e-9)
+        #expect(EV.tradingDaysForLane(lane: [crypto, equity]) == 6)
+        #expect(abs(dollars - perDay * 6 * 100) < 1e-6)
+        #expect(abs(dollars - 307.0) < 1e-4)
+        // An EXPLICIT cadence still wins, so callers pinning a fixed 5-day week are unaffected.
+        #expect(abs(EV.expectedWeeklyDollars([equity, crypto], account: 10000, riskFraction: 0.01,
+                                             tradingDays: 5)! - 255.8333333) < 1e-4)
         #expect(EV.expectedWeeklyDollars([equity, crypto], account: 0, riskFraction: 0.01) == nil)  // no account
         #expect(EV.expectedWeeklyDollars([], account: 10000, riskFraction: 0.01) == nil)            // empty fast lane
     }
@@ -530,14 +541,28 @@ struct StockSageExpectedValueTests {
             Issue.record("summary() returned nil weeklyRNet/weeklyRGrossSameBasket on a positive-velocity 4-idea mixed-class lane")
             return
         }
-        #expect(abs(sameBasket - 5.6151666667) < 1e-6)   // NEW: aware haircut (1.00) — the fix
-        #expect(abs(net - 5.2809166667) < 1e-6)
-        // The bug this test pins: the OLD value would have been sameBasket·0.70 (the wrong,
-        // unaware-judged haircut) — exactly 3.9306166667, and BELOW net, backwards.
-        let oldBuggyValue = 3.9306166667
-        #expect(abs(oldBuggyValue - sameBasket * 0.70) < 1e-6)
-        #expect(oldBuggyValue < net)          // the OLD bug: gross-before-costs shown BELOW net-of-cost
-        #expect(sameBasket > net)             // the FIX: gross-before-costs correctly ABOVE net-of-cost
+        // MOVED PIN (finding 5.1, 2026-09-12) — the CADENCE moved, the velocities did not.
+        //
+        // Cadence = tradingDaysForLane(lane:) = (5 + 2·crypto/count).rounded().
+        //   OLD: handed in as tradingDaysForLane(ideas) — the whole UNAWARE lane
+        //        {BTC, ETH, SOL, MSFT}: crypto 3 of 4 ⇒ 5 + 1.5 = 6.5 ⇒ 7.
+        //   NEW: derived inside the rollup from the basket it SUMS, the AWARE top-3
+        //        {BTC, ETH, MSFT}: crypto 2 of 3 ⇒ 5 + 1.3333 = 6.3333 ⇒ 6.
+        // Both hand-computed from the class counts above, which the two sanity checks already
+        // assert. The per-day velocity sums are pinned separately below so the products are
+        // determined by them and the cadence, not restated from the previous expected value.
+        #expect(EV.tradingDaysForLane(lane: Array(awareLane.prefix(3))) == 6)
+        #expect(EV.tradingDaysForLane(lane: EV.fastLane([c1, c2, c3, e1])) == 7, "the old, wrong basis")
+
+        #expect(abs(sameBasket / 6 - 0.8021666667) < 1e-9, "gross per-day sum over the aware top-3")
+        #expect(abs(net / 6 - 0.7544166667) < 1e-9, "net per-day sum over the same basket")
+        #expect(abs(sameBasket - 4.8130000000) < 1e-6)   // 0.8021666667 · 6, aware haircut 1.00
+        #expect(abs(net - 4.5265000000) < 1e-6)          // 0.7544166667 · 6
+        // The ORIGINAL bug this test was written for is still pinned: an unaware-judged 0.70
+        // haircut would put gross-before-costs BELOW its own net-of-cost pair, backwards from
+        // every other pairing in the app.
+        #expect(sameBasket * 0.70 < net)
+        #expect(sameBasket > net)             // gross-before-costs correctly ABOVE net-of-cost
     }
 
     // F4 (2026-07-09): the "≈ +$N/week" header dollarizes weekly R with no fundability check —
@@ -982,9 +1007,62 @@ struct StockSageExpectedValueTests {
         #expect(s.fastestSymbol == EV.fastLane(ideas).first?.symbol)
         // summary() uses netVelocity since iter6 — match the same helper here
         #expect(s.fastestVelocity == EV.fastLane(ideas).first.flatMap { EV.netVelocity(for: $0) })
-        // summary() uses crypto-aware cadence (tradingDaysForLane: ~7d for a crypto lane, 5d
-        // equity), so match that here rather than the default 5 — they must agree by construction.
-        #expect(s.weeklyR == EV.expectedWeeklyR(ideas, tradingDays: EV.tradingDaysForLane(ideas)))
+        // This line used to read `s.weeklyR == EV.expectedWeeklyR(ideas, tradingDays:
+        // EV.tradingDaysForLane(ideas))` — code compared against code, which asserts nothing and,
+        // after finding 5.1, pinned the WRONG basis. Replaced with a hand-derived cadence.
+        //
+        // Lane = {A, BTC-USD, AAPL}; only 3 ideas, so the top-3 IS the whole lane and both bases
+        // coincide here — which is precisely why this fixture never caught the defect.
+        // Cadence = (5 + 2·crypto/count).rounded() = (5 + 2·1/3).rounded() = 5.6667 ⇒ 6.
+        #expect(EV.tradingDaysForLane(lane: EV.fastLane(ideas)) == 6)
+        #expect(s.weeklyR == EV.expectedWeeklyR(ideas))
+    }
+
+    // THE STRADDLE THE OLD FIXTURES COULD NOT EXPRESS (finding 5.1). Every pre-existing weekly-R
+    // fixture had a top-3 equal to the whole lane, so the two cadences coincided and the defect
+    // was invisible. These two lanes separate them, in BOTH directions.
+    @Test func theCadenceFollowsTheSummedBasketNotTheWholeLane() {
+        let saved = StockSageConvictionCalibration.candidateSelectorEnabled
+        defer { StockSageConvictionCalibration.candidateSelectorEnabled = saved }
+        StockSageConvictionCalibration.candidateSelectorEnabled = false
+
+        // (a) UNDERSTATING — the common shape, since crypto's short hold ranks it up. 2 crypto +
+        // 8 equity: whole lane is crypto 2 of 10 ⇒ (5 + 0.4) ⇒ 5, but the top-3 is crypto-heavy
+        // ⇒ 2 of 3 ⇒ (5 + 1.3333) ⇒ 6. The shipped code paid a 5-day week for a 6-day basket.
+        var lopsided = [idea("BTC-USD", action: .strongBuy, conviction: 0.9, stop: 90, target: 130),
+                        idea("ETH-USD", action: .strongBuy, conviction: 0.85, stop: 90, target: 130)]
+        for i in 0..<8 {
+            lopsided.append(idea("EQ\(i)", action: .buy, conviction: 0.6, stop: 90, target: 130))
+        }
+        let lane = EV.fastLane(lopsided)
+        let top3 = Array(lane.prefix(3))
+        #expect(top3.filter { $0.symbol.hasSuffix("-USD") }.count == 2, "premise: the top-3 is crypto-heavy")
+        let wholeDays = EV.tradingDaysForLane(lane: lane)
+        let topDays = EV.tradingDaysForLane(lane: top3)
+        #expect(wholeDays == 5 && topDays == 6, "the two bases genuinely differ, and understate")
+        let wk = EV.expectedWeeklyR(lopsided)!
+        #expect(abs(wk - EV.expectedWeeklyR(lopsided, tradingDays: topDays)!) < 1e-12,
+                "the rollup must use the basket it summed")
+        #expect(abs(wk - EV.expectedWeeklyR(lopsided, tradingDays: wholeDays)!) > 1e-9,
+                "…and that is NOT the whole-lane cadence the shipped code handed in")
+        #expect(wk > EV.expectedWeeklyR(lopsided, tradingDays: wholeDays)!, "corrected UPWARD here")
+
+        // (b) OVERSTATING — the mirror. An equity-topped top-3 inside a crypto-heavy lane was
+        // being paid a 6- or 7-day week for a 5-day basket.
+        var equityTopped = [idea("MSFT", action: .strongBuy, conviction: 0.95, stop: 90, target: 140),
+                            idea("AAPL", action: .strongBuy, conviction: 0.94, stop: 90, target: 140),
+                            idea("NVDA", action: .strongBuy, conviction: 0.93, stop: 90, target: 140)]
+        for i in 0..<6 {
+            equityTopped.append(idea("C\(i)-USD", action: .buy, conviction: 0.3, stop: 90, target: 110))
+        }
+        let lane2 = EV.fastLane(equityTopped)
+        let top3b = Array(lane2.prefix(3))
+        if top3b.allSatisfy({ !$0.symbol.hasSuffix("-USD") }), EV.tradingDaysForLane(lane: lane2) > 5 {
+            #expect(EV.tradingDaysForLane(lane: top3b) == 5, "an all-equity basket is a 5-day week")
+            let wk2 = EV.expectedWeeklyR(equityTopped)!
+            #expect(wk2 < EV.expectedWeeklyR(equityTopped, tradingDays: EV.tradingDaysForLane(lane: lane2))!,
+                    "corrected DOWNWARD here")
+        }
     }
 
     @Test func bestOpportunityPicksHighestPositiveEVBuy() {

@@ -6,8 +6,15 @@ import Foundation
 
 struct StockSageVelocityHistoryTests {
 
+    // FIXTURE MIGRATION (2026-09-12), not an assertion edit. `lastDelta`/`trend` now compare only
+    // rows on the CURRENT metric basis, so a fixture standing in for days THIS build recorded must
+    // be stamped — an unstamped row means "written by the pre-fix code", which is exactly what the
+    // legacy-decode test below asserts. The expected VALUES are unchanged.
     private func snaps(_ rs: [Double]) -> [VelocitySnapshot] {
-        rs.enumerated().map { VelocitySnapshot(day: String(format: "2026-06-%02d", $0.offset + 1), weeklyR: $0.element) }
+        rs.enumerated().map {
+            VelocitySnapshot(day: String(format: "2026-06-%02d", $0.offset + 1), weeklyR: $0.element,
+                             metricBasis: VelocityMetricBasis.current.rawValue)
+        }
     }
 
     @Test func recordReplacesSameDayAndCaps() {
@@ -22,8 +29,11 @@ struct StockSageVelocityHistoryTests {
     }
 
     @Test func changeSinceLastNamesTheMover() {
-        let prev = VelocitySnapshot(day: "2026-06-01", weeklyR: 1.0, bestSymbol: "AAPL", fastestSymbol: "AAPL")
-        let cur = VelocitySnapshot(day: "2026-06-02", weeklyR: 2.5, bestSymbol: "BTC-USD", fastestSymbol: "AAPL")
+        let basis = VelocityMetricBasis.current.rawValue
+        let prev = VelocitySnapshot(day: "2026-06-01", weeklyR: 1.0, bestSymbol: "AAPL",
+                                    fastestSymbol: "AAPL", metricBasis: basis)
+        let cur = VelocitySnapshot(day: "2026-06-02", weeklyR: 2.5, bestSymbol: "BTC-USD",
+                                   fastestSymbol: "AAPL", metricBasis: basis)
         let c = StockSageVelocityHistory.changeSinceLast([prev, cur])!
         #expect(abs(c.weeklyRDelta - 1.5) < 1e-9)
         #expect(c.bestChangedTo == "BTC-USD")      // best moved AAPL → BTC-USD
@@ -38,6 +48,67 @@ struct StockSageVelocityHistoryTests {
         #expect(s.weeklyR == 2.0)
         #expect(s.bestSymbol == nil)
         #expect(s.fastestSymbol == nil)
+        // …and the 2026-09-12 basis marker is absent too, which MEANS the pre-fix basis: this row
+        // was written by the code that multiplied a top-N sum by the whole lane's cadence.
+        #expect(s.metricBasis == nil)
+        #expect(s.basisRaw == VelocityMetricBasis.wholeLaneCadenceV1.rawValue)
+        #expect(!s.isCurrentBasis)
+    }
+
+    // MARK: Metric basis (5.1) — a cadence correction must not read as a market move
+
+    @Test func preFixDaysAreKeptButNeverComparedAgainstTheNewBasis() {
+        let old = (1...3).map {
+            VelocitySnapshot(day: String(format: "2026-06-%02d", $0), weeklyR: 5.0)   // unstamped ⇒ v1
+        }
+        let new = (4...6).map {
+            VelocitySnapshot(day: String(format: "2026-06-%02d", $0), weeklyR: 4.0,
+                             metricBasis: VelocityMetricBasis.current.rawValue)
+        }
+        let mixed = old + new
+        // Kept: nothing is deleted from the stored series.
+        #expect(mixed.count == 6)
+        #expect(StockSageVelocityHistory.comparable(mixed).count == 3)
+        // The 5.0 -> 4.0 step is the CORRECTION, not a market move. Comparing across the seam
+        // would report -1.0R "since last session"; comparing within the new basis reports 0.
+        #expect(StockSageVelocityHistory.lastDelta(mixed) == 0)
+        #expect(StockSageVelocityHistory.lastDelta(old + [new[0]]) == nil,
+                "one same-basis day is not two — no delta rather than a cross-basis one")
+        // The trend needs 4 same-basis days; three is not enough, and the old ones cannot fill in.
+        #expect(StockSageVelocityHistory.trend(mixed) == nil)
+
+        // And the owner is told why the line is rebuilding.
+        let notice = StockSageVelocityHistory.preBasisNotice(mixed)
+        #expect(notice?.contains("3 earlier days through 2026-06-03") == true)
+        #expect(notice?.contains("previous weekly-R basis") == true)
+        #expect(StockSageVelocityHistory.preBasisNotice(new) == nil, "no old days ⇒ no notice")
+    }
+
+    // An unrecognized (newer-build) basis must read as not-current rather than being compared, and
+    // must never throw: `load()` uses `try?`, so one throw loses the whole 60-day history.
+    @Test func anUnknownFutureBasisDecodesAndIsExcluded() throws {
+        let future = #"{"day":"2026-06-09","weeklyR":9.0,"metricBasis":99}"#.data(using: .utf8)!
+        let s = try JSONDecoder().decode(VelocitySnapshot.self, from: future)
+        #expect(s.metricBasis == 99)
+        #expect(!s.isCurrentBasis)
+        #expect(StockSageVelocityHistory.comparable([s]).isEmpty)
+    }
+
+    @Test func recordStampsTheCurrentBasis() {
+        let s = StockSageVelocityHistory.record([], day: "2026-06-01", weeklyR: 2.0)
+        #expect(s[0].metricBasis == VelocityMetricBasis.current.rawValue)
+        #expect(s[0].isCurrentBasis)
+    }
+
+    // The "Mover:" line names SYMBOLS, which are not on the weeklyR basis at all — suppressing it
+    // because of a cadence fix would hide information this change has nothing to do with.
+    @Test func theMoverLineSurvivesTheBasisSeam() throws {
+        let prev = VelocitySnapshot(day: "2026-06-01", weeklyR: 5.0, bestSymbol: "AAPL", fastestSymbol: "AAPL")
+        let cur = VelocitySnapshot(day: "2026-06-02", weeklyR: 4.0, bestSymbol: "BTC-USD",
+                                   fastestSymbol: "AAPL", metricBasis: VelocityMetricBasis.current.rawValue)
+        let c = try #require(StockSageVelocityHistory.changeSinceLast([prev, cur]))
+        #expect(c.bestChangedTo == "BTC-USD", "the mover is still reported across the seam")
+        #expect(c.weeklyRDelta == 0, "…but the cross-basis R delta is NOT")
     }
 
     @Test func lastDeltaIsLatestMinusPrevious() {

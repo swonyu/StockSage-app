@@ -6781,6 +6781,12 @@ struct MarketsView: View {
                             .font(.system(size: mvFont8))
                             .foregroundStyle(d >= 0 ? DS.Palette.successSoft : DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                     }
+                    // 5.1: says WHY the trend is rebuilding, instead of the line silently
+                    // shortening. Copy comes from the engine so it is testable without a view.
+                    if let notice = StockSageVelocityHistory.preBasisNotice(velocityHistory.series) {
+                        Text(notice).font(.system(size: mvFont8)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if let ch = velocityHistory.change {
                         let movers = [ch.bestChangedTo.map { "best → \($0)" }, ch.fastestChangedTo.map { "fastest → \($0)" }].compactMap { $0 }
                         if !movers.isEmpty {
@@ -6797,8 +6803,13 @@ struct MarketsView: View {
                             Text(String(format: "Your opportunity set is %@ (recent gross wk-R %+.1f vs %+.1f early) — %@",
                                         t.direction.rawValue, t.recentAvg, t.earlyAvg, MoneyVelocityCopy.ownHistory))
                                 .font(.system(size: mvFont8)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            if velocityHistory.series.count >= 2 {
-                                Sparkline(values: velocityHistory.series.map(\.weeklyR))
+                            // 5.1: plot only same-basis days. A 48x14pt sparkline cannot mark the
+                            // boundary, so drawing pre- and post-fix days as one line would show a
+                            // step no market made. The old rows stay on disk and are named by the
+                            // notice below.
+                            let plotted = StockSageVelocityHistory.comparable(velocityHistory.series)
+                            if plotted.count >= 2 {
+                                Sparkline(values: plotted.map(\.weeklyR))
                                     .stroke(rising ? DS.Palette.successSoft : (fading ? DS.Palette.warningSoft : DS.Palette.surfaceStroke),
                                             style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
                                     .frame(width: 48, height: 14)

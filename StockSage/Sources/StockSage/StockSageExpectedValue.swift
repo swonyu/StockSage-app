@@ -934,7 +934,7 @@ enum StockSageExpectedValue {
     /// display site must label this "gross, before costs", and note that the sum can include
     /// ideas the net-cost floor DEMOTES on the velocity board (fastLane demotes, never excludes)
     /// while the same summary's "Fastest" pick excludes them.
-    nonisolated static func expectedWeeklyR(_ ideas: [StockSageIdea], maxConcurrent: Int = 3, tradingDays: Double = 5,
+    nonisolated static func expectedWeeklyR(_ ideas: [StockSageIdea], maxConcurrent: Int = 3, tradingDays: Double? = nil,
                                             holds: VelocityHoldDays = .defaults,
                                             calibration: StockSageConvictionCalibration? = nil) -> Double? {
         expectedWeeklyR(lane: fastLane(ideas, holds: holds, calibration: calibration), ideas: ideas,
@@ -968,12 +968,19 @@ enum StockSageExpectedValue {
     /// mutation — see `expectedWeeklyRLaneOverloadMatchesHandDerivedPin` for a hand-derived value pin
     /// that does).
     nonisolated static func expectedWeeklyR(lane: [StockSageIdea], ideas: [StockSageIdea], maxConcurrent: Int = 3,
-                                            tradingDays: Double = 5, holds: VelocityHoldDays = .defaults,
+                                            tradingDays: Double? = nil, holds: VelocityHoldDays = .defaults,
                                             calibration: StockSageConvictionCalibration? = nil,
                                             earnings: [String: EarningsProximity] = [:],
                                             liquidity: [String: LiquidityProfile] = [:]) -> Double? {
-        let vels = lane.prefix(Swift.max(0, maxConcurrent)).compactMap { velocity(for: $0, holds: holds, calibration: calibration) }
+        let top = lane.prefix(Swift.max(0, maxConcurrent))
+        let vels = top.compactMap { velocity(for: $0, holds: holds, calibration: calibration) }
         guard !vels.isEmpty else { return nil }
+        // Finding 5.1 (2026-09-12): the cadence MUST describe the basket actually summed — `top` —
+        // not the whole lane. `tradingDays: nil` (the default) derives it HERE, from the prefix
+        // already materialized above: zero extra fastLane passes, and no caller can pair one
+        // basket's velocities with another basket's week length by omission. An explicit value
+        // still wins, for callers pinning a fixed 5-day week.
+        let days = tradingDays ?? tradingDaysForLane(lane: Array(top))
         // If the top-N fast-lane setups are all one asset class, they tend to move together —
         // summing their velocities as if independent overstates the real weekly R by counting
         // one correlated bet N times. Haircut the total (not each leg) so the raw per-idea
@@ -983,7 +990,7 @@ enum StockSageExpectedValue {
         // below) — otherwise the 0.70 factor is decided on a different top-3 than the one `lane`'s
         // velocities were summed over.
         let concentrationFactor = fastLaneConcentration(ideas, topN: maxConcurrent, holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity)?.isConcentrated == true ? 0.70 : 1.0
-        return vels.reduce(0, +) * tradingDays * concentrationFactor
+        return vels.reduce(0, +) * days * concentrationFactor
     }
 
     /// NET-of-cost weekly R estimate — companion to `expectedWeeklyR` that sums
@@ -993,7 +1000,7 @@ enum StockSageExpectedValue {
     /// haircut, and trading-days cadence as the gross version. nil when the fast
     /// lane is empty or no net velocity is computable. An estimate, not income.
     nonisolated static func netExpectedWeeklyR(_ ideas: [StockSageIdea], maxConcurrent: Int = 3,
-                                               tradingDays: Double = 5,
+                                               tradingDays: Double? = nil,
                                                holds: VelocityHoldDays = .defaults,
                                                calibration: StockSageConvictionCalibration? = nil,
                                                earnings: [String: EarningsProximity] = [:],
@@ -1011,28 +1018,31 @@ enum StockSageExpectedValue {
     /// `expectedWeeklyR(lane:ideas:...)`'s doc for why the existing dedup-proof test cannot catch a
     /// body mutation here either).
     nonisolated static func netExpectedWeeklyR(lane: [StockSageIdea], ideas: [StockSageIdea], maxConcurrent: Int = 3,
-                                               tradingDays: Double = 5,
+                                               tradingDays: Double? = nil,
                                                holds: VelocityHoldDays = .defaults,
                                                calibration: StockSageConvictionCalibration? = nil,
                                                earnings: [String: EarningsProximity] = [:],
                                                liquidity: [String: LiquidityProfile] = [:]) -> Double? {
-        let vels = lane
-            .prefix(Swift.max(0, maxConcurrent))
-            .compactMap { netVelocity(for: $0, holds: holds, calibration: calibration) }
+        let top = lane.prefix(Swift.max(0, maxConcurrent))
+        let vels = top.compactMap { netVelocity(for: $0, holds: holds, calibration: calibration) }
         guard !vels.isEmpty else { return nil }
+        // Finding 5.1: cadence over `top` — the SLOTS the week is spent in — not over `vels`,
+        // which can be shorter when a member has no computable net velocity, and not over the
+        // whole lane. Same basis as the gross rollup above, so a same-basket pair cannot diverge.
+        let days = tradingDays ?? tradingDaysForLane(lane: Array(top))
         // Haircut must analyze the SAME earnings/liquidity-demoted top-N the velocities
         // above are summed over (line 809 passes earnings+liquidity) — otherwise the 0.70
         // concentration factor is decided on a different top-3 than the one being summed
         // (audit L4-1/F2, 2026-07-07). fastLaneConcentration's own contract requires this.
         let concentrationFactor = fastLaneConcentration(ideas, topN: maxConcurrent, holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity)?.isConcentrated == true ? 0.70 : 1.0
-        return vels.reduce(0, +) * tradingDays * concentrationFactor
+        return vels.reduce(0, +) * days * concentrationFactor
     }
 
     /// Account-aware weekly $ estimate: expected weekly R × the dollar value of 1R
     /// (account × riskFraction). nil without an account, risk, or a non-empty fast
     /// lane. An ESTIMATE that assumes you take & re-cycle the top setups — NOT income.
     nonisolated static func expectedWeeklyDollars(_ ideas: [StockSageIdea], account: Double, riskFraction: Double,
-                                                  maxConcurrent: Int = 3, tradingDays: Double = 5,
+                                                  maxConcurrent: Int = 3, tradingDays: Double? = nil,
                                                   holds: VelocityHoldDays = .defaults,
                                                   calibration: StockSageConvictionCalibration? = nil) -> Double? {
         guard account > 0, riskFraction > 0, account.isFinite, riskFraction.isFinite,
@@ -1051,13 +1061,17 @@ enum StockSageExpectedValue {
     /// in ranking/sizing reads it. nil when the fast lane is empty or no top idea has a hold
     /// (mirrors expectedWeeklyR's own nil — never a fabricated cadence).
     nonisolated static func assumedWeeklyRoundTrips(_ ideas: [StockSageIdea], maxConcurrent: Int = 3,
-                                                    tradingDays: Double = 5,
+                                                    tradingDays: Double? = nil,
                                                     holds: VelocityHoldDays = .defaults,
                                                     calibration: StockSageConvictionCalibration? = nil) -> Double? {
         let lane = fastLane(ideas, holds: holds, calibration: calibration).prefix(Swift.max(0, maxConcurrent))
+        // Finding 5.1: this count describes the SAME week `expectedWeeklyR` multiplies by, so it
+        // derives its cadence from the same top-N basket. Left as an explicit argument it
+        // inherited the whole-lane mismatch and reported round trips for a week nobody was paid.
+        let days = tradingDays ?? tradingDaysForLane(lane: Array(lane))
         let cycles = lane.compactMap { idea -> Double? in
             guard let hold = velocityHoldDays(for: idea, holds: holds) else { return nil }
-            return tradingDays / hold
+            return days / hold
         }
         guard !cycles.isEmpty else { return nil }
         return cycles.reduce(0, +)
@@ -1067,7 +1081,7 @@ enum StockSageExpectedValue {
     /// the gross figure assumes. LABEL ONLY — never alters the number itself (the gross→net
     /// netting decision stays owner-held, F03/F44). nil when no cadence is estimable.
     nonisolated static func weeklyTurnoverNote(_ ideas: [StockSageIdea], maxConcurrent: Int = 3,
-                                               tradingDays: Double = 5,
+                                               tradingDays: Double? = nil,
                                                holds: VelocityHoldDays = .defaults,
                                                calibration: StockSageConvictionCalibration? = nil) -> String? {
         guard let trips = assumedWeeklyRoundTrips(ideas, maxConcurrent: maxConcurrent, tradingDays: tradingDays,
@@ -1095,6 +1109,13 @@ enum StockSageExpectedValue {
     }
 
     /// BIND-ONCE variant: identical body, but takes an already-computed `fastLane(...)` result.
+    ///
+    /// CADENCE BASIS (finding 5.1, 2026-09-12): the weekly rollups no longer call this with the
+    /// WHOLE lane. They pass `lane.prefix(maxConcurrent)` — the basket whose velocities they sum —
+    /// so the membership-insensitivity noted below no longer makes whole-lane and top-N cadences
+    /// interchangeable. They are different numbers and only the top-N one is correct for a
+    /// top-N sum. This overload is still used whole-lane by the perf-probe dedup pin.
+    ///
     /// ORDER- and MEMBERSHIP-INSENSITIVE for this function specifically (it only reads `.count`
     /// and an asset-class `.filter{}.count` — earnings/liquidity dicts don't change fastLane's
     /// MEMBERSHIP, only its ranking order, so a lane the caller computed WITH earnings/liquidity
@@ -1182,18 +1203,26 @@ enum StockSageExpectedValue {
             fastestSymbol: fastest?.symbol,
             fastestVelocity: fastest.flatMap { netVelocity(for: $0, holds: holds, calibration: calibration) },
             // Honest cadence: an all-crypto lane re-cycles ~7 days/week, equity ~5.
-            weeklyR: expectedWeeklyR(ideas, tradingDays: tradingDaysForLane(ideas, holds: holds, calibration: calibration), holds: holds, calibration: calibration),
+            // Honest cadence — and finding 5.1 (2026-09-12): the cadence is now derived INSIDE
+            // the rollup from the top-N it actually SUMS, not handed in from
+            // `tradingDaysForLane(ideas, …)`, which measured the WHOLE lane's crypto share. A
+            // top-3 of equities inside a lane that also holds crypto was paid a 6- or 7-day week;
+            // a crypto-topped top-3 inside a mostly-equity lane was paid 5. Both directions were
+            // live, and three unaware `fastLane` passes go away with it.
+            weeklyR: expectedWeeklyR(ideas, holds: holds, calibration: calibration),
             // F03/F44 (owner gate lifted 2026-07-09): the NET figure is the headline the card
             // shows; earnings/liquidity passed so it equals the fast-lane strip's own net line
             // (the same number rendered twice must be identical). Routed through the bind-once
             // lane overload with `netAwareLane` — equivalent BY CONSTRUCTION to the ideas-only
             // overload's own internal `fastLane(...)` call, so this is byte-identical to before.
-            weeklyRNet: netExpectedWeeklyR(lane: netAwareLane, ideas: ideas, tradingDays: tradingDaysForLane(ideas, holds: holds, calibration: calibration), holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity),
+            weeklyRNet: netExpectedWeeklyR(lane: netAwareLane, ideas: ideas, holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity),
             // F9: the SAME netAwareLane basket, summed GROSS — for pairing next to weeklyRNet ONLY.
             // F-review fix (2026-07-10): earnings/liquidity now passed through so the concentration
             // haircut is judged on this SAME aware basket, not the unaware one weeklyR uses — see
             // the doc on `expectedWeeklyR(lane:ideas:...)` above for why that mismatch mattered.
-            weeklyRGrossSameBasket: expectedWeeklyR(lane: netAwareLane, ideas: ideas, tradingDays: tradingDaysForLane(ideas, holds: holds, calibration: calibration), holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity),
+            // Same `netAwareLane.prefix(3)` as weeklyRNet above ⇒ identical derived cadence ⇒ the
+            // F9 gross/net pair stays coherent by construction rather than by a shared argument.
+            weeklyRGrossSameBasket: expectedWeeklyR(lane: netAwareLane, ideas: ideas, holds: holds, calibration: calibration, earnings: earnings, liquidity: liquidity),
             // C7a (2026-07-09): the card's "top 3" subtitle overstated when the lane held fewer —
             // expose the count the weekly sums ACTUALLY use. Lane membership is earnings/
             // liquidity-independent (they adjust only the sort key), so the bare lane's count

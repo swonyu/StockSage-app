@@ -8,6 +8,23 @@ import Combine
 // It answers "are the setups the app is surfacing improving over time?" — descriptive
 // of the OPPORTUNITY SET, never a forecast. Pure engine + a persisted @MainActor store.
 
+/// SCHEMA VERSION of the numeric metric stored in `VelocitySnapshot.weeklyR`. Two days are
+/// comparable ONLY when they were computed on the same basis — the trend/delta readers filter on
+/// it. ADDING A CASE is the migration procedure for ANY future change to what `weeklyR` MEANS
+/// (netting it, re-basketing it, re-weighting it): bump `current`, never re-interpret a shipped
+/// case. Persisted as its RAW Int (see `VelocitySnapshot.metricBasis`), never as the enum, so a
+/// row written by a NEWER build can never throw inside this build's decode and take the whole
+/// 60-day array down with it — `load()` uses `try?`, so one throw is total loss.
+enum VelocityMetricBasis: Int, Sendable, Equatable, CaseIterable {
+    /// Shipped through 2026-09-11. Top-N velocities x the WHOLE lane's trading-day cadence
+    /// (finding 5.1: the multiplier described a different basket than the sum).
+    case wholeLaneCadenceV1 = 1
+    /// 2026-09-12 onward. Top-N velocities x the TOP-N basket's OWN cadence.
+    case topNCadenceV2 = 2
+    /// What today's writer stamps; readers compare only rows equal to this.
+    nonisolated static let current: VelocityMetricBasis = .topNCadenceV2
+}
+
 struct VelocitySnapshot: Codable, Sendable, Equatable {
     let day: String       // "YYYY-MM-DD" (UTC) — one snapshot per day
     let weeklyR: Double    // the day's estimated weekly R (top fast-lane setups)
@@ -15,6 +32,16 @@ struct VelocitySnapshot: Codable, Sendable, Equatable {
     // (Swift synthesizes decodeIfPresent for optionals).
     var bestSymbol: String? = nil
     var fastestSymbol: String? = nil
+    /// Migration-safe optional: rows persisted before this field decode as nil, and nil MEANS
+    /// `.wholeLaneCadenceV1` — that is literally the code that wrote them. Stored as the raw Int
+    /// so an UNRECOGNIZED (future/downgrade) value decodes fine and simply reads as not-current.
+    var metricBasis: Int? = nil
+
+    /// nil ⇒ pre-marker row ⇒ v1.
+    nonisolated var basisRaw: Int { metricBasis ?? VelocityMetricBasis.wholeLaneCadenceV1.rawValue }
+    /// Is this row on the basis today's code computes? Unknown future values ⇒ false (excluded,
+    /// never silently compared).
+    nonisolated var isCurrentBasis: Bool { basisRaw == VelocityMetricBasis.current.rawValue }
 }
 
 /// What moved between the two most-recent snapshots — names the new best/fastest if it
@@ -38,9 +65,11 @@ enum StockSageVelocityHistory {
     /// series sorted by day, and cap it to the newest `maxDays`. Pure.
     nonisolated static func record(_ series: [VelocitySnapshot], day: String, weeklyR: Double,
                                    bestSymbol: String? = nil, fastestSymbol: String? = nil,
-                                   maxDays: Int = 60) -> [VelocitySnapshot] {
+                                   maxDays: Int = 60,
+                                   basis: VelocityMetricBasis = .current) -> [VelocitySnapshot] {
         var out = series.filter { $0.day != day }
-        out.append(VelocitySnapshot(day: day, weeklyR: weeklyR, bestSymbol: bestSymbol, fastestSymbol: fastestSymbol))
+        out.append(VelocitySnapshot(day: day, weeklyR: weeklyR, bestSymbol: bestSymbol,
+                                    fastestSymbol: fastestSymbol, metricBasis: basis.rawValue))
         out.sort { $0.day < $1.day }
         if out.count > Swift.max(1, maxDays) { out = Array(out.suffix(Swift.max(1, maxDays))) }
         return out
@@ -48,12 +77,18 @@ enum StockSageVelocityHistory {
 
     /// What changed between the two most-recent snapshots: the weekly-R delta and the new
     /// best/fastest symbol IF it changed (nil if unchanged or unknown). nil under 2 snapshots.
+    ///
+    /// BASIS (2026-09-12): the weeklyR DELTA is computed over `comparable(series)` only — a metric
+    /// correction must never masquerade as a market move. The best/fastest SYMBOLS are not on the
+    /// weeklyR basis at all, so they keep reading the full series: suppressing the "Mover:" line
+    /// for a day because of a cadence fix would hide information this change has nothing to do
+    /// with. nil delta ⇒ not enough same-basis days yet.
     nonisolated static func changeSinceLast(_ series: [VelocitySnapshot]) -> VelocityChange? {
         let s = series.sorted { $0.day < $1.day }
         guard s.count >= 2 else { return nil }
         let prev = s[s.count - 2], cur = s[s.count - 1]
         return VelocityChange(
-            weeklyRDelta: cur.weeklyR - prev.weeklyR,
+            weeklyRDelta: lastDelta(series) ?? 0,
             bestChangedTo: (cur.bestSymbol != nil && cur.bestSymbol != prev.bestSymbol) ? cur.bestSymbol : nil,
             fastestChangedTo: (cur.fastestSymbol != nil && cur.fastestSymbol != prev.fastestSymbol) ? cur.fastestSymbol : nil)
     }
@@ -62,14 +97,37 @@ enum StockSageVelocityHistory {
     /// last session." nil with fewer than 2 snapshots. Descriptive of the owner's own
     /// recorded history, not a forecast.
     nonisolated static func lastDelta(_ series: [VelocitySnapshot]) -> Double? {
-        let s = series.sorted { $0.day < $1.day }
+        let s = comparable(series).sorted { $0.day < $1.day }
         guard s.count >= 2 else { return nil }
         return s[s.count - 1].weeklyR - s[s.count - 2].weeklyR
     }
 
+    /// The rows today's math may compare with each other. Pre-fix (and unrecognized-future) days
+    /// are KEPT in the series — owner decision 2026-09-12, "fix + mark the old days" — and excluded
+    /// HERE, so a metric correction can never masquerade as a market move.
+    nonisolated static func comparable(_ series: [VelocitySnapshot]) -> [VelocitySnapshot] {
+        series.filter(\.isCurrentBasis)
+    }
+
+    /// How many stored days predate the current basis, and the newest of them — so the UI can say
+    /// WHY the trend is rebuilding instead of silently rendering nothing.
+    nonisolated static func preBasisExcluded(_ series: [VelocitySnapshot]) -> (count: Int, throughDay: String)? {
+        let old = series.filter { !$0.isCurrentBasis }
+        guard let through = old.map(\.day).max() else { return nil }
+        return (old.count, through)
+    }
+
+    /// One sentence naming the excluded days, or nil when there are none. Engine-owned so the copy
+    /// is testable without a view.
+    nonisolated static func preBasisNotice(_ series: [VelocitySnapshot]) -> String? {
+        guard let (count, through) = preBasisExcluded(series) else { return nil }
+        return "\(count) earlier day\(count == 1 ? "" : "s") through \(through) used the previous weekly-R basis "
+            + "(top-N cadence fix) — kept, but not compared against the new basis."
+    }
+
     /// Recent-half mean vs first-half mean of weekly-R, with a flat band. nil under 4 days.
     nonisolated static func trend(_ series: [VelocitySnapshot], band: Double = 0.25) -> VelocityHistoryTrend? {
-        let vals = series.sorted { $0.day < $1.day }.map(\.weeklyR)
+        let vals = comparable(series).sorted { $0.day < $1.day }.map(\.weeklyR)
         guard vals.count >= 4 else { return nil }
         let half = vals.count / 2
         let early = vals.prefix(half), recent = vals.suffix(vals.count - half)
