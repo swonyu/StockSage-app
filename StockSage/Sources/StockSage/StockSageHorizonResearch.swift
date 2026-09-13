@@ -41,12 +41,15 @@ final class StockSageHorizonResearch: ObservableObject {
         let basis: String
     }
     nonisolated struct Result: Sendable {
+        enum ValidationOutcome: String, Sendable { case validated, rejected, unknown }
         var verdict: StockSageAIAssessment.Verdict?
         var levels: Levels?
         var facts: [String] = []
         var note: String
         var at: Date = Date()
         var model: String = ""
+        var validationOutcome: ValidationOutcome = .unknown
+        var validationFailure: String? = nil
         var referenceClose: (value: Double, at: Date)? = nil
     }
     struct Scan {
@@ -62,6 +65,8 @@ final class StockSageHorizonResearch: ObservableObject {
     private var task: Task<Void, Never>?
     enum ScanFailure: Error { case modelUnavailable(String) }
     private static let session = URLSession(configuration: .ephemeral, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+    typealias ReceiptObserver = @MainActor @Sendable (StockSageLocalModelServer.ModelAttemptEvent) -> Void
+    typealias ReceiptAnalyzer = @MainActor (Listing, UUID, @escaping ReceiptObserver) async -> Result
 
     // Vendor contract: massive.com/docs/rest/stocks/tickers/all-tickers, checked 2026-09-09.
     // Full reference pagination, not the trade snapshot (which omits unpriced symbols).
@@ -171,13 +176,17 @@ final class StockSageHorizonResearch: ObservableObject {
     func start(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
         interruptionReason: @escaping @MainActor () -> String? = { nil },
                universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
-               analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
+               analyze: @escaping @MainActor (Listing) async -> Result,
+               receiptStore: StockSageResearchReceiptStore? = nil,
+               receiptAnalyzer: ReceiptAnalyzer? = nil) -> Bool {
         guard task == nil, allowed() else { return false }
         let previousScan = scans[horizon]
+        let receiptID = receiptStore?.begin(horizon: horizon)
         running = horizon
         scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) US listings by dated trading activity…", at: Date())
         task = Task {
             var didStart = false
+            var attemptID: UUID?
             defer { activeSymbol = nil; running = nil; task = nil }
             @MainActor func valid() -> Bool { !Task.isCancelled && allowed() }
             do {
@@ -188,21 +197,44 @@ final class StockSageHorizonResearch: ObservableObject {
                 didStart = true
                 // Selection is activity-ranked BEFORE this safety cap; never sort it alphabetically.
                 let names = Array(directory.prefix(Self.scanLimit))
+                let receiptAttempts: [UUID] = {
+                    guard let receiptStore, let receiptID else { return [] }
+                    return receiptStore.registerSelection(selection.receipt, listings: names, for: receiptID)
+                }()
                 scans[horizon]?.listings = names
                 scans[horizon]?.selection = selection.receipt
                 // ponytail: one manual worker limits additional local-model load while the independent
                 // four-worker day scanner runs. No automatic repeat; parallelize only if model capacity allows.
-                for item in names {
+                for (index, item) in names.enumerated() {
                     guard valid() else { throw CancellationError() }
+                    attemptID = receiptAttempts.indices.contains(index) ? receiptAttempts[index] : nil
+                    if let receiptStore, let receiptID, let id = attemptID { receiptStore.beginAttempt(id, scanID: receiptID) }
                     activeSymbol = item.ticker
                     scans[horizon]?.status = "Checking \(item.ticker) · \(scans[horizon]?.results.count ?? 0)/\(names.count) finished"
-                    let result = await analyze(item)
+                    let result: Result
+                    if let receiptAnalyzer, let id = attemptID {
+                        result = await receiptAnalyzer(item, id) { capture in
+                            if let receiptStore, let receiptID { receiptStore.capture(capture, for: id, scanID: receiptID) }
+                        }
+                    } else {
+                        result = await analyze(item)
+                    }
                     guard valid() else { throw CancellationError() }
                     scans[horizon]?.results[item.ticker] = result
+                    if let receiptStore, let receiptID, let id = attemptID {
+                        let terminal = result.verdict == nil ? (result.note.localizedCaseInsensitiveContains("interrupted") ? "interrupted" : "rejected") : "accepted"
+                        receiptStore.finishAttempt(result, attemptID: id, scanID: receiptID, status: terminal)
+                    }
+                    attemptID = nil
                     activeSymbol = nil
                 }
                 scans[horizon]?.status = "Scan finished · \(names.count) listings checked once. No orders created."
             } catch {
+                if let receiptStore, let receiptID, let id = attemptID {
+                    let result = Result(note: error is CancellationError ? "Interrupted before terminal analysis." : "Attempt failed before terminal analysis.")
+                    receiptStore.finishAttempt(result, attemptID: id, scanID: receiptID,
+                        status: error is CancellationError ? "interrupted" : "failed")
+                }
                 // A failed preflight is not a replacement run; restore captured data and its dates.
                 if !didStart, let previousScan { scans[horizon] = previousScan }
                 if !valid() {
@@ -218,6 +250,10 @@ final class StockSageHorizonResearch: ObservableObject {
                 if !didStart, previousScan != nil {
                     scans[horizon]?.status += " Earlier scan data retained; no new listings checked."
                 }
+            }
+            if let receiptStore, let receiptID {
+                receiptStore.finish(scanID: receiptID, status: scans[horizon]?.status ?? "finished")
+                if receiptStore.persistenceFailed(scanID: receiptID) { scans[horizon]?.status += " Receipt persistence failed; durable coverage is unavailable." }
             }
         }
         return true
@@ -260,6 +296,10 @@ final class StockSageHorizonResearch: ObservableObject {
         }, analyze: { item in
             await Self.analyze(item, horizon: horizon, store: store, config: config,
                 isOllama: isOllama, key: key, allowed: allowed)
+        }, receiptStore: StockSageResearchReceiptStore.default,
+        receiptAnalyzer: { item, _, observer in
+            await Self.analyze(item, horizon: horizon, store: store, config: config,
+                isOllama: isOllama, key: key, allowed: allowed, attemptObserver: observer)
         })
     }
 
@@ -279,7 +319,8 @@ final class StockSageHorizonResearch: ObservableObject {
         modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
         benzingaSnapshot: ((String, Date) async -> StockSageBenzinga.Snapshot)? = nil,
         newsObservation: ((String, Date, StockSageBenzinga.Page?) async -> StockSageNewsService.Observation)? = nil,
-        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil) async -> Result {
+        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil,
+        attemptObserver: ReceiptObserver? = nil) async -> Result {
         guard item.currency_name?.lowercased() == "usd" else {
             return .init(note: "USD price currency not confirmed; listing retained, no opinion.")
         }
@@ -353,18 +394,27 @@ final class StockSageHorizonResearch: ObservableObject {
         let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
             system: fitted.system, user: fitted.user, facts: facts,
             maxTokens: Self.researchOutputTokens,
-            stillValid: { evidenceAllowed() && context.canAssess(at: Date()) }, transport: modelTransport)
+            stillValid: { evidenceAllowed() && context.canAssess(at: Date()) }, transport: modelTransport,
+            attemptObserver: attemptObserver)
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
         // A verdict truncated at the output limit is refused, exactly as in paper research.
         if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
             return .init(facts: facts,
                          note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote, referenceClose: referenceClose)
         }
-        guard context.canAssess(at: Date()), case .success(let completion) = response,
-              case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
+        guard context.canAssess(at: Date()), case .success(let completion) = response else {
             return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, referenceClose: referenceClose)
         }
-        return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
-            facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote, model: config.model, referenceClose: referenceClose)
+        switch StockSageAIAssessment.validate(completion.text, facts: facts) {
+        case .success(let verdict):
+            return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
+                facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote,
+                model: config.model, validationOutcome: .validated, referenceClose: referenceClose)
+        case .failure(let failure):
+            return .init(facts: facts,
+                note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote,
+                model: config.model, validationOutcome: .rejected, validationFailure: failure.rawValue,
+                referenceClose: referenceClose)
+        }
     }
 }

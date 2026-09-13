@@ -41,6 +41,117 @@ struct StockSageAIAssessmentTests {
         .init(baseURL: URL(string: "http://127.0.0.1:8765")!, model: "fixture-qwen")
     }
 
+    @Test func responseSchemaStaysPortableWhilePromptAndSwiftOwnTheNumericRule() throws {
+        let data = try #require(A.responseSchema(facts: ["first", "second"]))
+        let schema = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        #expect(schema["additionalProperties"] as? Bool == false)
+        #expect(Set(schema["required"] as? [String] ?? []) == ["evidence", "action", "reason", "risk"])
+        for key in ["reason", "risk"] {
+            let prose = try #require(properties[key] as? [String: Any])
+            #expect(prose["type"] as? String == "string")
+            #expect(prose["minLength"] as? Int == 1)
+            #expect(prose["maxLength"] as? Int == 600)
+            #expect(prose["pattern"] == nil)
+        }
+        let evidence = try #require(properties["evidence"] as? [String: Any])
+        let items = try #require(evidence["items"] as? [String: Any])
+        #expect(evidence["minItems"] as? Int == 1)
+        #expect(evidence["maxItems"] as? Int == 2)
+        #expect(items["enum"] as? [String] == ["F1", "F2"])
+        let action = try #require(properties["action"] as? [String: Any])
+        #expect(action["enum"] as? [String] == ["Strong Buy", "Buy", "Hold", "Avoid", "Reduce", "Sell"])
+        #expect(A.instructions.contains("do not write numerals in ANY script"))
+        #expect(A.instructions.contains("exact offered ASCII F/W reference"))
+        #expect(A.instructions.contains("exact supplied listing symbol"))
+    }
+
+    @Test func numericOutputContractAllowsOnlyValidatedReferencesAndExactListingSymbol() throws {
+        let facts = Array(repeating: "Dated source says uncertainty remains.", count: 16)
+        let accepted = #"{"action":"Hold","reason":"The outlook for 2222.SR is mixed (F13).","risk":"Research groups W1/W3 remain unverified.","evidence":["F13"]}"#
+        let verdict = try #require(A.parse(accepted, facts: facts, leadCount: 3, symbol: "2222.SR"))
+        #expect(verdict.evidence == ["F13"])
+        let unicodeListing = accepted.replacingOccurrences(of: "2222.SR", with: "٢٢٢٢.س")
+        #expect(A.parse(unicodeListing, facts: facts, leadCount: 3, symbol: "٢٢٢٢.س") != nil)
+        #expect(A.parse(unicodeListing.replacingOccurrences(of: "٢٢٢٢.س", with: "X٢٢٢٢.سY"),
+                        facts: facts, leadCount: 3, symbol: "٢٢٢٢.س") == nil)
+        #expect(A.parse(accepted, facts: facts, leadCount: 3) == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "2222.SR", with: "2222"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "2222.SR", with: "X2222.SRY"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "W3", with: "W4"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "[\"F13\"]", with: "[\"W1\"]"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "mixed (F13)", with: "mixed (F99)"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+    }
+
+    @Test func numericOutputContractRejectsNumeralScriptsOutsideIdentifiersAndUnsupportedClaims() throws {
+        let facts = ["SPY tracks the S&P 500 benchmark; the outlook is uncertain."]
+        let replies = [
+            #"{"action":"Hold","reason":"SPY may move over ۷–۱۴ sessions.","risk":"Uncertainty remains.","evidence":["F1"]}"#,
+            #"{"action":"Hold","reason":"The S&P ۵۰۰ outlook is mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#,
+            #"{"action":"Hold","reason":"SPY may move over ٧–١٤ sessions.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        ]
+        for reply in replies {
+            let result = A.validate(reply, facts: facts, symbol: "SPY")
+            guard case .failure(let failure) = result else {
+                Issue.record("A Unicode numeral reply was accepted")
+                continue
+            }
+            #expect(failure == .nonASCIINumber)
+        }
+
+        let repeatedFactNumber = #"{"action":"Hold","reason":"The S&P 500 outlook is mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        let inventedNumber = repeatedFactNumber.replacingOccurrences(of: "S&P 500", with: "SPY may reach 999")
+        guard case .failure(let repeatedFailure) = A.validate(repeatedFactNumber, facts: facts, symbol: "SPY"),
+              case .failure(let inventedFailure) = A.validate(inventedNumber, facts: facts, symbol: "SPY") else {
+            Issue.record("An unsupported ASCII numerical claim was accepted")
+            return
+        }
+        #expect(repeatedFailure == .unboundNumber)
+        #expect(inventedFailure == .foreignNumber)
+        #expect(A.parse(repeatedFactNumber, facts: facts, symbol: "SPY") == nil)
+        #expect(A.parse(inventedNumber, facts: facts, symbol: "SPY") == nil)
+    }
+
+    @Test func sharedCompletionLabelsInitialAndEvidenceRepairAttempts() async throws {
+        typealias S = StockSageLocalModelServer
+        let draft = #"{"action":"Hold","reason":"The outlook is mixed.","risk":"Uncertainty remains."}"#
+        let repaired = #"{"action":"Hold","reason":"The outlook is mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        let config = self.config
+        var calls = 0
+        var events: [S.ModelAttemptEvent] = []
+        let result = await A.complete(config, isOllama: true, system: A.instructions,
+            user: A.prompt(facts: ["The supplied evidence is mixed."]),
+            facts: ["The supplied evidence is mixed."], maxTokens: 240,
+            stillValid: { true }, transport: { request in
+                calls += 1
+                let content = calls == 1 ? draft : repaired
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "model": config.model,
+                    "message": ["content": content],
+                    "done_reason": "stop"
+                ])
+                let response = try #require(HTTPURLResponse(url: request.url!, statusCode: 200,
+                                                            httpVersion: nil, headerFields: nil))
+                return (body, response)
+            }, attemptObserver: { events.append($0) })
+        let completion = try #require(try? result.get())
+        #expect(completion.text == repaired)
+        #expect(calls == 2)
+        try #require(events.count == 4)
+        #expect(events.map(\.phase) == ["initial", "initial", "evidence-repair", "evidence-repair"])
+        #expect(events.map(\.stage) == [.started, .finished, .started, .finished])
+        #expect(events.map(\.ordinal) == [0, 0, 0, 0])
+        #expect(Set(events.map(\.callID)).count == 2)
+        #expect(events[0].callID == events[1].callID)
+        #expect(events[2].callID == events[3].callID)
+        #expect(events[0].callID != events[2].callID)
+    }
+
     @Test(arguments: ["answer", "repair"], ["success", "failure", "truncated"])
     func settingsReleaseObsoleteSlotAndLateResultCannotTouchReplacement(phase: String, result: String) async throws {
         let suite = "assessment.settings.\(UUID().uuidString)"

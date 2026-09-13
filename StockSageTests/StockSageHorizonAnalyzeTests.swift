@@ -122,9 +122,12 @@ struct StockSageHorizonAnalyzeTests {
             let ids = try #require(items["enum"] as? [String])
             #expect(ids.first == "F1" && !ids.contains("W1"))
             let reason = try #require(properties["reason"] as? [String: Any])
-            let pattern = try #require(reason["pattern"] as? String)
-            #expect("Qualitative case".range(of: pattern, options: .regularExpression) != nil)
-            #expect("Gains of 50%".range(of: pattern, options: .regularExpression) == nil)
+            #expect(reason["type"] as? String == "string")
+            #expect(reason["minLength"] as? Int == 1)
+            #expect(reason["maxLength"] as? Int == 600)
+            #expect(reason["pattern"] == nil) // Swift validates numeral scripts and offered F/W references.
+            let messages = try #require(object["messages"] as? [[String: String]])
+            #expect(messages.contains { $0["role"] == "system" && ($0["content"]?.contains("ANY script") ?? false) })
             throw URLError(.cancelled) // No inventory or real network needed for this request-boundary test.
         })
         #expect(dispatched)
@@ -201,6 +204,8 @@ struct StockSageHorizonAnalyzeTests {
                                   contextTokens: Server.researchContextTokens))
         #expect(result.model == Server.defaultModel)
         #expect(!result.facts.isEmpty)
+        #expect(result.validationOutcome == .validated)
+        #expect(result.validationFailure == nil)
     }
 
     // The horizon facts define the requested holding period and the reference entry. They are
@@ -228,12 +233,28 @@ struct StockSageHorizonAnalyzeTests {
         let result = await run(model: { Self.ok(truncated, $0) })
         #expect(result.verdict == nil, "a truncated answer became a published opinion")
         #expect(result.note.localizedCaseInsensitiveContains("output limit"))
+        #expect(result.validationOutcome == .unknown)
+        #expect(result.validationFailure == nil)
     }
 
     @Test func aModelFailureYieldsNoOpinionAndSaysSo() async throws {
         let result = await run(model: { _ in throw URLError(.timedOut) })
         #expect(result.verdict == nil)
         #expect(result.note.localizedCaseInsensitiveContains("no verified opinion"))
+        #expect(result.validationOutcome == .unknown)
+        #expect(result.validationFailure == nil)
+    }
+
+    @Test func anInvalidNumericClaimIsMarkedRejectedWithTheValidatorReason() async throws {
+        let invalid = try! JSONSerialization.data(withJSONObject: [
+            "model": Server.defaultModel,
+            "message": ["content": #"{"evidence":["F1"],"action":"Hold","reason":"Expected profit 999%","risk":"The setup can reverse."}"#],
+            "done_reason": "stop",
+        ])
+        let result = await run(model: { Self.ok(invalid, $0) })
+        #expect(result.verdict == nil)
+        #expect(result.validationOutcome == .rejected)
+        #expect(result.validationFailure == StockSageAIAssessment.ValidationFailure.foreignNumber.rawValue)
     }
 
     @Test func anUnparseableAnswerYieldsNoOpinion() async throws {
@@ -245,6 +266,8 @@ struct StockSageHorizonAnalyzeTests {
         let result = await run(model: { Self.ok(garbage, $0) })
         #expect(result.verdict == nil)
         #expect(result.note.localizedCaseInsensitiveContains("no verified opinion"))
+        #expect(result.validationOutcome == .rejected)
+        #expect(result.validationFailure == StockSageAIAssessment.ValidationFailure.malformedJSON.rawValue)
     }
 
     // MARK: Gates that must stop the request before it ever reaches the model
@@ -256,6 +279,8 @@ struct StockSageHorizonAnalyzeTests {
         #expect(!called, "a non-USD listing reached the model")
         #expect(result.verdict == nil)
         #expect(result.note.localizedCaseInsensitiveContains("usd"))
+        #expect(result.validationOutcome == .unknown)
+        #expect(result.validationFailure == nil)
     }
 
     @Test func anUnsupportedTickerIsNeverAnalysed() async throws {

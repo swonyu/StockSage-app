@@ -393,12 +393,13 @@ struct StockSageModelHarnessTests {
 
     // MARK: Failures stay distinguishable on every surface
 
-    // Sixteen of eighteen diagnostic categories used to collapse into one message per surface,
+    // Diagnostic categories used to collapse into one message per surface,
     // so a server that WAS reached and answered still told the user to check their connection.
     @Test func everyDiagnosticCategoryKeepsADistinguishableCause() {
         let categories: [S.FailureCategory] = [.invalidConfig, .unavailable, .modelMissing, .unsupportedModel,
             .nonHTTP, .http, .malformedJSON, .responseShape, .missingContent, .emptyContent, .timeout,
-            .cancelled, .network, .obsoleteRequest, .policyDenied, .responseTooLarge, .contextBudget, .incompleteOutput]
+            .cancelled, .network, .obsoleteRequest, .policyDenied, .responseTooLarge, .contextBudget,
+            .incompleteOutput, .degenerateOutput]
         var seen: Set<S.FailureCause> = []
         for category in categories {
             seen.insert(S.cause(for: .init(category: category)))
@@ -412,7 +413,7 @@ struct StockSageModelHarnessTests {
     // The reached-and-answered failures must never be described as connection problems.
     @Test func reachedAndAnsweredFailuresAreNotCalledConnectionProblems() {
         // These are the categories that mean the server was reached and answered.
-        for category in [S.FailureCategory.http, .responseTooLarge, .incompleteOutput,
+        for category in [S.FailureCategory.http, .responseTooLarge, .incompleteOutput, .degenerateOutput,
                          .emptyContent, .malformedJSON, .responseShape, .modelMissing] {
             let message = StockSageChat.unavailableMessage(for: .init(category: category))
             #expect(!message.lowercased().contains("could not be reached"),
