@@ -71,6 +71,52 @@ struct StockSageBenzingaClientTests {
         }
     }
 
+    @Test func explicitFreshPageBypassesCacheAndPreservesAccessGate() async throws {
+        var time = Date(timeIntervalSince1970: 1_789_293_600), calls = 0, allowed = true
+        let client = C(key: { "synthetic" }, revision: { "epoch" }, allowed: { allowed },
+            now: { time }, transport: { request in calls += 1; return Self.reply(request) })
+        let first = await client.page(for: query())
+        time = time.addingTimeInterval(1)
+        let cached = await client.page(for: query())
+        #expect(calls == 1 && cached.checkedAt == first.checkedAt)
+        let fresh = await client.page(for: query(), bypassCache: true)
+        #expect(calls == 2 && fresh.checkedAt > first.checkedAt)
+        allowed = false
+        #expect(await client.page(for: query(), bypassCache: true).status == .unavailable(.policyDenied))
+        #expect(calls == 2)
+    }
+
+    @Test func freshSnapshotPassesCompanyIdentityBeforeRawBodyClipping() async throws {
+        let time = ISO8601DateFormatter().date(from: "2026-09-13T12:00:00Z")!
+        let content = String(repeating: "Other company has ordinary news. ", count: 50)
+            + "Acme Holdings revenue rose 12.5%."
+        let body = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": [[
+            "benzinga_id": 123, "tickers": ["AAPL"], "author": "Fixture", "title": "Many companies",
+            "url": "https://www.benzinga.com/news/123", "published": "2026-09-13T11:00:00Z",
+            "last_updated": "2026-09-13T11:30:00Z", "body": content]]])
+        let client = C(key: { "synthetic" }, revision: { "epoch" }, allowed: { true }, now: { time },
+            transport: { request in Self.reply(request, body: request.url!.path.hasSuffix("/news") ? body : Self.empty) })
+        let capture = await client.snapshot(for: "AAPL", now: time, fresh: true, companyName: "Acme Holdings")
+        let record = try #require(capture.pages.first { $0.query.product == .news }?.records.first)
+        #expect(record.excerpt == "Acme Holdings revenue rose 12.5%.")
+    }
+
+    @Test func explicitFreshRequestCannotJoinOlderInFlightWork() async throws {
+        let wire = Wire(), timers = Timers()
+        let client = C(key: { "synthetic" }, revision: { "epoch" }, allowed: { true },
+                       transport: { try await wire.send($0) }, sleepUntil: { try await timers.sleep(until: $0) })
+        let old = Task { await client.page(for: query()) }
+        defer { old.cancel(); wire.finishAll(); timers.releaseAll() }
+        try await waitFor { wire.pending.count == 1 }
+        let fresh = Task { await client.page(for: query(), bypassCache: true) }
+        defer { fresh.cancel() }
+        try await waitFor { wire.pending.count == 2 }
+        #expect(wire.calls.count == 2 && wire.peak <= 3)
+        wire.finishAll()
+        #expect(await old.value.status == .answered)
+        #expect(await fresh.value.status == .answered)
+    }
+
     @Test func singleFlightPeerCancellationAndFallbackShareThreeSlots() async throws {
         let wire = Wire(), timers = Timers()
         let client = C(key: { "synthetic" }, revision: { "revision1" }, allowed: { true },

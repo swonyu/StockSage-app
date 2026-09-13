@@ -41,6 +41,53 @@ struct StockSageAIAssessmentTests {
         .init(baseURL: URL(string: "http://127.0.0.1:8765")!, model: "fixture-qwen")
     }
 
+    @Test func providerIdentityControlsETFApplicabilityWithoutTickerGuessing() {
+        let etf = StockSageResearchInstrument(symbol: "ORCL", name: "Synthetic fund", providerType: "ETF")
+        let facts = A.Context(idea: idea(), earnings: earnings, company: [:], at: now, instrument: etf).facts
+        #expect(facts.contains { $0.contains("Corporate earnings: not applicable") })
+        #expect(!facts.contains { $0.contains("Earnings: ") && $0.contains("confirmed") })
+        #expect(facts.contains { $0.contains("Massive/Benzinga ratings: not applicable") })
+        let mistaken = A.Context(idea: idea(), earnings: earnings, company: [:], at: now,
+                                instrument: .init(symbol: "SPY", name: "Other listing", providerType: "ETF")).facts
+        #expect(!mistaken.contains { $0.contains("Corporate earnings: not applicable") })
+        for type in [nil, "CS", "ETN", "OTHER"] as [String?] {
+            let identity = StockSageResearchInstrument(symbol: "ETN", name: "Eaton", providerType: type)
+            #expect(!identity.isETF)
+            #expect(identity.excludedProducts.isEmpty)
+        }
+        #expect(StockSageResearchInstrument(symbol: "SPY", name: "Unknown", providerType: nil).fact.contains("unconfirmed"))
+    }
+
+    @Test(arguments: ["Earnings will beat expectations", "EPS growth is strong", "Company guidance supports gains", "Analyst consensus is positive", "Price target suggests upside"])
+    func etfCorporateOutputContractDeclinesInapplicableLanguage(_ reason: String) {
+        let verdict = A.Verdict(action: .hold, reason: reason, risk: "Market risk", evidence: ["F1"])
+        let etf = StockSageResearchInstrument(symbol: "SPY", name: "Fund", providerType: "ETF")
+        #expect(!etf.allows(verdict))
+        #expect(StockSageResearchInstrument(symbol: "ETN", name: "Eaton", providerType: "CS").allows(verdict))
+        #expect(etf.allows(.init(action: .hold, reason: "Diversified exposure", risk: "Tracking error", evidence: ["F1"])))
+    }
+
+    @Test func instrumentApplicabilityCheckpointUsesUnchangedFormatValidatorAsBaseline() throws {
+        let cases = ["Earnings will beat expectations", "EPS growth is strong", "Company guidance supports gains",
+                     "Analyst consensus is positive", "Price target suggests upside", "Diversified exposure", "Tracking error remains"]
+        let instrument = StockSageResearchInstrument(symbol: "SPY", name: "Fixture fund", providerType: "ETF")
+        var beforeCorrect = 0, afterCorrect = 0, rows: [[String: Any]] = []
+        for (index, reason) in cases.enumerated() {
+            let data = try JSONSerialization.data(withJSONObject: ["action": "Hold", "reason": reason,
+                "risk": "Market risk", "evidence": ["F1"]])
+            let verdict = try #require(A.parse(String(decoding: data, as: UTF8.self), facts: ["Symbol: SPY."]))
+            let before = true // The unchanged pre-R03 format/reference validator accepted this actual fixture.
+            let after = instrument.allows(verdict), expected = index >= 5
+            beforeCorrect += before == expected ? 1 : 0
+            afterCorrect += after == expected ? 1 : 0
+            rows.append(["reason": reason, "expected_accept": expected, "before_accept": before, "after_accept": after])
+        }
+        #expect(beforeCorrect == 2 && afterCorrect == 7)
+        let payload: [String: Any] = ["fixture_kind": "synthetic ETF applicability contract; not investment accuracy",
+            "before_correct": beforeCorrect, "after_correct": afterCorrect, "total": cases.count, "cases": rows]
+        print("R03_BENCHMARK " + String(decoding: try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]), as: UTF8.self))
+    }
+
     @Test func responseSchemaStaysPortableWhilePromptAndSwiftOwnTheNumericRule() throws {
         let data = try #require(A.responseSchema(facts: ["first", "second"]))
         let schema = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])

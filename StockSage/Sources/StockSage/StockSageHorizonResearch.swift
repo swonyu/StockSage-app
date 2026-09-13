@@ -51,6 +51,9 @@ final class StockSageHorizonResearch: ObservableObject {
         var validationOutcome: ValidationOutcome = .unknown
         var validationFailure: String? = nil
         var referenceClose: (value: Double, at: Date)? = nil
+        var newsCheckedAt: Date? = nil
+        var newestNewsAt: Date? = nil
+        var newsCheckSummary: String? = nil
     }
     struct Scan {
         var listings: [Listing] = []
@@ -58,6 +61,13 @@ final class StockSageHorizonResearch: ObservableObject {
         var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) US listings once."
         var at: Date?
         var selection: StockSageResearchUniverse.Receipt?
+        var requestedAt: Date? = nil
+        var lastAttemptAt: Date? = nil
+        var attemptFinishedAt: Date? = nil
+        var retainsEarlierResults = false
+        var changes: [String: String] = [:]
+        var completedAt: Date? = nil
+        var previousCompletedAt: Date? = nil
     }
     @Published private(set) var scans: [Horizon: Scan] = [:]
     @Published private(set) var running: Horizon?
@@ -183,7 +193,9 @@ final class StockSageHorizonResearch: ObservableObject {
         let previousScan = scans[horizon]
         let receiptID = receiptStore?.begin(horizon: horizon)
         running = horizon
-        scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) US listings by dated trading activity…", at: Date())
+        let requestedAt = Date()
+        scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) US listings by dated trading activity…", at: requestedAt,
+            requestedAt: requestedAt, lastAttemptAt: requestedAt, completedAt: nil, previousCompletedAt: previousScan?.completedAt)
         task = Task {
             var didStart = false
             var attemptID: UUID?
@@ -221,6 +233,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     }
                     guard valid() else { throw CancellationError() }
                     scans[horizon]?.results[item.ticker] = result
+                    scans[horizon]?.changes[item.ticker] = StockSageResearchFreshness.change(from: previousScan?.results[item.ticker], to: result)
                     if let receiptStore, let receiptID, let id = attemptID {
                         let terminal = result.verdict == nil ? (result.note.localizedCaseInsensitiveContains("interrupted") ? "interrupted" : "rejected") : "accepted"
                         receiptStore.finishAttempt(result, attemptID: id, scanID: receiptID, status: terminal)
@@ -228,6 +241,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     attemptID = nil
                     activeSymbol = nil
                 }
+                scans[horizon]?.completedAt = Date()
                 scans[horizon]?.status = "Scan finished · \(names.count) listings checked once. No orders created."
             } catch {
                 if let receiptStore, let receiptID, let id = attemptID {
@@ -236,7 +250,11 @@ final class StockSageHorizonResearch: ObservableObject {
                         status: error is CancellationError ? "interrupted" : "failed")
                 }
                 // A failed preflight is not a replacement run; restore captured data and its dates.
-                if !didStart, let previousScan { scans[horizon] = previousScan }
+                if !didStart, let previousScan {
+                    scans[horizon] = previousScan
+                    scans[horizon]?.lastAttemptAt = requestedAt
+                    scans[horizon]?.retainsEarlierResults = true
+                }
                 if !valid() {
                     let reason = Task.isCancelled ? "Stop requested" : (interruptionReason() ?? "Model settings or access changed")
                     let count = scans[horizon]?.results.count ?? 0
@@ -255,6 +273,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 receiptStore.finish(scanID: receiptID, status: scans[horizon]?.status ?? "finished")
                 if receiptStore.persistenceFailed(scanID: receiptID) { scans[horizon]?.status += " Receipt persistence failed; durable coverage is unavailable." }
             }
+            scans[horizon]?.attemptFinishedAt = Date()
         }
         return true
     }
@@ -268,7 +287,13 @@ final class StockSageHorizonResearch: ObservableObject {
         guard task == nil else { return }
         guard let config = StockSageAIAssessments.configuration, StockSageMassive.isConfigured,
               ToolPolicy.isExternalAllowed, !store.isSampleData else {
-            scans[horizon, default: Scan()].status = "Enable web access, Massive and the local Qwen model in Settings. No scan started."
+            let attemptAt = Date()
+            let retained = !(scans[horizon]?.results.isEmpty ?? true)
+            scans[horizon, default: Scan()].lastAttemptAt = attemptAt
+            scans[horizon]?.attemptFinishedAt = attemptAt
+            scans[horizon]?.retainsEarlierResults = retained
+            scans[horizon]?.status = "Enable web access, Massive and the local Qwen model in Settings. No scan started."
+                + (retained ? " Earlier scan data retained; no new listings checked." : "")
             return
         }
         let key = StockSageMassive.apiKey
@@ -349,7 +374,7 @@ final class StockSageHorizonResearch: ObservableObject {
         if let benzingaSnapshot {
             benzinga = await benzingaSnapshot(item.ticker, newsAt)
         } else {
-            benzinga = await StockSageBenzingaClient.shared.snapshot(for: item.ticker, now: newsAt)
+            benzinga = await StockSageBenzingaClient.shared.snapshot(for: item.ticker, now: newsAt, fresh: true, companyName: item.name)
         }
         let evidenceAllowed: @MainActor () -> Bool = {
             allowed() && !Task.isCancelled
@@ -364,12 +389,21 @@ final class StockSageHorizonResearch: ObservableObject {
             news = await newsObservation(item.ticker, newsAt, newsPage)
         } else {
             news = await StockSageNewsService.observation(for: item.ticker, limit: 3, now: newsAt,
-                                                          benzingaPage: newsPage)
+                                                          benzingaPage: newsPage, companyName: item.name)
         }
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
-        let context = StockSageAIAssessment.Context(idea: idea, earnings: store.catalystChain[item.ticker],
-            company: store.companyEventChecks[item.ticker] ?? [:], at: Date(), newsObservation: news, quotedInUSD: true, benzinga: benzinga)
+        let assessmentAt = Date()
+        let catalyst = store.catalystChain[item.ticker]
+        let instrument = StockSageResearchInstrument(symbol: item.ticker, name: item.name, providerType: item.type)
+        let context = StockSageAIAssessment.Context(idea: idea, earnings: catalyst,
+            company: store.companyEventChecks[item.ticker] ?? [:], at: assessmentAt, newsObservation: news, quotedInUSD: true, benzinga: benzinga, instrument: instrument)
         var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
+        horizonFacts.append(instrument.fact)
+        let temporalEvents = StockSageResearchHorizonCalendar.capturedEvents(
+            benzinga: benzinga, catalyst: catalyst, at: assessmentAt,
+            excludingProducts: instrument.excludedProducts)
+        horizonFacts.append(StockSageResearchHorizonCalendar.mandatoryFact(
+            at: assessmentAt, horizon: horizon, events: temporalEvents))
         for period in [7, 14] {
             if let value = StockSageIndicators.returnOverPeriod(history.closes, period: period), value.isFinite {
                 horizonFacts.append("Observed return over the last \(period) completed daily bars: \(value)%. Bar window ends \(history.dates.last!.ISO8601Format()). Historical change, not an expected return.")
@@ -378,19 +412,21 @@ final class StockSageHorizonResearch: ObservableObject {
         // Pack to the model's real allowance rather than a hardcoded 12,000 bytes; the horizon
         // facts are mandatory (they define the requested holding period and the reference entry)
         // and are never dropped. Omissions are disclosed in the returned note.
-        let optionalFacts = context.facts(maximumUTF8Bytes: 12_000)
+        let optionalFacts = context.facts(maximumUTF8Bytes: 12_000).filter { $0 != instrument.fact }
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
                 optional: optionalFacts, mandatory: horizonFacts,
                 system: { _ in horizon.instructions },
                 outputTokens: Self.researchOutputTokens) else {
             return .init(facts: horizonFacts,
-                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.", referenceClose: referenceClose)
+                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.", referenceClose: referenceClose,
+                         newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         }
         let facts = fitted.facts
         let trimmedNote = fitted.isComplete
             ? ""
             : " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
-        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion." + trimmedNote, referenceClose: referenceClose) }
+        guard context.canAssess(at: Date()) else { return .init(facts: facts, note: "Evidence exceeded the age or size limit; no opinion." + trimmedNote, referenceClose: referenceClose,
+                         newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary) }
         let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
             system: fitted.system, user: fitted.user, facts: facts,
             maxTokens: Self.researchOutputTokens,
@@ -400,21 +436,31 @@ final class StockSageHorizonResearch: ObservableObject {
         // A verdict truncated at the output limit is refused, exactly as in paper research.
         if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
             return .init(facts: facts,
-                         note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote, referenceClose: referenceClose)
+                         note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote, referenceClose: referenceClose,
+                         newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         }
         guard context.canAssess(at: Date()), case .success(let completion) = response else {
-            return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, referenceClose: referenceClose)
+            return .init(facts: facts, note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, referenceClose: referenceClose,
+                         newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         }
         switch StockSageAIAssessment.validate(completion.text, facts: facts) {
         case .success(let verdict):
+            guard instrument.allows(verdict) else {
+                return .init(facts: facts, note: "No verified opinion. The ETF answer used excluded corporate earnings or analyst-target language." + trimmedNote,
+                             model: config.model, validationOutcome: .rejected, validationFailure: "instrumentApplicability",
+                             referenceClose: referenceClose, newsCheckedAt: news.latestCheckAt,
+                             newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
+            }
             return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
                 facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote,
-                model: config.model, validationOutcome: .validated, referenceClose: referenceClose)
+                model: config.model, validationOutcome: .validated, referenceClose: referenceClose,
+                         newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         case .failure(let failure):
             return .init(facts: facts,
                 note: "No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote,
                 model: config.model, validationOutcome: .rejected, validationFailure: failure.rawValue,
-                referenceClose: referenceClose)
+                referenceClose: referenceClose,
+                         newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         }
     }
 }

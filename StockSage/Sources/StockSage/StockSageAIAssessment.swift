@@ -15,12 +15,13 @@ enum StockSageAIAssessment {
         let asOf: Date
         /// Only for a provider-confirmed USD listing; suffixes can name US share classes.
         let quotedInUSD: Bool
+        let instrument: StockSageResearchInstrument?
 
         init(idea: StockSageIdea, earnings: StockSageCatalystRecordCache.Record?,
              company: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation],
              news: [StockSageNewsService.NewsItem]? = nil, research: StockSageResearchLeads.Snapshot? = nil, at: Date? = nil,
              newsObservation: StockSageNewsService.Observation? = nil, quotedInUSD: Bool = false,
-             benzinga: StockSageBenzinga.Snapshot? = nil) {
+             benzinga: StockSageBenzinga.Snapshot? = nil, instrument: StockSageResearchInstrument? = nil) {
             self.idea = idea; self.earnings = earnings; self.company = company
             let snapshotTime = at ?? idea.generatedAt ?? Date()
             asOf = snapshotTime
@@ -29,6 +30,7 @@ enum StockSageAIAssessment {
             self.research = research
             self.quotedInUSD = quotedInUSD
             self.benzinga = benzinga
+            self.instrument = instrument.flatMap { $0.symbol.uppercased() == idea.symbol.uppercased() ? $0 : nil }
         }
 
         var facts: [String] { facts(maximumUTF8Bytes: 12_000) }
@@ -46,10 +48,13 @@ enum StockSageAIAssessment {
                 "Technical rules: \(idea.advice.action.rawValue), regime: \(idea.advice.regime.rawValue). Analysis time: \(idea.generatedAt?.ISO8601Format() ?? "unknown"). These rules are not proven predictive probabilities.",
                 "Technical rationale: " + idea.advice.rationale.joined(separator: " ")
             ]
+            if let instrument { result.append(instrument.fact) }
             if let vol = idea.realizedVol, vol.isFinite, vol >= 0 {
                 result.append("Historical annualized volatility: \(String(format: "%.1f", vol * 100))%.")
             }
-            if let e = earnings, e.symbol == idea.symbol.uppercased() {
+            if instrument?.isETF == true {
+                result.append("Corporate earnings: not applicable to the provider-confirmed ETF; corporate earnings records withheld.")
+            } else if let e = earnings, e.symbol == idea.symbol.uppercased() {
                 let status: String
                 let age = asOf.timeIntervalSince(e.checkedAt)
                 if !(0..<StockSageStore.earningsCheckTTL).contains(age) {
@@ -65,6 +70,10 @@ enum StockSageAIAssessment {
                 result.append("Earnings: \(e.earningsDate?.ISO8601Format() ?? "date unavailable"), status: \(status). Source: \(e.source). Last checked: \(e.checkedAt.ISO8601Format()). A scheduled release does not establish a beat or price direction.")
             } else { result.append("Earnings: not checked; date and outcome unknown.") }
             for feed in StockSageMassiveEvents.Feed.allCases {
+                guard instrument?.allows(feed) != false else {
+                    result.append("\(feed.source): not applicable to this ETF; corporate records withheld.")
+                    continue
+                }
                 let record = company[feed].flatMap { $0.symbol == idea.symbol.uppercased() && $0.feed == feed ? $0 : nil }
                 result.append(StockSageMassiveEvents.statusLine(feed, observation: record, now: asOf))
                 if let record, record.fresh(at: asOf), record.outcome == .answered,
@@ -86,8 +95,10 @@ enum StockSageAIAssessment {
             result.append("Full filings were not retrieved. Absent evidence is not evidence of absence. No independently validated predictive edge or earnings outcome is supplied.")
             if let benzinga, benzinga.symbol == idea.symbol.uppercased(),
                let projection = StockSageBenzinga.projection(benzinga,
-                    maximumUTF8Bytes: max(0, maximumUTF8Bytes - result.joined(separator: "\n").utf8.count - 1))
-                    ?? StockSageBenzinga.projection(benzinga, maximumUTF8Bytes: 12_000, maximumRecords: 0) {
+                    maximumUTF8Bytes: max(0, maximumUTF8Bytes - result.joined(separator: "\n").utf8.count - 1),
+                    excludingProducts: instrument?.excludedProducts ?? [])
+                    ?? StockSageBenzinga.projection(benzinga, maximumUTF8Bytes: 12_000, maximumRecords: 0,
+                        excludingProducts: instrument?.excludedProducts ?? []) {
                 // Mandatory states may exceed the budget; callers must reject, not silently omit them.
                 result.append(projection.text)
             }

@@ -15,6 +15,41 @@ import Testing
             highs: Array(repeating: 102, count: 35), lows: Array(repeating: 98, count: 35),
             closes: Array(repeating: 100, count: 35), volumes: Array(repeating: 1000, count: 35), priceSource: .massiveDaily)
     }
+    @Test func failedRerunPreservesOldCompletionClockAndExposesAttemptTime() async throws {
+        let research = R()
+        func finished() async throws {
+            for _ in 0..<1000 {
+                if research.running == nil { return }
+                await Task.yield()
+            }
+            try #require(research.running == nil)
+        }
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing()]) },
+            analyze: { _ in .init(note: "first result", at: now) })
+        #expect(started)
+        try await finished()
+        let first = try #require(research.scans[.week])
+        #expect(first.completedAt != nil)
+        let retry = research.start(.week, allowed: { true }, universe: { throw URLError(.notConnectedToInternet) },
+            analyze: { _ in Issue.record("Failed preflight must not analyze"); return .init(note: "unexpected") })
+        #expect(retry)
+        try await finished()
+        let retained = try #require(research.scans[.week])
+        #expect(retained.retainsEarlierResults)
+        #expect(retained.at == first.at && retained.completedAt == first.completedAt)
+        #expect(retained.results["AAPL"]?.at == now)
+        #expect(retained.lastAttemptAt != nil && retained.attemptFinishedAt != nil)
+        let refresh = research.start(.week, allowed: { true }, universe: { .init([listing()]) },
+            analyze: { _ in .init(note: "new result", at: now.addingTimeInterval(3600)) })
+        #expect(refresh)
+        try await finished()
+        let updated = try #require(research.scans[.week])
+        #expect(!updated.retainsEarlierResults)
+        #expect(updated.results["AAPL"]?.note == "new result")
+        #expect(updated.previousCompletedAt == first.completedAt)
+        #expect(updated.changes["AAPL"]?.contains("1h 0m ago") == true)
+    }
+
     @Test func requestBindsHostPathAndHeaderWithoutLeakingKey() throws {
         let r = try #require(R.referenceRequest(key: "synthetic-test-only"))
         #expect(r.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-test-only")

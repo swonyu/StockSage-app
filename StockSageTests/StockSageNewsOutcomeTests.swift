@@ -133,6 +133,13 @@ struct StockSageNewsOutcomeTests {
         #expect(result.items.isEmpty && result.attempts.count == 1)
         #expect(result.attempts[0].status == .unavailable(.cancelled))
     }
+    @Test func unattemptedNewsStagesNeverClaimACheckTime() {
+        let unchecked = N.Attempt(provider: .massive, checkedAt: now, status: .notChecked(.missingKey))
+        #expect(N.Observation(attempts: [unchecked]).latestCheckAt == nil)
+        let earlier = N.Attempt(provider: .benzinga, checkedAt: now.addingTimeInterval(-60), status: .answered)
+        #expect(N.Observation(attempts: [earlier, unchecked]).latestCheckAt == earlier.checkedAt)
+    }
+
     @Test("Transport throws safe failure class without error text")
     func transportFailure() async {
         let result = await N.observe(for: "AAPL", now: now, allowed: { true }, clock: { now }, request: request) { _ in
@@ -156,7 +163,7 @@ struct StockSageNewsOutcomeTests {
         let summary = N.Observation(attempts: [parsed]).summary
         #expect(summary.contains("stale 1, future 1, missing/invalid date 1, other invalid 1"))
     }
-    @Test("Exact duplicates collapse; revisions, opposite numbers and publishers survive")
+    @Test("Duplicate stories merge with attribution; numeric revisions survive")
     func revisions() throws {
         let original = row()
         var changed = original; changed["description"] = "Revenue fell -12%."
@@ -164,7 +171,9 @@ struct StockSageNewsOutcomeTests {
         var longA = original; longA["description"] = String(repeating: "Detail ", count: 100) + "rose 12%"
         var longB = longA; longB["description"] = String(repeating: "Detail ", count: 100) + "fell -12%"
         let items = N.parseMassiveNews(try data(["results": [original, original, changed, publisher, longA, longB]]), symbol: "AAPL", now: now)
-        #expect(items.count == 5 && Set(items.map(\.id)).count == 5)
+        #expect(items.count == 4 && Set(items.map(\.id)).count == 4)
+        #expect(Set(items.flatMap { $0.provenance.map(\.revision) }).count == 5)
+        #expect(items.contains { $0.provenance.count == 2 && $0.source.contains("Other Fixture") })
     }
     @Test("Invalid bounds and permission revoked during request construction stop transport")
     func beforeTransport() async {

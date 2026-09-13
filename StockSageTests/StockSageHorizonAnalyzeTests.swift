@@ -105,6 +105,28 @@ struct StockSageHorizonAnalyzeTests {
 
     // MARK: The path runs, and what it sends is bounded
 
+    @Test(arguments: ["ETF", "CS"])
+    func productionPathPreservesProviderIdentityAndChecksApplicability(_ type: String) async throws {
+        let listing = Research.Listing(ticker: "ACME", name: "Fixture", market: "stocks", locale: "us",
+                                       active: true, type: type, currency_name: "usd", primary_exchange: "XNYS")
+        var sentUser = ""
+        let result = await run(listing: listing, model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            sentUser = messages.last?["content"] ?? ""
+            let draft = #"{"evidence":["F1"],"action":"Hold","reason":"Earnings will beat expectations","risk":"Market risk"}"#
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                "message": ["content": draft], "done_reason": "stop"]), request)
+        })
+        #expect(sentUser.contains("provider type " + type))
+        #expect(sentUser.components(separatedBy: "Instrument identity from Massive").count == 2)
+        #expect(result.referenceClose != nil)
+        if type == "ETF" {
+            #expect(result.verdict == nil)
+            #expect(result.validationFailure == "instrumentApplicability")
+        } else { #expect(result.verdict != nil) }
+    }
+
     @Test func lmStudioResearchConstrainsTheRequiredAnswerShape() async throws {
         var dispatched = false
         _ = await run(isOllama: false, model: { request in
@@ -220,6 +242,10 @@ struct StockSageHorizonAnalyzeTests {
         })
         #expect(sentUser.contains(Research.Horizon.week.rawValue))
         #expect(sentUser.localizedCaseInsensitiveContains("Research only"))
+        #expect(sentUser.contains("Holding-risk calendar"))
+        #expect(sentUser.contains("Current captured event timing")
+                || sentUser.contains("Captured event timing is unknown"))
+        #expect(sentUser.localizedCaseInsensitiveContains("not proof of no events"))
     }
 
     // MARK: Honest failure, never a fabricated opinion

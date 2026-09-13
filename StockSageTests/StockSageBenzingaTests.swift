@@ -62,10 +62,44 @@ struct StockSageBenzingaTests {
         return value
     }
     private func page(_ product: B.Product, rows: [[String: Any]]? = nil,
-                      subject: String? = nil, generation: String? = "epoch") throws -> B.Page {
+                      subject: String? = nil, generation: String? = "epoch",
+                      companyName: String? = nil) throws -> B.Page {
         let subject = subject ?? (product == .analysts ? "AnalystA" : product == .firms ? "FirmA" : "AAPL")
         return B.parse(try body(rows ?? [row(product)]), query: query(product, subject: subject),
-                       checkedAt: now, credentialGeneration: generation)
+                       checkedAt: now, credentialGeneration: generation, companyName: companyName)
+    }
+
+    @Test func etfProjectionWithholdsCorporateRecordsWithoutCallingThemBudgetTrimming() throws {
+        let pages = try [B.Product.earnings, .consensusRatings, .news].map { try page($0) }
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: pages)
+        let before = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000))
+        #expect(before.records.contains { $0.product == .earnings })
+        #expect(before.records.contains { $0.product == .consensusRatings })
+        let identity = StockSageResearchInstrument(symbol: "AAPL", name: "Synthetic ETF", providerType: "ETF")
+        let filtered = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000,
+                                                excludingProducts: identity.excludedProducts))
+        #expect(filtered.records.allSatisfy { $0.product == .news })
+        #expect(filtered.records.count == 1)
+        #expect(filtered.inapplicableRecordCount == 2)
+        #expect(filtered.trimmedRecordCount == 0)
+        #expect(filtered.text.contains("not applicable to supplied instrument"))
+        #expect(snapshot.pages.count == 3, "Raw captured evidence remains available for receipts")
+        let original = B.Projection(statusLines: [], records: [], omittedRecordCount: 0)
+        let data = try JSONEncoder().encode(original)
+        #expect(!String(decoding: data, as: UTF8.self).contains("inapplicableRecordCount"))
+        #expect(try JSONDecoder().decode(B.Projection.self, from: data) == original)
+    }
+
+    @Test func emptyBodyTeaserRevisionsCannotCollapseIntoOneFingerprint() throws {
+        var first = row(.news)
+        first["body"] = ""
+        first["teaser"] = "AAPL revenue rose 12%."
+        var second = first
+        second["teaser"] = "AAPL revenue fell -12%."
+        let captured = try page(.news, rows: [first, second])
+        #expect(captured.records.count == 2)
+        #expect(Set(captured.records.compactMap(\.contentFingerprint)).count == 2)
+        #expect(StockSageNewsService.benzingaAttempt(captured, symbol: "AAPL", now: now).items.count == 2)
     }
 
     @Test func requestsUseNineExactContractsWithoutCredentialURLs() throws {
@@ -153,9 +187,22 @@ struct StockSageBenzingaTests {
         let parsed = try page(.news, rows: [first, first, second])
         try #require(parsed.records.count == 2)
         #expect(Set(parsed.records.map(\.id)).count == 2)
+        #expect(parsed.records.compactMap(\.contentFingerprint).count == 2
+                && parsed.records[0].contentFingerprint != parsed.records[1].contentFingerprint)
         #expect(Set(parsed.records.map(\.vendorID)) == ["123"])
         #expect(parsed.records.allSatisfy { ($0.excerpt?.count ?? 0) <= 400 })
         #expect(parsed.records[0].excerpt == parsed.records[1].excerpt)
+    }
+
+    @Test func newsSelectsRawCompanyPassageBeforeRecordExcerptCap() throws {
+        var value = row(.news)
+        value["company_name"] = "Acme Holdings"
+        value["body"] = String(repeating: "Background context. ", count: 80)
+            + "<div>Acme Holdings reported revenue of 12.5% and $1,250.50.</div>"
+        let record = try #require(try page(.news, rows: [value], companyName: "Acme Holdings").records.first)
+        #expect(record.excerpt?.contains("Acme Holdings reported revenue of 12.5% and $1,250.50.") == true)
+        #expect(record.excerpt?.contains("Background") == false)
+        #expect(record.excerpt?.contains("<div>") == false)
     }
 
     @Test func newsKeepsHeadlineOnlyAndExactPublicationBoundary() throws {

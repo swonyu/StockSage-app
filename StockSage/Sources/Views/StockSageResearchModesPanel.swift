@@ -10,6 +10,7 @@ struct StockSageResearchModesPanel: View {
         var selected: String?
     }
     @Binding var presentation: Presentation
+
     private var selected: String? {
         get { presentation.selected }
         nonmutating set { presentation.selected = newValue }
@@ -21,6 +22,62 @@ struct StockSageResearchModesPanel: View {
     private var buysOnly: Bool {
         get { presentation.buysOnly }
         nonmutating set { presentation.buysOnly = newValue }
+    }
+
+    private var marketStatus: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let status = StockSageResearchFreshness.market(at: context.date)
+            let color: Color = switch status.tone {
+            case .green: .green
+            case .amber: .orange
+            case .red: .red
+            case .gray: .gray
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Searching US stocks & ETFs").font(.headline)
+                Label(status.phaseLabel, systemImage: status.tone == .green ? "circle.fill" : "clock.fill")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(color)
+                Text("NYSE · Nasdaq · other eligible US exchanges · USD · no OTC").font(.caption)
+                Text("New York: \(status.clock)").monospacedDigit()
+                Text("Next session change: \(status.next)").font(.caption)
+                Text("Scheduled hours · \(status.caveat)").font(.caption2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12).background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func freshness(_ scan: StockSageHorizonResearch.Scan) -> some View {
+        TimelineView(.periodic(from: .now, by: 30)) { tick in
+            VStack(alignment: .leading, spacing: 4) {
+                if scan.retainsEarlierResults {
+                    Label("Earlier results retained · latest attempt did not refresh them", systemImage: "exclamationmark.clock")
+                        .foregroundStyle(.orange).font(.callout.weight(.semibold))
+                }
+                if let requested = scan.at {
+                    Text("Displayed run requested: \(requested.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(requested, at: tick.date))")
+                }
+                if let last = scan.lastAttemptAt {
+                    Text("Latest attempt: \(last.formatted(date: .abbreviated, time: .standard))")
+                }
+                if let finished = scan.attemptFinishedAt, scan.completedAt == nil || scan.retainsEarlierResults {
+                    Text("Latest attempt ended: \(finished.formatted(date: .abbreviated, time: .standard))")
+                }
+                if let completed = scan.completedAt {
+                    Text("Displayed run completed: \(completed.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(completed, at: tick.date))")
+                }
+                if let latest = scan.results.values.map(\.at).max() {
+                    Text("Latest result: \(latest.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(latest, at: tick.date))")
+                }
+                if let news = scan.results.values.compactMap(\.newsCheckedAt).max() {
+                    Text("Latest news check: \(news.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(news, at: tick.date)). Check status and publication dates in each result.")
+                }
+                if let previous = scan.previousCompletedAt, let requested = scan.at, !scan.retainsEarlierResults {
+                    Text("Previous run completed \(StockSageResearchFreshness.age(previous, at: requested)) when this run began.")
+                }
+            }.font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     var body: some View {
@@ -62,6 +119,7 @@ struct StockSageResearchModesPanel: View {
                 ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
             }.pickerStyle(.segmented)
                 .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; buysOnly = false }
+            marketStatus
             Text("Up to \(StockSageHorizonResearch.scanLimit) US listings selected by recent trading activity, then researched for your chosen horizon. Research only; no orders.")
                 .font(.callout).foregroundStyle(.secondary)
             if let running = research.running, running != presentation.horizon {
@@ -84,6 +142,7 @@ struct StockSageResearchModesPanel: View {
                     run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Self.scanStatus(scan.status, isRunning: isRunning)
+                    freshness(scan)
                     if let selection = scan.selection {
                         Text(selection.summary).font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -218,7 +277,7 @@ struct StockSageResearchModesPanel: View {
                     if let activity = scan.selection?.detail(for: selected) {
                         Text(activity).font(.caption).foregroundStyle(.secondary)
                     }
-                    Self.resultDetail(item, result: scan.results[selected])
+                    Self.resultDetail(item, result: scan.results[selected], change: scan.changes[selected])
                 }.padding(20)
             }
             .toolbar {
@@ -328,12 +387,26 @@ struct StockSageResearchModesPanel: View {
     }
 
     static func resultDetail(_ item: StockSageHorizonResearch.Listing,
-                              result: StockSageHorizonResearch.Result?) -> some View {
+                              result: StockSageHorizonResearch.Result?, change: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("\(item.ticker) · \(item.name)").font(.headline)
             Text("Type: \(item.type ?? "unconfirmed") · \(item.primary_exchange ?? "exchange unconfirmed")").font(.caption)
             if let result {
                 Text(result.note).font(.callout)
+                TimelineView(.periodic(from: .now, by: 30)) { tick in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Research checked: \(result.at.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(result.at, at: tick.date))")
+                        if let checked = result.newsCheckedAt {
+                            Text("News checked: \(checked.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(checked, at: tick.date))")
+                        } else { Text("News check time unavailable for this result") }
+                        if let published = result.newestNewsAt {
+                            Text("Newest retained article: \(published.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(published, at: tick.date))")
+                        } else { Text("No usable article retained; this is not proof of no news") }
+                        if let summary = result.newsCheckSummary { Text(summary) }
+                        if let change { Text("Since previous run: " + change) }
+                    }.font(.caption).foregroundStyle(.secondary)
+                }
+
                 if let verdict = result.verdict {
                     Text("\(verdict.action.rawValue) · \(verdict.reason)")
                     Text("Risk: \(verdict.risk)").foregroundStyle(.secondary)
