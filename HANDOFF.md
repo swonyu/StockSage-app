@@ -1,3 +1,128 @@
+# Current handoff — paused September 13, 2026
+
+Salman requested stopping work for today, committing this handoff and continuing later.
+This checkpoint is for `/Users/salman/Stocksage Project`. Older sections below describe
+other dates and machines; use this checkpoint and current Git state when resuming here.
+
+## Saved state
+
+- Branch: `codex/research-quality-fixes`.
+- Latest application-source commit: `c74d553b72b98973a77d95e6061dddabec3fb9cf`, pushed.
+- Earlier fix batch: `ca53ed0f78c119b3b2c23cc7a9231f8799475ee2`, pushed.
+- Remote branch matched local source when checked on September 13. Local and remote
+  `main` remain `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`; no merge to main.
+- This closing commit changes the handoff only. No application-source edits since the gates.
+- Both Codex automations are **PAUSED**: `refresh-stocksage-research-audit`
+  (changelog only) and `watch-incoming-stocksage-version` (app updater).
+  Resume the changelog monitor when active fixing resumes; leave the updater paused
+  until explicitly authorized. No implementation or model work should run while paused.
+- Only the root worktree remains. Worker handoffs were archived and hash-checked in
+  ignored `.research/worker-handoff-20260913.tar.gz` and
+  `.research/worker-handoff-batch2-20260913.tar.gz` before cleanup.
+
+## Completed fixes
+
+The report's IDs are the canonical recommendation identities:
+
+- R06: aligned prompt, response schema and numeric/reference validator.
+- R13: bounded retries for clearly degenerate output.
+- R09/R10: durable per-listing coverage and model-call/validation/display receipts.
+- R01/R02: company-relevant news passages before clipping, markup cleanup and
+  conservative duplicate merging with source/revision provenance retained.
+- R04: dated events classified against the research holding window; certainty and
+  unsupported-calendar states remain explicit.
+- R03: provider instrument type in facts and conservative ETF applicability checks.
+- APP-FRESHNESS: Run Again fetches fresh bounded evidence; attempt/result/news times,
+  retained old results and prior-run differences are explicit. The UI identifies the
+  US stock/ETF market, USD/no OTC scope, New York clock and colored/text-labeled session state.
+
+These changes are compiled and tested branch code. The installed app was not replaced,
+and visual QA has not been performed for these two batches.
+
+## Verified build and tests
+
+Fresh closeout build, September 13 at 22:56 Riyadh: **BUILD SUCCEEDED**, exit 0,
+macOS arm64 Debug, Xcode 26.6 (17F113), two build jobs. Incremental wall time: 5.263 s.
+Bundle metadata is version **1.0**, build **1**; use the source commit to distinguish updates.
+Signing was disabled for this build check; it was not installed or launched.
+All 374 files in the final source/test/project snapshot matched the earlier native gate
+before and after this build. The gate's aggregate SHA256 is
+`3e876d1461fbd8b53cc659ae8d7c0323b4e97f4fe26a5f9b436ee01e03ed13f6`.
+
+Reproducible build (choose a new result bundle for each invocation):
+
+```bash
+cd '/Users/salman/Stocksage Project'
+xcodebuild -project StockSage.xcodeproj -scheme StockSage \
+  -destination 'platform=macOS,arch=arm64' -configuration Debug \
+  -derivedDataPath '/Users/salman/Library/Caches/StockSageAuditFixes/DerivedData' \
+  -resultBundlePath '/Users/salman/Library/Logs/StockSageAuditFixes/next-build.xcresult' \
+  -jobs 2 'OTHER_SWIFT_FLAGS=$(inherited) -j2' CODE_SIGNING_ALLOWED=NO build
+```
+
+- Built app: `/Users/salman/Library/Caches/StockSageAuditFixes/DerivedData/Build/Products/Debug/StockSageX.app`.
+- Executable SHA256: `d779e544a4e1badc66bc6f99a9f0b01c99940aabe8e7594a74c437f3276127e8`.
+- Fresh build log/result: `/Users/salman/Library/Logs/StockSageAuditFixes/pause-build-20260913.log`
+  and matching `.xcresult` bundle. Machine-readable receipt:
+  `.research/fix-benchmarks/pause-20260913/build-verification.json`.
+- Earlier final full macOS gate on the same source: **2,464 unique tests passed,
+  2,816 parameterized executions passed, one existing opt-in skip, zero failures**.
+  Evidence: `batch2-full-v2-20260913.xcresult` and `.log` in the same log directory;
+  `.research/fix-benchmarks/batch2/full-macos-summary.json`.
+- Only README's three optional suites were excluded: `CalibrationPersistRunTests`,
+  `LiveUniverseVerificationTests`, `StrategyBaselineMeasurementTests`.
+- Earlier iOS app-module compile passed in 88 s. iPhone runtime tests were unavailable:
+  Xcode 26.6 reported iOS 26.5 not installed and no eligible iPhone destination.
+  Compilation is not runtime verification. Do not install a platform incidentally.
+- No tests were rerun for this documentation-only closeout; the new verification is a build.
+
+## Report, measurements and local skills
+
+Keep the single colored report at
+`/Users/salman/Library/Application Support/StockSage Updater/Reports/2026-09-13-live-research-audit/report.html`.
+It contains the summary, source/model baseline, exact original research evidence,
+implementation ledger, one recommended-stock comparison table, measured checkpoints
+and improvement-only changelog. Do not create parallel PDF/Markdown audit reports.
+Full measurements belong in its benchmark sections; the changelog holds deltas only.
+Report, ignored `.research` receipts and other generated metadata remain unstaged.
+
+Synthetic guards and historical replay do not establish investment accuracy, live
+research speed or model-training benefit. This batch used no new local inference,
+training or full research scan. LM Studio logs may belong to another task.
+
+Validated skills live under `/Users/salman/bin/system-files/codex/skills/`, discoverable
+through the existing `~/.codex/skills` symlink:
+`stocksage-research-audit`, `stocksage-benchmark`, `stocksage-news-freshness`.
+These canonical workflow files are local, outside the StockSage Git commit.
+The report maintainer is `/Users/salman/bin/system-files/stocksage-updater/report_audit.py`;
+read its adjacent `REPORT_MAINTENANCE.md` before report changes. Do not rerun the archived
+one-shot `.research/finalize-batch2-report.py`; it is not idempotent.
+
+## Resume from here
+
+1. Confirm this branch/HEAD, source hashes and current toolchain. Read the report's
+   current ledger plus `.research/research-quality-fixes-plan.md`; do not restart
+   completed batches or infer current state from the older handoffs below.
+2. Next recorded order: **R08** analyst action versus consensus typing; **R27**
+   missing-fact/evidence coverage; **R05** typed price/target comparisons; **R07**
+   claim-to-citation support. Recheck acceptance criteria before editing. Other
+   model/training/hardware ideas retain the report's evidence gates.
+3. Freeze a baseline, implement one bounded recommendation batch and run appropriate
+   deterministic checks, with one native test owner and serial builds. Add benchmark
+   checkpoints after major progress. Honor branch-only commits; do not merge to main.
+4. Before any authorized local LM Studio experiment, read
+   `/Users/salman/bin/system-files/lmstudio/skills/resource-trade/SKILL.md`.
+   Log in as `stocksage`, save our session UUID, request the exact downloaded model key
+   with an honest task/reason/estimate, and wait for our own held instance. Preserve
+   other holders/FIFO; use broker heartbeats/release/logout as documented. Never edit
+   `queue.json`, impersonate another task, or unload a model owned by another session.
+   No StockSage broker session/reservation was created by this closeout.
+5. Preserve FaceTime/Safari and user records. Existing unrelated untracked files remain:
+   `.claude/`, `Astra_Trading_Master_Prompt.md`, `Astra_Trading_Plan.pdf`,
+   `Trading_Roadmap.md`, `Trading_Roadmap.pdf`. Do not include them in the handoff commit.
+
+---
+
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
 ## Main publication verification — September 12, after installation
