@@ -165,35 +165,31 @@ enum StockSageLocalModelServer {
     static let defaultURL = "http://127.0.0.1:11434"
     static let defaultModel = "qwen3.8"
 
-    /// Context window declared by the EVIDENCE-HEAVY callers (paper research, horizon research,
-    /// AI assessment, Catalyst explanations). Conversational Chat keeps the owner's 4,096
-    /// interactive target, which its own prompt budget already fits inside.
+    /// Client context target for evidence-heavy research callers. Chat declares its own
+    /// 32,768 target. These are input/output budgets, not verified server allocations.
+    /// Research compiles up to 12,000 UTF-8 bytes; 4,096 could not hold that evidence plus
+    /// instructions and output. The Ollama path sends this target as `num_ctx`; the
+    /// OpenAI-compatible path does not configure the model's load-time context.
     ///
-    /// Why this is not 4,096: those callers compile up to 12,000 UTF-8 bytes of facts, and
-    /// `chatRequest` sends `contextTokens` to Ollama verbatim as `num_ctx`. Declaring 4,096 while
-    /// sending 12,000 bytes meant the server silently truncated evidence — mandatory execution
-    /// facts, cash constraints and risk disclosures could fall off the end with nothing reported.
-    /// 16,384 leaves every one of those callers' existing 12,000-byte budgets fitting whole.
+    /// Dated observations differ: the September 10 probe reported 262,144 and accepted
+    /// a 24,206-byte prompt as 11,015 units. On September 14 this M5 Pro/24 GB host's
+    /// Qwen3.5-9B MLX load reported 71,680 after a 16,384 request. A separate remote
+    /// instance reported 262,144. None guarantees a later local or remote allocation;
+    /// verify the actual model, device and loaded context before inference.
     ///
-    /// Measured 2026-09-10 (receipts in `StockSage-harness-20260910.opus/`): LM Studio auto-fits
-    /// this model to a 262,144 runtime window regardless of the requested value, and accepted a
-    /// single 24,206-byte prompt as 11,015 units, so 16,384 is well inside the served capacity.
-    /// This is a REQUEST target, not a claim about the model's maximum or the server's allocation.
-    ///
-    /// COST OF RAISING IT, derived from the model's own config rather than assumed: this is a
-    /// HYBRID architecture — `full_attention_interval` 4 over 64 layers, so only 16 layers hold
-    /// a KV cache that grows with context; the other 48 are linear-attention (Gated DeltaNet)
-    /// layers whose state is constant-size regardless of context length. With 4 KV heads and a
-    /// 256 head dim, the growing part is 2 (K and V) x 16 layers x 4 heads x 256 dim = 32,768
-    /// elements per token, and the config's dtype is bfloat16, so at 2 bytes each that is
-    /// 64 KiB per token. 4,096 -> 16,384 therefore costs about 768 MiB, or about 384 MiB if the
-    /// server keeps an 8-bit KV cache. Negligible on this 48 GB machine.
-    ///
-    /// Scope of that derivation: it is the ARCHITECTURE's cost, not a measurement of any server.
-    /// A runtime that ignored the hybrid layout and allocated KV uniformly across all 64 layers
-    /// would pay roughly 4x more (~3 GiB), and LM Studio — which clamps this model to its own
-    /// 262,144 window regardless of the requested value — may not track `num_ctx` at all. The
-    /// conclusion holds either way at this scale; the arithmetic bounds the honest case.
+    /// Config-derived estimate, NOT measured allocation: the audited artifact is
+    /// mlx-community/Qwen3.5-9B-6bit, config SHA256
+    /// 6d92400233a58e9ea0e61198aeaee4ef671e9ad2bed4658066a547e3149edbe8.
+    /// Its text config has 32 layers, with 8 labelled full_attention (interval 4),
+    /// 4 KV heads, head_dim 256 and dtype bfloat16. An idealized growing KV cache is
+    /// 2 (K/V) x 8 layers x 4 heads x 256 elements x 2 bytes = 32 KiB/token.
+    /// A 4,096 -> 16,384 increase would add 384 MiB at bf16, or 192 MiB with a
+    /// hypothetical 8-bit KV cache. The artifact's 6-bit WEIGHT quantization does not
+    /// establish KV precision. Uniform allocation across all 32 layers would instead
+    /// add 1.5 GiB at bf16. These estimates exclude linear-attention state, weights,
+    /// vision, work buffers and allocator overhead; they predict neither total usage
+    /// nor LM Studio's actual allocation. They do not apply to the Ollama qwen3.8 tag
+    /// or a different local/remote model. Source receipts: September 14 audit report.
     nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"

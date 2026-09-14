@@ -1,5 +1,7 @@
 # Qwen research and simulated trading
 
+> Historical snapshot (2026-09-08): this document describes the Saleh-host Qwen3.8 27B MLX research and paper-trading snapshot. Present-tense configuration and hardware statements below are dated evidence, not the current host or runtime. The September 14 audit used Qwen3.5-9B MLX 6-bit on an Apple M5 Pro with 24 GB; local and remote loaded context must be verified separately. See current `HANDOFF.md` and the single colored audit report.
+
 Implemented in `codex/qwen-chat-context`, isolated from the shared coverage worktree
 at committed base `7e6e7aa`. No broker credentials, real orders, real-journal
 changes, new dependencies, or changes to the frozen prospective research pilot.
@@ -83,7 +85,7 @@ tokenizer in the app; normal English may use substantially less than 32K tokens.
 Current evidence that cannot fit fails explicitly. History accepts longer replies
 and uses a 2 MB file limit. Short catalyst calls retain their smaller defaults.
 
-The running MLX server's 256-token CLI setting is an output default, overridden
+At the September 8 run, the MLX server's 256-token CLI setting was an output default, overridden
 per request. Its model was not restarted or duplicated. The local model and
 [official Qwen model card](https://huggingface.co/Qwen/Qwen3.8-27B#model-overview)
 declare a 262,144-token native context; the app deliberately uses a smaller budget.

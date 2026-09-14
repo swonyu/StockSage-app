@@ -1,5 +1,7 @@
 # A faster, better-grounded AI system for StockSage
 
+> Historical snapshot (2026-09-10): this document describes the /Users/saleh/StockSage-wt/qwen-context checkout and its then-observed host/profile. Present-tense configuration and hardware statements below are dated evidence, not the current host or runtime. The September 14 audit used Qwen3.5-9B MLX 6-bit on an Apple M5 Pro with 24 GB; local and remote loaded context must be verified separately. See current `HANDOFF.md` and the single colored audit report.
+
 ## Executive recommendation
 
 **Improve the harness first; retain Qwen3.5-9B MLX 6-bit as the baseline; add specialists only where a controlled comparison demonstrates a benefit.** Use the owner's paid Massive and Benzinga products as the evidence supply, deterministic code for prices, arithmetic and execution constraints, and a local language model for interpretation. Keep the fine-tuned 27B available for rollback, not permanently loaded alongside every new candidate.

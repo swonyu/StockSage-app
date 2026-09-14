@@ -1,3 +1,36 @@
+# Latest checkpoint — 2026-09-14T01:58:53.941743+00:00 — R26 completed
+
+This checkpoint supersedes older completion counts. **10/27 recommendations complete
+(37.0%)**, including existing R17; R08/R27 remain partial. R26 corrected source comments
+and marked historical documents as dated snapshots. No executable Swift text changed:
+line-comment-stripped before/after source matched exactly. Fresh macOS build passed
+in8.941s; full native results remain2,481 unique passed/2,836 executions/skip1/fail0
+from the immediately preceding `2e37fd8` implementation checkpoint.
+
+Verified local metadata: `mlx-community/Qwen3.5-9B-6bit`, config SHA256
+`6d92400233a58e9ea0e61198aeaee4ef671e9ad2bed4658066a547e3149edbe8`,32text layers,
+8full-attention layers,4KV heads,256head dimension. Host is Apple M5 Pro/24GB.
+Idealized bf16 growing KV estimate is32KiB/token;4K→16K increment384MiB
+(hypothetical8-bit192MiB; uniform32-layer bf16 allocation1.5GiB). These are
+config-derived estimates, NOT actual allocations or measured memory savings.
+The artifact's6-bit weight quantization does not identify KV cache precision.
+Historical Saleh-host document measurements remain unchanged and labelled as dated.
+
+Receipts: `.research/fix-benchmarks/resume-20260914/r26-metadata-verification.json`
+and `r26-build-gate.json`. Report/changelog/roadmap updates must keep this distinction.
+Latest sent report before this checkpoint is revision34, Gmail message
+`1a09d9e2e31fee98`,5,738,412-byte attachment verified. Check newer ignored email receipts
+for delivery updates. Keep the single colored HTML; no main merge or app installation.
+Source/build/test work remains on `codex/research-quality-fixes`.
+
+Next: R05 exact record/field/currency/date/basis comparisons, R07 semantic claim support,
+and R14 actual context/reasoning profile verification. The other LM Studio setup task
+confirmed no new verified MLX context fix or distinct non-thinking profile. A prior remote
+27B benign arithmetic probe with zero reasoning tokens did not prove reasoning-mode control.
+No local GPU lease remains; preserve all remote instances and FaceTime/Safari.
+
+---
+
 # Latest checkpoint — 2026-09-14T01:47:00.898629+00:00
 
 Continue on `codex/research-quality-fixes`; do not merge main. This checkpoint supersedes

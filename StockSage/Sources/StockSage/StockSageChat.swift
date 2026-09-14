@@ -14,12 +14,12 @@ enum StockSageChat {
     /// six sources, the facts and a few history turns at once — so the loop trims because evidence
     /// is genuinely too large, not because the ceiling was set below one required input.
     ///
-    /// COST, on the same derivation as `StockSageLocalModelServer.researchContextTokens`: the
-    /// growing KV cache is 64 KiB per token for this hybrid model, so 4,096 -> 32,768 is about
-    /// 1.75 GiB, negligible on this 48 GB machine. That cost is only paid on the Ollama path,
-    /// where this value is sent verbatim as `num_ctx`. On the OpenAI-compatible path it is not
-    /// sent at all, and the LM Studio server this points at is already loaded with a 262,144
-    /// window (measured via /api/v0/models), so nothing server-side truncates at this size.
+    /// This is a client budget, not a memory estimate or a verified server window.
+    /// Ollama receives it as `num_ctx`; OpenAI-compatible requests do not configure
+    /// load-time context. The backend can be a different model or a remote LM Link
+    /// device, so Qwen3.5-9B artifact arithmetic cannot be generalized to this path.
+    /// Inspect the actual loaded model/device/context; the dated September 10
+    /// 262,144 observation does not establish current capacity or prevent truncation.
     nonisolated static let contextTokens = 32_768
     nonisolated static let outputTokens = 512
     nonisolated static let requestTimeout: TimeInterval = 300
