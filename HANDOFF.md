@@ -1,3 +1,52 @@
+# Current handoff — resumed September 14, 2026
+
+This checkpoint supersedes the paused September 13 section below. Salman resumed
+implementation and authorized local GPU tests, branch commits/pushes, and emailed
+colored report checkpoints. Do not merge main. Primary task:
+`01a09652-9a4a-7260-82a6-e949fe0c3dbc`.
+
+- Current application source is still `c74d553b72b98973a77d95e6061dddabec3fb9cf`;
+  branch handoff HEAD `e42da28` was verified pushed September 14. Main remains
+  `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`. New helper/docs commits follow on
+  this same fix branch; inspect Git for their exact resulting revision.
+- Completion: **9/27 implemented (33.3%)**, including the pre-existing R17 guard;
+  eight newly finished recommendations plus separate APP-FRESHNESS. No new
+  recommendation is complete in this resumption yet.
+- Private report-delivery details omitted.
+- The changelog-only heartbeat is **ACTIVE**; the app updater remains **PAUSED**.
+  Standalone `stocksage-spark-fallback-continuation` is ACTIVE every 30 minutes on
+  `gpt-5.3-codex-spark` high. It defers while ordinary usage is available or the
+  primary task runs. At 01:03 UTC ordinary usage was still allowed (23% remaining).
+- Read `agent-docs/SPARK_CONTINUATION.md` for the concrete ownership, automatic
+  commit/push and email procedure. All providers must use
+  `tools/research_continuation.py` on `.research/continuation-state.json`.
+  Eleven temp-state tests passed, including claim races and interrupted-owner
+  takeover with fresh quota/task evidence. Actual future Spark execution is unproven.
+- `tools/research_model_replay.py` prepared six frozen cases by compiling the actual
+  before/after Swift prompt/schema/validator. Preparation passed, but no inference
+  result is claimed yet. Its context/device checks fail closed; frozen input and
+  generated artifacts stay under `.research/fix-benchmarks/resume-20260914/`.
+- GPU setup found remote preferred-device routing and ignored requested context.
+  The temporary remote instance from our first attempt was explicitly removed;
+  no inference was sent to it. An explicitly selected local copy reported 71,680
+  context instead of 16,384 and was unloaded. A later SDK attempt failed with LM
+  Link keepalive errors. Recheck broker/model state before proceeding; do not use
+  saved instance names blindly. Existing remote 27B remains owned by the other task.
+- R08 typed analyst evidence is prepared but UNTESTED in isolated worktree
+  `/Users/salman/StockSage-worktrees/research-analyst`, branch
+  `codex/r08-analyst-evidence`. Only Benzinga source/tests changed there. Review
+  projection byte cost and R05 exact-target validation dependency before integration.
+- Next implementation order remains R08, R27, R05, R07. Local roadmap:
+  `.research/ROADMAP.md`. Do not count prepared code or synthetic acceptance as
+  completed financial accuracy. No full-universe research or training.
+
+Prior macOS 2,464 unique tests /2,816 executions, iOS module compile and 5.263-second
+closeout build below remain dated September 13 on unchanged application source.
+They were not rerun by this documentation/tooling checkpoint. The app was not
+installed or launched. Preserve all unrelated user files and the one HTML report.
+
+---
+
 # Current handoff — paused September 13, 2026
 
 Salman requested stopping work for today, committing this handoff and continuing later.
