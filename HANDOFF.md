@@ -6118,3 +6118,9 @@ Owner directives recorded today, applied going forward:
 Still open from pipeline 2 (honesty-scoped, not defects): Yahoo `earningsHistory` for `.SR` names unverified (429s);
 EODHD tier now known to be unauthorized (see above); `notApplicable` is driven by `assetClass != "Equity"` only —
 no ETF classifier exists in the codebase and none was invented.
+
+## Typed analyst target checkpoint — 2026-09-14T11:12:00Z
+
+R05 is now implemented for the analyst target path, and the R08 target-validation slice is complete. `AnalystEvidence.TargetComparison` derives a deterministic current-versus-previous target direction from the typed record; `validateTargetClaim` fails closed unless record identity, revision, field, amount, currency, date, basis, and optional direction all match. Split-adjusted, wrong-currency, wrong-date, wrong-field, wrong-record, and contradictory-direction claims are covered by regression tests. R07 semantic claim-to-citation support remains open.
+
+Benchmark: focused Benzinga suite passed 25 Swift Testing tests with zero failures. Full macOS gate passed 2,483 tests in 231 suites with zero failures in 90.424 seconds, with the three established optional suites excluded. Standalone Debug build passed and produced `/Users/salman/Library/Caches/StockSageAuditFixes/DerivedData-r05-full/Build/Products/Debug/StockSageX.app`; executable SHA-256 is `d779e544a4e1badc66bc6f99a9f0b01c99940aabe8e7594a74c437f3276127e8`. No iOS gate, live data run, or investment-accuracy claim was made.

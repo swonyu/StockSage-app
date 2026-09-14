@@ -383,6 +383,30 @@ struct StockSageBenzingaTests {
         #expect(!record.sourceText.contains("amount "))
     }
 
+    @Test func targetClaimsRequireExactRecordFieldCurrencyDateBasisAndDirection() throws {
+        let record = try #require(try page(.ratings).records.first)
+        let comparison = try #require(record.ratingTargetComparison)
+        #expect(comparison.recordID == record.id && comparison.revision == record.revision)
+        #expect(comparison.field == .ratingCurrent && comparison.previous == Decimal(100)
+                && comparison.current == Decimal(110) && comparison.direction == .raised)
+        let valid = B.AnalystEvidence.TargetClaim(recordID: comparison.recordID, revision: comparison.revision,
+            field: comparison.field, amount: comparison.current, currency: comparison.currency,
+            date: comparison.date, basis: comparison.basis, direction: .raised)
+        #expect(B.validateTargetClaim(valid, against: record))
+        #expect(!B.validateTargetClaim(.init(recordID: "other", revision: valid.revision, field: valid.field,
+            amount: valid.amount, currency: valid.currency, date: valid.date, basis: valid.basis, direction: valid.direction), against: record))
+        #expect(!B.validateTargetClaim(.init(recordID: valid.recordID, revision: valid.revision, field: .ratingPrevious,
+            amount: valid.amount, currency: valid.currency, date: valid.date, basis: valid.basis, direction: valid.direction), against: record))
+        #expect(!B.validateTargetClaim(.init(recordID: valid.recordID, revision: valid.revision, field: valid.field,
+            amount: valid.amount, currency: "EUR", date: valid.date, basis: valid.basis, direction: valid.direction), against: record))
+        #expect(!B.validateTargetClaim(.init(recordID: valid.recordID, revision: valid.revision, field: valid.field,
+            amount: valid.amount, currency: valid.currency, date: "2026-09-11", basis: valid.basis, direction: valid.direction), against: record))
+        #expect(!B.validateTargetClaim(.init(recordID: valid.recordID, revision: valid.revision, field: valid.field,
+            amount: valid.amount, currency: valid.currency, date: valid.date, basis: "split-adjusted", direction: valid.direction), against: record))
+        #expect(!B.validateTargetClaim(.init(recordID: valid.recordID, revision: valid.revision, field: valid.field,
+            amount: valid.amount, currency: valid.currency, date: valid.date, basis: valid.basis, direction: .lowered), against: record))
+    }
+
     @Test func insightAnalystEvidenceKeepsMissingCurrencyMissingRatherThanBorrowingIt() throws {
         var row = row(.analystInsights)
         row["rating_action"] = "maintains"

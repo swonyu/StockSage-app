@@ -79,10 +79,46 @@ enum StockSageBenzinga {
                 case .high: "consensus high target"
                 }
             }
+
+            var basis: String {
+                switch self {
+                case .ratingCurrent, .ratingPrevious: "original"
+                case .insight: "insight"
+                case .consensus, .low, .high: "consensus"
+                }
+            }
         }
         nonisolated struct Target: Equatable, Codable, Sendable {
             let field: TargetField
             let amount: Decimal
+        }
+
+        nonisolated enum TargetDirection: String, Codable, Sendable, Equatable {
+            case raised, lowered, unchanged, unknown
+        }
+
+        nonisolated struct TargetComparison: Equatable, Codable, Sendable {
+            let recordID: String
+            let revision: String
+            let symbol: String
+            let field: TargetField
+            let date: String
+            let currency: String
+            let basis: String
+            let previous: Decimal
+            let current: Decimal
+            let direction: TargetDirection
+        }
+
+        nonisolated struct TargetClaim: Equatable, Codable, Sendable {
+            let recordID: String
+            let revision: String
+            let field: TargetField
+            let amount: Decimal
+            let currency: String
+            let date: String
+            let basis: String
+            let direction: TargetDirection?
         }
 
         let action: String?
@@ -121,6 +157,25 @@ enum StockSageBenzinga {
         /// Optional so captures created before typed analyst fields remain decodable.
         var analystEvidence: AnalystEvidence? = nil
 
+        /// A rating target change is comparable only inside one exact provider record.
+        /// Missing record identity, date, currency, or original basis is unknown, never inferred.
+        var ratingTargetComparison: AnalystEvidence.TargetComparison? {
+            guard product == .ratings, let symbol, let evidence = analystEvidence,
+                  let date = evidence.date, let currency = evidence.currency,
+                  self.date == date,
+                  let current = evidence.targets.first(where: { $0.field == .ratingCurrent }),
+                  let previous = evidence.targets.first(where: { $0.field == .ratingPrevious }),
+                  current.amount > 0, previous.amount > 0 else { return nil }
+            let direction: AnalystEvidence.TargetDirection
+            if current.amount > previous.amount { direction = .raised }
+            else if current.amount < previous.amount { direction = .lowered }
+            else { direction = .unchanged }
+            return .init(recordID: id, revision: revision, symbol: symbol,
+                         field: .ratingCurrent, date: date, currency: currency,
+                         basis: AnalystEvidence.TargetField.ratingCurrent.basis,
+                         previous: previous.amount, current: current.amount, direction: direction)
+        }
+
         /// Never substitutes a local check clock or slices a numeric field to fit a prompt.
         var sourceText: String {
             var lines = [source + (symbol.map { " · " + $0 } ?? "") + " · provider claim"]
@@ -143,6 +198,9 @@ enum StockSageBenzinga {
                 lines.append("Analyst provenance: same provider record; " + fields.joined(separator: "; ")
                              + (targetFields.isEmpty ? "." : "; target fields " + targetFields + "."))
             }
+            if let comparison = ratingTargetComparison {
+                lines.append("Typed target comparison: record (comparison.recordID), revision (comparison.revision), field (comparison.field.rawValue), (comparison.currency) (comparison.previous) to (comparison.current), date (comparison.date), basis (comparison.basis), direction (comparison.direction.rawValue).")
+            }
             if let excerpt { lines.append(excerpt) }
             if product == .bullsBearsSay {
                 lines.append("Bull: " + (bullCase ?? "not supplied"))
@@ -150,6 +208,21 @@ enum StockSageBenzinga {
             }
             return lines.joined(separator: "\n")
         }
+    }
+
+    /// Validate a target claim against the exact typed record that supplied it.
+    /// A claim with a missing or contradictory identity fails closed.
+    nonisolated static func validateTargetClaim(_ claim: AnalystEvidence.TargetClaim, against record: Record) -> Bool {
+        guard let comparison = record.ratingTargetComparison,
+              claim.recordID == comparison.recordID,
+              claim.revision == comparison.revision,
+              claim.field == comparison.field,
+              claim.amount == comparison.current,
+              claim.currency == comparison.currency,
+              claim.date == comparison.date,
+              claim.basis == comparison.basis,
+              claim.direction.map({ $0 == comparison.direction }) ?? true else { return false }
+        return true
     }
 
     nonisolated enum Failure: Error, Equatable, Codable, Sendable {
