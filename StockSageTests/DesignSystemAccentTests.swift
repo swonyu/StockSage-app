@@ -32,6 +32,18 @@ struct DesignSystemAccentTests {
         #expect(contrast(text, [0.2, 0.2, 0.2]) >= 4.5)
     }
 
+    @Test @MainActor func macAndPhoneShareOpaqueCharcoalSurfaces() throws {
+        for (color, expected) in [(DS.Palette.bgTop, [0.094, 0.094, 0.102]),
+                                  (DS.Palette.bgBottom, [0.094, 0.094, 0.102]),
+                                  (DS.Bezel.cardFill, [0.137, 0.137, 0.149])] {
+            let rgba = try components(color)
+            for index in 0..<3 { #expect(abs(rgba[index] - expected[index]) < 0.001) }
+            #expect(rgba[3] == 1, "Surfaces must not change color with the content behind them")
+        }
+        #expect(StockSageDesktop.icon(for: .briefing) == "house")
+        #expect(StockSageDesktop.icon(for: .watchlist) == "star")
+    }
+
     @MainActor private func components(_ color: Color) throws -> [Double] {
         #if os(macOS)
         let color = try #require(NSColor(color).usingColorSpace(.sRGB))

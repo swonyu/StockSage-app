@@ -1,3 +1,90 @@
+## Publication authorized — 15 September 2026
+
+Owner explicitly requested “commit merge and push” for the completed iOS design
+parity and local watchlist/Chat fix described below. Publish this batch to the
+existing `swonyu/StockSage-app` origin `main` and implementation branch. Earlier
+no-publication statements record implementation stages and are superseded for
+this batch. The complete 385-file app/test/project manifest matches the final
+passed Mac/iOS gates; this publication changes no app code after that validation.
+The installed Mac app and physical-iPhone installation status remain separate.
+
+## iOS 27 Mac design parity ready — 14 September 2026
+
+Owner requested the iOS app use the Mac colors and design. Shared charcoal canvas,
+solid surfaces, magenta accent, titles/icons, Home/Research/Watchlist/Chat/Ideas and
+Portfolio presentation are implemented. Native iPhone tabs, More navigation and
+settings sheets remain. Chat uses its own scroll plus pinned composer, preserves
+literal ticker input, stacks actions at accessibility sizes and scrolls the feed
+notice with the transcript to fit the software keyboard. The earlier watchlist fix
+below is included. No new dependencies. No new commit, merge or push.
+
+FINAL source manifest: Codex cp workspace `work/ios-mac-parity/source-gate.json`,
+385 app/test/project files; aggregate
+`14e9fba8865d162ca5b0931fc4dc5f88fe73aaa655700ebf1344decfcde1b153`.
+Final iOS27 gate: 2348 passed / 0 failed or skipped. Final Mac gate: 2428 passed /
+0 failed / 1 existing opt-in skip. Both exit0 on final code, four jobs and serial
+heavy gates, README live suites excluded and diagnostic opt-ins disabled.
+Xcode26.6/17F113 uses the iOS26.5 SDK; tests EXECUTED on iOS27 beta24A5423a and
+macOS27. This is not Xcode27 validation. Actual native route/screens and AX3
+keyboard controls inspected; RKLB command remained literal and gave the correct
+local duplicate receipt without Qwen. Component bitmap test height measurement
+has limitations; native screenshots establish whole-screen UI correctness.
+
+Artifacts: `/private/tmp/stocksage-ios-parity-20260914.eQ1RT8/` final bundles
+`ios27-final-verified.xcresult`, `mac-final-verified.xcresult`; verified candidates
+`iOS27-final-StockSageX.app`, `Mac-final-StockSageX.app`,
+`iPhone-final-StockSageX.app`. Signed physical build exit0; strict signatures pass.
+Phone install attempted but BLOCKED by no compatible DDI (CoreDevice12040/12001).
+`xcodebuild -runFirstLaunch -checkForNewerComponents` reported no updates for
+17F113; physical phone iOS27/24A435 needs compatible Xcode/device support.
+
+Owner Mac PID22374 at /Applications/StockSageX.app was not restarted/replaced:
+active Research results are temporary. Prior restart question remains pending;
+do not treat this iOS request as consent to clear the scan. Qwen and the owner’s
+RKLB-only watchlist were not changed by iOS verification. Only the task-owned
+23E420EF-11AB-4623-ADED-46F528468665 simulator was shut down; pre-existing simulator
+CC923127-11DD-4234-A379-457A667E9D4F remains booted. Test profile was isolated;
+one post-test default launch refreshed public quotes before process-local offline
+overrides were applied. No model generation or orders were requested.
+
+Preview and receipt: Codex cp workspace
+`outputs/StockSage-iOS27-preview/index.html` and
+`outputs/StockSage-iOS27-design-verification.md`. Patch/reproduction evidence:
+`work/ios-mac-parity/verified-changes.patch`, `final-gates.py`, and gate summaries.
+
+## Watchlist fix ready; restart decision pending — 14 September 2026
+
+Owner asked to fix the catalog/watchlist rejection and misleading Chat refusal after
+RKLB was added operationally. Local code now fixes Add/Browse/autocomplete/Remove
+membership, preserves market rows, handles explicit Chat watchlist commands without
+Qwen, retains accurate per-call errors/cancellation, and uses stable ticker row IDs.
+Targeted read-only review found no remaining blocker.
+
+Final source is frozen in
+`/Users/saleh/Documents/Codex/2026-09-14/cp/work/watchlist-fix/source-gate.json` (383 files).
+Mac gate exit0: 2427 passed / 1 existing opt-in skip / 0 failed. iPhone gate exit0:
+2345 passed / 0 skipped or failed. Xcode26.6/17F113, four jobs, serial gates, same
+three README exclusions and diagnostic opt-ins disabled. Gate artifacts/candidate:
+`/private/tmp/stocksage-watchlist-20260914.ip6SAG/` (`mac-verified.xcresult`,
+`ios-verified.xcresult`, `Mac-tested-StockSageX.app`). Compact/wide Chat receipt
+fixtures inspected. Earlier `mac-final.xcresult` was intentionally interrupted for
+row-control corrections and is NOT final release evidence.
+
+NOT installed yet: the owner's running app has an active 7–14-day Research scan
+(observed ~277/500) with temporary results that quitting clears. Owner was asked
+whether to stop/clear those results and restart for installation; await that answer.
+Do not interrupt the scan or infer consent from elapsed time. Current observed saved
+watchlist is RKLB only (owner removed ORCL); never restore older preferences over it.
+Qwen remains enabled, `qwen3.5-9b`, local MLX 9B 6-bit, 262144 context / one parallel
+slot. If restart is authorized, normal Quit unloads the model: preserve fresh records
+and restore only this authorized model at the existing settings afterward.
+
+Prepared task-owned preservation/installation scripts and empty rollback directory
+are under `work/watchlist-fix/` in the Codex cp workspace. Refresh the state snapshot
+at the actual restart; no current snapshot permits overwriting newer data. The
+receipt is `outputs/StockSage-watchlist-fix-2026-09-14.md` in that workspace.
+No commit, merge or push for this fix. Existing publication below remains historical.
+
 ## Publication authorization — 14 September 2026
 
 Owner explicitly requested “merge and push” for the complete verified Unicode/UI

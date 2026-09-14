@@ -5,18 +5,28 @@ struct StockSageChatSection: View {
     @ObservedObject var store: StockSageStore
     var openModelSettings: () -> Void
     @ObservedObject var chat: StockSageChatSession
+    var feedNotice: AnyView? = nil
     /// The unsent draft lives on the session, so leaving Chat cannot discard it.
     private var question: String { chat.draft }
     @State private var issue: String?
     @State private var ownedRequestID: UUID?
     @State private var opening: StockSageChat.Snapshot?
     @State private var confirmClear = false
-    #if os(macOS)
     @FocusState private var questionFocused: Bool
-    #endif
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(StockSageLocalModelServer.backendKey) private var backend = "auto"
     @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL = StockSageLocalModelServer.defaultURL
     @AppStorage(StockSageLocalModelServer.modelKey) private var model = StockSageLocalModelServer.defaultModel
+
+    private var isWatchlistRequest: Bool { StockSageChat.watchlistSymbol(in: question) != nil }
+
+    private var showLatestReply: Bool {
+        #if os(iOS)
+        !chat.turns.isEmpty && !questionFocused
+        #else
+        !chat.turns.isEmpty
+        #endif
+    }
 
     private var settings: [String] { [backend, serverURL, model] }
     private var config: StockSageLocalModelServer.Config? {
@@ -25,6 +35,17 @@ struct StockSageChatSection: View {
 
     var body: some View {
         chatLayout
+            #if os(iOS)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    if questionFocused {
+                        Spacer()
+                        Button("Done") { questionFocused = false }
+                            .accessibilityLabel("Dismiss keyboard")
+                    }
+                }
+            }
+            #endif
             .task { refreshOpening() }
             .onChange(of: store.lastUpdated) { _, _ in refreshOpening() }
             .onChange(of: settings) { _, _ in cancel() }
@@ -34,83 +55,126 @@ struct StockSageChatSection: View {
             } message: { Text("Deletes this conversation, including unsaved turns and source snapshots. It cannot erase screenshots or server logs.") }
     }
 
-    @ViewBuilder private var chatLayout: some View {
+    private var contentPadding: CGFloat {
         #if os(macOS)
+        24
+        #else
+        16
+        #endif
+    }
+
+    private static var messageFont: Font {
+        #if os(macOS)
+        .system(size: 15)
+        #else
+        .body
+        #endif
+    }
+
+    private var chatLayout: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
                     ScrollView {
-                        conversation.padding(24).frame(maxWidth: 840, alignment: .leading)
+                        conversation.padding(contentPadding).frame(maxWidth: 840, alignment: .leading)
                             .frame(maxWidth: .infinity)
                         Color.clear.frame(height: 1).id("chat-bottom")
                     }
+                    #if os(iOS)
+                    .scrollDismissesKeyboard(.interactively)
+                    #endif
                     .onChange(of: Self.latestTurnID(in: chat)) { _, newID in
                         // Follow new questions, not completion, cancellation or market updates.
                         guard newID != nil else { return }
                         proxy.scrollTo("chat-bottom", anchor: .bottom)
                     }
-                    HStack {
-                        Spacer()
-                        Button("Latest reply", systemImage: "arrow.down") {
-                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                    if showLatestReply {
+                        HStack {
+                            Spacer()
+                            Button {
+                                proxy.scrollTo("chat-bottom", anchor: .bottom)
+                            } label: {
+                                Label("Latest reply", systemImage: "arrow.down")
+                                    #if os(iOS)
+                                    .frame(minHeight: 44)
+                                    #endif
+                            }
+                            .controlSize(.small)
+                            .buttonStyle(.borderless)
+                            .help("Jump to the newest question and reply without sending a request.")
                         }
-                        .controlSize(.small)
-                        .buttonStyle(.borderless)
-                        .disabled(chat.turns.isEmpty)
-                        .help("Jump to the newest question and reply without sending a request.")
+                        .padding(.horizontal, contentPadding)
+                        #if os(macOS)
+                        .padding(.vertical, 6)
+                        #endif
+                        .frame(maxWidth: 840).frame(maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 24).padding(.vertical, 6)
-                    .frame(maxWidth: 840).frame(maxWidth: .infinity)
                 }
             }
             Divider()
-            composer.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 840)
+            composer.padding(.horizontal, contentPadding).padding(.vertical, 16).frame(maxWidth: 840)
                 .frame(maxWidth: .infinity).background(DS.Palette.bgTop)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        #else
-        VStack(alignment: .leading, spacing: 16) { conversation; composer }.padding(16)
-        #endif
     }
 
     private var conversation: some View {
         VStack(alignment: .leading, spacing: 16) {
-            #if os(macOS)
+            if let feedNotice {
+                feedNotice
+                Divider()
+            }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Chat").font(.largeTitle.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
                     Spacer()
+                    #if os(macOS)
                     if config != nil { Button("Model settings", action: openModelSettings).tint(.secondary) }
                     Button("Clear history", role: .destructive) { confirmClear = true }
                         .disabled(chat.turns.isEmpty && chat.storageError == nil)
+                    #else
+                    Menu {
+                        Button("Model settings", systemImage: "gearshape", action: openModelSettings)
+                        Button("Clear history", systemImage: "trash", role: .destructive) { confirmClear = true }
+                            .disabled(chat.turns.isEmpty && chat.storageError == nil)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.title2)
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Chat options")
+                    #endif
                 }
                 .controlSize(.small)
                 Text("Your briefing first. Ask Qwen when you want to go deeper.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             .padding(.bottom, 4)
-            #else
-            HStack {
-                Label("Chat", systemImage: "bubble.left.and.bubble.right.fill").font(.title2.bold())
-                Spacer()
-                Button("Model settings", action: openModelSettings)
-                Button("Clear history", role: .destructive) { confirmClear = true }
-                    .disabled(chat.turns.isEmpty && chat.storageError == nil)
+
+            #if os(iOS)
+            if config == nil {
+                Self.missingModelNotice(openModelSettings: openModelSettings)
+            } else {
+                DisclosureGroup("Privacy and model connection") { connectionNotice }
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Your briefing first. Ask Qwen when you want to go deeper.").foregroundStyle(.secondary)
             #endif
 
             if let opening {
-                #if os(macOS)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Label("App briefing · no model call", systemImage: "text.alignleft")
                             .font(.subheadline.weight(.semibold))
                         Spacer()
-                        Button("Refresh briefing from app data", systemImage: "arrow.clockwise") { refreshOpening() }
-                            .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
-                            .help("Refresh briefing from app data")
+                        Button { refreshOpening() } label: {
+                            Label("Refresh briefing from app data", systemImage: "arrow.clockwise")
+                                #if os(iOS)
+                                .frame(width: 44, height: 44)
+                                #endif
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                        .help("Refresh briefing from app data")
                     }
                     Text("Captured \(opening.at.formatted(date: .abbreviated, time: .shortened)). A bounded watchlist/board selection, not the entire market.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -122,17 +186,6 @@ struct StockSageChatSection: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .background(DS.Palette.surface.opacity(0.55), in: .rect(cornerRadius: DS.Radius.small))
-                #else
-                GroupBox("App briefing · no model call") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Captured \(opening.at.formatted(date: .abbreviated, time: .shortened)). A bounded watchlist/board selection, not the entire market.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if opening.facts.isEmpty { Text("No tracked quotes yet. General questions are still available.") }
-                        ForEach(opening.facts.filter { $0.field == "observed price" }) { fact in Text(fact.text).font(.callout) }
-                        Button("Refresh briefing from app data") { refreshOpening() }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                #endif
             }
             let eventLog = Self.eventLog(enabled: store.alertsEnabled, count: store.alerts.count)
             if let shown = eventLog.shownCount {
@@ -146,7 +199,6 @@ struct StockSageChatSection: View {
                 Text(Self.eventLogHeader(eventLog)).font(.caption).foregroundStyle(.secondary)
             }
             ForEach(chat.turns) { turn in
-                #if os(macOS)
                 let edit: (() -> Void)? = chat.pending == nil && question.isEmpty ? {
                     if Self.reuseQuestion(turn.question, question: $chat.draft, issue: $issue, pending: chat.pending != nil) {
                         questionFocused = true
@@ -154,9 +206,6 @@ struct StockSageChatSection: View {
                 } : nil
                 Self.turnContent(turn, pending: chat.pending == turn.id, editQuestion: edit)
                     .padding(.top, 12)
-                #else
-                Self.turnContent(turn, pending: chat.pending == turn.id)
-                #endif
             }
         }
     }
@@ -164,7 +213,6 @@ struct StockSageChatSection: View {
     /// Pure rendering keeps captured evidence separate from the live Chat session.
     @ViewBuilder static func turnContent(_ turn: StockSageChatSession.Turn, pending: Bool,
                                         editQuestion: (() -> Void)? = nil) -> some View {
-        #if os(macOS)
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -174,13 +222,18 @@ struct StockSageChatSection: View {
                         .accessibilityAddTraits(.isHeader)
                     Spacer()
                     if !pending {
-                        Button("Edit question", systemImage: "square.and.pencil") { editQuestion?() }
-                            .controlSize(.small).buttonStyle(.borderless)
-                            .disabled(editQuestion == nil)
-                            .help("Copies this question into the empty message box without sending or changing history. Finish or clear your draft, and wait for any current request to finish.")
+                        Button { editQuestion?() } label: {
+                            Label("Edit question", systemImage: "square.and.pencil")
+                                #if os(iOS)
+                                .frame(minHeight: 44)
+                                #endif
+                        }
+                        .controlSize(.small).buttonStyle(.borderless)
+                        .disabled(editQuestion == nil)
+                        .help("Copies this question into the empty message box without sending or changing history. Finish or clear your draft, and wait for any current request to finish.")
                     }
                 }
-                Text(turn.question).font(.system(size: 15)).lineSpacing(4).textSelection(.enabled)
+                Text(turn.question).font(messageFont).lineSpacing(4).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
@@ -193,7 +246,8 @@ struct StockSageChatSection: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
 
             VStack(alignment: .leading, spacing: 10) {
-                Label("Qwen", systemImage: "sparkles")
+                Label(turn.isWatchlistAction == true ? "StockSage" : "Qwen",
+                      systemImage: turn.isWatchlistAction == true ? "star" : "sparkles")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(DS.Palette.textPrimary)
                     .accessibilityAddTraits(.isHeader)
@@ -206,7 +260,7 @@ struct StockSageChatSection: View {
                 } else {
                     Text(turn.notice).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(turn.answer).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled)
+                    Text(turn.answer).font(messageFont).lineSpacing(5).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -214,74 +268,42 @@ struct StockSageChatSection: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 12) {
-                Divider()
-                Label("Evidence", systemImage: "doc.text")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
+            if turn.isWatchlistAction != true {
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
-                        Text(fact.text).font(.callout).lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
-                        sourceCard(source).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-                    }
-                    ForEach(selectedBenzingaRecords(in: turn)) { record in
-                        StockSageBenzingaEvidenceView.recordContent(record)
-                    }
                     Divider()
-                    DisclosureGroup("Historical app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Historical snapshot, not current evidence. Model: \(turn.model)")
-                            Text(turn.snapshot.context)
-                            Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
-                            ForEach(turn.snapshot.facts) { Text($0.text) }
-                            ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
-                            if let evidence = turn.snapshot.benzinga {
-                                StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
-                            }
-                        }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .font(.caption)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, 4)
-        }
-        #else
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(turn.question).font(.headline).textSelection(.enabled)
-                if pending {
-                    ProgressView(turn.notice)
-                } else {
-                    Text(turn.notice).font(.caption).foregroundStyle(.secondary)
-                    Text(turn.answer).textSelection(.enabled)
-                }
-                ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
-                    Text(fact.text).font(.callout).padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
-                }
-                ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
-                    sourceCard(source)
-                }
-                ForEach(selectedBenzingaRecords(in: turn)) { record in
-                    StockSageBenzingaEvidenceView.recordContent(record)
-                }
-                DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Historical snapshot, not current evidence. Model: \(turn.model)")
-                        Text(turn.snapshot.context)
-                        Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
-                        ForEach(turn.snapshot.facts) { Text($0.text) }
-                        ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
-                        if let evidence = turn.snapshot.benzinga {
-                            StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+                    Label("Evidence", systemImage: "doc.text")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
+                            Text(fact.text).font(.callout).lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                    }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
+                            sourceCard(source).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(selectedBenzingaRecords(in: turn)) { record in
+                            StockSageBenzingaEvidenceView.recordContent(record)
+                        }
+                        Divider()
+                        DisclosureGroup("Historical app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Historical snapshot, not current evidence. Model: \(turn.model)")
+                                Text(turn.snapshot.context)
+                                Text(turn.snapshot.researchStatus ?? "News and private group leads not retrieved for this question. Include a ticker to request them.")
+                                ForEach(turn.snapshot.facts) { Text($0.text) }
+                                ForEach(turn.snapshot.sources ?? []) { sourceCard($0) }
+                                if let evidence = turn.snapshot.benzinga {
+                                    StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
+                                }
+                            }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .font(.caption)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+            }
         }
-        #endif
     }
 
     /// Match only cited IDs against the original capture; undated products stay typed records.
@@ -294,30 +316,46 @@ struct StockSageChatSection: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        #if os(iOS)
+        let stackedControls = dynamicTypeSize.isAccessibilitySize
+        #else
+        let stackedControls = false
+        #endif
+        let controls = stackedControls
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout())
+        return VStack(alignment: .leading, spacing: 8) {
             QuestionField(question: $chat.draft, issue: $issue)
-                #if os(macOS)
                 .focused($questionFocused)
-                .font(.system(size: 15))
+                .font(Self.messageFont)
                 .controlSize(.large)
-                #endif
-            HStack {
-                Button("Ask Qwen", systemImage: "arrow.up.circle.fill", action: send)
-                    .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config == nil)
-                    #if os(macOS)
+            controls {
+                Button(action: send) {
+                    Label(isWatchlistRequest ? "Add to watchlist" : "Ask Qwen", systemImage: "arrow.up.circle.fill")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                    .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (config == nil && !isWatchlistRequest))
                     .buttonStyle(.borderedProminent)
+                    #if os(macOS)
                     .keyboardShortcut(.return, modifiers: .command)
                     .help("Send your question with Command-Return.")
+                    #else
+                    .controlSize(.large)
                     #endif
                 if let pending = chat.pending {
-                    Button("Cancel") {
+                    Button {
                         chat.cancel(id: pending)
                         #if os(macOS)
                         questionFocused = true
                         #endif
+                    } label: {
+                        Text("Cancel")
+                            #if os(iOS)
+                            .frame(minHeight: 44)
+                            #endif
                     }
                 }
-                Spacer()
+                if !stackedControls { Spacer() }
                 Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
                     .accessibilityLabel("Question character count")
                     .accessibilityValue(Self.questionLengthDescription(question))
@@ -330,8 +368,6 @@ struct StockSageChatSection: View {
                 DisclosureGroup("Privacy and model connection") { connectionNotice }
                     .font(.caption).foregroundStyle(.secondary)
             }
-            #else
-            connectionNotice
             #endif
         }
     }
@@ -374,7 +410,7 @@ struct StockSageChatSection: View {
         }
     }
 
-    /// Composer text wraps OUTSIDE the chat ScrollView. macOS `chatLayout` makes `composer` a
+    /// Composer text wraps OUTSIDE the chat ScrollView. `chatLayout` makes `composer` a
     /// SIBLING of the scroll view, so its height sums into the NavigationSplitView's detail column
     /// instead of scrolling — the same route that made the app unusable in 3392d17.
     ///
@@ -395,18 +431,27 @@ struct StockSageChatSection: View {
     static let composerLineLimit = 4
 
     #if os(macOS)
-    static let modelSetupGuidance = "Configure a local model in Model settings. Chat requires a server on this Mac."
+    static let modelSetupGuidance = "Qwen answers require a local server on this Mac, configured in Model settings. Watchlist commands work without a model."
+    #else
+    static let modelSetupGuidance = "Watchlist commands work without a model. Qwen requires a server in Model settings. On iPhone, localhost refers to this phone; a private Mac connection is not configured."
+    #endif
 
     static func missingModelNotice(openModelSettings: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(modelSetupGuidance).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                #if os(macOS)
                 .lineLimit(composerLineLimit)
+                #endif
             Button("Model settings", systemImage: "gearshape", action: openModelSettings)
+                #if os(macOS)
                 .controlSize(.small)
+                #else
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                #endif
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
-    #endif
 
     static func sourceLinkLabel(_ source: StockSageChat.Source) -> String {
         "Read \(source.subject) source · \(source.attribution)"
@@ -440,9 +485,13 @@ struct StockSageChatSection: View {
         }
 
         var body: some View {
-            TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: editingBinding, axis: .vertical)
+            TextField("Ask about a ticker, or say ‘add RKLB to my watchlist’…", text: editingBinding, axis: .vertical)
                 .lineLimit(2...5).textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Question for Qwen")
+                #if os(iOS)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                #endif
+                .accessibilityLabel("Question or watchlist command")
         }
     }
 
@@ -455,18 +504,12 @@ struct StockSageChatSection: View {
         return ForEach(warnings.indices, id: \.self) { index in
             Text(warnings[index]).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
-                #if os(macOS)
                 .lineLimit(composerLineLimit)
-                #endif
         }
     }
 
     private var connectionNotice: some View {
-        #if os(macOS)
         let missing = Self.modelSetupGuidance
-        #else
-        let missing = "Chat requires the local server enabled in Catalysts → Explanation model. On iPhone, localhost is the phone, not your Mac; private HTTPS serving is not configured in this slice."
-        #endif
         return Text(config == nil
                     ? missing
                     : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation.")
@@ -487,7 +530,7 @@ struct StockSageChatSection: View {
     }
 
     private func snapshot(for question: String, followUp: Bool) -> StockSageChat.Snapshot {
-        let watchlist = followUp ? chat.turns.last?.snapshot.facts.map(\.subject) ?? store.userSymbols : store.userSymbols
+        let watchlist = followUp ? chat.followUpSymbols(watchlist: store.userSymbols) : store.userSymbols
         let symbols = StockSageChat.selectedSymbols(question: question, symbols: store.symbols, watchlist: watchlist)
         return StockSageChat.snapshot(symbols: symbols, ideas: store.ideas, earnings: store.catalystChain,
                                      sample: store.isSampleData, now: Date())
@@ -503,6 +546,15 @@ struct StockSageChatSection: View {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard StockSageChat.safeQuestion(text) else {
             issue = "Use 1–2000 characters without credentials or account identifiers. Nothing was saved or sent."
+            return
+        }
+        if isWatchlistRequest {
+            guard let id = chat.beginWatchlistAddition(question: text, store: store) else { return }
+            ownedRequestID = id
+            chat.draft = ""; issue = nil
+            #if os(macOS)
+            questionFocused = true
+            #endif
             return
         }
         guard let config else { issue = "Enable a loopback local model in Catalysts → Explanation model."; return }

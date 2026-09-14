@@ -8,8 +8,8 @@ import SwiftUI
 // displayed count reads `StockSageUniverse.catalog.count` live, so it never goes stale like this
 // comment did. Sectioned by market group,
 // searchable, asset-class filterable, with one-tap add-to-watchlist (a UI/tracking action
-// distinct from the scan itself). The add path lazily fetches a SINGLE quote (store.addSymbol)
-// for immediate board display — the bulk history/ideas scan covers the full catalog regardless
+// distinct from the scan itself). Catalog additions are local and preserve existing quotes;
+// the bulk history/ideas scan covers the full catalog regardless
 // of whether a symbol has been individually added.
 
 struct BrowseMarketsView: View {
@@ -41,20 +41,6 @@ struct BrowseMarketsView: View {
         // never match a row again.
         case all = "All", stocks = "Stocks", etf = "ETFs", fx = "Forex", index = "Indices"
         var id: String { rawValue }
-    }
-
-    /// The set the engine validates against in `addSymbol` (StockSageStore.validateNewSymbol):
-    /// store.symbols ∪ userSymbols ∪ worldwide. Using the SAME union here prevents showing
-    /// a '+' button for any symbol the engine would immediately refuse as "already tracked."
-    /// NOTE (2026-07-16): post-promotion `catalog` == `worldwide`, so every browsed row is in this
-    /// set ⇒ the '+'/spinner branches in `row(_for:)` are currently unreachable (all rows show the
-    /// tracked checkmark). They are kept, not deleted: they self-reactivate the moment `catalog`
-    /// re-gains an un-promoted long-tail beyond `worldwide`. The header copy no longer advertises
-    /// "+ to track" precisely because it cannot fire today.
-    private var tracked: Set<String> {
-        Set(store.symbols.map { $0.symbol.uppercased() })
-            .union(store.userSymbols.map { $0.uppercased() })
-            .union(StockSageUniverse.worldwide.map { $0.symbol.uppercased() })
     }
 
     /// Pure classifier (static so the data-driven filter list below is testable — the instance
@@ -101,7 +87,7 @@ struct BrowseMarketsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Browse markets").font(DS.Typography.titleM).foregroundStyle(.white)
-                    Text("\(StockSageUniverse.catalog.count) instruments — the full analyzed universe, all covered by Find ideas. Browse and search here.")
+                    Text("\(StockSageUniverse.catalog.count) instruments. Search and tap + to add a company to your watchlist.")
                         .font(.system(size: bmFont12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
@@ -113,6 +99,10 @@ struct BrowseMarketsView: View {
                 Image(systemName: "magnifyingglass").font(.system(size: bmFont12)).foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 TextField("Search symbol or market…", text: $query)
+                    #if os(iOS)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    #endif
                     .textFieldStyle(.plain).font(.system(size: bmFont13))
                     .accessibilityLabel("Search markets")
                 if !query.isEmpty {
@@ -166,7 +156,7 @@ struct BrowseMarketsView: View {
     }
 
     @ViewBuilder private func row(_for s: StockSageSymbol) -> some View {
-        let isTracked = tracked.contains(s.symbol.uppercased())
+        let isTracked = store.isWatchlisted(s.symbol)
         let isAdding = addingSymbol == s.symbol
         HStack(spacing: 10) {
             Text(s.symbol).font(.system(size: bmFont13, weight: .semibold)).foregroundStyle(.white)
@@ -179,7 +169,7 @@ struct BrowseMarketsView: View {
             Spacer(minLength: 4)
             if isTracked {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: bmFont14)).foregroundStyle(DS.Palette.successSoft)
-                    .accessibilityLabel("\(s.symbol) already tracked")
+                    .accessibilityLabel("\(s.symbol) is in your watchlist")
             } else if isAdding {
                 // Per-row spinner: only the symbol being added shows a ProgressView.
                 // Other untracked rows show a disabled '+' while an add is in flight, so
@@ -191,11 +181,8 @@ struct BrowseMarketsView: View {
                     Task {
                         localAddError = nil
                         addingSymbol = s.symbol
-                        await store.addSymbol(s.symbol)
+                        localAddError = await store.addSymbol(s.symbol)
                         addingSymbol = nil
-                        // Capture the error result locally so it's attributed to this sheet,
-                        // not shared with the watchlist add box in MarketsView.
-                        localAddError = store.addSymbolError
                     }
                 } label: {
                     Image(systemName: "plus.circle.fill").font(.system(size: bmFont15)).foregroundStyle(DS.Palette.accent)

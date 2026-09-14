@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 
 /// Presentation only. Existing raw routes and Command-1...9 assignments stay stable.
@@ -64,6 +63,7 @@ enum StockSageDesktop {
 }
 
 /// Native selection, keyboard navigation and sidebar accessibility; no market-tick observation.
+#if os(macOS)
 struct StockSageDesktopNavigation: View {
     @Binding var selection: MarketSection
 

@@ -64,6 +64,7 @@ struct StockSageIOSSettingsSheet: View {
         NavigationStack {
             Form {
                 StockSageSettingsView.networkControls(webAccess: $settings.webAccess, offlineOnly: $settings.offlineOnly)
+                    .listRowBackground(DS.Bezel.cardFill)
                 Section {
                     Toggle("Real-time streaming", isOn: $liveStream)
                     Toggle("Auto-refresh live markets", isOn: $autoRefresh)
@@ -74,12 +75,14 @@ struct StockSageIOSSettingsSheet: View {
                         liveStream: liveStream, autoRefresh: autoRefresh, monitorEnabled: monitorEnabled,
                         intervals: MarketsView.refreshIntervals(thermal: ProcessInfo.processInfo.thermalState)))
                 }
+                .listRowBackground(DS.Bezel.cardFill)
 
                 Section {
                     StockSageMassiveKeyField()
                 } header: {
                     Text("Data sources")
                 }
+                .listRowBackground(DS.Bezel.cardFill)
 
                 Section {
                     Picker("Horizon", selection: $horizon) {
@@ -94,6 +97,7 @@ struct StockSageIOSSettingsSheet: View {
                          ? "Ideas ranked by EV per day — fast setups that pay soonest rank first."
                          : "Ideas ranked by total expected value — the biggest edges rank first, regardless of holding time.")
                 }
+                .listRowBackground(DS.Bezel.cardFill)
                 .onChange(of: horizon) {
                     // Both are existing, tested engine rankings — the horizon picks the lens;
                     // the board's own sort picker can still override at any time.
@@ -113,6 +117,7 @@ struct StockSageIOSSettingsSheet: View {
                          ? "Full size to the fastest expected payoffs first; stops cold at the 8% heat cap. Fewer, bigger positions."
                          : "Every qualifying idea gets a share, all scaled down together to fit the 8% heat cap. More, smaller positions.")
                 }
+                .listRowBackground(DS.Bezel.cardFill)
 
                 Section {
                     Toggle("Strong Buy / Sell signals", isOn: $notifyStrong)
@@ -123,7 +128,10 @@ struct StockSageIOSSettingsSheet: View {
                 } footer: {
                     Text("Only enabled types send pushes. Disabled price alerts stay armed — they just don't notify until re-enabled.")
                 }
+                .listRowBackground(DS.Bezel.cardFill)
             }
+            .scrollContentBackground(.hidden)
+            .background { DSCanvasBackground().ignoresSafeArea() }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -132,6 +140,7 @@ struct StockSageIOSSettingsSheet: View {
                 }
             }
         }
+        .tint(DS.Palette.accent)
         .preferredColorScheme(.dark)
     }
 }

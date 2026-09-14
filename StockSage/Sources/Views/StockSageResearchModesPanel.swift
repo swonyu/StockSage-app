@@ -15,6 +15,8 @@ struct StockSageResearchModesPanel: View {
     @Binding var presentation: Presentation
     #if os(macOS)
     @State private var showsCoverage = false
+    #else
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     #endif
     private var selected: String? {
         get { presentation.selected }
@@ -73,12 +75,20 @@ struct StockSageResearchModesPanel: View {
 
     private var horizonControls: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("Research horizon", selection: $presentation.horizon) {
-                ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
-            }.pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.large)
-                .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; presentation.filter = .all }
+            Group {
+                #if os(iOS)
+                if dynamicTypeSize.isAccessibilitySize {
+                    horizonPicker.pickerStyle(.menu)
+                        .frame(minHeight: 44)
+                } else {
+                    horizonPicker.pickerStyle(.segmented).labelsHidden()
+                }
+                #else
+                horizonPicker.pickerStyle(.segmented).labelsHidden()
+                #endif
+            }
+            .controlSize(.large)
+            .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; presentation.filter = .all }
             #if os(iOS)
             Text("Up to \(StockSageHorizonResearch.scanLimit) US listings selected by recent trading activity, then researched for your chosen horizon. Research only; no orders.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -87,6 +97,12 @@ struct StockSageResearchModesPanel: View {
                 Self.runningScanControls(running: running,
                     show: { presentation.horizon = running }, stop: { research.stop() })
             }
+        }
+    }
+
+    private var horizonPicker: some View {
+        Picker("Research horizon", selection: $presentation.horizon) {
+            ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
         }
     }
 
@@ -128,18 +144,26 @@ struct StockSageResearchModesPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         #else
-        return VStack(alignment: .leading, spacing: 16) {
-            controls
-            GroupBox {
-                VStack(alignment: .leading, spacing: DS.Space.md) {
-                    if !scan.listings.isEmpty { resultsHeader }
-                    if rows.isEmpty { emptyResults(scan, isRunning: isRunning) }
-                    else { phoneResults(rows, scan: scan, horizon: horizon) }
-                    Divider()
-                    researchFooter(scan)
-                }.padding(DS.Space.xs)
+        // The phone workspace owns scrolling, just as the Mac workspace owns its table.
+        return VStack(alignment: .leading, spacing: 0) {
+            controls.padding(.bottom, 24)
+            Divider()
+            if !scan.listings.isEmpty {
+                resultsHeader.padding(.vertical, 16)
+                Divider()
             }
+            if rows.isEmpty {
+                emptyResults(scan, isRunning: isRunning)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else {
+                phoneResults(rows, scan: scan, horizon: horizon)
+            }
+            if rows.isEmpty { Divider() }
+            researchFooter(scan).padding(.top, 16)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tint(DS.Palette.accentText)
         .sheet(isPresented: detailPresented) { selectedDetail }
         #endif
     }
@@ -238,21 +262,39 @@ struct StockSageResearchModesPanel: View {
                               horizon: StockSageHorizonResearch.Horizon) -> some View {
         LazyVStack(spacing: 0) {
             ForEach(rows) { item in
+                let opinion = Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.successSoft : .secondary)
+                let close = Text("Daily close \(Self.price(scan.results[item.ticker]?.referenceClose?.value))")
+                    .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                    .accessibilityLabel(scan.results[item.ticker]?.referenceClose.map { "Daily close reference \(Self.price($0.value)), \($0.at.formatted(date: .abbreviated, time: .omitted))" } ?? "Daily close reference not available")
                 Button {
                     selected = item.ticker
                 } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
                             Text(item.ticker).font(.headline)
-                            Text(item.name).font(.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 12)
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary).accessibilityHidden(true)
                         }
-                        Spacer()
-                        Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
-                            .font(.callout)
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        Text(item.name).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                                opinion.fixedSize()
+                                Spacer(minLength: 0)
+                                close.fixedSize()
+                            }
+                            VStack(alignment: .leading, spacing: 6) { opinion; close }
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    .frame(minHeight: 44).contentShape(Rectangle()).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.vertical, 16).contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityHint("Show research evidence and price levels")
                 Divider()
             }
         }
@@ -278,7 +320,13 @@ struct StockSageResearchModesPanel: View {
             #if os(macOS)
             detail.inspectorColumnWidth(min: 300, ideal: 360, max: 450)
             #else
-            NavigationStack { detail.navigationTitle(item.ticker).navigationBarTitleDisplayMode(.inline) }
+            NavigationStack {
+                detail.background(DS.Palette.bgTop)
+                    .navigationTitle(item.ticker).navigationBarTitleDisplayMode(.inline)
+                    .toolbarBackground(DS.Palette.bgTop, for: .navigationBar)
+            }
+                .tint(DS.Palette.accentText)
+                .preferredColorScheme(.dark)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             #endif
@@ -295,6 +343,7 @@ struct StockSageResearchModesPanel: View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             ProgressView(value: Double(checked), total: Double(max(1, total))) {
                 Text("\(checked)/\(total) checks finished, including incomplete")
+                    .fixedSize(horizontal: false, vertical: true)
             }.accessibilityValue("\(checked) of \(total) checks finished, including \(incomplete) incomplete opinions")
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: DS.Space.lg) {
@@ -315,12 +364,8 @@ struct StockSageResearchModesPanel: View {
                                run: @escaping () -> Void, stop: @escaping () -> Void) -> some View {
         adaptiveActionRow {
             VStack(alignment: .leading, spacing: 4) {
-                #if os(macOS)
                 Text("Market research").font(.largeTitle.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
-                #else
-                Text(horizon.rawValue).font(.headline)
-                #endif
                 Text("Research only · up to \(StockSageHorizonResearch.scanLimit) US listings · one-time scan")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -363,9 +408,21 @@ struct StockSageResearchModesPanel: View {
             }
             VStack(alignment: .leading, spacing: DS.Space.sm) {
                 content().fixedSize(horizontal: false, vertical: true)
+                #if os(iOS)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: DS.Space.sm, content: actions).fixedSize()
+                    VStack(alignment: .leading, spacing: DS.Space.sm, content: actions)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                #else
                 HStack(spacing: DS.Space.sm, content: actions).fixedSize()
+                #endif
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+        #if os(iOS)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        #endif
     }
 
     /// Called only when no rows are visible; a filter is not a failed scan.
@@ -392,6 +449,10 @@ struct StockSageResearchModesPanel: View {
 
     static func filters(search: Binding<String>, filter: Binding<ResultFilter>) -> some View {
         let field = TextField("Find a symbol or company", text: search).textFieldStyle(.roundedBorder)
+            #if os(iOS)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            #endif
             .accessibilityLabel("Filter research by symbol or company")
         let picker = Picker("Show", selection: filter) {
             ForEach(ResultFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }

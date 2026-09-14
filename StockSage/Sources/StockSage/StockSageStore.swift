@@ -727,43 +727,65 @@ final class StockSageStore: ObservableObject {
         // rather than at each call site is what makes "this app holds no crypto" an enforced
         // property instead of a default that the next added symbol could quietly break.
         guard !s.hasSuffix("-USD") else { return (nil, "This app doesn't trade crypto.") }
-        guard !alreadyTracked.contains(s) else { return (nil, "\(s) is already tracked.") }
+        guard !alreadyTracked.contains(s) else { return (nil, "\(s) is already in your watchlist.") }
         return (s, nil)
     }
 
-    /// Validate a typed ticker against a LIVE quote; if it prices, add it to the
-    /// persisted watchlist and show it immediately. Honest rejection otherwise.
-    func addSymbol(_ raw: String) async {
-        guard !isAddingSymbol else { return }
-        let tracked = Set(userSymbols.map { $0.uppercased() })
-            .union(StockSageUniverse.worldwide.map { $0.symbol.uppercased() })
-        let validation = Self.validateNewSymbol(raw, alreadyTracked: tracked)
-        guard let symbol = validation.symbol else { addSymbolError = validation.error; return }
-        if let reason = ToolPolicy.webToolsDisabledReason() { addSymbolError = reason; return }
+    /// Personal membership is separate from the market catalog and quote subscriptions.
+    func isWatchlisted(_ symbol: String) -> Bool {
+        userSymbols.contains { $0.uppercased() == symbol.uppercased() }
+    }
 
+    /// Saved entries stay visible before the first quote arrives or while offline.
+    var watchlistSymbols: [StockSageSymbol] {
+        Self.composeTrackedDefs(base: symbols, userSymbols: userSymbols, offBoardHoldings: [])
+            .filter { isWatchlisted($0.symbol) }
+    }
+
+    /// Catalog/board tickers are local additions. Unknown tickers still need a valid quote.
+    /// Returns this call's error, so a concurrent caller cannot mistake a busy no-op for success.
+    @discardableResult
+    func addSymbol(_ raw: String,
+                   fetchQuotes: ([String]) async -> [String: StockSageQuoteService.LiveQuote] = {
+                       await StockSageQuoteService.fetchQuotes(for: $0)
+                   }) async -> String? {
+        guard !isAddingSymbol else { return "Another ticker is being added. Try again when it finishes." }
         isAddingSymbol = true
+        defer { isAddingSymbol = false }
         addSymbolError = nil
-        let quotes = await StockSageQuoteService.fetchQuotes(for: [symbol])
-        isAddingSymbol = false
-        guard let q = quotes[symbol] else {
-            addSymbolError = "Couldn't find a tradeable price for “\(symbol)”. Check the ticker (e.g. AAPL, 2222.SR)."
-            return
+        func reject(_ reason: String) -> String { addSymbolError = reason; return reason }
+        guard !Task.isCancelled else { return reject("Watchlist addition cancelled.") }
+        let saved: [String]
+        do { saved = try backupSymbols() }
+        catch { return reject("Saved watchlist could not be read. It has not been changed.") }
+        let validation = Self.validateNewSymbol(raw, alreadyTracked: Set((userSymbols + saved).map { $0.uppercased() }))
+        guard let symbol = validation.symbol else { return reject(validation.error ?? "Enter a ticker.") }
+        let known = symbols.first { $0.symbol.uppercased() == symbol }
+            ?? StockSageUniverse.catalog.first { $0.symbol == symbol }
+        var quote: StockSageQuoteService.LiveQuote?
+        if known == nil {
+            if let reason = ToolPolicy.webToolsDisabledReason() { return reject(reason) }
+            quote = await fetchQuotes([symbol])[symbol]
+            guard !Task.isCancelled else { return reject("Watchlist addition cancelled.") }
+            if let reason = ToolPolicy.webToolsDisabledReason() { return reject(reason) }
+            guard let q = quote, q.symbol.uppercased() == symbol, q.price.isFinite, q.price > 0,
+                  q.previousClose.isFinite else {
+                return reject("Couldn't find a tradeable price for “\(symbol)”. Check the ticker (e.g. AAPL, 2222.SR).")
+            }
         }
-        userSymbols.append(symbol)
-        defaults.set(userSymbols, forKey: Self.userSymbolsKey)
-        // Show it on the board now, without disturbing the sample/live flag.
-        let added = StockSageSymbol(symbol: symbol, market: Self.userMarketLabel, quotes: [
-            StockSageQuote(price: q.previousClose, previousPrice: q.previousClose, time: Date(timeIntervalSinceNow: -86_400)),
-            // Carry the feed's market timestamp (review Q6) — without it the new row is fail-closed STALE.
-            StockSageQuote(price: q.price, previousPrice: q.previousClose, marketTime: q.marketTime,
-                           massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource,
-                           previousCloseSource: q.previousCloseSource, previousCloseQuoteTime: q.previousCloseQuoteTime),
-        ])
-        symbols = symbols.filter { $0.symbol.uppercased() != symbol } + [added]
-        rebuildSymbolIndex()
-        // Thread the new-listing flag through here too (L3-03, 2026-07-07 audit) — same reconcile
-        // rule mergeLiveQuotes uses, never set without the feed itself saying isNewListing==true.
-        newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: [symbol: q])
+        do {
+            // Re-read after any await; an import may already have added this ticker.
+            let update = try prepareBackupImport([symbol])
+            guard update.added > 0 else { return reject("\(symbol) is already in your watchlist.") }
+            update.apply()
+        } catch { return reject("Saved watchlist could not be read. It has not been changed.") }
+        // Existing rows retain their market label, quote history and provenance.
+        if !symbols.contains(where: { $0.symbol.uppercased() == symbol }) {
+            symbols.append(known ?? StockSageSymbol(symbol: symbol, market: Self.userMarketLabel))
+            rebuildSymbolIndex()
+        }
+        if let quote { mergeLiveQuotes([symbol: quote]) }
+        return nil
     }
 
     /// Read the saved preference, not a possibly stale or failed-load in-memory fallback.

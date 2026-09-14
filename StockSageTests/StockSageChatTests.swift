@@ -71,6 +71,18 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [360, 760])
+    func renderLocalWatchlistReceipt(width: Int) async throws {
+        let turn = StockSageChatSession.Turn(id: UUID(), question: "add rklb to watchlist",
+            snapshot: .init(at: now, facts: [], context: "Local watchlist action."), model: "StockSage",
+            answer: "Added RKLB to your watchlist.", evidence: [], notice: "Local watchlist action completed.",
+            isWatchlistAction: true)
+        let size = try await capture(StockSageChatSection.turnContent(turn, pending: false)
+            .padding(16).frame(width: CGFloat(width)).environment(\.colorScheme, .dark),
+            name: "stocksage-watchlist-receipt-\(width)")
+        #expect(size.width == CGFloat(width) && size.height > 100 && size.height < 500)
+    }
+
     @Test(arguments: [240, 760], [0, 31, 500])
     func renderResearchProgressWithoutImplyingEveryOpinionPassed(width: Int, checked: Int) async throws {
         let view = GroupBox {

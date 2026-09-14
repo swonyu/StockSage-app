@@ -26,10 +26,9 @@ struct MarketsView: View {
     @State private var section: MarketSection
     @State private var researchPresentation = StockSageResearchModesPanel.Presentation()
 
-    #if os(macOS)
     @State private var desktopPortfolioPage: StockSageDesktop.PortfolioPage = .holdings
     @State private var desktopBriefingExpanded = false
-    #endif
+    @Environment(\.dynamicTypeSize) private var workspaceTypeSize
 
     @AppStorage("marketsWatchSort") private var sort: MarketSort = .feed
     @State private var showBrowseMarkets = false
@@ -405,7 +404,7 @@ struct MarketsView: View {
     /// claim "mostly Hold" about names it never looked at (review fix 2026-07-17).
     @State private var lastScanExamined = 0
     // Hover states — one per interactive surface type.
-    @State private var hoveredSignalID: UUID?
+    @State private var hoveredSignalID: String?
     @State private var hoveredPositionID: UUID?
     @State private var hoveredAlertSymbol: String?
     @State private var hoveredHeatID: UUID?
@@ -714,6 +713,8 @@ struct MarketsView: View {
         section = .catalysts
     }
 
+    #endif
+
     private var desktopHome: some View {
         VStack(alignment: .leading, spacing: 28) {
             ViewThatFits(in: .horizontal) {
@@ -728,18 +729,31 @@ struct MarketsView: View {
                 }
             }
             briefingSection
-            HStack(spacing: 0) {
+            #if os(macOS)
+            let links = AnyLayout(HStackLayout(spacing: 0))
+            #else
+            let links = AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            #endif
+            links {
                 desktopHomeLink("Watchlist", detail: "Tracked tickers: \(store.userSymbols.count)", section: .watchlist)
+                #if os(macOS)
                 Divider().frame(height: 32)
+                #else
+                Divider()
+                #endif
                 desktopHomeLink("Find ideas", detail: "Compare evidence and risk", section: .ideas)
+                #if os(macOS)
                 Divider().frame(height: 32)
+                #else
+                Divider()
+                #endif
                 desktopHomeLink("Ask Qwen", detail: "Your local research chat", section: .chat)
             }
             Divider()
             Text("Market context").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 18)], alignment: .leading, spacing: 18) {
-                regimeCard.frame(maxHeight: .infinity, alignment: .top)
-                catalystCard.frame(maxHeight: .infinity, alignment: .top)
+                erasedOnIOS(regimeCard).frame(maxHeight: .infinity, alignment: .top)
+                erasedOnIOS(catalystCard).frame(maxHeight: .infinity, alignment: .top)
             }
             forwardProgressStrip
             DisclosureGroup("Research assumptions and money velocity") { moneyVelocityCard.padding(.top, 12) }
@@ -776,7 +790,6 @@ struct MarketsView: View {
         }
         .buttonStyle(.plain).accessibilityLabel("\(title), \(detail)")
     }
-    #endif
 
     /// Honest feed status: the live (green) note once real quotes land, otherwise
     /// the sample/offline notice — surfacing `feedError` (web off, unreachable)
@@ -834,15 +847,7 @@ struct MarketsView: View {
             Self.bannerSentence(cachedBannerText)
             Spacer()
         }
-        #if os(macOS)
         .padding(.vertical, 6)
-        #else
-        .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
-        .background(DS.Palette.warningSoft.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous)
-            .stroke(DS.Palette.warningSoft.opacity(0.45), lineWidth: 1))
-        #endif
     }
 
     private var cachedBannerText: String {
@@ -885,16 +890,7 @@ struct MarketsView: View {
                 }
             }
         }
-        #if os(macOS)
         .padding(.vertical, 6)
-        #else
-        .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
-        .background(tint.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous)
-            .stroke(LinearGradient(colors: [tint.opacity(0.45), tint.opacity(0.10)],
-                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
-        #endif
     }
 
     /// Dates ONE accepted observation, not every row on a partially refreshed board.
@@ -1138,17 +1134,7 @@ struct MarketsView: View {
                  + (store.feedError.map { " \($0)" } ?? ""))
             Spacer()
         }
-        #if os(macOS)
         .padding(.vertical, 6)
-        #else
-        .padding(.horizontal, DS.Space.sm).padding(.vertical, DS.Space.sm)
-        .background(DS.Palette.warningSoft.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.chip, style: .continuous)
-            .stroke(LinearGradient(colors: [DS.Palette.warningSoft.opacity(0.52),
-                                            DS.Palette.warningSoft.opacity(0.12)],
-                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
-        #endif
     }
 
     #if os(iOS)
@@ -1172,36 +1158,41 @@ struct MarketsView: View {
     /// One tab's content: the feed banner, the visibility-gated page, and Home's extra context
     /// cards. Not itself a navigation container — see `phoneWorkspace` for why.
     private func phonePageBody(_ destination: MarketSection) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DS.Space.lg) {
-                erasedOnIOS(feedBanner)
-                // Only a page that is actually on screen is built: page bodies run
-                // their board/ideas prologues at construction and the store
-                // invalidates at streaming rate. Visibility is the page's own
-                // appearance, not the tab selection — a route opened from the
-                // system More list appears before the selection binding catches up.
-                // Chat stays built so its iPhone session and unsent draft survive
-                // tab switches (its onDisappear still cancels an in-flight request).
-                PhonePage(keepAlive: destination == .chat) {
-                    VStack(alignment: .leading, spacing: DS.Space.lg) {
-                        erasedOnIOS(page(for: destination))
-                        if destination == .briefing {
-                            MarketSessionClockView()
-                            erasedOnIOS(regimeCard)
-                            erasedOnIOS(catalystCard)
-                            erasedOnIOS(forwardProgressStrip)
-                            erasedOnIOS(moneyVelocityCard)
-                            // The best-move ticket rode every phone page before native
-                            // tabs; Home owns market context now, so it lives here once.
-                            erasedOnIOS(bestOpportunityCTA)
+        Group {
+            if destination == .chat {
+                PhonePage(keepAlive: true) { erasedOnIOS(page(for: .chat)) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        erasedOnIOS(feedBanner)
+                        PhonePage(keepAlive: false) {
+                            VStack(alignment: .leading, spacing: 22) {
+                                if destination == .briefing {
+                                    erasedOnIOS(desktopHome)
+                                } else {
+                                    if destination != .research && destination != .paper {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text(StockSageDesktop.title(for: destination))
+                                                .font(.largeTitle.weight(.semibold))
+                                                .accessibilityAddTraits(.isHeader)
+                                            Text(StockSageDesktop.subtitle(for: destination))
+                                                .font(.callout).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    erasedOnIOS(page(for: destination))
+                                }
+                            }
                         }
                     }
+                    .padding(16)
+                    .frame(maxWidth: 780, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 }
             }
-            .padding()
-            .frame(maxWidth: 780, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
+        .background(DSCanvasBackground().ignoresSafeArea())
+        .toolbarBackground(DS.Palette.bgTop, for: .navigationBar, .tabBar)
         .navigationTitle(destination.workspaceTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -1229,10 +1220,11 @@ struct MarketsView: View {
                 Tab(value: destination) {
                     NavigationStack { phonePageBody(destination) }
                 } label: {
-                    Label(destination.workspaceTitle, systemImage: destination.icon)
+                    Label(destination.workspaceTitle, systemImage: StockSageDesktop.icon(for: destination))
                 }
             }
         }
+        .tint(DS.Palette.accent)
         // One sheet per presentation on the owner: every tab's Settings/diagnostics button
         // shares these, and neither depends on the retired custom header being rendered.
         .sheet(isPresented: $showIOSSettings) {
@@ -1276,7 +1268,8 @@ struct MarketsView: View {
             // desktopWorkspace routes Chat before invoking content from its non-Chat branch.
             EmptyView()
             #else
-            StockSageChatSection(store: store, openModelSettings: { section = .catalysts }, chat: chatSession)
+            StockSageChatSection(store: store, openModelSettings: { section = .catalysts },
+                                chat: chatSession, feedNotice: AnyView(feedBanner))
             #endif
         }
     }
@@ -1798,13 +1791,19 @@ struct MarketsView: View {
     }
 
     private var portfolioSection: some View {
-        #if os(macOS)
         VStack(alignment: .leading, spacing: 24) {
-            Picker("Portfolio view", selection: $desktopPortfolioPage) {
-                ForEach(StockSageDesktop.PortfolioPage.allCases) { page in Text(page.title).tag(page) }
+            #if os(macOS)
+            portfolioPicker.pickerStyle(.segmented).frame(maxWidth: 510)
+                .accessibilityIdentifier("desktop.portfolio.tabs")
+            #else
+            HStack {
+                Text("Portfolio view").font(.callout).foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                portfolioPicker.pickerStyle(.menu).controlSize(.large)
+                    .accessibilityIdentifier("phone.portfolio.tabs")
             }
-            .pickerStyle(.segmented).frame(maxWidth: 510)
-            .accessibilityIdentifier("desktop.portfolio.tabs")
+            Divider()
+            #endif
             switch desktopPortfolioPage {
             case .holdings: portfolioHoldings
             case .journal: tradeJournalPanel
@@ -1823,21 +1822,12 @@ struct MarketsView: View {
                 kellySizerPanel
             }
         }
-        #else
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            portfolioHoldings
-            if portfolio.hasLoadedRecords {
-                if !portfolio.positions.isEmpty { allocationPanel }
-                if !portfolio.positions.isEmpty { riskParityPanel }
-                if !portfolio.positions.isEmpty { portfolioAnalyticsPanel }
-                correlationHeatmapPanel
-            }
-            forwardScoreboardPanel
-            tradeJournalPanel
-            kellySizerPanel
+    }
+
+    private var portfolioPicker: some View {
+        Picker("Portfolio view", selection: $desktopPortfolioPage) {
+            ForEach(StockSageDesktop.PortfolioPage.allCases) { page in Text(page.title).tag(page) }
         }
-        .animation(DS.Motion.smooth, value: portfolio.positions.isEmpty)
-        #endif
     }
 
     private var portfolioHoldings: some View {
@@ -4075,9 +4065,8 @@ struct MarketsView: View {
     /// tickers); when false, show the full board. The two picker segments ("Watchlist" / "All")
     /// now diverge here instead of both routing to the full-universe list.
     private func signalListView(watchlistOnly: Bool) -> some View {
-        let userSet = Set(store.userSymbols.map { $0.uppercased() })
         let displayed: [StockSageSymbol] = watchlistOnly
-            ? store.symbols.filter { userSet.contains($0.symbol.uppercased()) }
+            ? store.watchlistSymbols
             : store.symbols
         // Stop/target for the row come from the ADVISOR (ideas board), never from
         // StockSageSignalEngine — that engine is a |Δ%| threshold map with no stop/target
@@ -4088,7 +4077,7 @@ struct MarketsView: View {
                                       uniquingKeysWith: { first, _ in first })
         return VStack(alignment: .leading, spacing: 16) {
             addSymbolBar
-            if store.symbols.isEmpty {
+            if !watchlistOnly && store.symbols.isEmpty {
                 emptyState
                     .transition(.opacity)
             } else if watchlistOnly && displayed.isEmpty {
@@ -4099,9 +4088,7 @@ struct MarketsView: View {
                     .transition(.opacity)
             } else {
                 HStack {
-                    #if os(macOS)
                     Text("\(displayed.count) instruments").font(.callout).foregroundStyle(.secondary)
-                    #endif
                     Spacer()
                     Menu {
                         ForEach(MarketSort.allCases) { s in
@@ -4134,13 +4121,12 @@ struct MarketsView: View {
                 .padding(.horizontal, 16).padding(.top, 4)
                 Divider()
                 LazyVStack(spacing: 0) {
-                    ForEach(sort.apply(displayed)) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()]) }
+                    ForEach(sort.apply(displayed), id: \.symbol) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()]) }
                 }
                 #else
-                LazyVStack(spacing: DS.Space.sm) {
-                    ForEach(sort.apply(displayed)) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()])
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
-                    }
+                Divider()
+                LazyVStack(spacing: 0) {
+                    ForEach(sort.apply(displayed), id: \.symbol) { signalCard($0, idea: ideaBySymbol[$0.symbol.uppercased()]) }
                 }
                 #endif
             }
@@ -4155,8 +4141,12 @@ struct MarketsView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: DS.Space.sm) {
                 Image(systemName: "magnifyingglass").font(.system(size: mvFont12)).foregroundStyle(.secondary)
-                TextField("Track any ticker — AAPL · 2222.SR · BTC-USD · EURUSD=X", text: $newWatchSymbol)
+                TextField("Add a ticker — RKLB · AAPL · 2222.SR", text: $newWatchSymbol)
                     .textFieldStyle(.plain).font(.system(size: mvFont13))
+                    #if os(iOS)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.characters)
+                    #endif
                     .onSubmit { Task { await addWatchSymbol() } }
                     .accessibilityLabel("Ticker to add to watchlist")
                 if store.isAddingSymbol {
@@ -4166,7 +4156,7 @@ struct MarketsView: View {
                         #if os(macOS)
                         Label("Add ticker", systemImage: "plus")
                         #else
-                        Image(systemName: "plus.circle.fill").font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
+                        Image(systemName: "plus").font(.headline).frame(minWidth: 44, minHeight: 44)
                         #endif
                     }
                     #if os(macOS)
@@ -4175,7 +4165,7 @@ struct MarketsView: View {
                     .buttonStyle(LuxPressStyle())
                     #endif
                     .disabled(newWatchSymbol.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .help("Validate against a live quote, then add to the watchlist")
+                    .help("Save a catalog ticker to your watchlist; validate other tickers with a quote")
                     .accessibilityLabel("Add ticker to watchlist")
                 }
             }
@@ -4190,7 +4180,7 @@ struct MarketsView: View {
             let q = newWatchSymbol.trimmingCharacters(in: .whitespaces)
             let suggestions: [StockSageSymbol] = q.isEmpty ? [] :
                 StockSageUniverse.search(q, limit: 6).filter { sug in
-                    !store.symbols.contains { $0.symbol.uppercased() == sug.symbol.uppercased() }
+                    !store.isWatchlisted(sug.symbol)
                 }
             if !suggestions.isEmpty {
                 VStack(spacing: 0) {
@@ -4227,11 +4217,11 @@ struct MarketsView: View {
                     #if os(macOS)
                     .font(.callout).foregroundStyle(.secondary)
                     #else
-                    .font(.system(size: mvFont11, weight: .medium)).foregroundStyle(DS.Palette.accent)
+                    .font(.callout).foregroundStyle(DS.Palette.accentText).frame(minHeight: 44)
                     #endif
             }
             .buttonStyle(.plain)
-            .help("Browse the full searchable directory by region & asset class; tap + to track any (fetches one quote).")
+            .help("Browse the full searchable directory by region & asset class; tap + to add to your watchlist.")
         }
         .animation(DS.Motion.smooth, value: watchlistAddError)
         // Clear the watchlist error when the browse sheet opens or closes so errors from one
@@ -4248,19 +4238,13 @@ struct MarketsView: View {
 
     private func addWatchSymbol() async {
         watchlistAddError = nil
-        await store.addSymbol(newWatchSymbol)
-        // Capture the error locally; the store's addSymbolError is shared with the browse sheet
-        // so we never read it directly in the watchlist box display (see watchlistAddError).
-        watchlistAddError = store.addSymbolError
-        if store.addSymbolError == nil { newWatchSymbol = "" }
+        let submitted = newWatchSymbol
+        watchlistAddError = await store.addSymbol(submitted)
+        if watchlistAddError == nil && newWatchSymbol == submitted { newWatchSymbol = "" }
     }
 
     private func signalCard(_ sym: StockSageSymbol, idea: StockSageIdea? = nil) -> some View {
-        #if os(macOS)
         let detailSpacing: CGFloat = 5
-        #else
-        let detailSpacing: CGFloat = 2
-        #endif
         let signal = StockSageSignalEngine.generateSignal(for: sym)
         let verifiedChange = sym.sessionChangePercent
         let change = verifiedChange ?? 0
@@ -4272,20 +4256,19 @@ struct MarketsView: View {
         // close unknown) rendered here as a fabricated "+0.00%" flat day while the heatmap
         // honestly says "N/A (new)" for the SAME symbol. Mirror the heatmap's guard.
         let isNew = store.newListings.contains(sym.symbol.uppercased())
-        let hovered = hoveredSignalID == sym.id
+        let hovered = hoveredSignalID == sym.symbol
         // Per-row freshness: a stale (weekend/holiday or stale-feed) quote is dimmed + clock-flagged so
         // its Buy/Sell + strength% isn't acted on as a live signal — matching the heatmap's treatment.
         let stale = sym.isStale()
-        let source = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
+        let source = sym.latest == nil ? "Quote unavailable" : Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
             priceAsOf: sym.latest?.marketTime, now: Date(), priceSource: sym.latest?.priceSource)
-        return HStack(spacing: DS.Space.sm) {
-            VStack(alignment: .leading, spacing: detailSpacing) {
+        let identity = VStack(alignment: .leading, spacing: detailSpacing) {
                 HStack(spacing: DS.Space.xs) {
                     Text(sym.symbol)
                         #if os(macOS)
                         .font(.system(size: 16, weight: .semibold))
                         #else
-                        .font(.system(size: mvFont15, weight: .bold, design: .rounded))
+                        .font(.headline)
                         #endif
                         .foregroundStyle(.white)
                     if stale {
@@ -4296,7 +4279,7 @@ struct MarketsView: View {
                     #if os(macOS)
                     .font(.callout)
                     #else
-                    .font(.caption2)
+                    .font(.callout)
                     #endif
                     .foregroundStyle(.secondary)
                 if let source {
@@ -4347,19 +4330,14 @@ struct MarketsView: View {
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            #if os(macOS)
             .frame(maxWidth: .infinity, alignment: .leading)
-            #endif
-            #if os(iOS)
-            Spacer(minLength: 8)
-            #endif
-            VStack(alignment: .trailing, spacing: detailSpacing) {
+        let price = VStack(alignment: .trailing, spacing: detailSpacing) {
                 if let p = sym.latest?.price {
                     Text(adaptivePrice(p))
                         #if os(macOS)
                         .font(.system(size: 19, weight: .semibold))
                         #else
-                        .font(.system(size: mvFont15, weight: .semibold))
+                        .font(.title3.weight(.semibold))
                         #endif
                         .foregroundStyle(.white)
                         .contentTransition(.numericText())
@@ -4372,7 +4350,7 @@ struct MarketsView: View {
                             .contentTransition(.symbolEffect(.replace))
                             .animation(DS.Motion.smooth, value: up)
                     }
-                    Text(isNew ? "N/A (new)" : verifiedChange.map { String(format: "%+.2f%%", $0) } ?? "Previous close pending")
+                    Text(sym.latest == nil ? "—" : isNew ? "N/A (new)" : verifiedChange.map { String(format: "%+.2f%%", $0) } ?? "Previous close pending")
                         .font(.system(size: mvFont12, weight: .medium))
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: change)
@@ -4385,6 +4363,7 @@ struct MarketsView: View {
             #if os(macOS)
             .monospacedDigit().frame(width: 132, alignment: .trailing)
             #endif
+        let recommendation = Group {
             if let signal {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("Rules: " + signal.recommendation.rawValue)
@@ -4393,9 +4372,9 @@ struct MarketsView: View {
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(recColor(signal.recommendation).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
                         #else
-                        .font(.system(size: mvFont11, weight: .bold)).foregroundStyle(recTextColor(signal.recommendation))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(recColor(signal.recommendation), in: Capsule())
+                        .font(.caption.weight(.semibold)).foregroundStyle(recColor(signal.recommendation))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(recColor(signal.recommendation).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
                         #endif
                     // "Strength %" only makes sense for an actual buy/sell signal —
                     // SignalEngine hardcodes 0.65 for hold ("price consolidating"),
@@ -4413,8 +4392,6 @@ struct MarketsView: View {
                 }
                 #if os(macOS)
                 .frame(width: 154, alignment: .trailing)
-                #else
-                .frame(width: 96, alignment: .trailing)
                 #endif
             } else {
                 #if os(macOS)
@@ -4422,16 +4399,17 @@ struct MarketsView: View {
                     .frame(width: 154, alignment: .trailing)
                 #endif
             }
+        }
             // Quick-remove — only for user-added rows (curated rows aren't removable).
             // Hover-gated on macOS (quiet rows until pointed at); ALWAYS shown on iOS, where
             // .onHover never fires (review 2026-07-28 #13) — the button previously did not
             // exist on touch at all, leaving only the undiscoverable long-press below.
             #if os(iOS)
-            let showRemove = sym.market == "★ My watchlist"
+            let showRemove = store.isWatchlisted(sym.symbol)
             #else
-            let showRemove = sym.market == "★ My watchlist" && hovered
+            let showRemove = store.isWatchlisted(sym.symbol) && hovered
             #endif
-            ZStack {
+        let remove = ZStack {
             if showRemove {
                 Button { withAnimation(DS.Motion.smooth) { store.removeSymbol(sym.symbol) } } label: {
                     Image(systemName: "trash").font(.system(size: mvFont12)).foregroundStyle(DS.Palette.danger)
@@ -4445,35 +4423,39 @@ struct MarketsView: View {
             #if os(macOS)
             .frame(width: 22)
             #endif
+        return Group {
+            #if os(macOS)
+            HStack(spacing: DS.Space.sm) { identity; price; recommendation; remove }
+                .padding(.horizontal, 16)
+            #else
+            VStack(alignment: .leading, spacing: 12) {
+                let rowLayout = workspaceTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+                rowLayout { identity; price }
+                HStack { recommendation; Spacer(minLength: 12); remove }
+            }
+            #endif
         }
-        #if os(macOS)
-        .padding(.horizontal, 16).padding(.vertical, 14)
+        .padding(.vertical, 14)
         .background(hovered ? Color.white.opacity(0.035) : Color.clear)
-        .overlay(alignment: .bottom) { Divider().padding(.horizontal, 16) }
-        #else
-        .padding(DS.Space.sm)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(hovered ? Color.white.opacity(0.055) : DS.Bezel.cardFill)
-                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-        )
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-            .stroke(hovered ? DS.Palette.accent.opacity(0.35) : DS.Palette.surfaceStroke, lineWidth: 1))
-        .scaleEffect(hovered ? 1.008 : 1.0)
-        #endif
+        .overlay(alignment: .bottom) {
+            #if os(macOS)
+            Divider().padding(.horizontal, 16)
+            #else
+            Divider()
+            #endif
+        }
         // Tabs-audit 2026-07-09: 0.55 was sub-AA on this row's own secondary text — the exact
         // gap the ideas-card comment deferred "to its own wave"; heatmap got the same fix
         // earlier today (0.85 AA floor). Clock icon + "· stale" caption stay the primary cues.
         .opacity(stale ? 0.85 : 1)   // visually recede a stale row (AA floor) — not a live, actionable signal
-        #if os(iOS)
-        .shadow(color: DS.Palette.accent.opacity(hovered ? 0.10 : 0), radius: 10, y: 3)
-        #endif
         .animation(DS.Motion.smooth, value: hovered)
         .contentShape(Rectangle())
         .onHover { over in
             withAnimation(DS.Motion.smooth) {
-                if over { hoveredSignalID = sym.id }
-                else if hoveredSignalID == sym.id { hoveredSignalID = nil }
+                if over { hoveredSignalID = sym.symbol }
+                else if hoveredSignalID == sym.symbol { hoveredSignalID = nil }
             }
         }
         .help({
@@ -4484,7 +4466,7 @@ struct MarketsView: View {
             return h
         }())
         .contextMenu {
-            if sym.market == "★ My watchlist" {
+            if store.isWatchlisted(sym.symbol) {
                 Button(role: .destructive) { store.removeSymbol(sym.symbol) } label: {
                     Label("Remove “\(sym.symbol)” from watchlist", systemImage: "trash")
                 }
@@ -4518,63 +4500,38 @@ struct MarketsView: View {
 
     private var briefingSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.md) {
-            HStack {
+            let headingLayout = workspaceTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                : AnyLayout(HStackLayout())
+            headingLayout {
                 Text("Daily briefing")
-                    #if os(macOS)
                     .font(.title2.weight(.semibold))
-                    #else
-                    .font(.system(size: mvFont16, weight: .semibold, design: .rounded))
-                    #endif
                     .foregroundStyle(.white)
                 Spacer()
-                #if os(macOS)
                 Button { Task { await generateBriefing() } } label: {
                     Label(loadingBriefing ? "Generating…" : "Generate", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(loadingBriefing)
-                #else
-                Button { Task { await generateBriefing() } } label: {
-                    HStack(spacing: 6) {
-                        Group {
-                            if loadingBriefing { ProgressView().controlSize(.small).tint(.white) }
-                            else { Image(systemName: "sparkles") }
-                        }
-                        .transition(.opacity)
-                        .animation(DS.Motion.smooth, value: loadingBriefing)
-                        Text(loadingBriefing ? "Generating…" : "Generate")
-                            .contentTransition(.opacity)
-                            .animation(DS.Motion.smooth, value: loadingBriefing)
-                    }
-                    .font(.system(size: mvFont11_5, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(DS.Palette.accent, in: Capsule())
-                    .shadow(color: DS.Palette.accent.opacity(0.25), radius: 4, y: 1)
-                }
-                .buttonStyle(LuxPressStyle())
-                .disabled(loadingBriefing)
-                #endif
             }
             Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : currentBriefing)
                 .foregroundStyle(DS.Palette.textSecondary)
                 #if os(macOS)
-                .font(.system(size: 15)).lineSpacing(5)
-                .lineLimit(desktopBriefingExpanded ? nil : 6)
+                .font(.system(size: 15))
                 #else
                 .font(.callout)
                 #endif
+                .lineSpacing(5)
+                .lineLimit(desktopBriefingExpanded ? nil : 6)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .contentTransition(.opacity)
                 .animation(DS.Motion.smooth, value: currentBriefing.isEmpty)
-            #if os(macOS)
             Button(desktopBriefingExpanded ? "Show less" : "Read full briefing · strength and weakness") {
                 desktopBriefingExpanded.toggle()
             }
             .buttonStyle(.borderless)
             .accessibilityIdentifier("desktop.briefing.expand")
-            #endif
             if !currentBriefing.isEmpty, let generatedAt = briefingGeneratedAt {
                 let stale = generatedAt < Date().addingTimeInterval(-4 * 3600)
                 Text((stale ? "⚠︎ Generated " : "Generated ")
@@ -4586,7 +4543,7 @@ struct MarketsView: View {
         #if os(macOS)
         .padding(24)
         #else
-        .padding(DS.Space.lg)
+        .padding(18)
         #endif
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
@@ -4628,14 +4585,6 @@ struct MarketsView: View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             ideasHeader
             bestOpportunityCard
-            #if !os(macOS)
-            capitalAllocationCard
-            fastLaneStrip
-            todaysActionsCard
-            alertsPanel
-            strategyBacktestPanel
-            backtestPanel
-            #endif
             if store.ideas.isEmpty {
                 Text(store.isLoadingIdeas
                      ? "Analyzing every market on 1-year price history…"
@@ -4682,6 +4631,10 @@ struct MarketsView: View {
                     HStack(spacing: DS.Space.xs) {
                         Image(systemName: "magnifyingglass").font(.system(size: mvFont10)).foregroundStyle(.secondary)
                         TextField("Search", text: $ideaSearch).textFieldStyle(.plain).font(.system(size: mvFont11))
+                            #if os(iOS)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            #endif
                             .frame(width: 84)
                         if !ideaSearch.isEmpty {
                             Button { ideaSearch = "" } label: {
@@ -4729,25 +4682,23 @@ struct MarketsView: View {
                     .transition(.opacity)
                 }
             }
-            #if os(macOS)
             Divider().padding(.top, 12)
             DisclosureGroup("Planning tools · allocation, fast lane and today's actions") {
                 VStack(alignment: .leading, spacing: 16) {
-                    capitalAllocationCard
-                    fastLaneStrip
-                    todaysActionsCard
-                    alertsPanel
+                    erasedOnIOS(capitalAllocationCard)
+                    erasedOnIOS(fastLaneStrip)
+                    erasedOnIOS(todaysActionsCard)
+                    erasedOnIOS(alertsPanel)
                 }.padding(.top, 14)
             }
             .font(.callout).padding(.vertical, 8)
             DisclosureGroup("Backtests and strategy diagnostics") {
                 VStack(alignment: .leading, spacing: 16) {
-                    strategyBacktestPanel
-                    backtestPanel
+                    erasedOnIOS(strategyBacktestPanel)
+                    erasedOnIOS(backtestPanel)
                 }.padding(.top, 14)
             }
             .font(.callout).padding(.bottom, 16)
-            #endif
         }
         // NOT animated while a scan streams (owner, on device 2026-07-28: "when i press find
         // ideas it zooms and i cant go to other tabs"). `performRefreshIdeas` assigns
@@ -4921,22 +4872,13 @@ struct MarketsView: View {
 
     private var ideasHeader: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            HStack(spacing: DS.Space.sm) {
-                #if os(macOS)
+            #if os(macOS)
+            let headerLayout = AnyLayout(HStackLayout(spacing: DS.Space.sm))
+            #else
+            let headerLayout = AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            #endif
+            headerLayout {
                 Text("Research board").font(.title3.weight(.semibold))
-                #else
-                Image(systemName: "sparkles.rectangle.stack.fill")
-                    .font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Trade ideas").font(.system(size: fontCardTitle, weight: .semibold)).foregroundStyle(.white)
-                    // iPhone: the blurb + calibration caveat render BELOW this row at full width
-                    // (see after the HStack). Sharing the row with the Find-ideas button left them
-                    // ~200pt on a 402pt screen, wrapping the sentence into a 5-line ribbon.
-                    #if !os(iOS)
-                    ideasHeaderBlurb
-                    #endif
-                }
-                #endif
                 Spacer()
                 // EXPORT-03: sample/QA-seeded prices are indistinguishable from live once pasted —
                 // hide the export entirely rather than caveat it.
@@ -4953,49 +4895,17 @@ struct MarketsView: View {
                         ideasCopied = true
                         Task { try? await Task.sleep(for: .seconds(2)); ideasCopied = false }
                     } label: {
-                        #if os(macOS)
                         Label(ideasCopied ? "Copied" : "Copy CSV", systemImage: ideasCopied ? "checkmark" : "doc.on.clipboard")
-                        #else
-                        HStack(spacing: 5) {
-                            Image(systemName: ideasCopied ? "checkmark" : "doc.on.clipboard")
-                                .font(.system(size: mvFont10, weight: .semibold)).contentTransition(.symbolEffect(.replace))
-                            Text(ideasCopied ? "Copied" : "Copy CSV")
-                                .font(.system(size: mvFont11, weight: .semibold)).contentTransition(.opacity)
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(.white.opacity(0.08), in: Capsule())
-                        #endif
                     }
-                    #if os(macOS)
                     .buttonStyle(.bordered).controlSize(.large).tint(.secondary)
-                    #else
-                    .buttonStyle(LuxPressStyle())
-                    #endif
                     .help("Copy rules-ranked ideas as CSV (rules action/conviction/levels/weight/rationale), not AI assessments")
                     .accessibilityLabel("Copy ideas board as CSV")
                 }
                 if store.isLoadingIdeas {
                     Button { store.cancelIdeasRefresh() } label: {
-                        #if os(macOS)
                         Label("Cancel", systemImage: "xmark")
-                        #else
-                        HStack(spacing: 5) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: mvFont10, weight: .semibold))
-                            Text("Cancel")
-                                .font(.system(size: mvFont11, weight: .semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(.white.opacity(0.08), in: Capsule())
-                        #endif
                     }
-                    #if os(macOS)
                     .buttonStyle(.bordered).controlSize(.large).tint(.secondary)
-                    #else
-                    .buttonStyle(LuxPressStyle()).touchHitArea()
-                    #endif
                     .help("Stop the in-progress ideas scan")
                     .accessibilityLabel("Cancel ideas analysis")
                 }
@@ -5012,25 +4922,11 @@ struct MarketsView: View {
                                 Text(store.isLoadingIdeas ? "Analyzing…" : "Find ideas")
                             }
                         }
-                        #if os(macOS)
                         .font(.callout.weight(.medium))
-                        #else
-                        .font(.system(size: mvFont11_5, weight: .semibold))
-                        #endif
                         .contentTransition(.opacity)
                     }
-                    #if os(iOS)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 11).padding(.vertical, 6)
-                    .background(DS.Palette.accent, in: Capsule())
-                    .shadow(color: DS.Palette.accent.opacity(0.25), radius: 4, y: 1)
-                    #endif
                 }
-                #if os(macOS)
                 .buttonStyle(.borderedProminent).controlSize(.large)
-                #else
-                .buttonStyle(LuxPressStyle())
-                #endif
                 .disabled(store.isLoadingIdeas)
                 .help("First scan of the day covers all \(StockSageUniverse.worldwide.count) names and takes several minutes — results stream in as they complete.")
                 // POST2420-COPY item 7: this button is the ONLY progress indicator for the
@@ -5042,9 +4938,7 @@ struct MarketsView: View {
                                      ? (store.ideasProgress.map { "\($0.current) of \($0.total)" } ?? "")
                                      : "")
             }
-            #if os(macOS)
             ideasHeaderBlurb
-            #endif
             // UI#15 (2026-07-28 review, "two tiers of notes"): the universe subtitle, the
             // scan-duration note, the TOM tilt line and the engine caveat are all standing
             // context — honest, but not urgent — so they're grouped into one collapsible
@@ -5083,9 +4977,6 @@ struct MarketsView: View {
             .tint(DS.Palette.textSecondary)
             // iPhone: calibration caveat at FULL card width, below the title/CTA row. Tier-1 —
             // stays outside the disclosure above (see ideasHeaderBlurb doc comment).
-            #if os(iOS)
-            ideasHeaderBlurb
-            #endif
             if let when = store.ideasUpdated {
                 // POST2420-COPY item 1(b): a re-scan already in progress must never instruct
                 // the user to start one — `store.ideasIsStale` is keyed on `ideasUpdated`,
@@ -5151,21 +5042,9 @@ struct MarketsView: View {
                     .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft)
             }
         }
-        #if os(macOS)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .bottom) { Divider() }
-        #else
-        .padding(DS.Space.sm)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(DS.Bezel.cardFill)
-                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-        )
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-            .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-        #endif
         // POST2420-COPY item 6: VoiceOver never learned a throttle trip stopped the scan unless
         // already focused on the banner — post an announcement the instant scanThrottled flips
         // true (false→true only; a retry that resets it back to false says nothing here, the
