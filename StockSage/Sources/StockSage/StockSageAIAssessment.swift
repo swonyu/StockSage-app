@@ -192,12 +192,33 @@ enum StockSageAIAssessment {
         facts.enumerated().map { "F\($0.offset + 1): \($0.element)" }.joined(separator: "\n")
     }
 
+    /// LM Studio's installed Outlines parser treats \d as ASCII and cannot parse \p{N}.
+    /// Emit cached literal Unicode numeric ranges, including fractions and numeric ideographs,
+    /// so generation cannot evade the qualitative-only contract with non-ASCII numbers.
+    /// Keep letters/typographic punctuation available; never normalize a rejected opinion.
+    nonisolated static let qualitativeProsePattern: String = {
+        var ranges: [ClosedRange<UInt32>] = []
+        for value in UInt32(0)...0x10FFFF {
+            guard let scalar = Unicode.Scalar(value), scalar.properties.numericType != nil else { continue }
+            if let last = ranges.last, last.upperBound + 1 == value {
+                ranges[ranges.count - 1] = last.lowerBound...value
+            } else {
+                ranges.append(value...value)
+            }
+        }
+        let numbers = ranges.map { range in
+            let first = String(Unicode.Scalar(range.lowerBound)!)
+            return range.lowerBound == range.upperBound ? first : first + "-" + String(Unicode.Scalar(range.upperBound)!)
+        }.joined()
+        return "^[^\(numbers)<>\\[\\]]+$"
+    }()
+
     /// Constrain generation to the existing contract; the Swift validator still owns acceptance.
     /// Figures remain in captured facts. No action, evidence or financial claim is filled in by code.
     nonisolated static func responseSchema(facts: [String]) -> Data? {
         guard !facts.isEmpty else { return nil }
         let prose: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 600,
-                                    "pattern": #"^[^0-9<>\[\]]+$"#]
+                                    "pattern": qualitativeProsePattern]
         return try? JSONSerialization.data(withJSONObject: [
             "type": "object", "additionalProperties": false,
             "properties": [
@@ -574,7 +595,7 @@ final class StockSageAIAssessments: ObservableObject {
                 text: text.count <= 8_000 ? text : String(text.prefix(8_000)) + "\n[Display truncated at 8,000 characters]")
         }
         guard let text else {
-            if case .failure(let failure) = reply { errors[symbol] = "Local model request failed; " + failure.diagnostic.summary }
+            errors[symbol] = "Local model request failed; " + Self.failureSummary(reply, facts: facts, leadCount: 0)
             return
         }
         guard context.canAssess(at: clock?() ?? now) else {
@@ -622,7 +643,26 @@ final class StockSageAIAssessments: ObservableObject {
     static func failureSummary(_ reply: StockSageLocalModelServer.CompletionResult,
                                facts: [String], leadCount: Int, draft: String? = nil, symbol: String? = nil) -> String {
         switch reply {
-        case .failure(let failure): return failure.diagnostic.summary
+        case .failure(let failure):
+            let explanation: String
+            switch StockSageLocalModelServer.cause(for: failure.diagnostic) {
+            case .cancelled: explanation = "The model request was cancelled."
+            case .settingsChanged: explanation = "Model settings changed during the request; reassess with the current settings."
+            case .networkDenied: explanation = "Network access to a non-loopback model server is turned off. Check Model settings."
+            case .badSettings: explanation = "The model server URL or model ID is not usable. Check Model settings."
+            case .modelMissing: explanation = "The requested model is missing or unsupported. Check its model ID and availability in Model settings."
+            case .timedOut: explanation = "The model did not answer within the request deadline. Check whether it is still loading or busy before retrying."
+            case .unreachable: explanation = "The model server could not be reached. Check that it is running, then use Test connection in Model settings."
+            case .serverRejected:
+                explanation = "The model server rejected the request" + (failure.diagnostic.httpStatus.map { " (HTTP \($0))" } ?? "") + ". Check its model and request settings."
+            case .tooLarge: explanation = "The model returned more data than this app will read. No opinion was accepted."
+            case .contextBudget: explanation = "The evidence does not fit, or the loaded model's context size could not be verified. Check its context setting before retrying."
+            case .unfinished: explanation = "The model stopped before finishing its answer. No partial opinion was accepted."
+            case .emptyAnswer: explanation = "The model returned an empty answer. No opinion was accepted; retry when ready."
+            case .unreadable: explanation = "The model server returned a response this app could not read, or one identifying a different model. Check its model and response format."
+            case .unknown: explanation = "The model request did not complete. Check the model status before retrying."
+            }
+            return explanation + "\n" + failure.diagnostic.summary
         case .success(let completion):
             let category: String
             switch StockSageAIAssessment.validate(completion.text, facts: facts, leadCount: leadCount, symbol: symbol) {

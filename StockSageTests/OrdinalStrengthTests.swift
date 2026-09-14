@@ -40,6 +40,14 @@ struct OrdinalStrengthTests {
         #expect(M.ordinalStrengthLabel(0.95) == "5/5")
     }
 
+    @Test("missing previous-close basis is never announced as a flat price change")
+    func missingBasisIsNotZeroChange() {
+        #expect(M.sessionChangeAccessibilitySummary(nil, isNew: false) == "previous close pending")
+        #expect(M.sessionChangeAccessibilitySummary(nil, isNew: true) == "newly listed, not yet evaluated")
+        #expect(M.sessionChangeAccessibilitySummary(0, isNew: false) == "+0.0 percent")
+        #expect(M.sessionChangeAccessibilitySummary(-2.5, isNew: false) == "-2.5 percent")
+    }
+
     @Test("screen readers get the same five-level scale as signal cards")
     func screenReaderScaleMatchesCard() {
         for recommendation in [StockSageRecommendation.buy, .strongBuy, .sell, .strongSell] {

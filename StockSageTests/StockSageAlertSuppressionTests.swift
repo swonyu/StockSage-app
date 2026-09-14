@@ -19,8 +19,15 @@ struct StockSageAlertSuppressionTests {
     private typealias B = StockSageNotificationBudget
     private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func cappedBudget() -> B {
-        var b = B()
+    private func emptyBudget() throws -> B {
+        let name = "suppression.empty.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        return B(loadingFrom: defaults, now: t0)
+    }
+
+    private func cappedBudget() throws -> B {
+        var b = try emptyBudget()
         // Fill the rolling hour on DISTINCT symbols so no per-symbol brake is involved.
         for i in 0..<B.hourlyCap {
             b.record(symbol: "FILL\(i)", price: 100, now: t0)
@@ -42,13 +49,13 @@ struct StockSageAlertSuppressionTests {
     // `refuse` must name the reason, not just say no — that distinction IS the fix.
     // NOTE: `#expect` captures its subexpressions immutably, so every `mutating` call below is
     // hoisted to a `let` first. Inlining one is a compile error, not a style choice.
-    @Test func refuseNamesTheReasonTheCapAndTheBrakesAreDistinguishable() {
-        var capped = cappedBudget()
+    @Test func refuseNamesTheReasonTheCapAndTheBrakesAreDistinguishable() throws {
+        var capped = try cappedBudget()
         let capRefusal = capped.refuse(symbol: "NEW", price: 100, now: t0)
         #expect(capRefusal == .hourlyCapReached,
                 "a symbol never alerted before can only be refused by the GLOBAL cap")
 
-        var cooling = B()
+        var cooling = try emptyBudget()
         cooling.record(symbol: "AAPL", price: 100, now: t0)
         let cool = cooling.refuse(symbol: "AAPL", price: 200, now: t0.addingTimeInterval(60))
         #expect(cool == .symbolCoolingDown)
@@ -56,10 +63,10 @@ struct StockSageAlertSuppressionTests {
         #expect(flat == .priceHasNotMovedEnough)
 
         // `allow` keeps its exact Bool contract for every existing caller.
-        var b = cappedBudget()
+        var b = try cappedBudget()
         let deniedByCap = b.allow(symbol: "NEW", price: 100, now: t0)
         #expect(!deniedByCap)
-        var fresh = B()
+        var fresh = try emptyBudget()
         let allowed = fresh.allow(symbol: "FRESH", price: 100, now: t0)
         #expect(allowed)
     }
@@ -69,8 +76,8 @@ struct StockSageAlertSuppressionTests {
     // Without distinct counting this is the number that would reach the owner's screen: the
     // monitor re-consults the budget every 180s, and under D1 a capped signal no longer latches,
     // so one held event would report as ~20 suppressed alerts an hour.
-    @Test func repeatedPollsOfOneHeldEventCountAsOne() {
-        var b = cappedBudget()
+    @Test func repeatedPollsOfOneHeldEventCountAsOne() throws {
+        var b = try cappedBudget()
         for cycle in 0..<20 {
             _ = b.refuse(symbol: "RKLB", price: 50, now: t0.addingTimeInterval(Double(cycle) * 180))
         }
@@ -80,8 +87,8 @@ struct StockSageAlertSuppressionTests {
         #expect(b.suppressedSinceLastAllowed == 20)
     }
 
-    @Test func distinctSymbolsAndDistinctReasonsCountSeparately() {
-        var b = cappedBudget()
+    @Test func distinctSymbolsAndDistinctReasonsCountSeparately() throws {
+        var b = try cappedBudget()
         _ = b.refuse(symbol: "AAPL", price: 100, now: t0)
         _ = b.refuse(symbol: "NVDA", price: 100, now: t0)
         _ = b.refuse(symbol: "aapl", price: 100, now: t0)      // same symbol, different casing

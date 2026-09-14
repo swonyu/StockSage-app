@@ -12,83 +12,153 @@ struct StockSagePaperAutomationPanel: View {
     #endif
 
     var body: some View {
-        GroupBox("Qwen research and paper trading") {
-            VStack(alignment: .leading, spacing: 10) {
-                #if os(macOS)
-                Self.attention(automation.error)
-                #endif
-                HStack {
-                    Label(Self.modeLabel(running: automation.isRunning),
-                          systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
-                    Spacer()
-                    if automation.isRunning {
-                        Button("Pause day trading") { automation.stop() }
-                            .help("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
-                            .accessibilityHint("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
-                    } else {
-                        Button("Start day trading") { automation.start() }
+        VStack(alignment: .leading, spacing: 24) {
+            #if os(macOS)
+            Self.attention(automation.error)
+            #endif
+            VStack(alignment: .leading, spacing: 12) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 24) {
+                        modeHeading
+                        Spacer(minLength: 16)
+                        modeButton
+                    }
+                    VStack(alignment: .leading, spacing: 16) {
+                        modeHeading
+                        modeButton
                     }
                 }
-                if automation.isRunning {
-                    Text("Pausing stops both research and exit checks. Open paper positions remain.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let progress = automation.researchProgress {
-                    Text(progress.isIndeterminate ? "Preparing market data and Qwen…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
-                        .font(.callout).monospacedDigit()
+                VStack(alignment: .leading, spacing: 8) {
                     #if os(macOS)
-                    ForEach(automation.researchingSymbols.sorted(), id: \.self) { symbol in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(symbol) · Checking sources and Qwen…")
-                                .font(.caption).monospaced()
-                            ProgressView()
-                                .progressViewStyle(.linear)
-                                .accessibilityLabel("\(symbol) research in progress")
-                        }
+                    let mode = Label(Self.modeLabel(running: automation.isRunning),
+                                     systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
+                        .font(.headline)
+                    let status = Text(automation.status).font(.callout).foregroundStyle(.secondary)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 16) { mode; status }
+                            .fixedSize(horizontal: true, vertical: false)
+                        VStack(alignment: .leading, spacing: 6) { mode; status }
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    let queued = max(0, progress.totalUnitCount - progress.completedUnitCount - Int64(automation.researchingSymbols.count))
-                    if queued > 0 {
-                        Text("\(queued) checks queued · waiting for a free worker")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    #else
-                    ProgressView(progress)
-                        .progressViewStyle(.linear)
-                        .accessibilityLabel("Research checks completed")
                     #endif
-                    Text("Ready results appear as they finish; other workers continue while a request is loading. Checks completed, not trades. Position and exit checks run separately from research.")
+                    if automation.isRunning {
+                        Text("Pausing stops both research and exit checks. Open paper positions remain.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    researchProgress
+                    #if !os(macOS)
+                    Text(automation.status).font(.callout)
+                    Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
                         .font(.caption).foregroundStyle(.secondary)
+                    Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
+                        .font(.caption).foregroundStyle(.secondary)
+                    #endif
                 }
-                Text(automation.status).font(.callout)
-                #if !os(macOS)
-                Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
-                    .font(.caption).foregroundStyle(.secondary)
-                #endif
                 if automation.hasLoadedBook {
-                #if !os(macOS)
-                if automation.book.open.contains(where: { StockSagePaperAutomation.dayExitDue(openedAt: $0.openedAt, now: Date()) }) {
-                    Text("Close-out required: awaiting fresh later prices. No overnight or closing fill is assumed.")
+                    accountAndPositions
+                } else {
+                    Text("Paper balances and history unavailable: the saved account could not be verified. No new account balance is assumed.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
-                #endif
-                TimelineView(.periodic(from: .now, by: 30)) { _ in
-                // A scheduled TimelineView entry can be older than a newly received quote.
-                let at = Date()
-                VStack(alignment: .leading, spacing: 10) {
-                Text(Self.monitoringLabel(running: automation.isRunning, at: at))
-                    .font(.callout.bold())
-                Text("When day trading is enabled, StockSage is open and this device is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
-                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if automation.hasLoadedBook {
+                Divider()
+                activityHistory
+            }
+            #if !os(macOS)
+            if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
+            #endif
+            simulationPolicy
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var modeHeading: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Paper trading")
                 #if os(macOS)
-                if let warning = Self.closeOutWarning(book: automation.book, at: at, running: automation.isRunning) {
-                    Text(warning).font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                .font(.largeTitle.weight(.semibold))
+                #else
+                .font(.largeTitle.bold())
+                #endif
+            Text("Qwen research and paper trading").font(.callout).foregroundStyle(.secondary)
+            #if !os(macOS)
+            Label(Self.modeLabel(running: automation.isRunning),
+                  systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
+        }
+    }
+
+    @ViewBuilder private var modeButton: some View {
+        if automation.isRunning {
+            Button("Pause day trading") { automation.stop() }
+                .buttonStyle(.bordered).controlSize(.large)
+                .help("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
+                .accessibilityHint("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
+        } else {
+            Button("Start day trading") { automation.start() }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+        }
+    }
+
+    @ViewBuilder private var researchProgress: some View {
+        if let progress = automation.researchProgress {
+            Text(progress.isIndeterminate ? "Preparing market data and Qwen…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
+                .font(.callout).monospacedDigit()
+            #if os(macOS)
+            ForEach(automation.researchingSymbols.sorted(), id: \.self) { symbol in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(symbol) · Checking sources and Qwen…")
+                        .font(.caption).monospaced()
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .accessibilityLabel("\(symbol) research in progress")
                 }
-                if let timing = Self.researchTiming(book: automation.book, at: at, running: automation.isRunning, researching: automation.isResearching) {
-                    Text(timing).font(.caption).foregroundStyle(.secondary)
+            }
+            let queued = max(0, progress.totalUnitCount - progress.completedUnitCount - Int64(automation.researchingSymbols.count))
+            if queued > 0 {
+                Text("\(queued) checks queued · waiting for a free worker")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            #else
+            ProgressView(progress)
+                .progressViewStyle(.linear)
+                .accessibilityLabel("Research checks completed")
+            #endif
+            Text("Ready results appear as they finish; other workers continue while a request is loading. Checks completed, not trades. Position and exit checks run separately from research.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var accountAndPositions: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+            // A scheduled TimelineView entry can be older than a newly received quote.
+            let at = Date()
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(Self.monitoringLabel(running: automation.isRunning, at: at))
+                        .font(.headline)
+                    Text("When day trading is enabled, StockSage is open and this device is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    #if os(macOS)
+                    if let warning = Self.closeOutWarning(book: automation.book, at: at, running: automation.isRunning) {
+                        Text(warning).font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                    }
+                    if let timing = Self.researchTiming(book: automation.book, at: at, running: automation.isRunning, researching: automation.isResearching) {
+                        Text(timing).font(.callout).foregroundStyle(.secondary)
+                    }
+                    #else
+                    if automation.book.open.contains(where: { StockSagePaperAutomation.dayExitDue(openedAt: $0.openedAt, now: Date()) }) {
+                        Text("Close-out required: awaiting fresh later prices. No overnight or closing fill is assumed.")
+                            .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                    }
+                    #endif
                 }
-                Self.pendingRequests(automation.book.pending, running: automation.isRunning, at: at)
+                .fixedSize(horizontal: false, vertical: true)
+                Divider()
+                #if os(macOS)
                 Self.accountSummary(book: automation.book, quotes: automation.quotes, at: at)
                 #else
                 HStack(spacing: 20) {
@@ -128,109 +198,193 @@ struct StockSagePaperAutomationPanel: View {
                         }
                     }.font(.caption).foregroundStyle(.secondary)
                 #endif
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Positions and requests").font(.title2.weight(.semibold))
+                        Text("\(automation.book.open.count) paper positions · \(automation.book.pending.count) pending · \(automation.book.trades.filter { !$0.isOpen }.count) closed")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    paperPositions
+                    #if os(macOS)
+                    Self.pendingRequests(automation.book.pending, running: automation.isRunning, at: at)
+                    #endif
                 }
+            }
+        }
+    }
+
+    private var paperPositions: some View { Self.paperPositions(automation.book.open) }
+
+    @ViewBuilder static func paperPositions(_ positions: [TradeRecord]) -> some View {
+        if !positions.isEmpty {
+            let stackedPositions = VStack(alignment: .leading, spacing: 16) {
+                Text("Paper positions").font(.headline)
+                ForEach(positions) { trade in
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(trade.symbol).font(.title3.bold())
+                            Text("\(Int(trade.shares)) shares").font(.callout).foregroundStyle(.secondary)
+                        }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Entry").foregroundStyle(.secondary)
+                                Text("$\(StockSageCurrency.adaptivePrice(trade.entry))").fontWeight(.medium)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Stop").foregroundStyle(.secondary)
+                                Text("$\(StockSageCurrency.adaptivePrice(trade.stop))").fontWeight(.medium)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Target").foregroundStyle(.secondary)
+                                Text(trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded").fontWeight(.medium)
+                            }
+                        }
+                        .font(.callout).monospacedDigit()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
                 }
-                Text("\(automation.book.open.count) paper positions · \(automation.book.pending.count) pending · \(automation.book.trades.filter { !$0.isOpen }.count) closed")
-                    .font(.caption)
-                #if !os(macOS)
-                if let scan = automation.book.decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
-                    Text("Market coverage · \(scan.at.formatted(date: .omitted, time: .shortened))").font(.caption.bold())
-                    Text(scan.reason).font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Full US market discovery begins on the next research cycle; your watchlist is not the scan limit.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                #endif
-                #if os(macOS)
-                Self.recordedActivity(automation.book.decisions)
-                DisclosureGroup("Market coverage and research cycles") {
-                    Self.coverageSummary(automation.book.decisions)
-                }.font(.caption)
-                #else
-                if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
-                    Text("Latest decision: \(decision.symbol) · \(Self.actionLabel(decision.action))").font(.callout.bold())
-                    Text(decision.reason).font(.caption).foregroundStyle(.secondary)
-                    if let plan = decision.plan { Self.entryPlan(plan) }
-                }
-                if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
-                    Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(Self.reasonLabel(action: cycle.action, reason: cycle.reason))")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if automation.isRunning, !automation.isResearching, StockSagePaperAutomation.entryWindowOpen(Date()), let last = automation.book.lastResearch {
-                    Text("Next research due \(last.addingTimeInterval(StockSagePaperAutomation.interval).formatted(date: .omitted, time: .shortened)) · while awake, connected and in session")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                #endif
-                if let audit = automation.book.audit, !audit.archives.isEmpty {
-                    Text("Older audit records preserved in \(audit.archives.count) verified archive chunks beside the account. Recent history is shown below.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                } else {
-                    Text("Paper balances and history unavailable: the saved account could not be verified. No new account balance is assumed.")
-                        .font(.callout).foregroundStyle(DS.Palette.warningSoft)
-                }
-                #if !os(macOS)
-                if let error = automation.error { Text(error).foregroundStyle(DS.Palette.warningSoft).font(.callout) }
-                #endif
-                if automation.hasLoadedBook, !automation.book.open.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Paper positions").font(.callout.bold())
-                        ForEach(automation.book.open) { trade in
-                            Text("\(trade.symbol) · \(Int(trade.shares)) shares · entry $\(StockSageCurrency.adaptivePrice(trade.entry)) · stop $\(StockSageCurrency.adaptivePrice(trade.stop)) · target \(trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded")")
-                                .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #if os(macOS)
+            ViewThatFits(in: .horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 12) {
+                    GridRow {
+                        Text("Paper positions").font(.headline)
+                        Text("Entry").foregroundStyle(.secondary)
+                        Text("Stop").foregroundStyle(.secondary)
+                        Text("Target").foregroundStyle(.secondary)
+                    }
+                    ForEach(positions) { trade in
+                        GridRow {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(trade.symbol).font(.title3.weight(.semibold))
+                                Text("\(Int(trade.shares)) shares").foregroundStyle(.secondary)
+                            }
+                            Text("$\(StockSageCurrency.adaptivePrice(trade.entry))").fontWeight(.medium)
+                                .accessibilityLabel("\(trade.symbol), entry $\(StockSageCurrency.adaptivePrice(trade.entry))")
+                            Text("$\(StockSageCurrency.adaptivePrice(trade.stop))").fontWeight(.medium)
+                                .accessibilityLabel("\(trade.symbol), stop $\(StockSageCurrency.adaptivePrice(trade.stop))")
+                            Text(trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded")
+                                .fontWeight(.medium)
+                                .accessibilityLabel("\(trade.symbol), target " + (trade.target.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "not recorded"))
                         }
                     }
                 }
-                DisclosureGroup("Simulation policy and limitations") {
+                .font(.callout).monospacedDigit()
+                .fixedSize(horizontal: true, vertical: false)
+                stackedPositions
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            #else
+            stackedPositions
+            #endif
+        }
+    }
+
+    private var activityHistory: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            #if os(macOS)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                    Text("Recorded activity").font(.title2.weight(.semibold))
+                    Spacer(minLength: 12)
+                    exportButton
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Recorded activity").font(.title2.weight(.semibold))
+                    exportButton
+                }
+            }
+            if let exportResult { Text(exportResult).font(.callout).textSelection(.enabled) }
+            Self.recordedActivity(automation.book.decisions)
+            DisclosureGroup("Market coverage and research cycles") {
+                Self.coverageSummary(automation.book.decisions).padding(.top, 8)
+            }.font(.callout)
+            #else
+            if let scan = automation.book.decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
+                Text("Market coverage · \(scan.at.formatted(date: .omitted, time: .shortened))").font(.caption.bold())
+                Text(scan.reason).font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Full US market discovery begins on the next research cycle; your watchlist is not the scan limit.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
+                Text("Latest decision: \(decision.symbol) · \(Self.actionLabel(decision.action))").font(.callout.bold())
+                Text(decision.reason).font(.caption).foregroundStyle(.secondary)
+                if let plan = decision.plan { Self.entryPlan(plan) }
+            }
+            if let cycle = automation.book.decisions.last(where: { $0.action == "Research complete" }) {
+                Text("Last cycle · \(cycle.at.formatted(date: .omitted, time: .shortened)) · \(Self.reasonLabel(action: cycle.action, reason: cycle.reason))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if automation.isRunning, !automation.isResearching, StockSagePaperAutomation.entryWindowOpen(Date()), let last = automation.book.lastResearch {
+                Text("Next research due \(last.addingTimeInterval(StockSagePaperAutomation.interval).formatted(date: .omitted, time: .shortened)) · while awake, connected and in session")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            #endif
+            if let audit = automation.book.audit, !audit.archives.isEmpty {
+                Text("Older audit records preserved in \(audit.archives.count) verified archive chunks beside the account. Recent history is shown below.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            researchHistory
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    #if os(macOS)
+    private var exportButton: some View {
+        Button(exporting ? "Exporting verified history…" : "Export paper research…") { exportResearch() }
+            .disabled(exporting)
+            .help("Save the committed account, every referenced audit chunk and missing-evidence disclosures. No portfolio performance is calculated.")
+    }
+    #endif
+
+    private var simulationPolicy: some View {
+        DisclosureGroup("Simulation policy and limitations") {
+            #if os(macOS)
+            Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
+            Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
+            #endif
+            Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
+            Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
+            Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Up to \(StockSagePaperAutomation.discoveryLimit) total checks per cycle: all paper holdings first, then affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
+            Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
+            Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
+            Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")
+            Text("Runs while this Mac is awake and StockSage is open. Published 2026 holidays and early closes are modeled; unsupported calendar years and stale or missing data block fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
+        }.font(.callout).foregroundStyle(.secondary)
+    }
+
+    private var researchHistory: some View {
+        DisclosureGroup("Research and decisions · latest \(min(100, automation.book.decisions.count))") {
+            ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
+                VStack(alignment: .leading, spacing: 8) {
                     #if os(macOS)
-                    Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
-                    Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
+                    let recordedAt = "\(Self.activityDateLabel(decision.at)) New York"
+                    #else
+                    let recordedAt = decision.at.formatted(date: .abbreviated, time: .shortened)
                     #endif
-                    Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
-                    Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
-                    Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Up to \(StockSagePaperAutomation.discoveryLimit) total checks per cycle: all paper holdings first, then affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
-                    Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
-                    Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
-                    Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")
-                    Text("Runs while this Mac is awake and StockSage is open. Published 2026 holidays and early closes are modeled; unsupported calendar years and stale or missing data block fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
-                }.font(.caption).foregroundStyle(.secondary)
-                if automation.hasLoadedBook {
-                #if os(macOS)
-                Button(exporting ? "Exporting verified history…" : "Export paper research…") { exportResearch() }
-                    .disabled(exporting)
-                    .help("Save the committed account, every referenced audit chunk and missing-evidence disclosures. No portfolio performance is calculated.")
-                if let exportResult { Text(exportResult).font(.caption).textSelection(.enabled) }
-                #endif
-                DisclosureGroup("Research and decisions · latest \(min(100, automation.book.decisions.count))") {
-                    ForEach(Array(automation.book.decisions.suffix(100).reversed())) { decision in
-                        VStack(alignment: .leading, spacing: 4) {
-                            #if os(macOS)
-                            let recordedAt = "\(Self.activityDateLabel(decision.at)) New York"
-                            #else
-                            let recordedAt = decision.at.formatted(date: .abbreviated, time: .shortened)
-                            #endif
-                            Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(recordedAt)").font(.caption.bold())
-                            Text(Self.reasonLabel(action: decision.action, reason: decision.reason)).font(.callout)
-                            if let plan = decision.plan { Self.entryPlan(plan) }
-                            if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
-                            if !decision.facts.isEmpty {
-                                DisclosureGroup(decision.action == "Unavailable" ? "Available source evidence · incomplete research" : "Saved evidence and model") {
-                                    if decision.action == "Unavailable" {
-                                        Text("Captured source observations only. No verified model opinion or paper order was created; these historical observations are not current fill prices.")
-                                    } else {
-                                        Text("Model: \(decision.model.isEmpty ? "Simulation rules" : decision.model). References: \(decision.evidence.joined(separator: ", "))")
-                                    }
-                                    ForEach(Array(decision.facts.enumerated()), id: \.offset) { index, fact in
-                                        Text("F\(index + 1): \(fact)")
-                                    }
-                                }.font(.caption).foregroundStyle(.secondary)
+                    Text("\(decision.symbol) \(Self.actionLabel(decision.action)) · \(recordedAt)").font(.callout.bold())
+                    Text(Self.reasonLabel(action: decision.action, reason: decision.reason)).font(.callout)
+                    if let plan = decision.plan { Self.entryPlan(plan) }
+                    if !decision.risk.isEmpty { Text("Risk: \(decision.risk)").font(.caption) }
+                    if !decision.facts.isEmpty {
+                        DisclosureGroup(decision.action == "Unavailable" ? "Available source evidence · incomplete research" : "Saved evidence and model") {
+                            if decision.action == "Unavailable" {
+                                Text("Captured source observations only. No verified model opinion or paper order was created; these historical observations are not current fill prices.")
+                            } else {
+                                Text("Model: \(decision.model.isEmpty ? "Simulation rules" : decision.model). References: \(decision.evidence.joined(separator: ", "))")
                             }
-                        }.textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        Divider()
+                            ForEach(Array(decision.facts.enumerated()), id: \.offset) { index, fact in
+                                Text("F\(index + 1): \(fact)")
+                            }
+                        }.font(.caption).foregroundStyle(.secondary)
                     }
-                }
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+                }.textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                Divider()
+            }
         }
     }
 
@@ -267,18 +421,22 @@ struct StockSagePaperAutomationPanel: View {
     }
 
     static func coverageSummary(_ decisions: [StockSagePaperAutomation.Decision]) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
+        VStack(alignment: .leading, spacing: 12) {
             if let scan = decisions.last(where: { $0.action.hasPrefix("Market scan") }) {
-                Text("Market coverage · \(activityDateLabel(scan.at)) New York").font(.caption.bold())
-                Text(verbatim: scan.reason).font(.caption)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Market coverage · \(activityDateLabel(scan.at)) New York").font(.callout.bold())
+                    Text(verbatim: scan.reason).font(.callout)
+                }
             } else {
-                Text("No scan summary in recent history.").font(.caption)
+                Text("No scan summary in recent history.").font(.callout)
             }
             if let cycle = decisions.last(where: { $0.action == "Research complete" }) {
-                Text("Last completed cycle · \(activityDateLabel(cycle.at)) New York").font(.caption.bold())
-                Text(verbatim: cycle.reason).font(.caption)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Last completed cycle · \(activityDateLabel(cycle.at)) New York").font(.callout.bold())
+                    Text(verbatim: cycle.reason).font(.callout)
+                }
             } else {
-                Text("No completed-cycle summary in recent history.").font(.caption)
+                Text("No completed-cycle summary in recent history.").font(.callout)
             }
         }
         .foregroundStyle(.secondary).textSelection(.enabled)
@@ -290,30 +448,48 @@ struct StockSagePaperAutomationPanel: View {
                                quotes: [String: StockSageQuoteService.LiveQuote], at: Date) -> some View {
         let settled = book.settledCash(at: at)
         let sales = book.unsettledSales(at: at)
-        return VStack(alignment: .leading, spacing: DS.Space.xs) {
-            LabeledContent("Settled spending capacity") {
-                Text(book.buyingCash(at: at), format: .currency(code: "USD")).monospacedDigit()
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("Paper account").font(.title2.weight(.semibold))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 24, alignment: .topLeading)],
+                      alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Settled spending capacity").font(.callout).foregroundStyle(.secondary)
+                    Text(book.buyingCash(at: at), format: .currency(code: "USD"))
+                        .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .accessibilityElement(children: .combine)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Estimated paper equity").font(.callout).foregroundStyle(.secondary)
+                    if let equity = book.equity(quotes: quotes, at: at) {
+                        Text(equity, format: .currency(code: "USD"))
+                            .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                        Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Fresh marks unavailable").font(.title3).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .accessibilityElement(children: .combine)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Total paper cash").font(.callout).foregroundStyle(.secondary)
+                    Text(book.cash, format: .currency(code: "USD"))
+                        .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .accessibilityElement(children: .combine)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Unsettled proceeds").font(.callout).foregroundStyle(.secondary)
+                    Text(book.unsettledProceeds(at: at), format: .currency(code: "USD"))
+                        .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .accessibilityElement(children: .combine)
             }
             if settled < 0 {
                 Text("Legacy funding deficit: \((-settled).formatted(.currency(code: "USD"))). New entries wait for settlement; holdings and exits are retained.")
-                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
-            }
-            LabeledContent("Total paper cash") {
-                Text(book.cash, format: .currency(code: "USD")).monospacedDigit()
-            }
-            LabeledContent("Unsettled proceeds") {
-                Text(book.unsettledProceeds(at: at), format: .currency(code: "USD")).monospacedDigit()
-            }
-            if let equity = book.equity(quotes: quotes, at: at) {
-                LabeledContent("Estimated paper equity") {
-                    Text(equity, format: .currency(code: "USD")).monospacedDigit()
-                }
-                Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                LabeledContent("Estimated paper equity") {
-                    Text("Fresh marks unavailable").font(.caption)
-                }
+                    .font(.callout).foregroundStyle(DS.Palette.warningSoft)
             }
             Text("Calculated \(Self.activityDateLabel(at)) New York. Calculation time, not a market timestamp or broker balance.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -328,7 +504,7 @@ struct StockSagePaperAutomationPanel: View {
                                 .foregroundStyle(DS.Palette.warningSoft)
                         }
                     }
-                }.font(.caption).foregroundStyle(.secondary)
+                }.font(.callout).foregroundStyle(.secondary)
             }
         }
         .font(.callout)
@@ -365,20 +541,20 @@ struct StockSagePaperAutomationPanel: View {
 
     @ViewBuilder static func pendingRequests(_ requests: [StockSagePaperAutomation.Pending], running: Bool, at now: Date) -> some View {
         if !requests.isEmpty {
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                Text("Pending paper requests").font(.callout.bold())
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Pending paper requests").font(.headline)
                 ForEach(requests) { request in
-                    VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("\(request.symbol) · \(request.buy ? "Buy requested" : "Exit requested") · Not filled")
-                            .font(.caption.bold())
+                            .font(.callout.bold())
                         Text("Current attempt: \(activityDateLabel(request.at)) New York")
                             .font(.caption).foregroundStyle(.secondary)
                         if request.protectiveTradeID != nil {
-                            Text("Protective intent retained").font(.caption.bold())
+                            Text("Protective intent retained").font(.callout.bold())
                                 .foregroundStyle(DS.Palette.warningSoft)
                         }
                         Text(pendingStatus(request, running: running, at: now))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.callout).foregroundStyle(.secondary)
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -391,23 +567,24 @@ struct StockSagePaperAutomationPanel: View {
     @ViewBuilder static func recordedActivity(_ decisions: [StockSagePaperAutomation.Decision]) -> some View {
         let latest = latestActivity(in: decisions)
         let noFill = latestNoFillEvidence(in: decisions)
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
+        VStack(alignment: .leading, spacing: 20) {
             if let latest {
-                VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                VStack(alignment: .leading, spacing: 12) {
                     activityRow(latest, title: "Latest recorded activity")
                     if let plan = latest.plan { entryPlan(plan) }
                 }
             } else {
                 Text("No recorded activity in recent history.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
             }
             if let noFill {
                 if noFill.id != latest?.id {
+                    Divider()
                     activityRow(noFill, title: "Latest recorded no-fill evidence")
                 }
             } else {
                 Text("No matching no-fill record in recent history.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .textSelection(.enabled)
@@ -416,16 +593,17 @@ struct StockSagePaperAutomationPanel: View {
     }
 
     private static func activityRow(_ decision: StockSagePaperAutomation.Decision, title: String) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.xxs) {
-            Text(title).font(.callout.bold())
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
             Text("\(activityDateLabel(decision.at)) New York · \(decision.symbol.isEmpty ? "General activity" : decision.symbol) · \(actionLabel(decision.action))")
-                .font(.caption.bold())
-            Text(verbatim: decision.reason).font(.caption).foregroundStyle(.secondary)
-            Text("Historical record; does not establish current state or why a request is pending.")
-                .font(.caption).foregroundStyle(.secondary)
-            Text(decision.action == "Paper Buy" || decision.action == "Paper Sell"
-                 ? "Simulated fill · not a broker execution." : "This record is not a fill.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout.weight(.medium))
+            Text(verbatim: decision.reason).font(.callout).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Historical record; does not establish current state or why a request is pending.")
+                Text(decision.action == "Paper Buy" || decision.action == "Paper Sell"
+                     ? "Simulated fill · not a broker execution." : "This record is not a fill.")
+            }
+            .font(.caption).foregroundStyle(.secondary)
         }
     }
 

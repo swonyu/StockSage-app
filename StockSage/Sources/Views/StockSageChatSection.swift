@@ -40,7 +40,7 @@ struct StockSageChatSection: View {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
                     ScrollView {
-                        conversation.padding(24).frame(maxWidth: 860, alignment: .leading)
+                        conversation.padding(24).frame(maxWidth: 840, alignment: .leading)
                             .frame(maxWidth: .infinity)
                         Color.clear.frame(height: 1).id("chat-bottom")
                     }
@@ -55,15 +55,16 @@ struct StockSageChatSection: View {
                             proxy.scrollTo("chat-bottom", anchor: .bottom)
                         }
                         .controlSize(.small)
+                        .buttonStyle(.borderless)
                         .disabled(chat.turns.isEmpty)
                         .help("Jump to the newest question and reply without sending a request.")
                     }
-                    .padding(.horizontal, 20).padding(.vertical, 8)
-                    .frame(maxWidth: 860).frame(maxWidth: .infinity)
+                    .padding(.horizontal, 24).padding(.vertical, 6)
+                    .frame(maxWidth: 840).frame(maxWidth: .infinity)
                 }
             }
             Divider()
-            composer.padding(20).frame(maxWidth: 860)
+            composer.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 840)
                 .frame(maxWidth: .infinity).background(DS.Palette.bgTop)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -74,25 +75,54 @@ struct StockSageChatSection: View {
 
     private var conversation: some View {
         VStack(alignment: .leading, spacing: 16) {
+            #if os(macOS)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Chat").font(.largeTitle.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    if config != nil { Button("Model settings", action: openModelSettings).tint(.secondary) }
+                    Button("Clear history", role: .destructive) { confirmClear = true }
+                        .disabled(chat.turns.isEmpty && chat.storageError == nil)
+                }
+                .controlSize(.small)
+                Text("Your briefing first. Ask Qwen when you want to go deeper.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 4)
+            #else
             HStack {
-                #if os(iOS)
                 Label("Chat", systemImage: "bubble.left.and.bubble.right.fill").font(.title2.bold())
-                #else
-                Label("Your conversation", systemImage: "bubble.left.and.bubble.right")
-                    .font(.headline).foregroundStyle(.secondary)
-                #endif
                 Spacer()
-                #if os(macOS)
-                if config != nil { Button("Model settings", action: openModelSettings) }
-                #else
                 Button("Model settings", action: openModelSettings)
-                #endif
                 Button("Clear history", role: .destructive) { confirmClear = true }
                     .disabled(chat.turns.isEmpty && chat.storageError == nil)
             }
             Text("Your briefing first. Ask Qwen when you want to go deeper.").foregroundStyle(.secondary)
+            #endif
 
             if let opening {
+                #if os(macOS)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("App briefing · no model call", systemImage: "text.alignleft")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button("Refresh briefing from app data", systemImage: "arrow.clockwise") { refreshOpening() }
+                            .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                            .help("Refresh briefing from app data")
+                    }
+                    Text("Captured \(opening.at.formatted(date: .abbreviated, time: .shortened)). A bounded watchlist/board selection, not the entire market.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if opening.facts.isEmpty { Text("No tracked quotes yet. General questions are still available.") }
+                    ForEach(opening.facts.filter { $0.field == "observed price" }) { fact in
+                        Text(fact.text).font(.callout).lineSpacing(3)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(DS.Palette.surface.opacity(0.55), in: .rect(cornerRadius: DS.Radius.small))
+                #else
                 GroupBox("App briefing · no model call") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Captured \(opening.at.formatted(date: .abbreviated, time: .shortened)). A bounded watchlist/board selection, not the entire market.")
@@ -102,6 +132,7 @@ struct StockSageChatSection: View {
                         Button("Refresh briefing from app data") { refreshOpening() }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+                #endif
             }
             let eventLog = Self.eventLog(enabled: store.alertsEnabled, count: store.alerts.count)
             if let shown = eventLog.shownCount {
@@ -122,6 +153,7 @@ struct StockSageChatSection: View {
                     }
                 } : nil
                 Self.turnContent(turn, pending: chat.pending == turn.id, editQuestion: edit)
+                    .padding(.top, 12)
                 #else
                 Self.turnContent(turn, pending: chat.pending == turn.id)
                 #endif
@@ -133,34 +165,37 @@ struct StockSageChatSection: View {
     @ViewBuilder static func turnContent(_ turn: StockSageChatSession.Turn, pending: Bool,
                                         editQuestion: (() -> Void)? = nil) -> some View {
         #if os(macOS)
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                Label("You", systemImage: "person.crop.circle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(DS.Palette.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-                Text(turn.question).font(.body).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !pending {
-                    Button("Edit question", systemImage: "square.and.pencil") { editQuestion?() }
-                        .controlSize(.small)
-                        .disabled(editQuestion == nil)
-                        .help("Copies this question into the empty message box without sending or changing history. Finish or clear your draft, and wait for any current request to finish.")
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("You", systemImage: "person.crop.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(DS.Palette.textPrimary)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    if !pending {
+                        Button("Edit question", systemImage: "square.and.pencil") { editQuestion?() }
+                            .controlSize(.small).buttonStyle(.borderless)
+                            .disabled(editQuestion == nil)
+                            .help("Copies this question into the empty message box without sending or changing history. Finish or clear your draft, and wait for any current request to finish.")
+                    }
                 }
+                Text(turn.question).font(.system(size: 15)).lineSpacing(4).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(DS.Space.md)
+            .padding(16)
             .frame(maxWidth: 620, alignment: .leading)
-            .background(DS.Palette.accent.opacity(0.16), in: .rect(cornerRadius: DS.Radius.bubble))
+            .background(DS.Palette.accent.opacity(0.10), in: .rect(cornerRadius: DS.Radius.bubble))
             .overlay {
                 RoundedRectangle(cornerRadius: DS.Radius.bubble, style: .continuous)
-                    .stroke(DS.Palette.accent.opacity(0.30), lineWidth: 1)
+                    .stroke(DS.Palette.accent.opacity(0.17), lineWidth: 1)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
 
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
+            VStack(alignment: .leading, spacing: 10) {
                 Label("Qwen", systemImage: "sparkles")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(DS.Palette.textSecondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.Palette.textPrimary)
                     .accessibilityAddTraits(.isHeader)
                 if pending {
                     ProgressView {
@@ -171,32 +206,32 @@ struct StockSageChatSection: View {
                 } else {
                     Text(turn.notice).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(turn.answer).textSelection(.enabled)
+                    Text(turn.answer).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(DS.Space.md)
+            .padding(.horizontal, 4)
             .frame(maxWidth: 760, alignment: .leading)
-            .background(DS.Palette.surface, in: .rect(cornerRadius: DS.Radius.bubble))
-            .overlay {
-                RoundedRectangle(cornerRadius: DS.Radius.bubble, style: .continuous)
-                    .stroke(DS.Palette.surfaceStroke, lineWidth: 1)
-            }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            GroupBox("Evidence and original snapshot") {
-                VStack(alignment: .leading, spacing: DS.Space.xs) {
+            VStack(alignment: .leading, spacing: 12) {
+                Divider()
+                Label("Evidence", systemImage: "doc.text")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach(turn.snapshot.facts.filter { turn.evidence.contains($0.id) }) { fact in
-                        Text(fact.text).font(.callout).fixedSize(horizontal: false, vertical: true)
-                            .padding(8).background(.quaternary, in: .rect(cornerRadius: 8))
+                        Text(fact.text).font(.callout).lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach((turn.snapshot.sources ?? []).filter { turn.evidence.contains($0.id) }) { source in
-                        sourceCard(source).fixedSize(horizontal: false, vertical: true)
+                        sourceCard(source).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(selectedBenzingaRecords(in: turn)) { record in
                         StockSageBenzingaEvidenceView.recordContent(record)
                     }
-                    DisclosureGroup("Original app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
+                    Divider()
+                    DisclosureGroup("Historical app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Historical snapshot, not current evidence. Model: \(turn.model)")
                             Text(turn.snapshot.context)
@@ -208,8 +243,10 @@ struct StockSageChatSection: View {
                             }
                         }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .font(.caption)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.horizontal, 4)
         }
         #else
         GroupBox {
@@ -258,18 +295,17 @@ struct StockSageChatSection: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            #if os(macOS)
             QuestionField(question: $chat.draft, issue: $issue)
+                #if os(macOS)
                 .focused($questionFocused)
-            #else
-            TextField("Ask about a ticker, evidence, risks, or how StockSage works…", text: $chat.draft, axis: .vertical)
-                .lineLimit(2...5).textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Question for Qwen")
-            #endif
+                .font(.system(size: 15))
+                .controlSize(.large)
+                #endif
             HStack {
                 Button("Ask Qwen", systemImage: "arrow.up.circle.fill", action: send)
                     .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config == nil)
                     #if os(macOS)
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
                     .help("Send your question with Command-Return.")
                     #endif
@@ -283,16 +319,10 @@ struct StockSageChatSection: View {
                 }
                 Spacer()
                 Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
-                    #if os(macOS)
                     .accessibilityLabel("Question character count")
                     .accessibilityValue(Self.questionLengthDescription(question))
-                    #endif
             }
-            #if os(macOS)
             Self.composerWarnings(issue: issue, storageError: chat.storageError)
-            #else
-            if let issue = issue ?? chat.storageError { Text(issue).foregroundStyle(DS.Palette.warningSoft) }
-            #endif
             #if os(macOS)
             if config == nil {
                 Self.missingModelNotice(openModelSettings: openModelSettings)
@@ -344,7 +374,6 @@ struct StockSageChatSection: View {
         }
     }
 
-    #if os(macOS)
     /// Composer text wraps OUTSIDE the chat ScrollView. macOS `chatLayout` makes `composer` a
     /// SIBLING of the scroll view, so its height sums into the NavigationSplitView's detail column
     /// instead of scrolling — the same route that made the app unusable in 3392d17.
@@ -365,6 +394,7 @@ struct StockSageChatSection: View {
     /// near-zero-width pass finite.
     static let composerLineLimit = 4
 
+    #if os(macOS)
     static let modelSetupGuidance = "Configure a local model in Model settings. Chat requires a server on this Mac."
 
     static func missingModelNotice(openModelSettings: @escaping () -> Void) -> some View {
@@ -376,6 +406,7 @@ struct StockSageChatSection: View {
                 .controlSize(.small)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
+    #endif
 
     static func sourceLinkLabel(_ source: StockSageChat.Source) -> String {
         "Read \(source.subject) source · \(source.attribution)"
@@ -424,10 +455,11 @@ struct StockSageChatSection: View {
         return ForEach(warnings.indices, id: \.self) { index in
             Text(warnings[index]).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
+                #if os(macOS)
                 .lineLimit(composerLineLimit)
+                #endif
         }
     }
-    #endif
 
     private var connectionNotice: some View {
         #if os(macOS)
@@ -448,12 +480,8 @@ struct StockSageChatSection: View {
             Text(source.warning).font(.caption).foregroundStyle(.secondary)
             Text(source.excerpt).font(.callout).textSelection(.enabled)
             if let link = source.link {
-                #if os(macOS)
                 Link("Read attributed source", destination: link)
                     .accessibilityLabel(Self.sourceLinkLabel(source))
-                #else
-                Link("Read attributed source", destination: link)
-                #endif
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

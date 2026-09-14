@@ -76,10 +76,12 @@ struct StockSageDesktopNavigation: View {
             }
         }
         .listStyle(.sidebar)
+        .environment(\.defaultMinListRowHeight, 36)
         .navigationTitle("StockSage")
         .safeAreaInset(edge: .bottom) {
             SettingsLink { Label("Settings", systemImage: "gearshape") }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .help("Settings · ⌘,")
@@ -98,8 +100,15 @@ struct StockSageDesktopNavigation: View {
 
     private func rows(_ destinations: [MarketSection]) -> some View {
         ForEach(destinations) { destination in
-            Label(StockSageDesktop.title(for: destination),
-                  systemImage: StockSageDesktop.icon(for: destination))
+            Label {
+                Text(StockSageDesktop.title(for: destination))
+                    .font(.system(size: 13, weight: selection == destination ? .semibold : .regular))
+            } icon: {
+                Image(systemName: StockSageDesktop.icon(for: destination))
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(selection == destination ? StockSageDesktop.berry : Color.secondary)
+                    .symbolRenderingMode(.monochrome)
+            }
                 .tag(destination)
                 .help(StockSageDesktop.help(for: destination))
                 .accessibilityIdentifier("desktop.nav.\(destination.rawValue)")

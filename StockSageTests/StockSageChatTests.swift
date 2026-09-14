@@ -1,8 +1,8 @@
 import Foundation
 import Testing
+import SwiftUI
 @testable import StockSage
 #if os(macOS)
-import SwiftUI
 import AppKit
 import Combine
 #endif
@@ -17,6 +17,40 @@ struct StockSageChatTests {
     }
     private func snapshot(_ symbols: [StockSageSymbol]? = nil, sample: Bool = false) -> StockSageChat.Snapshot {
         StockSageChat.snapshot(symbols: symbols ?? [symbol()], ideas: [], earnings: [:], sample: sample, now: now)
+    }
+
+    @Test func editingQuestionClearsOnlyTheObsoleteInputIssue() {
+        var question = String(repeating: "x", count: 2_001)
+        var issue: String? = "Use 1–2000 characters."
+        let field = StockSageChatSection.QuestionField(
+            question: Binding(get: { question }, set: { question = $0 }),
+            issue: Binding(get: { issue }, set: { issue = $0 }))
+        #expect(!StockSageChat.safeQuestion(question))
+        #expect(field.editingBinding.wrappedValue == question)
+        field.editingBinding.wrappedValue = question
+        #expect(issue == "Use 1–2000 characters.", "An unchanged value must not dismiss the warning")
+        field.editingBinding.wrappedValue = "Explain uncertainty"
+        #expect(question == "Explain uncertainty" && StockSageChat.safeQuestion(question))
+        #expect(issue == nil, "An actual edit must discard the old input warning")
+        issue = "A newer validation failure"
+        field.editingBinding.wrappedValue = question
+        #expect(issue == "A newer validation failure", "No delayed edit handler may erase a newer error")
+    }
+
+    @Test func inputWarningsCannotConcealHistoryErrors() {
+        let input = "Use 1–2000 characters."
+        let storage = "Saved Chat history could not be read. It has not been overwritten."
+        #expect(StockSageChatSection.composerIssues(issue: nil, storageError: nil).isEmpty)
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: nil) == [input])
+        #expect(StockSageChatSection.composerIssues(issue: nil, storageError: storage) == [storage])
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: storage) == [input, storage])
+        #expect(StockSageChatSection.composerIssues(issue: input, storageError: input) == [input, input])
+    }
+
+    @Test func sharedChatPresentationKeepsWarningsAcrossPlatforms() {
+        #expect(StockSageChatSection.questionLengthDescription("مرحبا") == "5 of 2,000 characters")
+        #expect(StockSageChatSection.composerIssues(issue: "Question needs attention", storageError: "History not saved")
+                == ["Question needs attention", "History not saved"])
     }
 
     @Test func cancellationOnlyOwnsItsRequestAndCancelsTheActualTask() throws {
@@ -37,6 +71,18 @@ struct StockSageChatTests {
     }
 
     #if os(macOS)
+    @Test(arguments: [240, 760], [0, 31, 500])
+    func renderResearchProgressWithoutImplyingEveryOpinionPassed(width: Int, checked: Int) async throws {
+        let view = GroupBox {
+            StockSageResearchModesPanel.scanProgress(checked: checked, total: 500,
+                                                     buys: 0, incomplete: checked)
+                .padding(8)
+        }.padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(view, name: "stocksage-research-progress-\(width)-\(checked)")
+        #expect(size.width == CGFloat(width) && size.height > 90)
+    }
+
     @Test(arguments: [360, 760])
     func renderNetworkControlsWithoutSettingsOrPreferences(width: Int) async throws {
         for initialWeb in [false, true] {
@@ -103,6 +149,24 @@ struct StockSageChatTests {
             #expect(quotes.mapValues(\.marketTime) == timestamps)
         }
         if state == "long-error" { #expect(heights[0] > heights[1], "Long attention text must wrap at narrow width") }
+    }
+
+    @Test(arguments: [360, 760])
+    func renderPaperPositionsWithWideValuesAndMissingTarget(width: Int) async throws {
+        let positions = [
+            TradeRecord(symbol: "BRK.A", side: .long, entry: 752345.67, stop: 741234.56,
+                        target: nil, shares: 1234, openedAt: now),
+            TradeRecord(symbol: "2222.SR", side: .long, entry: 25.95, stop: 24.5,
+                        target: 28.25, shares: 125, openedAt: now)
+        ]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(positions)
+        let content = StockSagePaperAutomationPanel.paperPositions(positions)
+            .padding(16).frame(width: CGFloat(width))
+            .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
+        let size = try await capture(content, name: "stocksage-paper-positions-\(width)")
+        #expect(size.width == CGFloat(width) && size.height > 60)
+        #expect(try encoder.encode(positions) == before)
     }
 
     @Test(arguments: ["empty", "ordinary", "protective", "global-failure", "opinion-after-fill", "long-no-fill"])
@@ -210,23 +274,25 @@ struct StockSageChatTests {
     func renderResearchFiltersWithoutChangingBindings(width: Int, filled: Bool) async throws {
         let original = filled ? "Synthetic company · بحث تجريبي طويل" : ""
         var search = original
-        var buysOnly = filled
+        var filter: StockSageResearchModesPanel.ResultFilter = filled ? .incomplete : .all
         var changes = 0
         let view = GroupBox {
             StockSageResearchModesPanel.filters(
                 search: Binding(get: { search }, set: { search = $0; changes += 1 }),
-                buysOnly: Binding(get: { buysOnly }, set: { buysOnly = $0; changes += 1 }))
+                filter: Binding(get: { filter }, set: { filter = $0; changes += 1 }))
                 .padding(DS.Space.xs)
         }.padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
         let size = try await capture(view, name: "stocksage-research-filters-\(width)-\(filled)")
         #expect(size.width == CGFloat(width) && size.height > 40)
-        #expect(size.height > 90, "Search and its filter label need separate readable rows")
-        #expect(search == original && buysOnly == filled, "Layout cannot change the owner's filters")
+        if width == 360 {
+            #expect(size.height > 90, "At compact widths search and its filter need separate readable rows")
+        }
+        #expect(search == original && filter == (filled ? .incomplete : .all), "Layout cannot change the owner's filters")
         #expect(changes == 0)
     }
 
-    @Test(arguments: [360, 760], ["ordinary", "large", "missing-plan", "hold", "incomplete", "unchecked"])
+    @Test(arguments: [360, 760], ["ordinary", "large", "missing-plan", "hold", "incomplete", "request-failed", "unchecked"])
     func renderResearchDetailsWithoutOwnerState(width: Int, state: String) async throws {
         typealias R = StockSageHorizonResearch
         let listing = R.Listing(ticker: "FIXTURE", name: "Synthetic display fixture", market: "stocks",
@@ -236,13 +302,19 @@ struct StockSageChatTests {
         let levels = R.Levels(entry: large ? 750_000.25 : 159.70,
             stop: large ? 700_000.25 : 150, target: large ? 850_000.25 : 179.10, at: now,
             basis: "Synthetic daily ATR reference plan. Re-price before considering a trade; overnight gaps can pass the stop. These are scenarios, not forecasts.")
-        let result = R.Result(verdict: state == "incomplete" ? nil : .init(
+        let failedRequest = state == "request-failed"
+        let failureNote = "No verified opinion. " + StockSageAIAssessments.failureSummary(
+            .failure(.init(diagnostic: .init(category: .timeout))), facts: [], leadCount: 0)
+            + " 2 of 7 optional evidence records were omitted to fit the context budget."
+        let result = R.Result(verdict: state == "incomplete" || failedRequest ? nil : .init(
             action: large ? .strongBuy : state == "hold" ? .hold : .buy, reason: "Synthetic interpretation, not a verified trading edge.",
             risk: "Future news and overnight gaps remain unknown.", evidence: ["F1"]),
             levels: state == "ordinary" || large ? levels : nil,
             facts: ["Synthetic fixture only; no live quote or order."],
-            note: "Synthetic display values, not market observations.", at: now.addingTimeInterval(3600),
-            model: state == "incomplete" ? "" : "fixture",
+            note: failedRequest ? failureNote : state == "incomplete"
+                ? "No verified opinion. Numerical claims failed validation.\nvalidation=nonASCIINumber server=completed status=200 finish=stop outputLimitRetries=0 2 of 7 optional evidence records were omitted to fit the context budget."
+                : "Synthetic display values, not market observations.", at: now.addingTimeInterval(3600),
+            model: state == "incomplete" || failedRequest ? "" : "fixture",
             referenceClose: (value: levels.entry, at: levels.at))
         let content = GroupBox {
             StockSageResearchModesPanel.resultDetail(listing, result: state == "unchecked" ? nil : result)
@@ -252,7 +324,7 @@ struct StockSageChatTests {
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
         let size = try await capture(view, name: "stocksage-research-detail-\(width)-\(state)")
         #expect(size.width == CGFloat(width) && size.height > 40)
-        if width == 360 && (state == "missing-plan" || state == "unchecked") {
+        if width == 360 && (state == "missing-plan" || state == "unchecked" || failedRequest) {
             let wide = content.frame(width: 760)
                 .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
             let wideSize = try await capture(wide, name: "stocksage-research-detail-wide-reference-\(state)")
@@ -342,20 +414,28 @@ struct StockSageChatTests {
         model.presentation.search = ""
         try await settle()
         model.presentation.selected = "MSFT"
-        model.presentation.buysOnly = true
+        model.presentation.filter = .buys
         try await waitFor { model.presentation.selected == nil }
 
         // Buy-only filter keeps a Buy selection.
-        model.presentation.buysOnly = false
+        model.presentation.filter = .all
         try await settle()
         model.presentation.selected = "AAPL"
-        model.presentation.buysOnly = true
+        model.presentation.filter = .buys
         try await settle()
         #expect(model.presentation.selected == "AAPL", "Buy-only must not close a Buy's detail")
 
+        model.presentation.filter = .incomplete
+        try await waitFor { model.presentation.selected == nil }
+        model.presentation.selected = "MSFT"
+        try await settle()
+        #expect(model.presentation.selected == "MSFT", "An incomplete selection stays visible in its filter")
+        model.presentation.filter = .unchecked
+        try await waitFor { model.presentation.selected == nil }
+
         // Horizon change clears selection and filters.
         model.presentation.horizon = .fortnight
-        try await waitFor { model.presentation.selected == nil && model.presentation.search == "" && !model.presentation.buysOnly }
+        try await waitFor { model.presentation.selected == nil && model.presentation.search == "" && model.presentation.filter == .all }
 
         #expect(research.running == nil && research.scans[.fortnight] == nil && research.scans[.week]?.at == requestedAt,
                 "Rendering and selection changes must never start, stop or replace a scan")
@@ -393,21 +473,37 @@ struct StockSageChatTests {
         // Match desktopWorkspace, including the banner above the panel and window-level inspector.
         let workspace = NavigationSplitView {
             StockSageDesktopNavigation(selection: Binding(get: { selection }, set: { selection = $0 }))
+                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Synthetic feed observation · not live").padding(24)
                 Divider()
                 panel
             }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .navigationTitle("Research")
                 .navigationSubtitle("One-time research. Separate from day trading.")
         }
+        .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: panel.detailPresented) { panel.selectedDetail }
+        .background(DS.Palette.bgTop)
+        .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
-        .frame(width: CGFloat(width), height: 700)
         let size = try await capture(workspace, name: "stocksage-native-workspace-inspector-\(width)-\(showsDetail)",
-                                     viewport: CGSize(width: width, height: 700))
-        #expect(size.width == CGFloat(width) && size.height == 700)
+                                     viewport: CGSize(width: width, height: 700)) { root in
+            func tables(in view: NSView) -> [NSTableView] {
+                (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap { tables(in: $0) }
+            }
+            let table = try #require(tables(in: root).first { $0.numberOfColumns >= 3 })
+            #expect(table.visibleRect.height >= 100, "Results must retain a usable viewport beside the inspector")
+            #expect(table.rect(ofColumn: table.numberOfColumns - 1).maxX <= table.visibleRect.maxX + 2,
+                    "Every displayed result column must fit without horizontal scrolling")
+        }
+        // AppKit expands the window when opening its inspector. Do not impose an exact
+        // SwiftUI root frame: it fights that negotiation and loops on macOS 27.
+        #expect(size.height == 700)
+        #expect(showsDetail ? (CGFloat(width)...CGFloat(width + 450)).contains(size.width)
+                           : size.width == CGFloat(width))
         #expect(presentation.selected == (showsDetail ? "AAPL" : nil) && selection == .research, "Rendering must not alter selection state")
         #expect(research.running == nil, "Rendering must not start a scan")
         #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
@@ -653,33 +749,6 @@ struct StockSageChatTests {
         #expect(after == id && after != before, "A coalesced send/completion must still expose the new turn")
     }
 
-    @Test func editingQuestionClearsOnlyTheObsoleteInputIssue() {
-        var question = String(repeating: "x", count: 2_001)
-        var issue: String? = "Use 1–2000 characters."
-        let field = StockSageChatSection.QuestionField(
-            question: Binding(get: { question }, set: { question = $0 }),
-            issue: Binding(get: { issue }, set: { issue = $0 }))
-        #expect(!StockSageChat.safeQuestion(question))
-        #expect(field.editingBinding.wrappedValue == question)
-        field.editingBinding.wrappedValue = question
-        #expect(issue == "Use 1–2000 characters.", "An unchanged value must not dismiss the warning")
-        field.editingBinding.wrappedValue = "Explain uncertainty"
-        #expect(question == "Explain uncertainty" && StockSageChat.safeQuestion(question))
-        #expect(issue == nil, "An actual edit must discard the old input warning")
-        issue = "A newer validation failure"
-        field.editingBinding.wrappedValue = question
-        #expect(issue == "A newer validation failure", "No delayed edit handler may erase a newer error")
-    }
-
-    @Test func inputWarningsCannotConcealHistoryErrors() {
-        let input = "Use 1–2000 characters."
-        let storage = "Saved Chat history could not be read. It has not been overwritten."
-        #expect(StockSageChatSection.composerIssues(issue: nil, storageError: nil).isEmpty)
-        #expect(StockSageChatSection.composerIssues(issue: input, storageError: nil) == [input])
-        #expect(StockSageChatSection.composerIssues(issue: nil, storageError: storage) == [storage])
-        #expect(StockSageChatSection.composerIssues(issue: input, storageError: storage) == [input, storage])
-        #expect(StockSageChatSection.composerIssues(issue: input, storageError: input) == [input, input])
-    }
 
     @Test(arguments: [360, 760])
     func renderMissingModelGuidanceWithoutOpeningSettings(width: Int) async throws {
@@ -1029,14 +1098,16 @@ struct StockSageChatTests {
         #expect(size.width == 500 && size.height > 0 && actions == 0)
     }
 
-    private func capture(_ view: some View, name: String, viewport: CGSize? = nil) async throws -> CGSize {
+    private func capture(_ view: some View, name: String, viewport: CGSize? = nil,
+                         inspect: ((NSView) throws -> Void)? = nil) async throws -> CGSize {
         var appeared = false
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
         // A split-view workspace is viewport-sized, not an intrinsic-size leaf. Do not let its
         // transient mount measurements replace the fixture window's explicit dimensions.
         if viewport != nil { host.sizingOptions = [] }
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
-            width: 500, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            width: viewport?.width ?? 500, height: viewport?.height ?? 700),
+            styleMask: viewport == nil ? [.titled] : [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         // The app declares .preferredColorScheme(.dark) on its window; give the offscreen host the
         // same AppKit appearance so system controls and label colours match what ships.
@@ -1049,6 +1120,15 @@ struct StockSageChatTests {
         while !appeared, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         try #require(appeared)
         host.view.layoutSubtreeIfNeeded()
+        if let viewport {
+            // Let the native titlebar/inspector negotiate before a user-style resize.
+            try await Task.sleep(for: .milliseconds(100))
+            host.view.layoutSubtreeIfNeeded()
+            window.setContentSize(viewport)
+            try await Task.sleep(for: .milliseconds(100))
+            host.view.layoutSubtreeIfNeeded()
+        }
+        try inspect?(host.view)
         // GroupBox's native backing is omitted by ImageRenderer; capture the actual hosted view.
         let bitmap = try #require(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
         host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
@@ -1652,10 +1732,9 @@ struct StockSageChatTests {
     let store: StockSageStore
     let research: StockSageHorizonResearch
     var body: some View {
-        ScrollView {
-            StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
-                .onAppear { model.appearances += 1 }
-        }.frame(width: 900, height: 800)
+        StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
+            .onAppear { model.appearances += 1 }
+            .frame(width: 900, height: 800)
     }
 }
 

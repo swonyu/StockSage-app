@@ -4,6 +4,72 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
+    @Test func researchFiltersSeparateMissingOpinionsFromUncheckedListings() {
+        typealias P = StockSageResearchModesPanel
+        var scan = R.Scan()
+        scan.listings = [listing("MSFT"), listing("AAPL"), listing("NVDA"), listing("AMD")]
+        scan.results = [
+            "MSFT": .init(verdict: .init(action: .hold, reason: "Fixture", risk: "Fixture", evidence: []), note: "Fixture"),
+            "AAPL": .init(verdict: .init(action: .strongBuy, reason: "Fixture", risk: "Fixture", evidence: []), note: "Fixture"),
+            "NVDA": .init(note: "Fixture: no verified opinion")
+        ]
+        #expect(P.filteredListings(scan, search: " \n", filter: .all).map(\.ticker) == ["MSFT", "AAPL", "NVDA", "AMD"])
+        #expect(P.filteredListings(scan, search: "", filter: .buys).map(\.ticker) == ["AAPL"])
+        #expect(P.filteredListings(scan, search: "", filter: .incomplete).map(\.ticker) == ["NVDA"])
+        #expect(P.filteredListings(scan, search: "", filter: .unchecked).map(\.ticker) == ["AMD"])
+        #expect(P.filteredListings(scan, search: " nv ", filter: .incomplete).map(\.ticker) == ["NVDA"])
+        #expect(P.filteredListings(scan, search: "AMD", filter: .incomplete).isEmpty)
+        #expect(scan.results.count == 3 && scan.listings.count == 4)
+    }
+
+    @Test func researchDetailsKeepExplanationSeparateFromExactDiagnostics() {
+        let note = "No verified opinion. Numerical claims failed validation. validation=nonASCIINumber server=completed status=200"
+        let parts = StockSageResearchModesPanel.notePresentation(note)
+        #expect(parts.explanation == "No verified opinion. Numerical claims failed validation.")
+        #expect(parts.diagnostics == "validation=nonASCIINumber server=completed status=200")
+        let omission = "2 of 7 optional evidence records were omitted to fit the context budget."
+        let limited = StockSageResearchModesPanel.notePresentation(note + " " + omission)
+        #expect(limited.explanation == parts.explanation + "\n" + omission)
+        #expect(limited.diagnostics == parts.diagnostics)
+        for plain in ["No verified opinion. History missing.", "Unvalidated Qwen research.", "", "A server=word is not a recognized receipt"] {
+            let result = StockSageResearchModesPanel.notePresentation(plain)
+            #expect(result.explanation == plain && result.diagnostics == nil)
+        }
+    }
+
+    @Test func failedModelRequestsHaveHumanCausesAndPreserveReceipts() {
+        typealias S = StockSageLocalModelServer
+        let cases: [(S.FailureCategory?, String)] = [
+            (.invalidConfig, "URL or model ID"), (.unavailable, "could not be reached"),
+            (.modelMissing, "requested model"), (.unsupportedModel, "requested model"),
+            (.nonHTTP, "could not be reached"), (.http, "rejected the request"),
+            (.malformedJSON, "could not read"), (.responseShape, "could not read"),
+            (.missingContent, "empty answer"), (.emptyContent, "empty answer"),
+            (.timeout, "within the request deadline"), (.cancelled, "cancelled"),
+            (.network, "could not be reached"), (.obsoleteRequest, "settings changed"),
+            (.policyDenied, "turned off"), (.responseTooLarge, "more data"),
+            (.contextBudget, "context size"), (.incompleteOutput, "before finishing"),
+            (nil, "did not complete")
+        ]
+        let omission = "2 of 7 optional evidence records were omitted to fit the context budget."
+        for (category, expected) in cases {
+            let diagnostic = S.Diagnostic(category: category, httpStatus: category == .http ? 503 : nil)
+            let reply: S.CompletionResult = .failure(.init(diagnostic: diagnostic))
+            let summary = StockSageAIAssessments.failureSummary(reply, facts: [], leadCount: 0)
+            #expect(summary.contains(expected))
+            let note = "No verified opinion. " + summary + " " + omission
+            let parts = StockSageResearchModesPanel.notePresentation(note)
+            #expect(parts.explanation.contains(expected))
+            #expect(parts.explanation.hasSuffix(omission))
+            #expect(!parts.explanation.contains("server="))
+            #expect(parts.diagnostics == diagnostic.summary)
+        }
+        for unknown in ["No verified opinion. This server=word is part of the explanation.",
+                        "No verified opinion.\nserver=not-an-app-category status=unknown"] {
+            let parts = StockSageResearchModesPanel.notePresentation(unknown)
+            #expect(parts.explanation == unknown && parts.diagnostics == nil)
+        }
+    }
     let now = ISO8601DateFormatter().date(from: "2026-09-09T15:00:00Z")!
     func listing(_ symbol: String = "AAPL") -> R.Listing {
         .init(ticker: symbol, name: symbol, market: "stocks", locale: "us", active: true,

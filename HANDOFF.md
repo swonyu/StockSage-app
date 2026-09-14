@@ -1,4 +1,277 @@
+## Publication authorization — 14 September 2026
+
+Owner explicitly requested “merge and push” for the complete verified Unicode/UI
+clarity, native redesign and polish batch below. Publish to `swonyu/StockSage-app`
+`main`; earlier no-publication statements describe prior stages. The source still
+matches the final 381-file manifest and passed Mac/iPhone gates. Check Git refs
+for the current publication result; preserve the working directories and model state.
+
+## Native polish installed and Qwen enabled — 14 September 2026
+
+Final refined Mac UI is installed and running at `/Applications/StockSageX.app`,
+PID 22374, left on Home at 1300x840. Owner superseded the earlier model-off request
+with “load stocksage model” and “enable it”: only local Qwen3.5-9B-6bit is loaded as
+`qwen3.5-9b`, served at `127.0.0.1:1234`; automatic loading/startup stays disabled.
+Ollama remains disabled. Do not unload the now-authorized StockSage model merely
+because an older shutdown note says all models should stay off. No live inference
+or Paper start/stop was used during UI verification; Paper remains paused.
+
+Final frozen source aggregate `59e47451381425417c400780661cc3dcfbce9d7a0456baa2b5f174a29cb85df2` (381 files).
+Mac 2417 passed / 1 existing opt-in skip / 0 failed; iPhone simulator 2336 passed /
+0 skipped or failed. Both final gates exit0 after the last change, Xcode26.6/17F113,
+macOS27 and iOS26.5, four jobs, serial gates and the same three README exclusions.
+Artifacts: `/private/tmp/stocksage-native-polish-20260914.r37zcze4/`, specifically
+`mac-verified.xcresult`, `ios-verified.xcresult`, and `Mac-tested-StockSageX.app`.
+The candidate was preserved before the iPhone gate. All64 installed entries match;
+strict/deep signature passed. Executable SHA256 `afcaca5193d1d1d75e409a989f6f18c3e58ad4e961180710a32432a0921cd652`;
+debug dylib `1425f2a9a38fcbe862c08292df1b9a305a333d0377c5056d53393c95c50d7cef`.
+
+All34 preferences identical across replacement; Paper/Chat/Research JSON identical
+through the complete sequence. Only normal quit revision, window geometry and
+existing scan/velocity state changed. Rollback/state snapshots live under
+`/Users/saleh/Codex-Backups/stocksage-native-polish-20260914.3_5czajc/`, with final
+replacement rollback under `final-spacing/`. Never overwrite newer records.
+
+Actual11 destinations plus Settings, six compact pages, both Research horizons,
+Command1/9/comma, unsent Chat draft preservation and Ideas horizontal scrollbar
+verified. Source/screenshot reviews found no remaining scoped blocker. Populated
+Research/inspector is fixture-verified; no live-generation/all-actions signoff.
+No new StockSage crash; simulator shut down. Earlier dirty work preserved; no
+commit, merge or push. Full receipt/screenshots:
+`/Users/saleh/Documents/Codex/2026-09-14/cp/outputs/StockSage-native-polish-2026-09-14.md`.
+
+## Native UI redesign installed — 14 September 2026
+
+Owner selected **Polished native Mac — refined and spacious**. Home/sidebar/feed chrome,
+Research table/inspector, Paper account/workflow layout and Chat reading/composer surfaces
+are implemented and installed at `/Applications/StockSageX.app`. Exact final candidate
+is running as PID62158, left on Home at1300x840. All previous dirty work is preserved;
+no commit, merge or push. Lead owned all integration, tests and installation.
+
+Frozen gates with Xcode26.6/17F113, macOS27: Mac **2415 passed / 1 existing opt-in skip /
+0 failed**; iPhone17Pro(gate), iOS26.5 **2335 passed / 0 skipped or failed**. Both exit0,
+same three README exclusions and paper opt-ins disabled. 381 source/test/widget files
+still match aggregate `d67d304c4739a7001b3e56f083fad7405be90fb12fd4fb37a6d702ec5078889e`.
+Native fixture corrected to respect inspector expansion; pre-existing AlertSuppression
+fixture now uses isolated preferences. No production financial/lifecycle logic changes.
+
+Exact installed executable SHA256:
+`41acff960196ec72ba37da2d67b2442c3e57a6ab68ed6a91cd0f61876f445ec6`;
+debug dylib `7da5d3d4ec39b23728af6763a95e61b0966a7f288186417786ede2d1a6a2b3aa`.
+Candidate preserved before iPhone gate; installed bundle recursively matched and passed
+strict/deep signature verification. Artifacts: `/private/tmp/stocksage-native-ui-20260914.LiEvX8/`.
+Rollback bundle/state: `/Users/saleh/Codex-Backups/stocksage-native-ui-20260914.q9r83_xq/`.
+All34 preferences/JSON records identical across replacement; records byte-identical after
+launch/checks. Only window geometry and existing scan/velocity monitor state changed after
+launch. Preserve monitoring ON and records; never restore older state over newer records.
+
+Actual11 destinations plusSettings, narrowResearch/Paper/Chat, bothhorizons, coveragepopover,
+Command1/9 and Command-comma verified. Chat unsent draft survived navigation then cleared.
+Source/screenshot review found no actionable scoped defect. No new manual model/scan/order
+or paper-start/stop action. No new StockSage crash. PopulatedResearch/inspector is fixture
+verified; selected inspector caption contrast is not installed-pixel verified without a
+new scan. Native900 inspector window can expand to1260; no900 three-pane fit claim.
+Gate simulator shut down. Full receipt/screenshots:
+`/Users/saleh/Documents/Codex/2026-09-14/cp/outputs/StockSage-native-redesign-2026-09-14.md`.
+
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
+
+## Installation complete — September 14, authorized AppleScript fallback
+
+Owner restarted the connection, then explicitly approved AppleScript/macOS screenshots
+when native control crashed again. Normal Quit confirmed both Research horizons empty
+and idle, Chat draft empty, and old process gone before replacement. The exact tested
+Unicode/UI candidate is now installed at `/Applications/StockSageX.app`, reopened as
+PID55228 and left on Research at1300x840. No new production-code change/commit/push/merge.
+
+All381 source/test/widget files still match aggregate
+`1732cfd14a969fd4d976a22a50f8f83e4789b2c334eae0873d8501566d5d23c5`; the completed
+2415-pass Mac/2335-pass iPhone gates below were retained, not rerun during installation.
+Installed bundle recursively matches candidate and passed strict/deep codesign again.
+ExecutableSHA256 `1041a03db46cc3cf1c784692a33ad1eb4660a6d0321c131dc2ee16689f4147b0`;
+debug dylib `d5d9d873a31f4a508f38322056816b5121b0b713ccfa927783aba86f7ff5ccdb`.
+
+Rollback bundle/state directory:
+`/Users/saleh/Codex-Backups/stocksage-ui-install-20260914.t3p5a5c2/`.
+All34 preferences identical across replacement; only expected shutdown revision changed
+on Quit. Paper, Chat and imported-research JSON remained byte-identical through final
+verification. On reopen, existing scan-delta/velocity/notification-budget state refreshed;
+other settings and record preferences unchanged. Never restore old snapshots over newer
+records. Compare preferences using the same binary export format; stdout XML rounds dates.
+
+Actual updated windows inspected: all11 sidebar destinations plus Settings; Research
+both horizons at1300x840 and900x740, Chat at narrow/normal sizes. A12-character unsent
+Chat draft updated its counter and was cleared, preserving history. Paper remains paused.
+Independent screenshot review found no concrete visible defects in seven other pages.
+No new StockSage crash report, manual model request, scan or broker action. Populated
+Research details remain fixture/test-verified; no live-generation or all-actions signoff.
+Full receipt/screenshots: `/Users/saleh/Documents/Codex/2026-09-14/cp/outputs/StockSage-installed-2026-09-14.md`.
+
+## Continuation — September 14, fresh gates; native control crashed
+
+Recovered the pending September 13 Unicode/UI batch in this worktree at
+`62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`. Lead remained sole tester; an independent
+read-only Astra review found no new actionable scoped defect. No production-code
+change, commit, merge, push, installation or owner-record edit in this continuation.
+All 381 source/test/widget files retained aggregate
+`1732cfd14a969fd4d976a22a50f8f83e4789b2c334eae0873d8501566d5d23c5` across both gates.
+
+Fresh serial gates, Xcode26.6/17F113 on macOS27.0: Mac **2,415 passed / 1 existing
+opt-in skip / 0 failed**, 227 suites, 87.511 test seconds; iPhone17Pro(gate),
+iOS26.5 **2,335 passed / 0 skipped or failed**, 223 suites, 71.972 test seconds.
+Both xcodebuild exit0; same three README exclusions and paper opt-ins disabled.
+An initial Documents-based build failed signing before test execution because the
+generated bundle acquired FinderInfo/file-provider attributes. Fresh isolated
+DerivedData under `/private/tmp` cleared it; no source/signing-policy workaround.
+
+Artifacts: `/private/tmp/stocksage-continuation-20260914.uCoqzS/`, including both
+xcresults and exact `Mac-tested-StockSageX.app`, preserved before the iPhone gate
+and strict/deep signature-verified. Executable SHA256
+`1041a03db46cc3cf1c784692a33ad1eb4660a6d0321c131dc2ee16689f4147b0`;
+debug dylib `d5d9d873a31f4a508f38322056816b5121b0b713ccfa927783aba86f7ff5ccdb`.
+Installed executable still `5be7474b21fbe2240f1ad051fbd39eefee8eb58821bb9f168da5ab6c94a335ec`.
+
+Native control initially inspected installed Home and both empty Research horizons,
+then failed switching to Chat and failed reconnection after tool reset. Fresh
+SkyComputerUseService crash at00:12:38+03 records SIGTRAP/Array.remove(at:).
+This is a helper failure, not evidence of a StockSage crash. New narrow component
+PNGs were inspected; updated full-window interaction remains unverified. Recover
+the UI-control connection before completing visual acceptance and normal handover.
+Gate simulator confirmed Shutdown. Full commands, exclusions, previews and logs:
+`/Users/saleh/Documents/Codex/2026-09-14/cp/outputs/StockSage-continuation-2026-09-14.md`.
+
+## UI follow-up — September 13, final candidate verified; not installed
+
+Continued in the same sole-writer worktree and branch at HEAD
+`62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`, preserving the complete unfinished
+Unicode/U1–U6 batch below. Closed the remaining U2 request-failure gap: assessment
+failures now use the existing shared cause classification for safe human explanations.
+Ideas initial failures use that same formatter; horizon and paper already did.
+Research separates the newline-delimited receipt into Technical details, preserving
+the exact receipt, visible omission warning and unfamiliar notes. No financial
+acceptance, strategy, model weights or historical-record changes.
+
+Executed red: 21 tests, 20 passed / 1 failed for missing human explanations, exit65.
+Focused green: 51 tests / 2 suites, zero failures, exit0. Extended the existing native
+render fixture with failed-request detail at360/760 points; inspected both PNGs.
+Independent read-only Astra review found no further actionable scoped issue and closed.
+
+Final frozen-source serial gates: Mac2,415 passed / 1 existing opt-in skip / 0 failed,
+227 suites / 78.782 test seconds; iPhone17Pro(gate), iOS26.5:2,335 passed / 0 skip/fail,
+223 suites / 67.280 test seconds. Both xcodebuild exit0. Xcode26.6/17F113,
+hostmacOS27.0; the same three README exclusions and all paper opt-ins disabled.
+Source aggregate unchanged: `1732cfd14a969fd4d976a22a50f8f83e4789b2c334eae0873d8501566d5d23c5`.
+Artifacts: `/private/tmp/stocksage-ui-followup-20260913.2kal3k` (`mac`/`ios` logs
+and xcresults, red/green evidence, native component previews).
+Its `Mac-tested-StockSageX.app` was preserved before the iPhone gate and passed
+strict/deep signature verification. Executable SHA256:
+`d707e3fbf4055c4dcec250591b52063dfd9e0a3fcd9caae4a6e9e2133d1c2a20`;
+debug dylib: `e1f13cbebf41d113f2583b48eabdd5e54a8772832cd3e8e9990b78620cc26ca3`.
+
+Installed app remains the prior build (executable5be7474…335ec), running PID11799.
+No quit, installation, publication, model/provider request or owner-record edit.
+Native app-control attempt again failed with a closed pipe; no new live-tab pixels
+were observed. Full-window interaction, VoiceOver and physical iPhone remain
+unverified. Gate simulator returned to Shutdown. Exact receipts and limits are in
+`docs/reviews/2026-09-13-ui-critique.md`; the older candidate sections below are historical.
+
+## UI critique — September 13, verified source; not installed
+
+Lead continued as sole writer/test owner in `/Users/saleh/StockSage-wt/opus-harness`,
+common Git directory `/Users/saleh/StockSage-app/.git`, branch
+`claude/model-harness-2026-09-10`, HEAD `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`.
+Preserved all unfinished Unicode work below. New UI edits are in
+`StockSage/Sources/Views/StockSageResearchModesPanel.swift`,
+`StockSage/Sources/Views/StockSageChatSection.swift`,
+`StockSageTests/StockSageChatTests.swift`, and
+`StockSageTests/StockSageHorizonResearchTests.swift`.
+
+Six implemented findings: native research result filters and stable search placement;
+human explanations separate from technical receipts while omission warnings remain
+visible; checked/total progress; shorter scenario column headings and missing-value
+guidance; visible temporary-result lifetime; shared iPhone Chat editor/error/accessibility
+behavior. A seventh candidate (iPhone paper presentation) was withdrawn after the
+reviewer traced the actual Mac-only caller. Paper UI and automation/account rules are
+unchanged. No historical records or model weights edited.
+
+Final serial native gates on unchanged source: Mac 2,414 passed, 1 existing opt-in
+skip, 0 failed (227 suites, 94.618 test seconds); iPhone 17 Pro (gate), iOS 26.5:
+2,334 passed, 0 skipped/failed (223 suites, 73.440 test seconds). Both xcodebuild exit 0.
+Xcode 26.6/17F113 on macOS 27.0, not an Xcode 27 SDK/physical-device claim.
+The existing three canonical exclusions and disabled live/replay opt-ins remain.
+Artifact root `/private/tmp/stocksage-ui-clarity-20260913.HJoQ5W` contains final logs,
+xcresults and `Mac-tested-StockSageX.app`, preserved before the simulator build.
+Source aggregate: `0e5375f4bad7aec54d4882f689240a5ab2efe6daccf8fa61915a3e5528337f9e`.
+Candidate executable: `268211eeccee6abcdf3b827c31792857ae303e566b5719ab0723f86eb9a01ac7`;
+debug dylib: `347a60bdf4c60aad4ee496888a7451a0b527cfe606cdd288353604a6f98d7024`.
+Strict/deep signature check passed. No commit, push or installation in this UI task.
+
+Installed `/Applications/StockSageX.app` was opened for Home/Research inspection,
+observed PID 11799, executable still
+`5be7474b21fbe2240f1ad051fbd39eefee8eb58821bb9f168da5ab6c94a335ec`.
+No scan/trading control activated. UI connection failed thereafter, including reset;
+remaining live tabs and updated full-window pixels are not verified. Synthetic narrow
+component renders were inspected; whole-workspace offscreen capture remains unreliable.
+Do not equate passing platform tests with live all-tab visual signoff.
+
+Full critique, six findings, withdrawn candidate, exact receipts, exclusions and previews:
+`docs/reviews/2026-09-13-ui-critique.md`. Plan:
+`docs/superpowers/plans/2026-09-13-ui-clarity.md`. Spark inventory and Astra final
+source review completed, with no remaining actionable scoped source finding; no helper
+remains responsible for writing/testing. Preserve the existing branch/worktree and use
+the recorded candidate only through the authorized normal replacement workflow.
+
+## Unicode-number generation mismatch — September 13, verified; not installed
+
+User screenshot: 7–14-day research finished 500/500, 97 Buy/Strong Buy, 31 incomplete.
+Selected WFC reported `validation=nonASCIINumber`, HTTP200, finish=stop, completion91,
+outputLimitRetries=0. This selected failure is not token truncation. Its exact rejected
+character/draft is unavailable. Native inspection later confirmed the same failure for
+WM (completion93/10.680s) and SPOT (completion142/15.653s), both HTTP200/finish=stop,
+zero output-limit retries. Three sampled failures, not all31; the other28 reasons and a
+recovery rate remain unverified. No new scan, model call or provider refresh was initiated.
+
+Worktree/sole writer: `/Users/saleh/StockSage-wt/opus-harness`,
+`claude/model-harness-2026-09-10`, HEAD62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3.
+Shared assessment schema previously blocked only ASCII digits. Now it emits cached,
+literal ranges from Swift Unicode numeric properties, including fractions, superscripts
+and numeric ideographs. This prevents a known generation/acceptance mismatch for the
+LM Studio structured path used by horizon, paper and idea assessment. It preserves letters,
+accents and typographic punctuation instead of restricting all output to ASCII.
+The Swift validator, evidence, model weights, deadlines, risk limits and records are unchanged;
+no rejected draft is rewritten, normalized or promoted into a valid opinion.
+
+Installed Outlines0.1.26/interegular rejected `\p{N}` and treated `\d` as ASCII in an
+offline probe. Its actual schema/FSM accepted the replacement literal pattern and passed
+9 numeric negatives/3 ordinary-writing positives; no model load, inference or provider call.
+The actual Swift pattern also rejected all2023 scalar characters for which Character.isNumber
+is true. Pattern is1466UTF8bytes, computed/cached once; construction plus regex measured0.114s
+in the standalone probe, not a model-throughput benchmark.
+
+Red: 30-test assessment suite failed with the old pattern. An initial method filter ran0tests
+and is not counted. Test development exposed String.range grapheme behavior for keycaps;
+the final regression uses NSRegularExpression directly, matching the runtime grammar check.
+Focused final run:55tests/3suites,0failed,0.286testseconds,xcodebuildexit0. Existing8captured
+synthetic model replies still pass the unchanged validator; broad quality parity is unmeasured.
+Independent read-only review found no actionable issue. Lead owns serial platform gates.
+Artifacts: `/private/tmp/stocksage-unicode-prose-20260913.jQEbNO`.
+
+Final serial gates: Mac2410passed/1existingopt-in-skip/0failed,227suites,85.362testseconds;
+iPhone17Pro(gate)/iOS26.5 simulator2329passed/0skipped/0failed,223suites,73.628testseconds.
+Both xcodebuildexit0, Xcode26.6/17F113, hostmacOS27.0. README's three excluded suites only;
+all three paper diagnostic environment flags and their simulator-prefixed forms unset.
+Source/test/widget aggregate unchanged before/after both gates:
+`263e4ecf0acf65200e21bd503b70e99160683feadf95f7431eb3c1a09195d6dd`.
+Exact Mac-tested candidate preserved before the iPhone gate at the artifact directory's
+`Mac-tested-StockSageX.app`; strict/deep signature verified, executableSHA256
+`8396becfaa7514ce86b80e83a35a32c2f0924025a7652d61ac7d7a0773396464`.
+No UI source changes. Native inspection covered saved Research results only, not live
+generation under the replacement. No promise of zero future rejections or unchanged broad quality.
+
+Installed app remains open at PID58100, executableSHA256
+`5be7474b21fbe2240f1ad051fbd39eefee8eb58821bb9f168da5ab6c94a335ec`.
+No installation, quit, model restart, state restoration, commit or push in this follow-up.
+Existing completed in-memory scan results are preserved, not retroactively repaired.
 
 ## Main publication verification — September 12, after installation
 

@@ -5,6 +5,35 @@ import Testing
 @Suite("Qwen primary assessment")
 @MainActor
 struct StockSageAIAssessmentTests {
+    @Test func proseSchemaPreventsUnicodeNumbersWithoutRestrictingNormalWriting() throws {
+        let facts = ["Synthetic company; outlook uncertain."]
+        let data = try #require(StockSageAIAssessment.responseSchema(facts: facts))
+        let schema = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        for field in ["reason", "risk"] {
+            let definition = try #require(properties[field] as? [String: Any])
+            let pattern = try #require(definition["pattern"] as? String)
+            // Use the regex engine directly: String.range's grapheme search differs for keycaps.
+            let expression = try NSRegularExpression(pattern: pattern)
+            for value in ["٥٠", "５０", "½", "²", "Ⅳ", "四", "𝟛", "1️⃣"] {
+                let prose = "An unverified change of \(value)."
+                #expect(expression.firstMatch(in: prose, range: NSRange(prose.startIndex..., in: prose)) == nil,
+                        "Generation must prevent numeric prose before the unchanged validator rejects it")
+                let answer = try JSONSerialization.data(withJSONObject: ["evidence": ["F1"], "action": "Hold",
+                    "reason": field == "reason" ? prose : "The outlook is uncertain.",
+                    "risk": field == "risk" ? prose : "The outlook is uncertain."])
+                #expect(StockSageAIAssessment.parse(String(decoding: answer, as: UTF8.self), facts: facts) == nil)
+            }
+            for prose in ["Revenue remains uncertain.", "Café demand isn’t verified—remain cautious.",
+                          "The firm's outlook is mixed (not a forecast)."] {
+                #expect(expression.firstMatch(in: prose, range: NSRange(prose.startIndex..., in: prose)) != nil)
+                let answer = try JSONSerialization.data(withJSONObject: ["evidence": ["F1"], "action": "Hold",
+                    "reason": prose, "risk": prose])
+                #expect(StockSageAIAssessment.parse(String(decoding: answer, as: UTF8.self), facts: facts) != nil)
+            }
+        }
+    }
+
     // Captured from the local 9B MLX 6-bit model, 2026-09-12. Synthetic ACME facts only.
     // This pins format/evidence acceptance, not stock-picking skill or broad quality parity.
     @Test func capturedSchemaComparisonPassesTheUnchangedSwiftValidator() throws {
