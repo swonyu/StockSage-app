@@ -780,6 +780,51 @@ struct StockSageAIAssessmentTests {
             facts: captured.facts, leadCount: record.context.research?.messages.count ?? 0, symbol: "QCOM") == nil)
     }
 
+    @Test func recordProseCannotChangeTypedNewsAvailabilityOrLeakIntoKeys() throws {
+        let item = StockSageNewsService.NewsItem(date: now, title: "Unknown outlook with empty shelves",
+            snippet: "The company discussed unavailable products.", link: nil, sentiment: nil, source: "Fixture")
+        let observation = StockSageNewsService.Observation(attempts: [.init(provider: .massive, checkedAt: now,
+            status: .answered, items: [item])])
+        let packet = A.Context(idea: idea(), earnings: nil, company: [:], at: now, newsObservation: observation).evidencePacket()
+        #expect(packet.facts.first { $0.key == "news.status" }?.availability == .available)
+        let record = try #require(packet.facts.first { $0.key.hasPrefix("news.item.") })
+        #expect(record.key.count == "news.item.".count + 64)
+        #expect(!record.key.contains("shelves"))
+        #expect(!record.required)
+    }
+
+    @Test func budgetOmissionsDoNotBecomeMissingProviderEvidence() {
+        typealias B = StockSageBenzinga
+        let pages = B.Product.allCases.map { product in B.Page(query: .init(product: product, subject: "ORCL", from: nil, through: nil),
+            checkedAt: now, credentialGeneration: nil, status: .answered, records: [], excludedCount: 0, hasMore: false) }
+        let snapshot = B.Snapshot(symbol: "ORCL", capturedAt: now, credentialGeneration: nil, pages: pages, omittedRecordCount: 2)
+        let packet = A.Context(idea: idea(), earnings: nil, company: [:], at: now, benzinga: snapshot).evidencePacket()
+        #expect(packet.prePromptOmittedRecordCount == 2)
+        #expect(packet.facts.first { $0.key == "benzinga.projection" }?.availability == .unknown)
+    }
+
+    @Test func sourceStateCoverageKeepsPublicFactTextAndUnknownStates() {
+        let captured = A.Context(idea: idea(), earnings: nil, company: [:], at: now)
+        let packet = captured.evidencePacket()
+        let covered = packet.facts
+        #expect(captured.facts == covered.map(\.text) && packet.prePromptOmittedRecordCount == 0)
+        let required = covered.filter(\.required)
+        #expect(required.contains { $0.key == "earnings" && $0.availability == .unknown })
+        #expect(required.contains { $0.key == "news.status" && $0.availability == .unknown })
+        #expect(captured.coverage(offered: covered).missingOrUnknownRequiredKeys.contains("earnings"))
+    }
+
+    @Test func coverageRejectsModelEvidenceForFactRemovedBeforeAI() {
+        let offered = [A.EvidenceFact(key: "quote", text: "Observed quote", required: true, availability: .available)]
+        let removed = #"{"action":"Hold","reason":"Evidence remains mixed.","risk":"Uncertainty remains.","evidence":["F2"]}"#
+        #expect(A.parse(removed, facts: offered.map(\.text)) == nil)
+        let accepted = A.Verdict(action: .hold, reason: "Evidence remains mixed.", risk: "Uncertainty remains.", evidence: ["F1"])
+        let coverage = A.Context(idea: idea(), earnings: nil, company: [:], at: now)
+            .coverage(offered: offered, omittedKeys: ["news.item.1"], prePromptOmittedRecordCount: 2, verdict: accepted)
+        #expect(coverage.symbol == "ORCL" && coverage.citedKeys == ["quote"]
+                    && coverage.omittedKeys == ["news.item.1"] && coverage.prePromptOmittedRecordCount == 2)
+    }
+
     @Test func detailedFailuresAndRepairKeepSafeMetadata() async {
         typealias S = StockSageLocalModelServer
         let initial = StockSageAIAssessments()

@@ -72,6 +72,7 @@ struct StockSageHorizonAnalyzeTests {
     private func run(listing: Research.Listing = StockSageHorizonAnalyzeTests.listing(),
                      history: Data = StockSageHorizonAnalyzeTests.historyPayload(),
                      historyStatus: Int = 200,
+                     news: StockSageNewsService.Observation? = nil,
                      isOllama: Bool = true,
                      allowed: @escaping @MainActor () -> Bool = { true },
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
@@ -99,8 +100,41 @@ struct StockSageHorizonAnalyzeTests {
                 StockSageBenzinga.Snapshot(symbol: symbol, capturedAt: at,
                                            credentialGeneration: nil, pages: [])
             },
-            newsObservation: { _, _, _ in StockSageNewsService.Observation(attempts: []) },
+            newsObservation: { _, _, _ in news ?? StockSageNewsService.Observation(attempts: []) },
             evidenceIsCurrent: { _ in true })
+    }
+
+    @Test func coverageMapsLastHorizonCitationToItsExactOfferedSlot() async throws {
+        let result = await run(model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            let user = try #require(messages.last?["content"])
+            let last = try #require(user.split(separator: "\n").last { $0.hasPrefix("F") })
+            let reference = String(try #require(last.split(separator: ":").first))
+            let verdict = try JSONSerialization.data(withJSONObject: ["evidence": [reference], "action": "Hold",
+                "reason": "Mixed evidence", "risk": "Uncertain outlook"])
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["message": ["content": String(decoding: verdict, as: UTF8.self)], "done_reason": "stop"]), request)
+        })
+        #expect(result.verdict != nil)
+        let coverage = try #require(result.evidenceCoverage)
+        #expect(coverage.symbol == "ACME")
+        #expect(coverage.offeredKeys.count == result.facts.count)
+        #expect(coverage.citedKeys == ["horizon.return.14"])
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("earnings"))
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("news.status"))
+    }
+
+    @Test func oversizedMandatorySourceStatePreventsModelDispatch() async {
+        // Deliberately malformed oversized input at an injected boundary; no external client runs.
+        let attempts = Array(repeating: StockSageNewsService.Attempt(provider: .massive, checkedAt: Date(),
+            status: .notChecked(.notRequested)), count: 250)
+        var calls = 0
+        let result = await run(news: .init(attempts: attempts), model: { request in
+            calls += 1
+            return Self.ok(Self.verdictPayload(), request)
+        })
+        #expect(calls == 0 && result.verdict == nil)
+        #expect(result.note.contains("mandatory source or horizon fact"))
     }
 
     // MARK: The path runs, and what it sends is bounded

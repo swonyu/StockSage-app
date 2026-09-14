@@ -50,6 +50,7 @@ final class StockSageHorizonResearch: ObservableObject {
         var model: String = ""
         var validationOutcome: ValidationOutcome = .unknown
         var validationFailure: String? = nil
+        var evidenceCoverage: StockSageAIAssessment.EvidenceCoverage? = nil
         var referenceClose: (value: Double, at: Date)? = nil
         var newsCheckedAt: Date? = nil
         var newestNewsAt: Date? = nil
@@ -397,6 +398,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let instrument = StockSageResearchInstrument(symbol: item.ticker, name: item.name, providerType: item.type)
         let context = StockSageAIAssessment.Context(idea: idea, earnings: catalyst,
             company: store.companyEventChecks[item.ticker] ?? [:], at: assessmentAt, newsObservation: news, quotedInUSD: true, benzinga: benzinga, instrument: instrument)
+        var horizonKeys = ["horizon.policy", "instrument", "horizon.calendar"]
         var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
         horizonFacts.append(instrument.fact)
         let temporalEvents = StockSageResearchHorizonCalendar.capturedEvents(
@@ -406,22 +408,33 @@ final class StockSageHorizonResearch: ObservableObject {
             at: assessmentAt, horizon: horizon, events: temporalEvents))
         for period in [7, 14] {
             if let value = StockSageIndicators.returnOverPeriod(history.closes, period: period), value.isFinite {
+                horizonKeys.append("horizon.return.\(period)")
                 horizonFacts.append("Observed return over the last \(period) completed daily bars: \(value)%. Bar window ends \(history.dates.last!.ISO8601Format()). Historical change, not an expected return.")
             }
         }
         // Pack to the model's real allowance rather than a hardcoded 12,000 bytes; the horizon
         // facts are mandatory (they define the requested holding period and the reference entry)
         // and are never dropped. Omissions are disclosed in the returned note.
-        let optionalFacts = context.facts(maximumUTF8Bytes: 12_000).filter { $0 != instrument.fact }
+        let packet = context.evidencePacket(maximumUTF8Bytes: 12_000)
+        let compiledFacts = packet.facts
+            .filter { $0.text != instrument.fact }
+        let optionalEvidence = compiledFacts.filter { !$0.required }
+        let requiredEvidence = compiledFacts.filter(\.required) + zip(horizonKeys, horizonFacts).map {
+            StockSageAIAssessment.EvidenceFact(key: $0.0, text: $0.1, required: true, availability: .available)
+        }
+        let optionalFacts = optionalEvidence.map(\.text)
+        let mandatoryFacts = requiredEvidence.map(\.text)
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
-                optional: optionalFacts, mandatory: horizonFacts,
+                optional: optionalFacts, mandatory: mandatoryFacts,
                 system: { _ in horizon.instructions },
+                optionalKeys: optionalEvidence.map(\.key),
                 outputTokens: Self.researchOutputTokens) else {
-            return .init(facts: horizonFacts,
-                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory horizon fact; no opinion.", referenceClose: referenceClose,
+            return .init(facts: mandatoryFacts,
+                         note: "Evidence could not be reduced to the model context budget without dropping a mandatory source or horizon fact; no opinion.", referenceClose: referenceClose,
                          newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         }
         let facts = fitted.facts
+        let offeredEvidence = Array(optionalEvidence.prefix(fitted.optionalKept)) + requiredEvidence
         let trimmedNote = fitted.isComplete
             ? ""
             : " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
@@ -453,7 +466,8 @@ final class StockSageHorizonResearch: ObservableObject {
             }
             return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
                 facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote,
-                model: config.model, validationOutcome: .validated, referenceClose: referenceClose,
+                model: config.model, validationOutcome: .validated,
+                         evidenceCoverage: context.coverage(offered: Array(offeredEvidence), omittedKeys: fitted.omittedKeys, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict), referenceClose: referenceClose,
                          newsCheckedAt: news.latestCheckAt, newestNewsAt: news.items.map(\.date).max(), newsCheckSummary: news.summary)
         case .failure(let failure):
             return .init(facts: facts,

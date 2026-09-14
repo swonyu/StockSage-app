@@ -1,3 +1,47 @@
+# Latest checkpoint — 2026-09-14T01:47:00.898629+00:00
+
+Continue on `codex/research-quality-fixes`; do not merge main. This checkpoint supersedes
+older current-state paragraphs below. Current primary task remains
+`01a09652-9a4a-7260-82a6-e949fe0c3dbc`; use the ownership helper before work.
+
+- Completion remains **9/27 (33.3%)**. R08 and R27 have tested partial work, not completed
+  claim support. The pre-existing R17 guard is included in the nine.
+- This commit adds one typed evidence compiler, required source-state retention in
+  Horizon/Paper packing, hashed supplemental news identifiers, exact fitter omission
+  keys, separate earlier Benzinga omission counts, per-symbol reference coverage, and
+  backward-compatible Paper decision receipts. Intraday citations exclude both the
+  summary caveat and following daily facts. Coverage is reference presence, not semantic
+  validation. R27 still needs claim support and broader persisted coverage across consumers.
+- **Full macOS gate: 2,481 unique passed / 2,836 executions / one existing skip / zero
+  failures**, 231 suites, Swift Testing 90.335 s; command 201.846 s including compilation.
+  The log's 2,482 count includes the skip. Input hashes remained unchanged during the gate.
+  Built current macOS app/test targets; no installed-app replacement/launch or iOS runtime
+  claim. Receipt: `.research/fix-benchmarks/resume-20260914/r27-full-gate.json` and
+  `r27-full-summary.json`. Initial focused gate exposed a fixture error: company names
+  were clipped before its intended over-budget test. Replaced with oversized injected
+  source status; final full gate passes. Two review corrections landed before the final gate.
+- Synthetic six-budget production fitter checkpoint: all required facts retained in
+  **4/6 before → 6/6 after**. At 2K and 3K: **11/12 → 12/12**; at 4K/6K/8K/16K already12/12.
+  Before uses the original all-Context-facts-optional caller policy at `c724389`; after
+  uses typed required facts. No model calls, speed or investment accuracy claim.
+  Full rows: `.research/fix-benchmarks/resume-20260914/r27-paired-coverage.json`.
+- Latest delivered email before this commit: **revision32**, message `1a09d89cb8a5dd65`,
+  verified SENT with 5,505,297-byte HTML attachment; `email-delivery-r32.json` records hash.
+  The next report checkpoint must include this gate and values; check newer delivery
+  receipts before claiming a later revision was sent. One colored HTML remains authoritative.
+- Latest read-only model check: zero local instances; two remote instances owned by the
+  remote setup were preserved. StockSage broker remains released/logged out. Last GPU
+  benchmark still0/6 usable before/after; this source checkpoint did not rerun inference.
+- Spark fallback remains ACTIVE, first defer observed; no actual quota-exhaustion takeover
+  yet. Ordinary Codex usage was still allowed (19% remaining at this checkpoint).
+  Keep explicit file staging, normal fix-branch push and verified remote equality; report,
+  roadmap and receipts remain unstaged. Changelog contains completed improvements only.
+- Next: R05 exact typed comparisons and R07 claim/source support, plus R14 model capability
+  preflight needed after the reasoning-only failure. A typed amount match is insufficient:
+  require exact record/field, currency/date and adjustment basis; unknown basis must abstain.
+
+---
+
 # Current handoff — resumed September 14, 2026
 
 This checkpoint supersedes the paused September 13 section below. Salman resumed
