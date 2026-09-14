@@ -63,6 +63,37 @@ enum StockSageBenzinga {
         let through: String?
     }
 
+    /// Provider-supplied analyst fields kept separately from presentation prose. `nil` means the
+    /// returned record omitted that field; query-level absence remains represented by `Page.status`.
+    nonisolated struct AnalystEvidence: Equatable, Codable, Sendable {
+        nonisolated enum TargetField: String, Codable, Sendable {
+            case ratingCurrent, ratingPrevious, insight, consensus, low, high
+
+            var label: String {
+                switch self {
+                case .ratingCurrent: "rating original-basis current target"
+                case .ratingPrevious: "rating original-basis previous target"
+                case .insight: "insight target"
+                case .consensus: "consensus target"
+                case .low: "consensus low target"
+                case .high: "consensus high target"
+                }
+            }
+        }
+        nonisolated struct Target: Equatable, Codable, Sendable {
+            let field: TargetField
+            let amount: Decimal
+        }
+
+        let action: String?
+        let consensus: String?
+        /// Provider event date when that endpoint supplies one. Consensus currently supplies none.
+        let date: String?
+        /// Target currency only. A firm-directory currency is never copied here.
+        let currency: String?
+        let targets: [Target]
+    }
+
     nonisolated struct Record: Identifiable, Equatable, Codable, Sendable {
         let id: String
         let vendorID: String?
@@ -87,6 +118,8 @@ enum StockSageBenzinga {
         let analystIDs: [String]
         let firmIDs: [String]
         let ratingIDs: [String]
+        /// Optional so captures created before typed analyst fields remain decodable.
+        var analystEvidence: AnalystEvidence? = nil
 
         /// Never substitutes a local check clock or slices a numeric field to fit a prompt.
         var sourceText: String {
@@ -99,6 +132,17 @@ enum StockSageBenzinga {
             if date == nil && published == nil && lastUpdated == nil { lines.append("source time unknown") }
             lines.append(headline)
             lines += details
+            if let analystEvidence {
+                let fields = [
+                    analystEvidence.action.map { "action " + $0 },
+                    analystEvidence.consensus.map { "consensus " + $0 },
+                    analystEvidence.date.map { "provider date " + $0 },
+                    "target currency " + (analystEvidence.currency ?? "not supplied")
+                ].compactMap { $0 }
+                let targetFields = analystEvidence.targets.map(\.field.label).joined(separator: "; ")
+                lines.append("Analyst provenance: same provider record; " + fields.joined(separator: "; ")
+                             + (targetFields.isEmpty ? "." : "; target fields " + targetFields + "."))
+            }
             if let excerpt { lines.append(excerpt) }
             if product == .bullsBearsSay {
                 lines.append("Bull: " + (bullCase ?? "not supplied"))
@@ -436,6 +480,15 @@ enum StockSageBenzinga {
               number.doubleValue.isFinite else { throw Invalid.row }
         return number.doubleValue
     }
+    /// Parses the provider's numeric text directly so typed monetary fields do not pass through `Double`.
+    private nonisolated static func decimal(_ row: [String: Any], _ key: String) throws -> Decimal? {
+        guard let value = row[key], !(value is NSNull) else { return nil }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite,
+              let decimal = Decimal(string: number.stringValue, locale: Locale(identifier: "en_US_POSIX"))
+        else { throw Invalid.row }
+        return decimal
+    }
     private nonisolated static func integer(_ row: [String: Any], _ key: String) throws -> Int? {
         guard let value = try number(row, key) else { return nil }
         // Avoid lossy identifier/count conversion or trapping Int casts.
@@ -498,6 +551,7 @@ enum StockSageBenzinga {
         let ratingIDs = try identifier(row, "benzinga_rating_id").map { [$0] } ?? []
         var headline = product.label, details: [String] = []
         var excerpt: String?, contentFingerprint: String?, bull: String?, bear: String?, link: URL?
+        var analystEvidence: AnalystEvidence?
         let currency = try raw(row, "currency")
         if let currency, currency.utf8.count != 3 || !currency.utf8.allSatisfy({ (65...90).contains($0) }) { throw Invalid.row }
         func fields(_ names: [(String, String)]) throws {
@@ -559,6 +613,14 @@ enum StockSageBenzinga {
             details = event.details
             link = event.link
             details.append(feed.caveat)
+            if product == .ratings {
+                let targets = [
+                    try decimal(row, "price_target").map { AnalystEvidence.Target(field: .ratingCurrent, amount: $0) },
+                    try decimal(row, "previous_price_target").map { AnalystEvidence.Target(field: .ratingPrevious, amount: $0) }
+                ].compactMap { $0 }
+                analystEvidence = AnalystEvidence(action: try text(row, "rating_action"), consensus: nil,
+                                                   date: date, currency: currency, targets: targets)
+            }
             if product == .guidance {
                 try fields([("estimated_eps_guidance", "Analyst EPS estimate"), ("estimated_revenue_guidance", "Analyst revenue estimate")])
             }
@@ -568,8 +630,14 @@ enum StockSageBenzinga {
             guard excerpt != nil else { throw Invalid.row }
             if let firm = try text(row, "firm") { details.append("Firm: " + firm) }
             if let rating = try text(row, "rating") { details.append("Rating: " + rating) }
-            if let action = try text(row, "rating_action") { details.append("Action: " + action) }
-            try fields([("price_target", "Analyst target; currency unknown")])
+            let action = try text(row, "rating_action")
+            if let action { details.append("Action: " + action) }
+            try fields([("price_target", "Analyst target; currency " + (currency ?? "unknown"))])
+            let targets = try decimal(row, "price_target").map {
+                AnalystEvidence.Target(field: .insight, amount: $0)
+            }.map { [$0] } ?? []
+            analystEvidence = AnalystEvidence(action: action, consensus: nil, date: date,
+                                               currency: currency, targets: targets)
         case .bullsBearsSay:
             headline = "Bull and bear cases"
             bull = try text(row, "bull_case", limit: 400)
@@ -623,10 +691,18 @@ enum StockSageBenzinga {
                 details.append(label + ": " + String(count))
             }
             if let value = try number(row, "consensus_rating_value"), !(1...5).contains(value) { throw Invalid.row }
-            if let rating = try text(row, "consensus_rating") { details.append("Consensus: " + rating) }
+            let consensus = try text(row, "consensus_rating")
+            if let consensus { details.append("Consensus: " + consensus) }
             try fields([("consensus_rating_value", "Rating value"),
                         ("consensus_price_target", "Consensus target; currency unknown"),
                         ("low_price_target", "Low target; currency unknown"), ("high_price_target", "High target; currency unknown")])
+            let targets = [
+                try decimal(row, "consensus_price_target").map { AnalystEvidence.Target(field: .consensus, amount: $0) },
+                try decimal(row, "low_price_target").map { AnalystEvidence.Target(field: .low, amount: $0) },
+                try decimal(row, "high_price_target").map { AnalystEvidence.Target(field: .high, amount: $0) }
+            ].compactMap { $0 }
+            analystEvidence = AnalystEvidence(action: nil, consensus: consensus, date: nil,
+                                               currency: nil, targets: targets)
         }
         if product == .news {
             let body = try raw(row, "body") ?? ""
@@ -640,6 +716,7 @@ enum StockSageBenzinga {
                       date: date, time: time, timeZone: time == nil ? nil : product == .ratings ? "UTC" : product == .earnings ? "EST" : nil,
                       published: published, lastUpdated: updated, headline: headline, details: details,
                       excerpt: excerpt, contentFingerprint: contentFingerprint, bullCase: bull, bearCase: bear, link: link,
-                      analystIDs: analystIDs, firmIDs: firmIDs, ratingIDs: ratingIDs)
+                      analystIDs: analystIDs, firmIDs: firmIDs, ratingIDs: ratingIDs,
+                      analystEvidence: analystEvidence)
     }
 }

@@ -90,5 +90,8 @@ APP-FRESHNESS is outside the denominator. Data/training gates remain open until 
 
 The changelog-only heartbeat remains separate: `refresh-stocksage-research-audit`,
 every 15 minutes, quiet if unchanged. It does not build, infer or edit source.
-The schedulers require an available Codex host; a future quota-triggered run has
-not been observed merely because configuration and local coordination tests pass.
+The schedulers require an available Codex host. The first scheduled check deferred
+while ordinary usage was available and the primary task was active. Its saved note
+incorrectly labeled Riyadh time as UTC; every future timestamp must come from
+clock.curr_time or datetime.now(timezone.utc). Never append Z to local time.
+Actual exhausted-quota takeover remains unobserved; local coordination tests pass.

@@ -5,10 +5,9 @@ implementation and authorized local GPU tests, branch commits/pushes, and emaile
 colored report checkpoints. Do not merge main. Primary task:
 `01a09652-9a4a-7260-82a6-e949fe0c3dbc`.
 
-- Current application source is still `c74d553b72b98973a77d95e6061dddabec3fb9cf`;
-  branch handoff HEAD `e42da28` was verified pushed September 14. Main remains
-  `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`. New helper/docs commits follow on
-  this same fix branch; inspect Git for their exact resulting revision.
+- Earlier application batch is `c74d553`; pushed helper checkpoint is `41e893c`.
+  This checkpoint adds tested R08 typed analyst evidence, still partial. Inspect
+  Git for the resulting source revision. Main remains `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`.
 - Completion: **9/27 implemented (33.3%)**, including the pre-existing R17 guard;
   eight newly finished recommendations plus separate APP-FRESHNESS. No new
   recommendation is complete in this resumption yet.
@@ -20,11 +19,12 @@ colored report checkpoints. Do not merge main. Primary task:
 - Read `agent-docs/SPARK_CONTINUATION.md` for the concrete ownership, automatic
   commit/push and email procedure. All providers must use
   `tools/research_continuation.py` on `.research/continuation-state.json`.
-  Eleven temp-state tests passed, including claim races and interrupted-owner
-  takeover with fresh quota/task evidence. Actual future Spark execution is unproven.
+  Eleven ownership tests and seven replay guards passed. Spark recorded its first
+  correct defer while Astra remained active; actual exhausted-quota takeover is unproven.
 - `tools/research_model_replay.py` prepared six frozen cases by compiling the actual
-  before/after Swift prompt/schema/validator. Preparation passed, but no inference
-  result is claimed yet. Its context/device checks fail closed; frozen input and
+  before/after Swift prompt/schema/validator. Preparation and twelve bounded GPU
+  calls completed; all failed to return final JSON, as detailed below. Device and
+  context checks fail closed; frozen input and
   generated artifacts stay under `.research/fix-benchmarks/resume-20260914/`.
 - GPU setup found remote preferred-device routing and ignored requested context.
   The temporary remote instance from our first attempt was explicitly removed;
@@ -32,18 +32,54 @@ colored report checkpoints. Do not merge main. Primary task:
   context instead of 16,384 and was unloaded. A later SDK attempt failed with LM
   Link keepalive errors. Recheck broker/model state before proceeding; do not use
   saved instance names blindly. Existing remote 27B remains owned by the other task.
-- R08 typed analyst evidence is prepared but UNTESTED in isolated worktree
-  `/Users/salman/StockSage-worktrees/research-analyst`, branch
-  `codex/r08-analyst-evidence`. Only Benzinga source/tests changed there. Review
-  projection byte cost and R05 exact-target validation dependency before integration.
+- R08 typed analyst evidence is integrated and native-tested; its target-claim
+  validator remains dependent on R05. Worker source remains in isolated worktree
+  `/Users/salman/StockSage-worktrees/research-analyst` for review until cleanup.
 - Next implementation order remains R08, R27, R05, R07. Local roadmap:
   `.research/ROADMAP.md`. Do not count prepared code or synthetic acceptance as
   completed financial accuracy. No full-universe research or training.
 
 Prior macOS 2,464 unique tests /2,816 executions, iOS module compile and 5.263-second
 closeout build below remain dated September 13 on unchanged application source.
-They were not rerun by this documentation/tooling checkpoint. The app was not
+The new full native gate below supersedes the macOS test count. The app was not
 installed or launched. Preserve all unrelated user files and the one HTML report.
+
+## Verified checkpoint — 2026-09-14 01:21 UTC
+
+- `41e893c` is pushed and remote-ref equality verified. Spark's first scheduled
+  cycle correctly deferred because ordinary usage remained available and Astra
+  was active. Its note mislabeled Riyadh time as UTC; the automation now explicitly
+  requires tool-derived UTC timestamps. A true exhausted-quota takeover is not yet
+  observed; the helper's race/takeover tests pass.
+- This subsequent source checkpoint adds typed R08 analyst fields and six regressions.
+  Full macOS gate: **2,470 passed, one existing skip, zero failures**, 230 suites,
+  85.817 seconds in Swift Testing; total command wall time 105.896 seconds.
+  This builds the latest macOS app/test targets; no app install or launch. An initial
+  run had one new test wording mismatch; it was corrected and the full gate reran.
+  R08 remains **partial** because record-bound target-claim checking depends on R05.
+  Completion remains **9/27 (33.3%)**, including the pre-existing R17 safeguard.
+- Native receipt: `.research/fix-benchmarks/resume-20260914/r08-validation.json`;
+  results: `/Users/salman/Library/Logs/StockSageAuditFixes/r08-full-v2-20260914-0118.xcresult`.
+- Completed a separate local Q5 GGUF 9B paired benchmark, six frozen cases in each
+  phase, actual 16,384 context and one parallel slot. Original-source contract
+  `62d99cf` versus fixed contract `41e893c`: **0/6 usable answers in BOTH phases**.
+  All twelve 192-token replies were reasoning-only and truncated. Median whole-request
+  output throughput 20.068 vs20.174 tok/s includes reasoning, not useful final JSON or
+  isolated decode speed. No speed/accuracy improvement is established. Prioritize
+  model reasoning/capability preflight (R14); do not increase claimed completion.
+- Original MLX9B ignored 16K context (reported71,680) via CLI and REST; temporary
+  remote preferred-device routing was restored. All StockSage-created temporary
+  instances were removed. At01:14:52 UTC **zero local model instances** remained,
+  and only the existing remote `saudi-27b-fast-32k-vision` remained. Broker released
+  and StockSage logged out. This is runtime unload verification, not forensic GPU erasure.
+- New paired receipt, raw requests/responses, load discrepancy and unload evidence:
+  `.research/fix-benchmarks/resume-20260914/`. The single colored report will embed
+  this checkpoint and be emailed; check its delivery receipt before claiming a newer
+  email than revision30. Report and metadata remain unstaged.
+- Next: R27 required evidence coverage is being prepared in isolated worktree
+  `/Users/salman/StockSage-worktrees/research-coverage`, branch
+  `codex/r27-evidence-coverage`; no worker native builds/inference. Root owns
+  integration, benchmarks, report and serial gates. Then R05/R07 target/claim support.
 
 ---
 
@@ -53,7 +89,7 @@ Salman requested stopping work for today, committing this handoff and continuing
 This checkpoint is for `/Users/salman/Stocksage Project`. Older sections below describe
 other dates and machines; use this checkpoint and current Git state when resuming here.
 
-## Saved state
+## Historical saved state
 
 - Branch: `codex/research-quality-fixes`.
 - Latest application-source commit: `c74d553b72b98973a77d95e6061dddabec3fb9cf`, pushed.
