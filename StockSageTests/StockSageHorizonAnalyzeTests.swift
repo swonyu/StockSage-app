@@ -246,6 +246,14 @@ struct StockSageHorizonAnalyzeTests {
             evidenceIsCurrent: { _ in true })
     }
 
+    @Test func insufficientHistoryReportsActualBarCountWithoutRequestingModel() async {
+        let result = await run(history: Self.historyPayload(bars: 18), model: {
+            Issue.record("Insufficient history must not reach the model")
+            return Self.ok(Self.verdictPayload(), $0)
+        })
+        #expect(result.verdict == nil && result.note.contains("18 daily bars") && result.note.contains("at least 30"))
+    }
+
     @Test func oneCaptureSuppliesTwoDistinctHorizonsAndRejectsChangedOwnershipOrClock() async throws {
         let name = "stocksage.research.capture.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: name))
@@ -297,6 +305,20 @@ struct StockSageHorizonAnalyzeTests {
             #expect(entries.allSatisfy { $0.context.symbol == "ACME" && $0.context.horizon == (index == 0 ? 7 : 14) })
             #expect(entries.compactMap(\.attempt).map(\.stage) == [.started, .finished])
         }
+        // The production preparation path retains an accepted Buy while excluding it from
+        // the stricter shortlist when the typed capture has unknown earnings/no catalyst.
+        let strictAnalysis = Research.preparedAnalysis(gathered, config: config, isOllama: true,
+            allowed: { true }, modelTransport: { request in
+                let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+                #expect(body.contains("Strict qualification v1") && body.contains("Be selective"))
+                return Self.ok(Self.verdictPayload(action: "Buy"), request)
+            }, evidenceIsCurrent: { _ in true }, qualify: true)
+        let strict = await strictAnalysis(.fortnight)
+        let qualified = try #require(strict.qualification)
+        #expect(strict.verdict?.action == .buy && strict.levels != nil && !qualified.isQualified)
+        #expect(strict.evidenceReceipt?.requiredKeys.contains("research.qualification.v1") == true)
+        #expect(StockSageResearchQualification.valid(qualified, symbol: "ACME", horizon: Research.Horizon.fortnight.rawValue,
+            at: strict.at, citedKeys: strict.evidenceReceipt?.citedKeys ?? []))
         let rejected = await Research.assess(capture, horizon: .week, config: config, isOllama: true,
             allowed: { true }, modelTransport: { request in
                 Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,

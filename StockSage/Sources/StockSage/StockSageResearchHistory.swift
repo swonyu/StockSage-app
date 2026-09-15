@@ -55,6 +55,8 @@ final class StockSageResearchHistory: ObservableObject {
         let incomplete: Int
         let buyCount: Int
         let selection: SelectionReceipt?
+        /// Absent in legacy runs. Raw model Buy counts remain unchanged by qualification.
+        var qualifiedBuyCount: Int? = nil
     }
     nonisolated struct Run: Codable, Sendable, Equatable, Identifiable {
         let id: UUID
@@ -173,7 +175,8 @@ final class StockSageResearchHistory: ObservableObject {
             coverage: Coverage(requested: scan.listings.count, checked: scan.results.count,
                 incomplete: scan.results.values.filter { $0.verdict == nil }.count,
                 buyCount: scan.results.values.filter { $0.verdict?.action == .buy || $0.verdict?.action == .strongBuy }.count,
-                selection: selection), measurementPolicy: .nextTradingDateSessions,
+                selection: selection, qualifiedBuyCount: scan.qualificationPolicyVersion == 1
+                    ? scan.listings.filter { scan.isEligible($0.ticker) }.count : nil), measurementPolicy: .nextTradingDateSessions,
             ranking: scan.ranking, rankingFailure: scan.rankingFailure, originalRunID: originalRunID,
             retainedFromRunID: scan.retainedFromRunID)
     }
@@ -505,11 +508,15 @@ final class StockSageResearchHistory: ObservableObject {
               run.coverage.requested >= 0, run.coverage.checked == run.coverage.requested,
               (0...run.coverage.checked).contains(run.coverage.incomplete),
               (0...run.coverage.checked - run.coverage.incomplete).contains(run.coverage.buyCount) else { return false }
+        if let qualified = run.coverage.qualifiedBuyCount {
+            guard (0...run.coverage.buyCount).contains(qualified) else { return false }
+        }
         if let ranking = run.ranking {
             guard run.rankingFailure == nil, StockSageResearchRanking.valid(ranking),
+                  ranking.version == (run.coverage.qualifiedBuyCount == nil ? 1 : 2),
                   ranking.horizon == run.horizon.title,
                   ranking.symbols == run.predictions.map(\.symbol),
-                  ranking.candidateSymbols.count == run.coverage.buyCount,
+                  ranking.candidateSymbols.count == (run.coverage.qualifiedBuyCount ?? run.coverage.buyCount),
                   validDate(ranking.at), ranking.at >= run.startedAt, ranking.at <= run.completedAt else { return false }
         } else if let failure = run.rankingFailure {
             guard !failure.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -517,7 +524,8 @@ final class StockSageResearchHistory: ObservableObject {
         } else {
             // Older runs retain their original order. A new unfinished comparison with buys
             // has no predictions, so it cannot masquerade as a complete legacy snapshot.
-            guard run.predictions.count == min(5, run.coverage.buyCount) else { return false }
+            guard run.coverage.qualifiedBuyCount == nil,
+                  run.predictions.count == min(5, run.coverage.buyCount) else { return false }
         }
         for prediction in run.predictions {
             guard !prediction.symbol.isEmpty, !prediction.name.isEmpty,
@@ -620,6 +628,7 @@ extension StockSageResearchHistory {
         let evidenceReceipt: StockSageAIAssessment.EvidenceCoverage?
         let diagnosticID: UUID?
         let diagnosticsComplete: Bool?
+        var qualification: StockSageResearchQualification.Receipt? = nil
 
         init(listing: StockSageHorizonResearch.Listing, result: StockSageHorizonResearch.Result) {
             self.listing = listing
@@ -631,6 +640,7 @@ extension StockSageResearchHistory {
             coverage = result.coverage.map { .init(source: $0.source, state: $0.state.rawValue, checkedAt: $0.checkedAt) }
             evidenceReceipt = result.evidenceReceipt
             diagnosticID = result.diagnosticID; diagnosticsComplete = result.diagnosticsComplete
+            qualification = result.qualification
         }
 
         var result: StockSageHorizonResearch.Result? {
@@ -644,7 +654,8 @@ extension StockSageResearchHistory {
                 levels: levels.map { .init(entry: $0.entry, stop: $0.stop, target: $0.target, at: $0.at, basis: $0.basis) },
                 facts: facts, note: note, at: at, model: model,
                 referenceClose: referenceClose.map { (value: $0.value, at: $0.at) }, coverage: sources,
-                evidenceReceipt: evidenceReceipt, diagnosticID: diagnosticID, diagnosticsComplete: diagnosticsComplete)
+                evidenceReceipt: evidenceReceipt, diagnosticID: diagnosticID, diagnosticsComplete: diagnosticsComplete,
+                qualification: qualification)
         }
 
         var prediction: Prediction? {
@@ -660,6 +671,7 @@ extension StockSageResearchHistory {
         let horizon: Horizon
         let startedAt: Date
         let checks: [CompletedCheck]
+        var qualificationPolicyVersion: Int? = nil
     }
 
     static func captureChecks(scan: StockSageHorizonResearch.Scan, horizon: StockSageHorizonResearch.Horizon,
@@ -667,7 +679,8 @@ extension StockSageResearchHistory {
         guard Set(scan.listings.map(\.ticker)) == Set(scan.results.keys),
               scan.listings.count == scan.results.count else { return nil }
         let archive = CompletedChecks(version: 1, horizon: horizon == .week ? .week : .fortnight,
-            startedAt: startedAt, checks: scan.listings.map { .init(listing: $0, result: scan.results[$0.ticker]!) })
+            startedAt: startedAt, checks: scan.listings.map { .init(listing: $0, result: scan.results[$0.ticker]!) },
+            qualificationPolicyVersion: scan.qualificationPolicyVersion)
         guard capturedSince == nil || scan.retainedFromRunID != nil else { return nil }
         return validChecks(archive, through: completedAt, capturedSince: capturedSince) ? archive : nil
     }
@@ -687,6 +700,7 @@ extension StockSageResearchHistory {
         scan.results = Dictionary(uniqueKeysWithValues: archive.checks.map { ($0.listing.ticker, $0.result!) })
         scan.at = archive.startedAt
         scan.retainedFromRunID = run.retainedFromRunID
+        scan.qualificationPolicyVersion = archive.qualificationPolicyVersion
         scan.ranking = run.ranking; scan.rankingFailure = run.rankingFailure
         scan.selection = run.coverage.selection.map {
             .init(session: $0.session, requestedAt: $0.requestedAt, returnedCount: $0.returnedCount,
@@ -700,6 +714,7 @@ extension StockSageResearchHistory {
     private nonisolated static func validChecks(_ archive: CompletedChecks, through completedAt: Date, capturedSince: Date? = nil) -> Bool {
         let earliest = capturedSince ?? archive.startedAt
         guard validDate(earliest), earliest <= archive.startedAt, archive.version == 1, validDate(archive.startedAt), validDate(completedAt), archive.startedAt <= completedAt,
+              archive.qualificationPolicyVersion == nil || archive.qualificationPolicyVersion == 1,
               archive.checks.count <= StockSageHorizonResearch.scanLimit,
               Set(archive.checks.map { $0.listing.ticker }).count == archive.checks.count,
               let bytes = try? JSONEncoder().encode(archive), bytes.count <= maximumCompletedChecksBytes else { return false }
@@ -719,6 +734,15 @@ extension StockSageResearchHistory {
                           guard id.first == "F", let index = Int(id.dropFirst()), id == "F\(index)" else { return false }
                           return index > 0 && index <= check.facts.count
                       }) else { return false }
+                if archive.qualificationPolicyVersion == 1, check.qualification == nil { return false }
+            }
+            if let qualification = check.qualification {
+                guard let verdict = check.verdict, let evidence = check.evidenceReceipt,
+                      qualification.originalAction == verdict.action,
+                      qualification.evidenceAsOf <= completedAt,
+                      Set(qualification.candidateCatalysts.map(\.key)).isSubset(of: Set(evidence.offeredKeys)),
+                      StockSageResearchQualification.valid(qualification, symbol: listing.ticker,
+                        horizon: archive.horizon.title, at: check.at, citedKeys: evidence.citedKeys) else { return false }
             }
             guard (check.diagnosticID == nil) == (check.diagnosticsComplete == nil) else { return false }
             if let receipt = check.evidenceReceipt {
@@ -758,11 +782,16 @@ extension StockSageResearchHistory {
               run.coverage.checked == archive.checks.count,
               archive.checks.filter({ $0.verdict == nil }).count == run.coverage.incomplete,
               archive.checks.filter({ $0.prediction != nil }).count == run.coverage.buyCount else { return false }
+        let strict = archive.qualificationPolicyVersion == 1
+        guard strict == (run.coverage.qualifiedBuyCount != nil) else { return false }
+        let eligible = archive.checks.filter { $0.prediction != nil && (!strict || $0.qualification?.isQualified == true) }
+        if strict, run.coverage.qualifiedBuyCount != eligible.count { return false }
         let bySymbol = Dictionary(uniqueKeysWithValues: archive.checks.map { ($0.listing.ticker, $0) })
         if let selection = run.coverage.selection, Set(selection.dollarVolume.keys) != Set(bySymbol.keys) { return false }
         if let ranking = run.ranking,
-           Set(ranking.candidateSymbols) != Set(archive.checks.filter { $0.prediction != nil }.map { $0.listing.ticker }) { return false }
-        return run.predictions.allSatisfy { bySymbol[$0.symbol]?.prediction == $0 }
+           Set(ranking.candidateSymbols) != Set(eligible.map { $0.listing.ticker }) { return false }
+        let eligibleSymbols = Set(eligible.map { $0.listing.ticker })
+        return run.predictions.allSatisfy { eligibleSymbols.contains($0.symbol) && bySymbol[$0.symbol]?.prediction == $0 }
     }
 
     nonisolated struct Amendment: Codable, Equatable, Sendable {
@@ -833,7 +862,8 @@ extension StockSageResearchHistory {
                     original.append(failed)
                 } else { original.append(check) }
             }
-            let restored = CompletedChecks(version: 1, horizon: source.horizon, startedAt: source.startedAt, checks: original)
+            let restored = CompletedChecks(version: 1, horizon: source.horizon, startedAt: source.startedAt, checks: original,
+                qualificationPolicyVersion: source.coverage.qualifiedBuyCount == nil ? nil : 1)
             guard checksMatch(restored, run: source, capturedSince: source.retainedFromRunID == nil ? nil : sourceStart),
                   (try? checksDigest(restored)) == receipt.sourceChecksDigest else { return false }
             archive = restored; run = source
@@ -982,6 +1012,11 @@ extension StockSageResearchHistory {
                   source.coverage.selection == run.coverage.selection,
                   run.coverage.buyCount >= source.coverage.buyCount,
                   run.coverage.buyCount <= source.coverage.buyCount + source.coverage.incomplete - run.coverage.incomplete else { return false }
+            guard (run.coverage.qualifiedBuyCount == nil) == (source.coverage.qualifiedBuyCount == nil) else { return false }
+            if let count = run.coverage.qualifiedBuyCount, let previous = source.coverage.qualifiedBuyCount {
+                guard count >= previous,
+                      count <= previous + source.coverage.incomplete - run.coverage.incomplete else { return false }
+            }
         }
         guard let originalID = run.originalRunID else { return true }
         guard originalID != run.id, let original = runs.first(where: { $0.id == originalID }),

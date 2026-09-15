@@ -113,9 +113,12 @@ import Foundation
               Set(listed).count == listed.count,
               listed.allSatisfy({ StockSageHorizonResearch.validTicker($0) && scan.results[$0] != nil }),
               validModel(config.model) else { return .failure(.invalidCandidates) }
-        let names = listed.filter {
-            scan.results[$0]?.verdict?.action == .buy || scan.results[$0]?.verdict?.action == .strongBuy
-        }.sorted()
+        guard scan.qualificationPolicyVersion == nil || scan.qualificationPolicyVersion == 1,
+              scan.results.values.allSatisfy({ result in
+                  guard scan.qualificationPolicyVersion == 1, result.verdict != nil else { return true }
+                  return result.qualification?.horizon == horizon.rawValue
+              }) else { return .failure(.invalidCandidates) }
+        let names = listed.filter { scan.isEligible($0) }.sorted()
         let system = instructions(horizon: horizon)
         let outputReservation = config.reservedOutputTokens(for: 256)
         var candidates: [Candidate] = []
@@ -250,7 +253,7 @@ import Foundation
             }
         }
         guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
-        let receipt = Receipt(version: 1, method: rounds.count > 1 ? rollingMethod : wholePoolMethod,
+        let receipt = Receipt(version: scan.qualificationPolicyVersion == nil ? 1 : 2, method: rounds.count > 1 ? rollingMethod : wholePoolMethod,
                               horizon: horizon.rawValue, candidateSymbols: names, symbols: winners,
                               model: config.model, at: Date(), rounds: rounds)
         return valid(receipt) ? .success(receipt) : .failure(.invalidOutput)
@@ -258,7 +261,7 @@ import Foundation
 
     /// Bounded structural provenance check; it does not establish the model's research quality.
     nonisolated static func valid(_ receipt: Receipt) -> Bool {
-        guard receipt.version == 1, let horizon = StockSageHorizonResearch.Horizon(rawValue: receipt.horizon),
+        guard [1, 2].contains(receipt.version), let horizon = StockSageHorizonResearch.Horizon(rawValue: receipt.horizon),
               validDate(receipt.at), validModel(receipt.model),
               receipt.candidateSymbols.count <= StockSageHorizonResearch.scanLimit,
               receipt.candidateSymbols == receipt.candidateSymbols.sorted(),

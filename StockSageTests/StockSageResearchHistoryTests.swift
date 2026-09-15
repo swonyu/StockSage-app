@@ -8,6 +8,150 @@ struct StockSageResearchHistoryTests {
     typealias History = StockSageResearchHistory
 
     private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
+
+    private func qualifiedResult(_ symbol: String, at: Date, qualified: Bool) -> StockSageHorizonResearch.Result {
+        typealias R = StockSageHorizonResearch
+        var dates: [Date] = [], day = at.addingTimeInterval(-86_400)
+        while dates.count < 70 {
+            if StockSageMarketHours.nasdaqDay(at: day)?.trading == true { dates.append(day) }
+            day = day.addingTimeInterval(-86_400)
+        }
+        dates.reverse()
+        let closes = (0..<70).map { $0 < 50 ? 98.0 : 99 + Double($0 - 50) / 19 }
+        var highs = closes.map { $0 + 1 }; highs[59] = 104
+        let history = StockSagePriceHistory(symbol: symbol, dates: dates, opens: closes, highs: highs,
+            lows: closes.map { $0 - 1 }, closes: closes,
+            volumes: (0..<70).map { qualified && $0 >= 67 ? 200 : 100 }, priceSource: .massiveDaily)
+        let idea = StockSageIdea(symbol: symbol, market: "NASDAQ", price: 100,
+            advice: .init(action: .hold, conviction: 0, regime: .range, rationale: ["Fixture"],
+                stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: "Synthetic fixture"), spark: [],
+            generatedAt: at, priceAsOf: dates.last, priceSource: .massiveDaily)
+        let event = StockSageMassiveEvents.Event(id: "filing", symbol: symbol, feed: .insider,
+            date: at.addingTimeInterval(-60), headline: "Original public filing", details: ["Original interpretation retained"],
+            link: nil, transactionIdentity: "transaction")
+        let company: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation] = [.insider:
+            .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered, event: event)]
+        let context = StockSageAIAssessment.Context(idea: idea, earnings: nil, company: company, at: at, quotedInUSD: true)
+        let facts = ["Original public filing and interpretation"]
+        let capture = R.Capture(history: history, context: context, facts: facts, coverage: [], at: at,
+            blockedByThrottle: false, evidencePacket: .init(facts: [.init(key: "feed.insider.event", text: facts[0],
+                required: false, availability: .available)], prePromptOmittedRecordCount: 0),
+            nextEarnings: .init(outcome: .answered(.init(date: date("2026-11-24T00:00:00Z"), confirmed: true)), checkedAt: at, recordedAt: at))
+        let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Original case", risk: "Original risk", evidence: ["F1"])
+        let receipt = StockSageResearchQualification.prepare(capture, horizon: .fortnight)
+            .receipt(verdict: verdict, citedKeys: ["feed.insider.event"])
+        return .init(verdict: verdict, levels: receipt.levels, facts: facts, note: "Original capture", at: at, model: "fixture",
+            referenceClose: (100, dates.last!), evidenceReceipt: context.coverage(offered: capture.evidencePacket!.facts, verdict: verdict),
+            qualification: receipt)
+    }
+
+    private func strictFixture(failure: Bool = false, allExcluded: Bool = false) -> (History.Run, StockSageHorizonResearch.Scan) {
+        var scan = StockSageHorizonResearch.Scan()
+        let at = date("2026-09-15T13:00:00Z")
+        scan.at = at.addingTimeInterval(-1); scan.qualificationPolicyVersion = 1
+        for symbol in ["AAA", "BBB", "CCC"] {
+            scan.listings.append(.init(ticker: symbol, name: symbol, market: "stocks", locale: "us", active: true,
+                type: "CS", currency_name: "usd", primary_exchange: "XNAS"))
+            scan.results[symbol] = symbol == "CCC" && failure ? .init(note: "Original failed check", at: at)
+                : qualifiedResult(symbol, at: at, qualified: symbol == "AAA" && !allExcluded)
+        }
+        scan.rankingFailure = "Strict comparison pending."
+        return (History.snapshot(startedAt: scan.at!, completedAt: at.addingTimeInterval(1), horizon: .fortnight, scan: scan), scan)
+    }
+
+    @Test func strictQualificationArchiveRetainsRawOpinionsAndBindsScope() throws {
+        let (run, scan) = strictFixture()
+        #expect(run.coverage.buyCount == 3 && run.coverage.qualifiedBuyCount == 1)
+        let history = History()
+        try #require(history.record(run))
+        try #require(history.saveCompletedChecks(run, scan: scan))
+        let restored = try #require(history.completedScan(horizon: .fortnight))
+        #expect(restored.scan.qualificationPolicyVersion == 1 && restored.scan.isEligible("AAA"))
+        #expect(!restored.scan.isEligible("BBB") && restored.scan.results["BBB"]?.verdict == scan.results["BBB"]?.verdict)
+        let archive = try #require(History.captureChecks(scan: scan, horizon: .fortnight, startedAt: run.startedAt, completedAt: run.completedAt))
+        let bytes = try JSONEncoder().encode(archive)
+        let decoded = try History.decodeCapturedChecks(bytes, matching: run)
+        #expect(decoded == archive && decoded.qualificationPolicyVersion == 1)
+        let original = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        for changed in ["symbol", "horizon", "capturedAt", "originalAction", "missing", "citations", "unoffered", "policy"] {
+            var object = original
+            var rows = object["checks"] as! [[String: Any]]
+            var receipt = rows[0]["qualification"] as! [String: Any]
+            switch changed {
+            case "symbol": receipt["symbol"] = "OTHER"
+            case "horizon": receipt["horizon"] = StockSageHorizonResearch.Horizon.week.rawValue
+            case "capturedAt": receipt["capturedAt"] = run.startedAt.timeIntervalSinceReferenceDate
+            case "originalAction": receipt["originalAction"] = "Strong Buy"
+            case "citations": receipt["citedQualifyingKeys"] = []
+            case "unoffered":
+                var catalysts = receipt["candidateCatalysts"] as! [[String: Any]]
+                var extra = catalysts[0]
+                extra["identity"] = "unoffered"
+                extra["key"] = "feed.insider.transaction.unoffered"
+                catalysts.append(extra); receipt["candidateCatalysts"] = catalysts
+            case "policy": object["qualificationPolicyVersion"] = 99
+            default: break
+            }
+            rows[0]["qualification"] = changed == "missing" ? nil : receipt
+            object["checks"] = rows
+            let corrupt = try JSONSerialization.data(withJSONObject: object)
+            #expect(throws: (any Error).self) { try History.decodeCapturedChecks(corrupt, matching: run) }
+        }
+    }
+
+    @Test(arguments: [false, true]) func strictRankingSavesQualifiedOrEmptyPoolWithoutRelabelingBuys(empty: Bool) async throws {
+        let (pending, original) = strictFixture(allExcluded: empty)
+        var scan = original, requests = 0
+        let outcome = await StockSageResearchRanking.rank(scan: scan, horizon: .fortnight,
+            config: .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "offline-fixture"), isOllama: false,
+            allowed: { true }, completion: { _, _, _ in
+                requests += 1
+                return .success(.init(text: "{\"symbols\":[\"AAA\"]}", diagnostic: .init(finish: .stop), model: "offline-fixture"))
+            })
+        scan.ranking = try outcome.get(); scan.rankingFailure = nil
+        let run = History.snapshot(startedAt: pending.startedAt, completedAt: Date(), horizon: .fortnight, scan: scan)
+        #expect(requests == (empty ? 0 : 1) && run.ranking?.version == 2)
+        #expect(run.coverage.buyCount == 3 && run.coverage.qualifiedBuyCount == (empty ? 0 : 1))
+        #expect(run.predictions.map(\.symbol) == (empty ? [] : ["AAA"]))
+        let history = History()
+        #expect(history.record(run) && history.saveCompletedChecks(run, scan: scan))
+        #expect(history.completedScan(horizon: .fortnight)?.scan.results["BBB"]?.verdict?.action == .buy)
+    }
+
+    @Test func strictAmendmentKeepsAcceptedQualificationsAndSourcePolicy() throws {
+        let (source, scan) = strictFixture(failure: true)
+        let history = History()
+        try #require(history.record(source)); try #require(history.saveCompletedChecks(source, scan: scan))
+        var revised = scan
+        let began = source.completedAt.addingTimeInterval(1)
+        revised.at = began; revised.retainedFromRunID = source.id
+        revised.results["CCC"] = qualifiedResult("CCC", at: began.addingTimeInterval(1), qualified: true)
+        let run = History.snapshot(startedAt: began, completedAt: began.addingTimeInterval(2), horizon: .fortnight, scan: revised)
+        #expect(run.coverage.qualifiedBuyCount == 2)
+        try #require(history.saveCompletedChecks(run, scan: revised)); try #require(history.record(run))
+        let restored = try #require(history.completedScan(horizon: .fortnight))
+        #expect(restored.scan.results["AAA"]?.qualification == scan.results["AAA"]?.qualification)
+        #expect(history.runs.last == source)
+        revised.qualificationPolicyVersion = nil
+        let downgraded = History.snapshot(startedAt: began, completedAt: began.addingTimeInterval(2), horizon: .fortnight, scan: revised)
+        #expect(!history.record(downgraded) && !history.saveCompletedChecks(downgraded, scan: revised))
+    }
+
+    @Test func legacyQualificationFieldsRemainAbsentFromDigestMaterial() throws {
+        let (run, scan) = checkpointFixture(count: 8)
+        let archive = try #require(History.captureChecks(scan: scan, horizon: .fortnight,
+            startedAt: run.startedAt, completedAt: run.completedAt))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(archive)
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        #expect(object["qualificationPolicyVersion"] == nil)
+        #expect((object["checks"] as? [[String: Any]])?.allSatisfy { $0["qualification"] == nil } == true)
+        let restored = try History.decodeCapturedChecks(bytes, matching: run)
+        #expect(try encoder.encode(restored) == bytes)
+        let runObject = try #require(JSONSerialization.jsonObject(with: encoder.encode(run)) as? [String: Any])
+        #expect((runObject["coverage"] as? [String: Any])?["qualifiedBuyCount"] == nil)
+    }
+
     private func run(id: UUID = UUID(), completed: String = "2026-09-14T21:00:00Z",
                      horizon: History.Horizon = .week, referencePrice: Double? = 200,
                      policy: History.MeasurementPolicy? = nil) -> History.Run {

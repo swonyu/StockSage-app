@@ -354,6 +354,9 @@ struct StockSageResearchHistoryDetail: View {
                             .font(.callout).foregroundStyle(.secondary)
                         Text("\(run.coverage.checked) listings checked · \(run.coverage.incomplete) incomplete opinions · \(run.coverage.buyCount) Buy / Strong Buy")
                             .font(.callout).foregroundStyle(.secondary)
+                        if let qualified = run.coverage.qualifiedBuyCount {
+                            Text("\(qualified) passed the strict Top 5 screen").font(.caption)
+                        }
                         if let ranking = run.ranking {
                             Text("\(ranking.model) compared \(ranking.candidateSymbols.count) eligible candidates in \(ranking.rounds.count) rounds. \(ranking.method)")
                                 .font(.callout).foregroundStyle(.secondary)

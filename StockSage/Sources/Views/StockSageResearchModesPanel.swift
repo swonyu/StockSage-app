@@ -203,7 +203,12 @@ struct StockSageResearchModesPanel: View {
                 Text("\(rows.count) shown").font(.caption).foregroundStyle(.secondary)
             }
             if presentation.filter == .topBuys {
-                Text(StockSageHorizonResearch.topBuyRankingNote)
+                if scan.qualificationPolicyVersion == 1 {
+                Text("Strict screen v1: a cited recent news or public insider filing; close above SMA20 and positive horizon return; recent volume at least 1.5× its preceding average; observed stop/target with at least 2:1 reward/risk and bounded ATR distances; a fresh outside-window earnings date. These are unvalidated screening assumptions, not proven return probabilities. Unqualified opinions remain in All checks.")
+            } else if !scan.listings.isEmpty {
+                Text("This saved run predates the strict screen. Run fresh research to apply it; original opinions and rankings remain unchanged.")
+            }
+            Text(StockSageHorizonResearch.topBuyRankingNote)
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(3).help(StockSageHorizonResearch.topBuyRankingNote)
             }
@@ -288,7 +293,8 @@ struct StockSageResearchModesPanel: View {
             if !scan.listings.isEmpty {
                 Self.scanProgress(checked: scan.results.count, total: scan.listings.count,
                     buys: scan.results.values.filter { Self.isBuy($0.verdict?.action) }.count,
-                    incomplete: scan.results.values.filter { $0.verdict == nil }.count)
+                    incomplete: scan.results.values.filter { $0.verdict == nil }.count,
+                    qualified: scan.qualificationPolicyVersion == 1 ? scan.listings.filter { scan.isEligible($0.ticker) }.count : nil)
             }
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
@@ -336,13 +342,13 @@ struct StockSageResearchModesPanel: View {
     private func coverageDetails(_ scan: StockSageHorizonResearch.Scan) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Text("All checks preserve the scan’s original activity order. Top 5 buys is a separate comparison after every listing has been checked.")
-            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment or the S&P 500. Only NASDAQ-listed common stocks with confirmed USD currency; no ETFs, other listing types or OTC securities. Missing observations are not filled alphabetically. One manual worker researches the selected list in order.")
+            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment or the S&P 500. Only NASDAQ-listed common stocks with confirmed USD currency; no ETFs, other listing types or OTC securities. Missing observations are not filled alphabetically. Available model workers research this selected list concurrently.")
             Text(StockSageHorizonResearch.topBuyRankingNote)
             if let ranking = scan.ranking {
                 Text("\(ranking.candidateSymbols.count) eligible candidates compared in \(ranking.rounds.count) rounds. \(ranking.method).")
                 Text("\(ranking.rounds.reduce(0) { $0 + $1.omittedCitedFacts.values.reduce(0, +) }) cited-record omissions across comparison rounds. Cases, risks, capture dates and coverage were retained whole; full captured research remains in each selected stock’s details.")
             }
-            Text("Both horizons use the same evidence-selection rules and technical-level formula. The model is asked about a different holding period; differing opinions are unvalidated.")
+            Text("Each horizon has its own evidence window and scenario. Strict scenarios use recent lows and prior resistance highs; older runs retain their original ATR scenarios. Model opinions and screening rules are unvalidated.")
             if let selection = scan.selection {
                 Text("\(selection.directoryCount) active US directory entries considered. Selection requested \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)). \(selection.summary)")
             }
@@ -510,12 +516,15 @@ struct StockSageResearchModesPanel: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    static func scanProgress(checked: Int, total: Int, buys: Int, incomplete: Int) -> some View {
+    static func scanProgress(checked: Int, total: Int, buys: Int, incomplete: Int, qualified: Int? = nil) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             ProgressView(value: Double(checked), total: Double(max(1, total))) {
                 Text("\(checked)/\(total) checks finished, including incomplete")
                     .fixedSize(horizontal: false, vertical: true)
             }.accessibilityValue("\(checked) of \(total) checks finished, including \(incomplete) incomplete opinions")
+            if let qualified {
+                Text("\(qualified) qualified for Top 5").fontWeight(.semibold)
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: DS.Space.lg) {
                     Text("\(buys) Buy / Strong Buy found").fixedSize()
@@ -635,6 +644,9 @@ struct StockSageResearchModesPanel: View {
             if scan.results.count < scan.listings.count {
                 return ("Scan stopped before comparison", "The top five needs the complete scan. Collected checks remain available; run again to finish research and compare candidates.")
             }
+            if scan.qualificationPolicyVersion == 1 {
+                return ("No stocks passed the strict screen", "The checks are complete. No Buy / Strong Buy met every requirement for this horizon. All checks retain the original opinions, insider evidence and exclusion reasons; no picks were forced.")
+            }
             return ("No Buy / Strong Buy results", "The completed checks contain no eligible Buy / Strong Buy opinions. See all checks and coverage for the collected evidence and any incomplete opinions.")
         }
         if isRunning {
@@ -717,6 +729,13 @@ struct StockSageResearchModesPanel: View {
                     Text(verdict.reason).font(.body).lineSpacing(3)
                     Text("Risk: \(verdict.risk)").foregroundStyle(.secondary)
                 }
+                if let qualification = result.qualification {
+                    Text(qualification.isQualified ? "Qualified for Top 5 comparison" : "Not qualified for Top 5")
+                        .font(.headline)
+                    ForEach(Array(qualification.reasons.enumerated()), id: \.offset) { _, reason in
+                        Text(reason).font(.callout).foregroundStyle(.secondary)
+                    }
+                }
                 if let close = result.referenceClose {
                     Text("Daily close: \(price(close.value)) · \(close.at.formatted(date: .abbreviated, time: .omitted)) · USD · Massive split-adjusted history")
                         .font(.callout).monospacedDigit()
@@ -729,7 +748,7 @@ struct StockSageResearchModesPanel: View {
                     Text("Scenarios, not executable orders or forecasts.").font(.caption).foregroundStyle(.secondary)
                     Text(levels.basis).font(.caption).foregroundStyle(.secondary)
                 } else if isBuy(result.verdict?.action) {
-                    Text("No valid ATR-based entry/stop/target plan could be calculated. Do not treat this opinion as an order plan.")
+                    Text("No valid entry/stop/target scenario could be calculated. Do not treat this opinion as an order plan.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
                 if !result.coverage.isEmpty || result.evidenceReceipt != nil || result.diagnosticID != nil {
