@@ -126,7 +126,8 @@ struct StockSageResearchHomeSummary: View {
                         .font(.callout).foregroundStyle(.orange)
                 }
                 if run.predictions.isEmpty {
-                    Text("No Buy or Strong Buy picks qualified in the latest completed run.")
+                    Text(run.rankingFailure.map { "Top five comparison unavailable. " + $0 }
+                         ?? "No Buy or Strong Buy picks qualified in the latest completed run.")
                         .font(.callout)
                 } else {
                     ForEach(Array(run.predictions.enumerated()), id: \.element.id) { index, prediction in
@@ -322,6 +323,7 @@ struct StockSageResearchHistoryView: View {
     }
 
     static func status(for run: StockSageResearchHistory.Run, now: Date = Date()) -> String {
+        if run.rankingFailure != nil { return "Comparison unavailable · no ranked picks to review" }
         let availability = StockSageResearchHistory.availability(for: run, now: now)
         guard let date = StockSageResearchHistory.reviewAvailableAt(for: run) else { return availability.note }
         let dateLabel = date.formatted(date: .abbreviated, time: .shortened)
@@ -344,18 +346,30 @@ struct StockSageResearchHistoryDetail: View {
                             .font(.callout).foregroundStyle(.secondary)
                         Text("\(run.coverage.checked) listings checked · \(run.coverage.incomplete) incomplete opinions · \(run.coverage.buyCount) Buy / Strong Buy")
                             .font(.callout).foregroundStyle(.secondary)
+                        if let ranking = run.ranking {
+                            Text("\(ranking.model) compared \(ranking.candidateSymbols.count) eligible candidates in \(ranking.rounds.count) rounds. \(ranking.method)")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Text("\(ranking.rounds.reduce(0) { $0 + $1.omittedCitedFacts.values.reduce(0, +) }) cited-record omissions across comparison rounds; original cases, risks and coverage stayed whole.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if let failure = run.rankingFailure {
+                            Text("Top five comparison unavailable. " + failure)
+                                .font(.callout).foregroundStyle(.secondary)
+                        } else if !run.predictions.isEmpty {
+                            Text("Legacy shortlist: Strong Buy before Buy, with activity-order ties. This saved ordering has not been changed.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
                         if let selection = run.coverage.selection {
                             Text("\(selection.partialSession ? "Partial-session activity" : "Dated activity") · \(selection.session)\(selection.fallback ? " · fallback session" : "")")
                                 .font(.callout).foregroundStyle(selection.partialSession || selection.fallback ? Color.orange : .secondary)
                             Text("\(selection.returnedCount) observations · \(selection.eligibleCount) eligible · \(selection.directoryCount) directory listings. Captured \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)).")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Text("Saved order: Strong Buy before Buy, then the original dated activity order. These are unvalidated research opinions.")
+                        Text("Saved opinions and their ordering are unvalidated research, not forecasts.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(.vertical, 6)
                 }
                 if run.predictions.isEmpty {
-                    Text("No Buy or Strong Buy results qualified in this completed run.")
+                    Text(run.rankingFailure == nil ? "No Buy or Strong Buy results qualified in this completed run." : "No ranked picks were saved because comparison was unavailable.")
                 }
                 ForEach(Array(run.predictions.enumerated()), id: \.element.id) { index, prediction in
                     Section {

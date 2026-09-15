@@ -68,19 +68,60 @@ struct StockSageResearchHistoryTests {
             scan.listings.append(.init(ticker: symbol, name: "Company \(index)", market: "stocks", locale: "us",
                 active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS"))
             scan.results[symbol] = .init(verdict: .init(action: index == 6 ? .strongBuy : .buy,
-                reason: "Original case", risk: "Original risk", evidence: ["F1"]), facts: ["Dated source fact"],
+                reason: "Original case", risk: "Original risk", evidence: ["F1"]),
+                levels: .init(entry: 200, stop: 190, target: 220, at: date("2026-09-11T04:00:00Z"), basis: "Captured ATR scenario"),
+                facts: ["Dated source fact"],
                 note: "Unvalidated", at: date("2026-09-14T20:59:30Z"), model: "original-model",
                 referenceClose: (value: 200, at: date("2026-09-11T04:00:00Z")))
         }
+        let rankedSymbols = ["ACME5", "ACME3", "ACME6", "ACME1", "ACME4"]
+        scan.ranking = StockSageResearchRanking.Receipt.fixture(scan: scan, symbols: rankedSymbols,
+            horizon: .fortnight, at: date("2026-09-14T20:59:59Z"))
         let snapshot = History.snapshot(startedAt: try #require(scan.at), completedAt: date("2026-09-14T21:00:00Z"),
             horizon: .fortnight, scan: scan)
-        #expect(snapshot.predictions.map(\.symbol) == ["ACME6", "ACME0", "ACME1", "ACME2", "ACME3"])
+        #expect(snapshot.predictions.map(\.symbol) == rankedSymbols)
+        #expect(snapshot.ranking == scan.ranking && snapshot.rankingFailure == nil)
         #expect(snapshot.coverage.requested == 7 && snapshot.coverage.checked == 7 && snapshot.coverage.buyCount == 7)
         #expect(snapshot.horizon == .fortnight && snapshot.predictions[0].model == "original-model")
         scan.results.removeAll()
         #expect(snapshot.predictions[0].facts == ["Dated source fact"] && snapshot.predictions.count == 5)
-        let store = History(storageURL: nil)
+        #expect(snapshot.predictions[0].levels?.stop == 190 && snapshot.predictions[0].levels?.target == 220)
+        let suite = "stocksage.research.ranking.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let url = directory.appendingPathComponent("history.json")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let store = History(storageURL: url, defaults: defaults)
         #expect(store.record(snapshot))
+        let bytes = try Data(contentsOf: url)
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.runs == [snapshot] && reopened.lastError == nil)
+        #expect(try Data(contentsOf: url) == bytes, "Reading never reranks or rewrites original comparison evidence")
+
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        let validRanking = try #require(encoded["ranking"] as? [String: Any])
+        let changes: [(inout [String: Any]) -> Void] = [
+            { $0["version"] = 999 }, { $0["method"] = "activity-sort" },
+            { $0["horizon"] = History.Horizon.week.title },
+            { $0["symbols"] = Array(rankedSymbols.reversed()) },
+            { $0["candidateSymbols"] = Array((0..<6).map { "ACME\($0)" }) },
+            { $0["at"] = snapshot.startedAt.timeIntervalSinceReferenceDate - 1 },
+            { $0["at"] = snapshot.completedAt.timeIntervalSinceReferenceDate + 1 },
+            { $0["rounds"] = [] }
+        ]
+        for change in changes {
+            var object = encoded
+            var ranking = validRanking
+            change(&ranking)
+            object["ranking"] = ranking
+            let malformed = try JSONDecoder().decode(History.Run.self, from: JSONSerialization.data(withJSONObject: object))
+            #expect(!History(storageURL: nil).record(malformed), "Malformed or mismatched comparisons cannot publish picks")
+        }
+        var failureAndSuccess = encoded
+        failureAndSuccess["rankingFailure"] = "Comparison failed"
+        let contradictory = try JSONDecoder().decode(History.Run.self,
+            from: JSONSerialization.data(withJSONObject: failureAndSuccess))
+        #expect(!History(storageURL: nil).record(contradictory))
     }
 
     @Test func completedRunWithNoQualifiedBuysIsStillSaved() {
@@ -89,6 +130,34 @@ struct StockSageResearchHistoryTests {
             completedAt: date("2026-09-14T21:00:00Z"), horizon: .week, predictions: [],
             coverage: .init(requested: 5, checked: 5, incomplete: 2, buyCount: 0, selection: nil))
         #expect(store.record(empty) && store.runs == [empty])
+    }
+
+    @Test func missingComparisonCannotPublishPicksAndExplicitFailurePreservesCoverage() throws {
+        var scan = StockSageHorizonResearch.Scan()
+        scan.listings = [.init(ticker: "ACME", name: "Acme", market: "stocks", locale: "us",
+            active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")]
+        scan.results["ACME"] = .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]),
+            facts: ["Captured source fact"], note: "Unvalidated", model: "fixture")
+        let store = History(storageURL: nil)
+        let pending = History.snapshot(startedAt: date("2026-09-14T20:59:00Z"),
+            completedAt: date("2026-09-14T21:00:00Z"), horizon: .week, scan: scan)
+        #expect(pending.predictions.isEmpty && pending.ranking == nil && pending.rankingFailure == nil)
+        #expect(!store.record(pending), "A pending comparison cannot be stored as a complete legacy shortlist")
+
+        scan.rankingFailure = "The comparative model response was invalid."
+        let failed = History.snapshot(startedAt: pending.startedAt, completedAt: pending.completedAt,
+            horizon: .week, scan: scan)
+        #expect(store.record(failed) && failed.predictions.isEmpty && failed.coverage.buyCount == 1)
+        #expect(failed.coverage.checked == 1 && failed.coverage.incomplete == 0)
+        #expect(failed.rankingFailure == scan.rankingFailure)
+        #expect(try JSONDecoder().decode(History.Run.self, from: JSONEncoder().encode(failed)) == failed)
+        let attemptedPicks = History.Run(id: UUID(), startedAt: failed.startedAt, completedAt: failed.completedAt,
+            horizon: .week, predictions: run().predictions, coverage: failed.coverage,
+            rankingFailure: failed.rankingFailure)
+        #expect(!store.record(attemptedPicks), "A failed comparison cannot masquerade as published picks")
+        let blankFailure = History.Run(id: UUID(), startedAt: failed.startedAt, completedAt: failed.completedAt,
+            horizon: .week, predictions: [], coverage: failed.coverage, rankingFailure: " \n ")
+        #expect(!store.record(blankFailure))
     }
 
     @Test func homeUsesTheLatestCompletedRunPerHorizonEvenWhenItHasNoPicks() {
@@ -185,6 +254,9 @@ struct StockSageResearchHistoryTests {
         let savedLegacy = try #require(reopened.runs.first { $0.id == legacy.id })
         let savedCurrent = try #require(reopened.runs.first { $0.id == current.id })
         #expect(savedLegacy.measurementPolicy == nil && savedCurrent.measurementPolicy == .nextTradingDateSessions)
+        #expect(savedLegacy.ranking == nil && savedLegacy.rankingFailure == nil)
+        #expect(savedCurrent.ranking == nil && savedCurrent.rankingFailure == nil,
+                "Existing predictions keep their captured order without a retroactive comparison")
         #expect(History.targetClose(for: savedLegacy) == date("2026-09-22T20:00:00Z"))
         #expect(History.targetClose(for: savedCurrent) == date("2026-09-23T20:00:00Z"))
         let reopenedBytes = try Data(contentsOf: url)
@@ -545,7 +617,9 @@ struct StockSageResearchHistoryTests {
         let result = StockSageHorizonResearch.Result(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]),
             facts: ["Source fact"], note: "Unvalidated", model: "fixture",
             referenceClose: (value: 200, at: date("2026-09-11T04:00:00Z")))
-        let started = research.start(.week, allowed: { true }, universe: { .init([listing]) }, analyze: { _ in result })
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing]) },
+            rank: { scan, horizon in .success(.fixture(scan: scan, symbols: ["ACME"], horizon: horizon, at: Date())) },
+            analyze: { _ in result })
         #expect(started)
         var deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while research.running != nil, ContinuousClock.now < deadline { await Task.yield() }

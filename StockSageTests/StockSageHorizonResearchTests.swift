@@ -12,6 +12,8 @@ import Testing
         var selections = 0, captures = 0
         let started = research.start(R.Horizon.allCases, allowed: { true }, universe: {
             selections += 1; return .init(names)
+        }, rank: { scan, horizon in
+            .success(.fixture(scan: scan, symbols: ["AAPL", "MSFT"], horizon: horizon))
         }, analyze: { item, horizon in
             if horizon == .week { captures += 1 }
             let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"])
@@ -44,14 +46,16 @@ import Testing
         #expect(owningResearch.scans.values.allSatisfy { $0.results.isEmpty })
     }
 
-    @Test func stoppingSecondHorizonPreservesTheFirstCompletedRun() async throws {
+    @Test func stoppingSecondComparisonPreservesTheFirstRankedRun() async throws {
         let history = StockSageResearchHistory(storageURL: nil)
         let owner = R(history: history)
         defer { owner.stop() }
         var resume: CheckedContinuation<Void, Never>?
-        let started = owner.start(R.Horizon.allCases, allowed: { true }, universe: { .init([listing("AAPL")]) }, analyze: { _, horizon in
+        let started = owner.start(R.Horizon.allCases, allowed: { true }, universe: { .init([listing("AAPL")]) }, rank: { scan, horizon in
             if horizon == .fortnight { await withCheckedContinuation { resume = $0 } }
-            return .init(note: horizon.rawValue)
+            return .success(.fixture(scan: scan, symbols: ["AAPL"], horizon: horizon))
+        }, analyze: { _, horizon in
+            .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]), facts: ["Captured fact"], note: horizon.rawValue)
         })
         try #require(started)
         for _ in 0..<100 where resume == nil { try await Task.sleep(for: .milliseconds(5)) }
@@ -61,8 +65,36 @@ import Testing
         for _ in 0..<100 where owner.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         #expect(owner.scans[.week]?.results["AAPL"] != nil)
         #expect(owner.scans[.week]?.status.hasPrefix("Scan finished") == true && !owner.isRunning(.week))
-        #expect(owner.scans[.fortnight]?.results.isEmpty == true)
+        #expect(owner.scans[.fortnight]?.results.count == 1 && owner.scans[.fortnight]?.topBuys.isEmpty == true)
         #expect(history.runs.count == 1)
+    }
+
+    @Test(arguments: [true, false])
+    func cancellationOrSettingsChangeRejectsLateComparison(cancel: Bool) async throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let research = R(history: history)
+        var allowed = true
+        var held: CheckedContinuation<Void, Never>?
+        defer { research.stop(); held?.resume() }
+        let started = research.start(.week, allowed: { allowed }, universe: { .init([listing("AAPL")]) }, rank: { scan, horizon in
+            await withCheckedContinuation { held = $0 }
+            return .success(.fixture(scan: scan, symbols: ["AAPL"], horizon: horizon))
+        }, analyze: { _ in
+            .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]), facts: ["Dated fact"], note: "Fixture")
+        })
+        try #require(started)
+        for _ in 0..<100 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held != nil)
+        #expect(research.scans[.week]?.results.count == 1 && research.scans[.week]?.topBuys.isEmpty == true)
+        #expect(history.runs.isEmpty, "Checks alone cannot publish or save final top picks")
+        if cancel { research.stop() } else { allowed = false }
+        let release = held; held = nil; release?.resume()
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        let scan = try #require(research.scans[.week])
+        #expect(research.running == nil && history.runs.isEmpty && scan.topBuys.isEmpty)
+        #expect(scan.results.count == 1 && scan.rankingFailure != nil)
+        #expect(!scan.status.contains("remaining listings were not checked"))
+        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: false).title == "Top five comparison unavailable")
     }
 
     @Test func lastHorizonUsesIsolatedPreferencesAndExplicitHomeChoiceClearsSelection() throws {
@@ -79,30 +111,95 @@ import Testing
         #expect(explicit.horizon == .week && explicit.search.isEmpty && explicit.selected == nil)
     }
 
-    @Test func topBuysKeepOnlyFiveAcceptedOpinionsInDeclaredOrder() {
+    @Test func cancelledPreflightKeepsPreviousRankedPicks() async throws {
+        let research = R()
+        var held: CheckedContinuation<Void, Never>?
+        defer { research.stop(); held?.resume() }
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAPL")]) }, rank: { scan, horizon in
+            .success(.fixture(scan: scan, symbols: ["AAPL"], horizon: horizon))
+        }, analyze: { _ in
+            .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]), facts: ["Original fact"], note: "Original")
+        })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        let original = try #require(research.scans[.week])
+        try #require(original.topBuys.map(\.ticker) == ["AAPL"])
+        let restarted = research.start(.week, allowed: { true }, universe: {
+            await withCheckedContinuation { held = $0 }
+            return .init([])
+        }, analyze: { _ in .init(note: "Must not run") })
+        try #require(restarted)
+        for _ in 0..<100 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held != nil)
+        research.stop()
+        let release = held; held = nil; release?.resume()
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        let retained = try #require(research.scans[.week])
+        #expect(retained.ranking == original.ranking && retained.rankingFailure == nil)
+        #expect(retained.topBuys == original.topBuys && retained.results["AAPL"]?.facts == ["Original fact"])
+        #expect(retained.status.contains("Earlier scan data retained"))
+    }
+
+    @Test func filtersKeepAllChecksAndTopFiveUsesOnlyCompletedComparisonOrder() {
         var scan = R.Scan()
         scan.listings = ["BUY1", "HOLD", "STRONG1", "INCOMPLETE", "STRONG2", "BUY2",
                          "STRONG3", "BUY3", "SELL", "AVOID", "REDUCE", "UNCHECKED"].map { listing($0) }
         func result(_ action: TradeAdvice.Action) -> R.Result {
             .init(verdict: .init(action: action, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
         }
-        scan.results = [
-            "BUY1": result(.buy), "HOLD": result(.hold), "STRONG1": result(.strongBuy),
+        scan.results = ["BUY1": result(.buy), "HOLD": result(.hold), "STRONG1": result(.strongBuy),
             "INCOMPLETE": .init(note: "Unverified draft: Buy"), "STRONG2": result(.strongBuy),
             "BUY2": result(.buy), "STRONG3": result(.strongBuy), "BUY3": result(.buy),
-            "SELL": result(.sell), "AVOID": result(.avoid), "REDUCE": result(.reduce),
-            "NOTINSCAN": result(.strongBuy)
+            "SELL": result(.sell), "AVOID": result(.avoid), "REDUCE": result(.reduce)]
+        typealias Panel = StockSageResearchModesPanel
+        let filters: [(Panel.ResultFilter, [String])] = [
+            (.all, scan.listings.map(\.ticker)), (.topBuys, []),
+            (.buys, ["BUY1", "STRONG1", "STRONG2", "BUY2", "STRONG3", "BUY3"]),
+            (.hold, ["HOLD"]), (.avoid, ["AVOID"]),
+            (.incomplete, ["INCOMPLETE"]), (.unchecked, ["UNCHECKED"])
         ]
+        for (filter, expected) in filters {
+            #expect(Panel.filteredListings(scan, search: "", filter: filter).map(\.ticker) == expected)
+        }
+        #expect(scan.topBuys.isEmpty, "First-arriving buys are never presented as the best five")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Top five after the full scan")
+        #expect(Panel.filteredListings(scan, search: " buy3 ", filter: .all).map(\.ticker) == ["BUY3"])
+        scan.results["UNCHECKED"] = .init(note: "Completed without an opinion")
         let originalListings = scan.listings
         let originalResults = Set(scan.results.keys)
-        #expect(scan.topBuys.map(\.ticker) == ["STRONG1", "STRONG2", "STRONG3", "BUY1", "BUY2"])
-        #expect(scan.topBuys.count == R.topBuyLimit)
-        #expect(scan.listings == originalListings && Set(scan.results.keys) == originalResults,
-                "Selecting the top five must preserve every raw result and its activity order")
-        #expect(StockSageResearchModesPanel.filteredListings(scan, search: " \n").map(\.ticker) == scan.topBuys.map(\.ticker))
-        #expect(StockSageResearchModesPanel.filteredListings(scan, search: " buy2 ").map(\.ticker) == ["BUY2"])
-        #expect(StockSageResearchModesPanel.filteredListings(scan, search: "BUY3").isEmpty,
-                "Search must not promote the sixth eligible result into the displayed top five")
+        let ranked = ["BUY3", "STRONG2", "BUY1", "STRONG3", "STRONG1"]
+        scan.ranking = .fixture(scan: scan, symbols: ranked, horizon: .week)
+        #expect(scan.topBuys.map(\.ticker) == ranked, "A later Buy may rank above earlier Strong Buys")
+        #expect(Panel.filteredListings(scan, search: " \n").map(\.ticker) == ranked)
+        #expect(Panel.filteredListings(scan, search: " buy1 ").map(\.ticker) == ["BUY1"])
+        #expect(Panel.filteredListings(scan, search: "BUY2").isEmpty, "Search never promotes an unselected candidate")
+        #expect(scan.listings == originalListings && Set(scan.results.keys) == originalResults)
+        #expect(Panel.emptyState(for: scan, isRunning: true, search: "absent", filter: .hold).title == "No matching checks")
+        #if os(macOS)
+        #expect(Panel.Presentation().filter == .all)
+        #else
+        #expect(Panel.Presentation().filter == .topBuys)
+        #endif
+    }
+
+    @Test func completedOpinionRemainsVisibleWhileSecondHorizonChecksSameStock() async throws {
+        let research = R()
+        var held: CheckedContinuation<Void, Never>?
+        defer { research.stop(); held?.resume() }
+        let started = research.start(R.Horizon.allCases, allowed: { true }, universe: {
+            .init([listing("AAPL"), listing("MSFT")])
+        }, analyze: { _, horizon in
+            if horizon == .fortnight { await withCheckedContinuation { held = $0 } }
+            return .init(verdict: .init(action: .hold, reason: "Fixture", risk: "Fixture", evidence: []), note: "Fixture")
+        })
+        try #require(started)
+        for _ in 0..<100 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held != nil && research.activeSymbol == "AAPL")
+        let week = try #require(research.scans[.week])
+        let fortnight = try #require(research.scans[.fortnight])
+        #expect(research.isRunning(.week))
+        #expect(StockSageResearchModesPanel.resultLabel("AAPL", research: research, scan: week, horizon: .week) == "Hold")
+        #expect(StockSageResearchModesPanel.resultLabel("AAPL", research: research, scan: fortnight, horizon: .fortnight) == "Checking…")
     }
 
     @Test(arguments: 0..<5)
@@ -113,6 +210,8 @@ import Testing
             scan.results[item.ticker] = .init(verdict: .init(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
         }
         scan.results["HOLD"] = .init(verdict: .init(action: .hold, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+        scan.results["MISSING"] = .init(note: "No opinion")
+        scan.ranking = .fixture(scan: scan, symbols: (0..<count).map { "BUY\($0)" }, horizon: .week)
         #expect(scan.topBuys.map(\.ticker) == (0..<count).map { "BUY\($0)" })
     }
 
@@ -121,7 +220,9 @@ import Testing
         defer { research.stop() }
         let names = [listing("AAPL"), listing("MSFT"), listing("NVDA")]
         for horizon in R.Horizon.allCases {
-            let started = research.start(horizon, allowed: { true }, universe: { .init(names) }, analyze: { item in
+            let started = research.start(horizon, allowed: { true }, universe: { .init(names) }, rank: { scan, horizon in
+                .success(.fixture(scan: scan, symbols: horizon == .week ? ["MSFT"] : ["AAPL"], horizon: horizon))
+            }, analyze: { item in
                 let action: TradeAdvice.Action = horizon == .week
                     ? (item.ticker == "MSFT" ? .buy : .hold)
                     : (item.ticker == "AAPL" ? .strongBuy : .hold)
@@ -467,9 +568,10 @@ import Testing
         #expect(scan.status == "Stopping scan…")
         scan.status = "Scan incomplete: listing directory could not be verified."
         scan.listings = [listing()]
-        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Waiting for Buy / Strong Buy results")
-        #expect(Panel.emptyState(for: scan, isRunning: false).title == "No Buy / Strong Buy results")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Top five after the full scan")
+        #expect(Panel.emptyState(for: scan, isRunning: false).title == "Scan stopped before comparison")
         scan.results["AAPL"] = .init(verdict: .init(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+        scan.ranking = .fixture(scan: scan, symbols: ["AAPL"], horizon: .week)
         #expect(Panel.emptyState(for: scan, isRunning: false, search: "MSFT").title == "No matching top results")
         #expect(scan.status == "Scan incomplete: listing directory could not be verified.")
     }

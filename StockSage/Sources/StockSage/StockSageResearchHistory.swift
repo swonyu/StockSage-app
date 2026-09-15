@@ -64,15 +64,20 @@ final class StockSageResearchHistory: ObservableObject {
         let coverage: Coverage
         /// Missing in older files: retain the legacy count of future closes after completion.
         let measurementPolicy: MeasurementPolicy?
+        /// Captured comparison and failure are immutable; absent in legacy activity-ordered runs.
+        let ranking: StockSageResearchRanking.Receipt?
+        let rankingFailure: String?
         // Only these subsequent receipts change; the original prediction fields above never do.
         var evaluations: [String: Evaluation] = [:]
 
         init(id: UUID, startedAt: Date, completedAt: Date, horizon: Horizon,
              predictions: [Prediction], coverage: Coverage, evaluations: [String: Evaluation] = [:],
-             measurementPolicy: MeasurementPolicy? = nil) {
+             measurementPolicy: MeasurementPolicy? = nil,
+             ranking: StockSageResearchRanking.Receipt? = nil, rankingFailure: String? = nil) {
             self.id = id; self.startedAt = startedAt; self.completedAt = completedAt
             self.horizon = horizon; self.predictions = predictions; self.coverage = coverage
             self.evaluations = evaluations; self.measurementPolicy = measurementPolicy
+            self.ranking = ranking; self.rankingFailure = rankingFailure
         }
     }
     nonisolated struct DailyClose: Codable, Sendable, Equatable {
@@ -160,7 +165,8 @@ final class StockSageResearchHistory: ObservableObject {
             coverage: Coverage(requested: scan.listings.count, checked: scan.results.count,
                 incomplete: scan.results.values.filter { $0.verdict == nil }.count,
                 buyCount: scan.results.values.filter { $0.verdict?.action == .buy || $0.verdict?.action == .strongBuy }.count,
-                selection: selection), measurementPolicy: .nextTradingDateSessions)
+                selection: selection), measurementPolicy: .nextTradingDateSessions,
+            ranking: scan.ranking, rankingFailure: scan.rankingFailure)
     }
 
     @discardableResult func record(_ run: Run) -> Bool {
@@ -488,8 +494,21 @@ final class StockSageResearchHistory: ObservableObject {
               run.predictions.count <= 5, Set(run.predictions.map(\.symbol)).count == run.predictions.count,
               run.coverage.requested >= 0, run.coverage.checked == run.coverage.requested,
               (0...run.coverage.checked).contains(run.coverage.incomplete),
-              (0...run.coverage.checked - run.coverage.incomplete).contains(run.coverage.buyCount),
-              run.predictions.count == min(5, run.coverage.buyCount) else { return false }
+              (0...run.coverage.checked - run.coverage.incomplete).contains(run.coverage.buyCount) else { return false }
+        if let ranking = run.ranking {
+            guard run.rankingFailure == nil, StockSageResearchRanking.valid(ranking),
+                  ranking.horizon == run.horizon.title,
+                  ranking.symbols == run.predictions.map(\.symbol),
+                  ranking.candidateSymbols.count == run.coverage.buyCount,
+                  validDate(ranking.at), ranking.at >= run.startedAt, ranking.at <= run.completedAt else { return false }
+        } else if let failure = run.rankingFailure {
+            guard !failure.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  run.predictions.isEmpty else { return false }
+        } else {
+            // Older runs retain their original order. A new unfinished comparison with buys
+            // has no predictions, so it cannot masquerade as a complete legacy snapshot.
+            guard run.predictions.count == min(5, run.coverage.buyCount) else { return false }
+        }
         for prediction in run.predictions {
             guard !prediction.symbol.isEmpty, !prediction.name.isEmpty,
                   prediction.action == "Buy" || prediction.action == "Strong Buy",

@@ -68,6 +68,9 @@ struct StockSageIOSPresentationTests {
         var analyses = 0
         // Use the same injected offline seam as the existing Mac presentation tests.
         let started = research.start(horizon, allowed: { true }, universe: { .init(listings, receipt: receipt) },
+            rank: { scan, horizon in
+                .success(.fixture(scan: scan, symbols: ["RKLB", "AAPL", "MSFT", "NVDA", "AMD"], horizon: horizon))
+            },
             analyze: { item in
                 analyses += 1
                 if item.ticker == "FAIL" {
@@ -88,6 +91,7 @@ struct StockSageIOSPresentationTests {
         }
         try #require(research.running == nil && analyses == listings.count)
         let captured = try #require(research.scans[horizon])
+        try #require(captured.ranking != nil && captured.rankingFailure == nil)
         var presentation = StockSageResearchModesPanel.Presentation(horizon: horizon)
         var presentationChanges = 0
         let panel = StockSageResearchModesPanel(store: store, research: research,

@@ -23,7 +23,7 @@ struct OnboardingSheet: View {
         .init(id: 1, icon: "magnifyingglass", title: "Start with your daily summary",
               detail: "Home shows the latest saved picks and predictions ready for review. Open Research, choose 1–7 or 7–14 trading days and run a scan. These are multi-session holding horizons, not intraday trades or long-term investment plans."),
         .init(id: 2, icon: "list.number", title: "Review up to five Buy / Strong Buy results",
-              detail: "Each horizon shows at most five eligible opinions. Strong Buy comes before Buy; ties keep the scan's dated activity order. Fewer qualifying opinions means fewer results. Check completion, incomplete opinions and unchecked listings before drawing conclusions."),
+              detail: "After every check, Qwen compares the eligible Buy / Strong Buy research and selects up to five for each horizon. A Buy can rank above a Strong Buy. Large pools use approximate comparison rounds. Fewer qualifying opinions means fewer picks; a failed comparison produces no ranked shortlist."),
         .init(id: 3, icon: "doc.text.magnifyingglass", title: "Read the evidence and uncertainty",
               detail: "Open a result to inspect its dated sources, warnings and coverage gaps. Check the price source and timestamp. Qwen opinions and the ranking are unvalidated; they are not forecasts or win probabilities."),
         .init(id: 4, icon: "clock.arrow.circlepath", title: "Return to Saved research",

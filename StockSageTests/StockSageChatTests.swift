@@ -667,7 +667,7 @@ struct StockSageChatTests {
         #expect(actions == 0, "Rendering either layout must not start, stop or switch a research scan")
     }
 
-    @Test func researchSelectionTracksSearchTopFiveAndHorizon() async throws {
+    @Test func researchSelectionTracksAllChecksTopFiveAndHorizon() async throws {
         typealias R = StockSageHorizonResearch
         let suite = "stocksage.research.presentation.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -681,6 +681,8 @@ struct StockSageChatTests {
         var held: CheckedContinuation<Void, Never>?
         let started = research.start(.week, allowed: { true }, universe: {
             .init(["AAPL", "MSFT", "NVDA", "AMD", "META", "RKLB", "FAIL"].map(listing))
+        }, rank: { scan, horizon in
+            .success(.fixture(scan: scan, symbols: ["RKLB", "AAPL", "MSFT", "NVDA", "AMD"], horizon: horizon))
         }, analyze: { item in
             if item.ticker == "RKLB" { await withCheckedContinuation { held = $0 } }
             let verdict: StockSageAIAssessment.Verdict? = item.ticker == "FAIL" ? nil
@@ -691,9 +693,11 @@ struct StockSageChatTests {
         try #require(started)
         defer { research.stop(); held?.resume() }
         for _ in 0..<200 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
-        try #require(held != nil && research.scans[.week]?.topBuys.map(\.ticker) == ["AAPL", "MSFT", "NVDA", "AMD", "META"])
+        try #require(held != nil && research.scans[.week]?.results.count == 5)
+        #expect(research.scans[.week]?.topBuys.isEmpty == true)
         let requestedAt = try #require(research.scans[.week]?.at)
         let model = ResearchPresentationModel()
+        model.presentation.filter = .all
         let host = NSHostingController(rootView: ResearchPresentationFixture(model: model, store: store, research: research)
             .defaultAppStorage(defaults))
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 900, height: 800),
@@ -732,7 +736,12 @@ struct StockSageChatTests {
         try await settle()
         #expect(model.presentation.selected == "META")
         let release = held; held = nil; release?.resume()
-        try await waitFor { research.running == nil && model.presentation.selected == nil }
+        try await waitFor { research.running == nil }
+        try await settle()
+        #expect(model.presentation.selected == "META",
+                "All checks must retain selection when a stock leaves the top five")
+        model.presentation.filter = .topBuys
+        try await waitFor { model.presentation.selected == nil }
         #expect(research.scans[.week]?.topBuys.map(\.ticker) == ["RKLB", "AAPL", "MSFT", "NVDA", "AMD"])
         #expect(research.scans[.week]?.listings.count == 7 && research.scans[.week]?.results.count == 7,
                 "Shortlisting must retain incomplete and lower-ranked scan evidence")
@@ -750,10 +759,11 @@ struct StockSageChatTests {
         #expect(!window.isKeyWindow)
     }
 
-    @Test(arguments: [900, 1200], ["running", "results", "inspector"])
+    @Test(arguments: [900, 1200], ["running", "comparing", "results", "inspector"])
     func renderNativeWorkspaceWithResearchInspectorAsTrailingColumn(width: Int, state: String) async throws {
         let showsDetail = state == "inspector"
-        let isRunning = state == "running"
+        let isChecking = state == "running"
+        let isRunning = isChecking || state == "comparing"
         typealias R = StockSageHorizonResearch
         let suite = "stocksage.workspace.capture.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -765,14 +775,18 @@ struct StockSageChatTests {
                   type: "CS", currency_name: "usd", primary_exchange: "XNAS")
         }
         let receipt = StockSageResearchUniverse.Receipt(session: "2026-09-11", requestedAt: now,
-            returnedCount: 2, eligibleCount: 2, directoryCount: 2, partialSession: false,
-            dollarVolume: ["AAPL": 900, "MSFT": 100])
+            returnedCount: 4, eligibleCount: 4, directoryCount: 4, partialSession: false,
+            dollarVolume: ["AAPL": 900, "MSFT": 100, "NVDA": 80, "AMD": 60])
         var held: CheckedContinuation<Void, Never>?
-        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAPL"), listing("MSFT")], receipt: receipt) }, analyze: { item in
-            if isRunning { await withCheckedContinuation { held = $0 } }
-            return .init(verdict: item.ticker == "AAPL"
-                    ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
-                    : nil, note: "Synthetic research only", model: "fixture")
+        let started = research.start(.week, allowed: { true }, universe: { .init(["AAPL", "MSFT", "NVDA", "AMD"].map(listing), receipt: receipt) }, rank: { scan, horizon in
+            if state == "comparing" { await withCheckedContinuation { held = $0 } }
+            return .success(.fixture(scan: scan, symbols: ["AAPL"], horizon: horizon))
+        }, analyze: { item in
+            if isChecking { await withCheckedContinuation { held = $0 } }
+            let action: TradeAdvice.Action? = ["AAPL": .buy, "NVDA": .hold, "AMD": .avoid][item.ticker]
+            return .init(verdict: action.map { .init(action: $0, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: []) },
+                         levels: item.ticker == "AAPL" ? .init(entry: 100, stop: 95, target: 110, at: Date(timeIntervalSince1970: 1_788_739_200), basis: "Synthetic dated scenario") : nil,
+                         note: "Synthetic research only", model: "fixture")
         })
         try #require(started)
         defer { research.stop(); held?.resume() }
@@ -795,7 +809,7 @@ struct StockSageChatTests {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .navigationTitle("Research")
-                .navigationSubtitle("Top Buy / Strong Buy research for 1–7 or 7–14 trading days.")
+                .navigationSubtitle(StockSageDesktop.subtitle(for: .research))
         }
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: panel.detailPresented) { panel.selectedDetail }
@@ -808,30 +822,48 @@ struct StockSageChatTests {
                 let window = try #require(root.window)
                 let viewport = window.convertToScreen(window.contentLayoutRect)
                 let elements = nativeAccessibilityElements(in: root)
-                for label in ["Stop 1–7 trading days research scan", "0/2 checks finished, including incomplete"] {
+                let progressLabel = "\(isChecking ? 0 : 4)/4 checks finished, including incomplete"
+                for label in ["Stop 1–7 trading days research scan", progressLabel] {
                     let element = try #require(elements.first { $0.accessibilityLabel?() == label })
                     let frame = try #require(element.accessibilityFrame?())
                     #expect(frame.width > 0 && frame.height > 0 && viewport.contains(frame), "\(label) must remain visible while a scan is running")
                 }
                 let sidebar = try #require(elements.first { $0.accessibilityIdentifier?() == "desktop.nav.\(MarketSection.briefing.rawValue)" })
                 #expect(viewport.contains(try #require(sidebar.accessibilityFrame?())), "A running scan must not move the sidebar offscreen")
-                let progress = try #require(elements.first { $0.accessibilityLabel?() == "0/2 checks finished, including incomplete" })
+                let progress = try #require(elements.first { $0.accessibilityLabel?() == progressLabel })
                 func scrollViews(in view: NSView) -> [NSScrollView] {
                     (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
                 }
-                let controls = try #require(scrollViews(in: root).max { $0.contentView.bounds.width < $1.contentView.bounds.width })
+                let controls = try #require(scrollViews(in: root).first { scroll in
+                    guard let document = scroll.documentView else { return false }
+                    return nativeAccessibilityElements(in: document).contains { $0.accessibilityIdentifier?() == "research.saved" }
+                })
                 let visible = window.convertToScreen(controls.contentView.convert(controls.contentView.bounds, to: nil))
                 #expect(visible.contains(try #require(progress.accessibilityFrame?())), "Overall research progress must fit without scrolling the controls")
-                return
             }
             func tables(in view: NSView) -> [NSTableView] {
                 (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap { tables(in: $0) }
             }
             let table = try #require(tables(in: root).first { $0.numberOfColumns >= 3 })
-            #expect(table.numberOfRows == 1, "Only the Buy result belongs in the main table; the incomplete check stays in coverage")
+            #expect(table.numberOfRows == 4, "All checks must include completed and queued rows")
+            #expect(table.numberOfColumns == 6, "Stock, Opinion, Evidence, Daily close, Stop and Target must all be visible")
             #expect(table.visibleRect.height >= 100, "Results must retain a usable viewport beside the inspector")
             #expect(table.rect(ofColumn: table.numberOfColumns - 1).maxX <= table.visibleRect.maxX + 2,
                     "Every displayed result column must fit without horizontal scrolling")
+            if !isChecking {
+                for row in 0..<4 {
+                    for (column, label) in [(4, "Scenario stop \(row == 0 ? "$95.00" : "—")"),
+                                            (5, "Scenario target \(row == 0 ? "$110.00" : "—")")] {
+                        let cell = try #require(table.view(atColumn: column, row: row, makeIfNecessary: true))
+                        let values = nativeAccessibilityElements(in: cell).compactMap { element -> String? in
+                            let selector = NSSelectorFromString("accessibilityValue")
+                            guard let object = element as? NSObject, object.responds(to: selector) else { return nil }
+                            return object.perform(selector)?.takeUnretainedValue() as? String
+                        }
+                        #expect(values.contains(label), "Expected \(label) in column \(column), row \(row): \(values)")
+                    }
+                }
+            }
         }
         // AppKit expands the window when opening its inspector. Do not impose an exact
         // SwiftUI root frame: it fights that negotiation and loops on macOS 27.
@@ -843,7 +875,8 @@ struct StockSageChatTests {
         #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
     }
 
-    @Test func researchDetailAppearsOnlyAfterAnEligibleResultArrives() async throws {
+    @Test(arguments: [StockSageResearchModesPanel.ResultFilter.all, .topBuys])
+    func researchDetailAppearsOnlyAfterAnEligibleResultArrives(filter: StockSageResearchModesPanel.ResultFilter) async throws {
         let suite = "stocksage.detail.live.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -853,9 +886,11 @@ struct StockSageChatTests {
         let started = research.start(.week, allowed: { true }, universe: {
             .init([.init(ticker: "AAPL", name: "Synthetic Apple", market: "stocks", locale: "us",
                          active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")])
+        }, rank: { scan, horizon in
+            .success(.fixture(scan: scan, symbols: filter == .all ? [] : ["AAPL"], horizon: horizon))
         }, analyze: { _ in
             await withCheckedContinuation { held = $0 }
-            return .init(verdict: .init(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: []),
+            return .init(verdict: .init(action: filter == .all ? .hold : .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: []),
                          note: "Synthetic research finished. The retained detail host must now show this eligible result.")
         })
         try #require(started)
@@ -863,10 +898,11 @@ struct StockSageChatTests {
         for _ in 0..<2000 where held == nil { await Task.yield() }
         try #require(held != nil)
         var presentation = StockSageResearchModesPanel.Presentation()
+        presentation.filter = filter
         presentation.selected = "AAPL"
         let panel = StockSageResearchModesPanel(store: store, research: research,
             presentation: Binding(get: { presentation }, set: { presentation = $0 }))
-        #expect(!panel.detailPresented.wrappedValue, "An unchecked listing cannot open a top-result detail")
+        #expect(panel.detailPresented.wrappedValue == (filter == .all), "Only All checks can open an unchecked listing")
         var appeared = false
         let host = NSHostingController(rootView: panel.selectedDetail.frame(width: 400, height: 400)
             .onAppear { appeared = true })
@@ -889,7 +925,7 @@ struct StockSageChatTests {
         for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(10)) }
         for _ in 0..<15 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(research.scans[.week]?.results["AAPL"] != nil && presentation.selected == "AAPL")
-        #expect(panel.detailPresented.wrappedValue, "Only the arrived Buy opinion makes this detail eligible")
+        #expect(panel.detailPresented.wrappedValue, "All checks includes Hold; Top 5 includes the accepted Buy")
         #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 

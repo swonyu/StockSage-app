@@ -1,8 +1,8 @@
 # StockSage research and UI repair reconciliation
 
-Status: the follow-up Mac progress repair passed final native gates. Signed replacement and visible installation verification are in progress.
+Status: all-checks restoration and comparative top-five selection passed final native gates. The signed Release build and owner-app installation are the remaining operational steps.
 
-Working branch: `codex/research-pipeline-fixes-20260915`, based on `61d37a2` (which adds the incoming research audit to `4a18b17`). Work stays in the isolated `research-pipeline-20260915` worktree. The first signed build was installed from local commit `e7d8cd3`; a follow-up Mac progress repair is being verified.
+Working branch: `codex/research-pipeline-fixes-20260915`, based on `61d37a2` (which adds the incoming research audit to `4a18b17`). Work stays in the isolated `research-pipeline-20260915` worktree. Earlier signed builds were installed from local commits `e7d8cd3` and `c65a800`. This follow-up restores all Research checks and implements the owner’s comparative top-five definition.
 
 The owner's product choices are retained: Home first, NASDAQ-listed common stocks only, up to five accepted Buy/Strong Buy opinions per 1–7 or 7–14 trading-day horizon, and immutable saved predictions for later review. No intraday strategy, long-term mandate, broker submission, model activation or automatic repeat scan was added.
 
@@ -50,7 +50,7 @@ Additional defects found while implementing:
 
 - New saved runs count seven/fourteen full sessions starting on the next trading date. Optional policy metadata preserves old pending schedules and every existing evaluated receipt.
 - The forward earnings adapter now bounds response memory, rejects a mismatched response URL, and ignores the old unqualified 24-hour denial gate. Suppressed requests carry no invented provider-check time.
-- A completed first horizon is retained and saved even when the last second-horizon request is cancelled. Late cancelled results are discarded.
+- All requested per-stock horizon checks finish before comparison starts, preserving shared capture validity. A completed first ranking is retained and saved when the second-horizon comparison is cancelled. Late cancelled results are discarded.
 - Explicit recheck of an earlier overlapping rolling-news query must replace its exact pending flight, without cancelling the other query.
 - Mixed news fallback results remain partial, with the contributing check date. SEC acceptance time can precede the displayed filing date; publicly accepted metadata is not rejected merely because that date is the next business day.
 - Captures are invalid after a backward clock crosses their final capture boundary or after credential/policy ownership changes.
@@ -87,8 +87,8 @@ Final source passed the native gates on 2026-09-15:
 
 | Gate | Passed | Failed | Skipped |
 |---|---:|---:|---:|
-| Mac, `progress-restored-mac` | 2,531 | 0 | 1 |
-| iPhone simulator, `progress-restored-ios` | 2,460 | 0 | 0 |
+| Mac, `all-results-mac-final` | 2,547 | 0 | 1 |
+| iPhone simulator, `all-results-ios-final` | 2,476 | 0 | 0 |
 
 Xcode 26.6 (17F113), macOS/iOS SDK 26.5; execution on macOS 27 (26A428) and a task-owned iPhone 17 Pro simulator running iOS 27 (24A5423a). These are not Xcode 27 SDK or physical-iPhone release receipts. The canonical live/persistence/strategy measurement suites were excluded; the opt-in abrupt-child-death diagnostic was skipped. Tests ran serially with four build jobs.
 
@@ -107,3 +107,13 @@ The Mac ranking explanation is now capped at three lines, with the complete qual
 The earlier Mac compact heading and always-present charcoal status panel are restored. The new sidebar, saved research and both-horizon actions remain. The running controls region gains 60 points so overall counts also fit at the 900-point window width. Native checks use normal hosting sizing for active Research, test screen-space visibility of Stop, progress and the sidebar, and separately require overall progress to lie within the controls scroll viewport. The latter check failed at 900 points before the extra space.
 
 Follow-up final source gates: Mac 2,531 passed, one opt-in diagnostic skipped; iPhone simulator 2,460 passed. Both exited zero, with no failed tests. Native active Research screenshots at 900 and 1200 points show the sidebar, Stop action and overall research counts. The tests use only isolated synthetic research; they do not make live provider or model requests.
+
+## Follow-up: all checks and comparative top five
+
+Mac Research defaults to All checks and restores native menu filters for Top 5 buys, Buy / Strong Buy, Hold, Avoid, incomplete and not checked. Search and inspector selection use the same filtered rows. Stop and Target come directly from captured scenario values; absent values remain dashes. The current sidebar and iOS layout are retained. Completed stored opinions remain visible while another horizon checks the same symbol.
+
+Top five selection occurs only after all selected listings have been checked. Qwen compares every accepted Buy / Strong Buy for that horizon; a Buy may outrank a Strong Buy. The existing 500-name NASDAQ common-stock scan limit remains explicit. Mandatory dated cases, risks, evidence identities, coverage and scenarios stay whole. Full cited records are retained when the whole set fits; otherwise candidates receive equal initial optional-evidence byte allowances and omission counts are recorded. Larger mandatory pools use explicitly approximate rolling rounds; every eligible candidate participates. Grouping can affect this unvalidated model judgment. There is no activity-order fallback.
+
+Only strict eligible unique symbol selections are accepted. Failed, malformed, oversized or cancelled comparisons preserve raw checks with an explicit unavailable state and no fabricated shortlist. Successful comparison order, exact offered prompts, model identity and citation omissions are saved with the immutable predictions. Legacy saved runs retain their original order and display the older method. Evaluation dates and captured prices are unchanged by ranking.
+
+Regression evidence includes late candidate selection, full multi-round participation, malformed output, cancellation and settings revocation, history reload and provenance corruption, both horizons, citation starvation red/green, and native Mac mixed Buy/Hold/Avoid/incomplete rows at 900/1200 points with six columns and visible collection/comparison progress. The first full iPhone run exposed an outdated fixture with no comparison; updating its injected synthetic receipt fixed the actual populated-UI test. The final full gates above passed on identical source manifests.

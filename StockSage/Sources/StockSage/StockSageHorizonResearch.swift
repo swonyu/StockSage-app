@@ -7,7 +7,7 @@ final class StockSageHorizonResearch: ObservableObject {
     static let shared = StockSageHorizonResearch(history: .shared)
     nonisolated static let scanLimit = 500
     nonisolated static let topBuyLimit = 5
-    nonisolated static let topBuyRankingNote = "Strong Buy comes before Buy; ties keep the scan’s original dated activity order. This is unvalidated research, not a prediction of future returns."
+    nonisolated static let topBuyRankingNote = "After all checks, Qwen compares every eligible Buy / Strong Buy for this horizon. Cases and risks stay whole; cited evidence may be shortened to fit. Large pools use multiple comparison rounds. See Coverage for limits. This is unvalidated model judgment, not a prediction of returns."
     /// Shared by the fit() budget and the dispatched output limit; see PaperAutomation.
     nonisolated static let researchOutputTokens = 192
     nonisolated enum Horizon: String, CaseIterable, Identifiable, Sendable {
@@ -61,13 +61,16 @@ final class StockSageHorizonResearch: ObservableObject {
         var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks once."
         var at: Date?
         var selection: StockSageResearchUniverse.Receipt?
+        var ranking: StockSageResearchRanking.Receipt?
+        var rankingFailure: String?
 
-        /// Accepted opinions only. Preserve activity order within each action tier and
-        /// retain all raw checks separately so omissions never look like a complete scan.
+        /// Only a completed comparison may publish top picks. Raw checks retain scan order.
         var topBuys: [Listing] {
-            let strong = listings.filter { results[$0.ticker]?.verdict?.action == .strongBuy }
-            let buys = listings.filter { results[$0.ticker]?.verdict?.action == .buy }
-            return Array((strong + buys).prefix(StockSageHorizonResearch.topBuyLimit))
+            guard let ranking, rankingFailure == nil, results.count == listings.count else { return [] }
+            return ranking.symbols.compactMap { symbol in
+                guard results[symbol]?.verdict?.action == .buy || results[symbol]?.verdict?.action == .strongBuy else { return nil }
+                return listings.first { $0.ticker == symbol }
+            }
         }
     }
     @Published private(set) var scans: [Horizon: Scan] = [:]
@@ -240,14 +243,16 @@ final class StockSageHorizonResearch: ObservableObject {
     func start(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
         interruptionReason: @escaping @MainActor () -> String? = { nil },
         universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
+        rank: (@MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>)? = nil,
         analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
-        start([horizon], allowed: allowed, interruptionReason: interruptionReason, universe: universe,
+        start([horizon], allowed: allowed, interruptionReason: interruptionReason, universe: universe, rank: rank,
               analyze: { item, _ in await analyze(item) })
     }
 
     func start(_ horizons: [Horizon], allowed: @escaping @MainActor () -> Bool,
         interruptionReason: @escaping @MainActor () -> String? = { nil },
         universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
+        rank: (@MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>)? = nil,
         analyze: @escaping @MainActor (Listing, Horizon) async -> Result) -> Bool {
         guard task == nil, allowed(), !horizons.isEmpty, Set(horizons).count == horizons.count else { return false }
         let previous = scans
@@ -259,10 +264,34 @@ final class StockSageHorizonResearch: ObservableObject {
         task = Task {
             var didStart = false
             var completed: Set<Horizon> = []
-            @MainActor func finish(_ horizon: Horizon, count: Int) {
-                guard completed.insert(horizon).inserted else { return }
+            @MainActor func finish(_ horizon: Horizon, count: Int) async throws {
+                guard !completed.contains(horizon), let captured = scans[horizon] else { return }
+                guard valid() else { throw CancellationError() }
+                activeSymbol = nil
+                if let rank {
+                    scans[horizon]?.status = "All \(count) checks finished · comparing research for the top five…"
+                    let outcome = await rank(captured, horizon)
+                    guard valid() else { throw CancellationError() }
+                    switch outcome {
+                    case .success(let receipt):
+                        let eligible = Set(captured.listings.filter {
+                            captured.results[$0.ticker]?.verdict?.action == .buy || captured.results[$0.ticker]?.verdict?.action == .strongBuy
+                        }.map(\.ticker))
+                        if StockSageResearchRanking.valid(receipt), Set(receipt.candidateSymbols) == eligible,
+                           receipt.horizon == horizon.rawValue, receipt.at >= startedAt, receipt.at <= Date() {
+                            scans[horizon]?.ranking = receipt
+                        } else {
+                            scans[horizon]?.rankingFailure = StockSageResearchRanking.Failure.invalidOutput.message
+                        }
+                    case .failure(let failure): scans[horizon]?.rankingFailure = failure.message
+                    }
+                } else if captured.results.values.contains(where: { $0.verdict?.action == .buy || $0.verdict?.action == .strongBuy }) {
+                    scans[horizon]?.rankingFailure = "Comparative ranking was unavailable. All checks remain available."
+                }
+                completed.insert(horizon)
                 runningHorizons.removeAll { $0 == horizon }; running = runningHorizons.first
                 scans[horizon]?.status = "Scan finished · \(count) listings checked once. No orders created."
+                if let failure = scans[horizon]?.rankingFailure { scans[horizon]?.status += " Top five unavailable: \(failure)" }
                 if let history, let scan = scans[horizon] {
                     let run = StockSageResearchHistory.snapshot(startedAt: startedAt, completedAt: Date(), horizon: horizon, scan: scan)
                     scans[horizon]?.status += history.record(run)
@@ -291,21 +320,26 @@ final class StockSageHorizonResearch: ObservableObject {
                         scans[horizon]?.status = "Checking \(item.ticker) · \(scans[horizon]?.results.count ?? 0)/\(names.count) finished"
                     }
                     for horizon in horizons {
+                        activeSymbol = item.ticker
                         let result = await analyze(item, horizon)
                         guard valid() else { throw CancellationError() }
                         scans[horizon]?.results[item.ticker] = result
-                        if scans[horizon]?.results.count == names.count { finish(horizon, count: names.count) }
                     }
                     activeSymbol = nil
                 }
-                for horizon in horizons { finish(horizon, count: names.count) }
+                for horizon in horizons { try await finish(horizon, count: names.count) }
             } catch {
                 for horizon in horizons where !completed.contains(horizon) {
                     if !didStart, let old = previous[horizon] { scans[horizon] = old }
                     if !valid() {
                         let reason = Task.isCancelled ? "Stop requested" : (interruptionReason() ?? "Model settings or access changed")
                         let count = scans[horizon]?.results.count ?? 0
-                        let retained = count == 0 ? "No stocks were checked; no results to retain." : "\(count) completed results retained; remaining listings were not checked."
+                        let allChecked = didStart && count > 0 && count == scans[horizon]?.listings.count
+                        let retained = !didStart && previous[horizon] != nil ? "No new checks; the previous research is retained."
+                            : count == 0 ? "No stocks were checked; no results to retain."
+                            : allChecked ? "All \(count) checks retained; top five comparison was not completed."
+                            : "\(count) completed results retained; remaining listings were not checked."
+                        if allChecked { scans[horizon]?.rankingFailure = "Comparison stopped before completion. All checks remain available." }
                         scans[horizon]?.status = "Scan stopped · \(reason). \(retained) Run again when ready."
                     } else if case ScanFailure.modelUnavailable(let detail) = error {
                         scans[horizon]?.status = "\(detail) No scan started. Open Catalysts → Explanation model, finish setup, then Run again."
@@ -359,6 +393,11 @@ final class StockSageHorizonResearch: ObservableObject {
             let result = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed)
             selection = result.receipt
             return result
+        }, rank: { scan, horizon in
+            await StockSageResearchRanking.rank(scan: scan, horizon: horizon, config: config,
+                isOllama: isOllama, allowed: allowed, progress: { status in
+                    self.scans[horizon]?.status = status
+                })
         }, analyze: { item, horizon in
             if horizon == horizons.first {
                 gathered = await Self.gather(item, store: store, key: key, allowed: allowed,

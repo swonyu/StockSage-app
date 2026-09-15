@@ -38,7 +38,7 @@ enum StockSageDesktop {
         case .portfolio: "Your holdings, journal and forward record."
         case .alerts: "Choose what deserves your attention."
         case .chat: "Ask about your data. No automatic orders."
-        case .research: "Up to five Buy / Strong Buy results for 1–7 or 7–14 trading days."
+        case .research: "All checks and top picks for 1–7 or 7–14 trading days."
         case .paper: "Recorded simulation. New runs are retired; open positions are not monitored after relaunch."
         }
     }
