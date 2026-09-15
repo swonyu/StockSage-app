@@ -759,7 +759,7 @@ struct MarketsView: View {
                 #else
                 Divider()
                 #endif
-                desktopHomeLink("Ask Qwen", detail: "Your local research chat", section: .chat)
+                desktopHomeLink("Ask AI", detail: "Your local research chat", section: .chat)
             }
             Divider()
             DisclosureGroup("Market context") {
@@ -1320,7 +1320,7 @@ struct MarketsView: View {
                 .tint(DS.Palette.accent)
                 .accessibilityLabel("Strong-signal monitoring")
                 .sensoryFeedback(.selection, trigger: monitoring)
-                Text("Notify me when a rules-based Strong Buy or Strong Sell appears; these are not Qwen badges. Each cycle refreshes the \(StockSageUniverse.core.count)-name core + your watchlist. Other board names qualify while their quotes remain fresh after a full refresh.")
+                Text("Notify me when a rules-based Strong Buy or Strong Sell appears; these are not AI badges. Each cycle refreshes the \(StockSageUniverse.core.count)-name core + your watchlist. Other board names qualify while their quotes remain fresh after a full refresh.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Divider().padding(.vertical, 4)
@@ -4886,7 +4886,7 @@ struct MarketsView: View {
     /// `StockSageAdvisor.caveat`. What remains here is Tier-1: it qualifies every EV number on
     /// the board and must never be collapsible.
     @ViewBuilder private var ideasHeaderBlurb: some View {
-        Text("AI badges are unvalidated; failed checks stay drafts. Ranking, filters and money calculations use rules, not Qwen probabilities. Assessments use selected Massive news when external access is enabled.")
+        Text("AI badges are unvalidated; failed checks stay drafts. Ranking, filters and money calculations use rules, not model-generated probabilities. Assessments use selected Massive news when external access is enabled.")
             .font(.caption).foregroundStyle(DS.Palette.warningSoft)
             .fixedSize(horizontal: false, vertical: true)
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or

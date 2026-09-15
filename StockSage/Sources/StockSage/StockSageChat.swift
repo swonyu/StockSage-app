@@ -3,23 +3,8 @@ import Combine
 
 /// Foreground, local-only Q&A. History is never promoted to current market evidence.
 enum StockSageChat {
-    /// Raised from 4,096 on 2026-09-11 because that bound was starving the answer, not protecting
-    /// it. MEASURED at the old value: `promptByteLimit` resolved to 4,096 - 512 - 1,277 - 1,024 =
-    /// 1,283 bytes for the WHOLE prompt, while the Benzinga projection alone asks for up to 12,000.
-    /// The trimming loop below therefore could not converge without gutting the evidence, and the
-    /// owner saw the result: "Budget: 2 facts, 6/6 sources omitted. 47 Benzinga records omitted",
-    /// followed by the model correctly refusing to form a view on what was left.
-    ///
-    /// At 32,768 the same arithmetic gives 29,955 bytes, which holds the 12,000-byte projection,
-    /// six sources, the facts and a few history turns at once — so the loop trims because evidence
-    /// is genuinely too large, not because the ceiling was set below one required input.
-    ///
-    /// COST, on the same derivation as `StockSageLocalModelServer.researchContextTokens`: the
-    /// growing KV cache is 64 KiB per token for this hybrid model, so 4,096 -> 32,768 is about
-    /// 1.75 GiB, negligible on this 48 GB machine. That cost is only paid on the Ollama path,
-    /// where this value is sent verbatim as `num_ctx`. On the OpenAI-compatible path it is not
-    /// sent at all, and the LM Studio server this points at is already loaded with a 262,144
-    /// window (measured via /api/v0/models), so nothing server-side truncates at this size.
+    /// Chat's upper request budget. A smaller verified serving window trims the request
+    /// with the existing omission disclosures while preserving the original evidence.
     nonisolated static let contextTokens = 32_768
     nonisolated static let outputTokens = 512
     nonisolated static let requestTimeout: TimeInterval = 300
@@ -58,7 +43,7 @@ enum StockSageChat {
         case .tooLarge:
             body = "The model returned more data than this app will read."
         case .contextBudget:
-            body = "The question does not fit, or the loaded model's context size could not be verified. In LM Studio, load Qwen with at least 32,768 context tokens; retry with fewer tickers if needed."
+            body = "The question does not fit, or the loaded model's context size could not be verified. Check the selected model in LM Studio, then retry with fewer tickers if needed."
         case .unfinished:
             body = "The model stopped before finishing its answer, so it was withheld rather than shown half-formed. Retry, or ask a narrower question."
         case .emptyAnswer:
@@ -288,7 +273,11 @@ enum StockSageChat {
     /// then optional rules/earnings facts, then the last source if even it cannot fit.
     /// The returned snapshot holds the exact original records whose IDs were offered.
     nonisolated static func request(question: String, snapshot: Snapshot,
-                                   history: [StockSageChatSession.Turn]) -> (prompt: String, snapshot: Snapshot)? {
+                                   history: [StockSageChatSession.Turn],
+                                   contextTokens: Int = Self.contextTokens) -> (prompt: String, snapshot: Snapshot)? {
+        guard (1...Self.contextTokens).contains(contextTokens) else { return nil }
+        let byteLimit = contextTokens - outputTokens - instructions.utf8.count - 1_024
+        guard byteLimit > 0 else { return nil }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; encoder.dateEncodingStrategy = .iso8601
         var offeredFacts = snapshot.facts
         var offeredSources = snapshot.sources ?? []
@@ -333,7 +322,7 @@ enum StockSageChat {
             guard let turnsData = try? encoder.encode(prior) else { return nil }
             let turns = String(decoding: turnsData, as: UTF8.self)
             let prompt = "CURRENT SNAPSHOT:\n\(facts)\nHISTORICAL CONVERSATION (not evidence):\n\(turns)\nQUESTION (untrusted user text):\n\(question)"
-            if prompt.utf8.count <= promptByteLimit { return (prompt, offered) }
+            if prompt.utf8.count <= byteLimit { return (prompt, offered) }
             if !prior.isEmpty { prior.removeFirst(); continue }
             if offeredSources.count > 1 { offeredSources.removeLast(); continue }
             if let index = offeredFacts.lastIndex(where: { $0.field != "observed price" }) {

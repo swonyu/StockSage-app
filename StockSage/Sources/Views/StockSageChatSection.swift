@@ -154,7 +154,7 @@ struct StockSageChatSection: View {
                 }
                 .controlSize(.small)
                 #if os(macOS)
-                Text("Your briefing first. Ask Qwen when you want to go deeper.")
+                Text("Your briefing first. Ask AI when you want to go deeper.")
                     .font(.callout).foregroundStyle(.secondary)
                 #endif
             }
@@ -253,7 +253,7 @@ struct StockSageChatSection: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
 
             VStack(alignment: .leading, spacing: 10) {
-                Label(turn.isWatchlistAction == true ? "StockSage" : "Qwen",
+                Label(turn.isWatchlistAction == true ? "StockSage" : "AI assistant",
                       systemImage: turn.isWatchlistAction == true ? "star" : "sparkles")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(DS.Palette.textPrimary)
@@ -343,7 +343,7 @@ struct StockSageChatSection: View {
                 .controlSize(.large)
             controls {
                 Button(action: send) {
-                    Label(isWatchlistRequest ? "Add to watchlist" : "Ask Qwen", systemImage: "arrow.up.circle.fill")
+                    Label(isWatchlistRequest ? "Add to watchlist" : "Ask AI", systemImage: "arrow.up.circle.fill")
                         .fixedSize(horizontal: false, vertical: true)
                 }
                     .disabled(chat.pending != nil || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (config == nil && !isWatchlistRequest))
@@ -443,9 +443,9 @@ struct StockSageChatSection: View {
     static let composerLineLimit = 4
 
     #if os(macOS)
-    static let modelSetupGuidance = "Qwen answers require a local server on this Mac, configured in Model settings. Watchlist commands work without a model."
+    static let modelSetupGuidance = "AI answers require a local server on this Mac, configured in Model settings. Watchlist commands work without a model."
     #else
-    static let modelSetupGuidance = "Watchlist commands work without a model. Qwen requires a server in Model settings. On iPhone, localhost refers to this phone; a private Mac connection is not configured."
+    static let modelSetupGuidance = "Watchlist commands work without a model. AI answers require a server in Model settings. On iPhone, localhost refers to this phone; a private Mac connection is not configured."
     #endif
 
     static func missingModelNotice(openModelSettings: @escaping () -> Void) -> some View {
@@ -455,7 +455,7 @@ struct StockSageChatSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .lineLimit(composerLineLimit)
             #else
-            Text("Qwen needs setup. Watchlist commands work without a model.")
+            Text("The AI model needs setup. Watchlist commands work without a model.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             #endif
@@ -532,7 +532,7 @@ struct StockSageChatSection: View {
         let missing = Self.modelSetupGuidance
         return Text(config == nil
                     ? missing
-                    : "Uses your existing local Qwen server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation.")
+                    : "Uses your configured local model server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation.")
                     .font(.caption).foregroundStyle(.secondary)
     }
 
@@ -617,10 +617,6 @@ struct StockSageChatSection: View {
                 enriched = StockSageChat.addingBenzinga(to: withNews, evidence: evidence)
                 guard chat.attachResearch(id: id, snapshot: enriched) else { return }
             }
-            guard let prepared = StockSageChat.request(question: text, snapshot: enriched, history: history) else {
-                chat.finish(id: id, text: nil, unavailable: "This context is too large for the local request. Ask a shorter question or use fewer tickers. Source snapshots remain available.")
-                return
-            }
             let includesNews = enriched.sources?.contains { $0.id.contains(".news.") } == true
             let capturedBenzinga = enriched.benzinga
             let allowed: @MainActor @Sendable () -> Bool = {
@@ -639,13 +635,19 @@ struct StockSageChatSection: View {
             }
             guard probe.reachable && probe.hasModel else {
                 chat.finish(id: id, text: nil, unavailable: probe.detail,
-                    requestSnapshot: prepared.snapshot)
+                    requestSnapshot: enriched)
+                return
+            }
+            let contextTokens = min(StockSageChat.contextTokens, probe.servingContext ?? StockSageChat.contextTokens)
+            guard let prepared = StockSageChat.request(question: text, snapshot: enriched, history: history,
+                                                       contextTokens: contextTokens) else {
+                chat.finish(id: id, text: nil, unavailable: "This context is too large for the local request. Ask a shorter question or use fewer tickers. Source snapshots remain available.")
                 return
             }
             chat.advance(id: id, to: .generating)
             let result = await StockSageLocalModelServer.completeDetailed(config, isOllama: probe.isOllama,
                 system: StockSageChat.instructions, user: prepared.prompt, maxTokens: StockSageChat.outputTokens,
-                contextTokens: StockSageChat.contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)
+                contextTokens: contextTokens, timeout: StockSageChat.requestTimeout, stillValid: allowed)
             guard allowed() else {
                 // Identity ownership makes clear/cancel/newer requests immune to late completions.
                 if chat.pending == id { chat.cancel() }

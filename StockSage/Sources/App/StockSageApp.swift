@@ -6,15 +6,20 @@ import AppKit
 @MainActor final class StockSageQuitDelegate: NSObject, NSApplicationDelegate {
     private var quitting = false
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        StockSageLocalModelStartup.shared.startFromSavedSettings()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !StockSageStore.isRunningTests else { return .terminateNow }
         guard !quitting else { return .terminateLater }
         let defaults = UserDefaults.standard
+        let pendingLoad = StockSageLocalModelStartup.shared.pendingConfig
         let backend = StockSageCatalystNarrator.selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
-        guard backend == .auto || backend == .localServerOnly,
-              defaults.string(forKey: StockSageLocalModelServer.modelKey) != nil else { return .terminateNow }
+        guard pendingLoad != nil || ((backend == .auto || backend == .localServerOnly)
+              && defaults.string(forKey: StockSageLocalModelServer.modelKey) != nil) else { return .terminateNow }
         quitting = true
-        let config = StockSageLocalModelServer.config(
+        let config = pendingLoad ?? StockSageLocalModelServer.config(
             url: UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey) ?? StockSageLocalModelServer.defaultURL,
             model: UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey) ?? StockSageLocalModelServer.defaultModel)
         Task {
@@ -116,6 +121,22 @@ struct StockSageApp: App {
                     // Form, menus) follow the OS scheme and render light-on-dark-canvas in
                     // light mode, and materials would sample incoherently.
                     .preferredColorScheme(.dark)
+                    #if os(macOS)
+                    .safeAreaInset(edge: .bottom) {
+                        let startup = StockSageLocalModelStartup.shared
+                        if !startup.ready, let message = startup.message {
+                            HStack {
+                                if startup.isWorking { ProgressView().controlSize(.small) }
+                                Text(message).font(.callout).textSelection(.enabled)
+                                Spacer()
+                                if !startup.isWorking {
+                                    Button("Retry model") { startup.startFromSavedSettings() }
+                                }
+                            }
+                            .padding().background(.bar)
+                        }
+                    }
+                    #endif
                     .sheet(isPresented: $showOnboarding) {
                         OnboardingSheet(isPresented: $showOnboarding)
                     }

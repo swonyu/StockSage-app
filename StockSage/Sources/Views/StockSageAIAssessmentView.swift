@@ -47,7 +47,7 @@ struct StockSageAIAssessmentPanel: View {
             Text("Assessing captures bounded Benzinga product evidence via Massive and existing news fallback when needed. EODHD is disabled. Missing and partial coverage stay explicit.")
                 .font(.caption).foregroundStyle(.secondary)
             if ai.activeSymbol == idea.symbol {
-                ProgressView("Qwen is assessing the dated facts…")
+                ProgressView("Assessing the dated facts…")
             } else if let error = ai.errors[idea.symbol] {
                 Text(error).font(.callout).foregroundStyle(DS.Palette.warningSoft)
             }
@@ -65,7 +65,7 @@ struct StockSageAIAssessmentPanel: View {
                                        recordIsCurrent: Bool, isAssessing: Bool) -> some View {
         if let draft {
             let content = Group {
-                Text("Unverified Qwen draft — not a validated badge").font(.subheadline.bold())
+                Text("Unverified AI draft — not a validated badge").font(.subheadline.bold())
                     .foregroundStyle(DS.Palette.warningSoft)
                 Text(verbatim: draft.displayText).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Text("Model: \(draft.config.model) · snapshot \(draft.context.asOf.formatted(date: .abbreviated, time: .shortened))")
@@ -167,7 +167,7 @@ struct StockSageAIAssessmentPanel: View {
         let isSampleData: Bool
         let request: () -> Void
 
-        var title: String { hasRecord || hasDraft ? "Reassess" : "Assess with Qwen" }
+        var title: String { hasRecord || hasDraft ? "Reassess" : "Assess with AI" }
         var disabledReason: String? {
             var reasons: [String] = []
             if isSampleData { reasons.append("Assessments are unavailable with sample data. Switch to market data to assess an idea.") }

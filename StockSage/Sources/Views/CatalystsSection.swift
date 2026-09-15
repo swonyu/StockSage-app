@@ -49,6 +49,7 @@ struct CatalystsSection: View {
     // Keep the existing preference key, but make the approved agenda the first-run Mac view.
     @AppStorage("marketsCatalystsMode") private var mode: Mode = .calendar
     @AppStorage("marketsCatalystsPeriod") private var period: Period = .thisWeek
+    @AppStorage(StockSageLocalModelStartup.enabledKey) private var automaticModelStartup = false
     // Re-arms the one-shot UTC-boundary task after a boundary, wake or clock change. Each render
     // still captures a fresh Date below, so catalyst freshness never freezes at an old tick.
     @State private var periodClockRevision = 0
@@ -447,6 +448,22 @@ struct CatalystsSection: View {
                 }
                 .pickerStyle(.menu)
                 #if os(macOS)
+                Button("Use LM Studio · Gemma 4 31B") {
+                    updateModelSetting("localServerOnly", key: StockSageLocalModelServer.backendKey)
+                    updateModelSetting(StockSageLocalModelServer.lmStudioURL, key: StockSageLocalModelServer.urlKey)
+                    updateModelSetting(StockSageLocalModelServer.gemmaModel, key: StockSageLocalModelServer.modelKey)
+                    automaticModelStartup = true
+                    StockSageLocalModelStartup.shared.startFromSavedSettings()
+                }
+                if StockSageLocalModelServer.config(url: serverURL, model: serverModel)?.isLMStudioGemma == true {
+                    Toggle("Load Gemma when StockSage opens", isOn: $automaticModelStartup)
+                        .onChange(of: automaticModelStartup) {
+                            if automaticModelStartup { StockSageLocalModelStartup.shared.startFromSavedSettings() }
+                        }
+                    Text(StockSageLocalModelStartup.shared.message ?? "Gemma loads automatically before AI use. Startup loading also opens LM Studio; enable its server auto-start setting.")
+                        .font(.system(size: metadataSize)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Use LM Studio · Qwen3.5 9B") {
                     updateModelSetting("localServerOnly", key: StockSageLocalModelServer.backendKey)
                     updateModelSetting(StockSageLocalModelServer.lmStudioURL, key: StockSageLocalModelServer.urlKey)

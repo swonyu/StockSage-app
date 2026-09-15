@@ -10,6 +10,128 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    private static func gemmaInventory(context: Int = 16_384) -> [String: Any] {
+        ["models": [["type": "llm", "key": "google/gemma-4-31b-qat", "format": "gguf",
+            "architecture": "gemma4", "params_string": "31B",
+            "quantization": ["name": "Q4_0", "bits_per_weight": 4],
+            "loaded_instances": [["id": "google/gemma-4-31b-qat",
+                "config": ["context_length": context, "parallel": 1]]]]]]
+    }
+
+    @Test func gemmaManagedProfileRequiresItsCanonicalLocalIdentity() throws {
+        #expect(S.gemmaModel == "google/gemma-4-31b-qat")
+        for url in [S.lmStudioURL, "http://localhost:1234", "http://[::1]:1234"] {
+            let config = try #require(S.config(url: url, model: S.gemmaModel))
+            #expect(config.isLMStudioGemma && config.isManagedLMStudio && !config.isLMStudio9B)
+        }
+        for (url, model) in [("http://fixture.invalid:1234", S.gemmaModel),
+                             ("http://127.0.0.1:11434", S.gemmaModel),
+                             ("http://127.0.0.1:1234/proxy", S.gemmaModel),
+                             (S.lmStudioURL, "stocksage-gemma4-31b-qat-benchmark"),
+                             (S.lmStudioURL, "other-model")] {
+            let config = try #require(S.config(url: url, model: model))
+            #expect(!config.isLMStudioGemma && !config.isManagedLMStudio)
+        }
+        let qwen = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        #expect(qwen.isLMStudio9B && qwen.isManagedLMStudio && !qwen.isLMStudioGemma)
+    }
+
+    @Test(arguments: ["valid", "format", "architecture", "size", "quantization", "bits", "unloaded", "alias", "duplicate"])
+    @MainActor func gemmaInventoryRequiresExactVariantAndUniqueCanonicalContext(scenario: String) async throws {
+        var row = try #require((Self.gemmaInventory()["models"] as? [[String: Any]])?.first)
+        switch scenario {
+        case "format": row["format"] = "mlx"
+        case "architecture": row["architecture"] = "qwen3_5"
+        case "size": row["params_string"] = "4B"
+        case "quantization": row["quantization"] = ["name": "Q4_K_M", "bits_per_weight": 4]
+        case "bits": row["quantization"] = ["name": "Q4_0", "bits_per_weight": 6]
+        case "unloaded": row["loaded_instances"] = [[String: Any]]()
+        case "alias": row["loaded_instances"] = [["id": "benchmark-alias", "config": ["context_length": 16_384, "parallel": 1]]]
+        case "duplicate":
+            let instances = try #require(row["loaded_instances"] as? [[String: Any]])
+            row["loaded_instances"] = instances + instances
+        default: break
+        }
+        let inventory: [String: Any] = ["models": [row]]
+        let probe = try #require(S.managedInventory(inventory, modelKey: S.gemmaModel))
+        let compatible = !["format", "architecture", "size", "quantization", "bits"].contains(scenario)
+        #expect(probe.hasModel == compatible && !probe.canDownload && !probe.isOllama)
+        #expect(probe.researchParallelism == 1)
+        #expect(S.verifiedContext(inventory, model: S.gemmaModel) == (scenario == "valid" ? 16_384 : nil))
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: inventory), as: UTF8.self)
+        var calls = 0
+        let observed = await S.probe(config, transport: { request in
+            calls += 1
+            #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
+            return StockSageModelDownloadTests.response(request, json)
+        })
+        #expect(calls == 1 && observed == probe)
+    }
+
+    @Test(arguments: ["valid", "missing-finish", "missing-model", "wrong-model", "short-context", "ambiguous-context"])
+    @MainActor func gemmaCompletionRequiresConfirmedIdentityFinishAndServingContext(scenario: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        var choice: [String: Any] = ["message": ["content": "Complete fixture"], "finish_reason": "stop"]
+        if scenario == "missing-finish" { choice.removeValue(forKey: "finish_reason") }
+        var reply: [String: Any] = ["model": config.model, "choices": [choice]]
+        if scenario == "missing-model" { reply.removeValue(forKey: "model") }
+        if scenario == "wrong-model" { reply["model"] = "other-model" }
+        var inventory = Self.gemmaInventory(context: scenario == "short-context" ? 8192 : 16_384)
+        if scenario == "ambiguous-context" {
+            var rows = try #require(inventory["models"] as? [[String: Any]])
+            let instances = try #require(rows[0]["loaded_instances"] as? [[String: Any]])
+            rows[0]["loaded_instances"] = instances + instances
+            inventory["models"] = rows
+        }
+        let replyJSON = String(decoding: try JSONSerialization.data(withJSONObject: reply), as: UTF8.self)
+        let inventoryJSON = String(decoding: try JSONSerialization.data(withJSONObject: inventory), as: UTF8.self)
+        var posts = 0
+        let result = await S.completeDetailed(config, isOllama: false, system: "s", user: "u",
+            maxTokens: 192, contextTokens: 16_384, transport: { request in
+                if request.httpMethod == "GET" {
+                    #expect(request.url?.path == "/api/v1/models")
+                    return StockSageModelDownloadTests.response(request, inventoryJSON)
+                }
+                posts += 1
+                return StockSageModelDownloadTests.response(request, replyJSON)
+            })
+        #expect(posts == 1)
+        if scenario == "valid" {
+            let completion = try result.get()
+            #expect(completion.model == config.model && completion.text == "Complete fixture")
+        } else if case .failure(let failure) = result {
+            let expected: S.FailureCategory = scenario == "missing-finish" ? .incompleteOutput
+                : scenario.contains("context") ? .contextBudget : .responseShape
+            #expect(failure.diagnostic.category == expected)
+        } else { Issue.record("Gemma accepted unverified completion: \(scenario)") }
+    }
+
+    @Test @MainActor func gemmaLengthRetryKeepsTheOriginalDeadline() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        let schema = Data(#"{ "type":"object", "properties":{"symbols":{"type":"array","items":{"type":"string"}}} }"#.utf8)
+        var instant = ContinuousClock.now
+        var outputs: [Int] = []
+        let result = await S.completeDetailed(config, isOllama: false, system: "original system", user: "original facts",
+            maxTokens: 192, contextTokens: 16_384, timeout: 90, jsonSchema: schema, transport: { request in
+                #expect(request.httpMethod == "POST", "An overdue reply cannot trigger context verification")
+                let body = try #require(request.httpBody)
+                #expect(body.range(of: schema) != nil)
+                let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                outputs.append(try #require(json["max_tokens"] as? Int))
+                #expect(json["messages"] as? [[String: String]] == [
+                    ["role": "system", "content": "original system"], ["role": "user", "content": "original facts"]])
+                instant = instant.advanced(by: .seconds(outputs.count == 1 ? 60 : 31))
+                let finish = outputs.count == 1 ? "length" : "stop"
+                return StockSageModelDownloadTests.response(request,
+                    #"{"model":"\#(config.model)","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}]}"#)
+            }, clock: { instant })
+        #expect(outputs == [192, 384])
+        if case .failure(let failure) = result {
+            #expect(failure.diagnostic.category == .timeout && failure.diagnostic.outputLimitRetries == 1)
+        } else { Issue.record("The Gemma retry renewed the original deadline") }
+    }
+
     @Test @MainActor func attemptObserverKeepsBoundedUTF8PromptsAndExactReplyBytes() async throws {
         let config = try #require(S.config(url: "http://127.0.0.1:9876", model: "fixture"))
         let events = ModelAttemptRecorder()
@@ -52,12 +174,15 @@ struct StockSageLocalModelServerTests {
         #expect(!text.contains("not-sent"))
     }
 
-    @Test @MainActor func attemptObserverSeparatesLengthRetryAndKeepsTheAppliedSchema() async throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+    @Test(arguments: ["qwen3.5-9b", "google/gemma-4-31b-qat"])
+    @MainActor func attemptObserverSeparatesLengthRetryAndKeepsTheAppliedSchema(model: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: model))
         let events = ModelAttemptRecorder()
         let schema = Data(#"{"type":"object","properties":{"action":{"type":"string"}}}"#.utf8)
-        let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
-            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":16384}}]"#)
+        let inventory = model == S.gemmaModel
+            ? String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
+            : StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+                with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":16384}}]"#)
         var posts = 0
         let result = await S.completeDetailed(config, isOllama: false, system: "original system", user: "original facts",
             maxTokens: 192, contextTokens: 16_384, jsonSchema: schema, phase: "ranking",
@@ -67,7 +192,7 @@ struct StockSageLocalModelServerTests {
                 #expect(request.httpBody?.range(of: schema) != nil, "Both initial and length-retry requests preserve the supplied schema")
                 let finish = posts == 1 ? "length" : "stop"
                 return StockSageModelDownloadTests.response(request,
-                    #"{"model":"qwen3.5-9b","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}],"usage":{"prompt_tokens":42,"completion_tokens":12}}"#)
+                    #"{"model":"\#(model)","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}],"usage":{"prompt_tokens":42,"completion_tokens":12}}"#)
             })
         let values = await events.snapshot()
         try #require(values.count == 4)
@@ -535,8 +660,9 @@ struct StockSageLocalModelServerTests {
 
     // MARK: chatRequest — OpenAI-compatible
 
-    @Test func chatRequestPreservesSuppliedSchemaBytesAndEscaping() throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+    @Test(arguments: ["qwen3.5-9b", "google/gemma-4-31b-qat"])
+    func chatRequestPreservesSuppliedSchemaBytesAndEscaping(model: String) throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: model))
         let schema = Data(#"""
         { "type":"object", "properties":{
             "zeta":{"type":"string","description":"quote: \"; slash: \\; café 🚀"},
@@ -550,6 +676,9 @@ struct StockSageLocalModelServerTests {
         let body = try #require(request.httpBody)
         #expect(body.range(of: schema) != nil, "Serialization must not reorder or rewrite the supplied schema")
         let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        if model == S.gemmaModel { #expect(object["reasoning_effort"] as? String == "none") }
+        else { #expect(object["reasoning_effort"] == nil) }
+        #expect(object["model"] as? String == model && object["temperature"] as? Double == 0.2)
         let messages = try #require(object["messages"] as? [[String: String]])
         #expect(messages == [["role":"system", "content":system], ["role":"user", "content":user]])
         let format = try #require(object["response_format"] as? [String: Any])

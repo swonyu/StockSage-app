@@ -78,7 +78,7 @@ struct StockSageChatTests {
                         let controls = StockSageAIAssessmentPanel.RequestControls(
                             hasRecord: hasRecord, hasDraft: hasDraft,
                             activeSymbol: activeSymbol, isSampleData: isSampleData, request: {})
-                        #expect(controls.title == (hasRecord || hasDraft ? "Reassess" : "Assess with Qwen"))
+                        #expect(controls.title == (hasRecord || hasDraft ? "Reassess" : "Assess with AI"))
                         #expect((controls.disabledReason != nil) == (activeSymbol != nil || isSampleData))
                         if isSampleData {
                             #expect(controls.disabledReason?.contains("sample data") == true)
@@ -1671,6 +1671,24 @@ struct StockSageChatTests {
                     + StockSageChat.outputTokens + 1_024 <= StockSageChat.contextTokens)
         }
         #expect(captured == snapshot(), "The smaller request budget cannot rewrite saved evidence")
+    }
+
+    @Test func gemmaChatFitsItsServingContextWithoutChangingHistoryOrEvidence() throws {
+        let chat = StockSageChatSession(historyURL: nil)
+        let captured = snapshot()
+        let id = try #require(chat.begin(question: "Old conversation", snapshot: captured, model: "fixture"))
+        chat.finish(id: id, text: String(repeating: "ع", count: 10_000))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let originalHistory = try encoder.encode(chat.turns)
+        let prepared = try #require(StockSageChat.request(question: "Explain ORCL risks",
+            snapshot: captured, history: chat.turns, contextTokens: 16_384))
+        #expect(prepared.prompt.utf8.count + StockSageChat.instructions.utf8.count
+                + StockSageChat.outputTokens + 1_024 <= 16_384)
+        #expect(prepared.prompt.contains("ORCL.quote") && !prepared.prompt.contains("Old conversation"))
+        let preservedHistory = try encoder.encode(chat.turns)
+        #expect(captured == snapshot() && preservedHistory == originalHistory)
+        #expect(StockSageChat.request(question: "Explain ORCL", snapshot: captured,
+                                     history: [], contextTokens: 0) == nil)
     }
 
     /// Decode the actual request payload, not a second implementation of budget selection.

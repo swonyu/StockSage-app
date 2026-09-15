@@ -266,7 +266,7 @@ struct StockSageResearchModesPanel: View {
             selected = nil; research.start(StockSageHorizonResearch.Horizon.allCases, store: store)
         }
         .disabled(research.running != nil)
-        .help("Gather evidence once per stock, then ask Qwen separately for each horizon. Both completed runs are saved. No orders.")
+        .help("Gather evidence once per stock, then run a separate AI assessment for each horizon. Both completed runs are saved. No orders.")
     }
 
     private func scanSummary(_ scan: StockSageHorizonResearch.Scan, isRunning: Bool) -> some View {
@@ -277,7 +277,7 @@ struct StockSageResearchModesPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if isRunning, !research.activeSymbols.isEmpty {
-                Text("\(research.activeDescription) · daily history, news and Qwen").font(.caption).monospaced()
+                Text("\(research.activeDescription) · daily history, news and AI assessment").font(.caption).monospaced()
                     .help(research.activeSymbols.sorted().joined(separator: ", "))
                 ProgressView().progressViewStyle(.linear)
                     .accessibilityLabel("\(research.activeSymbols.sorted().joined(separator: ", ")) research in progress")
@@ -625,9 +625,9 @@ struct StockSageResearchModesPanel: View {
         if !scan.listings.isEmpty {
             if isRunning {
                 if scan.isComparing {
-                    return ("Comparing research for Top 5", "All checks are complete. Qwen is comparing every eligible Buy / Strong Buy using the captured evidence. Progress is shown above.")
+                    return ("Comparing research for Top 5", "All checks are complete. The model is comparing every eligible Buy / Strong Buy using the captured evidence. Progress is shown above.")
                 }
-                return ("Top five after the full scan", "Every listing is checked before Qwen compares the eligible Buy / Strong Buy research. All checks remain available while this runs.")
+                return ("Top five after the full scan", "Every listing is checked before the model compares the eligible Buy / Strong Buy research. All checks remain available while this runs.")
             }
             if let failure = scan.rankingFailure {
                 return ("Top five comparison unavailable", failure + " Collected checks remain available; no first-five fallback was used.")

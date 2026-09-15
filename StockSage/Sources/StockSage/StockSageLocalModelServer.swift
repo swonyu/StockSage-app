@@ -36,9 +36,11 @@ enum StockSageLocalModelServer {
         if !StockSageStore.isRunningTests { UserDefaults.standard.set(UUID().uuidString, forKey: revisionKey) }
         StockSageAIAssessments.shared.cancelActiveAssessment(reason: "StockSage is closing; reassess after reopening.")
         StockSageModelDownload.shared.stopChecking()
+        let loadingWasActive = StockSageLocalModelStartup.shared.cancel()
         let wasBusy = await inFlight.current > 0
+        let hadActiveWork = wasBusy || loadingWasActive
         session.invalidateAndCancel()
-        return wasBusy
+        return hadActiveWork
     }
 
     static func cancelShutdown() {
@@ -198,6 +200,7 @@ enum StockSageLocalModelServer {
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
     nonisolated static let lmStudioModel = "qwen3.5-9b"
+    nonisolated static let gemmaModel = "google/gemma-4-31b-qat"
     nonisolated static let maximumResponseBytes = 1_048_576
 
     /// Qwen3.5's installed NFC + byte-level BPE tokenizer cannot emit more tokens than
@@ -281,6 +284,11 @@ enum StockSageLocalModelServer {
     struct Config: Sendable, Equatable {
         let baseURL: URL
         let model: String
+        nonisolated var isLMStudioGemma: Bool {
+            model == StockSageLocalModelServer.gemmaModel && StockSageLocalModelServer.isLoopback(baseURL)
+                && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
+        }
+        nonisolated var isManagedLMStudio: Bool { isLMStudio9B || isLMStudioGemma }
         nonisolated var isLMStudio9B: Bool {
             model == StockSageLocalModelServer.lmStudioModel && StockSageLocalModelServer.isLoopback(baseURL)
                 && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
@@ -325,6 +333,7 @@ enum StockSageLocalModelServer {
         var canDownload = false
         /// Verified processing slots for the selected instance; unknown capacity stays serial.
         var researchParallelism = 1
+        var servingContext: Int? = nil
     }
 
     /// Ollama tags a locally-served model "name:latest" (e.g. "qwen3.8:latest") while a viewer
@@ -381,9 +390,9 @@ enum StockSageLocalModelServer {
         let stopped = Probe(reachable: false, isOllama: false, models: [], hasModel: false,
                             detail: "Model check stopped: request cancelled, settings changed, or network access disabled.")
         guard !denied() else { return stopped }
-        if c.isLMStudio9B,
+        if c.isManagedLMStudio,
            let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport),
-           let native = managedInventory(inventory) {
+           let native = managedInventory(inventory, modelKey: c.model) {
             return denied() ? stopped : native
         }
         guard !denied() else { return stopped }
@@ -450,7 +459,7 @@ enum StockSageLocalModelServer {
                         guard let rows = inventory["models"] as? [[String: Any]],
                               rows.allSatisfy({ $0["key"] is String }) else { throw URLError(.cannotParseResponse) }
                         let selected = rows.filter { $0["key"] as? String == c.model }
-                        guard selected.count <= 1 || (c.isLMStudio9B && managedInventory(inventory)?.hasModel == true),
+                        guard selected.count <= 1 || (c.isManagedLMStudio && managedInventory(inventory, modelKey: c.model)?.hasModel == true),
                               let loaded = loadedInstances(selected) else {
                             throw URLError(.cannotParseResponse)
                         }
@@ -479,7 +488,8 @@ enum StockSageLocalModelServer {
 
     /// A native inventory includes downloaded-but-unloaded models. Wrong variants are not
     /// missing: downloading over the same key would not safely select the right weights.
-    static func managedInventory(_ json: [String: Any]) -> Probe? {
+    static func managedInventory(_ json: [String: Any], modelKey: String = lmStudioModel) -> Probe? {
+        guard [lmStudioModel, gemmaModel].contains(modelKey) else { return nil }
         guard let rows = json["models"] as? [[String: Any]],
               rows.allSatisfy({
                   guard let key = $0["key"] as? String, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -487,7 +497,18 @@ enum StockSageLocalModelServer {
                         key.utf8.count <= 512, let type = $0["type"] as? String else { return false }
                   return ["llm", "embedding"].contains(type)
               }) else { return nil }
-        let matches = rows.filter { $0["key"] as? String == lmStudioModel }
+        let matches = rows.filter { $0["key"] as? String == modelKey }
+        if modelKey == gemmaModel {
+            let compatible = !matches.isEmpty && matches.allSatisfy {
+                $0["type"] as? String == "llm" && $0["format"] as? String == "gguf"
+                    && $0["architecture"] as? String == "gemma4" && $0["params_string"] as? String == "31B"
+                    && ($0["quantization"] as? [String: Any])?["name"] as? String == "Q4_0"
+                    && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 4
+            }
+            return Probe(reachable: true, isOllama: false, models: rows.compactMap { $0["key"] as? String },
+                hasModel: compatible, detail: compatible ? "Gemma 4 31B QAT Q4_0 downloaded; serving readiness checked before research."
+                    : "Gemma 4 31B QAT Q4_0 is missing or its variant is not verified. Check LM Studio My Models.")
+        }
         let compatible = !matches.isEmpty && matches.allSatisfy {
             $0["type"] as? String == "llm" && $0["format"] as? String == "mlx"
                 && $0["architecture"] as? String == "qwen3_5" && $0["params_string"] as? String == "9B"
@@ -531,8 +552,13 @@ enum StockSageLocalModelServer {
 
     /// Only real AI-use callers prepare missing models; passive probes remain read-only.
     /// Return immediately so a long download never replays an old market snapshot.
-    static func prepare(_ c: Config, stillValid: @MainActor () -> Bool = { true },
+    static func prepare(_ c: Config, stillValid: @escaping @MainActor () -> Bool = { true },
                         transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Probe {
+        #if os(macOS)
+        if c.isLMStudioGemma {
+            return await StockSageLocalModelStartup.shared.ensureLoaded(c, stillValid: stillValid, transport: transport)
+        }
+        #endif
         var result = await probe(c, stillValid: stillValid, transport: transport)
         #if os(macOS)
         if transport == nil, stillValid(), !Task.isCancelled, result.canDownload {
@@ -548,13 +574,20 @@ enum StockSageLocalModelServer {
     /// do not establish context for the response identity. This is a current-state check,
     /// not an attestation against an external unload/reload during generation.
     static func verifiedContext(_ inventory: [String: Any], model: String) -> Int? {
-        guard managedInventory(inventory)?.hasModel == true,
+        guard managedInventory(inventory, modelKey: model)?.hasModel == true,
               let rows = inventory["models"] as? [[String: Any]],
-              model == lmStudioModel,
+              [lmStudioModel, gemmaModel].contains(model),
               let instances = loadedInstances(rows.filter { $0["key"] as? String == model }) else { return nil }
         let matching = instances.filter { $0["id"] as? String == model }
         guard matching.count == 1, let config = matching[0]["config"] as? [String: Any],
-              let context = config["context_length"] as? Int, context > 0 else { return nil }
+              let number = config["context_length"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let context = Int(exactly: number.doubleValue), context > 0 else { return nil }
+        if model == gemmaModel {
+            guard let parallel = config["parallel"] as? NSNumber,
+                  CFGetTypeID(parallel) != CFBooleanGetTypeID(), parallel.intValue == 1,
+                  parallel.doubleValue == 1 else { return nil }
+        }
         return context
     }
 
@@ -584,9 +617,10 @@ enum StockSageLocalModelServer {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
             if c.isLMStudio9B { body["ttl"] = 180 }
+            if c.isLMStudioGemma { body["reasoning_effort"] = "none" }
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        if c.isLMStudio9B, !isOllama, let jsonSchema,
+        if c.isManagedLMStudio, !isOllama, let jsonSchema,
            let schema = try? JSONSerialization.jsonObject(with: jsonSchema),
            var data = request.httpBody, data.last == 0x7D {
             // Preserve generation order; decoding then reserializing would shuffle it.
@@ -928,7 +962,7 @@ enum StockSageLocalModelServer {
         let recordedSystem = boundedAttemptText(system)
         let recordedUser = boundedAttemptText(user)
         let recordedSchema: (text: String, bytes: Int, truncated: Bool)? = {
-            guard attemptObserver != nil, c.isLMStudio9B, !isOllama, let jsonSchema,
+            guard attemptObserver != nil, c.isManagedLMStudio, !isOllama, let jsonSchema,
                   let object = try? JSONSerialization.jsonObject(with: jsonSchema),
                   let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
                   let text = String(data: data, encoding: .utf8) else { return nil }
@@ -1042,7 +1076,7 @@ enum StockSageLocalModelServer {
                         httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
                         bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
                 }
-                switch parseCompletion(data, isOllama: isOllama, allowEmptyTruncated: c.isLMStudio9B) {
+                switch parseCompletion(data, isOllama: isOllama, allowEmptyTruncated: c.isManagedLMStudio) {
                 case .success(let reply):
                     returnedModel = reply.model
                     // No backend may publish another model's answer under the selected ID. Ollama
@@ -1051,7 +1085,7 @@ enum StockSageLocalModelServer {
                     // all stays acceptable off the strict profile — absent metadata is not a mismatch.
                     let identityMismatch = reply.model.map {
                         stripLatestSuffix($0) != stripLatestSuffix(c.model)
-                    } ?? c.isLMStudio9B
+                    } ?? c.isManagedLMStudio
                     if identityMismatch {
                         return await failed(.init(diagnostic: .init(category: .responseShape,
                                                                 httpStatus: http.statusCode,
@@ -1061,7 +1095,7 @@ enum StockSageLocalModelServer {
                     // One same-evidence restart for a confirmed output limit, never a continuation
                     // stitched onto an unfinished verdict. Reserve the extra output before sending;
                     // both attempts and context verification retain the ORIGINAL caller deadline.
-                    if c.isLMStudio9B, attempt == 0, reply.diagnostic.finish == .tokenLimit,
+                    if c.isManagedLMStudio, attempt == 0, reply.diagnostic.finish == .tokenLimit,
                        (1...512).contains(maxTokens), clock() < deadline,
                        promptFits(system: system, user: user, outputTokens: maxTokens * 2, contextTokens: contextTokens) {
                         var diagnostic = enriched(reply.diagnostic)
@@ -1077,13 +1111,13 @@ enum StockSageLocalModelServer {
                     // worth showing, while a truncated financial verdict is not. The decision
                     // therefore belongs to each caller: `financialOutputRejection` and evidence
                     // validation gate verdicts; `rejectsTruncatedOutput` annotates Chat prose.
-                    if c.isLMStudio9B, reply.diagnostic.finish != .stop {
+                    if c.isManagedLMStudio, reply.diagnostic.finish != .stop {
                         var diagnostic = reply.diagnostic
                         diagnostic.category = .incompleteOutput
                         diagnostic.httpStatus = http.statusCode
                         return await failed(.init(diagnostic: diagnostic))
                     }
-                    if c.isLMStudio9B {
+                    if c.isManagedLMStudio {
                         let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
                             transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
                         guard clock() < deadline else { return await failed(.init(diagnostic: .init(category: .timeout))) }
