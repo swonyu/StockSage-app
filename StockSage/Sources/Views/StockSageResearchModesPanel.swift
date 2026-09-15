@@ -137,7 +137,11 @@ struct StockSageResearchModesPanel: View {
             horizonControls
             StockSageResearchHistoryButton(store: store)
             #endif
+            #if os(macOS)
+            scanSummary(scan, isRunning: isRunning)
+            #else
             if !isUntouched { scanSummary(scan, isRunning: isRunning) }
+            #endif
         }
         // Selection belongs to the workspace and is limited to the visible top results.
         .onChange(of: rows.map(\.ticker)) { _, visible in
@@ -148,6 +152,11 @@ struct StockSageResearchModesPanel: View {
                 .font(.headline).accessibilityAddTraits(.isHeader)
             Text(StockSageHorizonResearch.topBuyRankingNote)
                 .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                // Bound minimum-size probes so this non-scrolling note cannot
+                // expand the whole split view and hide its progress and sidebar.
+                .lineLimit(3).help(StockSageHorizonResearch.topBuyRankingNote)
+                #endif
                 .fixedSize(horizontal: false, vertical: true)
             if !scan.topBuys.isEmpty { Self.searchField(search: $presentation.search) }
             Text("\(rows.count) shown · select a stock for evidence and scenario price levels")
@@ -157,7 +166,7 @@ struct StockSageResearchModesPanel: View {
         // The window owns the inspector. The table owns its scrolling, with no enclosing card.
         return VStack(alignment: .leading, spacing: 0) {
             ScrollView { controls.padding(24) }
-                .frame(height: scan.listings.isEmpty ? 220 : 300)
+                .frame(height: scan.listings.isEmpty ? 220 : (isRunning ? 360 : 300))
             Divider()
             if !scan.listings.isEmpty { resultsHeader.padding(.horizontal, 24).padding(.vertical, 12) }
             if rows.isEmpty {
@@ -432,8 +441,13 @@ struct StockSageResearchModesPanel: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Market research").font(.largeTitle.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
+                    #if os(macOS)
+                    Text("Research only · up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks · one-time scan")
+                        .font(.caption).foregroundStyle(.secondary)
+                    #else
                     Text("Up to \(StockSageHorizonResearch.topBuyLimit) Buy / Strong Buy per horizon")
                         .font(.caption).foregroundStyle(.secondary)
+                    #endif
                 }
             } actions: {
                 if running == horizon {
@@ -452,9 +466,11 @@ struct StockSageResearchModesPanel: View {
                         .help("Research once; no orders. A new run replaces this horizon’s visible results. Completed runs stay in saved research.")
                 }
             }
+            #if os(iOS)
             Text("One-time research across up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks. Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            #endif
         }
     }
 

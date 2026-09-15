@@ -1,8 +1,8 @@
 # StockSage research and UI repair reconciliation
 
-Status: source implementation and final native gates passed. Signed Mac packaging and installation verification are in progress.
+Status: the follow-up Mac progress repair passed final native gates. Signed replacement and visible installation verification are in progress.
 
-Working branch: `codex/research-pipeline-fixes-20260915`, based on `61d37a2` (which adds the incoming research audit to `4a18b17`). Work stays in the isolated `research-pipeline-20260915` worktree. The installed app has not been replaced by this batch.
+Working branch: `codex/research-pipeline-fixes-20260915`, based on `61d37a2` (which adds the incoming research audit to `4a18b17`). Work stays in the isolated `research-pipeline-20260915` worktree. The first signed build was installed from local commit `e7d8cd3`; a follow-up Mac progress repair is being verified.
 
 The owner's product choices are retained: Home first, NASDAQ-listed common stocks only, up to five accepted Buy/Strong Buy opinions per 1–7 or 7–14 trading-day horizon, and immutable saved predictions for later review. No intraday strategy, long-term mandate, broker submission, model activation or automatic repeat scan was added.
 
@@ -87,8 +87,8 @@ Final source passed the native gates on 2026-09-15:
 
 | Gate | Passed | Failed | Skipped |
 |---|---:|---:|---:|
-| Mac, `final-mac-spacing` | 2,530 | 0 | 1 |
-| iPhone simulator, `final-ios` | 2,460 | 0 | 0 |
+| Mac, `progress-restored-mac` | 2,531 | 0 | 1 |
+| iPhone simulator, `progress-restored-ios` | 2,460 | 0 | 0 |
 
 Xcode 26.6 (17F113), macOS/iOS SDK 26.5; execution on macOS 27 (26A428) and a task-owned iPhone 17 Pro simulator running iOS 27 (24A5423a). These are not Xcode 27 SDK or physical-iPhone release receipts. The canonical live/persistence/strategy measurement suites were excluded; the opt-in abrupt-child-death diagnostic was skipped. Tests ran serially with four build jobs.
 
@@ -97,3 +97,13 @@ Both gates recorded a SHA-256 manifest before building. The Release build checks
 Initial failing regressions were executed for NASDAQ selection, full-session scheduling, evidence/narrator failures, metadata churn, denial policy, shared scans and forward earnings. Compiler/test-fixture corrections are recorded separately from behavior failures in the native logs.
 
 No live provider account, model inference, broker, relay or owner prediction store is needed by the new tests. Synthetic tests verify software contracts; they do not establish forecast accuracy, present data entitlements, real-world speed gains or physical-device VoiceOver behavior.
+
+## Follow-up: visible Research progress and the earlier Mac layout
+
+The owner reported missing progress in the installed active-scan view. Read-only native accessibility measurements confirmed a 900 × 820 window containing a 900 × 2,398 split view at y = -703: its sidebar and progress controls had been pushed offscreen. The new ranking explanation outside the controls scroll view used unlimited vertical fixed sizing. A transient narrow minimum-size proposal expanded that text and the entire split view.
+
+The Mac ranking explanation is now capped at three lines, with the complete qualification retained in its help and Coverage & price assumptions. iOS continues to wrap the complete note. A regression reproduces the finite minimum-size failure (2,250.98 points before the cap), rather than assuming an unconstrained whole-panel ideal height must fit.
+
+The earlier Mac compact heading and always-present charcoal status panel are restored. The new sidebar, saved research and both-horizon actions remain. The running controls region gains 60 points so overall counts also fit at the 900-point window width. Native checks use normal hosting sizing for active Research, test screen-space visibility of Stop, progress and the sidebar, and separately require overall progress to lie within the controls scroll viewport. The latter check failed at 900 points before the extra space.
+
+Follow-up final source gates: Mac 2,531 passed, one opt-in diagnostic skipped; iPhone simulator 2,460 passed. Both exited zero, with no failed tests. Native active Research screenshots at 900 and 1200 points show the sidebar, Stop action and overall research counts. The tests use only isolated synthetic research; they do not make live provider or model requests.

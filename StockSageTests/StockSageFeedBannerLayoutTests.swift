@@ -60,7 +60,7 @@ struct StockSageFeedBannerLayoutTests {
     }
 
     /// Height the view reports when hosted at `degenerateWidth`, the same way the app hosts it.
-    private func height(_ view: some View) throws -> CGFloat {
+    private func height(_ view: some View, proposedHeight: CGFloat? = nil) throws -> CGFloat {
         let host = NSHostingController(rootView: view.frame(width: Self.degenerateWidth))
         let window = FeedBannerFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -71,6 +71,9 @@ struct StockSageFeedBannerLayoutTests {
         window.orderBack(nil)
         defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
         host.view.layoutSubtreeIfNeeded()
+        if let proposedHeight {
+            return host.sizeThatFits(in: CGSize(width: Self.degenerateWidth, height: proposedHeight)).height
+        }
         return host.view.fittingSize.height
     }
 
@@ -114,6 +117,30 @@ struct StockSageFeedBannerLayoutTests {
         let limit = try #require(MarketsView.bannerSentenceLineLimit as Int?)
         #expect(limit > 0, "a non-positive line limit does not bound anything")
         #expect(limit <= 6, "a cap this loose stops bounding the degenerate wrap")
+    }
+
+    @Test func runningResearchCannotExpandTheWholeWorkspace() async throws {
+        let suite = "stocksage.research.layout.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let research = StockSageHorizonResearch()
+        var held: CheckedContinuation<Void, Never>?
+        let started = research.start(.week, allowed: { true }, universe: {
+            .init([.init(ticker: "AAPL", name: "Synthetic Apple", market: "stocks", locale: "us",
+                         active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")])
+        }, analyze: { _ in
+            await withCheckedContinuation { held = $0 }
+            return .init(verdict: nil, note: "Synthetic incomplete check")
+        })
+        try #require(started)
+        defer { research.stop(); held?.resume() }
+        for _ in 0..<200 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held != nil)
+        let panel = StockSageResearchModesPanel(store: store, research: research,
+            presentation: .constant(.init(horizon: .week)))
+        let h = try height(panel, proposedHeight: 0)
+        #expect(h < 900, "Research answered a transient 24pt width with \(h)pt, pushing its progress and the sidebar outside the window")
     }
 
     // MARK: The chat composer — the same escape route, found by sweeping for the pattern

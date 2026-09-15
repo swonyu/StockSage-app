@@ -750,8 +750,10 @@ struct StockSageChatTests {
         #expect(!window.isKeyWindow)
     }
 
-    @Test(arguments: [900, 1200], [false, true])
-    func renderNativeWorkspaceWithResearchInspectorAsTrailingColumn(width: Int, showsDetail: Bool) async throws {
+    @Test(arguments: [900, 1200], ["running", "results", "inspector"])
+    func renderNativeWorkspaceWithResearchInspectorAsTrailingColumn(width: Int, state: String) async throws {
+        let showsDetail = state == "inspector"
+        let isRunning = state == "running"
         typealias R = StockSageHorizonResearch
         let suite = "stocksage.workspace.capture.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -765,14 +767,17 @@ struct StockSageChatTests {
         let receipt = StockSageResearchUniverse.Receipt(session: "2026-09-11", requestedAt: now,
             returnedCount: 2, eligibleCount: 2, directoryCount: 2, partialSession: false,
             dollarVolume: ["AAPL": 900, "MSFT": 100])
+        var held: CheckedContinuation<Void, Never>?
         let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAPL"), listing("MSFT")], receipt: receipt) }, analyze: { item in
-            .init(verdict: item.ticker == "AAPL"
+            if isRunning { await withCheckedContinuation { held = $0 } }
+            return .init(verdict: item.ticker == "AAPL"
                     ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
                     : nil, note: "Synthetic research only", model: "fixture")
         })
         try #require(started)
-        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
-        try #require(research.running == nil)
+        defer { research.stop(); held?.resume() }
+        for _ in 0..<200 where isRunning ? held == nil : research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(isRunning ? held != nil : research.running == nil)
         var presentation = StockSageResearchModesPanel.Presentation()
         presentation.selected = showsDetail ? "AAPL" : nil
         var selection: MarketSection = .research
@@ -797,8 +802,28 @@ struct StockSageChatTests {
         .background(DS.Palette.bgTop)
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
-        let size = try await capture(workspace, name: "stocksage-native-workspace-inspector-\(width)-\(showsDetail)",
-                                     viewport: CGSize(width: width, height: 700)) { root in
+        let size = try await capture(workspace, name: "stocksage-native-workspace-inspector-\(width)-\(state)",
+                                     viewport: CGSize(width: width, height: 700), usesIntrinsicSizing: isRunning) { root in
+            if isRunning {
+                let window = try #require(root.window)
+                let viewport = window.convertToScreen(window.contentLayoutRect)
+                let elements = nativeAccessibilityElements(in: root)
+                for label in ["Stop 1–7 trading days research scan", "0/2 checks finished, including incomplete"] {
+                    let element = try #require(elements.first { $0.accessibilityLabel?() == label })
+                    let frame = try #require(element.accessibilityFrame?())
+                    #expect(frame.width > 0 && frame.height > 0 && viewport.contains(frame), "\(label) must remain visible while a scan is running")
+                }
+                let sidebar = try #require(elements.first { $0.accessibilityIdentifier?() == "desktop.nav.\(MarketSection.briefing.rawValue)" })
+                #expect(viewport.contains(try #require(sidebar.accessibilityFrame?())), "A running scan must not move the sidebar offscreen")
+                let progress = try #require(elements.first { $0.accessibilityLabel?() == "0/2 checks finished, including incomplete" })
+                func scrollViews(in view: NSView) -> [NSScrollView] {
+                    (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+                }
+                let controls = try #require(scrollViews(in: root).max { $0.contentView.bounds.width < $1.contentView.bounds.width })
+                let visible = window.convertToScreen(controls.contentView.convert(controls.contentView.bounds, to: nil))
+                #expect(visible.contains(try #require(progress.accessibilityFrame?())), "Overall research progress must fit without scrolling the controls")
+                return
+            }
             func tables(in view: NSView) -> [NSTableView] {
                 (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap { tables(in: $0) }
             }
@@ -814,7 +839,7 @@ struct StockSageChatTests {
         #expect(showsDetail ? (CGFloat(width)...CGFloat(width + 450)).contains(size.width)
                            : size.width == CGFloat(width))
         #expect(presentation.selected == (showsDetail ? "AAPL" : nil) && selection == .research, "Rendering must not alter selection state")
-        #expect(research.running == nil, "Rendering must not start a scan")
+        #expect((research.running != nil) == isRunning, "Rendering must not start or stop a scan")
         #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
     }
 
@@ -1422,7 +1447,7 @@ struct StockSageChatTests {
     }
 
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil,
-                         inspect: ((NSView) async throws -> Void)? = nil) async throws -> CGSize {
+                         usesIntrinsicSizing: Bool = false, inspect: ((NSView) async throws -> Void)? = nil) async throws -> CGSize {
         let previousAppearance = NSApp.appearance
         let previousApplication = NSWorkspace.shared.frontmostApplication
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -1436,7 +1461,7 @@ struct StockSageChatTests {
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
         // A split-view workspace is viewport-sized, not an intrinsic-size leaf. Do not let its
         // transient mount measurements replace the fixture window's explicit dimensions.
-        if viewport != nil { disableIntrinsicSizing(host) }
+        if viewport != nil && !usesIntrinsicSizing { disableIntrinsicSizing(host) }
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
             width: viewport?.width ?? 500, height: viewport?.height ?? 700),
             styleMask: viewport == nil ? [.titled] : [.titled, .resizable], backing: .buffered, defer: false)
