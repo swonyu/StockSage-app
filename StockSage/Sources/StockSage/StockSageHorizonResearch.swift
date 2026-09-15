@@ -99,8 +99,7 @@ final class StockSageHorizonResearch: ObservableObject {
             if let restored = history?.completedScan(horizon: horizon) {
                 scans[horizon] = restored.scan
                 completedRuns[horizon] = restored.run
-                if restored.run.ranking != nil, let history,
-                   !history.runs.contains(where: { $0.id == restored.run.id }) {
+                if let history, !history.runs.contains(where: { $0.id == restored.run.id }) {
                     persistCompletedRun(horizon)
                 }
             }
@@ -410,7 +409,8 @@ final class StockSageHorizonResearch: ObservableObject {
                         if allChecked { scans[horizon]?.rankingFailure = "Comparison stopped before completion. All checks remain available." }
                         scans[horizon]?.status = "Scan stopped · \(reason). \(retained) Run again when ready."
                     } else if case ScanFailure.checkpointUnavailable = error {
-                        scans[horizon]?.status = "All checks finished, but could not be saved for recovery. Comparison has not started. Keep the app open; check Saved research for the save error, then Retry Top 5."
+                        scans[horizon]?.needsSaving = true
+                        scans[horizon]?.status = "All checks finished, but could not be saved for recovery. Comparison has not started. Keep the app open and use Retry save after resolving storage access."
                     } else if case ScanFailure.modelUnavailable(let detail) = error {
                         scans[horizon]?.status = "\(detail) No scan started. Open Catalysts → Explanation model, finish setup, then Run again."
                     } else if let failure = error as? StockSageResearchUniverse.Failure {
@@ -592,7 +592,8 @@ final class StockSageHorizonResearch: ObservableObject {
                 let pending = StockSageResearchHistory.snapshot(startedAt: startedAt, completedAt: Date(), horizon: horizon, scan: revised)
                 completedRuns[horizon] = pending
                 if let history, !history.saveCompletedChecks(pending, scan: revised) {
-                    scans[horizon]?.status = "Updated checks could not be saved for recovery. Comparison has not started; keep the app open and check Saved research."
+                    scans[horizon]?.needsSaving = true
+                    scans[horizon]?.status = "Updated checks could not be saved for recovery. Comparison has not started; keep the app open and use Retry save after resolving storage access."
                     return
                 }
                 scans[horizon]?.isComparing = true

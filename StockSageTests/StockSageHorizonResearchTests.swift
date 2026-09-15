@@ -66,6 +66,75 @@ import Testing
         #expect(research.scans[.week]?.results["AAA"]?.note == "Original unavailable check")
     }
 
+    @Test func failedAmendedCheckpointKeepsHoldAndAvoidResultsSaveableWithoutMoreResearch() async throws {
+        let suite = "stocksage.research.amended-save.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("history.json")
+        let checkpointURL = directory.appendingPathComponent("completed-7.json")
+        let history = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let research = R(history: history)
+        var initialChecks = 0, preparations = 0, assessments = 0, comparisons = 0
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAA"), listing("BBB")]) }, analyze: { item in
+            initialChecks += 1
+            return .init(verdict: item.ticker == "AAA" ? nil : .init(action: .avoid,
+                reason: "Original case", risk: "Original risk", evidence: ["F1"]),
+                facts: ["Original \(item.ticker)"], note: "Original capture", model: "fixture")
+        })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil && history.runs.count == 1)
+        let originalRun = try #require(history.runs.first)
+        let original = try #require(research.scans[.week])
+        try #require(!original.needsSaving)
+        var held: CheckedContinuation<Void, Never>?
+        var checkpointLease: StockSageFileLock?
+        defer { research.stop(); held?.resume(); withExtendedLifetime(checkpointLease) {} }
+        let retried = research.retryIncomplete(.week, allowed: { true }, makeAnalysis: { item in
+            preparations += 1
+            #expect(item.ticker == "AAA")
+            return { _ in
+                assessments += 1
+                await withCheckedContinuation { held = $0 }
+                return .init(verdict: .init(action: .hold, reason: "Updated case", risk: "Updated risk", evidence: ["F1"]),
+                    facts: ["Fresh AAA evidence"], note: "Updated capture", model: "fixture")
+            }
+        }, rank: { _, _ in comparisons += 1; return .failure(.unavailable) })
+        try #require(retried)
+        for _ in 0..<100 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held != nil)
+        // The retry's original-save preflight has succeeded. Only its amended checkpoint is blocked.
+        let originalCheckpoint = try Data(contentsOf: checkpointURL)
+        checkpointLease = try StockSageFileLock(url: checkpointURL.appendingPathExtension("lock"))
+        held?.resume(); held = nil
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil)
+        withExtendedLifetime(checkpointLease) {}
+        let revised = try #require(research.scans[.week])
+        #expect(revised.results["AAA"]?.verdict?.action == .hold && revised.results["AAA"]?.facts == ["Fresh AAA evidence"])
+        #expect(revised.results["BBB"]?.verdict == original.results["BBB"]?.verdict)
+        #expect(revised.results["BBB"]?.at == original.results["BBB"]?.at && revised.results["BBB"]?.facts == original.results["BBB"]?.facts)
+        #expect(revised.retainedFromRunID == originalRun.id && revised.at != original.at)
+        #expect(revised.needsSaving && !research.canRetryTopFive(.week))
+        #expect(revised.status.contains("could not be saved") && !revised.isComparing && comparisons == 0)
+        #expect(history.runs == [originalRun] && history.lastError != nil)
+        #expect(try Data(contentsOf: checkpointURL) == originalCheckpoint)
+
+        checkpointLease = nil
+        research.retrySave(.week)
+        #expect(research.scans[.week]?.needsSaving == false && research.scans[.week]?.at == revised.at)
+        #expect(initialChecks == 2 && preparations == 1 && assessments == 1 && comparisons == 0)
+        #expect(history.runs.count == 2 && history.runs.last == originalRun)
+        let restoredHistory = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let restored = try #require(restoredHistory.completedScan(horizon: .week))
+        #expect(restored.run.retainedFromRunID == originalRun.id && restored.run.predictions.isEmpty)
+        #expect(restored.scan.at == revised.at && restored.scan.results["AAA"]?.verdict == revised.results["AAA"]?.verdict)
+        #expect(restored.scan.results["AAA"]?.facts == ["Fresh AAA evidence"])
+        #expect(restored.scan.results["BBB"]?.verdict == original.results["BBB"]?.verdict)
+    }
+
     @Test func cloudRetryStartsWithOneSlotThenOwnsItsTwoGatherLookahead() async throws {
         let r = R()
         let names = (0..<4).map { listing("S\($0)") }
@@ -102,7 +171,7 @@ import Testing
         #expect(names.allSatisfy { r.scans[.week]?.results[$0.ticker]?.note == "Original incomplete" })
     }
 
-    @Test(arguments: [false, true]) func checkpointSuccessDoesNotStrandUnsavedPredictionsAfterRelaunch(manualRetry: Bool) async throws {
+    @Test(arguments: [false, true], [false, true]) func checkpointSuccessDoesNotStrandUnsavedPredictionsAfterRelaunch(manualRetry: Bool, ranked: Bool) async throws {
         let suite = "stocksage.research.history-save.\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
@@ -115,15 +184,15 @@ import Testing
         let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAA")]) }, rank: { scan, horizon in
             // The checkpoint remains writable; only the history writer fails.
             try! FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
-            return .success(.fixture(scan: scan, symbols: ["AAA"], horizon: horizon))
+            return ranked ? .success(.fixture(scan: scan, symbols: ["AAA"], horizon: horizon)) : .failure(.unavailable)
         }, analyze: { _ in
-            .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]), facts: ["Original"], note: "Original", model: "fixture")
+            .init(verdict: .init(action: ranked ? .buy : .hold, reason: "Case", risk: "Risk", evidence: ["F1"]), facts: ["Original"], note: "Original", model: "fixture")
         })
         try #require(started)
         for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         #expect(history.runs.isEmpty && history.lastError != nil)
         let retained = try #require(history.completedScan(horizon: .week))
-        #expect(retained.run.predictions.map(\.symbol) == ["AAA"])
+        #expect(retained.run.predictions.map(\.symbol) == (ranked ? ["AAA"] : []))
         if !manualRetry { try FileManager.default.removeItem(at: lock) }
         let restoredHistory = StockSageResearchHistory(storageURL: url, defaults: defaults)
         let restored = R(history: restoredHistory)
@@ -136,7 +205,7 @@ import Testing
         #expect(restoredHistory.runs.count == 1)
         #expect(restoredHistory.runs.first?.id == retained.run.id)
         #expect(restoredHistory.runs.first?.completedAt == retained.run.completedAt)
-        #expect(restored.scans[.week]?.topBuys.map(\.ticker) == ["AAA"])
+        #expect(restored.scans[.week]?.topBuys.map(\.ticker) == (ranked ? ["AAA"] : []))
     }
 
     @Test func checkpointFailureBlocksInitialComparisonAndRetryWithoutDiscardingChecks() async throws {
@@ -160,9 +229,14 @@ import Testing
         for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         #expect(comparisons == 0 && research.scans[.week]?.results.count == 1 && history.runs.isEmpty)
         #expect(research.scans[.week]?.status.contains("could not be saved") == true)
+        #expect(research.scans[.week]?.needsSaving == true)
         let retry = research.retryTopFive(.week, allowed: { true }) { _, _ in comparisons += 1; return .failure(.unavailable) }
         #expect(!retry && comparisons == 0 && history.runs.isEmpty)
         #expect(try Data(contentsOf: checkpointURL) == corrupt)
+        try FileManager.default.removeItem(at: checkpointURL)
+        research.retrySave(.week)
+        #expect(research.scans[.week]?.needsSaving == false && comparisons == 0)
+        #expect(history.runs.count == 1 && history.completedScan(horizon: .week)?.scan.results.count == 1)
         var scan = try #require(research.scans[.week])
         scan.isComparing = true
         #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: true).title == "Comparing research for Top 5")
