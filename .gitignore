@@ -16,3 +16,8 @@ xcuserdata/
 # Private research data, reports and isolated Python runtime (never publish feeds).
 .research/
 __pycache__/
+
+# Generated per-checkout tooling and review captures (preserve locally, never distribute).
+buildServer.json
+.review-tmp/
+.playwright-mcp/

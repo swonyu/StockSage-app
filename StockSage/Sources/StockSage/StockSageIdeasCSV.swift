@@ -55,8 +55,6 @@ enum StockSageIdeasCSV {
     /// RFC-4180: a field containing a comma, quote, CR or LF is wrapped in double
     /// quotes, with any internal double-quote doubled.
     nonisolated static func escape(_ field: String) -> String {
-        guard field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r")
-        else { return field }
-        return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        StockSageJournalCSV.escape(field)
     }
 }

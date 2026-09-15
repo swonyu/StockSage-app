@@ -117,6 +117,7 @@ final class StockSageStore: ObservableObject {
     static let shared = StockSageStore()
     private let defaults: UserDefaults
     private let heldSymbols: @MainActor () -> [String]
+    private let journalTrades: @MainActor () -> [TradeRecord]
 
     @Published private(set) var symbols: [StockSageSymbol] = []
     /// P3 (2026-07-28 review): uppercased-symbol → index into `symbols`. Rebuilt only by the
@@ -349,9 +350,11 @@ final class StockSageStore: ObservableObject {
 
     /// Bare watchlist/scan state for isolated tests. Production alone performs the cache,
     /// sample and calibration bootstrap in the convenience initializer below.
-    init(defaults: UserDefaults, heldSymbols: @escaping @MainActor () -> [String]) {
+    init(defaults: UserDefaults, heldSymbols: @escaping @MainActor () -> [String],
+         journalTrades: @escaping @MainActor () -> [TradeRecord] = { [] }) {
         self.defaults = defaults
         self.heldSymbols = heldSymbols
+        self.journalTrades = journalTrades
         userSymbols = (defaults.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
         do { priceAlerts = try Self.loadPriceAlerts(from: defaults) }
         catch { priceAlertsPersistenceError = "Saved price alerts could not be read. They were preserved; recover the saved alerts before editing or monitoring." }
@@ -364,7 +367,7 @@ final class StockSageStore: ObservableObject {
             Self.trackedSymbols(board: [], watchlist: [],
                 portfolio: StockSagePortfolio.shared.positions.map(\.symbol),
                 journalOpen: StockSageJournalStore.shared.open.map(\.symbol))
-        })
+        }, journalTrades: { StockSageJournalStore.shared.trades })
         seedSampleData()
         loadCachedQuotes()   // prefer real last-good prices over the sample seed when we have them
         loadCatalystRecords()   // A2: restore checkedAt/earningsDates so the TTL guard isn't blind on relaunch
@@ -917,7 +920,7 @@ final class StockSageStore: ObservableObject {
         // that never changes across chunks within one scan).
         let cachePriceHistories = cache?.priceHistories() ?? [:]
         let cal = convictionCalibration                           // read on the main actor before ANY await
-        let journalTrades = StockSageJournalStore.shared.trades   // read on the main actor before ANY await
+        let journalTrades = self.journalTrades()   // read on the main actor before ANY await
         // Benchmark fetched ONCE up front, shared by every chunk's buildIdeas call.
         let benchmark = await StockSageQuoteService.fetchHistory("^GSPC", range: "1y")
         await refreshInfraFX()   // SAR rate for .SR conversions (infra — FX left the universe 2026-07-16)
@@ -968,11 +971,12 @@ final class StockSageStore: ObservableObject {
             // skip the save entirely (the pre-hoist behavior). Per-entry `savedAt` (schema v2)
             // is the complete future fix — out of scope here. Scan-identity semantics (delta
             // baseline, alerts) stay behind the wasCancelled branch below as before.
-            if let toSave = Self.cancelSaveDecision(priorCacheSymbols: Set(cachePriceHistories.keys),
-                                                     priorCacheSavedAtDayKey: cache.map { StockSageScanChunking.utcDayKey($0.savedAt) },
+            if let today = StockSageScanChunking.utcDayKey(Date()),
+               let toSave = Self.cancelSaveDecision(priorCacheSymbols: Set(cachePriceHistories.keys),
+                                                     priorCacheSavedAtDayKey: cache.flatMap { StockSageScanChunking.utcDayKey($0.savedAt) },
                                                      accumulated: scan.accumulatedHistories,
                                                      priorCacheHistories: cachePriceHistories,
-                                                     nowDayKey: StockSageScanChunking.utcDayKey(Date())) {
+                                                     nowDayKey: today) {
                 // Concurrency R2: serialize through CacheWriter so this cancel save can't reorder past
                 // a still-in-flight full-scan save and shrink a same-day-fresh cache.
                 Task.detached { await StockSageHistoryCache.from(histories: toSave, universe: historyUniverse, savedAt: Date()).saveSerialized() }
@@ -1328,7 +1332,7 @@ final class StockSageStore: ObservableObject {
         ideasProgress = (current: 0, total: retryTotal)
         defer { ideasProgress = nil }
         let cal = convictionCalibration                           // read on the main actor before the await hop
-        let journalTrades = StockSageJournalStore.shared.trades   // read on the main actor before the await hop
+        let journalTrades = self.journalTrades()   // read on the main actor before the await hop
         let retrySet = Set(ideasMissing.map { $0.uppercased() })
         // CONCURRENCY #3: ONE universe snapshot BEFORE the await — the missing-list below must
         // be computed against the same set that was scanned, not a fresh post-await read that
@@ -1849,7 +1853,7 @@ final class StockSageStore: ObservableObject {
     /// (isotonicWilson/beta/platt/identity) — conservatism depends on the fit path, NOT on non-nil.
     /// Cached per journal state (F12); any journal change is picked up on the very next read.
     var convictionCalibration: StockSageConvictionCalibration? {
-        let journalFit = calibrationFitCache.value(for: StockSageJournalStore.shared.trades).fit
+        let journalFit = calibrationFitCache.value(for: journalTrades()).fit
         if Self.qaSuppressPersistedCalibration { return journalFit }
         return journalFit ?? backtestConvictionCalibration
     }
@@ -1859,7 +1863,7 @@ final class StockSageStore: ObservableObject {
     /// predictor. nil until the journal has enough closed trades to split + fit — so it shows only once
     /// there's a real OOS verdict to give (small-sample-noisy by nature). Cached with the fit (F12).
     var calibrationOOS: StockSageConvictionCalibration.OOSCalibrationCheck? {
-        calibrationFitCache.value(for: StockSageJournalStore.shared.trades).oos
+        calibrationFitCache.value(for: journalTrades()).oos
     }
 
     /// True when the EFFECTIVE calibration (`convictionCalibration`) is the backtest leg — the
@@ -1867,7 +1871,7 @@ final class StockSageStore: ObservableObject {
     /// help line in MarketsView's calibrationChip (Decision 5): the journal fit carries no
     /// snapshot of its own, so provenance only ever applies to the backtest leg.
     var convictionCalibrationIsFromBacktest: Bool {
-        calibrationFitCache.value(for: StockSageJournalStore.shared.trades).fit == nil
+        calibrationFitCache.value(for: journalTrades()).fit == nil
             && backtestConvictionCalibration != nil
     }
 
@@ -3420,7 +3424,7 @@ final class StockSageStore: ObservableObject {
     /// isSampleData = true) so the fixture board is honestly bannered "Sample data" —
     /// never rendered under the cached/live banner. In-memory only: nothing here persists
     /// (ideas/earningsDates are not written to disk; paper-trading/alerts/monitor untouched).
-    func seedQAIdeas() async {
+    func seedQAIdeas(previousScanEntries: [String: String] = [:]) async {
         seedSampleData()   // honest labeling: whole board = sample, isSampleData = true
         // Provenance honesty (2026-07-08): the --qa launch may already have loaded the disk
         // cache (loadedFromCache=true) before this seed replaces the board with fixtures. Clear
@@ -3444,10 +3448,7 @@ final class StockSageStore: ObservableObject {
         // Earnings warning on the buy card: ≤3 days → .imminent (StockSageEarnings severity)
         // → "⚠︎ earnings ~2d" chip + rank demotion visible on the AAPL card. In-memory only.
         earningsDates["AAPL"] = Date().addingTimeInterval(2 * 86_400)
-        // Scan deltas: reads whatever baseline is currently in StockSageScanSnapshotStore
-        // (QASnapshots.checkAndRun in-memory-seeds it via qaSeed before calling this, then
-        // restores it after capture) — this method NEVER calls save(), so the real
-        // stocksage.prevscan.v1 key is untouched (PLAN_2026-07-07_scan_deltas.md).
-        scanDeltas = StockSageScanDelta.deltas(current: ideas, previous: StockSageScanSnapshotStore.shared.entries)
+        // Fixture input only; never read or save the owner's previous-scan baseline.
+        scanDeltas = StockSageScanDelta.deltas(current: ideas, previous: previousScanEntries)
     }
 }

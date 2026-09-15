@@ -94,6 +94,25 @@ struct StockSagePortfolioTests {
         #expect(p.positions[0].totalCost == 0)
     }
 
+    @Test func overflowingPositionCostIsRejectedWithoutChangingSavedLots() throws {
+        let suite = "portfolio.overflow.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSagePortfolio(userDefaults: defaults)
+        try #require(store.add(symbol: "KEPT", shares: 2, costBasis: 100))
+        let positions = store.positions
+        let bytes = try #require(defaults.data(forKey: "stocksage_portfolio_v1"))
+        // The actual form parser accepts each plain-decimal operand; only their product overflows.
+        let text = "1" + String(repeating: "0", count: 200)
+        let shares = try #require(StockSageInput.positiveAmount(text))
+        let cost = try #require(StockSageInput.nonNegativeAmount(text))
+        try #require(!(shares * cost).isFinite)
+        #expect(!store.add(symbol: "HUGE", shares: shares, costBasis: cost))
+        #expect(store.positions == positions && store.lastError != nil && store.hasLoadedRecords)
+        #expect(defaults.data(forKey: "stocksage_portfolio_v1") == bytes)
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == positions)
+    }
+
     @Test func removeDeletesByIdAndClearEmpties() {
         let p = freshStore("remove")
         p.add(symbol: "A", shares: 1, costBasis: 1)
@@ -187,6 +206,34 @@ struct StockSagePortfolioAggregationTests {
         }
         #expect(dict["TSLA"] == nil)   // zero-share lot → nil, same as holding(for:in:)
         #expect(dict.count == 2)       // AAPL + MSFT only
+    }
+
+    @Test func unrepresentableHoldingsNeverBecomePartialOrInfiniteAggregates() {
+        let cases = [
+            [PortfolioPosition(symbol: "HUGE", shares: -1, costBasis: 100)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: -100)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1e200, costBasis: 1e200)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1e308, costBasis: 0),
+             PortfolioPosition(symbol: "HUGE", shares: 1e308, costBasis: 0)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: 1e308),
+             PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: 1e308)]
+        ]
+        for invalidLots in cases {
+            let positions = invalidLots + [
+                PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: 100),
+                PortfolioPosition(symbol: "GOOD", shares: 4, costBasis: 20)]
+            #expect(StockSagePortfolio.holding(for: "huge", in: positions) == nil)
+            let holdings = StockSagePortfolio.holdingBySymbol(in: positions)
+            #expect(holdings["HUGE"] == nil, "Dropping the invalid lots would fabricate a partial holding")
+            #expect(holdings["GOOD"] == AggregatedHolding(symbol: "GOOD", shares: 4, costBasis: 20))
+        }
+    }
+
+    @Test func unrealizedPercentRejectsNonfiniteInputsAndOverflow() {
+        for (basis, price) in [(Double.infinity, 100.0), (100.0, Double.infinity), (1e-200, 1e200)] {
+            let holding = AggregatedHolding(symbol: "HUGE", shares: 1, costBasis: basis)
+            #expect(holding.unrealizedPct(vs: price) == nil)
+        }
     }
 
     @Test func unrealizedPctPositiveCase() {

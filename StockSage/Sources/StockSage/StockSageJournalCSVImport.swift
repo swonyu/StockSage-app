@@ -29,7 +29,8 @@ enum StockSageJournalCSVImport {
     static func parse(_ csv: String, existing: [TradeRecord] = []) -> (trades: [TradeRecord], rowErrors: [(line: Int, reason: String)]) {
         let rawRows = splitRFC4180(csv)
         guard let headerRow = rawRows.first else { return ([], [(1, "empty file")]) }
-        guard headerRow.fields.joined(separator: ",") == StockSageJournalCSV.header else {
+        guard headerRow.error == nil,
+              headerRow.fields == StockSageJournalCSV.header.components(separatedBy: ",") else {
             return ([], [(1, "header doesn't match the export format — expected: \(StockSageJournalCSV.header)")])
         }
 
@@ -42,6 +43,7 @@ enum StockSageJournalCSVImport {
 
         for row in rawRows.dropFirst() {
             let line = row.line, fields = row.fields
+            if let error = row.error { errors.append((line, error)); continue }
             guard fields.count == 11 else {
                 errors.append((line, "expected 11 columns, found \(fields.count)"))
                 continue
@@ -140,18 +142,23 @@ enum StockSageJournalCSVImport {
     /// RFC-4180 row splitter: handles quoted fields containing commas, doubled quotes, and
     /// embedded newlines (CR, LF, CRLF) — a naive `.split(separator: "\n")` would break a
     /// multi-line quoted note into multiple fake rows.
-    private static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String])] {
-        var rows: [(line: Int, fields: [String])] = []
+    private static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String], error: String?)] {
+        var rows: [(line: Int, fields: [String], error: String?)] = []
         var fields: [String] = []
         var field = ""
         var inQuotes = false
+        var closedQuote = false
+        var rowError: String?
         let chars = Array(csv)
         var i = 0
         var sawAnyContent = false
         var physicalLine = 1, rowStart = 1
 
-        func endField() { fields.append(field); field = "" }
-        func endRow() { endField(); rows.append((rowStart, fields)); fields = []; rowStart = physicalLine }
+        func endField() { fields.append(field); field = ""; closedQuote = false }
+        func endRow() {
+            endField(); rows.append((rowStart, fields, rowError))
+            fields = []; rowError = nil; rowStart = physicalLine
+        }
 
         while i < chars.count {
             let c = chars[i]
@@ -161,24 +168,28 @@ enum StockSageJournalCSVImport {
                     if i + 1 < chars.count, chars[i + 1] == "\"" {
                         field.append("\""); i += 2; continue
                     }
-                    inQuotes = false; i += 1; continue
+                    inQuotes = false; closedQuote = true; i += 1; continue
                 }
                 field.append(c); i += 1; continue
             }
             switch c {
             case "\"":
-                inQuotes = true; sawAnyContent = true; i += 1
+                if field.isEmpty && !closedQuote { inQuotes = true }
+                else { rowError = "unexpected quote in an unquoted field" }
+                sawAnyContent = true; i += 1
             case ",":
                 sawAnyContent = true; endField(); i += 1
             case "\r", "\n", "\r\n":
                 // Swift treats CRLF as ONE extended-grapheme Character.
                 sawAnyContent = true; endRow(); i += 1
             default:
+                if closedQuote { rowError = "unexpected text after a closing quote" }
                 sawAnyContent = true; field.append(c); i += 1
             }
         }
         // Trailing row with no terminating newline.
-        if sawAnyContent, !field.isEmpty || !fields.isEmpty { endRow() }
+        if inQuotes { rowError = "unterminated quoted field" }
+        if sawAnyContent, !field.isEmpty || !fields.isEmpty || inQuotes || closedQuote { endRow() }
         return rows
     }
 }

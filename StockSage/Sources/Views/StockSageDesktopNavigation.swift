@@ -9,9 +9,9 @@ enum StockSageDesktop {
     /// The sidebar's single source of order and grouping; `sections` is derived from it, so a
     /// route can only disappear from the sidebar by disappearing from this list.
     static let groups: [SidebarGroup] = [
-        SidebarGroup(title: "Workspace", sections: [.briefing, .research, .paper, .chat]),
-        SidebarGroup(title: "Explore", sections: [.watchlist, .ideas, .all, .catalysts, .heatmap]),
-        SidebarGroup(title: "Your records", sections: [.portfolio, .alerts]),
+        SidebarGroup(title: "Workspace", sections: [.briefing, .research, .watchlist, .chat]),
+        SidebarGroup(title: "Explore", sections: [.ideas, .all, .catalysts, .heatmap]),
+        SidebarGroup(title: "Your records", sections: [.portfolio, .paper, .alerts]),
     ]
     static let sections: [MarketSection] = groups.flatMap(\.sections)
     static let berry = DS.Palette.accentText
@@ -29,7 +29,7 @@ enum StockSageDesktop {
     }
     static func subtitle(for section: MarketSection) -> String {
         switch section {
-        case .briefing: "Your briefing, followed by the wider market."
+        case .briefing: "Latest completed picks and saved predictions ready for review."
         case .watchlist: "The companies you choose to follow."
         case .ideas: "Compare the setup, the evidence and the risk."
         case .all: "Explore the tracked market."
@@ -38,8 +38,8 @@ enum StockSageDesktop {
         case .portfolio: "Your holdings, journal and forward record."
         case .alerts: "Choose what deserves your attention."
         case .chat: "Ask about your data. No automatic orders."
-        case .research: "One-time research. Separate from day trading."
-        case .paper: "Continuous same-day simulation. No real orders."
+        case .research: "Up to five Buy / Strong Buy results for 1–7 or 7–14 trading days."
+        case .paper: "Recorded simulation. New runs are retired; open positions are not monitored after relaunch."
         }
     }
     static func icon(for section: MarketSection) -> String {

@@ -588,9 +588,6 @@ final class StockSagePaperAutomation: ObservableObject {
         }
     }
 
-    func resumeIfEnabled() {
-        if defaults.bool(forKey: Self.enabledKey) { start() }
-    }
     func start() {
         guard !isRunning, !StockSageStore.isRunningTests, !CommandLine.arguments.contains("--qa"), acquire() else { return }
         var next = book
@@ -845,7 +842,7 @@ final class StockSagePaperAutomation: ObservableObject {
             recordFailure("Recent intraday bars and qualified trade evidence unavailable; no same-day model decision. Scheduled exits remain active.", symbol: symbol, at: Date()); return
         }
         guard let history, let historyAt = history.dates.last,
-              (0...4 * 86_400).contains(Date().timeIntervalSince(historyAt)) else {
+              StockSageMarketHours.isRecentResearchPrice(historyAt, source: history.priceSource, at: Date()) else {
             recordFailure("Recent dated price history unavailable; no paper decision.", symbol: symbol, at: Date(), facts: intraday.facts); return
         }
         let partialFacts = intraday.facts + ["Retrieved daily background ends \(historyAt.ISO8601Format()). Not an intraday price or executable quote."]
@@ -932,10 +929,10 @@ final class StockSagePaperAutomation: ObservableObject {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)
             recordFailure("Qwen request failed; \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
         }
-        // A verdict cut off at the output limit is refused outright. Measured 2026-09-10: a
-        // truncated P/L answer stated a headline figure its own unfinished working contradicted.
-        guard !StockSageLocalModelServer.rejectsTruncatedOutput(completion) else {
-            recordFailure("Qwen answer stopped at the output limit before finishing; a truncated verdict is not accepted. No paper order. Scheduled exits remain active.",
+        // Explicit incomplete verdicts are refused even when their JSON parses. Measured
+        // truncation previously produced a headline contradicted by its unfinished working.
+        if let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
+            recordFailure(rejection + " No paper order. Scheduled exits remain active. " + completion.diagnostic.summary,
                           symbol: symbol, at: Date(), facts: facts); return
         }
         guard case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {

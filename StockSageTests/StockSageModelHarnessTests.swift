@@ -311,6 +311,29 @@ struct StockSageModelHarnessTests {
             })
         let completion = try #require(try? result.get())
         #expect(!S.rejectsTruncatedOutput(completion))
+        #expect(S.financialOutputRejection(completion) == nil)
+    }
+
+    @Test func explicitNonfinalMetadataRejectsFinancialVerdictsButPreservesChatText() throws {
+        let text = #"{"action":"Hold","reason":"Outlook mixed.","risk":"Loss possible.","evidence":["F1"]}"#
+        let cases: [(Any, S.Finish)] = [
+            ("content_filter", .filtered), ("tool_calls", .toolCall), ("function_call", .toolCall),
+            ("unexpected", .unknown), (42, .malformed)
+        ]
+        for isOllama in [true, false] {
+            for (rawFinish, expected) in cases {
+                let body: [String: Any] = isOllama
+                    ? ["message": ["content": text], "done_reason": rawFinish]
+                    : ["choices": [["message": ["content": text], "finish_reason": rawFinish]]]
+                let bytes = try JSONSerialization.data(withJSONObject: body)
+                let completion = try S.parseCompletion(bytes, isOllama: isOllama).get()
+                #expect(completion.diagnostic.finish == expected)
+                #expect(S.financialOutputRejection(completion) != nil, "Explicit \(expected) is not a completed verdict")
+                #expect(!S.rejectsTruncatedOutput(completion), "These states are not Chat token-limit notices")
+                #expect(S.parseChatResponse(bytes, isOllama: isOllama) == text,
+                        "Generic Chat retains usable text and observes the finish metadata separately")
+            }
+        }
     }
 
     // The strict LM Studio profile keeps its stricter rule: it requires a positively confirmed
@@ -322,6 +345,8 @@ struct StockSageModelHarnessTests {
                 try Self.ok(["model": S.defaultModel, "message": ["content": "A complete answer."]], request)
             })
         #expect((try? result.get())?.text == "A complete answer.")
+        let completion = try result.get()
+        #expect(S.financialOutputRejection(completion) == nil)
     }
 
     // MARK: Model identity on every backend, without breaking Ollama's ":latest" spelling

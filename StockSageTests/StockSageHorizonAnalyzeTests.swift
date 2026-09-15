@@ -31,8 +31,16 @@ struct StockSageHorizonAnalyzeTests {
     private static func historyPayload(bars: Int = 90, endingDaysAgo: Int = 1) -> Data {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
-        let lastDay = calendar.date(byAdding: .day, value: -endingDaysAgo,
-                                    to: calendar.startOfDay(for: Date()))!
+        var lastDay = calendar.date(byAdding: .day, value: -endingDaysAgo,
+                                   to: calendar.startOfDay(for: Date()))!
+        // A normal successful fixture ends at a real completed session, including when
+        // this suite runs on Monday or after a market holiday. The stale fixture stays stale.
+        if endingDaysAgo == 1 {
+            for _ in 0..<8 {
+                if StockSageMarketHours.nasdaqDay(at: lastDay)?.trading == true { break }
+                lastDay = calendar.date(byAdding: .day, value: -1, to: lastDay)!
+            }
+        }
         var rows: [[String: Any]] = []
         for index in 0..<bars {
             let day = calendar.date(byAdding: .day, value: -(bars - 1 - index), to: lastDay)!
@@ -73,6 +81,7 @@ struct StockSageHorizonAnalyzeTests {
                      history: Data = StockSageHorizonAnalyzeTests.historyPayload(),
                      historyStatus: Int = 200,
                      isOllama: Bool = true,
+                     horizon: Research.Horizon = .week,
                      allowed: @escaping @MainActor () -> Bool = { true },
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
                      ) async -> Research.Result {
@@ -87,7 +96,7 @@ struct StockSageHorizonAnalyzeTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         return await Research.analyze(
-            listing, horizon: .week, store: store, config: config,
+            listing, horizon: horizon, store: store, config: config,
             isOllama: isOllama, key: "fixture-key", allowed: allowed,
             historyTransport: { request in
                 (history, HTTPURLResponse(url: request.url!, statusCode: historyStatus,
@@ -135,12 +144,16 @@ struct StockSageHorizonAnalyzeTests {
         let draft = #"{"action":"Hold","reason":"qualitative case","risk":"qualitative counter-case"}"#
         let result = await run(model: { request in
             calls += 1
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            let system = try #require(messages.first(where: { $0["role"] == "system" })?["content"])
+            #expect(system.contains("multi-session"), "The repair must retain the holding-horizon constraint")
+            #expect(system.contains("same-session day-trading"))
+            #expect(system.contains("beyond 14 trading days"))
             if calls == 1 {
                 return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
                     "message": ["content": draft], "done_reason": "stop"]), request)
             }
-            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
-            let messages = try #require(body["messages"] as? [[String: String]])
             #expect(messages.last?["content"]?.contains("Copy action, reason and risk EXACTLY") == true)
             return Self.ok(Self.verdictPayload(), request)
         })
@@ -205,15 +218,22 @@ struct StockSageHorizonAnalyzeTests {
 
     // The horizon facts define the requested holding period and the reference entry. They are
     // mandatory and must reach the model even when optional evidence has to be trimmed.
-    @Test func theRequestedHorizonAlwaysReachesTheModel() async throws {
-        var sentUser = ""
-        _ = await run(model: { request in
-            let object = try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any]
-            let messages = object?["messages"] as? [[String: String]]
-            sentUser = messages?.first(where: { $0["role"] == "user" })?["content"] ?? ""
-            return Self.ok(Self.verdictPayload(), request)
+    @Test(arguments: Research.Horizon.allCases, [true, false])
+    func theRequestedHorizonAlwaysReachesTheModel(horizon: Research.Horizon, isOllama: Bool) async throws {
+        var sentSystem = "", sentUser = ""
+        _ = await run(isOllama: isOllama, horizon: horizon, model: { request in
+            let object = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(object["messages"] as? [[String: String]])
+            sentSystem = try #require(messages.first(where: { $0["role"] == "system" })?["content"])
+            sentUser = try #require(messages.first(where: { $0["role"] == "user" })?["content"])
+            throw URLError(.cancelled) // Observe the real dispatch without a model or provider request.
         })
-        #expect(sentUser.contains(Research.Horizon.week.rawValue))
+        #expect(sentSystem.contains("for a \(horizon.rawValue) holding horizon"))
+        #expect(sentSystem.contains("multi-session"))
+        #expect(sentSystem.contains("Do not propose intraday or same-session day-trading strategies"))
+        #expect(sentSystem.contains("beyond 14 trading days"))
+        #expect(sentSystem.contains("historical windows are background evidence"))
+        #expect(sentUser.contains(horizon.rawValue))
         #expect(sentUser.localizedCaseInsensitiveContains("Research only"))
     }
 

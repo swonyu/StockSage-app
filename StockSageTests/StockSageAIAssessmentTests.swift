@@ -453,6 +453,55 @@ struct StockSageAIAssessmentTests {
         }
     }
 
+    @Test func dailyAssessmentFreshnessHonorsHolidaysWithoutWideningLiveQuoteAge() throws {
+        let cases: [(String, String, Bool, Bool)] = [
+            ("2026-09-08T14:00:00Z", "2026-09-04T04:00:00Z", true, false),
+            ("2026-04-06T14:00:00Z", "2026-04-02T04:00:00Z", true, false),
+            ("2026-09-15T14:00:00Z", "2026-09-11T04:00:00Z", false, false),
+            ("2027-01-19T15:00:00Z", "2027-01-15T05:00:00Z", false, false),
+            ("2026-09-06T14:00:00Z", "2026-09-04T04:00:00Z", true, true),
+            ("2026-09-15T14:00:00Z", "2026-09-15T04:00:00Z", true, true), // General daily-board compatibility.
+            ("2027-01-06T15:00:00Z", "2027-01-05T05:00:00Z", true, true) // Existing age policy, no calendar exception.
+        ]
+        let formatter = ISO8601DateFormatter()
+        for (clock, latest, dailyAccepted, liveAccepted) in cases {
+            let at = try #require(formatter.date(from: clock))
+            let bar = try #require(formatter.date(from: latest))
+            for (source, accepted) in [(StockSagePriceSource.massiveDaily, dailyAccepted), (.massiveSIP, liveAccepted)] {
+                let dailyIdea = StockSageIdea(symbol: "ORCL", market: "US", price: 100,
+                    advice: idea().advice, spark: [100], generatedAt: at, priceAsOf: bar, priceSource: source)
+                let c = A.Context(idea: dailyIdea, earnings: nil, company: [:], at: at)
+                #expect(c.canAssess(at: at) == accepted, "\(source) at \(clock)")
+                #expect(!c.canAssess(at: at.addingTimeInterval(4 * 3_600 + 1)),
+                        "A valid daily bar must not extend the analysis snapshot's four-hour lifetime")
+            }
+        }
+    }
+
+    @Test(arguments: ["answer", "repair"])
+    func explicitUnfinishedResponsesNeverPublishAnAssessment(phase: String) async throws {
+        typealias S = StockSageLocalModelServer
+        let draft = json.replacingOccurrences(of: ",\"evidence\":[\"F1\"]", with: "")
+        try #require(A.parse(json, facts: context.facts, symbol: "ORCL") != nil)
+        for finish in [S.Finish.filtered, .toolCall, .unknown, .malformed] {
+            let state = StockSageAIAssessments()
+            var calls = 0
+            await state.assess(context, config: config, now: now, stillValid: { true }, generateDetailed: { _, _ in
+                calls += 1
+                if phase == "repair", calls == 1 {
+                    return .success(.init(text: draft, diagnostic: .init(finish: .stop)))
+                }
+                return .success(.init(text: json, diagnostic: .init(finish: finish)))
+            })
+            #expect(calls == (phase == "repair" ? 2 : 1))
+            #expect(state.records.isEmpty && state.activeSymbol == nil, "Unfinished \(phase): \(finish)")
+            let error = try #require(state.errors["ORCL"])
+            #expect(!error.localizedCaseInsensitiveContains("output limit"),
+                    "An explicit \(finish) must not be mislabeled as token exhaustion")
+            if phase == "repair" { #expect(state.drafts["ORCL"]?.text == draft) }
+        }
+    }
+
     @Test @MainActor func coordinatorRejectsConcurrentAndObsoleteResults() async throws {
         let state = StockSageAIAssessments()
         let c = context

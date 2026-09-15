@@ -25,9 +25,14 @@ struct MarketsView: View {
 
     @State private var section: MarketSection
     @State private var researchPresentation = StockSageResearchModesPanel.Presentation()
+    @ObservedObject private var researchHistory: StockSageResearchHistory
 
     @State private var desktopPortfolioPage: StockSageDesktop.PortfolioPage = .holdings
     @State private var desktopBriefingExpanded = false
+    @State private var pendingModelSettingsReveal: UUID?
+    @AppStorage("marketsCatalystsModelSettingsExpanded") private var catalystModelSettingsExpanded = false
+    @AppStorage(AppSettings.Keys.offlineOnly) private var feedOfflineOnly = false
+    @AppStorage(AppSettings.Keys.webAccess) private var feedWebAccess = true
     @Environment(\.dynamicTypeSize) private var workspaceTypeSize
 
     @AppStorage("marketsWatchSort") private var sort: MarketSort = .feed
@@ -68,7 +73,7 @@ struct MarketsView: View {
         var id: String { rawValue }
     }
     @AppStorage("marketsFastLaneBoard") private var fastLaneBoard: FastLaneBoard = .both
-    @ObservedObject private var velocityHistory = StockSageVelocityHistoryStore.shared
+    @ObservedObject private var velocityHistory: StockSageVelocityHistoryStore
 
     // Dynamic-Type-aware small fonts: each equals its base size at the default text
     // setting (mvFont9 == 9), so the dense layout is unchanged, but they scale up when
@@ -95,33 +100,18 @@ struct MarketsView: View {
     @ScaledMetric(relativeTo: .caption2) private var mvFont20: CGFloat = 20
     @ScaledMetric(relativeTo: .caption2) private var mvFont22: CGFloat = 22
 
-    // ── Ideas-surface type roles (UX wave 2) ─────────────────────────────────
-    // A documented hierarchy ON TOP of the mvFont @ScaledMetric tokens (the F48
-    // mechanism is unchanged — every role scales with Dynamic Type via its token).
-    // Ramp ≈ a major-second (1.125×) modular scale anchored at the 9pt caption:
-    //   9.0 → 10.1 → 11.4 → 12.8 → 14.4 → … → 20.5, snapped to the token grid:
-    //   micro 8 · caption/metricLabel 9 · chipLabel 10 · body/caveat 11.5 ·
-    //   metricValue 12.5 (legacy exact-size token, kept) · sectionHeader 15 ·
-    //   cardTitle 15 · sheetTitle 20.
-    // Deliberate wave-2 change: sectionHeader 12 → 13 (mvFont13) so the sheet's
-    // section headers (Why / Evidence / Exit plan / Context) outrank the 12.5pt
-    // metric values they introduce. Roles name SIZES, never displayed terms —
-    // the Conviction-vs-Signal-strength wording question stays parked (F08).
-    // New call sites use roles; legacy mvFontN call sites migrate in a later wave.
+    // Ideas type roles: readable body/caveats, distinct values and quieter metadata.
+    // All roles retain the existing Dynamic Type scaling; layout adapts around them.
     private var fontSheetTitle: CGFloat { mvFont20 }
     private var fontCardTitle: CGFloat { mvFont15 }
-    // 13 → 15 (2026-07-28 design review): at 13 the section header was 1.04× the 12.5pt
-    // metric values it introduces — inside the JND, so "Why"/"Evidence"/"Exit plan"/
-    // "Context" read as body, not structure. 15 restores the 1.2× step the ladder claims.
     private var fontSectionHeader: CGFloat { mvFont15 }
-    private var fontMetricValue: CGFloat { mvFont12_5 }
-    private var fontBody: CGFloat { mvFont11_5 }
+    private var fontMetricValue: CGFloat { mvFont15 }
     /// Caveats, honesty labels and provenance. Deliberately ONE STEP ABOVE fontChipLabel:
     /// these strings are the product's differentiator, and at 9-10pt they rendered smaller
     /// than the descriptive copy they qualify. Never below 11.
-    private var fontCaveat: CGFloat { mvFont11_5 }
-    private var fontChipLabel: CGFloat { mvFont10 }
-    private var fontMetricLabel: CGFloat { mvFont9 }
+    private var fontCaveat: CGFloat { mvFont13 }
+    private var fontChipLabel: CGFloat { mvFont11 }
+    private var fontMetricLabel: CGFloat { mvFont11 }
     // fontCaption / fontMicro removed (2026-07-28 design review): zero consumers since the
     // wave-2 role migration.
 
@@ -227,32 +217,17 @@ struct MarketsView: View {
         static let section: CGFloat = 12 // sheet root vertical rhythm (was 10)
     }
 
-    @ObservedObject private var store = StockSageStore.shared
-    @ObservedObject private var aiAssessments = StockSageAIAssessments.shared
-    @ObservedObject private var portfolio = StockSagePortfolio.shared
-    @ObservedObject private var journal = StockSageJournalStore.shared
-    @ObservedObject private var paperStore = StockSagePaperTradeStore.shared
+    @ObservedObject private var store: StockSageStore
+    @ObservedObject private var aiAssessments: StockSageAIAssessments
+    @ObservedObject private var portfolio: StockSagePortfolio
+    @ObservedObject private var journal: StockSageJournalStore
+    @ObservedObject private var paperStore: StockSagePaperTradeStore
     // Fixup (2026-09-06, Q5 reviewer finding): the LIVE dot below must observe the stream
     // object directly. Reading `StockSageLiveStream.shared.isStreaming` inline registers no
     // SwiftUI dependency (it's a singleton read, not a wrapped property), so the watchdog's
     // isStreaming=false on a silent/half-open socket never redraws this view — the dot stays
     // lit until an unrelated re-render. Without this, Q5's "clears within ~45s" is not real.
-    @ObservedObject private var live = StockSageLiveStream.shared
-    @State private var briefing = ""
-    @State private var briefingGeneratedAt: Date? = nil
-    /// Fingerprint of the symbol list the briefing was generated against — display is
-    /// gated on it still matching at RENDER time (review fix 2026-07-17: the old
-    /// onChange reset lived on the briefing section, which is unmounted on other tabs,
-    /// so a symbols edit made elsewhere never fired it and stale text naming removed
-    /// tickers re-appeared as current on remount).
-    @State private var briefingSymbolsKey = ""
-
-    /// The generated briefing, valid ONLY while the board still matches what it was
-    /// generated against; "" (→ the deterministic fallback) otherwise.
-    private var currentBriefing: String {
-        briefingSymbolsKey == store.symbols.map(\.symbol).sorted().joined() ? briefing : ""
-    }
-    @State private var loadingBriefing = false
+    @ObservedObject private var live: StockSageLiveStream
     @State private var newSymbol = ""
     @State private var newShares = ""
     @State private var newCost = ""
@@ -379,7 +354,7 @@ struct MarketsView: View {
     private enum AddField: Hashable { case symbol, shares, cost }
     @FocusState private var focusedAddField: AddField?
     // Observe the live task, not an onAppear snapshot that misses launch/foreground changes.
-    @ObservedObject private var monitor = StockSageMonitor.shared
+    @ObservedObject private var monitor: StockSageMonitor
     private var monitoring: Bool { monitor.isRunning }
     // Shared key with StockSageMonitor.watchlistOnlyKey — scopes the alert scan to the watchlist.
     @AppStorage("marketsWatchlistOnly") private var watchlistOnly = false
@@ -423,7 +398,7 @@ struct MarketsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `qaSection` lets the QA harness capture a specific sub-section (e.g. the
-    /// heatmap) offscreen; normal use defaults to Home — both platforms land there on open
+    /// heatmap) offscreen; normal use defaults to Home on both platforms
     /// (iPhone's first native tab), so `--section <rawValue>` is the only way to start
     /// elsewhere. (The QA harness passes an explicit section so its snapshots stay deterministic.)
     /// QA-only seam (mirrors `qaSection`): when set, `body` renders the idea-detail SHEET
@@ -432,8 +407,22 @@ struct MarketsView: View {
     /// construction site) is byte-identical to today's body; never set outside QASnapshots.
     private let qaDetailSymbol: String?
     private let chatSession: StockSageChatSession
-    init(chatSession: StockSageChatSession, qaSection: MarketSection = .briefing, qaDetailSymbol: String? = nil) {
+    init(chatSession: StockSageChatSession, qaSection: MarketSection = .briefing, qaDetailSymbol: String? = nil,
+         store: StockSageStore = .shared, aiAssessments: StockSageAIAssessments = .shared,
+         portfolio: StockSagePortfolio = .shared, journal: StockSageJournalStore = .shared,
+         paperStore: StockSagePaperTradeStore = .shared, live: StockSageLiveStream = .shared,
+         velocityHistory: StockSageVelocityHistoryStore = .shared, monitor: StockSageMonitor = .shared,
+         researchHistory: StockSageResearchHistory = .shared) {
         self.chatSession = chatSession
+        _store = ObservedObject(wrappedValue: store)
+        _aiAssessments = ObservedObject(wrappedValue: aiAssessments)
+        _portfolio = ObservedObject(wrappedValue: portfolio)
+        _journal = ObservedObject(wrappedValue: journal)
+        _paperStore = ObservedObject(wrappedValue: paperStore)
+        _live = ObservedObject(wrappedValue: live)
+        _velocityHistory = ObservedObject(wrappedValue: velocityHistory)
+        _monitor = ObservedObject(wrappedValue: monitor)
+        _researchHistory = ObservedObject(wrappedValue: researchHistory)
         // Sweep seam (mirrors --qa, 2026-07-27): `--section heatmap` drives the initial tab
         // from the command line so the iOS-simulator sweep can screenshot every section
         // without UI scripting. Absent argument = byte-identical to today.
@@ -502,9 +491,12 @@ struct MarketsView: View {
             // `refreshIntervals`, and this task is the catalyst rescan, which has no timer at all.)
             // Keyed to the FULL-REFRESH clock, not lastUpdated: the catalyst rescan reloads the
             // entire on-disk history, and lastUpdated now moves twice a second while streaming.
-            .task(id: store.lastFullRefreshAt) { await store.refreshCatalysts() }
+            .task(id: store.lastFullRefreshAt) {
+                guard !StockSageStore.isRunningTests else { return }
+                await store.refreshCatalysts()
+            }
             .task(id: store.isLoadingIdeas) {
-                guard !store.isLoadingIdeas, !store.isSampleData,
+                guard !StockSageStore.isRunningTests, !store.isLoadingIdeas, !store.isSampleData,
                       !CommandLine.arguments.contains("--qa") else { return }
                 // ponytail: at most three serial assessments per completed scan; detail handles other names.
                 let revision = StockSageLocalModelServer.settingsRevision()
@@ -513,20 +505,24 @@ struct MarketsView: View {
                     await aiAssessments.assess(idea, store: store)
                 }
             }
-            .onChange(of: massiveCredentialRevision, initial: true) { _, _ in store.restartEarningsSweep() }
+            .onChange(of: massiveCredentialRevision, initial: true) { _, _ in
+                guard !StockSageStore.isRunningTests else { return }
+                store.restartEarningsSweep()
+            }
             .task(id: StockSageMassiveEvents.RefreshKey(symbols: store.trackedSymbolsUnion.sorted(), refreshedAt: store.lastFullRefreshAt,
                                                      credentialRevision: massiveCredentialRevision)) {
-                guard !CommandLine.arguments.contains("--qa") else { return }
+                guard !StockSageStore.isRunningTests, !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshCompanyEvents()
             }
             .task(id: StockSageMassiveSplits.RefreshKey(trades: journal.open, refreshedAt: store.lastFullRefreshAt)) {
-                guard !CommandLine.arguments.contains("--qa") else { return }
+                guard !StockSageStore.isRunningTests, !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshJournalSplits(journal.open)
             }
             // One whole-market T.*,Q.* socket. Board changes only select the UI projection.
             .task(id: streamSubscriptionKey) {
-                guard liveStreamEnabled else { StockSageLiveStream.shared.stop(); return }
-                StockSageLiveStream.shared.start(symbols: store.trackedSymbolsUnion)
+                guard !StockSageStore.isRunningTests else { return }
+                guard liveStreamEnabled else { live.stop(); return }
+                live.start(symbols: store.trackedSymbolsUnion)
             }
             // B3 (owner: "every stock tracking should be live" + thermal brake parity with
             // StockSageMonitor): the single 285s sweep is split into two independently-paced
@@ -539,7 +535,7 @@ struct MarketsView: View {
             // `refreshIntervals(thermal:)` is the single pure home for that math (pinned in
             // MarketsRefreshIntervalTests), mirroring StockSageMonitor's own ×2 brake.
             .task(id: autoRefreshEnabled) {
-                guard autoRefreshEnabled else { return }
+                guard !StockSageStore.isRunningTests, autoRefreshEnabled else { return }
                 while !Task.isCancelled {
                     let interval = Self.refreshIntervals(thermal: ProcessInfo.processInfo.thermalState).streamGap
                     try? await Task.sleep(for: .seconds(interval))
@@ -548,7 +544,7 @@ struct MarketsView: View {
                 }
             }
             .task(id: autoRefreshEnabled) {
-                guard autoRefreshEnabled else { return }
+                guard !StockSageStore.isRunningTests, autoRefreshEnabled else { return }
                 while !Task.isCancelled {
                     let interval = Self.refreshIntervals(thermal: ProcessInfo.processInfo.thermalState).full
                     try? await Task.sleep(for: .seconds(interval))
@@ -575,11 +571,14 @@ struct MarketsView: View {
         // every input — best opportunity, the account size heat needs, the paper book — is
         // already computed on this view; recomputing them in the store would be a second source
         // of truth for numbers the owner reads side by side.
-        .onChange(of: store.ideasUpdated) { _, _ in writeWidgetSnapshot() }
+        .onChange(of: store.ideasUpdated) { _, _ in
+            guard !StockSageStore.isRunningTests else { return }
+            writeWidgetSnapshot()
+        }
         .task {
             // Auto-pull a live Tadawul+NASDAQ snapshot on open — skipped under the QA
             // snapshot harness so captures stay deterministic and offline.
-            guard !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
+            guard !StockSageStore.isRunningTests, !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
             await store.refresh()
             // Auto-scan the EV ideas so the board the app lands on is already populated —
             // 0 taps from open to the best move. refreshIdeas self-guards re-entry/ToolPolicy.
@@ -588,7 +587,7 @@ struct MarketsView: View {
             // the fake-money experiment moves on any day the app gets opened. Stamped
             // BEFORE the await so a mid-scan relaunch can't double-fire; a failed scan
             // retries on the next day's first open.
-            let today = StockSageScanChunking.utcDayKey(Date())
+            guard let today = StockSageScanChunking.utcDayKey(Date()) else { return }
             if store.ideas.isEmpty || lastAutoScanDay != today {
                 lastAutoScanDay = today
                 await store.refreshIdeas()
@@ -667,15 +666,6 @@ struct MarketsView: View {
                                 VStack(alignment: .leading, spacing: 22) {
                                     if section == .briefing { desktopHome }
                                     else {
-                                        if section != .paper {
-                                            VStack(alignment: .leading, spacing: 6) {
-                                                Text(StockSageDesktop.title(for: section))
-                                                    .font(.largeTitle.weight(.semibold))
-                                                    .accessibilityAddTraits(.isHeader)
-                                                Text(StockSageDesktop.subtitle(for: section))
-                                                    .font(.callout).foregroundStyle(.secondary)
-                                            }
-                                        }
                                         content
                                     }
                                 }
@@ -683,7 +673,21 @@ struct MarketsView: View {
                                 .frame(maxWidth: .infinity, alignment: .top)
                                 .id("desktop-page-top")
                             }
-                            .onChange(of: section) { _, _ in proxy.scrollTo("desktop-page-top", anchor: .top) }
+                            .onChange(of: section) { _, destination in
+                                if destination != .catalysts || pendingModelSettingsReveal == nil {
+                                    proxy.scrollTo("desktop-page-top", anchor: .top)
+                                }
+                            }
+                            .task(id: pendingModelSettingsReveal) {
+                                guard let request = pendingModelSettingsReveal, section == .catalysts else { return }
+                                defer {
+                                    if pendingModelSettingsReveal == request { pendingModelSettingsReveal = nil }
+                                }
+                                await Task.yield()
+                                guard !Task.isCancelled, pendingModelSettingsReveal == request,
+                                      section == .catalysts else { return }
+                                proxy.scrollTo("catalysts-model-settings", anchor: .top)
+                            }
                         }
                     }
                 }
@@ -699,6 +703,9 @@ struct MarketsView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .onChange(of: section) { _, destination in
+            if destination != .catalysts { pendingModelSettingsReveal = nil }
+        }
         // A window-level inspector shares the real toolbar. Putting it inside the Research
         // panel below feedBanner creates a second titlebar strip that covers its controls.
         .inspector(isPresented: Binding(
@@ -709,7 +716,8 @@ struct MarketsView: View {
     }
 
     private func openDesktopModelSettings() {
-        UserDefaults.standard.set(true, forKey: "marketsCatalystsModelSettingsExpanded")
+        catalystModelSettingsExpanded = true
+        pendingModelSettingsReveal = UUID()
         section = .catalysts
     }
 
@@ -717,6 +725,7 @@ struct MarketsView: View {
 
     private var desktopHome: some View {
         VStack(alignment: .leading, spacing: 28) {
+            #if os(macOS)
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .bottom) {
                     desktopHomeHeading
@@ -728,7 +737,15 @@ struct MarketsView: View {
                     MarketSessionClockView()
                 }
             }
-            briefingSection
+            #else
+            desktopHomeHeading
+            #endif
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                StockSageResearchHomeSummary(store: store, history: researchHistory, now: context.date) { horizon in
+                    researchPresentation = .init(horizon: horizon == .week ? .week : .fortnight)
+                    section = .research
+                }
+            }
             #if os(macOS)
             let links = AnyLayout(HStackLayout(spacing: 0))
             #else
@@ -750,22 +767,29 @@ struct MarketsView: View {
                 desktopHomeLink("Ask Qwen", detail: "Your local research chat", section: .chat)
             }
             Divider()
-            Text("Market context").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 18)], alignment: .leading, spacing: 18) {
-                erasedOnIOS(regimeCard).frame(maxHeight: .infinity, alignment: .top)
-                erasedOnIOS(catalystCard).frame(maxHeight: .infinity, alignment: .top)
+            DisclosureGroup("Market context") {
+                VStack(alignment: .leading, spacing: 18) {
+                    #if os(iOS)
+                    MarketSessionClockView()
+                    #endif
+                    briefingSection
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 18)], alignment: .leading, spacing: 18) {
+                        erasedOnIOS(regimeCard).frame(maxHeight: .infinity, alignment: .top)
+                        erasedOnIOS(catalystCard).frame(maxHeight: .infinity, alignment: .top)
+                    }
+                    forwardProgressStrip
+                    DisclosureGroup("Research assumptions and money velocity") { moneyVelocityCard.padding(.top, 12) }
+                }.padding(.top, 12)
             }
-            forwardProgressStrip
-            DisclosureGroup("Research assumptions and money velocity") { moneyVelocityCard.padding(.top, 12) }
-                .font(.callout)
+            .font(.callout)
         }
     }
 
     private var desktopHomeHeading: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+            Text(StockSageResearchHistoryView.sessionDateLabel(Date.now))
                 .font(.callout).foregroundStyle(.secondary)
-            Text("Your market overview").font(.largeTitle.weight(.semibold))
+            Text("Your research today").font(.largeTitle.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
         }
     }
@@ -798,11 +822,25 @@ struct MarketsView: View {
     /// two banners and forgotten in the third. Deliberately not `private`: the regression test
     /// renders THIS, not a copy of it, at a degenerate width.
     /// See the note on `feedBanner` for what an uncapped sentence did to the whole window.
-    static func bannerSentence(_ text: String) -> some View {
+    @ViewBuilder static func bannerSentence(_ text: String, summary: String? = nil) -> some View {
+        #if os(iOS)
+        DisclosureGroup {
+            Text(text).font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+        } label: {
+            Text(summary ?? text).font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: 44, alignment: .leading)
+        }
+        .tint(DS.Palette.textSecondary)
+        .accessibilityHint("Expand for the full data source, freshness and feed details")
+        #else
         Text(text)
-            .font(.caption).foregroundStyle(.white.opacity(0.85))
+            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.85))
             .fixedSize(horizontal: false, vertical: true)
             .lineLimit(bannerSentenceLineLimit)
+        #endif
     }
 
     /// Three lines covers the longest live-banner sentence down to the 900pt window floor;
@@ -837,6 +875,10 @@ struct MarketsView: View {
         else { liveBanner }
     }
 
+    private var feedPolicySuffix: String {
+        feedOfflineOnly ? " · Offline Mode" : (!feedWebAccess ? " · Web access off" : "")
+    }
+
     /// Cached (last-good) prices loaded from disk after a failed/unreachable refresh. These are real
     /// numbers but NOT live — showing them under the green "Live" banner would imply a freshness the
     /// data doesn't have, so it gets its own amber banner with the snapshot age.
@@ -844,7 +886,7 @@ struct MarketsView: View {
         HStack(spacing: DS.Space.sm) {
             Image(systemName: "clock.arrow.circlepath").font(.system(size: mvFont11))
                 .foregroundStyle(DS.Palette.warningSoft)
-            Self.bannerSentence(cachedBannerText)
+            Self.bannerSentence(cachedBannerText, summary: "Cached prices · not live" + feedPolicySuffix)
             Spacer()
         }
         .padding(.vertical, 6)
@@ -877,7 +919,11 @@ struct MarketsView: View {
             HStack(spacing: DS.Space.sm) {
                 Circle().fill(tint).frame(width: 7, height: 7)
                     .shadow(color: stale ? .clear : tint.opacity(0.7), radius: 4)
-                Self.bannerSentence(text)
+                Self.bannerSentence(text, summary: asOf.flatMap { date in
+                    date.timeIntervalSince1970.isFinite && date <= now
+                        ? "\(stale ? "Last quote · not live" : "Latest dated quote") · \(date.formatted(date: .abbreviated, time: .shortened)). Other stocks may be older."
+                        : nil
+                } ?? "Price freshness unverified · no usable timestamp")
                 Spacer()
             }
             if let err = store.feedError {
@@ -1130,8 +1176,10 @@ struct MarketsView: View {
             // D5 (rotation-3 triage): `feedError ?? sample` hid the sample-data truth whenever a
             // feed error was ALSO present — both facts are true simultaneously (on sample data
             // AND the live feed errored) and the reader needs both, not whichever one won ??.
-            Self.bannerSentence("Sample data — connecting to the live Tadawul + NASDAQ feed… The signals show the engine running on illustrative prices."
-                 + (store.feedError.map { " \($0)" } ?? ""))
+            Self.bannerSentence("Sample data — illustrative prices, not live quotes."
+                 + (store.feedError.map { " \($0)" } ?? " Waiting for the Tadawul + NASDAQ feed."),
+                 summary: "Sample prices · not live" + (feedPolicySuffix.isEmpty
+                    ? (store.feedError == nil ? " · waiting for the feed" : " · feed unavailable") : feedPolicySuffix))
             Spacer()
         }
         .padding(.vertical, 6)
@@ -1171,15 +1219,6 @@ struct MarketsView: View {
                                 if destination == .briefing {
                                     erasedOnIOS(desktopHome)
                                 } else {
-                                    if destination != .research && destination != .paper {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text(StockSageDesktop.title(for: destination))
-                                                .font(.largeTitle.weight(.semibold))
-                                                .accessibilityAddTraits(.isHeader)
-                                            Text(StockSageDesktop.subtitle(for: destination))
-                                                .font(.callout).foregroundStyle(.secondary)
-                                        }
-                                    }
                                     erasedOnIOS(page(for: destination))
                                 }
                             }
@@ -1258,9 +1297,9 @@ struct MarketsView: View {
             StockSagePaperAutomationPanel()
             #else
             ContentUnavailableView {
-                Label("Paper trading runs on your Mac", systemImage: "desktopcomputer")
+                Label("Legacy paper history stays on your Mac", systemImage: "desktopcomputer")
             } description: {
-                Text("Use StockSage on your Mac to start or pause same-day simulation and inspect its account. This iPhone does not sync that paper account or monitor exits in the background. Research here never submits orders.")
+                Text("Open the Mac app to inspect its retained legacy account and history. New same-day runs are disabled, and open positions are not monitored after relaunch. This iPhone does not sync that legacy account. Research uses 1–7 or 7–14 trading days.")
             }
             #endif
         case .chat:
@@ -1279,39 +1318,25 @@ struct MarketsView: View {
     private var alertsSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             VStack(alignment: .leading, spacing: DS.Space.sm) {
-                HStack(spacing: DS.Space.sm) {
-                    Image(systemName: "bell.badge.fill").font(.system(size: mvFont18)).foregroundStyle(DS.Palette.accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Strong-signal alerts").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.white)
-                        .sensoryFeedback(.selection, trigger: monitoring)
-                        // Review fix 2026-07-17 (supersedes POST2420-COPY item 5): the cycle
-                        // REFRESHES core + watchlist but EVALUATES the whole board — a
-                        // non-core name pushes too while a recent full refresh keeps its
-                        // quote fresh (the freshness gate, not the refresh scope, is what
-                        // blocks stale pushes). The old "among the core + watchlist" copy
-                        // under-claimed the scope. Interpolated so counts can't drift.
-                        Text("Get a notification when a rules-based Strong Buy or Strong Sell appears; these are not Qwen badges. Each cycle refreshes the \(StockSageUniverse.core.count)-name curated core + your watchlist; other board names are included while a recent full refresh keeps their quotes fresh.")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    Toggle("", isOn: Binding(get: { monitoring }, set: { toggleMonitoring($0) }))
-                        .labelsHidden().tint(DS.Palette.accent)
-                        .accessibilityLabel("Strong-signal monitoring")
+                Toggle(isOn: Binding(get: { monitoring }, set: { toggleMonitoring($0) })) {
+                    Label("Strong-signal alerts", systemImage: "bell.badge.fill")
+                        .font(.headline)
                 }
-                HStack(spacing: DS.Space.sm) {
-                    Image(systemName: "star.circle").font(.system(size: mvFont12)).foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Watch only my watchlist").font(.system(size: mvFont12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
-                        Text(store.userSymbols.isEmpty
-                             ? "Add tickers to your watchlist to use this — each background cycle refreshes only the curated \(StockSageUniverse.core.count)-name core + your watchlist (a full \(StockSageUniverse.worldwide.count)-name pass runs on Find ideas / Refresh)."
-                             : "Alerts scan only your \(store.userSymbols.count) watchlist name\(store.userSymbols.count == 1 ? "" : "s") (faster). The full board won't auto-refresh — tap Refresh for it.")
-                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    Toggle("", isOn: $watchlistOnly).labelsHidden().tint(DS.Palette.accent)
-                        .disabled(store.userSymbols.isEmpty)
-                        .accessibilityLabel("Watch only my watchlist")
-                }
+                .tint(DS.Palette.accent)
+                .accessibilityLabel("Strong-signal monitoring")
+                .sensoryFeedback(.selection, trigger: monitoring)
+                Text("Notify me when a rules-based Strong Buy or Strong Sell appears; these are not Qwen badges. Each cycle refreshes the \(StockSageUniverse.core.count)-name core + your watchlist. Other board names qualify while their quotes remain fresh after a full refresh.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().padding(.vertical, 4)
+                Toggle("Watch only my watchlist", isOn: $watchlistOnly)
+                    .font(.body).tint(DS.Palette.accent)
+                    .disabled(store.userSymbols.isEmpty)
+                Text(store.userSymbols.isEmpty
+                    ? "Add tickers to your watchlist to use this filter. Until then, background refresh covers the curated \(StockSageUniverse.core.count)-name core."
+                    : "Scan only your \(store.userSymbols.count) watchlist name\(store.userSymbols.count == 1 ? "" : "s"). Use Refresh for the full board.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if !monitorError.isEmpty {
                     Text(monitorError).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
                         .transition(.opacity.combined(with: .offset(y: -4)))
@@ -1325,18 +1350,15 @@ struct MarketsView: View {
                         .transition(.opacity)
                         .animation(DS.Motion.smooth, value: checkingAlerts)
                         Text(checkingAlerts ? "Checking…" : "Check now")
-                            .font(.system(size: mvFont11_5, weight: .semibold))
+                            .font(.callout.weight(.medium))
                             .contentTransition(.opacity)
                             .animation(DS.Motion.smooth, value: checkingAlerts)
                     }
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 11).padding(.vertical, 5)
-                    .background(Color.white.opacity(0.08), in: Capsule())
-                    .overlay(Capsule().stroke(
-                        LinearGradient(colors: [Color.white.opacity(0.20), Color.white.opacity(0.04)],
-                                       startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                    #if os(iOS)
+                    .frame(minHeight: 32)
+                    #endif
                 }
-                .buttonStyle(LuxPressStyle()).disabled(checkingAlerts)
+                .buttonStyle(.bordered).controlSize(.large).disabled(checkingAlerts)
             }
             .animation(DS.Motion.smooth, value: monitorError.isEmpty)
             .padding(DS.Space.sm)
@@ -1509,6 +1531,7 @@ struct MarketsView: View {
         .padding(.horizontal, 10).padding(.vertical, 7)
         // Permission read for the denied banner above — re-checked on panel appear.
         .task {
+            guard !StockSageStore.isRunningTests else { return }
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             notificationsDenied = settings.authorizationStatus == .denied
         }
@@ -1793,13 +1816,17 @@ struct MarketsView: View {
     private var portfolioSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             #if os(macOS)
-            portfolioPicker.pickerStyle(.segmented).frame(maxWidth: 510)
+            portfolioPicker.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 510)
                 .accessibilityIdentifier("desktop.portfolio.tabs")
             #else
-            HStack {
+            let pickerLayout = workspaceTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(spacing: 12))
+            pickerLayout {
                 Text("Portfolio view").font(.callout).foregroundStyle(.secondary)
-                Spacer(minLength: 12)
+                if !workspaceTypeSize.isAccessibilitySize { Spacer(minLength: 12) }
                 portfolioPicker.pickerStyle(.menu).controlSize(.large)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("phone.portfolio.tabs")
             }
             Divider()
@@ -1872,8 +1899,11 @@ struct MarketsView: View {
         let pl = t.value - t.cost
         let plPct = t.cost > 0 ? pl / t.cost * 100 : 0
         let up = pl >= 0
+        let summaryLayout = workspaceTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+            : AnyLayout(HStackLayout(spacing: 12))
         return VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            summaryLayout {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Portfolio value (USD)").font(.caption).foregroundStyle(.secondary)
                     Text(String(format: "$%.2f", t.value))
@@ -1881,10 +1911,12 @@ struct MarketsView: View {
                         .contentTransition(.numericText())
                         .animation(DS.Motion.smooth, value: t.value)
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
+                if !workspaceTypeSize.isAccessibilitySize { Spacer() }
+                VStack(alignment: workspaceTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 2) {
                     Text("Total P&L (USD)").font(.caption).foregroundStyle(.secondary)
-                    if t.value == 0, t.cost == 0, !portfolio.positions.isEmpty {
+                    if portfolio.positions.isEmpty {
+                        Text("No holdings yet").font(.callout).foregroundStyle(.secondary)
+                    } else if t.value == 0, t.cost == 0 {
                         // Nothing priced/convertible → don't paint a fake green +$0.00 P&L.
                         Text("— no priced holdings").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.secondary)
                     } else {
@@ -1926,20 +1958,25 @@ struct MarketsView: View {
     }
 
     private var addPositionForm: some View {
-        // Fixup 2026-09-06 (adversarial review of commit 852cb72): same missing ViewThatFits
-        // fallback as priceAlertFormFields — this row's trailing Spacer absorbs slack space
-        // but does not stop the 3 field()s + button from exceeding the container's width at
-        // large Dynamic Type, since minWidth (review #16) only grows the fields' floor.
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: DS.Space.sm) { addPositionFormFields }
-            VStack(alignment: .leading, spacing: DS.Space.sm) { addPositionFormFields }
+        // Persistent field labels stay legible after entry; narrow layouts stack naturally.
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add a holding").font(.headline)
+            #if os(iOS)
+            VStack(alignment: .leading, spacing: 12) { addPositionFormFields }
+            #else
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .bottom, spacing: 12) { addPositionFormFields }
+                VStack(alignment: .leading, spacing: 12) { addPositionFormFields }
+            }
+            #endif
         }
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder private var addPositionFormFields: some View {
         field($newSymbol, "Symbol", width: 84, focus: .symbol)
         field($newShares, "Shares", width: 66, focus: .shares, numeric: true)
-        field($newCost, "Cost/sh", width: 72, focus: .cost, numeric: true)
+        field($newCost, "Cost per share", width: 112, focus: .cost, numeric: true)
         Button {
             // Validated parse — an unparseable cost ("1,234.56" pasted from a broker, a blank
             // field) must never default to $0 basis: that renders the ENTIRE value as fake
@@ -1950,27 +1987,32 @@ struct MarketsView: View {
             guard portfolio.add(symbol: newSymbol, shares: sh, costBasis: cost) else { return }
             newSymbol = ""; newShares = ""; newCost = ""
         } label: {
-            Image(systemName: "plus.circle.fill").font(.system(size: mvFont20)).foregroundStyle(DS.Palette.accent)
+            Label("Add holding", systemImage: "plus")
+                #if os(iOS)
+                .frame(minHeight: 32)
+                #endif
         }
-        .buttonStyle(LuxPressStyle())
+        .buttonStyle(.borderedProminent).controlSize(.large)
         .help("Add holding").accessibilityLabel("Add holding")
         .disabled(newSymbol.trimmingCharacters(in: .whitespaces).isEmpty
                   || StockSageInput.positiveAmount(newShares) == nil
                   || StockSageInput.nonNegativeAmount(newCost) == nil)
-        Spacer()
     }
 
     private func field(_ text: Binding<String>, _ placeholder: String, width: CGFloat, focus: AddField, numeric: Bool = false) -> some View {
         let active = focusedAddField == focus
-        return TextField(placeholder, text: text)
-            .textFieldStyle(.plain).font(.system(size: mvFont13))
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(placeholder).font(.caption).foregroundStyle(.secondary)
+            TextField(placeholder, text: text)
+            .textFieldStyle(.plain).font(.body)
             .decimalKeyboardOnIOS(numeric)
             .focused($focusedAddField, equals: focus)
             .padding(.horizontal, 8).padding(.vertical, 6)
-            // Review 2026-07-28 #16: minWidth, not a fixed width — the content scales with
-            // Dynamic Type and the box did not, so entered text clipped inside its own field
-            // at larger text sizes.
+            #if os(iOS)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            #else
             .frame(minWidth: width, maxWidth: width * 1.8)
+            #endif
             .background(Color.white.opacity(active ? 0.11 : 0.09), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
                 .stroke(active
@@ -1980,6 +2022,7 @@ struct MarketsView: View {
             .shadow(color: DS.Palette.accent.opacity(active ? 0.15 : 0.0), radius: 8, y: 2)
             .animation(DS.Motion.lux, value: active)
             .accessibilityLabel(placeholder)
+        }
     }
 
     private func positionRow(_ p: PortfolioPosition) -> some View {
@@ -2449,7 +2492,7 @@ struct MarketsView: View {
                         .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                 }
             } else if paperStore.trades.isEmpty {
-                Text("No paper trades yet — the engine opens one per long idea on each scan.")
+                Text("No retained legacy paper trades. New research saves 7/14-day predictions in Saved research.")
                     .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 10)
             } else {
                 // Live-book disclosure (owner asked to "try it with fake money",
@@ -2464,9 +2507,9 @@ struct MarketsView: View {
                 let since = paperStore.trades.map(\.openedAt).min()
                     .map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—"
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Paper experiment live since \(since): \(openCount) fake-money position\(openCount == 1 ? "" : "s") open · \(closedCount) closed.")
+                    Text("Legacy paper history since \(since): \(openCount) simulated position\(openCount == 1 ? "" : "s") recorded open · \(closedCount) closed.")
                         .font(.caption).foregroundStyle(.white)
-                    Text("Closes land when a later scan's new daily bars cross a stop/target/time-stop — run a scan to mark the book and fill this scoreboard in. Fills are net-of-cost; paper never mixes into your real journal or win-rate calibration.")
+                    Text("Automatic entries, marking and exits have stopped. These retained results use the original cost assumptions and remain separate from your real journal and win-rate calibration.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3380,17 +3423,31 @@ struct MarketsView: View {
         journalField("Shares", text: $draftShares, numeric: true)
     }
 
-    private func journalField(_ placeholder: String, text: Binding<String>, width: CGFloat = 70, numeric: Bool = false) -> some View {
-        TextField(placeholder, text: text)
+    private func journalField(_ placeholder: String, text: Binding<String>, width: CGFloat = 70,
+                              numeric: Bool = false, title: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let title {
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).accessibilityHidden(true)
+            }
+            TextField(placeholder, text: text)
+            .accessibilityIdentifier("journal.field.\(placeholder)")
+            .accessibilityLabel(title ?? placeholder)
             .textFieldStyle(.plain).font(.system(size: mvFont12))
             .decimalKeyboardOnIOS(numeric)
             .padding(.horizontal, 8).padding(.vertical, 6)
             // Review 2026-07-28 #16: minWidth, not a fixed width — the content scales with
             // Dynamic Type and the box did not, so entered text clipped inside its own field
             // at larger text sizes.
+            #if os(iOS)
+            .frame(minWidth: width, maxWidth: title == nil ? width * 1.8 : .infinity,
+                   minHeight: title == nil ? nil : 44)
+            #else
             .frame(minWidth: width, maxWidth: width * 1.8)
+            #endif
             .background(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).fill(Color.white.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+        }
     }
 
     private var draftIsValid: Bool {
@@ -3473,9 +3530,7 @@ struct MarketsView: View {
         draftSide = bearish ? .short : .long   // side follows the idea's direction
         showAddTrade = true
         selectedIdea = nil          // dismiss the detail sheet
-        #if os(macOS)
         desktopPortfolioPage = .journal
-        #endif
         section = .portfolio        // the journal lives in the Portfolio section
     }
 
@@ -3522,8 +3577,13 @@ struct MarketsView: View {
                     withAnimation(.easeOut(duration: 0.12)) { closingTradeID = (closingTradeID == trade.id) ? nil : trade.id }
                 } label: {
                     Text(closingTradeID == trade.id ? "Cancel" : "Close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(.secondary)
+                        #if os(iOS)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                        #endif
                 }.buttonStyle(.plain)
                 .accessibilityLabel(closingTradeID == trade.id ? "Cancel closing \(trade.symbol)" : "Close \(trade.symbol) position")
+                .accessibilityIdentifier("journal.close.\(trade.id.uuidString)")
             }
             if let note = basis.note {
                 Text(note).font(.caption2).foregroundStyle(DS.Palette.warningSoft)
@@ -3579,25 +3639,7 @@ struct MarketsView: View {
                     Text("Split basis is unverified. Manually entered close prices must use the original logged share units; verify them with your broker. No feed price is prefilled.")
                         .font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: DS.Space.sm) {
-                    journalField("Exit px", text: $closeExitText, width: 80, numeric: true)
-                    journalField("Plan px (opt)", text: $closePlannedExitText, width: 100)
-                        .help("What the plan quoted when you decided to exit. Measures your real execution cost vs. the plan — never changes P&L.")
-                    journalField("Fill px (opt)", text: $closeExitFillText, width: 100)
-                        .help("Your actual exit fill price. Measures your real execution cost vs. the plan — never changes P&L.")
-                    Button {
-                        guard !needsCloseReconciliation, let exit = StockSageInput.positiveAmount(closeExitText) else { return }
-                        guard journal.close(trade.id, exitPrice: exit,
-                                     plannedExit: StockSageInput.positiveAmount(closePlannedExitText),
-                                     exitFill: StockSageInput.positiveAmount(closeExitFillText)) else { return }
-                        closingTradeID = nil
-                        closePlannedExitText = ""; closeExitFillText = ""
-                    } label: {
-                        Text("Confirm close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(Self.badgeInk)
-                            .padding(.horizontal, 10).padding(.vertical, 5).background(DS.Palette.dangerSoft, in: Capsule())
-                    }.buttonStyle(LuxPressStyle()).disabled(!closeIsValid || needsCloseReconciliation)
-                    Spacer(minLength: 0)
-                }
+                journalCloseForm(trade, needsReconciliation: needsCloseReconciliation)
                 // First-real-trade review cycle-1 (2026-07-16): closing was blind — the owner typed
                 // an exit and only saw the realized P&L AFTER confirming. Preview it at the typed
                 // exit: currency-correct P&L (signedAmount — a .SR exit reads SAR, not "$") + the
@@ -3622,8 +3664,55 @@ struct MarketsView: View {
             }
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(a11y)
+    }
+
+    @ViewBuilder private func journalCloseForm(_ trade: TradeRecord, needsReconciliation: Bool) -> some View {
+        #if os(macOS)
+        HStack(alignment: .bottom, spacing: DS.Space.sm) {
+            journalCloseFields(trade, needsReconciliation: needsReconciliation)
+            Spacer(minLength: 0)
+        }
+        #else
+        if workspaceTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                journalCloseFields(trade, needsReconciliation: needsReconciliation)
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DS.Space.sm) {
+                    journalCloseFields(trade, needsReconciliation: needsReconciliation)
+                }
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    journalCloseFields(trade, needsReconciliation: needsReconciliation)
+                }
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder private func journalCloseFields(_ trade: TradeRecord, needsReconciliation: Bool) -> some View {
+        journalField("Exit px", text: $closeExitText, width: 80, numeric: true, title: "Exit price")
+        journalField("Plan px (opt)", text: $closePlannedExitText, width: 100, numeric: true, title: "Planned exit (optional)")
+            .help("What the plan quoted when you decided to exit. Measures your real execution cost vs. the plan — never changes P&L.")
+        journalField("Fill px (opt)", text: $closeExitFillText, width: 100, numeric: true, title: "Actual fill (optional)")
+            .help("Your actual exit fill price. Measures your real execution cost vs. the plan — never changes P&L.")
+        Button {
+            guard !needsReconciliation, let exit = StockSageInput.positiveAmount(closeExitText) else { return }
+            guard journal.close(trade.id, exitPrice: exit,
+                                plannedExit: StockSageInput.positiveAmount(closePlannedExitText),
+                                exitFill: StockSageInput.positiveAmount(closeExitFillText)) else { return }
+            closingTradeID = nil
+            closePlannedExitText = ""; closeExitFillText = ""
+        } label: {
+            Text("Confirm close").font(.system(size: mvFont10, weight: .semibold)).foregroundStyle(Self.badgeInk)
+                .padding(.horizontal, 10).padding(.vertical, 5).background(DS.Palette.dangerSoft, in: Capsule())
+        }
+        .buttonStyle(LuxPressStyle())
+        .disabled(!closeIsValid || needsReconciliation)
+        .touchHitArea()
+        .accessibilityIdentifier("journal.confirmClose")
     }
 
     /// Confirm-close gate: exit price required + parseable; the two optional realized-cost
@@ -4087,9 +4176,12 @@ struct MarketsView: View {
                     .padding(.top, DS.Space.sm)
                     .transition(.opacity)
             } else {
-                HStack {
-                    Text("\(displayed.count) instruments").font(.callout).foregroundStyle(.secondary)
-                    Spacer()
+                let listingControls = workspaceTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                    : AnyLayout(HStackLayout())
+                listingControls {
+                    Text("\(displayed.count) instrument\(displayed.count == 1 ? "" : "s")").font(.callout).foregroundStyle(.secondary)
+                    if !workspaceTypeSize.isAccessibilitySize { Spacer() }
                     Menu {
                         ForEach(MarketSort.allCases) { s in
                             Button { sort = s } label: {
@@ -4244,7 +4336,7 @@ struct MarketsView: View {
     }
 
     private func signalCard(_ sym: StockSageSymbol, idea: StockSageIdea? = nil) -> some View {
-        let detailSpacing: CGFloat = 5
+        let detailSpacing: CGFloat = 4
         let signal = StockSageSignalEngine.generateSignal(for: sym)
         let verifiedChange = sym.sessionChangePercent
         let change = verifiedChange ?? 0
@@ -4275,23 +4367,19 @@ struct MarketsView: View {
                         Image(systemName: "clock.fill").font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
                     }
                 }
+                #if os(macOS)
+                Text([stale ? "\(sym.market) · stale" : sym.market, source]
+                    .compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                #else
                 Text(stale ? "\(sym.market) · stale" : sym.market)
-                    #if os(macOS)
-                    .font(.callout)
-                    #else
-                    .font(.callout)
-                    #endif
-                    .foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
                 if let source {
-                    Text(source)
-                        #if os(macOS)
-                        .font(.caption)
-                        #else
-                        .font(.caption2)
-                        #endif
-                        .foregroundStyle(.secondary)
+                    Text(source).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                #endif
                 // Target/stop for this row come from the ADVISOR's plan (ideas board), never from
                 // StockSageSignalEngine — that engine maps |Δ%| to a recommendation and has no
                 // stop/target concept, so deriving a risk level from it would fabricate one.
@@ -4335,7 +4423,7 @@ struct MarketsView: View {
                 if let p = sym.latest?.price {
                     Text(adaptivePrice(p))
                         #if os(macOS)
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         #else
                         .font(.title3.weight(.semibold))
                         #endif
@@ -4437,7 +4525,7 @@ struct MarketsView: View {
             }
             #endif
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, 10)
         .background(hovered ? Color.white.opacity(0.035) : Color.clear)
         .overlay(alignment: .bottom) {
             #if os(macOS)
@@ -4499,74 +4587,28 @@ struct MarketsView: View {
     // MARK: Briefing
 
     private var briefingSection: some View {
-        VStack(alignment: .leading, spacing: DS.Space.md) {
-            let headingLayout = workspaceTypeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
-                : AnyLayout(HStackLayout())
-            headingLayout {
-                Text("Daily briefing")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button { Task { await generateBriefing() } } label: {
-                    Label(loadingBriefing ? "Generating…" : "Generate", systemImage: "sparkles")
-                }
-                .buttonStyle(.borderedProminent).controlSize(.large)
-                .disabled(loadingBriefing)
-            }
-            Text(currentBriefing.isEmpty ? StockSageBriefingService.deterministicSummary(for: store.symbols) : currentBriefing)
-                .foregroundStyle(DS.Palette.textSecondary)
-                #if os(macOS)
-                .font(.system(size: 15))
-                #else
-                .font(.callout)
-                #endif
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Daily briefing").font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            // This target computes a rules summary, not model prose. Always use the current
+            // symbols and observations; an old generated string can outlive its quotes.
+            Text(StockSageBriefingService.deterministicSummary(for: store.symbols,
+                                                              compact: !desktopBriefingExpanded))
+                .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                 .lineSpacing(5)
-                .lineLimit(desktopBriefingExpanded ? nil : 6)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-                .contentTransition(.opacity)
-                .animation(DS.Motion.smooth, value: currentBriefing.isEmpty)
-            Button(desktopBriefingExpanded ? "Show less" : "Read full briefing · strength and weakness") {
+            Button(desktopBriefingExpanded ? "Show summary" : "Show all named moves") {
                 desktopBriefingExpanded.toggle()
             }
             .buttonStyle(.borderless)
             .accessibilityIdentifier("desktop.briefing.expand")
-            if !currentBriefing.isEmpty, let generatedAt = briefingGeneratedAt {
-                let stale = generatedAt < Date().addingTimeInterval(-4 * 3600)
-                Text((stale ? "⚠︎ Generated " : "Generated ")
-                     + generatedAt.formatted(.relative(presentation: .named)))
-                    .font(.caption2)
-                    .foregroundStyle(stale ? DS.Palette.warningSoft : Color.secondary)
-            }
         }
-        #if os(macOS)
-        .padding(24)
-        #else
-        .padding(18)
-        #endif
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(DS.Bezel.cardFill)
-                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-        )
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
+        .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: DS.Radius.card))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card)
             .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-        // Staleness is enforced at RENDER time via `currentBriefing`'s fingerprint gate
-        // (see its doc) — the old onChange here couldn't fire for symbol edits made
-        // while this section was unmounted on another tab.
-    }
-
-    private func generateBriefing() async {
-        loadingBriefing = true
-        // Screened like every recommendation surface (review 2026-07-26) — the briefing names
-        // Strength/Weakness with buy/sell labels, drawn from the same board every other surface uses.
-        let symbols = store.symbols
-        briefing = await StockSageBriefingService.generateBriefing(for: symbols)
-        briefingSymbolsKey = symbols.map(\.symbol).sorted().joined()
-        briefingGeneratedAt = Date()
-        loadingBriefing = false
     }
 
     // MARK: Catalysts (owner request 2026-09-06)
@@ -4841,7 +4883,7 @@ struct MarketsView: View {
     /// `StockSageAdvisor.caveat`. What remains here is Tier-1: it qualifies every EV number on
     /// the board and must never be collapsible.
     @ViewBuilder private var ideasHeaderBlurb: some View {
-        Text("Primary badges are unvalidated AI assessments. The top three ideas are assessed after a scan; open another idea to assess it. Assessments retrieve selected recent news via Massive when external access is enabled. EODHD is disabled. Failed checks leave a visible unverified draft. Filters, rank, signal blocks and money calculations remain Rules-based, not Qwen probabilities.")
+        Text("AI badges are unvalidated; failed checks stay drafts. Ranking, filters and money calculations use rules, not Qwen probabilities. Assessments use selected Massive news when external access is enabled.")
             .font(.caption).foregroundStyle(DS.Palette.warningSoft)
             .fixedSize(horizontal: false, vertical: true)
         // Honesty: say plainly whether the EV/win numbers below are measured, fitted, or
@@ -4852,7 +4894,7 @@ struct MarketsView: View {
         // not a chip label, and must outrank the descriptive copy above it.
         if let cal = store.convictionCalibration {
             if cal.method == .identity {
-                Label("EV win-rates are assumed (identity floor) — conviction, capped at the conservative ~\(StockSageExpectedValue.assumedWinBandLabel) prior when the sample is too thin to validate out-of-sample, used as win% until a fit beats it out-of-sample", systemImage: "exclamationmark.triangle.fill")
+                Label("EV win-rates are assumed; a validated fitted rate is not available.", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: fontCaveat, weight: .semibold)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(cal.chipHelp)
@@ -5521,7 +5563,7 @@ struct MarketsView: View {
     }
 
     private func loadDetailEvidence(_ idea: StockSageIdea) async {
-        guard !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
+        guard !StockSageStore.isRunningTests, !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
         await detailEvidence.load(for: idea, using: publishDetailQuote)
     }
 
@@ -5965,36 +6007,43 @@ struct MarketsView: View {
             VStack(alignment: .leading, spacing: 6) {
             Button { selectedIdea = idea } label: {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: DS.Space.sm) {
+                    let headingLayout = workspaceTypeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                        : AnyLayout(HStackLayout(spacing: 8))
+                    headingLayout {
                         Image(systemName: "bolt.fill").font(.system(size: mvFont13)).foregroundStyle(DS.Palette.accent)
-                        Text("Best opportunity now").font(.system(size: mvFont12, weight: .bold)).foregroundStyle(.white)
+                        Text("Best opportunity now").font(.headline).foregroundStyle(.white)
                         if let g = cardGate {
                             Text(g.decision == .blocked ? "DO NOT TRADE" : g.decision.rawValue.uppercased())
-                                .font(.system(size: mvFont9, weight: .bold))
+                                .font(.system(size: fontCaveat, weight: .bold))
                                 .foregroundStyle(Self.badgeInk)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
                                 .background(Self.gateChipColor(g.decision),
                                             in: Capsule())
-                                .lineLimit(1).fixedSize()
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
-                        calibrationChip   // is the green Est. EV / Win est. below measured or assumed?
+                    }
+                    headingLayout {
+                        Text(idea.symbol).font(.title2.weight(.semibold)).foregroundStyle(.white)
+                        Spacer(minLength: 8)
+                        calibrationChip
                         StockSageAIBadge(idea: idea, store: store)
+                    }
+                    if let name = StockSageTadawulNames.displayLine(for: idea.symbol) {
+                        Text(name).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     // F7 (rotation-3 triage): this card's "best" is provisional during the
                     // first-ever scan — say so, folded into orderLabel above for VoiceOver.
                     if let firstScanCaption {
                         Text(firstScanCaption)
-                            .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: fontCaveat)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             .accessibilityHidden(true)
                     }
-                    HStack(spacing: DS.Space.sm) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(idea.symbol).font(.system(size: mvFont16, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                            if let n = StockSageTadawulNames.displayLine(for: idea.symbol) {
-                                Text(n).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                        }
+                    LazyVGrid(columns: workspaceTypeSize.isAccessibilitySize
+                        ? [GridItem(.flexible(), alignment: .leading)]
+                        : [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 14) {
                         ideaMetric("Est. EV", String(format: "%+.2fR (gross)", ev.evR),
                                    color: DS.Palette.successSoft,
                                    sub: cardNetEV.map { String(format: "≈%+.2fR net est.", $0) },
@@ -6008,7 +6057,6 @@ struct MarketsView: View {
                             ideaMetric("Base size", String(format: "%.1f%%", idea.advice.suggestedWeight * 100))
                                 .explain(Self.sizeMetricHelp)
                         }
-                        Spacer(minLength: 0)
                     }
                     // Imminent-earnings warning (now that earnings are fed to the boards): a #1 pick
                     // reporting in days can gap through a protective stop — say so on the headline card.
@@ -6022,15 +6070,18 @@ struct MarketsView: View {
                         }
                         .accessibilityHidden(true)  // folded into orderLabel above so VoiceOver reads it once
                     }
-                    // The actual order levels, so the card is a placeable order, not just a verdict.
-                    HStack(spacing: DS.Space.sm) {
+                    // Reference levels stay readable at narrow widths and larger text sizes.
+                    LazyVGrid(columns: workspaceTypeSize.isAccessibilitySize
+                        ? [GridItem(.flexible(), alignment: .leading)]
+                        : [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 14) {
                         ideaMetric("Entry", adaptivePrice(idea.price))
                         if let stop = idea.advice.stopPrice {
                             if idea.price > 0 {
                                 // Signed distance-to-invalidation: raw (stop/price − 1)×100 — negative
                                 // for longs (stop below price), positive for shorts (stop above). No abs().
                                 let stopDistPct = (stop / idea.price - 1) * 100
-                                ideaMetric("Stop", "\(adaptivePrice(stop)) (\(String(format: "%+.1f%%", stopDistPct)) to stop)", color: DS.Palette.dangerSoft)
+                                ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft,
+                                    sub: String(format: "%+.1f%% to stop", stopDistPct), subColor: DS.Palette.dangerSoft)
                             } else {
                                 ideaMetric("Stop", adaptivePrice(stop), color: DS.Palette.dangerSoft)
                             }
@@ -6038,7 +6089,6 @@ struct MarketsView: View {
                         if let target = idea.advice.targetPrice {
                             ideaMetric("Target", adaptivePrice(target), color: DS.Palette.successSoft)
                         }
-                        Spacer(minLength: 0)
                     }
                     // Round-H: the Entry/Stop/Target above and "Size it now" below are a
                     // placeable order — flag it when idea.price is off a stale (prior-UTC-day)
@@ -6047,7 +6097,7 @@ struct MarketsView: View {
                         HStack(alignment: .top, spacing: 6) {
                             Image(systemName: "clock.badge.exclamationmark").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
                             Text("⚠︎ Price as of \(staleAsOf.formatted(.relative(presentation: .named))) — not live; re-price before ordering.")
-                                .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                                .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                         }
                         .accessibilityHidden(true)  // folded into orderLabel above so VoiceOver reads it once
                     } else if analysisStaleOnly {
@@ -6057,7 +6107,7 @@ struct MarketsView: View {
                         HStack(alignment: .top, spacing: 6) {
                             Image(systemName: "clock.badge.exclamationmark").font(.system(size: mvFont11)).foregroundStyle(DS.Palette.warningSoft)
                             Text("⚠︎ Analysis over 4h old — re-scan for a current read.")
-                                .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+                                .font(.system(size: fontCaveat)).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
                         }
                         .accessibilityHidden(true)  // folded into orderLabel above so VoiceOver reads it once
                     }
@@ -6069,32 +6119,35 @@ struct MarketsView: View {
                         // refusal itself (and drops the go-green tint) when the gate blocks.
                         Text("Size it now: \(StockSagePositionSizer.summaryLine(ps, riskPct: rp, symbol: idea.symbol, pctOverride: pctOfAccountUSD(ps, symbol: idea.symbol, account: acct)))"
                              + (cardGate?.decision == .blocked ? " — gate: do NOT trade at this risk %" : ""))
-                            .font(.system(size: mvFont9, weight: .medium))
+                            .font(.system(size: fontCaveat, weight: .medium))
                             .foregroundStyle(cardGate?.decision == .blocked ? DS.Palette.dangerSoft
                                              : (pctOfAccountUSD(ps, symbol: idea.symbol, account: acct) > 100 || ps.shares == 0 ? DS.Palette.warningSoft : DS.Palette.successSoft))   // wave-2 #2
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Text(MoneyVelocityCopy.bestOpportunity + tomTiltDisclosureSuffix + crownDivergenceSuffix)
-                        .font(.system(size: mvFont9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: fontCaveat)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(DS.Space.sm).frame(maxWidth: .infinity, alignment: .leading)
-                .background(DS.Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
+                .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.accent.opacity(0.35), lineWidth: 1))
             }
             .buttonStyle(LuxPressStyle())
             .accessibilityLabel(orderLabel)
-            HStack(spacing: 6) {
-                Spacer()
+            let actionLayout = workspaceTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+                : AnyLayout(HStackLayout(spacing: 12))
+            actionLayout {
                 // FASTMONEY (owner, 2026-07-17): one-tap journal prefill from the crown card —
                 // the same prefillTradeFromIdea path the detail sheet's "Log trade" CTA uses,
                 // surfaced one level up so recording a real fill costs one click, not three.
                 // Hold/Avoid aren't trades (isLoggableIdea) — no button rather than a dead one.
                 if isLoggableIdea(idea.advice.action) {
                     Button { prefillTradeFromIdea(idea) } label: {
-                        Label("Log trade", systemImage: "square.and.pencil").font(.system(size: mvFont9, weight: .medium))
+                        Label("Log trade", systemImage: "square.and.pencil").font(.callout)
                     }
-                    .buttonStyle(.plain).foregroundStyle(DS.Palette.accent)
+                    .buttonStyle(.bordered).controlSize(.large).tint(DS.Palette.accentText)
                     .help("Prefill the journal's add-trade form (Portfolio section) with this idea's entry, stop, and target, including the planned entry — enter the fill you actually get and it feeds your calibration and execution-cost (slippage) measurement. Recording a decision, not endorsing it.")
+                    .accessibilityIdentifier("journal.log.bestOpportunity")
                 }
                 Button {
                     let plan = StockSageTodayPlan.build(
@@ -6113,9 +6166,9 @@ struct MarketsView: View {
                         analysisStale: analysisStaleOnly, calibration: store.convictionCalibration)
                                         PlatformClipboard.copy(plan)
                 } label: {
-                    Label("Copy today's plan", systemImage: "checklist").font(.system(size: mvFont9, weight: .medium))
+                    Label("Copy plan", systemImage: "checklist").font(.callout)
                 }
-                .buttonStyle(.plain).foregroundStyle(DS.Palette.accent)
+                .buttonStyle(.bordered).controlSize(.large).tint(DS.Palette.accentText)
                 .help("Copy a checklist — best bet, the pre-trade gate verdict, and the size — to the clipboard. Estimates, not advice.")
             }
             }
@@ -6831,6 +6884,11 @@ struct MarketsView: View {
         let conc = StockSageExpectedValue.fastLaneConcentration(store.ideas, holds: velocityHolds, calibration: store.convictionCalibration, earnings: store.earnings, liquidity: store.liquidity)
         // F7 (rotation-3 triage): first-ever scan only — see firstScanProgressCaption's doc.
         let firstScanCaption = Self.firstScanProgressCaption(isLoadingIdeas: store.isLoadingIdeas, ideasUpdated: store.ideasUpdated, progress: store.ideasProgress)
+        if let error = velocityHistory.lastError {
+            Text(error).font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("velocity.history.error")
+        }
         if s.hasContent {
             VStack(alignment: .leading, spacing: 6) {
             Button {
@@ -7293,6 +7351,7 @@ struct MarketsView: View {
                         }
                     }
                     .task(id: (split.crypto.map(\.symbol) + split.equity.map(\.symbol)).sorted()) {
+                        guard !StockSageStore.isRunningTests else { return }
                         await store.refreshLaneCorrelation(holds: velocityHolds)
                     }
                     if StockSageExpectedValue.cryptoRotationDominant(crypto: split.crypto, equity: split.equity, holds: velocityHolds, calibration: store.convictionCalibration) {
@@ -7475,7 +7534,7 @@ struct MarketsView: View {
         onLogFill: { symbol in
             guard let idea = store.ideas.first(where: { $0.symbol == symbol }) else { return }
             if isLoggableIdea(idea.advice.action) { prefillTradeFromIdea(idea) } else { selectedIdea = idea }
-        })
+        }, paperStore: paperStore)
     }
 
     // Strategy backtest — the advisor's rules aggregated across the sample universe.
@@ -9180,6 +9239,7 @@ struct MarketsView: View {
                             }
                             .buttonStyle(LuxPressStyle())
                             .help("Prefill the trade journal with this idea's direction, entry, stop and target")
+                            .accessibilityIdentifier("journal.log.ideaDetail")
                         }
 
                         Button {
@@ -9352,6 +9412,7 @@ struct MarketsView: View {
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1)
         )
         .task(id: idea.symbol + store.derivedResearchRevision.uuidString) {
+            guard !StockSageStore.isRunningTests else { return }
             guard !ProcessInfo.processInfo.arguments.contains("--qa") else { return }
             // Invalidate any prior completion mark for THIS symbol FIRST — before the debounce
             // sleep, so a revisited symbol whose earlier fetch completed without data
@@ -9521,21 +9582,22 @@ struct MarketsView: View {
                             sub: String? = nil, subColor: Color = DS.Palette.successSoft,
                             flash: Double? = nil) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(sub != nil ? label.uppercased() : label)
-                .font(.system(size: sub != nil ? mvFont8 : mvFont9, weight: .semibold))
+            Text(label)
+                .font(.system(size: fontMetricLabel, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             if let sub {
                 // UI#3 (review 2026-07-28): this branch hard-truncated ("Yahoo · 3…") with no
                 // scale floor — give it the same escape hatch as the sibling branch below.
-                Text(value).font(.system(size: mvFont14, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.75)
+                Text(value).font(.system(size: fontMetricValue, weight: .semibold))
+                    .foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.75)
                     .contentTransition(.numericText())
                     .animation(DS.Motion.smooth, value: flash)
                     .priceFlash(flash)
-                Text(sub).font(.system(size: mvFont8)).foregroundStyle(subColor).lineLimit(1).minimumScaleFactor(0.8)
+                Text(sub).font(.system(size: fontMetricLabel)).foregroundStyle(subColor)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text(value).font(.system(size: mvFont12_5, weight: .semibold, design: .rounded))
+                Text(value).font(.system(size: fontMetricValue, weight: .semibold))
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -9603,7 +9665,9 @@ struct MarketsView: View {
         }()
         let priceStale: Bool = {
             guard let priceAsOf else { return false }
-            return StockSageScanChunking.utcDayKey(priceAsOf) != StockSageScanChunking.utcDayKey(now)
+            guard let priceDay = StockSageScanChunking.utcDayKey(priceAsOf),
+                  let currentDay = StockSageScanChunking.utcDayKey(now) else { return true }
+            return priceDay != currentDay
         }()
         return analysisStale || priceStale
     }
@@ -9624,9 +9688,10 @@ struct MarketsView: View {
     /// nil otherwise — including when `priceAsOf` itself is nil (HONESTY_FLOOR: unknown never
     /// flags stale).
     static func staleAsOfPrice(_ priceAsOf: Date?, now: Date) -> Date? {
-        guard let priceAsOf, StockSageScanChunking.utcDayKey(priceAsOf) != StockSageScanChunking.utcDayKey(now)
-        else { return nil }
-        return priceAsOf
+        guard let priceAsOf else { return nil }
+        guard let priceDay = StockSageScanChunking.utcDayKey(priceAsOf),
+              let currentDay = StockSageScanChunking.utcDayKey(now) else { return priceAsOf }
+        return priceDay != currentDay ? priceAsOf : nil
     }
 
     /// Price and source are one accepted observation. Old caches/fixtures have no origin:
@@ -9856,7 +9921,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     // Four primary phone destinations; the native More list retains every other route.
     static let phoneSections: [Self] = [
-        .briefing, .research, .catalysts, .chat, .watchlist, .ideas, .all,
+        .briefing, .research, .watchlist, .chat, .catalysts, .ideas, .all,
         .heatmap, .portfolio, .alerts, .paper
     ]
     var workspaceTitle: String {
@@ -9879,7 +9944,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .briefing:  return "Briefing"
         case .chat:      return "Chat"
         case .research:  return "Research"
-        case .paper:     return "Paper trading"
+        case .paper:     return "Legacy paper history"
         }
     }
 

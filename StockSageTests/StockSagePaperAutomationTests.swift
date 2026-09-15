@@ -33,8 +33,8 @@ struct StockSagePaperAutomationTests {
     }
 
     @Test func panelModeDescribesEnabledStateNotContinuousActivity() {
-        #expect(StockSagePaperAutomationPanel.modeLabel(running: true) == "Day trading enabled · simulation only")
-        #expect(StockSagePaperAutomationPanel.modeLabel(running: false) == "Day trading paused · simulation only")
+        #expect(StockSagePaperAutomationPanel.modeLabel(running: true) == "Legacy run active · simulation only")
+        #expect(StockSagePaperAutomationPanel.modeLabel(running: false) == "Legacy history · monitoring off")
     }
     #endif
 
@@ -42,6 +42,23 @@ struct StockSagePaperAutomationTests {
                        source: StockSagePriceSource = .massiveSIP) -> StockSageQuoteService.LiveQuote {
         .init(symbol: symbol, price: price, previousClose: 100, marketTime: at, priceSource: source,
               paperTradeQualified: true) // Explicit synthetic qualified-tape fixture.
+    }
+
+    @Test func holidayDailyBackgroundCanSupportResearchWithoutQualifyingAFill() throws {
+        for (clock, latest, accepted) in [
+            ("2026-09-08T14:00:00Z", "2026-09-04T04:00:00Z", true),
+            ("2026-04-06T14:00:00Z", "2026-04-02T04:00:00Z", true),
+            ("2026-09-15T14:00:00Z", "2026-09-11T04:00:00Z", false),
+            ("2027-01-19T15:00:00Z", "2027-01-15T05:00:00Z", false)
+        ] {
+            let at = try Date(clock, strategy: .iso8601)
+            let bar = try Date(latest, strategy: .iso8601)
+            #expect(StockSageMarketHours.isRecentResearchPrice(bar, source: .massiveDaily, at: at) == accepted)
+            #expect(!StockSageMarketHours.isRecentResearchPrice(bar, source: .massiveSIP, at: at))
+            #expect(!A.qualified(quote(at: bar, source: .massiveDaily), at: at))
+            #expect(!A.qualified(quote(at: bar), at: at), "The holiday exception must not widen the live fill clock")
+            #expect(A.qualified(quote(at: at), at: at))
+        }
     }
 
     #if os(macOS)

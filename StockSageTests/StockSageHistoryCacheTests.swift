@@ -147,6 +147,46 @@ struct StockSageHistoryCacheTests {
         #expect(HC.decode(Data("{\"schemaVersion\":1}".utf8)) == nil)   // missing entries/savedAt → decode fails, no guess
     }
 
+    @Test func decodeRejectsExtremeSaveDatesBeforeScanDayConversion() throws {
+        for seconds in [Double.nan, .infinity, -.infinity, 1e308, -1e308] {
+            #expect(StockSageScanChunking.utcDayKey(Date(timeIntervalSince1970: seconds)) == nil)
+        }
+        #expect(StockSageScanChunking.utcDayKey(Date(timeIntervalSince1970: -1)) == -1)
+        #expect(StockSageScanChunking.utcDayKey(Date(timeIntervalSince1970: 0)) == 0)
+        for seconds in [1e308, -1e308] {
+            let cache = HC(schemaVersion: HC.currentSchemaVersion, entries: [],
+                           savedAt: Date(timeIntervalSince1970: seconds))
+            let bytes = try JSONEncoder().encode(cache) // Valid JSON; no malformed-text shortcut.
+            let decoded = HC.decode(bytes)
+            #expect(decoded == nil, "An unrepresentable day must not reach the scan's Int conversion")
+            #expect(!StockSageScanChunking.isCacheFreshForToday(symbol: "AAA", cache: cache, now: cache.savedAt),
+                    "Two unknown day keys must not compare as a fresh day")
+            // Stop here on the old implementation so the red gate reports an assertion, not a process trap.
+            guard decoded == nil else { continue }
+            let partition = StockSageScanChunking.partitionByCacheFreshness(symbols: ["AAA"], cache: decoded)
+            #expect(partition.fromCache.isEmpty && partition.toFetch == ["AAA"])
+        }
+    }
+
+    @Test func malformedCachedEntriesCannotReenterAnalysis() throws {
+        let day = Date(timeIntervalSince1970: 100 * 86_400)
+        let entries = [
+            HC.Entry(symbol: "AAA", dates: [day], opens: [10, 11], highs: [10, 11],
+                     lows: [10, 11], closes: [10, 11], volumes: [100, 100]),
+            HC.Entry(symbol: "AAA", dates: [day, Date(timeIntervalSince1970: 1e308)],
+                     opens: [10, 11], highs: [10, 11], lows: [10, 11], closes: [10, 11], volumes: [100, 100])
+        ]
+        for entry in entries {
+            let cache = HC(schemaVersion: HC.currentSchemaVersion, entries: [entry], savedAt: day)
+            let decoded = HC.decode(try JSONEncoder().encode(cache))
+            #expect(decoded?.priceHistories()["AAA"] == nil,
+                    "Rejecting the whole cache or excluding the malformed entry are both safe")
+        }
+        let extreme = StockSagePriceHistory(symbol: "AAA", dates: [day, Date(timeIntervalSince1970: 1e308)],
+            opens: [10, 11], highs: [10, 11], lows: [10, 11], closes: [10, 11], volumes: [100, 100])
+        #expect(HC.panel(from: ["AAA": extreme, "BBB": history("BBB", bars: 2, base: 20)], industryOf: { _ in 0 }) == nil)
+    }
+
     // 5. Staleness straddle (F05): full-day age 7 → fresh, 8 → stale; unknown symbol → stale.
     @Test func isStaleStraddlesTheDayBoundary() {
         let newest = Date(timeIntervalSince1970: 100 * 86_400)

@@ -5,6 +5,13 @@ import Foundation
 // MARK: - Ideas board CSV export (pure)
 
 struct StockSageIdeasCSVTests {
+    @Test(arguments: ["\n", "\r", "\r\n"])
+    func multilineRationaleRemainsOneQuotedField(ending: String) {
+        let rationale = "First line" + ending + "second line"
+        let csv = StockSageIdeasCSV.csv([idea("AAPL", 100, .hold, rationale: [rationale])])
+        #expect(csv.contains(",\"" + rationale + "\","))
+    }
+
     private func idea(_ symbol: String, _ price: Double, _ action: TradeAdvice.Action,
                       conviction: Double = 0.5, stop: Double? = nil, target: Double? = nil,
                       weight: Double = 0.05, regime: TradeAdvice.Regime = .bullTrend,

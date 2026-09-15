@@ -7,7 +7,7 @@ import AppKit
 import Combine
 #endif
 
-@Suite("Native local Chat")
+@Suite("Native local Chat", .serialized)
 @MainActor
 struct StockSageChatTests {
     private let now = Date(timeIntervalSince1970: 1_788_739_200)
@@ -70,7 +70,300 @@ struct StockSageChatTests {
         #expect(late.isCancelled)
     }
 
+    @Test func assessmentControlsExplainRetriesAndUnavailableActions() {
+        for hasRecord in [false, true] {
+            for hasDraft in [false, true] {
+                for activeSymbol: String? in [nil, "ORCL", "QCOM"] {
+                    for isSampleData in [false, true] {
+                        let controls = StockSageAIAssessmentPanel.RequestControls(
+                            hasRecord: hasRecord, hasDraft: hasDraft,
+                            activeSymbol: activeSymbol, isSampleData: isSampleData, request: {})
+                        #expect(controls.title == (hasRecord || hasDraft ? "Reassess" : "Assess with Qwen"))
+                        #expect((controls.disabledReason != nil) == (activeSymbol != nil || isSampleData))
+                        if isSampleData {
+                            #expect(controls.disabledReason?.contains("sample data") == true)
+                        }
+                        if let activeSymbol {
+                            #expect(controls.disabledReason?.contains(activeSymbol) == true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #if os(macOS)
+    @Test func onboardingAndSettingsUseNativeMacViewport() async throws {
+        let suite = "stocksage.audit.mac.presentation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var presented = true
+        let welcome = OnboardingSheet(isPresented: Binding(get: { presented }, set: { presented = $0 }))
+            .defaultAppStorage(defaults)
+        let size = try await capture(welcome, name: "stocksage-audit-onboarding-mac",
+                                     viewport: CGSize(width: 560, height: 640)) { root in
+            #expect(presented && !defaults.bool(forKey: "stocksage.onboarding.done"))
+            let button = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityRole?() == .button && $0.accessibilityIdentifier?() == "onboarding.getStarted"
+            })
+            let window = try #require(root.window)
+            let visibleFrame = window.convertToScreen(root.convert(root.bounds, to: nil))
+            let buttonFrame = try #require(button.accessibilityFrame?())
+            #expect(buttonFrame.width > 0 && buttonFrame.height > 0 && visibleFrame.contains(buttonFrame),
+                    "Get started must be reachable without resizing")
+            try #require(button.accessibilityPerformPress?() == true, "Activate the shipped native button")
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while presented, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        #expect(size == CGSize(width: 560, height: 640))
+        #expect(!presented && defaults.bool(forKey: "stocksage.onboarding.done"))
+        let settings = AppSettings(defaults: defaults)
+        let settingsSize = try await capture(StockSageSettingsView(settings: settings)
+            .defaultAppStorage(defaults), name: "stocksage-audit-settings-mac",
+            viewport: CGSize(width: 520, height: 700))
+        #expect(settingsSize == CGSize(width: 520, height: 700))
+        #expect(settings.webAccess && !settings.offlineOnly)
+        #expect(defaults.object(forKey: AppSettings.Keys.policyRevision) == nil,
+                "Rendering cannot change network preferences")
+    }
+
+    @Test(arguments: ["empty", "list", "detail"])
+    func renderSavedResearchMacSheetsWithoutStartingChecks(page: String) async throws {
+        try #require(StockSageStore.isRunningTests)
+        let suite = "stocksage.audit.mac.saved-research.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        let history = StockSageResearchHistory(storageURL: nil)
+        func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
+        let referenceDate = date("2026-07-13T04:00:00Z")
+        let run = StockSageResearchHistory.Run(id: UUID(), startedAt: date("2026-07-14T20:29:00Z"),
+            completedAt: date("2026-07-14T20:30:00Z"), horizon: .week,
+            predictions: [.init(symbol: "ACME", name: "Acme Research Fixture", action: "Buy",
+                reason: "Dated evidence supports the setup.", risk: "Demand could weaken before the review close.",
+                evidence: ["F1"], facts: ["Synthetic completed-session observation for layout verification."],
+                model: "Fixture model", note: "Unvalidated research opinion", referencePrice: 200,
+                referenceDate: referenceDate, levels: .init(entry: 200, stop: 190, target: 220,
+                    at: referenceDate, basis: "Original synthetic risk scenario; not an execution record."))],
+            coverage: .init(requested: 8, checked: 8, incomplete: 2, buyCount: 1, selection: nil))
+        if page != "empty" {
+            try #require(history.record(run))
+            let benchmark = try #require(StockSageResearchHistory.benchmarkDay(after: run.completedAt))
+            let observation = StockSageResearchHistory.Observation(history: .init(symbol: "ACME",
+                dates: [benchmark, date("2026-07-23T04:00:00Z")], opens: [100, 110], highs: [105, 110],
+                lows: [100, 110], closes: [105, 110], volumes: [100, 100], priceSource: .massiveDaily),
+                splitAdjusted: true, provider: "Synthetic daily-price fixture", fetchedAt: date("2026-07-24T12:00:00Z"))
+            let evaluation = StockSageResearchHistory.evaluate(run.predictions[0], in: run,
+                observation: observation, now: date("2026-07-24T13:00:00Z"))
+            try #require(evaluation.state == .evaluated && evaluation.direction == .rose)
+            #expect(evaluation.comparisonReferenceDate == benchmark && evaluation.comparisonReferencePrice == 100)
+            #expect(abs((evaluation.priceReturn ?? 0) - 0.10) < 0.000000001)
+            try #require(history.recordEvaluation(evaluation, runID: run.id, symbol: "ACME"))
+        }
+        let originalRuns = history.runs
+        let originalDefaults = defaults.persistentDomain(forName: suite) ?? [:]
+        let view = Group {
+            if page == "detail" {
+                NavigationStack { StockSageResearchHistoryDetail(history: history, runID: run.id) }
+            } else {
+                StockSageResearchHistoryView(store: store, history: history)
+            }
+        }.defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
+        let viewport = CGSize(width: 760, height: 680)
+        let size = try await capture(view, name: "stocksage-audit-mac-saved-research-\(page)", viewport: viewport) { root in
+            func scrollViews(in view: NSView) -> [NSScrollView] {
+                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+            }
+            let scroll = try #require(scrollViews(in: root)
+                .filter { !$0.isHidden && $0.visibleRect.height > 100 }
+                .max { $0.contentView.bounds.width < $1.contentView.bounds.width })
+            let document = try #require(scroll.documentView)
+            #expect(scroll.contentView.bounds.width >= 600 && scroll.contentView.bounds.height >= 450)
+            #expect(document.bounds.width <= scroll.contentView.bounds.width + 2,
+                    "Saved research must fit its native sheet viewport without horizontal overflow")
+        }
+        #expect(size == viewport && history.runs == originalRuns && !history.isChecking && history.lastError == nil)
+        #expect(!store.isRefreshing && !store.isLoadingIdeas && store.lastFullRefreshAt == nil)
+        #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: suite) ?? [:]).isEqual(to: originalDefaults))
+    }
+
+    @Test(.serialized, arguments: ["research", "chat", "home", "ideas", "markets", "watchlist", "portfolio", "alerts", "catalysts"], [900, 1300])
+    func renderActualMacWorkspaceWithoutStartingServices(page: String, width: Int) async throws {
+        try #require(StockSageStore.isRunningTests)
+        let section = try #require([
+            "home": MarketSection.briefing, "ideas": .ideas, "markets": .all,
+            "watchlist": .watchlist, "portfolio": .portfolio, "alerts": .alerts,
+            "catalysts": .catalysts, "research": .research, "chat": .chat
+        ][page])
+        let suite = "stocksage.audit.mac.workspace.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults,
+            heldSymbols: { portfolio.positions.map(\.symbol) + journal.open.map(\.symbol) },
+            journalTrades: { journal.trades })
+        await store.seedQAIdeas(previousScanEntries: [:])
+        let live = StockSageLiveStream()
+        let ai = StockSageAIAssessments()
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let monitor = StockSageMonitor(defaults: defaults)
+        let velocity = StockSageVelocityHistoryStore(defaults: defaults)
+        let chat = StockSageChatSession(historyURL: nil)
+        try #require(journal.hasLoadedRecords && portfolio.hasLoadedRecords && paper.hasLoadedRecords)
+        try #require(!store.ideas.isEmpty && !store.watchlistSymbols.isEmpty)
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        if page == "home" {
+            for (horizon, stamp, symbol) in [(StockSageResearchHistory.Horizon.week, "2026-09-01T21:00:00Z", "ACME"),
+                                             (.fortnight, "2026-09-14T21:00:00Z", "FUTR")] {
+                let completed = try Date(stamp, strategy: .iso8601)
+                let run = StockSageResearchHistory.Run(id: UUID(), startedAt: completed.addingTimeInterval(-60),
+                    completedAt: completed, horizon: horizon, predictions: [.init(symbol: symbol,
+                        name: "Synthetic \(symbol) research", action: "Buy", reason: "Original dated evidence supports the setup.",
+                        risk: "Synthetic uncertainty", evidence: ["F1"], facts: ["Original fixture evidence"], model: "fixture",
+                        note: "Synthetic research only", referencePrice: nil, referenceDate: nil, levels: nil)],
+                    coverage: .init(requested: 2, checked: 2, incomplete: 1, buyCount: 1, selection: nil))
+                try #require(history.record(run))
+            }
+        }
+        let savedRuns = history.runs
+        let savedDefaults = defaults.persistentDomain(forName: suite) ?? [:]
+        let ideaSymbols = store.ideas.map(\.symbol)
+        let viewport = CGSize(width: CGFloat(width), height: width == 900 ? 700 : 840)
+        let view = MarketsView(chatSession: chat, qaSection: section,
+            store: store, aiAssessments: ai, portfolio: portfolio, journal: journal,
+            paperStore: paper, live: live, velocityHistory: velocity, monitor: monitor, researchHistory: history)
+            .defaultAppStorage(defaults)
+            .environment(\.colorScheme, .dark)
+            .preferredColorScheme(.dark)
+        let size = try await capture(view, name: "stocksage-audit-mac-\(page)-\(width)", viewport: viewport) { root in
+            func scrollViews(in view: NSView) -> [NSScrollView] {
+                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+            }
+            let scroll = try #require(scrollViews(in: root)
+                .filter { !$0.isHidden && $0.visibleRect.height > 100 }
+                .max { $0.contentView.bounds.width < $1.contentView.bounds.width })
+            let document = try #require(scroll.documentView)
+            #expect(scroll.contentView.bounds.width >= 500 && scroll.contentView.bounds.height >= (page == "research" ? 180 : 300),
+                    "The actual desktop page must retain a usable viewport beside its sidebar")
+            #expect(document.bounds.width <= scroll.contentView.bounds.width + 2,
+                    "The page must fit its native scroll viewport without horizontal overflow")
+        }
+        #expect(size == viewport, "Mounting a page must not force the requested window wider or taller")
+        if page == "home" {
+            _ = try await capture(view, name: "stocksage-audit-mac-home-open-research-\(width)", viewport: viewport) { root in
+                let button = try #require(nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityIdentifier?() == "home.research.14"
+                })
+                try #require(button.accessibilityPerformPress?() == true)
+                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                var selected = false
+                while !selected, ContinuousClock.now < deadline {
+                    selected = nativeAccessibilityElements(in: root).compactMap { $0 as? NSSegmentedControl }.contains {
+                        $0.selectedSegment >= 0 && $0.label(forSegment: $0.selectedSegment) == "7–14 trading days"
+                    }
+                    if !selected { try await Task.sleep(for: .milliseconds(10)) }
+                }
+                #expect(selected, "Home must open the real Research page with the requested horizon selected")
+            }
+        }
+        #expect(history.runs == savedRuns && !history.isChecking && history.lastError == nil)
+        #expect(journal.trades.isEmpty && portfolio.positions.isEmpty && paper.trades.isEmpty && velocity.series.isEmpty)
+        #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: suite) ?? [:]).isEqual(to: savedDefaults),
+                "Rendering must not write fixture records or preferences")
+        #expect(store.userSymbols == ["AAPL"] && store.priceAlerts.isEmpty && store.ideas.map(\.symbol) == ideaSymbols)
+        #expect(!store.isRefreshing && !store.isLoadingIdeas && store.lastFullRefreshAt == nil)
+        #expect(!live.isStreaming && live.subscribed.isEmpty && !monitor.isRunning)
+        #expect(ai.activeSymbol == nil && ai.records.isEmpty && ai.drafts.isEmpty)
+        #expect(chat.turns.isEmpty && chat.pending == nil && chat.draft.isEmpty)
+    }
+
+    @Test(arguments: [900, 1300])
+    func chatModelSettingsButtonRevealsActualCatalystsControls(width: Int) async throws {
+        try #require(StockSageStore.isRunningTests)
+        let suite = "stocksage.audit.mac.model-navigation.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        // Reopening settings must reveal them even when the saved disclosure is already expanded.
+        defaults.set(width == 1300, forKey: "marketsCatalystsModelSettingsExpanded")
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults,
+            heldSymbols: { portfolio.positions.map(\.symbol) + journal.open.map(\.symbol) },
+            journalTrades: { journal.trades })
+        await store.seedQAIdeas(previousScanEntries: [:])
+        let live = StockSageLiveStream()
+        let ai = StockSageAIAssessments()
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let monitor = StockSageMonitor(defaults: defaults)
+        let velocity = StockSageVelocityHistoryStore(defaults: defaults)
+        let chat = StockSageChatSession(historyURL: nil)
+        try #require(journal.hasLoadedRecords && portfolio.hasLoadedRecords && paper.hasLoadedRecords)
+        var expectedDefaults = defaults.persistentDomain(forName: suite) ?? [:]
+        expectedDefaults["marketsCatalystsModelSettingsExpanded"] = true
+        let viewport = CGSize(width: CGFloat(width), height: width == 900 ? 700 : 840)
+        let view = MarketsView(chatSession: chat, qaSection: .chat,
+            store: store, aiAssessments: ai, portfolio: portfolio, journal: journal,
+            paperStore: paper, live: live, velocityHistory: velocity, monitor: monitor)
+            .defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
+        let size = try await capture(view, name: "stocksage-audit-mac-model-settings-\(width)", viewport: viewport) { root in
+            let button = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityRole?() == .button &&
+                    ($0.accessibilityLabel?() == "Model settings" || $0.accessibilityTitle?() == "Model settings")
+            })
+            try #require(button.accessibilityPerformPress?() == true, "Use the actual Chat navigation action")
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            var controls: [AnyObject] = []
+            var visible = false
+            while ContinuousClock.now < deadline {
+                root.layoutSubtreeIfNeeded()
+                // SwiftUI can replace native fields while the destination mounts. Rediscover
+                // the live Catalysts control instead of retaining a transient layout object.
+                controls = nativeAccessibilityElements(in: root)
+                visible = controls.compactMap { $0 as? NSTextField }.contains { field in
+                    guard field.placeholderString == "Server URL", field.window === root.window, !field.isHiddenOrHasHiddenAncestor,
+                          let scroll = field.enclosingScrollView else { return false }
+                    let frame = field.convert(field.bounds, to: scroll.contentView)
+                    return frame.width > 0 && frame.height > 0 && field.visibleRect.height > 0
+                        && scroll.contentView.bounds.contains(frame)
+                }
+                if visible { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(defaults.bool(forKey: "marketsCatalystsModelSettingsExpanded"))
+            let selectedRows = controls.flatMap { object -> [Any] in
+                let selector = NSSelectorFromString("accessibilitySelectedRows")
+                guard let native = object as? NSObject, native.responds(to: selector) else { return [] }
+                return native.perform(selector)?.takeUnretainedValue() as? [Any] ?? []
+            }
+            #expect(selectedRows.contains { row in
+                nativeAccessibilityElements(in: row).contains {
+                    $0.accessibilityIdentifier?() == "desktop.nav.catalysts"
+                }
+            }, "The native sidebar must select Catalysts after Chat's Model settings action")
+            #expect(visible, "The expanded Server URL control must be inside the actual scroll viewport")
+        }
+        #expect(size == viewport)
+        #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: suite) ?? [:]).isEqual(to: expectedDefaults),
+                "Navigation may change only the disclosure preference")
+        #expect(journal.trades.isEmpty && portfolio.positions.isEmpty && paper.trades.isEmpty && velocity.series.isEmpty)
+        #expect(!store.isRefreshing && !store.isLoadingIdeas && store.lastFullRefreshAt == nil)
+        #expect(!live.isStreaming && live.subscribed.isEmpty && !monitor.isRunning)
+        #expect(ai.activeSymbol == nil && ai.records.isEmpty && ai.drafts.isEmpty)
+        #expect(chat.turns.isEmpty && chat.pending == nil && chat.draft.isEmpty)
+    }
+
     @Test(arguments: [360, 760])
     func renderLocalWatchlistReceipt(width: Int) async throws {
         let turn = StockSageChatSession.Turn(id: UUID(), question: "add rklb to watchlist",
@@ -283,24 +576,19 @@ struct StockSageChatTests {
     }
 
     @Test(arguments: [360, 760], [false, true])
-    func renderResearchFiltersWithoutChangingBindings(width: Int, filled: Bool) async throws {
+    func renderTopFiveResearchSearchWithoutChangingBindings(width: Int, filled: Bool) async throws {
         let original = filled ? "Synthetic company · بحث تجريبي طويل" : ""
         var search = original
-        var filter: StockSageResearchModesPanel.ResultFilter = filled ? .incomplete : .all
         var changes = 0
         let view = GroupBox {
-            StockSageResearchModesPanel.filters(
-                search: Binding(get: { search }, set: { search = $0; changes += 1 }),
-                filter: Binding(get: { filter }, set: { filter = $0; changes += 1 }))
+            StockSageResearchModesPanel.searchField(
+                search: Binding(get: { search }, set: { search = $0; changes += 1 }))
                 .padding(DS.Space.xs)
         }.padding(16).frame(width: CGFloat(width))
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
-        let size = try await capture(view, name: "stocksage-research-filters-\(width)-\(filled)")
+        let size = try await capture(view, name: "stocksage-research-top-five-search-\(width)-\(filled)")
         #expect(size.width == CGFloat(width) && size.height > 40)
-        if width == 360 {
-            #expect(size.height > 90, "At compact widths search and its filter need separate readable rows")
-        }
-        #expect(search == original && filter == (filled ? .incomplete : .all), "Layout cannot change the owner's filters")
+        #expect(search == original, "Layout cannot change the owner's search")
         #expect(changes == 0)
     }
 
@@ -369,7 +657,7 @@ struct StockSageChatTests {
         #expect(actions == 0, "Rendering either layout must not start, stop or switch a research scan")
     }
 
-    @Test func researchSelectionClearsWhenFilteredOutOrHorizonChanges() async throws {
+    @Test func researchSelectionTracksSearchTopFiveAndHorizon() async throws {
         typealias R = StockSageHorizonResearch
         let suite = "stocksage.research.presentation.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -380,15 +668,20 @@ struct StockSageChatTests {
             .init(ticker: symbol, name: "\(symbol) synthetic", market: "stocks", locale: "us", active: true,
                   type: "CS", currency_name: "usd", primary_exchange: "XNAS")
         }
-        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAPL"), listing("MSFT")]) }, analyze: { item in
-            let verdict: StockSageAIAssessment.Verdict? = item.ticker == "AAPL"
-                ? StockSageAIAssessment.Verdict(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
-                : nil
+        var held: CheckedContinuation<Void, Never>?
+        let started = research.start(.week, allowed: { true }, universe: {
+            .init(["AAPL", "MSFT", "NVDA", "AMD", "META", "RKLB", "FAIL"].map(listing))
+        }, analyze: { item in
+            if item.ticker == "RKLB" { await withCheckedContinuation { held = $0 } }
+            let verdict: StockSageAIAssessment.Verdict? = item.ticker == "FAIL" ? nil
+                : .init(action: item.ticker == "RKLB" ? .strongBuy : .buy,
+                        reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: [])
             return .init(verdict: verdict, note: "Synthetic research only", model: verdict == nil ? "" : "fixture")
         })
         try #require(started)
-        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
-        try #require(research.running == nil && research.scans[.week]?.listings.count == 2)
+        defer { research.stop(); held?.resume() }
+        for _ in 0..<200 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held != nil && research.scans[.week]?.topBuys.map(\.ticker) == ["AAPL", "MSFT", "NVDA", "AMD", "META"])
         let requestedAt = try #require(research.scans[.week]?.at)
         let model = ResearchPresentationModel()
         let host = NSHostingController(rootView: ResearchPresentationFixture(model: model, store: store, research: research)
@@ -422,32 +715,25 @@ struct StockSageChatTests {
         model.presentation.search = "MSF"
         try await waitFor { model.presentation.selected == nil }
 
-        // Buy-only filter removes a non-Buy selection → cleared.
+        // A newly arrived Strong Buy moves the fifth Buy out of the shortlist.
         model.presentation.search = ""
         try await settle()
-        model.presentation.selected = "MSFT"
-        model.presentation.filter = .buys
-        try await waitFor { model.presentation.selected == nil }
-
-        // Buy-only filter keeps a Buy selection.
-        model.presentation.filter = .all
+        model.presentation.selected = "META"
         try await settle()
-        model.presentation.selected = "AAPL"
-        model.presentation.filter = .buys
-        try await settle()
-        #expect(model.presentation.selected == "AAPL", "Buy-only must not close a Buy's detail")
+        #expect(model.presentation.selected == "META")
+        let release = held; held = nil; release?.resume()
+        try await waitFor { research.running == nil && model.presentation.selected == nil }
+        #expect(research.scans[.week]?.topBuys.map(\.ticker) == ["RKLB", "AAPL", "MSFT", "NVDA", "AMD"])
+        #expect(research.scans[.week]?.listings.count == 7 && research.scans[.week]?.results.count == 7,
+                "Shortlisting must retain incomplete and lower-ranked scan evidence")
 
-        model.presentation.filter = .incomplete
-        try await waitFor { model.presentation.selected == nil }
-        model.presentation.selected = "MSFT"
+        // Horizon change clears a matching top-result selection and search.
+        model.presentation.selected = "RKLB"
+        model.presentation.search = "RKL"
         try await settle()
-        #expect(model.presentation.selected == "MSFT", "An incomplete selection stays visible in its filter")
-        model.presentation.filter = .unchecked
-        try await waitFor { model.presentation.selected == nil }
-
-        // Horizon change clears selection and filters.
+        #expect(model.presentation.selected == "RKLB")
         model.presentation.horizon = .fortnight
-        try await waitFor { model.presentation.selected == nil && model.presentation.search == "" && model.presentation.filter == .all }
+        try await waitFor { model.presentation.selected == nil && model.presentation.search == "" }
 
         #expect(research.running == nil && research.scans[.fortnight] == nil && research.scans[.week]?.at == requestedAt,
                 "Rendering and selection changes must never start, stop or replace a scan")
@@ -494,7 +780,7 @@ struct StockSageChatTests {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .navigationTitle("Research")
-                .navigationSubtitle("One-time research. Separate from day trading.")
+                .navigationSubtitle("Top Buy / Strong Buy research for 1–7 or 7–14 trading days.")
         }
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: panel.detailPresented) { panel.selectedDetail }
@@ -507,6 +793,7 @@ struct StockSageChatTests {
                 (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap { tables(in: $0) }
             }
             let table = try #require(tables(in: root).first { $0.numberOfColumns >= 3 })
+            #expect(table.numberOfRows == 1, "Only the Buy result belongs in the main table; the incomplete check stays in coverage")
             #expect(table.visibleRect.height >= 100, "Results must retain a usable viewport beside the inspector")
             #expect(table.rect(ofColumn: table.numberOfColumns - 1).maxX <= table.visibleRect.maxX + 2,
                     "Every displayed result column must fit without horizontal scrolling")
@@ -521,7 +808,7 @@ struct StockSageChatTests {
         #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
     }
 
-    @Test func openResearchDetailUpdatesWithoutReselectionOrRemount() async throws {
+    @Test func researchDetailAppearsOnlyAfterAnEligibleResultArrives() async throws {
         let suite = "stocksage.detail.live.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -533,7 +820,8 @@ struct StockSageChatTests {
                          active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")])
         }, analyze: { _ in
             await withCheckedContinuation { held = $0 }
-            return .init(note: "Synthetic research finished. The open detail must now show this completed result.")
+            return .init(verdict: .init(action: .buy, reason: "Synthetic interpretation", risk: "Synthetic risk", evidence: []),
+                         note: "Synthetic research finished. The retained detail host must now show this eligible result.")
         })
         try #require(started)
         defer { research.stop(); held?.resume() }
@@ -543,6 +831,7 @@ struct StockSageChatTests {
         presentation.selected = "AAPL"
         let panel = StockSageResearchModesPanel(store: store, research: research,
             presentation: Binding(get: { presentation }, set: { presentation = $0 }))
+        #expect(!panel.detailPresented.wrappedValue, "An unchecked listing cannot open a top-result detail")
         var appeared = false
         let host = NSHostingController(rootView: panel.selectedDetail.frame(width: 400, height: 400)
             .onAppear { appeared = true })
@@ -565,6 +854,7 @@ struct StockSageChatTests {
         for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(10)) }
         for _ in 0..<15 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(research.scans[.week]?.results["AAPL"] != nil && presentation.selected == "AAPL")
+        #expect(panel.detailPresented.wrappedValue, "Only the arrived Buy opinion makes this detail eligible")
         #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 
@@ -619,28 +909,6 @@ struct StockSageChatTests {
         #expect(edited == "Unrelated fixture update")
         #expect(!(window.firstResponder is NSTextView), "A state redraw must not request focus")
         #expect(!window.isKeyWindow, "The isolated focus check must not activate a window")
-    }
-
-    @Test func assessmentControlsExplainRetriesAndUnavailableActions() {
-        for hasRecord in [false, true] {
-            for hasDraft in [false, true] {
-                for activeSymbol: String? in [nil, "ORCL", "QCOM"] {
-                    for isSampleData in [false, true] {
-                        let controls = StockSageAIAssessmentPanel.RequestControls(
-                            hasRecord: hasRecord, hasDraft: hasDraft,
-                            activeSymbol: activeSymbol, isSampleData: isSampleData, request: {})
-                        #expect(controls.title == (hasRecord || hasDraft ? "Reassess" : "Assess with Qwen"))
-                        #expect((controls.disabledReason != nil) == (activeSymbol != nil || isSampleData))
-                        if isSampleData {
-                            #expect(controls.disabledReason?.contains("sample data") == true)
-                        }
-                        if let activeSymbol {
-                            #expect(controls.disabledReason?.contains(activeSymbol) == true)
-                        }
-                    }
-                }
-            }
-        }
     }
 
     @Test(arguments: [360, 760], ["fresh", "draft", "busy", "sample-and-busy"])
@@ -1110,23 +1378,77 @@ struct StockSageChatTests {
         #expect(size.width == 500 && size.height > 0 && actions == 0)
     }
 
+    // SwiftUI's native AX proxies can implement these public Objective-C methods
+    // without declaring NSAccessibilityProtocol conformance.
+    private func nativeAccessibilityElements(in root: Any) -> [AnyObject] {
+        var elements: [AnyObject] = []
+        var seen: Set<ObjectIdentifier> = []
+        func visit(_ value: Any) {
+            let object = value as AnyObject
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            elements.append(object)
+
+            for child in object.accessibilityChildren?() ?? [] { visit(child) }
+            if let native = object as? NSObject {
+                if native.responds(to: NSSelectorFromString("accessibilityAttributeValue:")) {
+                    for child in native.accessibilityAttributeValue(.children) as? [Any] ?? [] {
+                        visit(child)
+                    }
+                }
+                let selector = NSSelectorFromString("accessibilityChildrenInNavigationOrder")
+                if native.responds(to: selector) {
+                    // This public getter returns an ObjC array. Preserve the existing raw
+                    // array bridge for native scroller parts that lack formal conformance.
+                    let children = native.perform(selector)?.takeUnretainedValue() as? [Any] ?? []
+                    for child in children { visit(child) }
+                }
+            }
+            if let view = object as? NSView {
+                for child in view.subviews { visit(child) }
+            }
+        }
+        visit(root)
+        return elements
+    }
+
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil,
-                         inspect: ((NSView) throws -> Void)? = nil) async throws -> CGSize {
+                         inspect: ((NSView) async throws -> Void)? = nil) async throws -> CGSize {
+        let previousAppearance = NSApp.appearance
+        let previousApplication = NSWorkspace.shared.frontmostApplication
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        defer {
+            NSApp.appearance = previousAppearance
+            if viewport != nil, previousApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                previousApplication?.activate(options: [])
+            }
+        }
         var appeared = false
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
         // A split-view workspace is viewport-sized, not an intrinsic-size leaf. Do not let its
         // transient mount measurements replace the fixture window's explicit dimensions.
-        if viewport != nil { host.sizingOptions = [] }
+        if viewport != nil { disableIntrinsicSizing(host) }
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
             width: viewport?.width ?? 500, height: viewport?.height ?? 700),
             styleMask: viewport == nil ? [.titled] : [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.title = name
+        window.allowsFixtureFocus = viewport != nil
+        window.fixtureContentHeight = viewport?.height
         // The app declares .preferredColorScheme(.dark) on its window; give the offscreen host the
         // same AppKit appearance so system controls and label colours match what ships.
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentViewController = host
         if let viewport { window.setContentSize(viewport) }
-        window.orderBack(nil)
+        if let viewport, let screen = NSScreen.main {
+            // Native SwiftUI workflows need an active fixture window, not an offscreen preview.
+            let area = screen.visibleFrame
+            window.setFrameOrigin(NSPoint(x: area.midX - viewport.width / 2,
+                                          y: area.midY - viewport.height / 2))
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+        } else {
+            window.orderBack(nil)
+        }
         defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !appeared, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
@@ -1140,15 +1462,46 @@ struct StockSageChatTests {
             try await Task.sleep(for: .milliseconds(100))
             host.view.layoutSubtreeIfNeeded()
         }
-        try inspect?(host.view)
+        if inspect != nil {
+            // Query only this isolated host through the public AX client path. SwiftUI
+            // otherwise omits virtual controls from in-process getters. Yield the main
+            // actor while AppKit services the query; never prompt or modify AX settings.
+            let pid = ProcessInfo.processInfo.processIdentifier
+            let code = await Task.detached {
+                let application = AXUIElementCreateApplication(pid)
+                let timeout = AXUIElementSetMessagingTimeout(application, 1)
+                guard timeout == .success else { return timeout.rawValue }
+                var value: CFTypeRef?
+                return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value).rawValue
+            }.value
+            try #require(code == AXError.success.rawValue,
+                "The native AX query must succeed before testing virtual SwiftUI controls")
+        }
+        var inspectionError: (any Error)?
+        do { try await inspect?(host.view) } catch { inspectionError = error }
+        if viewport != nil {
+            window.displayIfNeeded()
+            print("NATIVE_VIEWPORT \(name) pid=\(ProcessInfo.processInfo.processIdentifier) window=\(window.windowNumber)")
+            fflush(nil)
+            // Let the native backing finish displaying before collecting the render artifact.
+            try await Task.sleep(for: .milliseconds(250))
+        }
         // GroupBox's native backing is omitted by ImageRenderer; capture the actual hosted view.
         let bitmap = try #require(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
-        host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+        host.view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+        }
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         // Matches the existing offline component-render checks; inspect these for copy/wrapping.
         try png.write(to: FileManager.default.temporaryDirectory
             .appendingPathComponent("\(name).png"), options: .atomic)
+        if let inspectionError { throw inspectionError }
         return host.view.bounds.size
+    }
+
+    private func disableIntrinsicSizing<Content: View>(_ host: NSHostingController<Content>) {
+        host.sizingOptions = []
+        (host.view as? NSHostingView<Content>)?.sizingOptions = []
     }
     #endif
 
@@ -1751,7 +2104,23 @@ struct StockSageChatTests {
 }
 
 @MainActor private final class ChatTranscriptFixtureWindow: NSWindow {
-    override var canBecomeMain: Bool { false }
-    override var canBecomeKey: Bool { false }
+    var allowsFixtureFocus = false
+    var fixtureContentHeight: CGFloat?
+
+    // This fixture tests a fixed content viewport, like a user-sized application window.
+    // SwiftUI's hosted inspector negotiates width; it cannot enlarge the test's height
+    // until all content fits. Keep the real native layout/scrolling inside that viewport.
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        var proposed = frameRect
+        if let fixtureContentHeight {
+            let height = self.frameRect(forContentRect: NSRect(x: 0, y: 0,
+                width: frameRect.width, height: fixtureContentHeight)).height
+            proposed.origin.y = frameRect.maxY - height
+            proposed.size.height = height
+        }
+        if proposed != frame { super.setFrame(proposed, display: flag) }
+    }
+    override var canBecomeMain: Bool { allowsFixtureFocus }
+    override var canBecomeKey: Bool { allowsFixtureFocus }
 }
 #endif

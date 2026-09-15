@@ -99,12 +99,29 @@ struct StockSageQuoteTests {
 
 // MARK: - Briefing (deterministic / offline path)
 //
-// Only the sync `deterministicSummary` is unit-tested — the async
-// `generateBriefing` routes through `LocalLLM` (network/Apple Intelligence) and
-// belongs in an integration test, not a pure unit test.
+// Both compact and complete summaries use the actual local rules engine.
 
 struct StockSageBriefingTests {
     private let at = ISO8601DateFormatter().date(from: "2026-01-02T15:00:00Z")!
+
+    @Test func compactBriefingKeepsBothDirectionsCountsAndUnknownCoverage() throws {
+        let symbols = (0..<12).map { index in
+            StockSageSymbol(symbol: "FIX\(index)", market: "US", quotes: [
+                .init(price: index < 8 ? 110 : 90, previousPrice: 100,
+                    marketTime: at, priceSource: .yahoo,
+                    previousCloseSource: .yahoo, previousCloseQuoteTime: at)])
+        } + [StockSageSymbol(symbol: "UNKNOWN", market: "US", quotes: [])]
+        let compact = StockSageBriefingService.deterministicSummary(for: symbols, compact: true)
+        let full = StockSageBriefingService.deterministicSummary(for: symbols)
+        #expect(compact.contains("Strength (8)") && compact.contains("Weakness (4)"))
+        #expect(compact.contains("5 more") && compact.contains("1 more"))
+        #expect(compact.contains("1 of 13") && compact.contains("Constructive"))
+        #expect(compact.contains("stale quote") && !compact.contains("FIX7"))
+        #expect(full.contains("FIX7") && full.contains("FIX11"))
+        let tone = try #require(compact.range(of: "Constructive"))
+        let strength = try #require(compact.range(of: "Strength"))
+        #expect(tone.lowerBound < strength.lowerBound)
+    }
 
     @Test func unverifiedBaselineIsNotAConsolidationFinding() {
         let unknown = StockSageSymbol(symbol: "UNKNOWN", market: "US", quotes: [

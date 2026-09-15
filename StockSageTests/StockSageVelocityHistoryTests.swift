@@ -84,8 +84,8 @@ struct StockSageVelocityHistoryTests {
         #expect(StockSageVelocityHistory.preBasisNotice(new) == nil, "no old days ⇒ no notice")
     }
 
-    // An unrecognized (newer-build) basis must read as not-current rather than being compared, and
-    // must never throw: `load()` uses `try?`, so one throw loses the whole 60-day history.
+    // An unrecognized (newer-build) basis must read as not-current rather than being compared,
+    // without making the whole 60-day history unreadable.
     @Test func anUnknownFutureBasisDecodesAndIsExcluded() throws {
         let future = #"{"day":"2026-06-09","weeklyR":9.0,"metricBasis":99}"#.data(using: .utf8)!
         let s = try JSONDecoder().decode(VelocitySnapshot.self, from: future)
@@ -149,5 +149,75 @@ struct StockSageVelocityHistoryTests {
         #expect(final.series.contains { $0.day == "2026-07-01" && $0.weeklyR == 1.5 })
         #expect(final.series.contains { $0.day == StockSageVelocityHistoryStore.dayKey(Date()) && $0.weeklyR == 2.0 })
         #expect(final.series == final.series.sorted { $0.day < $1.day })   // stays day-sorted
+    }
+
+    @MainActor @Test(arguments: ["broken-at-load", "broken-after-load", "wrong-type-at-load",
+                                "wrong-type-after-load", "nan", "positive-infinity", "negative-infinity"])
+    func rejectedRecordPreservesStoredBytesAndLastValidSeries(failure: String) throws {
+        let suite = "velocity.preservation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "history"
+        let saved = [VelocitySnapshot(day: "2000-01-01", weeklyR: 1.5),
+                     VelocitySnapshot(day: "2000-01-02", weeklyR: 2.5,
+                                      metricBasis: VelocityMetricBasis.current.rawValue)]
+        let savedData = try JSONEncoder().encode(saved)
+        let startsUnreadable = failure.hasSuffix("at-load")
+        if startsUnreadable {
+            if failure.hasPrefix("wrong-type") { defaults.set("unexpected stored string", forKey: key) }
+            else { defaults.set(Data("{broken".utf8), forKey: key) }
+        } else {
+            defaults.set(savedData, forKey: key)
+        }
+        let store = StockSageVelocityHistoryStore(defaults: defaults, key: key)
+        #expect(store.series == (startsUnreadable ? [] : saved))
+        #expect((store.lastError != nil) == startsUnreadable)
+
+        if failure == "broken-after-load" { defaults.set(Data("{broken".utf8), forKey: key) }
+        if failure == "wrong-type-after-load" { defaults.set("unexpected stored string", forKey: key) }
+        let previousSeries = store.series
+        let previousData = defaults.data(forKey: key)
+        let previousString = defaults.string(forKey: key)
+        let weeklyR: Double
+        switch failure {
+        case "nan": weeklyR = .nan
+        case "positive-infinity": weeklyR = .infinity
+        case "negative-infinity": weeklyR = -.infinity
+        default: weeklyR = 3
+        }
+        store.record(weeklyR: weeklyR)
+        #expect(store.lastError != nil)
+        #expect(store.series == previousSeries)
+        #expect(defaults.data(forKey: key) == previousData)
+        #expect(defaults.string(forKey: key) == previousString)
+
+        // An external repair becomes readable on the next record without discarding old-basis days.
+        defaults.set(savedData, forKey: key)
+        store.record(weeklyR: 3)
+        #expect(store.lastError == nil)
+        #expect(store.series.contains(saved[0]))
+        #expect(store.series.contains(saved[1]))
+        #expect(store.series.last?.day == StockSageVelocityHistoryStore.dayKey(Date()))
+        #expect(store.series.last?.weeklyR == 3)
+        #expect(store.series.last?.isCurrentBasis == true)
+        let persistedData = try #require(defaults.data(forKey: key))
+        let persisted = try JSONDecoder().decode([VelocitySnapshot].self, from: persistedData)
+        #expect(persisted == store.series)
+    }
+
+    @MainActor @Test func missingKeyCanStartANewHistory() throws {
+        let suite = "velocity.fresh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageVelocityHistoryStore(defaults: defaults, key: "history")
+        #expect(store.series.isEmpty)
+        #expect(store.lastError == nil)
+        store.record(weeklyR: 2)
+        #expect(store.lastError == nil)
+        let restored = StockSageVelocityHistoryStore(defaults: defaults, key: "history")
+        #expect(restored.series == store.series)
+        #expect(restored.series.count == 1)
+        #expect(restored.series.first?.weeklyR == 2)
+        #expect(restored.series.first?.isCurrentBasis == true)
     }
 }

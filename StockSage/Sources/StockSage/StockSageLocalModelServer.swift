@@ -722,6 +722,19 @@ enum StockSageLocalModelServer {
         completion.diagnostic.finish == .tokenLimit
     }
 
+    /// Financial verdicts require a completed response. Absent metadata retains the
+    /// generic-backend compatibility contract; the strict 9B profile separately requires stop.
+    /// Chat's truncation notice and preservation of partial prose remain unchanged.
+    nonisolated static func financialOutputRejection(_ completion: Completion) -> String? {
+        switch completion.diagnostic.finish {
+        case .absent, .stop: return nil
+        case .tokenLimit: return "The model stopped at the output limit before finishing."
+        case .filtered: return "The model response was stopped by a content filter."
+        case .toolCall: return "The model requested a tool call instead of completing its answer."
+        case .unknown, .malformed: return "The model did not report a valid completion state."
+        }
+    }
+
     private nonisolated static func tokenCount(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
@@ -916,8 +929,8 @@ enum StockSageLocalModelServer {
                     // `finish` is reported, never used to reject text outside the strict profile.
                     // That contract is deliberate and correct — a truncated Chat answer is still
                     // worth showing, while a truncated financial verdict is not. The decision
-                    // therefore belongs to each caller, and lives in `rejectsTruncatedOutput` /
-                    // `StockSageAIAssessment.validate`, not here.
+                    // therefore belongs to each caller: `financialOutputRejection` and evidence
+                    // validation gate verdicts; `rejectsTruncatedOutput` annotates Chat prose.
                     if c.isLMStudio9B, reply.diagnostic.finish != .stop {
                         var diagnostic = reply.diagnostic
                         diagnostic.category = .incompleteOutput

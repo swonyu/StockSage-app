@@ -1,12 +1,14 @@
 # StockSage
 
-A native macOS/iPhone workspace for market research, local-model explanations,
-portfolio journaling and simulated trading. Research opinions are not execution
+A native macOS/iPhone workspace focused on **1–7 and 7–14 trading-day research**,
+local-model explanations and portfolio journaling. Research opinions are not execution
 permission or evidence of a profitable strategy.
 
 Originally extracted from Salehman AI's Markets tab. The macOS app now has a left
-sidebar: Home, Watchlist, Ideas, Markets, Catalysts, Heatmap, Portfolio, Alerts and
-Chat, plus native Settings. iPhone retains its platform-specific navigation.
+sidebar led by Home, Research, Watchlist and Chat. Home summarizes the latest saved
+picks for each horizon and predictions ready for review, with dates and direct links.
+iPhone uses the same charcoal/magenta design and Home-first native tabs.
+Legacy same-day paper records remain on Mac; new runs and automatic resumption are retired.
 
 ## What it is
 
@@ -16,14 +18,24 @@ Chat, plus native Settings. iPhone retains its platform-specific navigation.
   Endpoint access, freshness and licensing rights are separate questions.
 - **Research:** rules-based indicators and sizing, company catalysts, evidence-bound
   AI opinions, local Qwen Chat, and manual 1–7 / 7–14 trading-day scans. Each manual
-  horizon scans at most 500 validated active US names; it does not open positions.
-- **Native paper automation:** Day mode checks up to 101 symbols including holdings,
-  with four research workers, a 15-minute research cadence and independent position
-  polling. The poll sleeps 30 seconds after completion; this is not a maximum delay
-  guarantee. Scheduled pre-market, regular and after-hours sessions are supported.
+  horizon scans at most 500 validated active US names and displays at most five
+  accepted Buy / Strong Buy results. Strong Buy precedes Buy; ties retain the dated
+  activity order. The rank is not a validated return forecast. No positions are opened.
+- **Saved research:** completed runs preserve original ordered picks, opinions,
+  evidence, model and reference prices in `Application Support/StockSage/ResearchHistory/runs.json`.
+  Saved research → Check due results reviews the seventh or fourteenth future Nasdaq
+  regular-session target date, once that New York date has ended. The benchmark uses the
+  next trading date’s daily open after completion and the target date’s daily close from
+  one verified split-adjusted history; missing dates/calendar/data stay unavailable. Flat is distinct from rose/fell.
+  Active or cancelled scans are not durable completed runs. Review is manual while
+  the app is open, not a background execution service.
+- **Legacy paper:** retained account/history/export remain readable. No new same-day
+  runs start from the app or resume on launch. Open legacy positions are not monitored
+  after relaunch; existing records are not reinterpreted as 7/14-day research.
 - **Records:** holdings, journal, legacy paper results and the separate native Qwen
-  paper account. Normal backup covers journal/portfolio/watchlist; the separate
+  paper account. Normal backup covers journal/portfolio/watchlist/price alerts; the separate
   paper research export includes committed account data and referenced audit chunks.
+  Saved research is a separate local file and is not yet part of that normal backup.
 - **Code:** financial/data logic in `StockSage/Sources/StockSage/`; views in
   `StockSage/Sources/Views/`; shared refresh/lifecycle ownership in `MarketsView`.
   `AppSettings` and `ToolPolicy` enforce web-access/offline controls.
@@ -68,7 +80,22 @@ Xcode or passing a build is not equivalent to executing either platform's tests.
 
 Fallback while `xcodebuild` is unavailable (e.g. an unaccepted Xcode licence after an update):
 `tools/gate.sh` emits the app module for macOS and iOS with the project's Swift 6 flags and
-type-checks the whole test target. It proves the code compiles; it does NOT run the tests.
+type-checks macOS test code. It does not check iOS-only test code or the widget target,
+and it does **not** execute tests. Invalid modes fail; each invocation keeps separate artifacts.
+
+`tools/runtests.sh` runs the Mac gate above using Xcode's actual app test host and
+unique artifacts. It preserves the native failure status and rejects successful
+zero-test runs. The retired standalone dylib runner did not activate XCTest-based
+startup isolation and could resolve its supposed temporary home to the owner's data.
+Use `--filter StockSagePortfolioTests` for an exact suite (no regex), `--build-only`
+for `build-for-testing`, or no options for the full Mac gate. `--no-parallel` remains
+accepted; all runs are serial. Live diagnostics remain excluded as above.
+
+Editor configuration is checkout-local. If using the already installed
+`xcode-build-server`, generate it from the checkout you are editing:
+`xcode-build-server config -project StockSage.xcodeproj -scheme StockSage`.
+The generated `buildServer.json`, temporary source archives and browser review
+captures are ignored; do not commit another checkout's absolute paths or captured pages.
 
 Requires full Xcode (macOS 26.5 deploy target, Swift 6, MainActor default isolation). New `.swift` files under `StockSage/Sources/` auto-compile (synchronized file groups — no `project.pbxproj` edits). Live quote/history fetches need network access.
 

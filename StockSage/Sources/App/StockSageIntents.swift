@@ -14,12 +14,12 @@ import SwiftUI
 /// beats age — and the same thresholds (60s / 3600s / 86400s), so an answer spoken about an idea
 /// can never contradict the tag rendered beside it. Words, not the card's compact "3h": these
 /// strings are read aloud. Same honesty rule as everywhere else — an unknown, future or
-/// non-finite timestamp renders NOTHING, never a false "now", and never a refusal to answer.
+/// non-finite timestamp is disclosed as unverified, never a false "now" or a refusal to answer.
 enum StockSageSpokenProvenance {
 
     /// Age in the words a person hears, or nil when it cannot be judged. nil is deliberate:
-    /// `priceAsOf` is legitimately absent on older/test-built ideas, and a missing clock must
-    /// cost the caveat, not the answer.
+    /// `priceAsOf` is legitimately absent on older/test-built ideas; the caller must disclose
+    /// that uncertainty while retaining the answer.
     nonisolated static func spokenAge(from asOf: Date?, now: Date) -> String? {
         guard let asOf else { return nil }
         let secs = now.timeIntervalSince(asOf)
@@ -36,7 +36,9 @@ enum StockSageSpokenProvenance {
                                       asOf: Date?, now: Date) -> String {
         if isSampleData { return " (SAMPLE data — not live prices)" }
         if loadedFromCache { return " (last-session prices — not live)" }
-        guard let age = spokenAge(from: asOf, now: now) else { return "" }
+        guard let age = spokenAge(from: asOf, now: now) else {
+            return " (price timestamp unavailable — freshness unverified)"
+        }
         return " (prices \(age))"
     }
 

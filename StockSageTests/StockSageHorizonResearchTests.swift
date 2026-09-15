@@ -4,22 +4,64 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
-    @Test func researchFiltersSeparateMissingOpinionsFromUncheckedListings() {
-        typealias P = StockSageResearchModesPanel
+    @Test func topBuysKeepOnlyFiveAcceptedOpinionsInDeclaredOrder() {
         var scan = R.Scan()
-        scan.listings = [listing("MSFT"), listing("AAPL"), listing("NVDA"), listing("AMD")]
+        scan.listings = ["BUY1", "HOLD", "STRONG1", "INCOMPLETE", "STRONG2", "BUY2",
+                         "STRONG3", "BUY3", "SELL", "AVOID", "REDUCE", "UNCHECKED"].map { listing($0) }
+        func result(_ action: TradeAdvice.Action) -> R.Result {
+            .init(verdict: .init(action: action, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+        }
         scan.results = [
-            "MSFT": .init(verdict: .init(action: .hold, reason: "Fixture", risk: "Fixture", evidence: []), note: "Fixture"),
-            "AAPL": .init(verdict: .init(action: .strongBuy, reason: "Fixture", risk: "Fixture", evidence: []), note: "Fixture"),
-            "NVDA": .init(note: "Fixture: no verified opinion")
+            "BUY1": result(.buy), "HOLD": result(.hold), "STRONG1": result(.strongBuy),
+            "INCOMPLETE": .init(note: "Unverified draft: Buy"), "STRONG2": result(.strongBuy),
+            "BUY2": result(.buy), "STRONG3": result(.strongBuy), "BUY3": result(.buy),
+            "SELL": result(.sell), "AVOID": result(.avoid), "REDUCE": result(.reduce),
+            "NOTINSCAN": result(.strongBuy)
         ]
-        #expect(P.filteredListings(scan, search: " \n", filter: .all).map(\.ticker) == ["MSFT", "AAPL", "NVDA", "AMD"])
-        #expect(P.filteredListings(scan, search: "", filter: .buys).map(\.ticker) == ["AAPL"])
-        #expect(P.filteredListings(scan, search: "", filter: .incomplete).map(\.ticker) == ["NVDA"])
-        #expect(P.filteredListings(scan, search: "", filter: .unchecked).map(\.ticker) == ["AMD"])
-        #expect(P.filteredListings(scan, search: " nv ", filter: .incomplete).map(\.ticker) == ["NVDA"])
-        #expect(P.filteredListings(scan, search: "AMD", filter: .incomplete).isEmpty)
-        #expect(scan.results.count == 3 && scan.listings.count == 4)
+        let originalListings = scan.listings
+        let originalResults = Set(scan.results.keys)
+        #expect(scan.topBuys.map(\.ticker) == ["STRONG1", "STRONG2", "STRONG3", "BUY1", "BUY2"])
+        #expect(scan.topBuys.count == R.topBuyLimit)
+        #expect(scan.listings == originalListings && Set(scan.results.keys) == originalResults,
+                "Selecting the top five must preserve every raw result and its activity order")
+        #expect(StockSageResearchModesPanel.filteredListings(scan, search: " \n").map(\.ticker) == scan.topBuys.map(\.ticker))
+        #expect(StockSageResearchModesPanel.filteredListings(scan, search: " buy2 ").map(\.ticker) == ["BUY2"])
+        #expect(StockSageResearchModesPanel.filteredListings(scan, search: "BUY3").isEmpty,
+                "Search must not promote the sixth eligible result into the displayed top five")
+    }
+
+    @Test(arguments: 0..<5)
+    func fewerThanFiveBuysAreNeverFilledWithOtherActions(count: Int) {
+        var scan = R.Scan()
+        scan.listings = (0..<count).map { listing("BUY\($0)") } + [listing("HOLD"), listing("MISSING")]
+        for item in scan.listings where item.ticker.hasPrefix("BUY") {
+            scan.results[item.ticker] = .init(verdict: .init(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+        }
+        scan.results["HOLD"] = .init(verdict: .init(action: .hold, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+        #expect(scan.topBuys.map(\.ticker) == (0..<count).map { "BUY\($0)" })
+    }
+
+    @Test func topBuysStayIndependentAcrossBothActualScanStores() async throws {
+        let research = R()
+        defer { research.stop() }
+        let names = [listing("AAPL"), listing("MSFT"), listing("NVDA")]
+        for horizon in R.Horizon.allCases {
+            let started = research.start(horizon, allowed: { true }, universe: { .init(names) }, analyze: { item in
+                let action: TradeAdvice.Action = horizon == .week
+                    ? (item.ticker == "MSFT" ? .buy : .hold)
+                    : (item.ticker == "AAPL" ? .strongBuy : .hold)
+                return .init(verdict: .init(action: action, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+            })
+            #expect(started)
+            for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+            try #require(research.running == nil)
+        }
+        #expect(research.scans[.week]?.topBuys.map(\.ticker) == ["MSFT"])
+        #expect(research.scans[.fortnight]?.topBuys.map(\.ticker) == ["AAPL"])
+        for horizon in R.Horizon.allCases {
+            #expect(research.scans[horizon]?.listings == names)
+            #expect(research.scans[horizon]?.results.count == names.count)
+        }
     }
 
     @Test func researchDetailsKeepExplanationSeparateFromExactDiagnostics() {
@@ -94,6 +136,158 @@ import Testing
             #expect(R.referenceRequest(key: "x", next: bad) == nil)
         }
     }
+    @Test func dailyRequestsRequireExactDatesAndKeepResearchShareClasses() throws {
+        for symbol in ["BRK.B", "ETF-X"] {
+            let request = try #require(R.dailyHistoryRequest(symbol: symbol, from: "2024-02-29", to: "2026-09-23", key: "synthetic-test-only"))
+            #expect(request.url?.path == "/v2/aggs/ticker/\(symbol)/range/1/day/2024-02-29/2026-09-23")
+            #expect(request.url?.host == "api.massive.com" && request.url?.scheme == "https")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-test-only")
+            #expect(request.url?.absoluteString.contains("synthetic-test-only") == false)
+            #expect(request.cachePolicy == .reloadIgnoringLocalCacheData && request.timeoutInterval == 30)
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            #expect(query == [.init(name: "adjusted", value: "true"), .init(name: "sort", value: "asc"), .init(name: "limit", value: "5000")])
+        }
+        for invalid in ["2026-02-29", "2026-09-31", "2026-9-01", "12026-09-11", "2026-09-11T00:00:00Z", "2026-09-11\n", "../2026-09-11", ""] {
+            #expect(R.dailyHistoryRequest(symbol: "AAPL", from: invalid, to: "2026-09-23", key: "x") == nil)
+            #expect(R.dailyHistoryRequest(symbol: "AAPL", from: "2026-01-01", to: invalid, key: "x") == nil)
+        }
+        #expect(R.dailyHistoryRequest(symbol: "AAPL", from: "2026-09-24", to: "2026-09-23", key: "x") == nil)
+        for symbol in ["../AAPL", "aapl", "A..B", "AAPL?key=x"] {
+            #expect(R.dailyHistoryRequest(symbol: symbol, from: "2026-09-11", to: "2026-09-23", key: "x") == nil)
+        }
+        for key in ["", " \n"] {
+            #expect(R.dailyHistoryRequest(symbol: "AAPL", from: "2026-09-11", to: "2026-09-23", key: key) == nil)
+        }
+    }
+
+    private func reviewDate(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
+    private func reviewRun(symbol: String = "ACME", horizon: StockSageResearchHistory.Horizon = .week,
+                           includeReference: Bool = true) -> StockSageResearchHistory.Run {
+        .init(id: UUID(), startedAt: reviewDate("2026-09-14T20:59:00Z"), completedAt: reviewDate("2026-09-14T21:00:00Z"),
+            horizon: horizon, predictions: [.init(symbol: symbol, name: symbol, action: "Buy", reason: "Fixture", risk: "Fixture",
+                evidence: ["F1"], facts: ["Dated fixture"], model: "fixture-model", note: "Unvalidated research",
+                referencePrice: includeReference ? 200 : nil,
+                referenceDate: includeReference ? reviewDate("2026-09-11T04:00:00Z") : nil, levels: nil)],
+            coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil))
+    }
+    private func reviewPayload(_ run: StockSageResearchHistory.Run) -> [String: Any] {
+        let target = StockSageResearchHistory.targetClose(after: run.completedAt, horizon: run.horizon)!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let dates = [StockSageResearchHistory.benchmarkDay(after: run.completedAt)!, calendar.startOfDay(for: target)]
+        let rows: [[String: Any]] = dates.enumerated().map { index, date in
+            let open = index == 0 ? 100 : 110
+            let close = index == 0 ? 105 : 110
+            return ["t": date.timeIntervalSince1970 * 1000, "o": open, "h": close, "l": open, "c": close, "v": 100]
+        }
+        return ["status": "OK", "ticker": run.predictions[0].symbol, "adjusted": true, "resultsCount": 2, "results": rows]
+    }
+
+    @Test(arguments: ["BRK.B", "ETF-X"], StockSageResearchHistory.Horizon.allCases)
+    func dueReviewFetchesTheForwardBenchmarkToTargetRange(symbol: String, horizon: StockSageResearchHistory.Horizon) async throws {
+        let run = reviewRun(symbol: symbol, horizon: horizon)
+        let readyAt = try #require(StockSageResearchHistory.reviewAvailableAt(for: run))
+        var clock = readyAt
+        var calls = 0
+        let result = await R.fetchReviewObservation(prediction: run.predictions[0], run: run, key: "synthetic-test-only",
+            allowed: { true }, clock: { clock }, transport: { request in
+                calls += 1
+                let end = horizon == .week ? "2026-09-23" : "2026-10-02"
+                #expect(request.url?.path == "/v2/aggs/ticker/\(symbol)/range/1/day/2026-09-15/\(end)")
+                clock = readyAt.addingTimeInterval(2)
+                return (try JSONSerialization.data(withJSONObject: reviewPayload(run)),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let observation = try #require(result)
+        #expect(calls == 1 && observation.splitAdjusted && observation.history.priceSource == .massiveDaily)
+        #expect(observation.provider == "Massive split-adjusted daily aggregates" && observation.fetchedAt == clock)
+        #expect(observation.history.symbol == symbol && observation.history.opens == [100, 110] && observation.history.closes == [105, 110])
+        #expect(run.predictions[0].referencePrice == 200, "Fetching a revised split basis must not rewrite the saved prediction")
+        let evaluation = StockSageResearchHistory.evaluate(run.predictions[0], in: run, observation: observation, now: clock)
+        #expect(evaluation.state == .evaluated)
+        #expect(abs(try #require(evaluation.priceReturn) - 0.10) < 0.000000001,
+                "The forward benchmark uses the next trading date's daily open, not its close or the old reference")
+    }
+
+    @Test func missingOriginalReferenceContextDoesNotBlockForwardReview() async throws {
+        let run = reviewRun(includeReference: false)
+        let readyAt = try #require(StockSageResearchHistory.reviewAvailableAt(for: run))
+        let result = await R.fetchReviewObservation(prediction: run.predictions[0], run: run, key: "synthetic-test-only",
+            allowed: { true }, clock: { readyAt }, transport: { request in
+                #expect(request.url?.path == "/v2/aggs/ticker/ACME/range/1/day/2026-09-15/2026-09-23")
+                return (try JSONSerialization.data(withJSONObject: reviewPayload(run)),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let observation = try #require(result)
+        let evaluation = StockSageResearchHistory.evaluate(run.predictions[0], in: run, observation: observation, now: readyAt)
+        #expect(evaluation.state == .evaluated && run.predictions[0].referencePrice == nil && run.predictions[0].referenceDate == nil)
+    }
+
+    @Test(arguments: ["notDue", "denied", "emptyKey", "foreignPrediction", "cancelled"])
+    func reviewPreflightNeverDispatchesIneligibleRequests(reason: String) async {
+        let run = reviewRun()
+        let readyAt = StockSageResearchHistory.reviewAvailableAt(for: run)!
+        var calls = 0
+        let task = Task { @MainActor in
+            if reason == "cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+            return await R.fetchReviewObservation(prediction: reason == "foreignPrediction" ? reviewRun(symbol: "OTHER").predictions[0] : run.predictions[0],
+                run: run, key: reason == "emptyKey" ? "" : "synthetic-test-only", allowed: { reason != "denied" },
+                clock: { readyAt.addingTimeInterval(reason == "notDue" ? -1 : 1) }, transport: { _ in
+                    calls += 1
+                    throw URLError(.unknown)
+                })
+        }
+        #expect(await task.value == nil && calls == 0)
+    }
+
+    @Test(arguments: ["missingAdjustment", "falseAdjustment", "numericAdjustment", "stringAdjustment", "wrongTicker", "wrongCount", "pagination", "oversized", "http"])
+    func reviewFetchRejectsUnverifiedResponses(failure: String) async throws {
+        let run = reviewRun()
+        let readyAt = try #require(StockSageResearchHistory.reviewAvailableAt(for: run))
+        var payload = reviewPayload(run)
+        switch failure {
+        case "missingAdjustment": payload.removeValue(forKey: "adjusted")
+        case "falseAdjustment": payload["adjusted"] = false
+        case "numericAdjustment": payload["adjusted"] = 1
+        case "stringAdjustment": payload["adjusted"] = "true"
+        case "wrongTicker": payload["ticker"] = "OTHER"
+        case "wrongCount": payload["resultsCount"] = 3
+        case "pagination": payload["next_url"] = "https://api.massive.com/next"
+        default: break
+        }
+        let data = failure == "oversized" ? Data(repeating: 32, count: 2_000_001) : try JSONSerialization.data(withJSONObject: payload)
+        var calls = 0
+        let result = await R.fetchReviewObservation(prediction: run.predictions[0], run: run, key: "synthetic-test-only",
+            allowed: { true }, clock: { readyAt }, transport: { request in
+                calls += 1
+                return (data, HTTPURLResponse(url: request.url!, statusCode: failure == "http" ? 503 : 200, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(calls == 1 && result == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func reviewResponseIsDiscardedAfterAccessRevocationOrCancellation(cancel: Bool) async throws {
+        let run = reviewRun()
+        let readyAt = try #require(StockSageResearchHistory.reviewAvailableAt(for: run))
+        let data = try JSONSerialization.data(withJSONObject: reviewPayload(run))
+        var allowed = true
+        var calls = 0
+        var held: CheckedContinuation<Void, Never>?
+        let task = Task { @MainActor in
+            await R.fetchReviewObservation(prediction: run.predictions[0], run: run, key: "synthetic-test-only",
+                allowed: { allowed }, clock: { readyAt }, transport: { request in
+                    calls += 1
+                    await withCheckedContinuation { held = $0 }
+                    return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+        }
+        defer { task.cancel(); held?.resume() }
+        for _ in 0..<2000 where held == nil { await Task.yield() }
+        try #require(held != nil && calls == 1)
+        if cancel { task.cancel() } else { allowed = false }
+        let release = held; held = nil; release?.resume()
+        #expect(await task.value == nil)
+    }
     @Test func badPagesNeverBecomeCompleteCensuses() throws {
         let good = Data(#"{"status":"OK","results":[{"ticker":"BRK.B","name":"Berkshire","market":"stocks","locale":"us","active":true,"type":"CS","currency_name":"usd"}]}"#.utf8)
         #expect(try R.parsePage(good).results.first?.ticker == "BRK.B")
@@ -152,6 +346,29 @@ import Testing
             highs: [0], lows: h.lows, closes: h.closes, volumes: h.volumes, priceSource: .massiveDaily)
         #expect(R.completedHistory(broken, at: now) == nil)
     }
+    @Test func completedHistoryAcceptsHolidayGapsButRejectsMissingSessions() throws {
+        let cases: [(String, String, Bool)] = [
+            ("2026-09-08T14:00:00Z", "2026-09-04T04:00:00Z", true), // Tuesday after Labor Day; Friday is latest.
+            ("2026-04-06T14:00:00Z", "2026-04-02T04:00:00Z", true), // Monday after Good Friday; Thursday is latest.
+            ("2026-09-15T14:00:00Z", "2026-09-11T04:00:00Z", false), // Same 106-hour age, but Monday is missing.
+            ("2027-01-19T15:00:00Z", "2027-01-15T05:00:00Z", false), // Calendar year is not verified.
+            ("2027-01-06T15:00:00Z", "2027-01-05T05:00:00Z", false) // Even recent Horizon history needs the calendar.
+        ]
+        let formatter = ISO8601DateFormatter()
+        for (clock, latest, accepted) in cases {
+            let at = try #require(formatter.date(from: clock))
+            let last = try #require(formatter.date(from: latest))
+            let dates = (0..<35).map { last.addingTimeInterval(Double($0 - 34) * 86_400) }
+            let h = StockSagePriceHistory(symbol: "AAPL", dates: dates,
+                opens: Array(repeating: 100, count: 35), highs: Array(repeating: 102, count: 35),
+                lows: Array(repeating: 98, count: 35), closes: Array(repeating: 100, count: 35),
+                volumes: Array(repeating: 1_000, count: 35), priceSource: .massiveDaily)
+            let completed = R.completedHistory(h, at: at)
+            #expect((completed != nil) == accepted, "Latest completed session at \(clock)")
+            if accepted { #expect(completed == h, "Preserve the original bar date and values") }
+        }
+    }
+
     @Test func promptsDifferByRequestedHorizonNotTradingPolicy() {
         #expect(R.Horizon.week.instructions.contains("1–7 trading days"))
         #expect(R.Horizon.fortnight.instructions.contains("7–14 trading days"))
@@ -175,9 +392,10 @@ import Testing
         #expect(scan.status == "Stopping scan…")
         scan.status = "Scan incomplete: listing directory could not be verified."
         scan.listings = [listing()]
-        for running in [true, false] {
-            #expect(Panel.emptyState(for: scan, isRunning: running).title == "No matching stocks")
-        }
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Waiting for Buy / Strong Buy results")
+        #expect(Panel.emptyState(for: scan, isRunning: false).title == "No Buy / Strong Buy results")
+        scan.results["AAPL"] = .init(verdict: .init(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
+        #expect(Panel.emptyState(for: scan, isRunning: false, search: "MSFT").title == "No matching top results")
         #expect(scan.status == "Scan incomplete: listing directory could not be verified.")
     }
     #endif
@@ -207,17 +425,21 @@ import Testing
         #expect(R.parseResearchHistory(try JSONSerialization.data(withJSONObject: incomplete), symbol: "AAPL") == nil)
     }
     @Test func dailyBoundaryUsesNewYorkAcrossDSTAndWeekend() throws {
-        for stamp in ["2026-03-09T04:30:00Z", "2026-11-02T05:30:00Z", "2026-09-12T15:00:00Z"] {
+        for (stamp, lastSession) in [("2026-03-09T04:30:00Z", "2026-03-06T05:00:00Z"),
+                                     ("2026-11-02T05:30:00Z", "2026-10-30T04:00:00Z"),
+                                     ("2026-09-12T15:00:00Z", "2026-09-11T04:00:00Z")] {
             let at = try #require(ISO8601DateFormatter().date(from: stamp))
+            let last = try #require(ISO8601DateFormatter().date(from: lastSession))
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(identifier: "America/New_York")!
             let today = calendar.startOfDay(for: at)
-            let dates = (0..<36).map { calendar.date(byAdding: .day, value: $0 - 35, to: today)! }
+            // The final completed bar is a real session, not a synthesized Sunday candle.
+            let dates = (0..<35).map { calendar.date(byAdding: .day, value: $0 - 34, to: last)! } + [today]
             let h = StockSagePriceHistory(symbol: "AAPL", dates: dates, opens: Array(repeating: 100, count: 36),
                 highs: Array(repeating: 102, count: 36), lows: Array(repeating: 98, count: 36),
                 closes: Array(repeating: 100, count: 36), volumes: Array(repeating: 1000, count: 36), priceSource: .massiveDaily)
             let filtered = try #require(R.completedHistory(h, at: at))
-            #expect(filtered.count == 35 && filtered.dates.last == dates[34])
+            #expect(filtered.count == 35 && filtered.dates.last == last)
             #expect(filtered.dates.allSatisfy { $0 < today })
         }
     }

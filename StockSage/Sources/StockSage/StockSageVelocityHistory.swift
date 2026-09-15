@@ -13,8 +13,7 @@ import Combine
 /// it. ADDING A CASE is the migration procedure for ANY future change to what `weeklyR` MEANS
 /// (netting it, re-basketing it, re-weighting it): bump `current`, never re-interpret a shipped
 /// case. Persisted as its RAW Int (see `VelocitySnapshot.metricBasis`), never as the enum, so a
-/// row written by a NEWER build can never throw inside this build's decode and take the whole
-/// 60-day array down with it — `load()` uses `try?`, so one throw is total loss.
+/// row written by a NEWER build can never make this build reject the whole 60-day array.
 enum VelocityMetricBasis: Int, Sendable, Equatable, CaseIterable {
     /// Shipped through 2026-09-11. Top-N velocities x the WHOLE lane's trading-day cadence
     /// (finding 5.1: the multiplier described a different basket than the sum).
@@ -143,6 +142,7 @@ enum StockSageVelocityHistory {
 final class StockSageVelocityHistoryStore: ObservableObject {
     static let shared = StockSageVelocityHistoryStore()
     @Published private(set) var series: [VelocitySnapshot] = []
+    @Published private(set) var lastError: String?
     private let key: String
     private let defaults: UserDefaults
 
@@ -156,9 +156,13 @@ final class StockSageVelocityHistoryStore: ObservableObject {
 
     /// Record (or replace) today's snapshot (weekly-R + the day's best/fastest) and persist.
     func record(weeklyR: Double, bestSymbol: String? = nil, fastestSymbol: String? = nil) {
-        series = StockSageVelocityHistory.record(series, day: Self.dayKey(Date()), weeklyR: weeklyR,
-                                                 bestSymbol: bestSymbol, fastestSymbol: fastestSymbol)
-        save()
+        guard weeklyR.isFinite else {
+            lastError = "Opportunity history wasn’t saved because the weekly-R estimate is invalid. Previous history was kept."
+            return
+        }
+        let proposed = StockSageVelocityHistory.record(series, day: Self.dayKey(Date()), weeklyR: weeklyR,
+                                                       bestSymbol: bestSymbol, fastestSymbol: fastestSymbol)
+        save(proposed)
     }
 
     var trend: VelocityHistoryTrend? { StockSageVelocityHistory.trend(series) }
@@ -172,9 +176,20 @@ final class StockSageVelocityHistoryStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = defaults.data(forKey: key),
-              let decoded = try? JSONDecoder().decode([VelocitySnapshot].self, from: data) else { return }
-        series = decoded
+        guard let saved = readStoredSeries() else { return }
+        series = saved
+        lastError = nil
+    }
+
+    /// A missing key is a new history. Existing unreadable data must survive for recovery.
+    private func readStoredSeries() -> [VelocitySnapshot]? {
+        guard let stored = defaults.object(forKey: key) else { return [] }
+        guard let data = stored as? Data,
+              let decoded = try? JSONDecoder().decode([VelocitySnapshot].self, from: data) else {
+            lastError = "Opportunity history couldn’t be read. Its saved data was kept; new snapshots were not saved."
+            return nil
+        }
+        return decoded
     }
 
     /// LOST-UPDATE FIX (2026-07-09, C8 — same cross-process clobber class as the paper/
@@ -185,16 +200,19 @@ final class StockSageVelocityHistoryStore: ObservableObject {
     /// valid), disk days it lacks are preserved; then re-sort and re-cap to the newest 60
     /// exactly like record() does. No deletion API exists on this store — every save
     /// reconciles.
-    private func save() {
-        if let data = defaults.data(forKey: key),
-           let disk = try? JSONDecoder().decode([VelocitySnapshot].self, from: data) {
-            let mine = Set(series.map(\.day))
-            var merged = series
-            for d in disk where !mine.contains(d.day) { merged.append(d) }
-            merged.sort { $0.day < $1.day }
-            if merged.count > 60 { merged = Array(merged.suffix(60)) }
-            series = merged
+    private func save(_ proposed: [VelocitySnapshot]) {
+        guard let disk = readStoredSeries() else { return }
+        let mine = Set(proposed.map(\.day))
+        var merged = proposed
+        for d in disk where !mine.contains(d.day) { merged.append(d) }
+        merged.sort { $0.day < $1.day }
+        if merged.count > 60 { merged = Array(merged.suffix(60)) }
+        guard let data = try? JSONEncoder().encode(merged) else {
+            lastError = "Opportunity history couldn’t be saved. Previous history was kept."
+            return
         }
-        if let data = try? JSONEncoder().encode(series) { defaults.set(data, forKey: key) }
+        defaults.set(data, forKey: key)
+        series = merged
+        lastError = nil
     }
 }

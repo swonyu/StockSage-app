@@ -35,23 +35,11 @@ struct StockSageAIAssessmentPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            #if os(macOS)
             RequestControls(hasRecord: ai.records[idea.symbol] != nil,
                             hasDraft: ai.drafts[idea.symbol] != nil,
                             activeSymbol: ai.activeSymbol, isSampleData: store.isSampleData) {
                 Task { await ai.assess(idea, store: store, force: true) }
             }
-            #else
-            HStack {
-                Text("AI assessment · next trading week").font(.headline)
-                Spacer()
-                Button(ai.records[idea.symbol] == nil ? "Assess with Qwen" : "Reassess") {
-                    Task { await ai.assess(idea, store: store, force: true) }
-                }
-                .disabled(ai.activeSymbol != nil || store.isSampleData)
-                .touchHitArea()
-            }
-            #endif
             Text("Unvalidated AI opinion; can misstate. Not a probability or permission to execute. Levels, sizing, rankings and trade controls below remain Rules-based.")
                 .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
@@ -171,7 +159,6 @@ struct StockSageAIAssessmentPanel: View {
         }
     }
 
-    #if os(macOS)
     struct RequestControls: View {
         let hasRecord: Bool
         let hasDraft: Bool
@@ -209,5 +196,4 @@ struct StockSageAIAssessmentPanel: View {
                 .touchHitArea()
         }
     }
-    #endif
 }

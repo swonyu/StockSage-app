@@ -34,7 +34,7 @@ struct MarketsTodayActionsCard: View {
     /// Logged real fills are the dataset that feeds calibration and execution-cost measurement.
     /// nil (default) renders no quick-log affordance, keeping other call sites unchanged.
     var onLogFill: ((String) -> Void)? = nil
-    @ObservedObject private var paperStore = StockSagePaperTradeStore.shared
+    @ObservedObject var paperStore = StockSagePaperTradeStore.shared
     @State private var executableOnly = false
 
     @ScaledMetric(relativeTo: .caption2) private var font8: CGFloat = 8

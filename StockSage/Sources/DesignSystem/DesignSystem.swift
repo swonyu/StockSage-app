@@ -268,7 +268,7 @@ extension View {
 // Markets component and the standalone has no LLM stack. No Markets view referenced it.
 
 // MARK: - DSSegmentPicker
-/// Dark-themed sliding-pill segment control. Replaces `.pickerStyle(.segmented)` app-wide.
+/// Dark-themed sliding-pill segments, with a native phone menu when space or text size requires it.
 /// Selection indicator slides between segments via `matchedGeometryEffect`.
 /// Usage: `DSSegmentPicker(cases: MyEnum.allCases, selection: $binding) { $0.title }`
 struct DSSegmentPicker<T: Hashable>: View {
@@ -277,36 +277,72 @@ struct DSSegmentPicker<T: Hashable>: View {
     let label: (T) -> String
     @Namespace private var ns
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(iOS)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #endif
 
     var body: some View {
+        #if os(iOS)
+        if dynamicTypeSize.isAccessibilitySize {
+            menuPicker
+        } else {
+            ViewThatFits(in: .horizontal) {
+                segments.fixedSize(horizontal: true, vertical: false)
+                menuPicker
+            }
+        }
+        #else
+        segments
+        #endif
+    }
+
+    #if os(iOS)
+    private var menuPicker: some View {
+        Picker("Selection", selection: $selection) {
+            ForEach(cases, id: \.self) { item in
+                Text(label(item)).tag(item)
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .font(.subheadline.weight(.semibold))
+        .frame(minWidth: 44, minHeight: 44)
+    }
+    #endif
+
+    private var segments: some View {
         HStack(spacing: 2) {
             ForEach(cases, id: \.self) { item in
                 Button {
-                    // TODO: Uncomment when HapticFeedback.swift is added to project
-                    // #if os(iOS)
-                    // HapticFeedback.trigger(.selection)
-                    // #endif
                     var transaction = Transaction(animation: reduceMotion ? nil : DS.Motion.spring)
                     transaction.disablesAnimations = reduceMotion
                     withTransaction(transaction) { selection = item }
                 } label: {
                     Text(label(item))
+                        #if os(iOS)
+                        .font(.subheadline.weight(.semibold))
+                        #else
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(selection == item ? Color.black : Color.white.opacity(0.62))
+                        #endif
+                        .foregroundStyle(selection == item ? Color.white : DS.Palette.textSecondary)
                         .lineLimit(1)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
+                        #if os(iOS)
+                        .frame(minWidth: 44, minHeight: 44)
+                        #endif
                         .frame(maxWidth: .infinity)
                         .background {
                             if selection == item {
                                 Capsule()
-                                    .fill(Color.white.opacity(0.92))
+                                    .fill(DS.Palette.accent)
                                     .matchedGeometryEffect(id: "segPill", in: ns)
                             }
                         }
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(label(item))
                 .accessibilityAddTraits(selection == item ? .isSelected : [])
             }
         }
@@ -315,5 +351,7 @@ struct DSSegmentPicker<T: Hashable>: View {
         .overlay(Capsule().stroke(
             LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)],
                            startPoint: .top, endPoint: .bottom), lineWidth: 1))
+        // A caller's group label must not replace each option's own accessible name.
+        .accessibilityElement(children: .contain)
     }
 }

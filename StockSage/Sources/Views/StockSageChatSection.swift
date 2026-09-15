@@ -126,8 +126,14 @@ struct StockSageChatSection: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
+                    #if os(macOS)
                     Text("Chat").font(.largeTitle.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
+                    #else
+                    Text("Ask about a stock or add a ticker to your watchlist.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    #endif
                     Spacer()
                     #if os(macOS)
                     if config != nil { Button("Model settings", action: openModelSettings).tint(.secondary) }
@@ -147,18 +153,19 @@ struct StockSageChatSection: View {
                     #endif
                 }
                 .controlSize(.small)
+                #if os(macOS)
                 Text("Your briefing first. Ask Qwen when you want to go deeper.")
                     .font(.callout).foregroundStyle(.secondary)
+                #endif
             }
             .padding(.bottom, 4)
 
             #if os(iOS)
             if config == nil {
                 Self.missingModelNotice(openModelSettings: openModelSettings)
-            } else {
-                DisclosureGroup("Privacy and model connection") { connectionNotice }
-                    .font(.caption).foregroundStyle(.secondary)
             }
+            DisclosureGroup("Privacy and model connection") { connectionNotice }
+                .font(.caption).foregroundStyle(.secondary)
             #endif
 
             if let opening {
@@ -286,7 +293,7 @@ struct StockSageChatSection: View {
                             StockSageBenzingaEvidenceView.recordContent(record)
                         }
                         Divider()
-                        DisclosureGroup("Historical app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))") {
+                        DisclosureGroup {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Historical snapshot, not current evidence. Model: \(turn.model)")
                                 Text(turn.snapshot.context)
@@ -297,6 +304,11 @@ struct StockSageChatSection: View {
                                     StockSageBenzingaEvidenceView(capturedSnapshot: evidence)
                                 }
                             }.font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        } label: {
+                            Text("Historical app snapshot · \(turn.snapshot.at.formatted(date: .abbreviated, time: .shortened))")
+                                #if os(iOS)
+                                .fixedSize(horizontal: false, vertical: true)
+                                #endif
                         }
                         .font(.caption)
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -438,17 +450,25 @@ struct StockSageChatSection: View {
 
     static func missingModelNotice(openModelSettings: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            #if os(macOS)
             Text(modelSetupGuidance).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                #if os(macOS)
                 .lineLimit(composerLineLimit)
-                #endif
-            Button("Model settings", systemImage: "gearshape", action: openModelSettings)
+            #else
+            Text("Qwen needs setup. Watchlist commands work without a model.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
+            Button(action: openModelSettings) {
+                Label("Model settings", systemImage: "gearshape")
+                    #if os(iOS)
+                    .frame(minHeight: 44)
+                    #endif
+            }
                 #if os(macOS)
                 .controlSize(.small)
                 #else
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+                .buttonStyle(.borderless)
                 #endif
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

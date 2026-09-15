@@ -64,16 +64,15 @@ enum StockSageLauncher {
 // the DesignSystem (`DS.*`), `ToolPolicy`, and a 3-member `AppSettings` shim — none of the
 // parent app's brain/agents/knowledge/voice/media code came along.
 //
-// Extension batch (2026-07-16): menu-bar ticker (toggle in Settings, default on), Settings
-// scene (launch-at-login, monitor autostart, menu bar), first-run onboarding sheet (the
-// first-trade checklist + parent-app data import), App Intents (Shortcuts/Spotlight).
+// Settings provides launch-at-login and monitor autostart. The first-run onboarding
+// sheet introduces research, paper trading and journal records, with parent-app data
+// import on Mac. App Intents provide Shortcuts/Spotlight actions.
 struct StockSageApp: App {
     @StateObject private var chatSession = StockSageChatSession(
         historyURL: StockSageStore.isRunningTests ? nil : StockSageChatSession.localHistoryURL)
     // Review 2026-07-27: the App-scope @ObservedObject store was UNUSED in this body yet
     // re-evaluated the whole scene on every store publish (each quote tick). MarketsView
     // owns its own observation; the App struct needs none.
-    @AppStorage("stocksage.menubar.enabled") private var menuBarEnabled = true
     #if os(macOS)
     @NSApplicationDelegateAdaptor(StockSageQuitDelegate.self) private var quitDelegate
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
@@ -105,9 +104,8 @@ struct StockSageApp: App {
                 // STRUCT, so every Debug build showed the error card instead of the app. Reverted
                 // to the direct view; its delegate-timing init() fix above was kept (it's better
                 // than the old onAppear wiring).
-                // Both platforms open on Home: the iPhone's first native tab, never a route that
-                // lives behind the system More list.
-                Group { MarketsView(chatSession: chatSession, qaSection: .briefing) }
+                // Home summarizes completed research and due reviews on both platforms.
+                Group { MarketsView(chatSession: chatSession) }
                     .tint(DS.Palette.accent)
                     #if os(macOS)
                     .frame(minWidth: 900, minHeight: 700)   // mac window floor — on iOS this forced
@@ -127,7 +125,6 @@ struct StockSageApp: App {
                         // Autostart is a Settings opt-in (default OFF): the monitor's own honesty
                         // gates (no sample/cached/stale pushes) still apply to every cycle.
                         if monitorAutostart { try? StockSageMonitor.shared.start() }
-                        StockSagePaperAutomation.shared.resumeIfEnabled()
                         #endif
                     }
                     // Settings' "Show the welcome checklist again" flips onboardingDone to

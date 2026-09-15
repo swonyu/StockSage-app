@@ -387,13 +387,6 @@ struct CatalystsSectionTests {
         #expect(CatalystsSection.calendarRowColor(isNegativeRecord: true) != DS.Palette.dangerSoft)
     }
 
-    @Test("negative-record row opacity dims below full; a real row stays at full opacity")
-    func negativeRecordRowOpacity() {
-        #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: true) == 0.6)
-        #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: false) == 1.0)
-        #expect(CatalystsSection.calendarRowOpacity(isNegativeRecord: true) < CatalystsSection.calendarRowOpacity(isNegativeRecord: false))
-    }
-
     // MARK: Major fix 2026-09-06 — the empty state must not be fooled by negative records alone
 
     private static let now = Date(timeIntervalSince1970: 1_757_000_000)

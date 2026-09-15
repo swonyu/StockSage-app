@@ -8,6 +8,7 @@ import SwiftUI
 // 60s is plenty; no need for anything finer). Secondary/caption styling to match the
 // freshness banner it sits beside (see MarketsView.swift `feedBanner`).
 struct MarketSessionClockView: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var now = Date()
     private let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
@@ -21,23 +22,23 @@ struct MarketSessionClockView: View {
     }
 
     private func line(icon: String, label: String, state: StockSageMarketHours.SessionState) -> some View {
-        HStack(spacing: 4) {
-            Text(icon)
-            Text(label).fontWeight(.medium)
-            Text("·")
-            Text(state.phaseLabel + countdownSuffix(state.nextTransition))
+        VStack(alignment: .leading, spacing: 4) {
+            if typeSize.isAccessibilitySize {
+                Text("\(icon) \(label)").fontWeight(.medium)
+                Text(state.phaseLabel + countdownSuffix(state.nextTransition))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(spacing: 4) {
+                    Text(icon)
+                    Text(label).fontWeight(.medium)
+                    Text("·")
+                    Text(state.phaseLabel + countdownSuffix(state.nextTransition))
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            }
         }
-        // NO layoutPriority here: giving the phase text priority starved the flag and market
-        // name to zero width, so the Tadawul row rendered as a bare "Scheduled open 10:00
-        // Riyadh (8m)" with no indication of WHICH market (caught on device 2026-07-28).
-        // The whole line shrinks together instead.
         .font(.system(size: font11))
-        // One market = one line (2026-07-28). Unbounded, a long phase like "Scheduled open
-        // 10:00 Riyadh (1h 4m)" wrapped inside the header's narrow column on iPhone, turning
-        // two clocks into four ragged lines and shoving the header taller than the content
-        // it labels. Shrink-to-fit rather than truncate: a clipped countdown is useless.
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
         .foregroundStyle(DS.Palette.textSecondary)
         .help(state.caveat)
         // Both markets read as one status group to VoiceOver instead of four fragments.

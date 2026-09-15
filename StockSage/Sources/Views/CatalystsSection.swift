@@ -190,7 +190,7 @@ struct CatalystsSection: View {
     /// — `.onDeviceOnly`/`.off` never need one, so this no-ops there rather than pinging a server
     /// nobody asked for.
     private func probeIfBackendNeedsServer() async {
-        guard !Task.isCancelled else { return }
+        guard !StockSageStore.isRunningTests, !Task.isCancelled else { return }
         let backend = StockSageCatalystNarrator.selectedBackend(backendRaw)
         guard backend == .auto || backend == .localServerOnly else {
             probeState = .init()
@@ -205,7 +205,11 @@ struct CatalystsSection: View {
                           cancelled: Task.isCancelled)
     }
 
-    @ScaledMetric(relativeTo: .caption2) private var font9: CGFloat = 9
+    #if os(macOS)
+    @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11
+    #else
+    @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 12
+    #endif
     @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
     @ScaledMetric(relativeTo: .caption2) private var font11_5: CGFloat = 11.5
     @ScaledMetric(relativeTo: .caption2) private var font12: CGFloat = 12
@@ -247,6 +251,10 @@ struct CatalystsSection: View {
                 }
                 #endif
             }
+            // Events stay ahead of setup even when the saved disclosure is expanded.
+            Divider()
+            explanationModelSettings(availability: availability)
+                .id("catalysts-model-settings")
         }
         .task(id: explanationRequestSettings) { await probeIfBackendNeedsServer() }
         #if os(macOS)
@@ -266,6 +274,7 @@ struct CatalystsSection: View {
 
     #if os(macOS)
     private func waitForNextUTCMidnight() async {
+        guard !StockSageStore.isRunningTests, !Task.isCancelled else { return }
         let now = Date()
         let seconds = max(1, Self.periodInterval(.today, now: now).end.timeIntervalSince(now) + 0.1)
         do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
@@ -346,11 +355,11 @@ struct CatalystsSection: View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Text("Catalysts to watch")
                 .font(.system(size: font15, weight: .semibold)).foregroundStyle(.white)
-            Text("The same ranked ideas as the Ideas tab, in the same order — viewed by what could move each one next.")
-                .font(.system(size: font11_5)).foregroundStyle(DS.Palette.textSecondary)
+            Text("Events and dated evidence for your current Ideas, in ranked order.")
+                .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Primary badges are AI assessments; open Details for the reasoning or to assess a name with selected recent Massive news. EODHD is disabled. Failed checks leave a visible unverified draft. Rules action remains separate; AI does not change sizing or execution checks.")
-                .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+            Text("AI badges are unvalidated; failed checks stay drafts. Rules actions, sizing and execution checks remain separate.")
+                .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
             #if os(macOS)
             if let now, let entries {
@@ -368,19 +377,17 @@ struct CatalystsSection: View {
                     .pickerStyle(.menu).fixedSize()
                 }
                 .font(.system(size: font11, weight: .medium))
-                Text(Self.periodCountLabel(entries))
-                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Selected events for your current Ideas filters; recent coverage is limited.")
-                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+                Text(Self.periodCountLabel(entries) + " · Current Ideas filters; recent coverage is limited.")
+                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if period == .thisMonth {
                     Text("This Month filters retained observations; it is not a complete monthly event archive.")
-                        .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                        .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
                 }
             }
             #else
             DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
+                .accessibilityLabel("Catalyst view")
             #endif
             Self.ideasRecovery(visibleCount: ideas.count, totalCount: store.ideas.count,
                 loading: store.isLoadingIdeas, filteredMessage: ideasFilterMessage,
@@ -393,7 +400,7 @@ struct CatalystsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .help(regime.caveat + " " + store.regimeEvidenceText)
                 Text(store.regimeIsStale ? "Stale gauge — re-gauge before relying on it." : store.regimeEvidenceText)
-                    .font(.caption2).foregroundStyle(store.regimeIsStale ? DS.Palette.warningSoft : DS.Palette.textSecondary)
+                    .font(.system(size: metadataSize)).foregroundStyle(store.regimeIsStale ? DS.Palette.warningSoft : DS.Palette.textSecondary)
             }
             // Honesty-floor label — always visible, never collapsible.
             Text(StockSageCatalystWatch.caveat)
@@ -405,7 +412,7 @@ struct CatalystsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if case .unavailable(let reason) = availability {
-                Text(reason).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                Text(reason).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             // [network-safety-warn-first], fix pass 2026-09-06 (review blocker): this banner used
@@ -415,23 +422,13 @@ struct CatalystsSection: View {
             // so it renders on first appearance of this tab — before the auto-probe below ever
             // fires and before any "Explain" press — regardless of whether the panel is expanded.
             if isNonLoopbackConfig { nonLoopbackWarning() }
-            Text("With external access enabled, daily company-event checks send tracked US symbols to api.massive.com for ratings, guidance, filings and dividends. These are observations, not trade signals. Missing events do not prove nothing occurred; Cards shows per-feed coverage.")
-                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+            Text("When external access is enabled, daily checks send tracked US tickers to api.massive.com for ratings, guidance, filings and dividends. Explain sends its ticker to api.massive.com (hourly news), sec.gov (filings/insider trades) and the selected narrator. EODHD is disabled. Events are not trade signals; missing events do not establish absence. See Cards for coverage.")
+                .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !store.companyEventCacheSaved {
                 Text("Company-event cache could not be saved; checks may repeat after relaunch.")
-                    .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
             }
-            // Privacy line (fix pass 2026-09-06, W4): "Explain" fetches CITABLE SOURCES itself —
-            // separate from, and in addition to, whichever narrator backend answers the
-            // paragraph. Those fetches are the app's own Massive/SEC calls, so this is true
-            // regardless of the loopback/LAN warning above, which only covers the backend.
-            Text("When external access is enabled, Explain also sends the symbol to api.massive.com "
-                + "(news, updated hourly) and sec.gov "
-                + "(filings, insider trades) from this device, in addition to the narrator backend.")
-                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            explanationModelSettings(availability: availability)
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -465,11 +462,14 @@ struct CatalystsSection: View {
                                 }
                             }, open: { NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/LM Studio.app")) })
                         Text("Automatic setup keeps Qwen3.5 9B at 6-bit. Transfers use LM Studio and Hugging Face; your facts are not sent. Pause/cancel in LM Studio. A missing upstream release is an error, not permission to choose untested weights.")
-                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: metadataSize)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         Text("Quitting StockSage unloads the selected local model from memory; downloaded files stay on disk. Force Quit cannot run this cleanup.")
-                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: metadataSize)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
-                    .onChange(of: modelDownload.ready) { _, ready in if ready { testConnection() } }
+                    .onChange(of: modelDownload.ready) { _, ready in
+                        guard !StockSageStore.isRunningTests else { return }
+                        if ready { testConnection() }
+                    }
                 }
                 #endif
                 TextField("Server URL", text: Binding(get: { serverURL }, set: { updateModelSetting($0, key: StockSageLocalModelServer.urlKey) }))
@@ -524,7 +524,7 @@ struct CatalystsSection: View {
             : "Not loopback: the facts (symbol, price, stop, target) will leave this device "
                 + "over your network. Prefer 127.0.0.1 or a Tailscale address. Plain-HTTP LAN "
                 + "calls also need the local-networking allowance this build does not set.")
-            .font(.system(size: compact ? font9 : font11)).foregroundStyle(DS.Palette.warningSoft)
+            .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -558,7 +558,7 @@ struct CatalystsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text("Source: \(primary.source)")
-                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
             if let url = primary.sourceURL {
                 Link("Read source record", destination: url).font(.system(size: font11)).touchHitArea()
             }
@@ -585,7 +585,7 @@ struct CatalystsSection: View {
                 Text(StockSageCurrency.adaptivePrice(idea.price))
                     .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
                 Spacer()
-                weightDot(primary.weight)
+                Self.weightDot(primary.weight)
             }
             HStack(alignment: .top, spacing: DS.Space.xs) {
                 Image(systemName: rowIconName(for: brief)).font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
@@ -636,16 +636,16 @@ struct CatalystsSection: View {
         // platform, not only under a mouse cursor.
         VStack(alignment: .leading, spacing: 2) {
             Text(item.headline)
-                .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
             if let caveat = item.caveat {
-                Text(caveat).font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                Text(caveat).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 180, alignment: .leading)
             }
             if let url = item.sourceURL {
-                Link("Read \(item.source)", destination: url).font(.system(size: font9)).touchHitArea()
+                Link("Read \(item.source)", destination: url).font(.system(size: metadataSize)).touchHitArea()
             }
         }
         .help(item.why.joined(separator: " "))
@@ -660,11 +660,11 @@ struct CatalystsSection: View {
             DisclosureGroup("Company feeds: \(checked)/5 current checks") {
                 ForEach(StockSageMassiveEvents.Feed.allCases, id: \.rawValue) { feed in
                     Text(StockSageMassiveEvents.statusLine(feed, observation: records[feed], now: now))
-                        .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                        .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+            .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
         }
     }
 
@@ -772,7 +772,7 @@ struct CatalystsSection: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Text(StockSageCatalystNarrator.label(for: source)
                          + " Numbered news/SEC sources: \(sources.count). Benzinga products are shown separately.")
-                        .font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
+                        .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             case .unavailable(let msg):
@@ -782,14 +782,14 @@ struct CatalystsSection: View {
             if let facts = narrationFacts[symbol] {
                 DisclosureGroup("Original supplied facts for this explanation") {
                     ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
-                        Text(verbatim: fact).font(.system(size: font9)).textSelection(.enabled)
+                        Text(verbatim: fact).font(.system(size: metadataSize)).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
             }
             if let news = narrationNews[symbol] {
-                Text(news.summary).font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                Text(news.summary).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let checkedAt = news.attempts.last?.checkedAt, !news.items.isEmpty {
                     DisclosureGroup("Local headline sentiment · optional") {
@@ -798,7 +798,7 @@ struct CatalystsSection: View {
                                 evidenceCurrent: refreshReason == nil && ToolPolicy.isExternalAllowed)
                         }
                     }
-                    .font(.caption)
+                    .font(.system(size: metadataSize))
                 }
             }
             if let evidence = narrationBenzinga[symbol] {
@@ -868,7 +868,7 @@ struct CatalystsSection: View {
             }
             Text(StockSageNewsService.caveat).fixedSize(horizontal: false, vertical: true)
         }
-        .font(.caption2).foregroundStyle(DS.Palette.textSecondary)
+        .font(.caption).foregroundStyle(DS.Palette.textSecondary)
     }
 
     // MARK: - Cards mode: row actions
@@ -1025,7 +1025,7 @@ struct CatalystsSection: View {
                     VStack(alignment: .leading, spacing: DS.Space.xs) {
                         VStack(alignment: .leading, spacing: DS.Space.xs) {
                             Text("Matches \(period.title)")
-                                .font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
+                                .font(.system(size: metadataSize, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
                             ForEach(entriesBySymbol[brief.idea.symbol] ?? []) {
                                 calendarRow($0, now: now)
                             }
@@ -1036,7 +1036,7 @@ struct CatalystsSection: View {
                         DisclosureGroup("Full stock context — all dates") {
                             VStack(alignment: .leading, spacing: DS.Space.xs) {
                                 Text("Explain uses the unchanged full stock brief below, not the period-match row.")
-                                    .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                                 catalystCard(brief, availability: availability)
                             }
                             .padding(.top, DS.Space.xs)
@@ -1050,12 +1050,12 @@ struct CatalystsSection: View {
                     Text(StockSageCatalystWatch.dateStr(group.day))
                         .font(.system(size: font12, weight: .semibold))
                     if !group.scheduled.isEmpty {
-                        Text("Scheduled / estimated").font(.system(size: font9, weight: .medium))
+                        Text("Scheduled / estimated").font(.system(size: metadataSize, weight: .medium))
                             .foregroundStyle(DS.Palette.warningSoft)
                         ForEach(group.scheduled) { calendarRow($0, now: now) }
                     }
                     if !group.reported.isEmpty {
-                        Text("Reported").font(.system(size: font9, weight: .medium))
+                        Text("Reported").font(.system(size: metadataSize, weight: .medium))
                             .foregroundStyle(DS.Palette.textSecondary)
                         ForEach(group.reported) { calendarRow($0, now: now) }
                     }
@@ -1066,7 +1066,7 @@ struct CatalystsSection: View {
             }
             if !matching.isEmpty {
                 Text("Choose Cards from View for each matching stock's unchanged full context and optional explanation.")
-                    .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
+                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
             }
         }
 
@@ -1123,89 +1123,107 @@ struct CatalystsSection: View {
         }
     }
 
-    @ViewBuilder
     private func calendarRow(_ entry: StockSageCatalystWatch.CalendarEntry, now: Date? = nil) -> some View {
-        // A5: a dated "none known as of <date>" record (`isNegativeRecord`) is not a catalyst —
-        // it renders dimmer and swaps the headline sentence for a small "No known catalyst" tag
-        // (the date column already carries the same `checkedAt` date, so repeating "as of <date>"
-        // in the headline too would be redundant) so it reads as a checked-and-empty record at a
-        // glance, never mistaken for a real event. Both pieces are pure static helpers keyed
-        // ONLY on the engine's flag (CatalystsSectionTests), never re-derived from `headline`.
-        let badge = Self.negativeRecordBadge(isNegativeRecord: entry.isNegativeRecord)
-        let rowColor = Self.calendarRowColor(isNegativeRecord: entry.isNegativeRecord)
-        let content = HStack(alignment: .top, spacing: DS.Space.xs) {
-            Text(entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "—")
-                .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
-                .frame(minWidth: 64, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: DS.Space.xs) {
-                    Text(entry.idea.symbol).font(.system(size: font12, weight: .bold, design: .rounded)).foregroundStyle(rowColor)
-                    if let badge {
-                        Text(badge).font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.textSecondary)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-                    } else {
-                        Text(Self.cardHeadline(entry.item, displayNow: now))
-                            .font(.system(size: font11)).foregroundStyle(rowColor)
+        CalendarRow(entry: entry, now: now, onSelect: onSelect)
+    }
+
+    /// The actual calendar row, independently renderable without starting the section's model probe.
+    struct CalendarRow: View {
+        let entry: StockSageCatalystWatch.CalendarEntry
+        let now: Date?
+        let onSelect: (StockSageIdea) -> Void
+        #if os(macOS)
+        @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11
+        #else
+        @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 12
+        #endif
+        @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
+        @ScaledMetric(relativeTo: .caption2) private var font12: CGFloat = 12
+
+        var body: some View {
+            // A5: a dated "none known as of <date>" record (`isNegativeRecord`) is not a catalyst —
+            // it renders dimmer and swaps the headline sentence for a small "No known catalyst" tag
+            // (the date column already carries the same `checkedAt` date, so repeating "as of <date>"
+            // in the headline too would be redundant) so it reads as a checked-and-empty record at a
+            // glance, never mistaken for a real event. Both pieces are pure static helpers keyed
+            // ONLY on the engine's flag (CatalystsSectionTests), never re-derived from `headline`.
+            let badge = CatalystsSection.negativeRecordBadge(isNegativeRecord: entry.isNegativeRecord)
+            let rowColor = CatalystsSection.calendarRowColor(isNegativeRecord: entry.isNegativeRecord)
+            let content = HStack(alignment: .top, spacing: DS.Space.xs) {
+                Text(entry.item.date.map(StockSageCatalystWatch.dateStr) ?? "—")
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+                    .frame(minWidth: 64, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: DS.Space.xs) {
+                        Text(entry.idea.symbol).font(.system(size: font12, weight: .bold, design: .rounded)).foregroundStyle(rowColor)
+                        if let badge {
+                            Text(badge).font(.system(size: metadataSize, weight: .medium)).foregroundStyle(DS.Palette.textSecondary)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+                        } else {
+                            Text(CatalystsSection.cardHeadline(entry.item, displayNow: now))
+                                .font(.system(size: font11)).foregroundStyle(rowColor)
+                        }
+                    }
+                    if let firstWhy = entry.item.why.first {
+                        Text(firstWhy).font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
+                    }
+                    // Cross-platform since 2026-09-12. The `entry.item.date != nil` guard is NOT
+                    // cosmetic: the iOS bucket list includes `.undated` ("No date on file"), and for a
+                    // dateless entry `eventStatus` falls through every guard and returns
+                    // "Scheduled / estimated" — a schedule claim about an item with no date. macOS was
+                    // protected by `periodEntries`' own `guard let date`, which this path has not got.
+                    if let now, !entry.isNegativeRecord, entry.item.date != nil {
+                        Text(CatalystsSection.eventStatus(entry, now: now))
+                            .font(.system(size: metadataSize, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
+                        Text("Source: \(entry.item.source)")
+                            .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
+                    }
+                    // Honesty floor: the RVOL detector is "unvalidated" and regime/seasonality carry
+                    // their own caveats — the primary card already shows this (line ~165); the
+                    // calendar row was the one path that dropped it (fix pass 2026-09-06). Stays
+                    // `warningSoft` (never raw `danger`) so caveats remain readable alongside
+                    // the neutral secondary text used for negative records.
+                    if let caveat = entry.item.caveat {
+                        Text(caveat).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                if let firstWhy = entry.item.why.first {
-                    Text(firstWhy).font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
-                }
-                // Cross-platform since 2026-09-12. The `entry.item.date != nil` guard is NOT
-                // cosmetic: the iOS bucket list includes `.undated` ("No date on file"), and for a
-                // dateless entry `eventStatus` falls through every guard and returns
-                // "Scheduled / estimated" — a schedule claim about an item with no date. macOS was
-                // protected by `periodEntries`' own `guard let date`, which this path has not got.
-                if let now, !entry.isNegativeRecord, entry.item.date != nil {
-                    Text(Self.eventStatus(entry, now: now))
-                        .font(.system(size: font9, weight: .medium)).foregroundStyle(DS.Palette.warningSoft)
-                    Text("Source: \(entry.item.source)")
-                        .font(.system(size: font9)).foregroundStyle(DS.Palette.textSecondary)
-                }
-                // Honesty floor: the RVOL detector is "unvalidated" and regime/seasonality carry
-                // their own caveats — the primary card already shows this (line ~165); the
-                // calendar row was the one path that dropped it (fix pass 2026-09-06). Stays
-                // `warningSoft` (never raw `danger`) even on a dimmed negative-record row — a
-                // caveat about a REAL catalyst reads no less true because a neighboring row is dim.
-                if let caveat = entry.item.caveat {
-                    Text(caveat).font(.system(size: font9)).foregroundStyle(DS.Palette.warningSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Spacer()
+                CatalystsSection.weightDot(entry.item.weight)
             }
-            Spacer()
-            weightDot(entry.item.weight)
-        }
-        #if os(macOS)
-        if let now {
-            VStack(alignment: .leading, spacing: 2) {
+            #if os(macOS)
+            if let now {
+                VStack(alignment: .leading, spacing: 2) {
+                    Button { onSelect(entry.idea) } label: { content.contentShape(Rectangle()) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(CatalystsSection.periodAccessibilityLabel(entry, now: now))
+                        .accessibilityHint("Open stock details")
+                    if let url = entry.item.sourceURL {
+                        Link("Read source record", destination: url).font(.system(size: metadataSize))
+                    }
+                }
+            } else {
                 Button { onSelect(entry.idea) } label: { content.contentShape(Rectangle()) }
                     .buttonStyle(.plain)
-                    .opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
-                    .accessibilityLabel(Self.periodAccessibilityLabel(entry, now: now))
+                    .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
                     .accessibilityHint("Open stock details")
-                if let url = entry.item.sourceURL {
-                    Link("Read source record", destination: url).font(.system(size: font9))
-                }
             }
-        } else {
-            content.opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
-                .contentShape(Rectangle()).onTapGesture { onSelect(entry.idea) }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
-        }
-        #else
-        content.opacity(Self.calendarRowOpacity(isNegativeRecord: entry.isNegativeRecord))
-            .touchHitArea().contentShape(Rectangle()).onTapGesture { onSelect(entry.idea) }
-            .accessibilityElement(children: .combine)
+            #else
+            Button { onSelect(entry.idea) } label: {
+                content.touchHitArea().contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             .accessibilityLabel("\(entry.idea.symbol), \(entry.bucket.title), \(entry.item.headline), source: \(entry.item.source). \(entry.item.caveat ?? "")")
-        #endif
+            .accessibilityHint("Open stock details")
+            #endif
+        }
     }
 
     // MARK: - Shared small pieces
 
     @ViewBuilder
-    private func weightDot(_ weight: StockSageCatalystWatch.Weight) -> some View {
+    private static func weightDot(_ weight: StockSageCatalystWatch.Weight) -> some View {
         let pair: (color: Color, label: String) = {
             switch weight {
             case .high:   return (DS.Palette.dangerSoft, "high")
@@ -1436,11 +1454,5 @@ struct CatalystsSection: View {
     /// information, not a warning, so a danger tint would misrepresent it as one.
     nonisolated static func calendarRowColor(isNegativeRecord: Bool) -> Color {
         isNegativeRecord ? Color.white.opacity(0.66) : Color.white   // DS.Palette.textSecondary / .textPrimary
-    }
-
-    /// A5: whole-row opacity for the same dimming — a second, cruder signal (on top of
-    /// `calendarRowColor`) so the row reads as de-emphasized even at a glance/low contrast.
-    nonisolated static func calendarRowOpacity(isNegativeRecord: Bool) -> Double {
-        isNegativeRecord ? 0.6 : 1.0
     }
 }

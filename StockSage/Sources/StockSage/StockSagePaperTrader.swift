@@ -175,9 +175,9 @@ enum StockSagePaperTrader {
 
     /// Honest framing for any surface that shows the paper track record.
     nonisolated static let caveat =
-        "Paper (fake-money) forward test — the engine auto-opens each long idea and marks it to a "
-        + "NET-OF-COST fill, closing on stop/target/time-stop. It measures the rules going forward, "
-        + "out-of-sample; it is NOT the owner's real trades and does NOT feed win-rate calibration."
+        "Retained legacy paper history. Automatic entries, marking and exits have stopped. "
+        + "Historical fills retain their original net-of-cost and stop/target/time-stop assumptions; "
+        + "these are not the owner's real trades and do not feed win-rate calibration."
 
     /// BIAS-CORRECTED forward read. The closed-only `forwardStats` is SELECTION-BIASED — a stop is a
     /// near boundary hit quickly, a 2× target a far one hit slowly, so the trades that close FIRST
@@ -289,9 +289,9 @@ final class StockSagePaperTradeStore: ObservableObject {
     private let key: String
     private let defaults: UserDefaults
     private var deletions: StockSageRecordDeletions { .init(defaults: defaults, recordKey: key) }
-    /// Master switch. The owner asked for paper trading, so it is ON by default; OFF ⇒ the store is
-    /// never mutated by the refresh (byte-identical to no paper trading).
-    var enabled = true
+    /// Legacy forward recording is retired. Old records stay readable without new refresh
+    /// mutations; current research uses explicit 7/14-session outcome reviews.
+    var enabled = false
 
     /// `defaults`/`key` are injectable ONLY so tests can isolate storage in an ephemeral suite;
     /// production (`.shared`) uses `.standard` + the paper key, byte-identical to a fixed private init.

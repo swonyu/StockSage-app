@@ -8,6 +8,20 @@ struct StockSageTapeView: View {
     @State private var tape: StockSageMassiveTicks.Tape?
     @State private var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
     @State private var exchangeNotice: String?
+    private let loadExchanges: @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange]
+    private let loadTape: @MainActor (String, Date, Date) async -> StockSageMassiveTicks.Tape
+
+    init(symbol: String,
+         loadExchanges: @escaping @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange] = {
+             try await StockSageMassiveTicks.exchanges()
+         },
+         loadTape: @escaping @MainActor (String, Date, Date) async -> StockSageMassiveTicks.Tape = {
+             await StockSageMassiveTicks.fetch(symbol: $0, from: $1, to: $2)
+         }) {
+        self.symbol = symbol
+        self.loadExchanges = loadExchanges
+        self.loadTape = loadTape
+    }
 
     var body: some View {
         NavigationStack {
@@ -30,7 +44,12 @@ struct StockSageTapeView: View {
                     }
                     Section("Trades") {
                         let trades = tape.trades.filter { !nasdaqOnly || StockSageMassiveTicks.isNasdaq($0.exchange, exchanges: exchanges) }
-                        if trades.isEmpty { Text("No matching trades in the returned window.").foregroundStyle(.secondary) }
+                        if trades.isEmpty {
+                            Text(nasdaqOnly && exchanges.isEmpty
+                                 ? "Nasdaq attribution unavailable. Turn off Nasdaq only to inspect the returned SIP trades without a venue filter."
+                                 : "No matching trades in the returned window.")
+                                .foregroundStyle(.secondary)
+                        }
                         ForEach(Array(trades.enumerated()), id: \.offset) { _, trade in
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("\(trade.price.formatted(.currency(code: "USD").precision(.fractionLength(2...4)))) · \(trade.size.formatted()) shares")
@@ -47,7 +66,12 @@ struct StockSageTapeView: View {
                             !nasdaqOnly || StockSageMassiveTicks.isNasdaq($0.bidExchange, exchanges: exchanges)
                                 || StockSageMassiveTicks.isNasdaq($0.askExchange, exchanges: exchanges)
                         }
-                        if quotes.isEmpty { Text("No matching quotes in the returned window.").foregroundStyle(.secondary) }
+                        if quotes.isEmpty {
+                            Text(nasdaqOnly && exchanges.isEmpty
+                                 ? "Nasdaq attribution unavailable. Turn off Nasdaq only to inspect the returned SIP quotes without a venue filter."
+                                 : "No matching quotes in the returned window.")
+                                .foregroundStyle(.secondary)
+                        }
                         ForEach(Array(quotes.enumerated()), id: \.offset) { _, quote in
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(quote.timestamp.formatted(date: .abbreviated, time: .standard)).font(.caption).foregroundStyle(.secondary)
@@ -64,11 +88,19 @@ struct StockSageTapeView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: symbol) {
                 tape = nil
+                exchanges = [:]
+                exchangeNotice = nil
                 let to = Date()
-                do { exchanges = try await StockSageMassiveTicks.exchanges() }
-                catch { exchangeNotice = "Exchange reference unavailable; unknown venue IDs are not treated as Nasdaq." }
+                do {
+                    let reference = try await loadExchanges()
+                    guard !Task.isCancelled else { return }
+                    exchanges = reference
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    exchangeNotice = "Exchange reference unavailable; unknown venue IDs are not treated as Nasdaq."
+                }
                 guard !Task.isCancelled else { return }
-                let result = await StockSageMassiveTicks.fetch(symbol: symbol, from: to.addingTimeInterval(-7 * 86_400), to: to)
+                let result = await loadTape(symbol, to.addingTimeInterval(-7 * 86_400), to)
                 guard !Task.isCancelled else { return }
                 tape = result
             }
@@ -82,8 +114,9 @@ struct StockSageTapeView: View {
     }
 
     private func side(_ label: String, price: Double, size: Double, exchange: Int64?) -> String {
-        guard !nasdaqOnly || StockSageMassiveTicks.isNasdaq(exchange, exchanges: exchanges) else {
-            return "\(label): no Nasdaq-attributed side"
+        if let notice = StockSageNBBOView.filteredSideNotice(nasdaqOnly: nasdaqOnly,
+                                                          exchanges: exchanges, exchange: exchange) {
+            return "\(label): \(notice)"
         }
         guard price > 0, size > 0 else { return "\(label): unavailable · \(venue(exchange))" }
         return "\(label): \(price.formatted(.currency(code: "USD").precision(.fractionLength(2...4)))) × \(size.formatted()) shares · \(venue(exchange))"

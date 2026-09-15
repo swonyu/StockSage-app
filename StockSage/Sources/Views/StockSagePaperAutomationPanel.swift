@@ -29,6 +29,9 @@ struct StockSagePaperAutomationPanel: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("New same-day runs are disabled. After relaunch, legacy open positions are not monitored and no paper exits are attempted. Recorded balances, positions and history are retained.")
+                        .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
                     #if os(macOS)
                     let mode = Label(Self.modeLabel(running: automation.isRunning),
                                      systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
@@ -48,10 +51,6 @@ struct StockSagePaperAutomationPanel: View {
                     researchProgress
                     #if !os(macOS)
                     Text(automation.status).font(.callout)
-                    Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
-                        .font(.caption).foregroundStyle(.secondary)
                     #endif
                 }
                 if automation.hasLoadedBook {
@@ -75,13 +74,15 @@ struct StockSagePaperAutomationPanel: View {
 
     private var modeHeading: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Paper trading")
+            Text("Legacy paper history")
                 #if os(macOS)
                 .font(.largeTitle.weight(.semibold))
                 #else
                 .font(.largeTitle.bold())
                 #endif
-            Text("Qwen research and paper trading").font(.callout).foregroundStyle(.secondary)
+            Text("Recorded same-day simulation. Current research uses 1–7 or 7–14 trading days.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             #if !os(macOS)
             Label(Self.modeLabel(running: automation.isRunning),
                   systemImage: automation.isRunning ? "play.circle.fill" : "pause.circle")
@@ -93,13 +94,10 @@ struct StockSagePaperAutomationPanel: View {
 
     @ViewBuilder private var modeButton: some View {
         if automation.isRunning {
-            Button("Pause day trading") { automation.stop() }
+            Button("Pause legacy run") { automation.stop() }
                 .buttonStyle(.bordered).controlSize(.large)
-                .help("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
-                .accessibilityHint("Stops day-trading research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain, but no exit attempts run while paused.")
-        } else {
-            Button("Start day trading") { automation.start() }
-                .buttonStyle(.borderedProminent).controlSize(.large)
+                .help("Stops the active legacy research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain. New legacy runs are disabled.")
+                .accessibilityHint("Stops the active legacy research and position/exit checks. Cancels ordinary pending paper orders. Positions and triggered protective-exit intents remain. New legacy runs are disabled.")
         }
     }
 
@@ -140,8 +138,13 @@ struct StockSagePaperAutomationPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Self.monitoringLabel(running: automation.isRunning, at: at))
                         .font(.headline)
-                    Text("When day trading is enabled, StockSage is open and this device is awake: next position check 30 seconds after the previous check finishes. Fresh data is required; research does not pause these checks.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    if automation.isRunning {
+                        Text("This already-active legacy run checks positions while StockSage is open and this device is awake. The next check follows 30 seconds after the previous check finishes. Fresh data is required. Pausing or quitting stops monitoring; it will not restart after relaunch.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        Text("Legacy monitoring is off. Open positions and pending requests remain as records; no closing fill is assumed.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     #if os(macOS)
                     if let warning = Self.closeOutWarning(book: automation.book, at: at, running: automation.isRunning) {
                         Text(warning).font(.callout).foregroundStyle(DS.Palette.warningSoft)
@@ -172,7 +175,7 @@ struct StockSagePaperAutomationPanel: View {
                             Text(equity, format: .currency(code: "USD")).monospacedDigit()
                             Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))").font(.caption)
                         } else {
-                            Text(automation.isRunning ? "Waiting for fresh position prices · checks retry automatically" : "Resume monitoring to refresh position prices")
+                            Text(automation.isRunning ? "Waiting for fresh position prices · checks retry automatically" : "Fresh position marks unavailable · legacy monitoring is off")
                                 .font(.caption)
                         }
                     }
@@ -307,7 +310,7 @@ struct StockSagePaperAutomationPanel: View {
                 Text("Market coverage · \(scan.at.formatted(date: .omitted, time: .shortened))").font(.caption.bold())
                 Text(scan.reason).font(.caption).foregroundStyle(.secondary)
             } else {
-                Text("Full US market discovery begins on the next research cycle; your watchlist is not the scan limit.")
+                Text("No scan summary in recent legacy history.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let decision = automation.book.decisions.last(where: { !$0.symbol.isEmpty }) {
@@ -342,7 +345,8 @@ struct StockSagePaperAutomationPanel: View {
     #endif
 
     private var simulationPolicy: some View {
-        DisclosureGroup("Simulation policy and limitations") {
+        DisclosureGroup("Legacy simulation policy and limitations") {
+            Text("These rules explain the retained same-day simulation history. They do not define the current Research horizons. New legacy runs are disabled; an already-active run can be paused. Legacy positions are not monitored after relaunch.")
             #if os(macOS)
             Text("Paper sessions: normal 04:00–20:00 · early-close 04:00–17:00 New York · exchange holidays closed")
             Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
@@ -353,7 +357,7 @@ struct StockSagePaperAutomationPanel: View {
             Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
             Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
             Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")
-            Text("Runs while this Mac is awake and StockSage is open. Published 2026 holidays and early closes are modeled; unsupported calendar years and stale or missing data block fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
+            Text("The legacy simulator required this device to be awake with StockSage open. Published 2026 holidays and early closes were modeled; unsupported calendar years and stale or missing data block fills. Sleep, disconnects and missed research are never backfilled. Dividends, actual liquidity, broker minimum fees and corporate actions are not modeled; large price/basis changes pause the account for review. No real orders or real-journal records are created.")
         }.font(.callout).foregroundStyle(.secondary)
     }
 
@@ -634,7 +638,7 @@ struct StockSagePaperAutomationPanel: View {
     #endif
 
     static func modeLabel(running: Bool) -> String {
-        running ? "Day trading enabled · simulation only" : "Day trading paused · simulation only"
+        running ? "Legacy run active · simulation only" : "Legacy history · monitoring off"
     }
 
     static func monitoringLabel(running: Bool, at date: Date) -> String {

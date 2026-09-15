@@ -4,15 +4,20 @@ import Combine
 /// Manual research only. Deliberately has no paper book, order, journal or broker writer.
 @MainActor
 final class StockSageHorizonResearch: ObservableObject {
-    static let shared = StockSageHorizonResearch()
+    static let shared = StockSageHorizonResearch(history: .shared)
     nonisolated static let scanLimit = 500
+    nonisolated static let topBuyLimit = 5
+    nonisolated static let topBuyRankingNote = "Strong Buy comes before Buy; ties keep the scan’s original dated activity order. This is unvalidated research, not a prediction of future returns."
     /// Shared by the fit() budget and the dispatched output limit; see PaperAutomation.
     nonisolated static let researchOutputTokens = 192
     nonisolated enum Horizon: String, CaseIterable, Identifiable, Sendable {
         case week = "1–7 trading days", fortnight = "7–14 trading days"
         var id: String { rawValue }
+        static let focusInstructions = """
+        StockSage focuses on \(Horizon.week.rawValue) and \(Horizon.fortnight.rawValue), as multi-session holding horizons. Do not propose intraday or same-session day-trading strategies, or long-term plans beyond 14 trading days. Longer historical windows are background evidence, not a holding horizon. If asked for an out-of-scope strategy, explain this focus and offer one of the supported horizons instead. Rankings are unvalidated research, not predictions of future returns.
+        """
         var instructions: String {
-            StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
+            Self.focusInstructions + "\n" + StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
                 with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Consider overnight gaps and missing future catalysts. The daily technical rules are background, not independently validated for this horizon.")
         }
     }
@@ -55,11 +60,24 @@ final class StockSageHorizonResearch: ObservableObject {
         var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) US listings once."
         var at: Date?
         var selection: StockSageResearchUniverse.Receipt?
+
+        /// Accepted opinions only. Preserve activity order within each action tier and
+        /// retain all raw checks separately so omissions never look like a complete scan.
+        var topBuys: [Listing] {
+            let strong = listings.filter { results[$0.ticker]?.verdict?.action == .strongBuy }
+            let buys = listings.filter { results[$0.ticker]?.verdict?.action == .buy }
+            return Array((strong + buys).prefix(StockSageHorizonResearch.topBuyLimit))
+        }
     }
     @Published private(set) var scans: [Horizon: Scan] = [:]
     @Published private(set) var running: Horizon?
     @Published private(set) var activeSymbol: String?
     private var task: Task<Void, Never>?
+    private let history: StockSageResearchHistory?
+
+    init(history: StockSageResearchHistory? = nil) {
+        self.history = history
+    }
     enum ScanFailure: Error { case modelUnavailable(String) }
     private static let session = URLSession(configuration: .ephemeral, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
 
@@ -90,6 +108,24 @@ final class StockSageHorizonResearch: ObservableObject {
             && !symbol.contains("..")
     }
 
+    /// Both research and its later review need the same explicit split-adjusted daily contract.
+    nonisolated static func dailyHistoryRequest(symbol: String, from: String, to: String, key: String) -> URLRequest? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "America/New_York")!
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        guard validTicker(symbol), !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              from.utf8.count == 10, to.utf8.count == 10,
+              let start = formatter.date(from: from), formatter.string(from: start) == from,
+              let end = formatter.date(from: to), formatter.string(from: end) == to, start <= end,
+              let url = URL(string: StockSageMassive.host + "/v2/aggs/ticker/\(symbol)/range/1/day/\(from)/\(to)?adjusted=true&sort=asc&limit=5000") else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
     nonisolated static func parseResearchHistory(_ data: Data, symbol: String) -> StockSagePriceHistory? {
         struct Metadata: Decodable {
             struct Volume: Decodable { let v: Double }
@@ -106,6 +142,37 @@ final class StockSageHorizonResearch: ObservableObject {
               let history = StockSageMassive.parseHistory(data, symbol: symbol),
               history.count == meta.results.count else { return nil }
         return history
+    }
+
+    /// Fetch the next trading date's daily open and the target close on one adjusted price basis.
+    /// This path does not fall back to another provider or request a model opinion.
+    static func fetchReviewObservation(prediction: StockSageResearchHistory.Prediction,
+        run: StockSageResearchHistory.Run, key: String,
+        allowed: @escaping @MainActor () -> Bool, clock: @MainActor () -> Date = { Date() },
+        transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> StockSageResearchHistory.Observation? {
+        guard !Task.isCancelled, allowed() else { return nil }
+        let requestedAt = clock()
+        guard run.predictions.contains(prediction),
+              StockSageResearchHistory.availability(for: run, now: requestedAt).state == .due,
+              let target = StockSageResearchHistory.targetClose(after: run.completedAt, horizon: run.horizon),
+              let benchmark = StockSageResearchHistory.benchmarkDay(after: run.completedAt) else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        formatter.timeZone = TimeZone(identifier: "America/New_York")!
+        guard let request = dailyHistoryRequest(symbol: prediction.symbol,
+            from: formatter.string(from: benchmark), to: formatter.string(from: target), key: key) else { return nil }
+        do {
+            let data: Data
+            let response: URLResponse
+            if let transport { (data, response) = try await transport(request) }
+            else { (data, response) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: 2_000_000) }
+            guard !Task.isCancelled, allowed(), (response as? HTTPURLResponse)?.statusCode == 200,
+                  let history = parseResearchHistory(data, symbol: prediction.symbol) else { return nil }
+            let fetchedAt = clock()
+            guard fetchedAt.timeIntervalSince1970.isFinite, fetchedAt >= requestedAt, fetchedAt >= target else { return nil }
+            return .init(history: history, splitAdjusted: true,
+                provider: "Massive split-adjusted daily aggregates", fetchedAt: fetchedAt)
+        } catch { return nil }
     }
 
     static func fetchUniverse(key: String, allowed: @MainActor () -> Bool,
@@ -151,7 +218,7 @@ final class StockSageHorizonResearch: ObservableObject {
                   h.highs[i] >= max(h.opens[i], h.closes[i]), h.lows[i] <= min(h.opens[i], h.closes[i]) else { return nil }
         }
         let n = h.dates.prefix { $0 < boundary }.count
-        guard n >= 30, (0...4 * 86400).contains(now.timeIntervalSince(h.dates[n - 1])) else { return nil }
+        guard n >= 30, StockSageMarketHours.isLatestCompletedDailyBar(h.dates[n - 1], at: now) else { return nil }
         return .init(symbol: h.symbol, dates: Array(h.dates.prefix(n)), opens: Array(h.opens.prefix(n)),
             highs: Array(h.highs.prefix(n)), lows: Array(h.lows.prefix(n)), closes: Array(h.closes.prefix(n)),
             volumes: Array(h.volumes.prefix(n)), priceSource: h.priceSource)
@@ -190,8 +257,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 let names = Array(directory.prefix(Self.scanLimit))
                 scans[horizon]?.listings = names
                 scans[horizon]?.selection = selection.receipt
-                // ponytail: one manual worker limits additional local-model load while the independent
-                // four-worker day scanner runs. No automatic repeat; parallelize only if model capacity allows.
+                // One manual worker bounds local-model load. No automatic repeat or parallel model requests.
                 for item in names {
                     guard valid() else { throw CancellationError() }
                     activeSymbol = item.ticker
@@ -202,6 +268,15 @@ final class StockSageHorizonResearch: ObservableObject {
                     activeSymbol = nil
                 }
                 scans[horizon]?.status = "Scan finished · \(names.count) listings checked once. No orders created."
+                if let history, let scan = scans[horizon], let startedAt = scan.at {
+                    let run = StockSageResearchHistory.snapshot(startedAt: startedAt,
+                        completedAt: Date(), horizon: horizon, scan: scan)
+                    if history.record(run) {
+                        scans[horizon]?.status += " Saved for \(run.horizon.rawValue)-trading-day review."
+                    } else {
+                        scans[horizon]?.status += " Research could not be saved. Open Saved research for details."
+                    }
+                }
             } catch {
                 // A failed preflight is not a replacement run; restore captured data and its dates.
                 if !didStart, let previousScan { scans[horizon] = previousScan }
@@ -283,13 +358,11 @@ final class StockSageHorizonResearch: ObservableObject {
         guard item.currency_name?.lowercased() == "usd" else {
             return .init(note: "USD price currency not confirmed; listing retained, no opinion.")
         }
-        guard validTicker(item.ticker), allowed(), !Task.isCancelled,
+        guard allowed(), !Task.isCancelled,
               let dates = StockSageMassive.historyDates(for: "1y"),
-              let url = URL(string: StockSageMassive.host + "/v2/aggs/ticker/\(item.ticker)/range/1/day/\(dates.from)/\(dates.to)?adjusted=true&sort=asc&limit=5000") else {
+              let request = dailyHistoryRequest(symbol: item.ticker, from: dates.from, to: dates.to, key: key) else {
             return .init(note: "Unsupported symbol or request cancelled; no opinion.")
         }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         let historyFetch: () async throws -> (Data, URLResponse) = {
             if let historyTransport { return try await historyTransport(request) }
             return try await StockSageHTTP.data(for: request, session: session, maximumBytes: 2_000_000)
@@ -298,7 +371,7 @@ final class StockSageHorizonResearch: ObservableObject {
               allowed(), !Task.isCancelled, (historyResponse as? HTTPURLResponse)?.statusCode == 200,
               let raw = parseResearchHistory(data, symbol: item.ticker),
               let history = completedHistory(raw, at: Date()) else {
-            return .init(note: "Need at least 30 valid, completed daily bars and a bar within four days. History missing, stale or malformed; no opinion.")
+            return .init(note: "Need at least 30 valid, completed daily bars including the latest prior trading session from a verified calendar. History missing, stale or malformed; no opinion.")
         }
         let referenceClose = (value: history.closes.last!, at: history.dates.last!) // completedHistory checked both arrays.
         let ideas = await StockSageStore.buildIdeas(defs: [.init(symbol: item.ticker, market: "US · \(item.primary_exchange ?? "exchange unconfirmed")")], histories: [item.ticker: history])
@@ -355,10 +428,11 @@ final class StockSageHorizonResearch: ObservableObject {
             maxTokens: Self.researchOutputTokens,
             stillValid: { evidenceAllowed() && context.canAssess(at: Date()) }, transport: modelTransport)
         guard evidenceAllowed() else { return .init(note: "Analysis interrupted.") }
-        // A verdict truncated at the output limit is refused, exactly as in paper research.
-        if case .success(let completion) = response, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
+        // Explicit incomplete responses cannot become a financial verdict, even when their JSON parses.
+        if case .success(let completion) = response,
+           let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
             return .init(facts: facts,
-                         note: "No verified opinion. The model stopped at the output limit before finishing; a truncated verdict is not accepted." + trimmedNote, referenceClose: referenceClose)
+                         note: "No verified opinion. " + rejection + trimmedNote + " " + completion.diagnostic.summary, referenceClose: referenceClose)
         }
         guard context.canAssess(at: Date()), case .success(let completion) = response,
               case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {

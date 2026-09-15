@@ -72,7 +72,7 @@ struct StockSageNBBOView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
             .task {
-                guard StockSageMassive.isConfigured else { return }
+                guard !StockSageStore.isRunningTests, StockSageMassive.isConfigured else { return }
                 // A swallowed `try?` here was the whole defect: a FAILED reference load left
                 // `exchanges` empty, and an empty map made every side render "No Nasdaq-attributed
                 // side" — a confident claim about the venue, produced by not knowing the venue.

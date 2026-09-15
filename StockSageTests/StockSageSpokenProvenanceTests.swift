@@ -35,14 +35,15 @@ struct StockSageSpokenProvenanceTests {
         #expect(P.spokenAge(from: ago(172_800), now: now) == "2 days old")
     }
 
-    // Unknown renders NOTHING — never a false "now", and never a refusal to answer. nil priceAsOf
-    // is a legitimate state, and a missing clock must cost the caveat, not the recommendation.
-    @Test func anUnjudgeableClockRendersNothingRatherThanGuessing() {
+    // Keep the answer, but explicitly disclose when its price age cannot be established.
+    @Test func anUnjudgeableClockDisclosesUnavailableFreshness() {
         #expect(P.spokenAge(from: nil, now: now) == nil)
         #expect(P.spokenAge(from: now.addingTimeInterval(3_600), now: now) == nil, "a future stamp is not freshness")
         #expect(P.spokenAge(from: Date(timeIntervalSince1970: .infinity), now: now) == nil)
-        // …and the clause degrades to empty, so the answer still gets spoken.
-        #expect(P.ageClause(isSampleData: false, loadedFromCache: false, asOf: nil, now: now) == "")
+        for stamp in [nil, now.addingTimeInterval(3_600), Date(timeIntervalSince1970: .infinity)] {
+            #expect(P.ageClause(isSampleData: false, loadedFromCache: false, asOf: stamp, now: now)
+                    == " (price timestamp unavailable — freshness unverified)")
+        }
     }
 
     // Precedence matches MarketsView.sourceTagLabel: sample beats cached beats age.

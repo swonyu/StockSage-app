@@ -34,19 +34,19 @@ import UIKit
 @Suite("Section navigation")
 struct MarketSectionNavigationTests {
 
-    @Test func researchAndPaperAreDistinctDestinations() {
+    @Test func researchAndLegacyPaperKeepDistinctRawDestinations() {
         #expect(MarketSection(rawValue: "research") != nil)
         #expect(MarketSection(rawValue: "paper") != nil)
     }
 
     @Test func phoneTabsPutTheFourPrimaryWorkspacesFirstAndKeepEveryRoute() {
-        #expect(Array(MarketSection.phoneSections.prefix(4)) == [.briefing, .research, .catalysts, .chat])
+        #expect(Array(MarketSection.phoneSections.prefix(4)) == [.briefing, .research, .watchlist, .chat])
         #expect(Set(MarketSection.phoneSections) == Set(MarketSection.allCases))
         #expect(MarketSection.phoneSections.count == MarketSection.allCases.count)
         #expect(Array(MarketSection.allCases.suffix(2)) == [.research, .paper], "New routes append after the original nine")
         #expect(MarketSection.allCases.count == 11)
-        #expect(MarketSection.research.title == "Research" && MarketSection.paper.title == "Paper trading")
-        #expect(MarketSection.research.workspaceTitle == "Research" && MarketSection.paper.workspaceTitle == "Paper trading")
+        #expect(MarketSection.research.title == "Research" && MarketSection.paper.title == "Legacy paper history")
+        #expect(MarketSection.research.workspaceTitle == "Research" && MarketSection.paper.workspaceTitle == "Legacy paper history")
         #expect(MarketSection.briefing.workspaceTitle == "Home" && MarketSection.all.workspaceTitle == "Markets")
         for section in [MarketSection.research, .paper] {
             #if os(macOS)
@@ -90,10 +90,14 @@ struct MarketSectionNavigationTests {
         #expect(Set(StockSageDesktop.sections) == Set(MarketSection.allCases))
         #expect(StockSageDesktop.sections.count == MarketSection.allCases.count)
         #expect(StockSageDesktop.sections == [
-            .briefing, .research, .paper, .chat, .watchlist, .ideas, .all, .catalysts, .heatmap, .portfolio, .alerts
+            .briefing, .research, .watchlist, .chat, .ideas, .all, .catalysts, .heatmap, .portfolio, .paper, .alerts
         ])
         #expect(StockSageDesktop.sections == StockSageDesktop.groups.flatMap(\.sections),
                 "The rendered groups are the only source of sidebar order")
+        #expect(StockSageDesktop.groups.first?.sections == [.briefing, .research, .watchlist, .chat])
+        let records = StockSageDesktop.groups.first { $0.title == "Your records" }
+        #expect(records?.sections == [.portfolio, .paper, .alerts],
+                "Legacy paper history remains accessible with the records, outside the main research workflow")
         #expect(StockSageDesktop.help(for: .watchlist) == "Watchlist · ⌘1")
         #expect(StockSageDesktop.help(for: .briefing) == "Home · ⌘9")
         #expect(StockSageDesktop.help(for: .research) == "Research", "Appended routes carry no digit")

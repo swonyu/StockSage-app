@@ -56,7 +56,13 @@ nonisolated enum StockSageScanChunking {
     /// UTC calendar-day bucket for a `Date` — same convention `StockSageHistoryCache.panel`
     /// already aligns dates on (audit L3-05), reused here so "same day" means the same thing
     /// everywhere in the engine.
-    nonisolated static func utcDayKey(_ d: Date) -> Int { Int((d.timeIntervalSince1970 / 86_400).rounded(.down)) }
+    /// Persisted dates can decode as finite Doubles outside Int's day range.
+    /// Exact conversion returns nil instead of trapping or inventing a usable calendar day.
+    nonisolated static func utcDayKey(_ d: Date) -> Int? {
+        let day = (d.timeIntervalSince1970 / 86_400).rounded(.down)
+        guard day.isFinite else { return nil }
+        return Int(exactly: day)
+    }
 
     /// True when `symbol` can serve straight from `cache` for this scan — no network call —
     /// because the cache was SAVED today (UTC) and the symbol's own entry is not stale per
@@ -68,7 +74,8 @@ nonisolated enum StockSageScanChunking {
     /// on purpose (same-day skip is about NOT re-hitting the feed twice in one day, not about
     /// whether the data is usably fresh for analysis). Pure — `cache`/`now` both injected.
     nonisolated static func isCacheFreshForToday(symbol: String, cache: StockSageHistoryCache, now: Date) -> Bool {
-        guard utcDayKey(cache.savedAt) == utcDayKey(now) else { return false }
+        guard let savedDay = utcDayKey(cache.savedAt), let today = utcDayKey(now),
+              savedDay == today else { return false }
         return !cache.isStale(symbol: symbol, asOf: now)
     }
 

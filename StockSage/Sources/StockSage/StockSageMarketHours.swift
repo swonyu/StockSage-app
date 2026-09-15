@@ -114,6 +114,33 @@ enum StockSageMarketHours {
                      regularClose: early ? 13 : 16, extendedClose: early ? 17 : 20)
     }
 
+    /// Whether a daily bar belongs to the latest trading session before today's New York date.
+    /// Today's candle is never assumed complete. Unknown calendar years and missing sessions
+    /// fail closed; a weekend or a published holiday does not make the last session stale.
+    nonisolated static func isLatestCompletedDailyBar(_ bar: Date, at now: Date) -> Bool {
+        guard now.timeIntervalSince1970.isFinite, bar.timeIntervalSince1970.isFinite,
+              bar <= now, nasdaqDay(at: now) != nil else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let today = calendar.startOfDay(for: now)
+        guard bar < today else { return false }
+        for offset in 1...8 {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today),
+                  let session = nasdaqDay(at: day) else { return false }
+            if session.trading { return calendar.isDate(bar, inSameDayAs: day) }
+        }
+        return false
+    }
+
+    /// General research retains its existing age ceiling, including today's daily background.
+    /// Only Massive daily bars get a verified completed-session holiday exception. This policy
+    /// does not qualify an intraday observation or an executable paper-fill quote.
+    nonisolated static func isRecentResearchPrice(_ priceTime: Date, source: StockSagePriceSource?, at now: Date) -> Bool {
+        guard now.timeIntervalSince1970.isFinite, priceTime.timeIntervalSince1970.isFinite else { return false }
+        return (0...4 * 86_400).contains(now.timeIntervalSince(priceTime))
+            || (source == .massiveDaily && isLatestCompletedDailyBar(priceTime, at: now))
+    }
+
     nonisolated static func nasdaqState(at date: Date, calendar: Calendar) -> SessionState {
         var cal = calendar
         let tz = TimeZone(identifier: "America/New_York")!

@@ -6,6 +6,25 @@ import Foundation
 
 struct StockSageJournalCSVImportTests {
 
+    @Test(arguments: ["\"unfinished", "plain\"quote", "\"closed\"tail"])
+    func malformedQuotesAreErrorsNotTrades(note: String) {
+        let good = "GOOD,Long,100,90,,1,1970-01-01T00:00:00Z,,,,valid"
+        let bad = "BAD,Long,100,90,,1,1970-01-01T00:00:00Z,,,," + note
+        let preview = StockSageJournalCSVImport.preview(StockSageJournalCSV.header + "\n" + good + "\n" + bad)
+        #expect(preview.trades.map(\.symbol) == ["GOOD"])
+        #expect(preview.skipped == 0)
+        #expect(preview.errors.map(\.line) == [3])
+        #expect(preview.errors.first?.reason.contains("quot") == true)
+    }
+
+    @Test func headerMustHaveSeparateColumns() {
+        let csv = "\"" + StockSageJournalCSV.header + "\"\n" +
+            "GOOD,Long,100,90,,1,1970-01-01T00:00:00Z,,,,"
+        let preview = StockSageJournalCSVImport.preview(csv)
+        #expect(preview.trades.isEmpty)
+        #expect(preview.errors.map(\.line) == [1])
+    }
+
     @MainActor @Test(arguments: ["\n", "\r", "\r\n"])
     func lineEndingsAndQuotedNotesRoundTripIntoIsolatedJournal(ending: String) throws {
         let suite = "stocksage-csv-lines-\(UUID().uuidString)"

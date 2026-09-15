@@ -9,7 +9,7 @@ struct PortfolioPosition: Codable, Identifiable, Equatable, Sendable {
     var costBasis: Double   // per-share purchase price
 
     /// Cost of the whole position.
-    var totalCost: Double { shares * costBasis }
+    nonisolated var totalCost: Double { shares * costBasis }
 }
 
 /// Tiny persisted portfolio for the Markets tab. UserDefaults-backed (JSON) —
@@ -48,6 +48,10 @@ final class StockSagePortfolio: ObservableObject {
         let s = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !s.isEmpty, shares > 0, shares.isFinite, costBasis >= 0, costBasis.isFinite else {
             lastError = "Enter a symbol, positive finite shares and a nonnegative finite cost basis."
+            return false
+        }
+        guard (shares * costBasis).isFinite else {
+            lastError = "The total position cost is too large. Reduce the shares or cost basis."
             return false
         }
         let before = positions
@@ -163,8 +167,9 @@ struct AggregatedHolding: Equatable {
     /// as "-0.0" and, combined with callers' `pct >= 0 ? "+" : ""` prefix logic (-0.0 >= 0 is
     /// true), renders "+-0.0%". `r == 0` is true for both since -0.0 == 0 in Swift.
     func unrealizedPct(vs price: Double) -> Double? {
-        guard costBasis > 0, price > 0 else { return nil }
+        guard costBasis.isFinite, costBasis > 0, price.isFinite, price > 0 else { return nil }
         let r = ((price / costBasis - 1) * 100 * 10).rounded() / 10
+        guard r.isFinite else { return nil }
         return r == 0 ? 0 : r
     }
 }
@@ -172,16 +177,11 @@ struct AggregatedHolding: Equatable {
 extension StockSagePortfolio {
     /// Aggregates every lot matching `symbol` (case-insensitive — positions are stored
     /// uppercased by `add()`, but this defends a caller that isn't). Returns nil when the
-    /// symbol isn't held or every matching lot has zero/invalid shares (avoids a
-    /// divide-by-zero weighted average).
+    /// symbol isn't held, no matching lot has positive shares, or the holding cannot
+    /// be represented with finite shares and cost. Invalid lots never become a partial holding.
     nonisolated static func holding(for symbol: String, in positions: [PortfolioPosition]) -> AggregatedHolding? {
         let target = symbol.uppercased()
-        let lots = positions.filter { $0.symbol.uppercased() == target && $0.shares > 0 }
-        guard !lots.isEmpty else { return nil }
-        let totalShares = lots.reduce(0) { $0 + $1.shares }
-        guard totalShares > 0 else { return nil }
-        let weightedCost = lots.reduce(0) { $0 + $1.shares * $1.costBasis } / totalShares
-        return AggregatedHolding(symbol: target, shares: totalShares, costBasis: weightedCost)
+        return aggregate(symbol: target, lots: positions.filter { $0.symbol.uppercased() == target })
     }
 
     /// Same result as `holding(for:in:)`, for every symbol in `positions`, computed in one O(P)
@@ -194,14 +194,28 @@ extension StockSagePortfolio {
     /// `StockSageTodayPlan.rankedActions` (itself `nonisolated`) can call it directly.
     nonisolated static func holdingBySymbol(in positions: [PortfolioPosition]) -> [String: AggregatedHolding] {
         var lotsBySymbol: [String: [PortfolioPosition]] = [:]
-        for p in positions where p.shares > 0 {
+        for p in positions {
             lotsBySymbol[p.symbol.uppercased(), default: []].append(p)
         }
         return lotsBySymbol.compactMapValues { lots in
-            let totalShares = lots.reduce(0) { $0 + $1.shares }
-            guard totalShares > 0 else { return nil }
-            let weightedCost = lots.reduce(0) { $0 + $1.shares * $1.costBasis } / totalShares
-            return AggregatedHolding(symbol: lots[0].symbol.uppercased(), shares: totalShares, costBasis: weightedCost)
+            aggregate(symbol: lots[0].symbol.uppercased(), lots: lots)
         }
+    }
+
+    private nonisolated static func aggregate(symbol: String, lots: [PortfolioPosition]) -> AggregatedHolding? {
+        var shares = 0.0, cost = 0.0
+        for lot in lots {
+            guard lot.shares.isFinite, lot.shares >= 0,
+                  lot.costBasis.isFinite, lot.costBasis >= 0 else { return nil }
+            guard lot.shares > 0 else { continue }
+            guard lot.totalCost.isFinite else { return nil }
+            shares += lot.shares
+            cost += lot.totalCost
+            guard shares.isFinite, cost.isFinite else { return nil }
+        }
+        guard shares > 0 else { return nil }
+        let basis = cost / shares
+        guard basis.isFinite else { return nil }
+        return AggregatedHolding(symbol: symbol, shares: shares, costBasis: basis)
     }
 }

@@ -7,11 +7,15 @@
 # tests = swiftc -typecheck StockSageTests/*.swift against the emitted macOS module + Testing.framework.
 set -uo pipefail
 REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; MODE="${2:-all}"
+if [ "$#" -gt 2 ] || [[ ! "$MODE" =~ ^(macos|ios|tests|all)$ ]]; then
+  echo 'Usage: tools/gate.sh [repo_dir] [macos|ios|tests|all]' >&2
+  exit 2
+fi
 cd "$REPO" || exit 2
-DEV=/Applications/Xcode.app/Contents/Developer
+DEV=$(xcode-select -p) || exit 2
 TC="$DEV/Toolchains/XcodeDefault.xctoolchain/usr/bin"
 PLUGINS="$DEV/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing"
-OUT="${TMPDIR:-/tmp}/stocksage_gate/$(basename "$REPO")"; mkdir -p "$OUT"
+OUT=$(mktemp -d "${TMPDIR:-/tmp}/stocksage_gate.XXXXXX") || exit 2
 COMMON=(-swift-version 6 -default-isolation MainActor -strict-concurrency=complete -D DEBUG
   -enable-upcoming-feature MemberImportVisibility
   -enable-upcoming-feature InferIsolatedConformances

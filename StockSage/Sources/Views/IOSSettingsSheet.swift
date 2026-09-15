@@ -1,7 +1,7 @@
 import SwiftUI
 
-// iOS Settings (owner directive 2026-07-27): gear top-right next to refresh. Three concerns:
-// auto-refresh cadence, trading horizon, and per-type notification control. macOS keeps its
+// iOS Settings: gear top-right next to refresh. Research horizons are selected in Research;
+// this sheet controls data, allocation and notification preferences. macOS keeps its
 // native Settings scene (StockSageSettingsView) — this file compiles empty there.
 
 // BATCH 12.4 (2026-09-12) — the "Live data" footer, as a pure function.
@@ -47,13 +47,9 @@ struct StockSageIOSSettingsSheet: View {
     @ObservedObject private var settings = AppSettings.shared
     @AppStorage("stocksage.autoRefresh") private var autoRefresh = true
     @AppStorage("stocksage.liveStream") private var liveStream = true
-    @AppStorage("stocksage.horizon") private var horizon = "short"
     @AppStorage(StockSageNotifyPrefs.strongSignalsKey) private var notifyStrong = true
     @AppStorage(StockSageNotifyPrefs.ideaAlertsKey) private var notifyIdeas = true
     @AppStorage(StockSageNotifyPrefs.priceAlertsKey) private var notifyPrice = true
-    /// The board's sort identity key — horizon selects the default lens (raw values are
-    /// StockSageIdeaProjection.Sort's STABLE storage identities; never rename).
-    @AppStorage("marketsIdeaSort") private var ideaSortRaw = "EV / day"
     @AppStorage("stocksage.allocStrategy") private var allocStrategy = "greedyKnapsack"
     /// Mirrors `StockSageMonitor.foregroundMonitoringEnabled`'s key — the writer is the Markets
     /// alerts row ("Strong-signal monitoring", MarketsView.swift:1234), NOT this sheet's
@@ -83,26 +79,6 @@ struct StockSageIOSSettingsSheet: View {
                     Text("Data sources")
                 }
                 .listRowBackground(DS.Bezel.cardFill)
-
-                Section {
-                    Picker("Horizon", selection: $horizon) {
-                        Text("Short term").tag("short")
-                        Text("Long term").tag("long")
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Trading horizon")
-                } footer: {
-                    Text(horizon == "short"
-                         ? "Ideas ranked by EV per day — fast setups that pay soonest rank first."
-                         : "Ideas ranked by total expected value — the biggest edges rank first, regardless of holding time.")
-                }
-                .listRowBackground(DS.Bezel.cardFill)
-                .onChange(of: horizon) {
-                    // Both are existing, tested engine rankings — the horizon picks the lens;
-                    // the board's own sort picker can still override at any time.
-                    ideaSortRaw = horizon == "short" ? "EV / day" : "Expected value"
-                }
 
                 Section {
                     Picker("Deploy-capital allocation", selection: $allocStrategy) {

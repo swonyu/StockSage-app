@@ -109,7 +109,14 @@ def main():
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
-        os.replace(temporary, args.output)  # Atomic; mkstemp creates a private 0600 file.
+        if args.replace:
+            os.replace(temporary, args.output)
+        else:
+            try:
+                # Same-directory hard link publishes the complete 0600 file without clobbering.
+                os.link(temporary, args.output)
+            except FileExistsError:
+                parser.error("output appeared during import; preserved it (use --replace for an intentional refresh)")
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

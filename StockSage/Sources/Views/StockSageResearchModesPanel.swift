@@ -3,13 +3,9 @@ import SwiftUI
 struct StockSageResearchModesPanel: View {
     @ObservedObject var store: StockSageStore
     @ObservedObject var research = StockSageHorizonResearch.shared
-    enum ResultFilter: String, CaseIterable {
-        case all = "All checks", buys = "Buy / Strong Buy", incomplete = "Incomplete", unchecked = "Not checked"
-    }
     struct Presentation {
         var horizon: StockSageHorizonResearch.Horizon = .week
         var search = ""
-        var filter: ResultFilter = .all
         var selected: String?
     }
     @Binding var presentation: Presentation
@@ -33,22 +29,14 @@ struct StockSageResearchModesPanel: View {
 
     private var visibleListings: [StockSageHorizonResearch.Listing] {
         let scan = research.scans[presentation.horizon] ?? .init()
-        return Self.filteredListings(scan, search: search, filter: presentation.filter)
+        return Self.filteredListings(scan, search: search)
     }
 
-    static func filteredListings(_ scan: StockSageHorizonResearch.Scan, search: String,
-                                 filter: ResultFilter) -> [StockSageHorizonResearch.Listing] {
+    static func filteredListings(_ scan: StockSageHorizonResearch.Scan, search: String) -> [StockSageHorizonResearch.Listing] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return scan.listings.filter { item in
-            guard query.isEmpty || item.ticker.localizedCaseInsensitiveContains(query)
-                    || item.name.localizedCaseInsensitiveContains(query) else { return false }
-            let result = scan.results[item.ticker]
-            switch filter {
-            case .all: return true
-            case .buys: return isBuy(result?.verdict?.action)
-            case .incomplete: return result != nil && result?.verdict == nil
-            case .unchecked: return result == nil
-            }
+        return scan.topBuys.filter { item in
+            query.isEmpty || item.ticker.localizedCaseInsensitiveContains(query)
+                || item.name.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -88,11 +76,7 @@ struct StockSageResearchModesPanel: View {
                 #endif
             }
             .controlSize(.large)
-            .onChange(of: presentation.horizon) { _, _ in selected = nil; search = ""; presentation.filter = .all }
-            #if os(iOS)
-            Text("Up to \(StockSageHorizonResearch.scanLimit) US listings selected by recent trading activity, then researched for your chosen horizon. Research only; no orders.")
-                .font(.callout).foregroundStyle(.secondary)
-            #endif
+            .onChange(of: presentation.horizon) { _, _ in selected = nil; search = "" }
             if let running = research.running, running != presentation.horizon {
                 Self.runningScanControls(running: running,
                     show: { presentation.horizon = running }, stop: { research.stop() })
@@ -111,26 +95,37 @@ struct StockSageResearchModesPanel: View {
         let scan = research.scans[horizon] ?? .init()
         let rows = visibleListings
         let isRunning = research.running == horizon
+        // A blocked preflight can have no request date or listings but still has useful status.
+        // Suppress only the untouched model's repeated "Press Run" instruction.
+        let isUntouched = !isRunning && scan.at == nil && scan.listings.isEmpty
+            && scan.results.isEmpty && scan.selection == nil
+            && scan.status == StockSageHorizonResearch.Scan().status
         let controls = VStack(alignment: .leading, spacing: 16) {
             Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: research.running,
                 run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
             horizonControls
-            scanSummary(scan, isRunning: isRunning)
+            StockSageResearchHistoryButton(store: store)
+            if !isUntouched { scanSummary(scan, isRunning: isRunning) }
         }
-        // Selection belongs to the workspace, even while filters leave no rows to render.
+        // Selection belongs to the workspace and is limited to the visible top results.
         .onChange(of: rows.map(\.ticker)) { _, visible in
             if let selected, !visible.contains(selected) { self.selected = nil }
         }
         let resultsHeader = VStack(alignment: .leading, spacing: 8) {
-            Self.filters(search: $presentation.search, filter: $presentation.filter)
-            Text("\(rows.count) shown · select a stock for evidence and price levels")
+            Text("Up to \(StockSageHorizonResearch.topBuyLimit) Buy / Strong Buy")
+                .font(.headline).accessibilityAddTraits(.isHeader)
+            Text(StockSageHorizonResearch.topBuyRankingNote)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !scan.topBuys.isEmpty { Self.searchField(search: $presentation.search) }
+            Text("\(rows.count) shown · select a stock for evidence and scenario price levels")
                 .font(.caption).foregroundStyle(.secondary)
         }
         #if os(macOS)
         // The window owns the inspector. The table owns its scrolling, with no enclosing card.
         return VStack(alignment: .leading, spacing: 0) {
             ScrollView { controls.padding(24) }
-                .frame(height: scan.listings.isEmpty ? 220 : 300)
+                .frame(height: scan.listings.isEmpty ? 260 : 300)
             Divider()
             if !scan.listings.isEmpty { resultsHeader.padding(.horizontal, 24).padding(.vertical, 12) }
             if rows.isEmpty {
@@ -190,14 +185,14 @@ struct StockSageResearchModesPanel: View {
     }
 
     private func emptyResults(_ scan: StockSageHorizonResearch.Scan, isRunning: Bool) -> some View {
-        let empty = Self.emptyState(for: scan, isRunning: isRunning)
+        let empty = Self.emptyState(for: scan, isRunning: isRunning, search: search)
         return ContentUnavailableView {
             Label(empty.title, systemImage: scan.listings.isEmpty ? "doc.text.magnifyingglass" : "line.3.horizontal.decrease.circle")
         } description: {
             Text(empty.detail).frame(maxWidth: 380)
         } actions: {
-            if !scan.listings.isEmpty {
-                Button("Clear filters") { search = ""; presentation.filter = .all; selected = nil }
+            if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button("Clear search") { search = ""; selected = nil }
             } else if isRunning {
                 ProgressView().controlSize(.small).accessibilityLabel("Research scan in progress")
             }
@@ -206,7 +201,6 @@ struct StockSageResearchModesPanel: View {
 
     private func researchFooter(_ scan: StockSageHorizonResearch.Scan) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Temporary results · quitting clears them; a new run replaces this horizon’s results.")
             if !scan.listings.isEmpty {
                 Text("USD references, not executable orders. Stop and Target are scenarios, not forecasts. A dash means no calculated value; select a stock for the reason.")
             }
@@ -225,13 +219,32 @@ struct StockSageResearchModesPanel: View {
 
     private func coverageDetails(_ scan: StockSageHorizonResearch.Scan) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Text("Ranked by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment, a Buy ranking or the S&P 500. Confirmed USD listings, including ETFs and share classes; no OTC. Missing observations are not filled alphabetically. One manual worker researches the selected list in order.")
+            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment or the S&P 500. Confirmed USD listings, including ETFs and share classes; no OTC. Missing observations are not filled alphabetically. One manual worker researches the selected list in order.")
+            Text(StockSageHorizonResearch.topBuyRankingNote)
             if let selection = scan.selection {
                 Text("\(selection.directoryCount) active US directory entries considered. Selection requested \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)). \(selection.summary)")
             }
-            Text("Results stay in this app session. A new run replaces this horizon’s results; quitting clears them. No paper positions or real orders are created.")
+            Text("Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open. A new run replaces this horizon’s visible results. No paper positions or real orders are created.")
             Text("Reference prices are completed split-adjusted daily closes, not current executable quotes. Neither horizon has an independently validated profitable strategy.")
             if let at = scan.at { Text("Run requested \(at.formatted(date: .abbreviated, time: .shortened))") }
+            let incomplete = scan.listings.filter { scan.results[$0.ticker] != nil && scan.results[$0.ticker]?.verdict == nil }
+            if !incomplete.isEmpty {
+                DisclosureGroup("Incomplete checks (\(incomplete.count))") {
+                    ForEach(incomplete) { item in
+                        if let result = scan.results[item.ticker] {
+                            let note = Self.notePresentation(result.note)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(item.ticker).fontWeight(.semibold)
+                                Text(note.explanation)
+                                if let diagnostics = note.diagnostics {
+                                    Text(verbatim: diagnostics).font(.caption.monospaced())
+                                }
+                            }.fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 6)
+                        }
+                    }
+                }
+            }
         }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
     }
 
@@ -294,6 +307,7 @@ struct StockSageResearchModesPanel: View {
                     .padding(.vertical, 16).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                     .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("research.result.\(item.ticker)")
                     .accessibilityHint("Show research evidence and price levels")
                 Divider()
             }
@@ -347,12 +361,14 @@ struct StockSageResearchModesPanel: View {
             }.accessibilityValue("\(checked) of \(total) checks finished, including \(incomplete) incomplete opinions")
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: DS.Space.lg) {
-                    Text("\(buys) Buy / Strong Buy").fixedSize()
+                    Text("\(buys) Buy / Strong Buy found").fixedSize()
                     Text("\(incomplete) incomplete").fixedSize()
+                    Text("\(max(0, total - checked)) not checked").fixedSize()
                 }
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
-                    Text("\(buys) Buy / Strong Buy")
+                    Text("\(buys) Buy / Strong Buy found")
                     Text("\(incomplete) incomplete")
+                    Text("\(max(0, total - checked)) not checked")
                 }
             }
         }.font(.caption).monospacedDigit()
@@ -362,26 +378,31 @@ struct StockSageResearchModesPanel: View {
     static func manualControls(horizon: StockSageHorizonResearch.Horizon, hasRun: Bool,
                                running: StockSageHorizonResearch.Horizon?,
                                run: @escaping () -> Void, stop: @escaping () -> Void) -> some View {
-        adaptiveActionRow {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Market research").font(.largeTitle.weight(.semibold))
-                    .accessibilityAddTraits(.isHeader)
-                Text("Research only · up to \(StockSageHorizonResearch.scanLimit) US listings · one-time scan")
-                    .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            adaptiveActionRow {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Market research").font(.largeTitle.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text("Up to \(StockSageHorizonResearch.topBuyLimit) Buy / Strong Buy per horizon")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } actions: {
+                if running == horizon {
+                    Button("Stop scan", systemImage: "stop.fill", action: stop)
+                        .accessibilityLabel("Stop \(horizon.rawValue) research scan")
+                        .help("Stop this horizon’s research scan. Collected results remain available.")
+                } else {
+                    Button(hasRun ? "Run again" : "Run \(StockSageHorizonResearch.scanLimit)-stock scan", systemImage: "play.fill", action: run)
+                        .buttonStyle(.borderedProminent).tint(DS.Palette.accent)
+                        .controlSize(.large)
+                        .accessibilityLabel("Run \(horizon.rawValue) research scan")
+                        .disabled(running != nil)
+                        .help("Research once; no orders. A new run replaces this horizon’s visible results. Completed runs stay in saved research.")
+                }
             }
-        } actions: {
-            if running == horizon {
-                Button("Stop scan", systemImage: "stop.fill", action: stop)
-                    .accessibilityLabel("Stop \(horizon.rawValue) research scan")
-                    .help("Stop this research scan. Day trading is controlled separately.")
-            } else {
-                Button(hasRun ? "Run again" : "Run \(StockSageHorizonResearch.scanLimit)-stock scan", systemImage: "play.fill", action: run)
-                    .buttonStyle(.borderedProminent).tint(DS.Palette.accent)
-                    .controlSize(.large)
-                    .accessibilityLabel("Run \(horizon.rawValue) research scan")
-                    .disabled(running != nil)
-                    .help("Research once; no orders. A new run replaces this horizon’s temporary results.")
-            }
+            Text("One-time research across up to \(StockSageHorizonResearch.scanLimit) US listings. Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -425,10 +446,15 @@ struct StockSageResearchModesPanel: View {
         #endif
     }
 
-    /// Called only when no rows are visible; a filter is not a failed scan.
-    static func emptyState(for scan: StockSageHorizonResearch.Scan, isRunning: Bool) -> (title: String, detail: String) {
+    /// Called only when no top results are visible; an empty shortlist is not a failed scan.
+    static func emptyState(for scan: StockSageHorizonResearch.Scan, isRunning: Bool, search: String = "") -> (title: String, detail: String) {
+        if !scan.topBuys.isEmpty, !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return ("No matching top results", "Search only includes this horizon’s top five Buy / Strong Buy results. Clear the search to see the shortlist.")
+        }
         if !scan.listings.isEmpty {
-            return ("No matching stocks", "Change your search or choose All checks. Incomplete means checked without a verified opinion; Not checked includes queued listings.")
+            return isRunning
+                ? ("Waiting for Buy / Strong Buy results", "No eligible opinion has arrived yet. Checks, incomplete opinions and listings not yet checked are counted above.")
+                : ("No Buy / Strong Buy results", "The collected checks contain no Buy / Strong Buy opinions. Incomplete and unchecked listings are counted above; see Coverage & price assumptions for incomplete-check details.")
         }
         if isRunning {
             return ("Waiting for scan results", "The current status is shown above.")
@@ -436,7 +462,7 @@ struct StockSageResearchModesPanel: View {
         if scan.at != nil {
             return ("No results collected", "See the scan status above for details. You can run again when ready; no orders were created.")
         }
-        return ("Your research starts here", "Choose Run \(StockSageHorizonResearch.scanLimit)-stock scan to check daily history, news and Qwen opinions once. Select a result to see its evidence and any entry, stop-loss and target levels.")
+        return ("Your research starts here", "Choose 1–7 or 7–14 trading days, then Run to review up to five Buy / Strong Buy opinions. Research is unvalidated; these are not forecasts.")
     }
 
     static func resultLabel(_ symbol: String, research: StockSageHorizonResearch,
@@ -447,22 +473,15 @@ struct StockSageResearchModesPanel: View {
         return research.running == horizon && research.activeSymbol != nil ? "Queued" : "Not checked"
     }
 
-    static func filters(search: Binding<String>, filter: Binding<ResultFilter>) -> some View {
-        let field = TextField("Find a symbol or company", text: search).textFieldStyle(.roundedBorder)
+    static func searchField(search: Binding<String>) -> some View {
+        TextField("Find in top five", text: search).textFieldStyle(.roundedBorder)
             #if os(iOS)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             #endif
-            .accessibilityLabel("Filter research by symbol or company")
-        let picker = Picker("Show", selection: filter) {
-            ForEach(ResultFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-        }
-        .pickerStyle(.menu).accessibilityLabel("Research result filter")
-        .help("Incomplete: checked without a verified opinion. Not checked: includes queued listings.")
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) { field.frame(minWidth: 200); picker.fixedSize() }
-            VStack(alignment: .leading, spacing: DS.Space.sm) { field; picker }
-        }.controlSize(.large)
+            .accessibilityLabel("Search top five by symbol or company")
+            .help("Search narrows this horizon’s top five; it never adds lower-ranked results.")
+            .controlSize(.large)
     }
 
     static func notePresentation(_ note: String) -> (explanation: String, diagnostics: String?) {

@@ -33,6 +33,13 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         let closes: [Double]
         let volumes: [Double]
         var priceSource: StockSagePriceSource? = nil
+
+        var isUsable: Bool {
+            let n = closes.count
+            return n > 0 && dates.count == n && opens.count == n && highs.count == n
+                && lows.count == n && volumes.count == n
+                && dates.allSatisfy { StockSageScanChunking.utcDayKey($0) != nil }
+        }
     }
 
     var schemaVersion: Int
@@ -54,11 +61,12 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
             guard n > 0, h.dates.count == n, h.opens.count == n, h.highs.count == n,
                   h.lows.count == n, h.volumes.count == n else { return nil }   // malformed → skip, never guess
             let k = Swift.max(0, maxBars)
-            return Entry(symbol: h.symbol,
+            let entry = Entry(symbol: h.symbol,
                          dates: Array(h.dates.suffix(k)),  opens:  Array(h.opens.suffix(k)),
                          highs: Array(h.highs.suffix(k)),  lows:   Array(h.lows.suffix(k)),
                          closes: Array(h.closes.suffix(k)), volumes: Array(h.volumes.suffix(k)),
                          priceSource: h.priceSource)
+            return entry.isUsable ? entry : nil
         }.sorted { $0.symbol < $1.symbol }
         return StockSageHistoryCache(schemaVersion: currentSchemaVersion, entries: entries, savedAt: savedAt)
     }
@@ -66,7 +74,7 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     /// Reconstruct the `[symbol: StockSagePriceHistory]` map (uppercased keys) for consumers.
     func priceHistories() -> [String: StockSagePriceHistory] {
         var out: [String: StockSagePriceHistory] = [:]
-        for e in entries {
+        for e in entries where e.isUsable {
             out[e.symbol.uppercased()] = StockSagePriceHistory(
                 symbol: e.symbol, dates: e.dates, opens: e.opens, highs: e.highs,
                 lows: e.lows, closes: e.closes, volumes: e.volumes, priceSource: e.priceSource)
@@ -83,7 +91,7 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     /// as current. Returns true (stale) for an unknown or empty symbol — absence is not freshness.
     func isStale(symbol: String, asOf: Date, maxAgeDays: Int = 7) -> Bool {
         guard let e = entries.first(where: { $0.symbol.uppercased() == symbol.uppercased() }),
-              let newest = e.dates.last else { return true }
+              e.isUsable, let newest = e.dates.last else { return true }
         return Self.isStale(newest: newest, asOf: asOf, maxAgeDays: maxAgeDays)
     }
 
@@ -112,11 +120,13 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         return dir.appendingPathComponent("stocksage_history_cache.json")
     }
 
-    /// Decode + validate the schema version. Separated from the disk read so the version guard
-    /// is unit-testable without touching Application Support.
+    /// Validate schema, timestamp bounds, and parallel arrays before cache reuse.
+    /// A corrupt disposable cache is rejected; the next scan can fetch it again.
     nonisolated static func decode(_ data: Data) -> StockSageHistoryCache? {
         guard let cache = try? JSONDecoder().decode(StockSageHistoryCache.self, from: data),
-              cache.schemaVersion == currentSchemaVersion else { return nil }
+              cache.schemaVersion == currentSchemaVersion,
+              StockSageScanChunking.utcDayKey(cache.savedAt) != nil,
+              cache.entries.allSatisfy(\.isUsable) else { return nil }
         return cache
     }
 
@@ -127,7 +137,8 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     }
 
     nonisolated func save(to url: URL? = nil) {
-        guard let url = url ?? Self.diskURL(), let data = try? JSONEncoder().encode(self) else { return }
+        guard StockSageScanChunking.utcDayKey(savedAt) != nil, entries.allSatisfy(\.isUsable),
+              let url = url ?? Self.diskURL(), let data = try? JSONEncoder().encode(self) else { return }
         try? data.write(to: url, options: .atomic)
     }
 
@@ -156,7 +167,8 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
     nonisolated static func nonShrinkMerge(disk: StockSageHistoryCache?, candidate: StockSageHistoryCache) -> StockSageHistoryCache {
         guard let disk else { return candidate }
         let diskKeys = Set(disk.priceHistories().keys), candKeys = Set(candidate.priceHistories().keys)
-        guard StockSageScanChunking.utcDayKey(disk.savedAt) == StockSageScanChunking.utcDayKey(candidate.savedAt),
+        guard let diskDay = StockSageScanChunking.utcDayKey(disk.savedAt),
+              let candidateDay = StockSageScanChunking.utcDayKey(candidate.savedAt), diskDay == candidateDay,
               !diskKeys.isSubset(of: candKeys) else { return candidate }
         let merged = disk.priceHistories().merging(candidate.priceHistories()) { _, new in new }
         // The union of both symbol sets IS the valid universe (each side was already universe-filtered).
@@ -191,10 +203,14 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         // exact-Date set-intersection drops EVERY cross-exchange pair and returns a null/degenerate
         // panel for any mixed-market universe. Same dayKey the rest of the engine aligns on
         // (StockSagePortfolioAnalytics.alignByDate) — audit L3-05, 2026-07-07.
-        func dayKey(_ d: Date) -> Int { Int((d.timeIntervalSince1970 / 86_400).rounded(.down)) }
         var shared: Set<Int>? = nil
+        var keysBySymbol: [String: [Int]] = [:]
         for s in syms {
-            let ds = Set(histories[s]!.dates.map(dayKey))
+            guard let h = histories[s], h.dates.count == h.closes.count else { return nil }
+            let keys = h.dates.compactMap(StockSageScanChunking.utcDayKey)
+            guard keys.count == h.dates.count else { return nil }
+            keysBySymbol[s] = keys
+            let ds = Set(keys)
             shared = shared.map { $0.intersection(ds) } ?? ds
         }
         let days = (shared ?? []).sorted()
@@ -202,12 +218,13 @@ nonisolated struct StockSageHistoryCache: Codable, Sendable, Equatable {
         var returns: [[Double]] = []
         var industry: [Int] = []
         for s in syms {
-            guard let h = histories[s] else { return nil }
+            guard let h = histories[s], let keys = keysBySymbol[s] else { return nil }
             var byDate: [Int: Double] = [:]
-            for (d, c) in zip(h.dates, h.closes) { byDate[dayKey(d)] = c }
+            for (key, close) in zip(keys, h.closes) { byDate[key] = close }
             let closes = days.map { byDate[$0] ?? Double.nan }
-            guard !closes.contains(where: { $0.isNaN || $0 <= 0 }) else { return nil }   // must be present & positive
+            guard closes.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
             let r = (1..<closes.count).map { closes[$0] / closes[$0 - 1] - 1 }
+            guard r.allSatisfy(\.isFinite) else { return nil }
             returns.append(r)
             industry.append(industryOf(s))
         }

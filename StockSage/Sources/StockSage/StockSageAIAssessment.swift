@@ -103,8 +103,11 @@ enum StockSageAIAssessment {
                   idea.priceSource != nil, idea.priceSource != .sample,
                   let priceTime = idea.priceAsOf, let analysisTime = idea.generatedAt,
                   priceTime.timeIntervalSince1970 > 0, analysisTime.timeIntervalSince1970 > 0 else { return false }
-            // ponytail: four-day quote ceiling permits weekends, not live execution; add exchange-calendar gating only if needed.
-            return (0...4 * 86_400).contains(now.timeIntervalSince(priceTime))
+            // Preserve the existing age policy, including today's general daily-board quotes.
+            // Only older Massive daily bars receive the verified prior-session holiday exception.
+            // Horizon research separately requires completed prior-session history on every run.
+            let recentPrice = StockSageMarketHours.isRecentResearchPrice(priceTime, source: idea.priceSource, at: now)
+            return recentPrice
                 && (0...4 * 3600).contains(now.timeIntervalSince(analysisTime))
                 && facts.joined(separator: "\n").utf8.count <= 12_000
         }
@@ -248,11 +251,11 @@ enum StockSageAIAssessment {
         }
         let reply = await generate(user)
         guard !Task.isCancelled, stillValid(), case .success(let draft) = reply,
-              !StockSageLocalModelServer.rejectsTruncatedOutput(draft),
+              StockSageLocalModelServer.financialOutputRejection(draft) == nil,
               let repair = evidenceRepairPrompt(draft.text, facts: facts) else { return reply }
         let repaired = await generate(repair)
         guard !Task.isCancelled, stillValid(), case .success(let candidate) = repaired,
-              !StockSageLocalModelServer.rejectsTruncatedOutput(candidate),
+              StockSageLocalModelServer.financialOutputRejection(candidate) == nil,
               let verdict = parse(candidate.text, facts: facts), preservesOpinion(verdict, draft: draft.text) else { return reply }
         return repaired
     }
@@ -583,8 +586,9 @@ final class StockSageAIAssessments: ObservableObject {
         // A verdict cut off at the output limit is refused, as in paper and horizon research.
         // Measured 2026-09-10: a truncated P/L answer stated a headline figure its own
         // unfinished working contradicted, while still parsing as well-formed JSON.
-        if case .success(let completion) = reply, StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
-            errors[symbol] = "The model stopped at the output limit before finishing; a truncated assessment is not accepted. Reassess this idea."
+        if case .success(let completion) = reply,
+           let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
+            errors[symbol] = rejection + " An incomplete assessment is not accepted. Reassess this idea. " + completion.diagnostic.summary
             return
         }
         let text = try? reply.get().text
@@ -611,8 +615,8 @@ final class StockSageAIAssessments: ObservableObject {
             guard activeRequest === request, !Task.isCancelled else { return }
             guard stillValid() else { errors[symbol] = "Facts or model settings changed; reassess this idea."; return }
             if case .success(let completion) = repairedReply,
-               StockSageLocalModelServer.rejectsTruncatedOutput(completion) {
-                errors[symbol] = "Unverified draft: evidence repair stopped before finishing; " + completion.diagnostic.summary
+               let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
+                errors[symbol] = "Unverified draft: " + rejection + " " + completion.diagnostic.summary
                 return
             }
             let repaired = try? repairedReply.get().text

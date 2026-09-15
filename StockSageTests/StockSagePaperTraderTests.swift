@@ -37,11 +37,34 @@ struct StockSagePaperTraderTests {
 
     // MARK: open() gating
 
+    @Test @MainActor func retiredForwardHistoryRemainsReadableWithoutFetchingOrResuming() async throws {
+        let suite = "paper.retired.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let previous = StockSagePaperTradeStore(defaults: defaults)
+        previous.enabled = true
+        let trade = try #require(StockSagePaperTrader.open(
+            from: idea("TEST", price: 100, .buy, stop: 90, target: 120), at: d(0)))
+        previous.add(trade)
+        let bytes = try #require(defaults.data(forKey: "stocksage.papertrades.v1"))
+        let restored = StockSagePaperTradeStore(defaults: defaults)
+        #expect(!restored.enabled && restored.open == [trade])
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let histories = await store.paperExitHistories(existing: [:], paper: restored,
+            allowed: { true }, fetch: { _ in
+                Issue.record("Restored legacy records must not request exit data or resume recording")
+                return [:]
+            })
+        #expect(histories.isEmpty && restored.trades == [trade])
+        #expect(defaults.data(forKey: "stocksage.papertrades.v1") == bytes)
+    }
+
     @Test @MainActor func offCatalogHoldingGetsExitHistoryWithoutJoiningTheEntryUniverse() async throws {
         let suite = "paper.coverage.\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let paper = StockSagePaperTradeStore(defaults: defaults)
+        paper.enabled = true // Exercise retained engine behavior explicitly; app startup stays retired.
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         let trade = try #require(StockSagePaperTrader.open(
             from: idea("OFFCAT", price: 100, .buy, stop: 90, target: 120), at: d(0)))
@@ -72,6 +95,7 @@ struct StockSagePaperTraderTests {
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let paper = StockSagePaperTradeStore(defaults: defaults)
+        paper.enabled = true // Exercise retained engine behavior explicitly; app startup stays retired.
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         for i in 0..<8 {
             paper.add(try #require(StockSagePaperTrader.open(
@@ -99,6 +123,7 @@ struct StockSagePaperTraderTests {
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let paper = StockSagePaperTradeStore(defaults: defaults)
+        paper.enabled = true // Exercise retained engine behavior explicitly; app startup stays retired.
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         paper.add(try #require(StockSagePaperTrader.open(from: idea("TEST", price: 100, .buy, stop: 90, target: 120), at: d(0))))
         var wire: CheckedContinuation<Void, Never>?
