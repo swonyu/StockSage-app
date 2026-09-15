@@ -143,6 +143,26 @@ struct StockSageResearchModesPanel: View {
         let controls = VStack(alignment: .leading, spacing: 16) {
             Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: isRunning ? horizon : research.running,
                 run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
+            if scan.needsSaving && research.running == nil {
+                Button("Retry save", systemImage: "square.and.arrow.down") { research.retrySave(horizon) }
+                    .help("Save the same completed research and dates without another model request.")
+            }
+            if !research.incompleteListings(horizon).isEmpty {
+                Button("Retry \(research.incompleteListings(horizon).count) incomplete", systemImage: "arrow.clockwise") {
+                    selected = nil; search = ""; presentation.filter = .topBuys
+                    research.retryIncomplete(horizon, store: store)
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Refresh only incomplete checks, retain the other opinions, then compare the entire eligible pool again.")
+            }
+            if research.canRetryTopFive(horizon) {
+                Button("Retry Top 5", systemImage: "arrow.clockwise") {
+                    selected = nil; search = ""; presentation.filter = .topBuys
+                    research.retryTopFive(horizon, store: store)
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Compare the completed checks again using their original evidence. No new stock scan.")
+            }
             #if os(macOS)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 16) {
@@ -327,6 +347,7 @@ struct StockSageResearchModesPanel: View {
                 Text("\(selection.directoryCount) active US directory entries considered. Selection requested \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)). \(selection.summary)")
             }
             Text("Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open. A new run replaces this horizon’s visible results. No paper positions or real orders are created.")
+            Text("The latest complete checks for each horizon are kept after relaunch. Retry Top 5 compares that original evidence again; it does not refresh prices or news. Retry incomplete refreshes only failed checks before comparing the entire eligible pool. Older saved top-five predictions retain their original review records.")
             Text("Reference prices are completed split-adjusted daily closes, not current executable quotes. Neither horizon has an independently validated profitable strategy.")
             if let at = scan.at { Text("Run requested \(at.formatted(date: .abbreviated, time: .shortened))") }
             let incomplete = scan.listings.filter { scan.results[$0.ticker] != nil && scan.results[$0.ticker]?.verdict == nil }
@@ -602,11 +623,14 @@ struct StockSageResearchModesPanel: View {
             return ("No matching top results", "Search only includes this horizon’s top five Buy / Strong Buy results. Clear the search to see the shortlist.")
         }
         if !scan.listings.isEmpty {
+            if isRunning {
+                if scan.isComparing {
+                    return ("Comparing research for Top 5", "All checks are complete. Qwen is comparing every eligible Buy / Strong Buy using the captured evidence. Progress is shown above.")
+                }
+                return ("Top five after the full scan", "Every listing is checked before Qwen compares the eligible Buy / Strong Buy research. All checks remain available while this runs.")
+            }
             if let failure = scan.rankingFailure {
                 return ("Top five comparison unavailable", failure + " Collected checks remain available; no first-five fallback was used.")
-            }
-            if isRunning {
-                return ("Top five after the full scan", "Every listing is checked before Qwen compares the eligible Buy / Strong Buy research. All checks remain available while this runs.")
             }
             if scan.results.count < scan.listings.count {
                 return ("Scan stopped before comparison", "The top five needs the complete scan. Collected checks remain available; run again to finish research and compare candidates.")

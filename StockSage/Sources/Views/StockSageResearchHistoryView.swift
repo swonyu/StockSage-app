@@ -341,6 +341,14 @@ struct StockSageResearchHistoryDetail: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         LabeledContent("Completed", value: run.completedAt.formatted(date: .abbreviated, time: .shortened))
+                        if run.retainedFromRunID != nil {
+                            Text("Incomplete checks were researched again. Earlier completed opinions retain their captured evidence and dates. " + (run.ranking == nil ? "The updated pool has no completed shortlist." : "The entire updated eligible pool was compared for this shortlist."))
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        if run.originalRunID != nil {
+                            Text("Comparison retried using checks captured in the scan started \(run.startedAt.formatted(date: .abbreviated, time: .shortened)). Prices and evidence were not refreshed. The original attempt is retained; this review window starts from the later comparison.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
                         Text(StockSageResearchHistoryView.status(for: run))
                         Text(StockSageResearchHistory.measurementDescription(for: run))
                             .font(.callout).foregroundStyle(.secondary)

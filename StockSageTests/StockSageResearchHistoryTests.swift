@@ -619,7 +619,7 @@ struct StockSageResearchHistoryTests {
             referenceClose: (value: 200, at: date("2026-09-11T04:00:00Z")))
         let started = research.start(.week, allowed: { true }, universe: { .init([listing]) },
             rank: { scan, horizon in .success(.fixture(scan: scan, symbols: ["ACME"], horizon: horizon, at: Date())) },
-            analyze: { _ in result })
+            analyze: { _ in var current = result; current.at = Date(); return current })
         #expect(started)
         var deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while research.running != nil, ContinuousClock.now < deadline { await Task.yield() }
@@ -678,4 +678,408 @@ struct StockSageResearchHistoryTests {
         let memory = History(storageURL: nil)
         #expect(memory.record(run()) && memory.runs.count == 1 && memory.lastError == nil)
     }
+}
+
+extension StockSageResearchHistoryTests {
+    /// Explicit, offline recovery receipt. Never discovers or writes the owner's app directory.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_RECOVERY_DIR"] != nil))
+    func validateSuppliedRecoveryCheckpoint() throws {
+        let path = try #require(ProcessInfo.processInfo.environment["STOCKSAGE_RECOVERY_DIR"])
+        try #require(path.hasPrefix("/"))
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        struct Document: Decodable { let version: Int; let runs: [History.Run] }
+        let document = try JSONDecoder().decode(Document.self, from: Data(contentsOf: directory.appendingPathComponent("runs-before.json")))
+        try #require(document.version == 1)
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("live-checks.json"))
+        let archive = try JSONDecoder().decode(History.CompletedChecks.self, from: bytes)
+        let original = try #require(document.runs.first { $0.startedAt == archive.startedAt && $0.horizon == archive.horizon })
+        let checked = try History.decodeCapturedChecks(bytes, matching: original)
+        let scan = try #require(History.restoreChecks(checked, matching: original))
+        let suite = "stocksage.recovery.validation.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let target = directory.appendingPathComponent("validated/history.json")
+        let history = History(storageURL: target, defaults: defaults)
+        try #require(history.record(original))
+        try #require(history.saveCompletedChecks(original, scan: scan))
+        let reopened = try #require(History(storageURL: target, defaults: defaults).completedScan(horizon: original.horizon == .week ? .week : .fortnight))
+        #expect(reopened.run == original && reopened.scan.results.count == archive.checks.count)
+        print("RECOVERY_VALIDATED \(archive.checks.count) original checks, \(original.coverage.buyCount) eligible, \(original.coverage.incomplete) incomplete; no model or provider requests")
+    }
+
+    @Test func historyCompletionWinsOverPendingCheckpointAfterCrash() throws {
+        let (pending, scan) = checkpointFixture(count: 8)
+        let suite = "stocksage.checkpoint.crash.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.saveCompletedChecks(pending, scan: scan))
+        let checkpointURL = directory.appendingPathComponent("completed-14.json")
+        let originalBytes = try Data(contentsOf: checkpointURL)
+        var ranked = scan
+        ranked.rankingFailure = nil
+        ranked.ranking = .fixture(scan: scan, symbols: ["S003", "S002", "S001", "S000"], horizon: .fortnight, at: pending.completedAt.addingTimeInterval(10))
+        let saved = History.snapshot(id: pending.id, startedAt: pending.startedAt, completedAt: pending.completedAt.addingTimeInterval(11), horizon: .fortnight, scan: ranked)
+        try #require(history.record(saved))
+        let restored = try #require(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight))
+        #expect(restored.run == saved && restored.scan.topBuys.map(\.ticker) == saved.predictions.map(\.symbol))
+        #expect(try Data(contentsOf: checkpointURL) == originalBytes)
+    }
+
+    private func checkpointFixture(count: Int = 500, start: Date? = nil) -> (History.Run, StockSageHorizonResearch.Scan) {
+        let started = start ?? date("2026-09-15T07:00:00Z")
+        let reference = started.addingTimeInterval(-86_400)
+        var scan = StockSageHorizonResearch.Scan()
+        scan.at = started
+        for index in 0..<count {
+            let symbol = String(format: "S%03d", index)
+            scan.listings.append(.init(ticker: symbol, name: "Original company \(index)", market: "stocks", locale: "us",
+                active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS"))
+            let action: TradeAdvice.Action = index < 83 ? (index.isMultiple(of: 2) ? .buy : .strongBuy) : .hold
+            scan.results[symbol] = .init(verdict: index >= count - min(4, count) ? nil :
+                .init(action: action, reason: "Original case \(symbol)", risk: "Original risk \(symbol)", evidence: ["F1", "F2"]),
+                levels: .init(entry: 100, stop: 95, target: 110, at: reference, basis: "Original captured scenario"),
+                facts: ["Original fact \(symbol)", "Original counterevidence \(symbol)"], note: "Original coverage note",
+                at: started.addingTimeInterval(Double(index) + 0.123456), model: "original-model",
+                referenceClose: (100, reference), coverage: [.init(source: "News", state: .partial, checkedAt: reference)])
+        }
+        scan.rankingFailure = "Comparison could not complete; original checks retained."
+        return (History.snapshot(startedAt: started, completedAt: started.addingTimeInterval(Double(count) + 60),
+            horizon: .fortnight, scan: scan), scan)
+    }
+
+    @Test func latestCheckpointRetainsAllChecksAndOriginalDatesWithoutGrowingPredictionHistory() throws {
+        let (original, scan) = checkpointFixture()
+        let suite = "stocksage.research.checkpoint.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let store = History(storageURL: url, defaults: defaults)
+        try #require(store.record(original))
+        let historyBytes = try Data(contentsOf: url)
+        try #require(store.saveCompletedChecks(original, scan: scan))
+        #expect(try Data(contentsOf: url) == historyBytes, "Saving all checks never rewrites original prediction history")
+        let reopened = History(storageURL: url, defaults: defaults)
+        let restored = try #require(reopened.completedScan(horizon: .fortnight))
+        #expect(restored.run == original && restored.scan.listings == scan.listings)
+        #expect(restored.scan.results.count == 500 && restored.run.coverage.buyCount == 83 && restored.run.coverage.incomplete == 4)
+        for listing in scan.listings {
+            let expected = try #require(scan.results[listing.ticker])
+            let actual = try #require(restored.scan.results[listing.ticker])
+            #expect(actual.verdict == expected.verdict && actual.facts == expected.facts && actual.at == expected.at)
+            #expect(actual.levels == expected.levels && actual.coverage == expected.coverage && actual.model == expected.model)
+            #expect(actual.referenceClose?.value == expected.referenceClose?.value && actual.referenceClose?.at == expected.referenceClose?.at)
+        }
+        #expect(restored.scan.topBuys.isEmpty && reopened.runs == [original])
+        let (next, nextScan) = checkpointFixture(start: original.startedAt.addingTimeInterval(86_400))
+        try #require(reopened.saveCompletedChecks(next, scan: nextScan))
+        #expect(!reopened.saveCompletedChecks(original, scan: scan), "A late older callback cannot replace a later complete scan")
+        #expect(reopened.completedScan(horizon: .fortnight)?.run == next)
+        #expect(try Data(contentsOf: url) == historyBytes)
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix("completed-") && $0.hasSuffix(".json") }
+        #expect(files == ["completed-14.json"], "Later checks replace only the bounded latest checkpoint")
+    }
+
+    @Test func capturedArchiveRejectsCorruptionAndPreservesTheAppleEpoch() throws {
+        let (original, scan) = checkpointFixture(count: 8)
+        let archive = try #require(History.captureChecks(scan: scan, horizon: .fortnight,
+            startedAt: original.startedAt, completedAt: original.completedAt))
+        let bytes = try JSONEncoder().encode(archive)
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        #expect(object["startedAt"] as? Double == original.startedAt.timeIntervalSinceReferenceDate)
+        #expect(try History.decodeCapturedChecks(bytes, matching: original) == archive)
+        let changes: [(inout [String: Any]) -> Void] = [
+            { $0["version"] = 99 }, { $0["horizon"] = 7 }, { $0["startedAt"] = original.startedAt.timeIntervalSince1970 },
+            { object in var checks = object["checks"] as! [[String: Any]]; checks.append(checks[0]); object["checks"] = checks },
+            { object in var checks = object["checks"] as! [[String: Any]]; checks[0]["at"] = original.completedAt.timeIntervalSinceReferenceDate + 1; object["checks"] = checks },
+            { object in var checks = object["checks"] as! [[String: Any]]; var verdict = checks[0]["verdict"] as! [String: Any]; verdict["action"] = "invented"; checks[0]["verdict"] = verdict; object["checks"] = checks },
+            { object in var checks = object["checks"] as! [[String: Any]]; var verdict = checks[0]["verdict"] as! [String: Any]; verdict["evidence"] = ["F999"]; checks[0]["verdict"] = verdict; object["checks"] = checks },
+            { object in var checks = object["checks"] as! [[String: Any]]; checks[0]["coverage"] = [["source": "News", "state": "invented"]]; object["checks"] = checks }
+        ]
+        for change in changes {
+            var corrupt = object; change(&corrupt)
+            let data = try JSONSerialization.data(withJSONObject: corrupt)
+            #expect(throws: (any Error).self) { try History.decodeCapturedChecks(data, matching: original) }
+        }
+        #expect(throws: (any Error).self) {
+            try History.decodeCapturedChecks(Data(repeating: 32, count: History.maximumCompletedChecksBytes + 1), matching: original)
+        }
+    }
+
+    @Test func malformedCheckpointCannotBeSilentlyReplacedAndLegacyHistoryStillReads() throws {
+        let (original, scan) = checkpointFixture(count: 8)
+        let suite = "stocksage.research.checkpoint-corrupt.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let store = History(storageURL: url, defaults: defaults)
+        try #require(store.record(original))
+        #expect(store.completedScan(horizon: .fortnight) == nil, "Legacy counts never invent original evidence")
+        let checkpointURL = directory.appendingPathComponent("completed-14.json")
+        let corrupt = Data("{malformed original checkpoint".utf8)
+        try corrupt.write(to: checkpointURL)
+        #expect(store.completedScan(horizon: .fortnight) == nil && store.lastError != nil)
+        #expect(!store.saveCompletedChecks(original, scan: scan))
+        #expect(try Data(contentsOf: checkpointURL) == corrupt)
+        #expect(History(storageURL: url, defaults: defaults).runs == [original])
+    }
+    private func amendedFixture(_ source: History.Run, scan: StockSageHorizonResearch.Scan,
+                                repairCount: Int = 4) -> (History.Run, StockSageHorizonResearch.Scan) {
+        var amended = scan
+        let began = source.completedAt.addingTimeInterval(1)
+        amended.at = began
+        amended.retainedFromRunID = source.id
+        amended.ranking = nil
+        amended.rankingFailure = "Amended checks awaiting comparison."
+        for (index, listing) in scan.listings.filter({ scan.results[$0.ticker]?.verdict == nil }).prefix(repairCount).enumerated() {
+            var result = scan.results[listing.ticker]!
+            result.at = began.addingTimeInterval(Double(index) + 0.25)
+            result.verdict = .init(action: .buy, reason: "New case", risk: "New risk", evidence: ["F1"])
+            result.facts = ["New source fact for \(listing.ticker)"]
+            result.note = "New capture; original failure preserved separately."
+            amended.results[listing.ticker] = result
+        }
+        return (History.snapshot(startedAt: began, completedAt: began.addingTimeInterval(10),
+            horizon: .fortnight, scan: amended), amended)
+    }
+
+    @Test func amendedCheckpointPreservesOriginalFourFailuresAndAllOtherChecks() async throws {
+        let (source, original) = checkpointFixture()
+        let suite = "stocksage.checkpoint.amended.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let checkpointURL = directory.appendingPathComponent("completed-14.json")
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.record(source))
+        try #require(history.saveCompletedChecks(source, scan: original))
+        let originalHistoryBytes = try Data(contentsOf: url)
+        let (pending, amended) = amendedFixture(source, scan: original)
+        try #require(history.saveCompletedChecks(pending, scan: amended))
+        #expect(try Data(contentsOf: url) == originalHistoryBytes)
+        let restored = try #require(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight))
+        #expect(restored.scan.retainedFromRunID == source.id && restored.run.coverage.incomplete == 0)
+        #expect(restored.run.coverage.buyCount == 87 && restored.scan.listings == original.listings)
+        for listing in original.listings.prefix(496) {
+            #expect(History.CompletedCheck(listing: listing, result: restored.scan.results[listing.ticker]!)
+                == History.CompletedCheck(listing: listing, result: original.results[listing.ticker]!))
+        }
+        let checkpoint = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: checkpointURL)) as? [String: Any])
+        let receipt = try #require(checkpoint["amendment"] as? [String: Any])
+        let failures = try JSONDecoder().decode([History.CompletedCheck].self,
+            from: JSONSerialization.data(withJSONObject: try #require(receipt["previousFailures"])))
+        #expect(failures == original.listings.suffix(4).map { History.CompletedCheck(listing: $0, result: original.results[$0.ticker]!) })
+        #expect(try Data(contentsOf: checkpointURL).count <= History.maximumCompletedChecksBytes)
+
+        // A crash after recording the completed ranking must restore that actual completion,
+        // while retaining the amendment receipt and leaving checkpoint bytes unchanged.
+        try #require(history.record(pending))
+        let checkpointBytes = try Data(contentsOf: checkpointURL)
+        var ranked = amended
+        ranked.rankingFailure = nil
+        let preferred = ["S499", "S498", "S003", "S001", "S000"]
+        var compared: Set<String> = []
+        let outcome = await StockSageResearchRanking.rank(scan: amended, horizon: .fortnight,
+            config: .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "offline-ranking-fixture"),
+            isOllama: false, allowed: { true }, completion: { _, user, _ in
+                guard let object = try? JSONSerialization.jsonObject(with: Data(user.utf8)) as? [String: Any],
+                      let candidates = object["candidates"] as? [[String: Any]] else {
+                    Issue.record("Ranking supplied an invalid candidate packet")
+                    return .failure(.init(diagnostic: .init(category: .responseShape)))
+                }
+                let symbols = candidates.compactMap { $0["symbol"] as? String }
+                compared.formUnion(symbols)
+                let selected = symbols.sorted {
+                    let left = preferred.firstIndex(of: $0) ?? Int.max
+                    let right = preferred.firstIndex(of: $1) ?? Int.max
+                    return left == right ? $0 < $1 : left < right
+                }.prefix(5)
+                let bytes = try! JSONSerialization.data(withJSONObject: ["symbols": Array(selected)])
+                return .success(.init(text: String(decoding: bytes, as: UTF8.self),
+                    diagnostic: .init(finish: .stop), model: "offline-ranking-fixture"))
+            })
+        let ranking = try outcome.get()
+        #expect(StockSageResearchRanking.valid(ranking) && ranking.rounds.count > 1)
+        #expect(ranking.symbols == preferred && compared == Set(ranking.candidateSymbols) && compared.count == 87)
+        ranked.ranking = ranking
+        let success = History.snapshot(startedAt: pending.startedAt, completedAt: Date(),
+            horizon: .fortnight, scan: ranked, originalRunID: pending.id)
+        try #require(history.record(success))
+        let recovered = try #require(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight))
+        #expect(recovered.run == success && recovered.scan.retainedFromRunID == source.id)
+        #expect(recovered.scan.topBuys.map(\.ticker) == success.predictions.map(\.symbol))
+        #expect(try Data(contentsOf: checkpointURL) == checkpointBytes)
+        #expect(history.runs.last == source)
+        try #require(history.saveCompletedChecks(success, scan: ranked))
+        #expect(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight)?.run == success)
+    }
+
+    @Test(arguments: ["completedResult", "listingOrder", "oldReplacement", "missingParent", "wrongParent", "missingCheckpoint"])
+    func amendedCheckpointRejectsChangedRetainedInputsOrInvalidParent(change: String) throws {
+        let (source, original) = checkpointFixture(count: 8)
+        let history = History()
+        try #require(history.record(source))
+        if change != "missingCheckpoint" { try #require(history.saveCompletedChecks(source, scan: original)) }
+        let (_, prepared) = amendedFixture(source, scan: original)
+        var amended = prepared
+        switch change {
+        case "completedResult": amended.results["S000"]?.facts = ["Changed earlier complete check"]
+        case "listingOrder": amended.listings.swapAt(0, 1)
+        case "oldReplacement": amended.results["S004"]?.at = source.startedAt
+        case "missingParent": amended.retainedFromRunID = UUID()
+        case "wrongParent":
+            let (other, _) = checkpointFixture(count: 9)
+            try #require(history.record(other))
+            amended.retainedFromRunID = other.id
+        default: break
+        }
+        let run = History.snapshot(startedAt: amended.at!, completedAt: amended.at!.addingTimeInterval(10),
+            horizon: .fortnight, scan: amended)
+        #expect(!history.saveCompletedChecks(run, scan: amended))
+        #expect(history.completedScan(horizon: .fortnight)?.run == (change == "missingCheckpoint" ? nil : source))
+        if change == "missingParent" || change == "wrongParent" { #expect(!history.record(run)) }
+    }
+
+    @Test func repeatedAmendmentRetainsEarliestCapturesAndRejectsUnlinkedComparison() throws {
+        let (source, original) = checkpointFixture(count: 8)
+        let history = History()
+        try #require(history.record(source))
+        try #require(history.saveCompletedChecks(source, scan: original))
+        let (first, firstScan) = amendedFixture(source, scan: original, repairCount: 1)
+        try #require(history.saveCompletedChecks(first, scan: firstScan))
+        try #require(history.record(first))
+        let (second, secondScan) = amendedFixture(first, scan: firstScan, repairCount: 1)
+        try #require(history.saveCompletedChecks(second, scan: secondScan))
+        try #require(history.record(second))
+        let restored = try #require(history.completedScan(horizon: .fortnight))
+        #expect(restored.scan.results["S000"]?.at == original.results["S000"]?.at)
+        #expect(restored.scan.results["S004"]?.at == firstScan.results["S004"]?.at)
+        #expect(restored.run.coverage.incomplete == 2 && history.runs.last == source)
+        var lostLink = secondScan
+        lostLink.retainedFromRunID = nil
+        let invalid = History.snapshot(startedAt: second.startedAt, completedAt: second.completedAt.addingTimeInterval(1),
+            horizon: .fortnight, scan: lostLink, originalRunID: second.id)
+        #expect(!history.record(invalid), "Comparison-only retries must keep their amendment parent")
+    }
+
+    @Test func amendedCheckpointRejectsChangedRetainedFactAfterRelaunch() throws {
+        let (source, original) = checkpointFixture(count: 8)
+        let suite = "stocksage.checkpoint.amendment-corrupt.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let checkpointURL = directory.appendingPathComponent("completed-14.json")
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.record(source))
+        try #require(history.saveCompletedChecks(source, scan: original))
+        let (pending, amended) = amendedFixture(source, scan: original)
+        try #require(history.saveCompletedChecks(pending, scan: amended))
+        var object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: checkpointURL)) as? [String: Any])
+        var checks = object["completedChecks"] as! [String: Any]
+        var rows = checks["checks"] as! [[String: Any]]
+        rows[0]["facts"] = ["Tampered retained evidence", "Original counterevidence S000"]
+        checks["checks"] = rows; object["completedChecks"] = checks
+        let corrupted = try JSONSerialization.data(withJSONObject: object)
+        try corrupted.write(to: checkpointURL)
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.completedScan(horizon: .fortnight) == nil && reopened.lastError != nil)
+        #expect(try Data(contentsOf: checkpointURL) == corrupted && reopened.runs == [source])
+    }
+
+    @Test(arguments: [8, 500])
+    func repeatedRepairsPreserveEveryOriginalFailedCheck(count: Int) throws {
+        let (source, original) = checkpointFixture(count: count)
+        let suite = "stocksage.checkpoint.ancestry.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let checkpointURL = directory.appendingPathComponent("completed-14.json")
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.record(source))
+        try #require(history.saveCompletedChecks(source, scan: original))
+        let (first, firstScan) = amendedFixture(source, scan: original, repairCount: 1)
+        try #require(history.saveCompletedChecks(first, scan: firstScan))
+        try #require(history.record(first))
+        let (second, secondScan) = amendedFixture(first, scan: firstScan, repairCount: 1)
+        try #require(history.saveCompletedChecks(second, scan: secondScan))
+        try #require(history.record(second))
+        let bytes = try Data(contentsOf: checkpointURL)
+        let checkpoint = try JSONDecoder().decode(History.CompletedCheckpoint.self, from: bytes)
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let previous = try JSONDecoder().decode([History.Amendment].self,
+            from: JSONSerialization.data(withJSONObject: try #require(object["previousAmendments"])))
+        #expect(previous.count == 1 && previous.first?.sourceRunID == source.id)
+        var reconstructed = checkpoint.completedChecks
+        for receipt in [try #require(checkpoint.amendment)] + previous {
+            let parent = try #require(history.runs.first { $0.id == receipt.sourceRunID })
+            let failed = Dictionary(uniqueKeysWithValues: receipt.previousFailures.map { ($0.listing.ticker, $0) })
+            reconstructed = .init(version: 1, horizon: parent.horizon, startedAt: parent.startedAt,
+                checks: reconstructed.checks.map { failed[$0.listing.ticker] ?? $0 })
+        }
+        let expected = try #require(History.captureChecks(scan: original, horizon: .fortnight,
+            startedAt: source.startedAt, completedAt: source.completedAt))
+        #expect(reconstructed == expected, "Repeated repairs must retain the first overwritten failure too")
+        #expect(reconstructed.checks[count - 4].verdict == nil)
+        let restored = try #require(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight))
+        #expect(restored.run == second && restored.run.coverage.incomplete == 2)
+        // Comparison-only completion/reconciliation must carry all earlier amendment receipts.
+        let later = History.snapshot(startedAt: second.startedAt, completedAt: second.completedAt.addingTimeInterval(1),
+            horizon: .fortnight, scan: secondScan, originalRunID: second.id)
+        try #require(history.record(later))
+        #expect(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight)?.run == later)
+        #expect(try Data(contentsOf: checkpointURL) == bytes)
+        try #require(history.saveCompletedChecks(later, scan: secondScan))
+        let updatedObject = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: checkpointURL)) as? [String: Any])
+        let retained = try JSONDecoder().decode([History.Amendment].self,
+            from: JSONSerialization.data(withJSONObject: try #require(updatedObject["previousAmendments"])))
+        #expect(retained == previous && history.runs.last == source)
+    }
+
+    @Test(arguments: ["missing", "fact", "digest", "source", "duplicate", "tooMany"])
+    func corruptedAmendmentAncestryCannotRestoreOrReplaceEvidence(change: String) throws {
+        let (source, original) = checkpointFixture(count: 8)
+        let suite = "stocksage.checkpoint.bad-ancestry.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let checkpointURL = directory.appendingPathComponent("completed-14.json")
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.record(source))
+        try #require(history.saveCompletedChecks(source, scan: original))
+        let (first, firstScan) = amendedFixture(source, scan: original, repairCount: 1)
+        try #require(history.saveCompletedChecks(first, scan: firstScan))
+        try #require(history.record(first))
+        let (second, secondScan) = amendedFixture(first, scan: firstScan, repairCount: 1)
+        try #require(history.saveCompletedChecks(second, scan: secondScan))
+        var object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: checkpointURL)) as? [String: Any])
+        var ancestors = try #require(object["previousAmendments"] as? [[String: Any]])
+        switch change {
+        case "missing": ancestors = []
+        case "fact":
+            var failed = ancestors[0]["previousFailures"] as! [[String: Any]]
+            failed[0]["facts"] = ["Changed earliest failed evidence"]
+            ancestors[0]["previousFailures"] = failed
+        case "digest": ancestors[0]["sourceChecksDigest"] = String(repeating: "0", count: 64)
+        case "source": ancestors[0]["sourceRunID"] = UUID().uuidString
+        case "duplicate": ancestors.append(ancestors[0])
+        case "tooMany": ancestors = Array(repeating: ancestors[0], count: 501)
+        default: break
+        }
+        object["previousAmendments"] = ancestors
+        let corrupted = try JSONSerialization.data(withJSONObject: object)
+        try corrupted.write(to: checkpointURL)
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.completedScan(horizon: .fortnight) == nil && reopened.lastError != nil)
+        #expect(!reopened.saveCompletedChecks(second, scan: secondScan))
+        #expect(try Data(contentsOf: checkpointURL) == corrupted && reopened.runs == [first, source])
+    }
+
 }

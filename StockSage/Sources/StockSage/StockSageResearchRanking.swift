@@ -168,13 +168,22 @@ import Foundation
             guard let schema = responseSchema(symbols: offered) else { return .failure(.invalidCandidates) }
             progress("Comparing research · \(cursor)/\(candidates.count) eligible candidates considered · round \(rounds.count + 1)")
             guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
-            let answer: StockSageLocalModelServer.CompletionResult
-            if let completion { answer = await completion(system, user, schema) }
-            else {
-                answer = await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
+            func request() async -> StockSageLocalModelServer.CompletionResult {
+                if let completion { return await completion(system, user, schema) }
+                return await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
                     system: system, user: user, maxTokens: 256,
                     contextTokens: StockSageLocalModelServer.researchContextTokens,
                     jsonSchema: schema, stillValid: allowed)
+            }
+            var answer = await request()
+            // One identical retry for a transient connection/server failure. Invalid output,
+            // timeouts, policy changes and unsupported requests still fail immediately.
+            if case .failure(let failure) = answer,
+               failure.diagnostic.category == .network || (failure.diagnostic.category == .http
+                   && [500, 502, 503, 504].contains(failure.diagnostic.httpStatus ?? 0)) {
+                guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
+                progress("Model connection interrupted · retrying comparison round \(rounds.count + 1) once…")
+                answer = await request()
             }
             guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
             switch answer {
@@ -283,7 +292,8 @@ import Foundation
         try? JSONSerialization.data(withJSONObject: [
             "type": "object", "additionalProperties": false, "required": ["symbols"],
             "properties": ["symbols": ["type": "array", "minItems": min(5, symbols.count),
-                                       "maxItems": min(5, symbols.count), "uniqueItems": true,
+                                       // MLX does not implement uniqueItems. selection() enforces uniqueness.
+                                       "maxItems": min(5, symbols.count),
                                        "items": ["type": "string", "enum": symbols]]]
         ], options: [.sortedKeys])
     }

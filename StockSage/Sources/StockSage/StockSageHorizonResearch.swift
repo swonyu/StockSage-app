@@ -21,7 +21,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Consider overnight gaps and missing future catalysts. The daily technical rules are background, not independently validated for this horizon.")
         }
     }
-    nonisolated struct Listing: Decodable, Identifiable, Sendable, Equatable {
+    nonisolated struct Listing: Codable, Identifiable, Sendable, Equatable {
         let ticker: String
         let name: String
         let market: String
@@ -63,6 +63,9 @@ final class StockSageHorizonResearch: ObservableObject {
         var selection: StockSageResearchUniverse.Receipt?
         var ranking: StockSageResearchRanking.Receipt?
         var rankingFailure: String?
+        var retainedFromRunID: UUID?
+        var isComparing = false
+        var needsSaving = false
 
         /// Only a completed comparison may publish top picks. Raw checks retain scan order.
         var topBuys: [Listing] {
@@ -84,11 +87,22 @@ final class StockSageHorizonResearch: ObservableObject {
     }
     private var task: Task<Void, Never>?
     private let history: StockSageResearchHistory?
+    private var completedRuns: [Horizon: StockSageResearchHistory.Run] = [:]
 
     init(history: StockSageResearchHistory? = nil) {
         self.history = history
+        for horizon in Horizon.allCases {
+            if let restored = history?.completedScan(horizon: horizon) {
+                scans[horizon] = restored.scan
+                completedRuns[horizon] = restored.run
+                if restored.run.ranking != nil, let history,
+                   !history.runs.contains(where: { $0.id == restored.run.id }) {
+                    persistCompletedRun(horizon)
+                }
+            }
+        }
     }
-    enum ScanFailure: Error { case modelUnavailable(String) }
+    enum ScanFailure: Error { case modelUnavailable(String), checkpointUnavailable }
     private static let session = URLSession(configuration: .ephemeral, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
 
     // Vendor contract: massive.com/docs/rest/stocks/tickers/all-tickers, checked 2026-09-09.
@@ -288,36 +302,17 @@ final class StockSageHorizonResearch: ObservableObject {
                 guard !completed.contains(horizon), let captured = scans[horizon] else { return }
                 guard valid() else { throw CancellationError() }
                 activeSymbols.removeAll()
+                let outcome: Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>
                 if let rank {
+                    scans[horizon]?.isComparing = true
                     scans[horizon]?.status = "All \(count) checks finished · comparing research for the top five…"
-                    let outcome = await rank(captured, horizon)
+                    outcome = await rank(captured, horizon)
                     guard valid() else { throw CancellationError() }
-                    switch outcome {
-                    case .success(let receipt):
-                        let eligible = Set(captured.listings.filter {
-                            captured.results[$0.ticker]?.verdict?.action == .buy || captured.results[$0.ticker]?.verdict?.action == .strongBuy
-                        }.map(\.ticker))
-                        if StockSageResearchRanking.valid(receipt), Set(receipt.candidateSymbols) == eligible,
-                           receipt.horizon == horizon.rawValue, receipt.at >= startedAt, receipt.at <= Date() {
-                            scans[horizon]?.ranking = receipt
-                        } else {
-                            scans[horizon]?.rankingFailure = StockSageResearchRanking.Failure.invalidOutput.message
-                        }
-                    case .failure(let failure): scans[horizon]?.rankingFailure = failure.message
-                    }
-                } else if captured.results.values.contains(where: { $0.verdict?.action == .buy || $0.verdict?.action == .strongBuy }) {
-                    scans[horizon]?.rankingFailure = "Comparative ranking was unavailable. All checks remain available."
-                }
+                } else { outcome = .failure(.unavailable) }
+                finishComparison(outcome, horizon: horizon, earliestRankingAt: startedAt,
+                    id: completedRuns[horizon]?.id ?? UUID())
                 completed.insert(horizon)
                 runningHorizons.removeAll { $0 == horizon }; running = runningHorizons.first
-                scans[horizon]?.status = "Scan finished · \(count) listings checked once. No orders created."
-                if let failure = scans[horizon]?.rankingFailure { scans[horizon]?.status += " Top five unavailable: \(failure)" }
-                if let history, let scan = scans[horizon] {
-                    let run = StockSageResearchHistory.snapshot(startedAt: startedAt, completedAt: Date(), horizon: horizon, scan: scan)
-                    scans[horizon]?.status += history.record(run)
-                        ? " Saved for \(run.horizon.rawValue)-trading-day review."
-                        : " Research could not be saved. Open Saved research for details."
-                }
             }
             defer { activeSymbols.removeAll(); running = nil; runningHorizons = []; task = nil }
             let valid: @MainActor @Sendable () -> Bool = { !Task.isCancelled && allowed() }
@@ -365,9 +360,21 @@ final class StockSageHorizonResearch: ObservableObject {
                     }
                     try await group.waitForAll()
                 }
+                // Both completed horizons are durable before the first model comparison starts.
+                for horizon in horizons {
+                    scans[horizon]?.rankingFailure = "Top five comparison has not completed. Retry using these saved checks."
+                    guard let scan = scans[horizon] else { continue }
+                    let pending = StockSageResearchHistory.snapshot(startedAt: startedAt, completedAt: Date(), horizon: horizon, scan: scan)
+                    completedRuns[horizon] = pending
+                }
+                for horizon in horizons {
+                    if let history, let pending = completedRuns[horizon], let scan = scans[horizon],
+                       !history.saveCompletedChecks(pending, scan: scan) { throw ScanFailure.checkpointUnavailable }
+                }
                 for horizon in horizons { try await finish(horizon, count: names.count) }
             } catch {
                 for horizon in horizons where !completed.contains(horizon) {
+                    scans[horizon]?.isComparing = false
                     if !didStart, let old = previous[horizon] { scans[horizon] = old }
                     if !valid() {
                         let reason = Task.isCancelled ? "Stop requested" : (interruptionReason() ?? "Model settings or access changed")
@@ -379,6 +386,8 @@ final class StockSageHorizonResearch: ObservableObject {
                             : "\(count) completed results retained; remaining listings were not checked."
                         if allChecked { scans[horizon]?.rankingFailure = "Comparison stopped before completion. All checks remain available." }
                         scans[horizon]?.status = "Scan stopped · \(reason). \(retained) Run again when ready."
+                    } else if case ScanFailure.checkpointUnavailable = error {
+                        scans[horizon]?.status = "All checks finished, but could not be saved for recovery. Comparison has not started. Keep the app open; check Saved research for the save error, then Retry Top 5."
                     } else if case ScanFailure.modelUnavailable(let detail) = error {
                         scans[horizon]?.status = "\(detail) No scan started. Open Catalysts → Explanation model, finish setup, then Run again."
                     } else if let failure = error as? StockSageResearchUniverse.Failure {
@@ -394,6 +403,209 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         return true
     }
+    private func finishComparison(_ outcome: Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>,
+        horizon: Horizon, earliestRankingAt: Date, id: UUID = UUID(), originalRunID: UUID? = nil) {
+        guard var scan = scans[horizon], let startedAt = scan.at else { return }
+        scan.ranking = nil; scan.isComparing = false
+        switch outcome {
+        case .success(let receipt):
+            let eligible = Set(scan.listings.filter {
+                scan.results[$0.ticker]?.verdict?.action == .buy || scan.results[$0.ticker]?.verdict?.action == .strongBuy
+            }.map(\.ticker))
+            if StockSageResearchRanking.valid(receipt), Set(receipt.candidateSymbols) == eligible,
+               receipt.horizon == horizon.rawValue, receipt.at >= earliestRankingAt, receipt.at <= Date() {
+                scan.ranking = receipt; scan.rankingFailure = nil
+            } else { scan.rankingFailure = StockSageResearchRanking.Failure.invalidOutput.message }
+        case .failure(let failure): scan.rankingFailure = failure.message
+        }
+        scan.status = "Scan finished · \(scan.results.count) listings checked once. No orders created."
+        if let failure = scan.rankingFailure { scan.status += " Top five unavailable: \(failure)" }
+        let run = StockSageResearchHistory.snapshot(id: id, startedAt: startedAt, completedAt: Date(),
+            horizon: horizon, scan: scan, originalRunID: originalRunID)
+        completedRuns[horizon] = run
+        scans[horizon] = scan
+        persistCompletedRun(horizon)
+    }
+
+    /// Same receipt and completion date on storage retry; no model or provider work.
+    private func persistCompletedRun(_ horizon: Horizon) {
+        guard let history, let run = completedRuns[horizon], var scan = scans[horizon] else { return }
+        let retained = history.saveCompletedChecks(run, scan: scan)
+        let checkpointError = retained ? nil : history.lastError
+        let recorded = history.runs.contains(where: { $0.id == run.id }) || history.record(run)
+        let recordError = recorded ? nil : history.lastError
+        scan.needsSaving = !retained || !recorded
+        scan.status += recorded ? " Saved for \(run.horizon.rawValue)-trading-day review."
+            : " Research could not be saved for review. \(recordError ?? "Check storage access.")"
+        if !retained { scan.status += " \(checkpointError ?? "Full checks could not be saved for recovery.") Keep the app open." }
+        if scan.needsSaving { scan.status += " Use Retry save after resolving storage access." }
+        scans[horizon] = scan
+    }
+
+    func retrySave(_ horizon: Horizon) {
+        guard task == nil, scans[horizon]?.needsSaving == true else { return }
+        scans[horizon]?.status = "Completed research retained."
+        persistCompletedRun(horizon)
+    }
+
+    func canRetryTopFive(_ horizon: Horizon) -> Bool {
+        guard task == nil, let scan = scans[horizon], let source = completedRuns[horizon],
+              scan.at == source.startedAt, scan.ranking == nil, !scan.listings.isEmpty,
+              Set(scan.listings.map(\.ticker)) == Set(scan.results.keys) else { return false }
+        return scan.results.values.contains { $0.verdict?.action == .buy || $0.verdict?.action == .strongBuy }
+    }
+
+    /// Reuses only immutable completed checks: no universe, provider or per-stock AI work.
+    @discardableResult func retryTopFive(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
+        rank: @escaping @MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>) -> Bool {
+        guard canRetryTopFive(horizon), allowed(), let captured = scans[horizon], let source = completedRuns[horizon] else { return false }
+        if let history, !history.saveCompletedChecks(source, scan: captured) {
+            scans[horizon]?.status = "Completed checks could not be saved for recovery. Comparison has not started. Keep the app open and check Saved research for the save error."
+            return false
+        }
+        // A crash may leave a pending checkpoint without its small history record.
+        if let history, !history.runs.contains(where: { $0.id == source.id }), !history.record(source) { return false }
+        let began = Date()
+        running = horizon; runningHorizons = [horizon]
+        scans[horizon]?.isComparing = true
+        scans[horizon]?.status = "Retrying Top 5 · comparing \(captured.results.count) saved checks. Original evidence retained…"
+        task = Task {
+            defer { scans[horizon]?.isComparing = false; running = nil; runningHorizons = []; task = nil }
+            let outcome = await rank(captured, horizon)
+            guard !Task.isCancelled, allowed() else {
+                scans[horizon]?.status = "Comparison stopped · all original checks retained. Retry Top 5 when ready."
+                return
+            }
+            finishComparison(outcome, horizon: horizon, earliestRankingAt: began, originalRunID: source.originalRunID ?? source.id)
+        }
+        return true
+    }
+
+    func retryTopFive(_ horizon: Horizon, store: StockSageStore) {
+        guard canRetryTopFive(horizon) else { return }
+        guard let config = StockSageAIAssessments.configuration, ToolPolicy.isExternalAllowed, !store.isSampleData else {
+            scans[horizon]?.status = "Enable web access and the local Qwen model in Settings to retry Top 5. Original checks retained."
+            return
+        }
+        let revision = StockSageLocalModelServer.settingsRevision()
+        let allowed: @MainActor () -> Bool = {
+            !StockSageLocalModelServer.isShuttingDown && ToolPolicy.isExternalAllowed && !store.isSampleData
+                && StockSageAIAssessments.configuration == config && StockSageLocalModelServer.settingsRevision() == revision
+        }
+        retryTopFive(horizon, allowed: allowed) { scan, horizon in
+            let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
+            guard probe.reachable, probe.hasModel else { return .failure(.modelFailure) }
+            return await StockSageResearchRanking.rank(scan: scan, horizon: horizon, config: config,
+                isOllama: probe.isOllama, allowed: allowed, progress: { self.scans[horizon]?.status = $0 })
+        }
+    }
+
+    func incompleteListings(_ horizon: Horizon) -> [Listing] {
+        guard task == nil, let scan = scans[horizon], let source = completedRuns[horizon],
+              scan.at == source.startedAt, Set(scan.listings.map(\.ticker)) == Set(scan.results.keys) else { return [] }
+        return scan.listings.filter { scan.results[$0.ticker]?.verdict == nil }
+    }
+
+    /// New dated observations for failed checks only; all accepted checks remain byte-for-byte.
+    @discardableResult func retryIncomplete(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
+        parallelism: @escaping @MainActor () -> Int = { 1 },
+        makeAnalysis: @escaping @MainActor (Listing) async -> Analysis,
+        rank: @escaping @MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>) -> Bool {
+        let missing = incompleteListings(horizon)
+        guard !missing.isEmpty, allowed(), let original = scans[horizon], let source = completedRuns[horizon] else { return false }
+        if let history {
+            guard history.saveCompletedChecks(source, scan: original),
+                  history.runs.contains(where: { $0.id == source.id }) || history.record(source) else {
+                scans[horizon]?.status = "The original checks could not be saved. Retry has not started; keep the app open."
+                return false
+            }
+        }
+        let startedAt = Date()
+        running = horizon; runningHorizons = [horizon]
+        scans[horizon]?.status = "Retrying incomplete checks · 0/\(missing.count) finished · \(original.results.count - missing.count) previous opinions retained…"
+        task = Task {
+            defer { activeSymbols.removeAll(); scans[horizon]?.isComparing = false; running = nil; runningHorizons = []; task = nil }
+            let valid: @MainActor @Sendable () -> Bool = { !Task.isCancelled && allowed() }
+            var revised = original
+            revised.at = startedAt; revised.retainedFromRunID = source.id
+            revised.ranking = nil; revised.rankingFailure = "Updated checks await Top 5 comparison."
+            var finished = 0
+            @MainActor func accept(_ result: (String, Result)) throws {
+                guard valid() else { throw CancellationError() }
+                revised.results[result.0] = result.1
+                activeSymbols.remove(result.0); finished += 1
+                scans[horizon]?.status = "Retrying incomplete checks · \(finished)/\(missing.count) finished · \(original.results.count - missing.count) previous opinions retained…"
+            }
+            do {
+                try await withThrowingTaskGroup(of: (String, Result).self) { group in
+                    var occupied = 0
+                    for item in missing {
+                        while occupied >= min(8, max(1, parallelism())) {
+                            if let result = try await group.next() { try accept(result) }
+                            occupied -= 1
+                        }
+                        guard valid() else { throw CancellationError() }
+                        activeSymbols.insert(item.ticker)
+                        let analyze = await makeAnalysis(item)
+                        guard valid() else { throw CancellationError() }
+                        group.addTask { @MainActor @Sendable in (item.ticker, await analyze(horizon)) }
+                        occupied += 1
+                    }
+                    while let result = try await group.next() { try accept(result) }
+                }
+                guard valid() else { throw CancellationError() }
+                scans[horizon] = revised
+                let pending = StockSageResearchHistory.snapshot(startedAt: startedAt, completedAt: Date(), horizon: horizon, scan: revised)
+                completedRuns[horizon] = pending
+                if let history, !history.saveCompletedChecks(pending, scan: revised) {
+                    scans[horizon]?.status = "Updated checks could not be saved for recovery. Comparison has not started; keep the app open and check Saved research."
+                    return
+                }
+                scans[horizon]?.isComparing = true
+                scans[horizon]?.status = "Updated checks complete · comparing the full eligible pool for Top 5…"
+                let outcome = await rank(revised, horizon)
+                guard valid() else { throw CancellationError() }
+                finishComparison(outcome, horizon: horizon, earliestRankingAt: startedAt, id: pending.id)
+            } catch {
+                // Before the amended checkpoint, the original scan stays published and durable.
+                scans[horizon]?.status = "Retry stopped. Completed research is retained; no new ranked picks were published."
+            }
+        }
+        return true
+    }
+
+    func retryIncomplete(_ horizon: Horizon, store: StockSageStore) {
+        guard !incompleteListings(horizon).isEmpty, let config = StockSageAIAssessments.configuration,
+              StockSageMassive.isConfigured, ToolPolicy.isExternalAllowed, !store.isSampleData else { return }
+        let key = StockSageMassive.apiKey
+        let credentials = StockSageMassive.credentialRevision()
+        let revision = StockSageLocalModelServer.settingsRevision()
+        let allowed: @MainActor () -> Bool = {
+            !StockSageLocalModelServer.isShuttingDown && ToolPolicy.isExternalAllowed && !store.isSampleData
+                && StockSageMassive.apiKey == key && StockSageMassive.credentialRevision() == credentials
+                && StockSageAIAssessments.configuration == config && StockSageLocalModelServer.settingsRevision() == revision
+        }
+        var capacity = 1
+        var isOllama = false
+        var prepared = false
+        var modelReady = true
+        retryIncomplete(horizon, allowed: { allowed() && modelReady }, parallelism: { capacity }, makeAnalysis: { item in
+            if !prepared {
+                let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
+                prepared = true; capacity = probe.researchParallelism; isOllama = probe.isOllama
+                modelReady = probe.reachable && probe.hasModel
+            }
+            guard modelReady else { return { _ in .init(note: "Local model unavailable; original check retained.") } }
+            let gathered = await Self.gather(item, store: store, key: key, allowed: allowed,
+                selectionFact: self.scans[horizon]?.selection?.detail(for: item.ticker))
+            return Self.preparedAnalysis(gathered, config: config, isOllama: isOllama, allowed: allowed,
+                outputTokens: 384)
+        }, rank: { scan, horizon in
+            await StockSageResearchRanking.rank(scan: scan, horizon: horizon, config: config, isOllama: isOllama,
+                allowed: allowed, progress: { self.scans[horizon]?.status = $0 })
+        })
+    }
+
     func stop() {
         guard running != nil else { return }
         task?.cancel(); activeSymbols.removeAll()
@@ -485,13 +697,14 @@ final class StockSageHorizonResearch: ObservableObject {
         config: StockSageLocalModelServer.Config, isOllama: Bool,
         allowed: @escaping @MainActor () -> Bool,
         modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
-        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil) -> Analysis {
+        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil,
+        outputTokens: Int = researchOutputTokens) -> Analysis {
         { horizon in
             switch gathered {
             case .failed(let result): return result
             case .captured(let capture):
                 return await assess(capture, horizon: horizon, config: config, isOllama: isOllama,
-                    allowed: allowed, modelTransport: modelTransport, evidenceIsCurrent: evidenceIsCurrent)
+                    allowed: allowed, modelTransport: modelTransport, evidenceIsCurrent: evidenceIsCurrent, outputTokens: outputTokens)
             }
         }
     }
@@ -691,7 +904,8 @@ final class StockSageHorizonResearch: ObservableObject {
         config: StockSageLocalModelServer.Config, isOllama: Bool,
         allowed: @escaping @MainActor () -> Bool,
         modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
-        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil) async -> Result {
+        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil,
+        outputTokens: Int = researchOutputTokens) async -> Result {
         let history = capture.history, context = capture.context, referenceClose = capture.referenceClose
         func evidenceAllowed() -> Bool {
             allowed() && !Task.isCancelled && capture.isFresh(at: Date())
@@ -700,6 +914,7 @@ final class StockSageHorizonResearch: ObservableObject {
         func result(_ note: String, facts: [String] = []) -> Result {
             .init(facts: facts, note: note, at: capture.at, referenceClose: referenceClose, coverage: capture.coverage)
         }
+        guard [researchOutputTokens, 384].contains(outputTokens) else { return result("Unsupported research output budget; no opinion.") }
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
         if capture.blockedByThrottle { return result("Supplemental evidence requests were blocked by throttling or access denial, with no usable fallback; no model request or opinion. Retry after provider access recovers.", facts: capture.facts) }
         var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
@@ -714,13 +929,13 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         let optionalFacts = capture.facts
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optionalFacts, mandatory: horizonFacts,
-            system: { _ in horizon.instructions }, outputTokens: Self.researchOutputTokens) else {
+            system: { _ in horizon.instructions }, outputTokens: outputTokens) else {
             return result("Evidence could not fit the model context budget without dropping a mandatory horizon or source-status fact; no opinion.", facts: horizonFacts)
         }
         let facts = fitted.facts
         let trimmedNote = fitted.isComplete ? "" : " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
         let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
-            system: fitted.system, user: fitted.user, facts: facts, maxTokens: Self.researchOutputTokens,
+            system: fitted.system, user: fitted.user, facts: facts, maxTokens: outputTokens,
             stillValid: evidenceAllowed, transport: modelTransport)
         guard evidenceAllowed() else { return result("Analysis interrupted or captured evidence expired.") }
         if case .success(let completion) = response, let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {

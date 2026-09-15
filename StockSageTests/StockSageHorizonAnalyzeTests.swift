@@ -32,7 +32,7 @@ struct StockSageHorizonAnalyzeTests {
         try #require(path.hasPrefix("/"), "Use an absolute task scratch directory")
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         let mode = environment["STOCKSAGE_THROUGHPUT_MODE"] ?? "export"
-        try #require(["export", "validate"].contains(mode))
+        try #require(["export", "validate", "validate-four-workers"].contains(mode))
         struct Request: Codable {
             let id, symbol, horizon, url: String
             let body: Data; let facts: [String]; let inputUTF8Bytes: Int
@@ -49,7 +49,7 @@ struct StockSageHorizonAnalyzeTests {
         let manifestURL = directory.appendingPathComponent("requests.json")
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let decoder = JSONDecoder()
-        if mode == "validate" {
+        if mode != "export" {
             let bytes = try Data(contentsOf: manifestURL)
             let manifest = try decoder.decode(Manifest.self, from: bytes)
             try #require(manifest.version == 1 && manifest.synthetic && manifest.requests.count == 16)
@@ -65,7 +65,7 @@ struct StockSageHorizonAnalyzeTests {
                              "A batch must use this exact exported corpus")
                 responses += try decoder.decode([Response].self, from: Data(contentsOf: replyURL))
             }
-            try #require(Set(responses.map(\.parallelism)) == Set([1, 2, 4, 8]))
+            try #require(Set(responses.map(\.parallelism)) == Set(mode == "validate-four-workers" ? [4] : [1, 2, 4, 8]))
             for (_, trial) in Dictionary(grouping: responses, by: \.trial) {
                 try #require(trial.count == 16 && Set(trial.map(\.id)) == Set(requests.keys)
                              && Set(trial.map(\.parallelism)).count == 1)

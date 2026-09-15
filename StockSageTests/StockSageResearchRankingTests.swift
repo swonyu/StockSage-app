@@ -58,6 +58,7 @@ extension StockSageResearchRanking.Receipt {
             #expect(ids == ["AAA", "BBB", "CCC", "DDD", "EEE", "ZZZ"])
             #expect(system.contains("a Buy can rank above a Strong Buy"))
             #expect(String(decoding: schema, as: UTF8.self).contains("additionalProperties"))
+            #expect(!String(decoding: schema, as: UTF8.self).contains("uniqueItems"), "The installed MLX grammar rejects uniqueItems; application validation still rejects duplicates")
             return self.response(["ZZZ", "AAA", "BBB", "CCC", "DDD"])
         })
         let receipt = try result.get()
@@ -185,6 +186,21 @@ extension StockSageResearchRanking.Receipt {
             .failure(.init(diagnostic: .init(category: .unavailable)))
         })
         #expect(failed == .failure(.modelFailure))
+    }
+
+    @Test(arguments: [false, true]) func transientComparisonFailureRetriesOnceWithIdenticalEvidence(persistent: Bool) async throws {
+        let scan = fixtureScan(["AAA", "BBB"])
+        var calls = 0
+        var inputs: [String] = []
+        let result = await Ranking.rank(scan: scan, horizon: .week, config: config, isOllama: false, allowed: { true }, completion: { system, user, schema in
+            calls += 1
+            inputs.append(system + user + String(decoding: schema, as: UTF8.self))
+            if calls == 1 || persistent { return .failure(.init(diagnostic: .init(category: .http, httpStatus: 500))) }
+            return self.response(["BBB", "AAA"])
+        })
+        #expect(calls == 2 && Set(inputs).count == 1)
+        if persistent { #expect(result == .failure(.modelFailure)) }
+        else { #expect(try result.get().symbols == ["BBB", "AAA"]) }
     }
 
     @Test func oversizedMandatoryCandidateFailsBeforeAnyModelRequest() async {
