@@ -19,6 +19,7 @@ final class StockSageHorizonResearch: ObservableObject {
         var instructions: String {
             Self.focusInstructions + "\n" + StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
                 with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Consider overnight gaps and missing future catalysts. The daily technical rules are background, not independently validated for this horizon.")
+                + "\nUse the app-calculated earnings holding-window check as authoritative for timing. Do not calculate or state relative earnings dates, durations, month parts, or event probabilities in reason/risk. An outside-window date cannot be an in-window catalyst; unknown dates cannot establish either timing or absence of risk. Projected dates are not announcements. Historical earnings results are separate from the next report."
         }
     }
     nonisolated struct Listing: Codable, Identifiable, Sendable, Equatable {
@@ -686,6 +687,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let at: Date
         let blockedByThrottle: Bool
         var evidencePacket: StockSageAIAssessment.EvidencePacket? = nil
+        var nextEarnings: StockSageMassiveEarnings.Observation? = nil
         var referenceClose: (value: Double, at: Date) { (history.closes.last!, history.dates.last!) }
         func isFresh(at now: Date) -> Bool {
             (0...300).contains(now.timeIntervalSince(at))
@@ -868,7 +870,8 @@ final class StockSageHorizonResearch: ObservableObject {
         evidence.insert(contentsOf: extra, at: providerIndex)
         return .captured(.init(history: history, context: context, facts: evidence.map(\.text),
             coverage: coverage, at: began, blockedByThrottle: blocked,
-            evidencePacket: .init(facts: evidence, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount)))
+            evidencePacket: .init(facts: evidence, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount),
+            nextEarnings: earnings))
     }
 
     nonisolated static func historicalFacts(_ history: StockSagePriceHistory) -> [String] {
@@ -972,6 +975,8 @@ final class StockSageHorizonResearch: ObservableObject {
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
         if capture.blockedByThrottle { return result("Supplemental evidence requests were blocked by throttling or access denial, with no usable fallback; no model request or opinion. Retry after provider access recovers.", facts: capture.facts) }
         var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
+        let earningsWindow = StockSageMassiveEarnings.Window(observation: capture.nextEarnings,
+            asOf: context.asOf, horizon: horizon)
         for period in [7, 14] {
             if let value = StockSageIndicators.returnOverPeriod(history.closes, period: period), value.isFinite {
                 horizonFacts.append("Observed return over the last \(period) completed daily bars: \(value)%. Bar window ends \(history.dates.last!.ISO8601Format()). Historical change, not an expected return.")
@@ -986,7 +991,8 @@ final class StockSageHorizonResearch: ObservableObject {
         let mandatory = packet.facts.filter(\.required) + horizonFacts.enumerated().map {
             StockSageAIAssessment.EvidenceFact(key: "horizon.\($0.offset)", text: $0.element,
                                              required: true, availability: .available)
-        }
+        } + [.init(key: "nextEarnings.window", text: earningsWindow.fact, required: true,
+                   availability: earningsWindow.relation == .unknown ? .unknown : .available)]
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optional.map(\.text),
             mandatory: mandatory.map(\.text), system: { _ in horizon.instructions },
             optionalKeys: optional.map(\.key), outputTokens: outputTokens) else {
@@ -1004,9 +1010,14 @@ final class StockSageHorizonResearch: ObservableObject {
         if case .success(let completion) = response, let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
             return result("No verified opinion. " + rejection + trimmedNote + " " + completion.diagnostic.summary, facts: facts)
         }
-        guard case .success(let completion) = response,
-              case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
+        guard case .success(let completion) = response else {
             return result("No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, facts: facts)
+        }
+        let verdict: StockSageAIAssessment.Verdict
+        switch StockSageAIAssessment.validate(completion.text, facts: facts, earningsWindow: earningsWindow) {
+        case .success(let accepted): verdict = accepted
+        case .failure(let failure):
+            return result("No verified opinion. " + failure.explanation + trimmedNote, facts: facts)
         }
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
             prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict)

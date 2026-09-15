@@ -260,6 +260,7 @@ struct StockSageHorizonAnalyzeTests {
             evidenceIsCurrent: { _ in true })
         guard case .captured(let capture) = gathered else { Issue.record("Expected isolated capture"); return }
         #expect(historyCalls == 1 && newsCalls == 1 && earningsCalls == 1 && filingsCalls == 1 && snapshotCalls == 1)
+        #expect(capture.nextEarnings?.checkedAt != nil)
         let config = try #require(Server.config(url: Server.defaultURL, model: Server.defaultModel))
         var prompts: [String] = [], results: [Research.Result] = []
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -280,6 +281,10 @@ struct StockSageHorizonAnalyzeTests {
             #expect(receipt.requiredKeys.contains("quote") && receipt.requiredKeys.contains("nextEarnings")
                     && receipt.requiredKeys.contains("sec.status") && !receipt.requiredKeys.contains("earnings"))
             #expect(receipt.missingOrUnknownRequiredKeys.contains("nextEarnings"))
+            #expect(receipt.requiredKeys.contains("nextEarnings.window"))
+            #expect(receipt.missingOrUnknownRequiredKeys.contains("nextEarnings.window"))
+            #expect(result.facts.contains(StockSageMassiveEarnings.Window(observation: capture.nextEarnings,
+                asOf: capture.context.asOf, horizon: index == 0 ? .week : .fortnight).fact))
             #expect(receipt.citedKeys.count == result.verdict?.evidence.count)
             let id = try #require(result.diagnosticID)
             let entries = await diagnostics.entries(for: id)
@@ -708,6 +713,17 @@ struct StockSageHorizonAnalyzeTests {
     }
 
     // MARK: Honest failure, never a fabricated opinion
+
+    @Test func aDistantEarningsDateCannotBecomeAnImminentReport() async throws {
+        let content = #"{"evidence":["F1"],"action":"Buy","reason":"Demand supports the case.","risk":"Earnings gap risk exists as the next report is in two weeks."}"#
+        let payload = try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+            "message": ["content": content], "done_reason": "stop"])
+        let result = await run(horizon: .fortnight, next: { _, at in
+            .answered(.init(date: at.addingTimeInterval(60 * 86_400), confirmed: true))
+        }, model: { Self.ok(payload, $0) })
+        #expect(result.verdict == nil, "A date beyond the holding window became an imminent earnings claim")
+        #expect(result.facts.contains { $0.hasPrefix("Earnings holding-window check: ") })
+    }
 
     @Test func aTruncatedVerdictIsRefusedRatherThanPublished() async throws {
         let truncated = try! JSONSerialization.data(withJSONObject: [

@@ -5,6 +5,40 @@ import Testing
 @Suite("Qwen primary assessment")
 @MainActor
 struct StockSageAIAssessmentTests {
+    @Test func schemaKeepsExplanationsBeforeCitationsAndAction() throws {
+        let facts = ["Uncertain outlook.", "Reported sale under a prearranged plan."]
+        let data = try #require(StockSageAIAssessment.responseSchema(facts: facts))
+        let text = String(decoding: data, as: UTF8.self)
+        let positions = try ["reason", "risk", "evidence", "action"].map { key in
+            try #require(text.range(of: "\"\(key)\":" )).lowerBound
+        }
+        #expect(positions == positions.sorted(), "Match the frozen benchmark's generation order")
+        for _ in 0..<20 {
+            #expect(StockSageAIAssessment.responseSchema(facts: facts) == data)
+        }
+        #expect(StockSageAIAssessment.responseSchema(facts: []) == nil)
+    }
+
+    @Test func proseGrammarCannotEscapeItsJSONStringOrExceedTheContract() throws {
+        let data = try #require(StockSageAIAssessment.responseSchema(facts: ["Uncertain outlook."]))
+        let schema = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        for field in ["reason", "risk"] {
+            let definition = try #require(properties[field] as? [String: Any])
+            let pattern = try #require(definition["pattern"] as? String)
+            let expression = try NSRegularExpression(pattern: pattern)
+            // Some engines embed pattern directly inside JSON quote delimiters.
+            for prose in [#"Uncertain.","evidence":"F"#, "A\\B", "Line\nbreak", "Tab\there", String(repeating: "A", count: 601)] {
+                #expect(expression.firstMatch(in: prose, range: NSRange(prose.startIndex..., in: prose)) == nil)
+            }
+            let valid = String(repeating: "A", count: 600)
+            #expect(expression.firstMatch(in: valid, range: NSRange(valid.startIndex..., in: valid)) != nil)
+        }
+        if let path = ProcessInfo.processInfo.environment["STOCKSAGE_QUALITY_EXPORT_RECEIPT"] {
+            try data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
     @Test func proseSchemaPreventsUnicodeNumbersWithoutRestrictingNormalWriting() throws {
         let facts = ["Synthetic company; outlook uncertain."]
         let data = try #require(StockSageAIAssessment.responseSchema(facts: facts))
@@ -445,6 +479,221 @@ struct StockSageAIAssessmentTests {
         #expect(A.parse(groupReference, facts: facts, leadCount: 2) == nil)
         #expect(A.parse(groupReference.replacingOccurrences(of: "[\"F13\"]", with: "[\"W1\"]"), facts: facts, leadCount: 3) == nil)
         #expect(A.parse(groupReference.replacingOccurrences(of: "are unverified", with: "promise 99999"), facts: facts, leadCount: 3) == nil)
+    }
+
+    @Test func repeatedModelTokensAreRejectedWithoutRejectingOrdinaryFinancialProse() throws {
+        // Exact 600-character risk from the Gemma TW benchmark, retained without sanitizing.
+        let captured = "Technical indicators show a long-term bearish trend and the stock is trading below its  Implementing ly  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload  autoload oload "
+        #expect(captured.count == 600)
+        for prose in [captured, "AutoLoad, autoload; AUTOLOAD! autoload  autoload autoload"] {
+            for field in ["reason", "risk"] {
+                let raw = try researchAnswer(reason: field == "reason" ? prose : "The evidence is mixed.",
+                                             risk: field == "risk" ? prose : "The outlook is uncertain.")
+                guard case .failure(.repetitiveProse) = A.validate(raw, facts: ["Captured evidence."]) else {
+                    Issue.record("Accepted repeated model tokens"); continue
+                }
+            }
+        }
+        for prose in ["Risk remains; earnings risk and price risk differ from cash flow risk. Risk needs review.",
+                      "Cash flow supports the business; weaker cash flow would challenge that view.",
+                      "risk risk risk risk risk"] {
+            let raw = try researchAnswer(reason: prose, risk: prose)
+            let accepted = try A.validate(raw, facts: ["Captured evidence."]).get()
+            #expect(accepted.reason == prose && accepted.risk == prose)
+        }
+    }
+
+    @Test func repetitiveStoppedAnswerRemainsADraftAndCannotTriggerEvidenceRepair() async throws {
+        for withEvidence in [true, false] {
+            var body: [String: Any] = ["action": "Buy", "reason": "The evidence is mixed.",
+                                      "risk": "autoload autoload autoload autoload autoload autoload"]
+            if withEvidence { body["evidence"] = ["F1"] }
+            let raw = String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+            #expect(A.evidenceRepairPrompt(raw, facts: context.facts) == nil)
+            let state = StockSageAIAssessments()
+            var calls = 0
+            await state.assess(context, config: config, now: now, stillValid: { true }, generateDetailed: { _, _ in
+                calls += 1; return .success(.init(text: raw, diagnostic: .init(finish: .stop)))
+            })
+            #expect(calls == 1 && state.records["ORCL"] == nil)
+            #expect(state.drafts["ORCL"]?.text == raw && state.errors["ORCL"] != nil)
+        }
+    }
+
+    private func researchWindow(earningsDate: String?) throws -> StockSageMassiveEarnings.Window {
+        let formatter = ISO8601DateFormatter()
+        let asOf = try #require(formatter.date(from: "2026-09-15T12:00:00Z"))
+        let observation: StockSageMassiveEarnings.Observation?
+        if let earningsDate {
+            let date = try #require(formatter.date(from: earningsDate + "T00:00:00Z"))
+            observation = .init(outcome: .answered(.init(date: date, confirmed: true)),
+                                checkedAt: asOf, recordedAt: asOf)
+        } else { observation = nil }
+        return .init(observation: observation, asOf: asOf, horizon: .fortnight)
+    }
+
+    private func researchAnswer(reason: String = "The supplied evidence is mixed.", risk: String) throws -> String {
+        String(decoding: try JSONSerialization.data(withJSONObject: [
+            "action": "Hold", "reason": reason, "risk": risk, "evidence": ["F1"]
+        ]), as: UTF8.self)
+    }
+
+    @Test func researchEarningsGuardRejectsCapturedNTAPAndAURTiming() throws {
+        // Exact risk strings from the frozen September 15 replay, before this guard existed.
+        let cases = [
+            ("2026-11-24", "Earnings gap risk exists as the next report is in two weeks, and technical indicators show bearish momentum despite an uptrend structure."),
+            ("2026-10-27", "Upcoming earnings on Oct  create significant gap risk within the holding horizon, and historical volatility suggests wide price swings.")
+        ]
+        for (date, risk) in cases {
+            let window = try researchWindow(earningsDate: date)
+            #expect(window.relation == .outside)
+            let raw = try researchAnswer(risk: risk)
+            let facts = [window.fact]
+            #expect(A.parse(raw, facts: facts)?.risk == risk, "Legacy parsing must preserve the original draft")
+            guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: facts, earningsWindow: window) else {
+                Issue.record("Accepted a captured false earnings-window claim: \(risk)")
+                continue
+            }
+        }
+    }
+
+    @Test func researchGuardRejectsInventedCalendarPhrasingAndProbability() throws {
+        let window = try researchWindow(earningsDate: "2026-11-24")
+        for risk in ["The next earnings report is in a fortnight.",
+                     "Earnings are due next week.",
+                     "The next report is scheduled for late November.",
+                     "Earnings will arrive before the holding period concludes.",
+                     "Earnings are imminent.",
+                     "The setup has a high probability of further downside."] {
+            let raw = try researchAnswer(risk: risk)
+            #expect(A.parse(raw, facts: [window.fact]) != nil)
+            guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+                Issue.record("Accepted an unsupported research claim: \(risk)")
+                continue
+            }
+        }
+    }
+
+    @Test func unknownAndBoundaryDatesCannotBecomeInWindowEarnings() throws {
+        for date in [nil, "2026-10-05"] as [String?] {
+            let window = try researchWindow(earningsDate: date)
+            #expect(window.relation == (date == nil ? .unknown : .boundary))
+            let raw = try researchAnswer(risk: "The earnings release occurs within this holding window.")
+            guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+                Issue.record("An uncertain earnings date became a definite in-window event")
+                continue
+            }
+        }
+    }
+
+    @Test func researchGuardPreservesHistoricalAndUncertainEarningsProseExactly() throws {
+        let window = try researchWindow(earningsDate: "2026-11-24")
+        for risk in ["The last earnings report was released two weeks ago.",
+                     "The previous earnings report was released in early September.",
+                     "The earnings outcome remains unknown and a gap could bypass the stop.",
+                     "Missing earnings data does not establish that no earnings risk exists.",
+                     "The supplied calendar does not place earnings within this holding window.",
+                     "No evidence places the next earnings report within this window.",
+                     "No high probability of a gain is established.",
+                     "Earnings timing remains unknown; the evidence is mixed."] {
+            let reason = "The original evidence remains unchanged."
+            let raw = try researchAnswer(reason: reason, risk: risk)
+            let accepted = try A.validate(raw, facts: [window.fact], earningsWindow: window).get()
+            #expect(accepted.reason == reason && accepted.risk == risk && accepted.evidence == ["F1"])
+            let legacy = try A.validate(raw, facts: [window.fact]).get()
+            #expect(accepted == legacy)
+        }
+    }
+
+    @Test func verifiedInsideWindowKeepsLegitimateEarningsRisk() throws {
+        let window = try researchWindow(earningsDate: "2026-09-23")
+        #expect(window.relation == .inside)
+        for risk in ["The earnings release falls within this holding window; its outcome remains unknown.",
+                     "Upcoming earnings introduce gap risk within the holding horizon."] {
+            let raw = try researchAnswer(risk: risk)
+            let accepted = try A.validate(raw, facts: [window.fact], earningsWindow: window).get()
+            #expect(accepted.risk == risk)
+        }
+    }
+
+    @Test func commaSeparatedEarningsTimingCannotEscapeWindowGuard() throws {
+        let window = try researchWindow(earningsDate: "2026-11-24")
+        let risk = "Earnings, scheduled within the holding window, introduce gap risk."
+        let raw = try researchAnswer(risk: risk)
+        #expect(A.parse(raw, facts: [window.fact])?.risk == risk)
+        guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+            Issue.record("A comma separated the earnings subject from its false timing")
+            return
+        }
+    }
+
+    @Test func historicalWordsCannotExemptPresentEarningsTiming() throws {
+        let window = try researchWindow(earningsDate: "2026-11-24")
+        for risk in ["Historical volatility and earnings within the holding window add risk.",
+                     "The earnings report is released within this holding window.",
+                     "The announced earnings are within the holding horizon."] {
+            let raw = try researchAnswer(risk: risk)
+            guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+                Issue.record("A present earnings claim was treated as historical: \(risk)")
+                continue
+            }
+        }
+        for risk in ["The earnings report was released in early September.",
+                     "The previous earnings report, released in early September, remains historical evidence."] {
+            let raw = try researchAnswer(risk: risk)
+            let accepted = try A.validate(raw, facts: [window.fact], earningsWindow: window).get()
+            #expect(accepted.risk == risk)
+        }
+    }
+
+    @Test func unknownEarningsCannotEstablishAbsenceOfRisk() throws {
+        let window = try researchWindow(earningsDate: nil)
+        #expect(window.relation == .unknown)
+        let raw = try researchAnswer(risk: "There is no earnings risk within this holding window.")
+        guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+            Issue.record("Unknown earnings data became a claim of no earnings risk")
+            return
+        }
+        for risk in ["Missing earnings data does not establish that no earnings risk exists.",
+                     "No earnings risk can be ruled out.",
+                     "There is no evidence of earnings timing within this holding window."] {
+            let retained = try researchAnswer(risk: risk)
+            let accepted = try A.validate(retained, facts: [window.fact], earningsWindow: window).get()
+            #expect(accepted.risk == risk)
+        }
+    }
+
+    @Test func unknownGapRiskWithinTheWindowDoesNotClaimAnEarningsDate() throws {
+        let window = try researchWindow(earningsDate: nil)
+        #expect(window.relation == .unknown)
+        for risk in ["Missing scheduled earnings date creates unknown gap risk within the trading window.",
+                     "Missing scheduled earnings date creates unquantified gap risk within the trading window."] {
+            let raw = try researchAnswer(risk: risk)
+            let accepted = try A.validate(raw, facts: [window.fact], earningsWindow: window).get()
+            #expect(accepted.risk == risk)
+        }
+        for risk in ["Upcoming earnings will occur within the holding window.",
+                     "Missing scheduled earnings date creates unknown gap risk within the trading window, and upcoming earnings will occur within the holding window."] {
+            let raw = try researchAnswer(risk: risk)
+            guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+                Issue.record("Uncertainty about gap risk exempted a separate earnings-date claim")
+                continue
+            }
+        }
+    }
+
+    @Test func rejectedResearchTimingIsNotRemovedOrRepaired() throws {
+        let window = try researchWindow(earningsDate: "2026-11-24")
+        let reason = "The next earnings report is due in two weeks."
+        let risk = "The outcome remains uncertain."
+        let raw = try researchAnswer(reason: reason, risk: risk)
+        let legacy = try A.validate(raw, facts: [window.fact], earningsWindow: nil).get()
+        #expect(legacy.reason == reason && legacy.risk == risk)
+        guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
+            Issue.record("The timing claim in reason was accepted")
+            return
+        }
+        #expect(A.parse(raw, facts: [window.fact]) == legacy)
     }
 
     @Test func rejectsMalformedActionsInventedNumbersAndForgedEvidence() {

@@ -64,6 +64,7 @@ struct StockSageLocalModelServerTests {
             attemptObserver: { await events.append($0) }, transport: { request in
                 if request.httpMethod == "GET" { return StockSageModelDownloadTests.response(request, inventory) }
                 posts += 1
+                #expect(request.httpBody?.range(of: schema) != nil, "Both initial and length-retry requests preserve the supplied schema")
                 let finish = posts == 1 ? "length" : "stop"
                 return StockSageModelDownloadTests.response(request,
                     #"{"model":"qwen3.5-9b","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}],"usage":{"prompt_tokens":42,"completion_tokens":12}}"#)
@@ -533,6 +534,56 @@ struct StockSageLocalModelServerTests {
     }
 
     // MARK: chatRequest — OpenAI-compatible
+
+    @Test func chatRequestPreservesSuppliedSchemaBytesAndEscaping() throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let schema = Data(#"""
+        { "type":"object", "properties":{
+            "zeta":{"type":"string","description":"quote: \"; slash: \\; café 🚀"},
+            "alpha":{"type":"array","items":{"enum":["F2","F1"]}}
+        }, "required":["zeta","alpha"], "additionalProperties":false }
+        """#.utf8)
+        let system = "Keep \"quotes\", \\slashes and Unicode 🚀 unchanged."
+        let user = "Fact text containing } and \"schema\": is data.\nNext fact."
+        let request = S.chatRequest(config, system: system, user: user, isOllama: false,
+            maxTokens: 192, jsonSchema: schema)
+        let body = try #require(request.httpBody)
+        #expect(body.range(of: schema) != nil, "Serialization must not reorder or rewrite the supplied schema")
+        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let messages = try #require(object["messages"] as? [[String: String]])
+        #expect(messages == [["role":"system", "content":system], ["role":"user", "content":user]])
+        let format = try #require(object["response_format"] as? [String: Any])
+        let definition = try #require(format["json_schema"] as? [String: Any])
+        #expect(definition["strict"] as? Bool == true && definition["name"] as? String == "assessment")
+        #expect(try JSONSerialization.data(withJSONObject: definition["schema"] as Any, options: .sortedKeys)
+            == JSONSerialization.data(withJSONObject: JSONSerialization.jsonObject(with: schema), options: .sortedKeys))
+    }
+
+    @Test func schemaEmbeddingNormalizesEncodingAndKeepsBackendGates() throws {
+        let managed = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let other = try #require(S.config(url: "http://127.0.0.1:1234", model: "other-model"))
+        let text = #"{"type":"object","properties":{"symbols":{"type":"array","items":{"type":"string"}}}}"#
+        let bom = Data([0xEF, 0xBB, 0xBF]) + Data(text.utf8)
+        let encodings: [String.Encoding] = [.utf16, .utf16LittleEndian, .utf16BigEndian, .utf32LittleEndian, .utf32BigEndian]
+        let wide = try encodings.map { try #require(text.data(using: $0)) }
+        for schema in [Data(text.utf8), bom] + wide {
+            let request = S.chatRequest(managed, system: "s", user: "u", isOllama: false, maxTokens: 192, jsonSchema: schema)
+            let body = try #require(request.httpBody)
+            let parsed = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let format = try #require(parsed["response_format"] as? [String: Any])
+            let definition = try #require(format["json_schema"] as? [String: Any])
+            #expect(try JSONSerialization.data(withJSONObject: definition["schema"] as Any, options: .sortedKeys)
+                == JSONSerialization.data(withJSONObject: JSONSerialization.jsonObject(with: Data(text.utf8)), options: .sortedKeys))
+        }
+        for (config, ollama, schema) in [(managed, true, Data(text.utf8)),
+                                        (other, false, Data(text.utf8)),
+                                        (managed, false, Data(#"{},"model":"unexpected""#.utf8))] {
+            let request = S.chatRequest(config, system: "s", user: "u", isOllama: ollama, maxTokens: 192, jsonSchema: schema)
+            let body = try #require(request.httpBody)
+            let parsed = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(parsed["response_format"] == nil && parsed["model"] as? String == config.model)
+        }
+    }
 
     @Test("chatRequest (OpenAI-compatible) posts to /v1/chat/completions with max_tokens, no think key")
     func chatRequestOpenAIShape() throws {

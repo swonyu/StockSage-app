@@ -82,6 +82,7 @@ import Foundation
         let reference: Reference?
         var citedFacts: [Fact]
         var omittedCitedFacts: Int
+        var earningsWindow: String? = nil
 
         var mandatory: Self {
             var copy = self
@@ -311,6 +312,8 @@ import Foundation
 
     private nonisolated static func packet(symbol: String, result: StockSageHorizonResearch.Result) -> Candidate? {
         guard let verdict = result.verdict, Set(verdict.evidence).count == verdict.evidence.count else { return nil }
+        let windows = result.facts.filter { $0.hasPrefix(StockSageMassiveEarnings.Window.factPrefix) }
+        guard windows.count <= 1 else { return nil }
         var cited: [Fact] = []
         for id in verdict.evidence {
             guard let index = factIndex(id), result.facts.indices.contains(index) else { return nil }
@@ -321,7 +324,7 @@ import Foundation
                      coverage: result.coverage.map(\.detail), note: result.note,
                      scenario: result.levels.map { .init(entry: $0.entry, stop: $0.stop, target: $0.target, at: $0.at.ISO8601Format(), basis: $0.basis) },
                      reference: result.referenceClose.map { .init(value: $0.value, at: $0.at.ISO8601Format()) },
-                     citedFacts: cited, omittedCitedFacts: 0)
+                     citedFacts: cited, omittedCitedFacts: 0, earningsWindow: windows.first)
     }
 
     private nonisolated static func input(_ candidates: [Candidate], horizon: StockSageHorizonResearch.Horizon) -> String? {
@@ -370,6 +373,11 @@ import Foundation
               candidate.omittedCitedFacts == candidate.evidence.count - candidate.citedFacts.count,
               Set(candidate.citedFacts.map(\.id)).count == candidate.citedFacts.count,
               Set(candidate.citedFacts.map(\.id)).isSubset(of: Set(candidate.evidence.map { candidate.symbol + ":" + $0 })) else { return false }
+        if let window = candidate.earningsWindow {
+            let prefix = StockSageMassiveEarnings.Window.factPrefix
+            guard window.utf8.count <= 4_096, window.hasPrefix(prefix),
+                  !window.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        }
         if let scenario = candidate.scenario {
             guard [scenario.entry, scenario.stop, scenario.target].allSatisfy({ $0.isFinite && $0 > 0 }),
                   date(scenario.at, noLaterThan: at) else { return false }

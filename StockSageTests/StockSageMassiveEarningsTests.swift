@@ -7,6 +7,51 @@ struct StockSageMassiveEarningsTests {
     private typealias E = StockSageMassiveEarnings
     private let today = Date(timeIntervalSince1970: 1_788_652_800) // 2026-09-06 00:00 UTC
 
+    @Test func earningsDatesUseCivilLabelsAndTheFullForwardSessionWindow() throws {
+        let asOf = try Date("2026-09-15T13:00:00Z", strategy: .iso8601)
+        let cases: [(String, E.Window.Relation, E.Window.Relation)] = [
+            ("2026-09-15", .boundary, .boundary), ("2026-09-16", .boundary, .boundary),
+            ("2026-09-17", .inside, .inside), ("2026-09-20", .inside, .inside),
+            ("2026-09-24", .boundary, .inside), ("2026-09-25", .outside, .inside),
+            ("2026-10-05", .outside, .boundary), ("2026-10-27", .outside, .outside),
+            ("2026-11-24", .outside, .outside)
+        ]
+        for (day, week, fortnight) in cases {
+            let date = try Date(day + "T00:00:00Z", strategy: .iso8601)
+            let receipt = E.Observation(outcome: .answered(.init(date: date, confirmed: false)),
+                checkedAt: asOf.addingTimeInterval(-2), recordedAt: asOf)
+            let short = E.Window(observation: receipt, asOf: asOf, horizon: .week)
+            let long = E.Window(observation: receipt, asOf: asOf, horizon: .fortnight)
+            #expect(short.relation == week && long.relation == fortnight, "\(day)")
+            #expect(short.fact.contains("2026-09-16 through 2026-09-24"))
+            #expect(long.fact.contains("2026-09-16 through 2026-10-05"))
+            #expect(short.fact.contains("Provider date \(day), projected, not announced"))
+        }
+    }
+
+    @Test func missingOrInvalidEarningsNeverEstablishAnEmptyWindow() throws {
+        let asOf = try Date("2026-09-15T13:00:00Z", strategy: .iso8601)
+        let row = E.Row(date: try Date("2026-09-18T00:00:00Z", strategy: .iso8601), confirmed: true)
+        let receipts: [E.Observation?] = [nil,
+            .init(outcome: .answered(nil), checkedAt: asOf, recordedAt: asOf),
+            .init(outcome: .unavailable, checkedAt: asOf, recordedAt: asOf),
+            .init(outcome: .notRequested, checkedAt: nil, recordedAt: asOf),
+            .init(outcome: .answered(row), checkedAt: asOf.addingTimeInterval(-301), recordedAt: asOf),
+            .init(outcome: .answered(row), checkedAt: asOf.addingTimeInterval(1), recordedAt: asOf),
+            .init(outcome: .answered(row), checkedAt: asOf, recordedAt: asOf.addingTimeInterval(1)),
+            .init(outcome: .answered(.init(date: .distantPast, confirmed: true)), checkedAt: asOf, recordedAt: asOf)
+        ]
+        for receipt in receipts {
+            let window = E.Window(observation: receipt, asOf: asOf, horizon: .fortnight)
+            #expect(window.relation == .unknown)
+            #expect(window.fact.contains("Missing data is not absence"))
+        }
+        #expect(E.Window(observation: nil, asOf: .distantFuture, horizon: .week).relation == .unknown)
+        let beforeHoliday = try Date("2026-09-03T13:00:00Z", strategy: .iso8601)
+        #expect(E.Window(observation: nil, asOf: beforeHoliday, horizon: .week)
+            .fact.contains("2026-09-04 through 2026-09-15"), "Labor Day is excluded")
+    }
+
     @Test func denialBelongsToItsCredentialRevisionIncludingLateResponses() throws {
         let name = "provider.denial.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: name))

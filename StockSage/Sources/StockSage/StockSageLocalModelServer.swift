@@ -584,13 +584,28 @@ enum StockSageLocalModelServer {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
             if c.isLMStudio9B { body["ttl"] = 180 }
-            if c.isLMStudio9B, let jsonSchema,
-               let schema = try? JSONSerialization.jsonObject(with: jsonSchema) {
-                body["response_format"] = ["type": "json_schema", "json_schema": [
-                    "name": "assessment", "strict": true, "schema": schema]]
-            }
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        if c.isLMStudio9B, !isOllama, let jsonSchema,
+           let schema = try? JSONSerialization.jsonObject(with: jsonSchema),
+           var data = request.httpBody, data.last == 0x7D {
+            // Preserve generation order; decoding then reserializing would shuffle it.
+            // Non-UTF8 or BOM-prefixed input needs normalization before JSON embedding.
+            let embedded: Data?
+            if String(data: jsonSchema, encoding: .utf8) != nil,
+               !jsonSchema.starts(with: [0xEF, 0xBB, 0xBF]), !jsonSchema.contains(0) {
+                embedded = jsonSchema
+            } else {
+                embedded = try? JSONSerialization.data(withJSONObject: schema, options: .sortedKeys)
+            }
+            if let embedded {
+                data.removeLast()
+                data.append(contentsOf: #", "response_format":{"type":"json_schema","json_schema":{"name":"assessment","strict":true,"schema":"#.utf8)
+                data.append(embedded)
+                data.append(contentsOf: "}}}".utf8)
+                request.httpBody = data
+            }
+        }
         return request
     }
 

@@ -134,6 +134,7 @@ extension StockSageResearchRanking.Receipt {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let bytes = try encoder.encode(receipt)
         #expect(!String(decoding: bytes, as: UTF8.self).contains("diagnostic"))
+        #expect(!String(decoding: bytes, as: UTF8.self).contains("earningsWindow"))
         let restored = try JSONDecoder().decode(Ranking.Receipt.self, from: bytes)
         #expect(restored == receipt && Ranking.valid(restored))
         #expect(try encoder.encode(restored) == bytes)
@@ -187,6 +188,48 @@ extension StockSageResearchRanking.Receipt {
         #expect(Set(receipt.rounds.compactMap(\.diagnosticID)).count == receipt.rounds.count)
         #expect(receipt.rounds.allSatisfy { $0.diagnosticsComplete == true })
         #expect(Ranking.valid(receipt))
+    }
+
+    @Test(arguments: [false, true])
+    func uncitedEarningsWindowRemainsMandatoryWhenCitationsAreTrimmed(trim: Bool) async throws {
+        var scan = fixtureScan(["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"])
+        let window = StockSageMassiveEarnings.Window.factPrefix
+            + "listed projected date 2026-11-05 is outside the holding window; release time is unknown."
+        for symbol in scan.results.keys {
+            scan.results[symbol]?.facts = [trim ? String(repeating: "oversized source record ", count: 1_000) : "Dated cited fact \(symbol)", window]
+        }
+        let result = await Ranking.rank(scan: scan, horizon: .fortnight, config: config, isOllama: false,
+            allowed: { true }, completion: { _, user, _ in
+                for packet in self.packets(in: user) {
+                    #expect(packet["earningsWindow"] as? String == window)
+                    #expect(packet["evidence"] as? [String] == ["F1"], "The new window is intentionally not cited by the assessment")
+                    #expect((packet["citedFacts"] as? [[String: String]])?.count == (trim ? 0 : 1))
+                    #expect(packet["omittedCitedFacts"] as? Int == (trim ? 1 : 0))
+                }
+                return self.response(Array(self.symbols(in: user).prefix(5)))
+            })
+        let receipt = try result.get()
+        #expect(receipt.version == 1 && Ranking.valid(receipt))
+        let restored = try JSONDecoder().decode(Ranking.Receipt.self, from: JSONEncoder().encode(receipt))
+        #expect(restored == receipt && Ranking.valid(restored))
+    }
+
+    @Test(arguments: ["duplicate", "empty", "oversized"])
+    func invalidEarningsWindowFailsBeforeRankingRequests(_ invalid: String) async {
+        var scan = fixtureScan(["AAA"])
+        let prefix = StockSageMassiveEarnings.Window.factPrefix
+        switch invalid {
+        case "duplicate": scan.results["AAA"]?.facts += [prefix + "inside", prefix + "outside"]
+        case "empty": scan.results["AAA"]?.facts.append(prefix + " \n")
+        default: scan.results["AAA"]?.facts.append(prefix + String(repeating: "x", count: 4_096))
+        }
+        var requests = 0
+        let result = await Ranking.rank(scan: scan, horizon: .fortnight, config: config, isOllama: false,
+            allowed: { true }, completion: { _, _, _ in
+                requests += 1
+                return self.response(["AAA"])
+            })
+        #expect(result == .failure(.invalidCandidates) && requests == 0)
     }
 
     @Test func optionalCitationsAreWholeFairlyIncludedAndOmissionsDisclosed() async throws {

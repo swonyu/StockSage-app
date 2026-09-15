@@ -24,6 +24,60 @@ enum StockSageMassiveEarnings {
         let recordedAt: Date
         var notRequestedReason: NotRequestedReason? = nil
     }
+
+    /// Date-only comparison anchored to the final evidence snapshot, not the earlier fetch start.
+    /// The saved run's review schedule remains independently anchored to scan completion.
+    nonisolated struct Window: Sendable, Equatable {
+        enum Relation: Sendable { case inside, outside, boundary, unknown }
+        static let factPrefix = "Earnings holding-window check: "
+        let relation: Relation
+        let fact: String
+
+        init(observation: Observation?, asOf: Date, horizon: StockSageHorizonResearch.Horizon) {
+            guard asOf.timeIntervalSince1970.isFinite, asOf.timeIntervalSince1970 > 0,
+                  let first = StockSageResearchHistory.benchmarkDay(after: asOf),
+                  let last = StockSageResearchHistory.targetClose(after: asOf,
+                      horizon: horizon == .week ? .week : .fortnight, policy: .nextTradingDateSessions) else {
+                relation = .unknown
+                fact = Self.factPrefix + "unknown; verified trading calendar unavailable. Do not infer event timing or absence of earnings risk."
+                return
+            }
+            let ny = DateFormatter()
+            ny.calendar = Calendar(identifier: .gregorian)
+            ny.locale = Locale(identifier: "en_US_POSIX")
+            ny.timeZone = TimeZone(identifier: "America/New_York")
+            ny.dateFormat = "yyyy-MM-dd"
+            let start = ny.string(from: first), end = ny.string(from: last)
+            let basis = Self.factPrefix + "snapshot \(asOf.ISO8601Format()); \(horizon.rawValue); next-session window \(start) through \(end) (New York dates). "
+            guard let observation, let checked = observation.checkedAt,
+                  (0...300).contains(asOf.timeIntervalSince(checked)),
+                  (0...300).contains(asOf.timeIntervalSince(observation.recordedAt)),
+                  observation.recordedAt >= checked,
+                  case .answered(let row?) = observation.outcome,
+                  row.date.timeIntervalSince1970.isFinite,
+                  (floor(checked.timeIntervalSince1970 / 86_400) * 86_400 ... floor(checked.timeIntervalSince1970 / 86_400) * 86_400 + 401 * 86_400 - 1)
+                    .contains(row.date.timeIntervalSince1970) else {
+                relation = .unknown
+                fact = basis + "Unknown: no usable scheduled date. Missing data is not absence of earnings risk."
+                return
+            }
+            // The provider encodes a civil date at UTC midnight. Converting that instant to
+            // New York would shift the date back one day, so compare civil labels instead.
+            let day = dayFormatter.string(from: row.date)
+            let detail: String
+            if day == start || day == end || day == ny.string(from: asOf) {
+                relation = .boundary
+                detail = "Boundary date: release time unknown; do not assert the report occurs during the holding period."
+            } else if day > start && day < end {
+                relation = .inside
+                detail = "Listed date is inside the window; outcome and gap probability unknown."
+            } else {
+                relation = .outside
+                detail = "Listed date is outside the window; do not claim an in-window earnings event. This is not absence of all earnings risk."
+            }
+            fact = basis + "Provider date \(day), \(row.confirmed ? "confirmed" : "projected, not announced"). " + detail
+        }
+    }
     private nonisolated enum Failure: Error { case invalidPayload }
     private nonisolated static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
