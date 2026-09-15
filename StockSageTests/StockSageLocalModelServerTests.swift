@@ -4,13 +4,86 @@ import Foundation
 
 // Pure-part tests for the local-server (Ollama / LM Studio) client behind the Catalysts tab's
 // optional explanation paragraph (owner request 2026-09-06, build step: local-server backend).
-// No live network calls here — `probe(_:)`/`complete(_:)` need a real server and are exercised
-// manually against the owner's running Ollama instance instead (see the commit body); every case
-// below is the deterministic config/request/response machinery those two are built on.
+// No live network calls: probe/completion checks use injected transports and synthetic inventory.
 @Suite("Local model server (config + request + response)")
 struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
+
+    @Test(arguments: ["1", "2", "4", "8", "9", "64", "2.0", "0", "-1", "2.5", "true", "false", "\"8\"", "null", "1e300"])
+    @MainActor func researchCapacityUsesOnlySafeIntegralSelectedInstanceMetadata(parallel: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let json = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":\#(parallel)}}]"#)
+        var requests = 0
+        let probe = await S.probe(config, transport: { request in
+            requests += 1
+            #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
+            return StockSageModelDownloadTests.response(request, json)
+        })
+        let expected = ["1": 1, "2": 2, "4": 4, "8": 8, "9": 8, "64": 8, "2.0": 2][parallel] ?? 1
+        #expect(probe.researchParallelism == expected)
+        #expect(requests == 1 && probe.reachable && probe.hasModel && !probe.canDownload && !probe.isOllama)
+    }
+
+    @Test(arguments: ["missing", "unloaded", "sibling", "duplicate", "malformed", "incompatible", "mixed-variant", "compatible-copies"])
+    @MainActor func researchCapacityKeepsAmbiguousOrIncompatibleInstancesSerial(scenario: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let inventory = try #require(JSONSerialization.jsonObject(with: Data(StockSageModelDownloadTests.installed.utf8)) as? [String: Any])
+        let empty = try #require((inventory["models"] as? [[String: Any]])?.first)
+        var selected = empty
+        let instance: [String: Any] = ["id": config.model, "config": ["context_length": 262144, "parallel": 8]]
+        selected["loaded_instances"] = [instance]
+        switch scenario {
+        case "missing": selected["loaded_instances"] = [["id": config.model, "config": ["context_length": 262144]]]
+        case "unloaded": selected["loaded_instances"] = [[String: Any]]()
+        case "sibling": selected["loaded_instances"] = [["id": "another-instance", "config": ["context_length": 262144, "parallel": 8]]]
+        case "duplicate": selected["loaded_instances"] = [instance, instance]
+        case "malformed": selected["loaded_instances"] = "unverified"
+        case "incompatible": selected["quantization"] = ["bits_per_weight": 4]
+        default: break
+        }
+        var rows = [selected]
+        if scenario == "mixed-variant" {
+            var wrongVariant = empty
+            wrongVariant["quantization"] = ["bits_per_weight": 4]
+            rows.append(wrongVariant)
+        } else if scenario == "compatible-copies" { rows.insert(empty, at: 0) }
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: ["models": rows]), as: UTF8.self)
+        let probe = await S.probe(config, transport: { request in
+            #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
+            return StockSageModelDownloadTests.response(request, json)
+        })
+        #expect(probe.researchParallelism == (scenario == "compatible-copies" ? 8 : 1))
+        #expect(probe.hasModel == !["incompatible", "mixed-variant"].contains(scenario))
+    }
+
+    @Test @MainActor func researchCapacityCannotEscapeProbeIdentityOrAccessChecks() async throws {
+        let native = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":8}}]"#)
+        let strict = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        var valid = true
+        let revoked = await S.probe(strict, stillValid: { valid }, transport: { request in
+            valid = false
+            return StockSageModelDownloadTests.response(request, native)
+        })
+        #expect(!revoked.hasModel && revoked.researchParallelism == 1)
+        for config in [S.config(url: S.lmStudioURL, model: "another-model")!,
+                       S.config(url: "http://127.0.0.1:11434", model: S.lmStudioModel)!] {
+            let other = await S.probe(config, transport: { request in
+                #expect(request.url?.path == "/api/tags")
+                return StockSageModelDownloadTests.response(request, #"{"models":[{"name":"\#(config.model)","parallel":8}]}"#)
+            })
+            #expect(other.isOllama && other.hasModel && other.researchParallelism == 1)
+        }
+        let remote = try #require(S.config(url: "http://fixture.invalid:1234", model: S.lmStudioModel))
+        var remoteRequests = 0
+        let denied = await S.probe(remote, externalAllowed: { false }, transport: { request in
+            remoteRequests += 1
+            return StockSageModelDownloadTests.response(request, native)
+        })
+        #expect(remoteRequests == 0 && !denied.reachable && denied.researchParallelism == 1)
+    }
 
     @Test(arguments: [false, true]) @MainActor
     func totalDeadlineAndCancellationSettleBeforeAnUncooperativeTransport(cancel: Bool) async throws {

@@ -256,9 +256,11 @@ struct StockSageResearchModesPanel: View {
                 Text(selection.summary).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if isRunning, let symbol = research.activeSymbol {
-                Text("\(symbol) · daily history, news and Qwen").font(.caption).monospaced()
-                ProgressView().progressViewStyle(.linear).accessibilityLabel("\(symbol) research in progress")
+            if isRunning, !research.activeSymbols.isEmpty {
+                Text("\(research.activeDescription) · daily history, news and Qwen").font(.caption).monospaced()
+                    .help(research.activeSymbols.sorted().joined(separator: ", "))
+                ProgressView().progressViewStyle(.linear)
+                    .accessibilityLabel("\(research.activeSymbols.sorted().joined(separator: ", ")) research in progress")
             } else if isRunning, !scan.listings.isEmpty, scan.results.count == scan.listings.count {
                 Text("Comparing completed research").font(.caption)
                 ProgressView().progressViewStyle(.linear).accessibilityLabel("Top five comparison in progress")
@@ -626,8 +628,8 @@ struct StockSageResearchModesPanel: View {
                             scan: StockSageHorizonResearch.Scan,
                             horizon: StockSageHorizonResearch.Horizon) -> String {
         if let result = scan.results[symbol] { return result.verdict?.action.rawValue ?? "Incomplete" }
-        if research.isRunning(horizon), research.activeSymbol == symbol { return "Checking…" }
-        return research.isRunning(horizon) && research.activeSymbol != nil ? "Queued" : "Not checked"
+        if research.isRunning(horizon), research.activeSymbols.contains(symbol) { return "Checking…" }
+        return research.isRunning(horizon) && !research.activeSymbols.isEmpty ? "Queued" : "Not checked"
     }
 
     static func searchField(search: Binding<String>) -> some View {

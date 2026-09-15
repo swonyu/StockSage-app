@@ -323,6 +323,8 @@ enum StockSageLocalModelServer {
         /// qwen3.8 present" or "Unreachable: <error>".
         let detail: String
         var canDownload = false
+        /// Verified processing slots for the selected instance; unknown capacity stays serial.
+        var researchParallelism = 1
     }
 
     /// Ollama tags a locally-served model "name:latest" (e.g. "qwen3.8:latest") while a viewer
@@ -491,12 +493,21 @@ enum StockSageLocalModelServer {
                 && $0["architecture"] as? String == "qwen3_5" && $0["params_string"] as? String == "9B"
                 && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 6
         }
+        var parallelism = 1
+        if compatible, let instances = loadedInstances(matches) {
+            let selected = instances.filter { $0["id"] as? String == lmStudioModel }
+            if selected.count == 1, let config = selected[0]["config"] as? [String: Any],
+               let number = config["parallel"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+               let slots = Int(exactly: number.doubleValue), slots > 0 {
+                parallelism = min(slots, 8)
+            }
+        }
         return Probe(reachable: true, isOllama: false, models: rows.compactMap { $0["key"] as? String },
             hasModel: compatible, detail: compatible
                 ? "Reachable · LM Studio · Qwen3.5 9B MLX 6-bit downloaded (loads on demand)."
                 : matches.isEmpty ? "Qwen3.5 9B is missing. Download the current 6-bit release in Model settings."
                 : "The model key exists but its 9B MLX 6-bit compatibility is not verified. Check the variant in LM Studio; no replacement downloaded.",
-            canDownload: matches.isEmpty)
+            canDownload: matches.isEmpty, researchParallelism: parallelism)
     }
 
     /// LM Studio can list multiple compatible copies under one key. Resolve instances across

@@ -802,6 +802,156 @@ import Testing
         #expect(r.scans[horizon]?.status.contains("500 listings checked once") == true)
     }
 
+    @Test func stockWorkersOverlapWithoutPreparingPastTheirBound() async throws {
+        let r = R()
+        var prepared: [String] = []
+        var waiting: [String: CheckedContinuation<Void, Never>] = [:]
+        var active = 0
+        var peak = 0
+        var compared = false
+        let started = r.start([.week, .fortnight], allowed: { true },
+            universe: { .init([listing("AAA"), listing("BBB"), listing("CCC")]) },
+            rank: { _, _ in compared = true; return .failure(.unavailable) },
+            parallelism: { 2 }, makeAnalysis: { item in
+                prepared.append(item.ticker)
+                let symbol = item.ticker
+                return { horizon in
+                    active += 1; peak = max(peak, active)
+                    await withCheckedContinuation { waiting[symbol + horizon.rawValue] = $0 }
+                    active -= 1
+                    return .init(note: symbol + horizon.rawValue)
+                }
+            })
+        #expect(started)
+        for _ in 0..<100 where waiting.count < 2 { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(prepared == ["AAA", "BBB"], "The second stock must prepare while the first model call waits; the third must wait for a whole stock slot")
+        #expect(peak == 2 && waiting.count == 2 && !compared)
+        #if os(macOS)
+        let scan = try #require(r.scans[.week])
+        #expect(StockSageResearchModesPanel.resultLabel("AAA", research: r, scan: scan, horizon: .week) == "Checking…")
+        #expect(StockSageResearchModesPanel.resultLabel("BBB", research: r, scan: scan, horizon: .week) == "Checking…")
+        #endif
+        r.stop()
+        let held = waiting.values; waiting.removeAll()
+        for continuation in held { continuation.resume() }
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(r.running == nil && r.scans[.week]?.results.isEmpty == true && !compared)
+    }
+
+    @Test(arguments: [-1, 1, 2, 4, 8, 64])
+    func parallelChecksKeepOrderIdentityAndFinishBeforeRanking(capacity: Int) async throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let r = R(history: history)
+        defer { r.stop() }
+        let names = (0..<12).map { listing("S\($0)") }
+        var prepared: [String] = [], calls: [String] = [], finished: [String] = []
+        var active = 0, peak = 0, comparisons = 0
+        let started = r.start(R.Horizon.allCases, allowed: { true }, universe: { .init(names) },
+            rank: { scan, horizon in
+                #expect(active == 0 && calls.count == names.count * 2)
+                #expect(scan.results.count == names.count && scan.listings == names)
+                comparisons += 1
+                return .success(.fixture(scan: scan, symbols: Array(names.reversed().prefix(5)).map(\.ticker), horizon: horizon))
+            }, parallelism: { capacity }, makeAnalysis: { item in
+                prepared.append(item.ticker)
+                let capturedAt = Date()
+                return { horizon in
+                    calls.append(item.ticker + horizon.rawValue)
+                    active += 1; peak = max(peak, active)
+                    // Unequal delays force later listings to finish first when capacity allows.
+                    try? await Task.sleep(for: .milliseconds(item.ticker == "S0" ? 25 : 5))
+                    active -= 1; finished.append(item.ticker)
+                    return .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]),
+                        facts: [item.ticker], note: horizon.rawValue, at: capturedAt)
+                }
+            })
+        #expect(started)
+        for _ in 0..<500 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(r.running == nil)
+        #expect(peak == min(8, max(1, capacity)))
+        #expect(prepared == names.map(\.ticker) && calls.count == 24 && Set(calls).count == 24)
+        #expect(comparisons == 2 && history.runs.count == 2 && r.activeSymbols.isEmpty)
+        if capacity > 1 { #expect(finished.first != "S0") }
+        for item in names {
+            for horizon in R.Horizon.allCases {
+                let result = try #require(r.scans[horizon]?.results[item.ticker])
+                #expect(result.facts == [item.ticker] && result.note == horizon.rawValue)
+            }
+            #expect(r.scans[.week]?.results[item.ticker]?.at == r.scans[.fortnight]?.results[item.ticker]?.at)
+        }
+    }
+
+    @Test func capacityDiscoveredAfterFirstModelRequestAppliesToRemainingStocks() async throws {
+        let r = R()
+        var capacity = 1, active = 0, peak = 0
+        var prepared: [String] = []
+        var held: [String: CheckedContinuation<Void, Never>] = [:]
+        defer { r.stop(); for continuation in held.values { continuation.resume() } }
+        let started = r.start([.week], allowed: { true },
+            universe: { .init((0..<9).map { listing("S\($0)") }) }, parallelism: { capacity },
+            makeAnalysis: { item in
+                prepared.append(item.ticker)
+                return { _ in
+                    active += 1; peak = max(peak, active)
+                    await withCheckedContinuation { held[item.ticker] = $0 }
+                    active -= 1
+                    capacity = 8
+                    return .init(note: item.ticker)
+                }
+            })
+        #expect(started)
+        for _ in 0..<100 where held.isEmpty { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(prepared == ["S0"] && held.count == 1)
+        held.removeValue(forKey: "S0")?.resume()
+        for _ in 0..<100 where held.count < 8 { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(peak == 8 && prepared.count == 9 && held.count == 8)
+        r.stop()
+        let pending = held.values; held.removeAll()
+        for continuation in pending { continuation.resume() }
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(r.running == nil && r.scans[.week]?.results.count == 1)
+    }
+
+    @Test(arguments: [true, false])
+    func parallelStopRetainsCompletedHorizonsAndOwnsAllChildren(cancel: Bool) async throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let r = R(history: history)
+        var allowed = true, compared = false
+        var prepared: [String] = []
+        var waiting: [String: CheckedContinuation<Void, Never>] = [:]
+        defer { r.stop(); for held in waiting.values { held.resume() } }
+        let started = r.start(R.Horizon.allCases, allowed: { allowed },
+            universe: { .init((0..<9).map { listing("S\($0)") }) },
+            rank: { _, _ in compared = true; return .failure(.unavailable) },
+            parallelism: { 8 }, makeAnalysis: { item in
+                prepared.append(item.ticker)
+                return { horizon in
+                    if horizon == .fortnight { await withCheckedContinuation { waiting[item.ticker] = $0 } }
+                    return .init(verdict: .init(action: .hold, reason: "Case", risk: "Risk", evidence: []), note: item.ticker)
+                }
+            })
+        #expect(started)
+        for _ in 0..<100 where waiting.count < 8 { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(waiting.count == 8)
+        #expect(prepared.count == 8 && r.scans[.week]?.results.count == 8)
+        #expect(r.activeDescription == "S0, S1, S2 +5 more")
+        for symbol in waiting.keys {
+            #expect(StockSageResearchModesPanel.resultLabel(symbol, research: r, scan: r.scans[.week]!, horizon: .week) == "Hold")
+            #expect(StockSageResearchModesPanel.resultLabel(symbol, research: r, scan: r.scans[.fortnight]!, horizon: .fortnight) == "Checking…")
+        }
+        if cancel { r.stop(); #expect(r.activeSymbols.isEmpty) } else { allowed = false }
+        waiting.removeValue(forKey: "S0")?.resume()
+        try await Task.sleep(for: .milliseconds(10))
+        #expect(r.running != nil, "One finished child cannot release the other seven workers' ownership")
+        let restarted = r.start(.week, allowed: { true }, universe: { .init([]) }, analyze: { _ in .init(note: "Must not run") })
+        #expect(!restarted)
+        let held = waiting.values; waiting.removeAll()
+        for continuation in held { continuation.resume() }
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(r.running == nil && r.activeSymbols.isEmpty && prepared.count == 8 && !compared)
+        #expect(r.scans[.week]?.results.count == 8 && r.scans[.fortnight]?.results.isEmpty == true && history.runs.isEmpty)
+    }
+
     @Test func cancellationOrSettingsChangeCannotPublishLateResult() async throws {
         for cancel in [true, false] {
             let r = R()

@@ -24,11 +24,130 @@ struct StockSageHorizonAnalyzeTests {
     typealias Research = StockSageHorizonResearch
     typealias Server = StockSageLocalModelServer
 
+    /// Opt-in synthetic model benchmark. Every provider/model call stays injected here.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_THROUGHPUT_DIR"] != nil))
+    func syntheticThroughputPayloadExportAndValidation() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["STOCKSAGE_THROUGHPUT_DIR"] else { return }
+        try #require(path.hasPrefix("/"), "Use an absolute task scratch directory")
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        let mode = environment["STOCKSAGE_THROUGHPUT_MODE"] ?? "export"
+        try #require(["export", "validate"].contains(mode))
+        struct Request: Codable {
+            let id, symbol, horizon, url: String
+            let body: Data; let facts: [String]; let inputUTF8Bytes: Int
+        }
+        struct Manifest: Codable {
+            let version: Int; let synthetic: Bool; let source, generatedAt, model: String
+            let outputTokens, contextTokens: Int; let requests: [Request]
+        }
+        // Data fields are standard base64. Extra Python timing/usage fields are ignored.
+        struct Response: Decodable {
+            let trial, id: String; let parallelism, httpStatus: Int
+            let body, inventory: Data; let elapsedSeconds: Double
+        }
+        let manifestURL = directory.appendingPathComponent("requests.json")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let decoder = JSONDecoder()
+        if mode == "validate" {
+            let bytes = try Data(contentsOf: manifestURL)
+            let manifest = try decoder.decode(Manifest.self, from: bytes)
+            try #require(manifest.version == 1 && manifest.synthetic && manifest.requests.count == 16)
+            try #require(manifest.model == Server.lmStudioModel && manifest.outputTokens == Research.researchOutputTokens
+                         && manifest.contextTokens == Server.researchContextTokens)
+            try #require(Set(manifest.requests.map(\.id)).count == 16)
+            let requests = Dictionary(uniqueKeysWithValues: manifest.requests.map { ($0.id, $0) })
+            var responses: [Response] = []
+            for batch in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("batches"), includingPropertiesForKeys: nil) {
+                let replyURL = batch.appendingPathComponent("responses.json")
+                guard FileManager.default.fileExists(atPath: replyURL.path) else { continue }
+                try #require(Data(contentsOf: batch.appendingPathComponent("requests.json")) == bytes,
+                             "A batch must use this exact exported corpus")
+                responses += try decoder.decode([Response].self, from: Data(contentsOf: replyURL))
+            }
+            try #require(Set(responses.map(\.parallelism)) == Set([1, 2, 4, 8]))
+            for (_, trial) in Dictionary(grouping: responses, by: \.trial) {
+                try #require(trial.count == 16 && Set(trial.map(\.id)) == Set(requests.keys)
+                             && Set(trial.map(\.parallelism)).count == 1)
+            }
+            var failures: [String] = []
+            for response in responses {
+                do {
+                    let request = try #require(requests[response.id])
+                    try #require((200..<300).contains(response.httpStatus) && response.body.count <= Server.maximumResponseBytes
+                                 && response.inventory.count <= 262_144 && response.elapsedSeconds.isFinite && response.elapsedSeconds > 0)
+                    let completion = try Server.parseCompletion(response.body, isOllama: false).get()
+                    try #require(completion.model == Server.lmStudioModel && completion.diagnostic.finish == .stop
+                                 && Server.financialOutputRejection(completion) == nil)
+                    _ = try StockSageAIAssessment.validate(completion.text, facts: request.facts).get()
+                    let inventory = try #require(JSONSerialization.jsonObject(with: response.inventory) as? [String: Any])
+                    try #require((Server.verifiedContext(inventory, model: Server.lmStudioModel) ?? 0) >= manifest.contextTokens)
+                    try #require((Server.managedInventory(inventory)?.researchParallelism ?? 1) >= response.parallelism)
+                } catch { failures.append(response.trial + "/" + response.id + ": " + String(describing: error)) }
+            }
+            try encoder.encode(failures).write(to: directory.appendingPathComponent("validation-errors.json"), options: .atomic)
+            #expect(failures.isEmpty, "All timed responses must pass the unchanged Swift acceptance checks")
+            print("THROUGHPUT_VALIDATED \(responses.count - failures.count)/\(responses.count) raw completions")
+            return
+        }
+        let cases = ["Synthetic customer orders improved, but delivery timing and margins remain uncertain.",
+                     "Synthetic demand softened and inventory rose; a recovery has not been confirmed.",
+                     "Synthetic results were mixed and management kept its outlook unchanged.",
+                     "Synthetic expansion may support sales, while funding and execution remain risks."]
+        let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":1}}]"#)
+        var requests: [Request] = []
+        for (index, suffix) in Array("ABCDEFGHIJKLMNOP").enumerated() {
+            let symbol = "ACME" + String(suffix)
+            let horizon: Research.Horizon = index.isMultiple(of: 2) ? .week : .fortnight
+            var posts: [(URL, Data)] = []
+            let result = await run(listing: Self.listing(symbol),
+                history: Self.historyPayload(ticker: symbol, baseClose: 30 + Double(index) * 7),
+                isOllama: false, horizon: horizon, news: { at in
+                    .init(attempts: [.init(provider: .benzinga, checkedAt: at, status: .answered, items: (0..<3).map { offset in
+                        .init(date: at.addingTimeInterval(-Double(offset + 1) * 3600), title: "Synthetic news for " + symbol,
+                              snippet: cases[(index + offset) % cases.count], link: nil, sentiment: nil, source: "Synthetic benchmark provider")
+                    })])
+                }, next: { _, at in
+                    if index.isMultiple(of: 3) { return .unavailable }
+                    return .answered(.init(date: at.addingTimeInterval(Double(3 + index % 10) * 86_400), confirmed: index.isMultiple(of: 2)))
+                }, model: { request in
+                    if request.httpMethod == "POST" {
+                        posts.append((try #require(request.url), try #require(request.httpBody)))
+                        let content = #"{"evidence":["F1"],"action":"Hold","reason":"Synthetic supporting case.","risk":"Synthetic uncertainty remains."}"#
+                        return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.lmStudioModel,
+                            "choices": [["message": ["content": content], "finish_reason": "stop"]]]), request)
+                    }
+                    try #require(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
+                    return Self.ok(Data(inventory.utf8), request)
+                })
+            try #require(result.verdict != nil && posts.count == 1)
+            let (url, body) = posts[0]
+            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let messages = try #require(object["messages"] as? [[String: String]])
+            try #require(object["max_tokens"] as? Int == 192 && object["model"] as? String == Server.lmStudioModel)
+            try #require(messages.first?["content"] == horizon.instructions
+                         && messages.last?["content"] == StockSageAIAssessment.prompt(facts: result.facts))
+            try #require(object["response_format"] != nil && result.facts.count > 10)
+            requests.append(.init(id: symbol + (horizon == .week ? ".week" : ".fortnight"), symbol: symbol,
+                horizon: horizon.rawValue, url: url.absoluteString, body: body, facts: result.facts,
+                inputUTF8Bytes: messages.reduce(0) { $0 + ($1["content"] ?? "").precomposedStringWithCanonicalMapping.utf8.count }))
+        }
+        let manifest = Manifest(version: 1, synthetic: true,
+            source: "\(#fileID): injected gather/assess; pair with native gate source receipt. Sixteen model requests, not a full-scan benchmark.",
+            generatedAt: Date().ISO8601Format(), model: Server.lmStudioModel, outputTokens: Research.researchOutputTokens,
+            contextTokens: Server.researchContextTokens, requests: requests)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        print("THROUGHPUT_EXPORTED \(requests.count) synthetic research requests; normalized input bytes \(requests.map(\.inputUTF8Bytes))")
+    }
+
     // MARK: Fixtures
 
     /// A Massive daily-aggregate payload with enough completed prior-day bars to pass the
     /// 30-bar / four-day-recency gate. Prices trend gently so indicators are well defined.
-    private static func historyPayload(bars: Int = 90, endingDaysAgo: Int = 1) -> Data {
+    private static func historyPayload(ticker: String = "ACME", baseClose: Double = 40,
+                                       bars: Int = 90, endingDaysAgo: Int = 1) -> Data {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
         var lastDay = calendar.date(byAdding: .day, value: -endingDaysAgo,
@@ -46,13 +165,13 @@ struct StockSageHorizonAnalyzeTests {
             let day = calendar.date(byAdding: .day, value: -(bars - 1 - index), to: lastDay)!
             // Midday New York so the bar lands unambiguously inside its own session date.
             let stamp = calendar.date(byAdding: .hour, value: 13, to: day)!
-            let close = 40.0 + Double(index) * 0.10
+            let close = baseClose + Double(index) * 0.10
             rows.append(["t": Int(stamp.timeIntervalSince1970 * 1_000),
                          "o": close - 0.20, "h": close + 0.35, "l": close - 0.40,
                          "c": close, "v": 1_500_000 + Double(index) * 1_000])
         }
         return try! JSONSerialization.data(withJSONObject: [
-            "status": "OK", "ticker": "ACME", "adjusted": true,
+            "status": "OK", "ticker": ticker, "adjusted": true,
             "resultsCount": rows.count, "results": rows,
         ])
     }
@@ -157,6 +276,130 @@ struct StockSageHorizonAnalyzeTests {
         #expect(!capture.isFresh(at: capture.at.addingTimeInterval(301)))
         #expect(!capture.isFresh(at: capture.at.addingTimeInterval(-1)))
         #expect(!capture.isFresh(at: capture.context.asOf.addingTimeInterval(-0.001)))
+    }
+
+    @Test func preparedAnalysesKeepTwoRealCapturesIsolatedAcrossInterleavedHorizons() async throws {
+        let name = "stocksage.research.prepared-captures.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let config = try #require(Server.config(url: Server.defaultURL, model: Server.defaultModel))
+        var providerCalls: [String: Int] = [:]
+        var prompts: [String: String] = [:]
+        var held: [String: CheckedContinuation<Void, Never>] = [:]
+        var tasks: [Task<Research.Result, Never>] = []
+        var activeModels = 0, maximumActiveModels = 0
+        defer {
+            tasks.forEach { $0.cancel() }
+            for continuation in held.values { continuation.resume() }
+            held.removeAll()
+        }
+
+        func gather(_ symbol: String, baseClose: Double) async throws -> (Research.Gathered, Research.Capture) {
+            let gathered = await Research.gather(Self.listing(symbol), store: store, key: "fixture", allowed: { true },
+                companyObservations: [:], historyTransport: { request in
+                    providerCalls[symbol + ".history", default: 0] += 1
+                    #expect(request.url?.path.contains("/\(symbol)/") == true)
+                    return Self.ok(Self.historyPayload(ticker: symbol, baseClose: baseClose), request)
+                }, benzingaSnapshot: { ticker, at in
+                    #expect(ticker == symbol)
+                    providerCalls[symbol + ".benzinga", default: 0] += 1
+                    return .init(symbol: ticker, capturedAt: at, credentialGeneration: nil, pages: [])
+                }, newsObservation: { ticker, _, _ in
+                    #expect(ticker == symbol)
+                    providerCalls[symbol + ".news", default: 0] += 1
+                    return .init(attempts: [])
+                }, nextEarnings: { ticker, at in
+                    #expect(ticker == symbol)
+                    providerCalls[symbol + ".earnings", default: 0] += 1
+                    return .init(outcome: .answered(nil), checkedAt: at, recordedAt: at)
+                }, filingsObservation: { ticker, at in
+                    #expect(ticker == symbol)
+                    providerCalls[symbol + ".filings", default: 0] += 1
+                    return .init(checkedAt: at, outcome: .answered, filings: [])
+                }, evidenceIsCurrent: { _ in true }, selectionFact: "Immutable source marker for \(symbol)")
+            guard case .captured(let capture) = gathered else {
+                Issue.record("Expected a real isolated capture for \(symbol)")
+                throw URLError(.cannotParseResponse)
+            }
+            return (gathered, capture)
+        }
+
+        func prepared(_ gathered: Research.Gathered, symbol: String) -> Research.Analysis {
+            Research.preparedAnalysis(gathered, config: config, isOllama: true, allowed: { true },
+                modelTransport: { request in
+                    let data = try #require(request.httpBody)
+                    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+                    let messages = try #require(object["messages"] as? [[String: String]])
+                    let system = try #require(messages.first { $0["role"] == "system" }?["content"])
+                    let user = try #require(messages.first { $0["role"] == "user" }?["content"])
+                    let horizon = try #require(Research.Horizon.allCases.first {
+                        user.contains("Requested holding horizon: \($0.rawValue).")
+                    })
+                    #expect(system.contains("for a \(horizon.rawValue) holding horizon"))
+                    #expect(user.contains("Symbol: \(symbol)."))
+                    #expect(user.contains("Immutable source marker for \(symbol)"))
+                    let other = symbol == "ACME" ? "BETA" : "ACME"
+                    #expect(!user.contains("Symbol: \(other).") && !user.contains("Immutable source marker for \(other)"))
+                    let key = symbol + "." + horizon.id
+                    #expect(prompts[key] == nil, "Each captured symbol/horizon must reach the model once")
+                    prompts[key] = user
+                    activeModels += 1
+                    maximumActiveModels = max(maximumActiveModels, activeModels)
+                    defer { activeModels -= 1 }
+                    await withCheckedContinuation { held[key] = $0 }
+                    return Self.ok(Self.verdictPayload(), request)
+                }, evidenceIsCurrent: { _ in true })
+        }
+
+        func waitFor(_ symbol: String, _ horizon: Research.Horizon) async throws {
+            let key = symbol + "." + horizon.id
+            for _ in 0..<100 where held[key] == nil { try await Task.sleep(for: .milliseconds(5)) }
+            try #require(held[key] != nil, "Expected the injected model request for \(key)")
+        }
+        func release(_ symbol: String, _ horizon: Research.Horizon) throws {
+            let removed = held.removeValue(forKey: symbol + "." + horizon.id)
+            let continuation = try #require(removed)
+            continuation.resume()
+        }
+
+        let (gatheredA, captureA) = try await gather("ACME", baseClose: 40)
+        let analysisA = prepared(gatheredA, symbol: "ACME")
+        let aWeek = Task { await analysisA(.week) }; tasks.append(aWeek)
+        try await waitFor("ACME", .week)
+        // The producer gathers B while A's model request is still in flight.
+        let (gatheredB, captureB) = try await gather("BETA", baseClose: 140)
+        let analysisB = prepared(gatheredB, symbol: "BETA")
+        let bWeek = Task { await analysisB(.week) }; tasks.append(bWeek)
+        try await waitFor("BETA", .week)
+        #expect(activeModels == 2)
+
+        try release("BETA", .week)
+        let bFirst = await bWeek.value
+        let bFortnight = Task { await analysisB(.fortnight) }; tasks.append(bFortnight)
+        try await waitFor("BETA", .fortnight)
+        try release("ACME", .week)
+        let aFirst = await aWeek.value
+        let aFortnight = Task { await analysisA(.fortnight) }; tasks.append(aFortnight)
+        try await waitFor("ACME", .fortnight)
+        try release("ACME", .fortnight)
+        try release("BETA", .fortnight)
+        let aSecond = await aFortnight.value, bSecond = await bFortnight.value
+
+        for (symbol, capture, results) in [("ACME", captureA, [aFirst, aSecond]), ("BETA", captureB, [bFirst, bSecond])] {
+            for stage in ["history", "benzinga", "news", "earnings", "filings"] {
+                #expect(providerCalls[symbol + "." + stage] == 1)
+            }
+            for (result, horizon) in zip(results, Research.Horizon.allCases) {
+                #expect(result.verdict != nil && result.at == capture.at)
+                #expect(result.referenceClose?.value == capture.referenceClose.value && result.referenceClose?.at == capture.referenceClose.at)
+                #expect(result.coverage == capture.coverage)
+                #expect(result.facts.contains("Immutable source marker for \(symbol)"))
+                #expect(result.facts.contains { $0.contains("Requested holding horizon: \(horizon.rawValue).") })
+            }
+        }
+        #expect(captureA.referenceClose.value != captureB.referenceClose.value)
+        #expect(prompts.count == 4 && maximumActiveModels == 2 && activeModels == 0)
     }
 
     @Test(arguments: [false, true]) func companyFallbackDistinguishesFreshFromStaleDuringThrottle(stale: Bool) async throws {
