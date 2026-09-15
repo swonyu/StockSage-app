@@ -773,6 +773,78 @@ struct StockSageHorizonAnalyzeTests {
         #expect(result.note.localizedCaseInsensitiveContains("output limit"))
     }
 
+    @Test func nearContextResearchReservesTheSameEvidenceOutputRetryBeforeFitting() async throws {
+        // Exercise analyze(), its provider capture, whole-record fitter and native strict
+        // completion path. The managed fixture avoids dependence on the global web setting;
+        // both managed LM Studio and RunPod use the same strict output-retry contract.
+        let baseSnippet = "Synthetic boundary disclosure."
+        var snippet = baseSnippet
+        func news(_ at: Date) -> StockSageNewsService.Observation {
+            .init(attempts: [.init(provider: .massive, checkedAt: at, status: .answered, items: [
+                .init(date: at, title: "Synthetic boundary source", snippet: snippet, link: nil,
+                    sentiment: nil, source: "Synthetic provider", articleIdentity: "boundary-source")
+            ])])
+        }
+        func reply(_ request: URLRequest, truncated: Bool = false) throws -> (Data, URLResponse) {
+            if request.httpMethod == "GET" {
+                #expect(request.url?.path == "/api/v1/models")
+                let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+                    with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":16384}}]"#)
+                return Self.ok(Data(inventory.utf8), request)
+            }
+            let content = truncated ? #"{"reason":"Unfinished"#
+                : #"{"reason":"The evidence is mixed.","risk":"Price direction remains uncertain.","evidence":["F1"],"action":"Hold"}"#
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.lmStudioModel,
+                "choices": [["message": ["content": content], "finish_reason": truncated ? "length" : "stop"]]]), request)
+        }
+        var calibrationMessages: [[String: String]] = []
+        let calibration = await run(isOllama: false, news: news, model: { request in
+            if request.httpMethod == "POST" {
+                let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+                calibrationMessages = try #require(body["messages"] as? [[String: String]])
+            }
+            return try reply(request)
+        })
+        try #require(calibration.verdict != nil)
+        let system = try #require(calibrationMessages.first { $0["role"] == "system" }?["content"])
+        let originalUser = try #require(calibrationMessages.first { $0["role"] == "user" }?["content"])
+        let firstBudget = Server.maximumUserBytes(system: system, outputTokens: 192, contextTokens: 16384)
+        let retryBudget = Server.maximumUserBytes(system: system, outputTokens: 384, contextTokens: 16384)
+        let target = (firstBudget + retryBudget) / 2
+        try #require(originalUser.components(separatedBy: baseSnippet).count == 2 && target > originalUser.utf8.count)
+        snippet += String(repeating: "x", count: target - originalUser.utf8.count)
+        let unreserved = originalUser.replacingOccurrences(of: baseSnippet, with: snippet)
+        #expect(Server.promptFits(system: system, user: unreserved, outputTokens: 192, contextTokens: 16384))
+        #expect(!Server.promptFits(system: system, user: unreserved, outputTokens: 384, contextTokens: 16384))
+
+        var bodies: [[String: Any]] = []
+        let result = await run(isOllama: false, news: news, model: { request in
+            if request.httpMethod == "POST" {
+                bodies.append(try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any]))
+            }
+            return try reply(request, truncated: request.httpMethod == "POST" && bodies.count == 1)
+        })
+        #expect(bodies.compactMap { $0["max_tokens"] as? Int } == [192, 384],
+                "The initial evidence fit must reserve the existing same-evidence retry")
+        try #require(bodies.count == 2)
+        #expect(result.verdict != nil && result.verdict?.action == .hold)
+        bodies[0].removeValue(forKey: "max_tokens"); bodies[1].removeValue(forKey: "max_tokens")
+        #expect(try JSONSerialization.data(withJSONObject: bodies[0], options: [.sortedKeys])
+            == JSONSerialization.data(withJSONObject: bodies[1], options: [.sortedKeys]),
+            "Retry must preserve the exact messages and response schema")
+        let originalReceipt = try #require(calibration.evidenceReceipt)
+        let receipt = try #require(result.evidenceReceipt)
+        #expect(receipt.requiredKeys == originalReceipt.requiredKeys)
+        #expect(Set(receipt.requiredKeys).isSubset(of: Set(receipt.offeredKeys)))
+        #expect(!receipt.omittedKeys.isEmpty && Set(receipt.omittedKeys).isDisjoint(with: Set(receipt.requiredKeys)))
+        #expect(Set(receipt.omittedKeys).isSubset(of: Set(originalReceipt.offeredKeys)))
+        #expect(Set(receipt.offeredKeys).isDisjoint(with: Set(receipt.omittedKeys)))
+        #expect(receipt.offeredKeys.count == result.facts.count
+            && receipt.omittedKeys.count == calibration.facts.count - result.facts.count)
+        #expect(result.facts.contains { $0.hasPrefix("Earnings holding-window check:") })
+        #expect(result.note.contains("optional evidence records were omitted"))
+    }
+
     @Test func aModelFailureYieldsNoOpinionAndSaysSo() async throws {
         let result = await run(model: { _ in throw URLError(.timedOut) })
         #expect(result.verdict == nil)

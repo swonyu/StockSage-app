@@ -216,7 +216,7 @@ enum StockSageAIAssessment {
 
         /// Preserve every compiled fact; fit only whole optional messages and capture exactly
         /// which W IDs were offered so omitted claims cannot pass later validation.
-        func fittedPrompt() -> (context: Self, user: String)? {
+        func fittedPrompt(outputTokens: Int = 240) -> (context: Self, user: String)? {
             let numbered = StockSageAIAssessment.prompt(facts: facts)
             func leads(_ count: Int) -> StockSageResearchLeads.Snapshot? {
                 research.map { .init(importedAt: $0.importedAt, timezone: $0.timezone,
@@ -224,7 +224,7 @@ enum StockSageAIAssessment {
             }
             func user(_ count: Int) -> String { numbered + "\n\n" + (leads(count)?.prompt ?? "") }
             guard let fitted = StockSageLocalModelServer.fit(optionalCount: research?.messages.count ?? 0,
-                outputTokens: 240, contextTokens: StockSageLocalModelServer.researchContextTokens,
+                outputTokens: outputTokens, contextTokens: StockSageLocalModelServer.researchContextTokens,
                 assemble: { (StockSageAIAssessment.instructions, user($0)) }) else { return nil }
             var captured = self
             captured.research = leads(fitted.optionalKept)
@@ -745,7 +745,7 @@ final class StockSageAIAssessments: ObservableObject {
             errors[symbol] = "AI not assessed: a known-source dated quote and recent analysis are required; refresh this idea."
             return
         }
-        guard let fitted = context.fittedPrompt() else {
+        guard let fitted = context.fittedPrompt(outputTokens: config.reservedOutputTokens(for: 240)) else {
             errors[symbol] = "Mandatory evidence exceeds the model context budget; refresh a smaller evidence snapshot."
             return
         }

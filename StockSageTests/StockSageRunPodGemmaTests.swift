@@ -122,11 +122,12 @@ import Testing
         }
     }
 
-    @Test func truncatedReplyRetriesTheSameEvidenceThenVerifiesRemoteContext() async throws {
+    @Test(arguments: [192, 384])
+    func truncatedReplyRetriesTheSameEvidenceThenVerifiesRemoteContext(outputLimit: Int) async throws {
         let schema = try #require(StockSageAIAssessment.responseSchema(facts: ["Retained fact."]))
         var bodies: [[String: Any]] = [], paths: [String] = []
         let completion = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "F1: Retained fact.",
-            maxTokens: 192, contextTokens: 16384, jsonSchema: schema, externalAllowed: { true }, transport: { request in
+            maxTokens: outputLimit, contextTokens: 16384, jsonSchema: schema, externalAllowed: { true }, transport: { request in
                 paths.append(request.url!.path)
                 #expect(request.url?.port == 18080)
                 if request.httpMethod == "GET" { return try response(request, properties()) }
@@ -141,7 +142,7 @@ import Testing
         #expect(answer.text == "Complete answer." && answer.model == S.gemmaModel && answer.diagnostic.outputLimitRetries == 1)
         #expect(paths == ["/v1/chat/completions", "/v1/chat/completions", "/props"])
         try #require(bodies.count == 2)
-        #expect(bodies[0]["max_tokens"] as? Int == 192 && bodies[1]["max_tokens"] as? Int == 384)
+        #expect(bodies[0]["max_tokens"] as? Int == outputLimit && bodies[1]["max_tokens"] as? Int == outputLimit * 2)
         bodies[0].removeValue(forKey: "max_tokens"); bodies[1].removeValue(forKey: "max_tokens")
         #expect(try JSONSerialization.data(withJSONObject: bodies[0], options: .sortedKeys)
             == JSONSerialization.data(withJSONObject: bodies[1], options: .sortedKeys))

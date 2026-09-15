@@ -1040,7 +1040,7 @@ final class StockSageHorizonResearch: ObservableObject {
                    availability: earningsWindow.relation == .unknown ? .unknown : .available)]
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optional.map(\.text),
             mandatory: mandatory.map(\.text), system: { _ in horizon.instructions },
-            optionalKeys: optional.map(\.key), outputTokens: outputTokens) else {
+            optionalKeys: optional.map(\.key), outputTokens: config.reservedOutputTokens(for: outputTokens)) else {
             return result("Evidence could not fit the model context budget without dropping a mandatory horizon or source-status fact; no opinion.", facts: mandatory.map(\.text))
         }
         let offered = Array(optional.prefix(fitted.optionalKept)) + mandatory

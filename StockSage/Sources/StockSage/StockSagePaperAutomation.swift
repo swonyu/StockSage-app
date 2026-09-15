@@ -899,7 +899,7 @@ final class StockSagePaperAutomation: ObservableObject {
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
                 optional: allFacts, mandatory: executionFacts,
                 system: { Self.researchInstructions + entryInstruction($0) },
-                outputTokens: Self.researchOutputTokens) else {
+                outputTokens: config.reservedOutputTokens(for: Self.researchOutputTokens)) else {
             recordFailure("Research evidence could not be reduced to the model's context budget without dropping a mandatory execution fact. No paper order. Scheduled exits remain active.",
                           symbol: symbol, at: Date(), facts: partialFacts); return
         }

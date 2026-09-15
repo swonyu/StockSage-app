@@ -117,12 +117,13 @@ import Foundation
             scan.results[$0]?.verdict?.action == .buy || scan.results[$0]?.verdict?.action == .strongBuy
         }.sorted()
         let system = instructions(horizon: horizon)
+        let outputReservation = config.reservedOutputTokens(for: 256)
         var candidates: [Candidate] = []
         for symbol in names {
             guard let result = scan.results[symbol], let candidate = packet(symbol: symbol, result: result),
                   valid(candidate, at: Date()) else { return .failure(.invalidCandidates) }
             // Preflight every mandatory record, including late entrants, before any request.
-            guard fits([candidate.mandatory], horizon: horizon, system: system) else { return .failure(.contextBudget) }
+            guard fits([candidate.mandatory], horizon: horizon, system: system, outputTokens: outputReservation) else { return .failure(.contextBudget) }
             candidates.append(candidate)
         }
         let bySymbol = Dictionary(uniqueKeysWithValues: candidates.map { ($0.symbol, $0) })
@@ -139,11 +140,11 @@ import Foundation
             guard end <= candidates.count else { return .failure(.contextBudget) }
             batch.append(contentsOf: candidates[cursor..<end].map(\.mandatory))
             batch.sort { $0.symbol < $1.symbol }
-            guard fits(batch, horizon: horizon, system: system) else { return .failure(.contextBudget) }
+            guard fits(batch, horizon: horizon, system: system, outputTokens: outputReservation) else { return .failure(.contextBudget) }
             cursor = end
             while cursor < candidates.count {
                 let expanded = (batch + [candidates[cursor].mandatory]).sorted { $0.symbol < $1.symbol }
-                guard fits(expanded, horizon: horizon, system: system) else { break }
+                guard fits(expanded, horizon: horizon, system: system, outputTokens: outputReservation) else { break }
                 batch = expanded
                 cursor += 1
             }
@@ -151,10 +152,10 @@ import Foundation
             // Preserve full evidence packs whenever they fit. Otherwise give each candidate
             // the same initial byte allowance; one large citation cannot starve its peers.
             let originals = batch.compactMap { bySymbol[$0.symbol] }
-            if fits(originals, horizon: horizon, system: system) { batch = originals }
+            if fits(originals, horizon: horizon, system: system, outputTokens: outputReservation) { batch = originals }
             else {
                 guard let mandatory = input(batch, horizon: horizon) else { return .failure(.invalidCandidates) }
-                let budget = StockSageLocalModelServer.maximumUserBytes(system: system, outputTokens: 256,
+                let budget = StockSageLocalModelServer.maximumUserBytes(system: system, outputTokens: outputReservation,
                                                                        contextTokens: StockSageLocalModelServer.researchContextTokens)
                 let allowance = max(0, budget - mandatory.precomposedStringWithCanonicalMapping.utf8.count) / batch.count
                 let encoder = JSONEncoder()
@@ -164,7 +165,7 @@ import Foundation
                         guard let record = try? encoder.encode(fact), record.count + 1 <= allowance - used else { continue }
                         batch[position].citedFacts.append(fact)
                         batch[position].omittedCitedFacts -= 1
-                        if fits(batch, horizon: horizon, system: system) { used += record.count + 1 }
+                        if fits(batch, horizon: horizon, system: system, outputTokens: outputReservation) { used += record.count + 1 }
                         else {
                             batch[position].citedFacts.removeLast()
                             batch[position].omittedCitedFacts += 1
@@ -334,9 +335,9 @@ import Foundation
         return String(data: data, encoding: .utf8)
     }
 
-    private nonisolated static func fits(_ candidates: [Candidate], horizon: StockSageHorizonResearch.Horizon, system: String) -> Bool {
+    private nonisolated static func fits(_ candidates: [Candidate], horizon: StockSageHorizonResearch.Horizon, system: String, outputTokens: Int) -> Bool {
         guard let user = input(candidates, horizon: horizon) else { return false }
-        return StockSageLocalModelServer.promptFits(system: system, user: user, outputTokens: 256,
+        return StockSageLocalModelServer.promptFits(system: system, user: user, outputTokens: outputTokens,
                                                     contextTokens: StockSageLocalModelServer.researchContextTokens)
     }
 

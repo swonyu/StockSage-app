@@ -26,7 +26,14 @@ import Synchronization
 // network path just isn't loopback there.
 enum StockSageLocalModelServer {
     /// Facts go only to the configured endpoint, never to a redirect target; no shared cookies.
-    private static var session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+    private static func inferenceSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpMaximumConnectionsPerHost = 8
+        return URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
+    }
+    private static var session = inferenceSession()
+    // Short readiness checks must not queue behind long-running inference POSTs.
+    private static var metadataSession = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
     private(set) static var isShuttingDown = false
     private static var lifecycleRevision = UUID()
 
@@ -40,13 +47,15 @@ enum StockSageLocalModelServer {
         let wasBusy = await inFlight.current > 0
         let hadActiveWork = wasBusy || loadingWasActive
         session.invalidateAndCancel()
+        metadataSession.invalidateAndCancel()
         return hadActiveWork
     }
 
     static func cancelShutdown() {
         lifecycleRevision = UUID()
         if !StockSageStore.isRunningTests { UserDefaults.standard.set(UUID().uuidString, forKey: revisionKey) }
-        session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+        session = inferenceSession()
+        metadataSession = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
         isShuttingDown = false
     }
 
@@ -298,6 +307,10 @@ enum StockSageLocalModelServer {
                 && isRunPodEndpoint && ["", "/"].contains(baseURL.path)
         }
         nonisolated var requiresStrictOutput: Bool { isManagedLMStudio || isRunPodGemma }
+        /// Reserve the existing same-evidence retry before fitting optional records.
+        nonisolated func reservedOutputTokens(for initial: Int) -> Int {
+            requiresStrictOutput && (1...512).contains(initial) ? initial * 2 : initial
+        }
         // SSH ends on loopback, but the selected RunPod model receives evidence off-device.
         nonisolated var requiresExternalAccess: Bool { isRunPodEndpoint || !StockSageLocalModelServer.isLoopback(baseURL) }
         nonisolated var supportsLocalUnload: Bool {
@@ -379,7 +392,7 @@ enum StockSageLocalModelServer {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.5
         let limit = clock().advanced(by: .milliseconds(2500))
-        let requestSession = session
+        let requestSession = metadataSession
         do {
             let (data, response) = try await Pending<(Data, URLResponse)>().run(
                 deadline: min(deadline ?? limit, limit), now: clock, sleepUntil: sleepUntil) {
@@ -1141,14 +1154,15 @@ enum StockSageLocalModelServer {
                     // One same-evidence restart for a confirmed output limit, never a continuation
                     // stitched onto an unfinished verdict. Reserve the extra output before sending;
                     // both attempts and context verification retain the ORIGINAL caller deadline.
-                    if c.requiresStrictOutput, attempt == 0, reply.diagnostic.finish == .tokenLimit,
-                       (1...512).contains(maxTokens), clock() < deadline,
-                       promptFits(system: system, user: user, outputTokens: maxTokens * 2, contextTokens: contextTokens) {
+                    let retryOutputTokens = c.reservedOutputTokens(for: maxTokens)
+                    if attempt == 0, reply.diagnostic.finish == .tokenLimit,
+                       retryOutputTokens > maxTokens, clock() < deadline,
+                       promptFits(system: system, user: user, outputTokens: retryOutputTokens, contextTokens: contextTokens) {
                         var diagnostic = enriched(reply.diagnostic)
                         diagnostic.httpStatus = http.statusCode
                         await observe(.finished, diagnostic: diagnostic)
                         if attemptObserver != nil, let failure = failureAfterSuspension() { return await failed(failure) }
-                        outputLimit = maxTokens * 2
+                        outputLimit = retryOutputTokens
                         continue
                     }
                     // Truncation stays OBSERVATIONAL here, as this seam has always documented:
