@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+import CryptoKit
 
 /// M6 contracts: https://massive.com/docs/rest/partners/benzinga/{analyst-ratings,corporate-guidance}
 /// and /docs/rest/stocks/{filings/8-k-disclosures,filings/form-4,corporate-actions/dividends}.
@@ -7,6 +8,7 @@ import CoreFoundation
 @MainActor
 enum StockSageMassiveEvents {
     nonisolated static let pageLimit = 10
+    nonisolated static let insiderRecordLimit = 10
     nonisolated enum Feed: String, Codable, Sendable, CaseIterable {
         case filing8K, ratings, guidance, dividends, insider
 
@@ -71,6 +73,14 @@ enum StockSageMassiveEvents {
         let headline: String
         let details: [String]
         let link: URL?
+        /// Optional for saved single-event caches. Hash raw transaction fields before display rounding.
+        var transactionIdentity: String? = nil
+        var insiderIdentity: String {
+            if let transactionIdentity { return transactionIdentity }
+            let fields = [id, symbol, feed.rawValue, String(date.timeIntervalSince1970), headline] + details + [link?.absoluteString ?? ""]
+            return SHA256.hash(data: Data(fields.map { "\($0.utf8.count):\($0)" }.joined().utf8))
+                .map { String(format: "%02x", $0) }.joined()
+        }
     }
     nonisolated struct Observation: Codable, Sendable, Equatable {
         nonisolated enum Outcome: String, Codable, Sendable { case answered, unavailable }
@@ -81,6 +91,9 @@ enum StockSageMassiveEvents {
         let event: Event?
         var failure: Failure? = nil
         var credentialRevision: String? = nil
+        /// nil means the legacy single-event selection, whose omitted count was not recorded.
+        var insiderEvents: [Event]? = nil
+        var insiderOmittedRecordCount: Int? = nil
         var key: String { symbol + "|" + feed.rawValue }
 
         func fresh(at now: Date, credentialRevision expected: String? = nil) -> Bool {
@@ -106,6 +119,9 @@ enum StockSageMassiveEvents {
         guard observation.outcome == .answered else {
             return "\(feed.source): unavailable at \(date), not an empty result. "
                 + (observation.failure?.message ?? "Failure reason not recorded; await the next due check.")
+        }
+        if feed == .insider, let events = observation.insiderEvents {
+            return "\(feed.source): checked \(date); \(events.count) retained purchase/sale records, \(observation.insiderOmittedRecordCount ?? 0) omitted by the record limit in the queried \(feed.days)-day filing window. Amendments remain labeled; records are not a net-trade total."
         }
         return "\(feed.source): checked \(date); " + (observation.event == nil
             ? "no qualifying event in the queried \(feed.days)-day window."
@@ -201,11 +217,11 @@ enum StockSageMassiveEvents {
         let page = try parsePage(data, feed: feed, symbol: symbol, now: now,
                                  windowDays: windowDays, requireMateriality: requireMateriality)
         guard page.next == nil else { throw Failure.incompleteResponse }
-        return page.event
+        return selected(page.events, feed: feed)
     }
     private nonisolated static func parsePage(_ data: Data, feed: Feed, symbol: String, now: Date,
                                               windowDays: Int? = nil,
-                                              requireMateriality: Bool = true) throws -> (event: Event?, next: String?) {
+                                              requireMateriality: Bool = true) throws -> (events: [Event], next: String?) {
         guard data.count <= 2_000_000 else { throw Failure.responseTooLarge }
         guard StockSageMassive.covers(symbol), now.timeIntervalSince1970.isFinite,
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -228,14 +244,26 @@ enum StockSageMassiveEvents {
             if let event = try event(row, feed: feed, symbol: symbol.uppercased(), date: date,
                                      requireMateriality: requireMateriality) { events.append(event) }
         }
-        return (selected(events, feed: feed), next)
+        return (events, next)
     }
     private nonisolated static func selected(_ events: [Event], feed: Feed) -> Event? {
-        events.min {
-            if $0.date != $1.date { return feed == .dividends ? $0.date < $1.date : $0.date > $1.date }
-            // Stable content tie-break also handles multiple disclosures/transactions in a filing.
-            return ($0.id + $0.headline + $0.details.joined()) < ($1.id + $1.headline + $1.details.joined())
+        events.min { precedes($0, $1, feed: feed) }
+    }
+    private nonisolated static func precedes(_ lhs: Event, _ rhs: Event, feed: Feed) -> Bool {
+        if lhs.date != rhs.date { return feed == .dividends ? lhs.date < rhs.date : lhs.date > rhs.date }
+        let left = lhs.id + lhs.headline + lhs.details.joined()
+        let right = rhs.id + rhs.headline + rhs.details.joined()
+        return left == right && feed == .insider ? lhs.insiderIdentity < rhs.insiderIdentity : left < right
+    }
+    private nonisolated static func answered(_ events: [Event], feed: Feed, symbol: String, now: Date) -> Observation {
+        guard feed == .insider else {
+            return .init(symbol: symbol, feed: feed, checkedAt: now, outcome: .answered, event: selected(events, feed: feed))
         }
+        var seen = Set<String>()
+        let distinct = events.filter { seen.insert($0.insiderIdentity).inserted }.sorted { precedes($0, $1, feed: feed) }
+        let retained = Array(distinct.prefix(insiderRecordLimit))
+        return .init(symbol: symbol, feed: feed, checkedAt: now, outcome: .answered, event: retained.first,
+            insiderEvents: retained, insiderOmittedRecordCount: distinct.count - retained.count)
     }
 
     /// Same trust boundary as MassiveTicks: bearer auth never follows an arbitrary vendor URL.
@@ -364,7 +392,18 @@ enum StockSageMassiveEvents {
                 details.append(flag.boolValue ? "Reported under a Rule 10b5-1 plan." : "No Rule 10b5-1 plan reported in this record.")
             } else { details.append("Rule 10b5-1 plan status not supplied.") }
         }
-        return Event(id: id, symbol: symbol, feed: feed, date: date, headline: headline, details: details, link: link)
+        var result = Event(id: id, symbol: symbol, feed: feed, date: date, headline: headline, details: details, link: link)
+        if feed == .insider {
+            // A filing accession alone is not a transaction identity. Preserve source precision,
+            // even when two prices/shares render to the same eight significant digits.
+            let keys = ["accession_number", "filing_date", "transaction_date", "transaction_code",
+                        "transaction_shares", "transaction_price_per_share", "owner_name", "officer_title",
+                        "form_type", "aff_10b5_one", "filing_url"]
+            let fields = Dictionary(uniqueKeysWithValues: keys.map { ($0, row[$0] ?? NSNull()) })
+            let bytes = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+            result.transactionIdentity = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        }
+        return result
     }
 
     private nonisolated static func numberID(_ value: Any?) throws -> String? {
@@ -384,10 +423,11 @@ enum StockSageMassiveEvents {
         if case .failure(let failure) = await get(feed, symbol: "AAPL", now: Date(), limit: 1) { return failure }
         return nil
     }
-    static func fetch(_ feed: Feed, symbol: String, now: Date = Date()) async -> Observation {
+    static func fetch(_ feed: Feed, symbol: String, now: Date = Date(),
+                      allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Observation {
         let revision = StockSageMassive.credentialRevision()
         var result = await fetch(feed, symbol: symbol, now: now, key: StockSageMassive.apiKey) {
-            await get(feed, request: $0, now: Date(), revision: revision)
+            await get(feed, request: $0, now: Date(), revision: revision, allowed: allowed)
         }
         result.credentialRevision = revision ?? ""
         return result
@@ -402,7 +442,8 @@ enum StockSageMassiveEvents {
         // Raise only on measured need; a cap/error never publishes a partial or checked-empty result.
         var visited: Set<String> = []
         var bytes = 0
-        var best: Event?
+        // Bounded by ten pages of at most 100 rows and the aggregate byte limit.
+        var events: [Event] = []
         do {
             for pageIndex in 0..<pageLimit {
                 guard !Task.isCancelled else { throw Failure.cancelled }
@@ -412,9 +453,9 @@ enum StockSageMassiveEvents {
                 guard data.count <= 2_000_000 - bytes else { throw Failure.responseTooLarge }
                 bytes += data.count
                 let page = try parsePage(data, feed: feed, symbol: symbol, now: now)
-                best = selected([best, page.event].compactMap { $0 }, feed: feed)
+                events.append(contentsOf: page.events)
                 guard let next = page.next else {
-                    return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: .answered, event: best)
+                    return answered(events, feed: feed, symbol: symbol, now: now)
                 }
                 guard let next = nextRequest(next, feed: feed, key: key, pagesLoaded: pageIndex + 1, visited: visited) else {
                     throw Failure.incompleteResponse
@@ -428,8 +469,9 @@ enum StockSageMassiveEvents {
     }
     nonisolated static func observation(_ response: Result<Data, Failure>, feed: Feed, symbol: String, now: Date) -> Observation {
         do {
-            let event = try parse(response.get(), feed: feed, symbol: symbol, now: now)
-            return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: .answered, event: event)
+            let page = try parsePage(response.get(), feed: feed, symbol: symbol, now: now)
+            guard page.next == nil else { throw Failure.incompleteResponse }
+            return answered(page.events, feed: feed, symbol: symbol, now: now)
         } catch {
             return Observation(symbol: symbol, feed: feed, checkedAt: now, outcome: .unavailable,
                                event: nil, failure: error as? Failure ?? .invalidPayload)
@@ -483,12 +525,22 @@ nonisolated struct StockSageCompanyEventCache: Codable {
               cache.entries.count <= 10_000,
               cache.entries.allSatisfy({ record in
                   guard StockSageMassive.covers(record.symbol), record.checkedAt.timeIntervalSince1970.isFinite else { return false }
-                  guard let event = record.event else { return true }
-                  return record.outcome == .answered && event.symbol == record.symbol && event.feed == record.feed
+                  if let events = record.insiderEvents {
+                      guard record.feed == .insider, record.outcome == .answered,
+                            events.count <= StockSageMassiveEvents.insiderRecordLimit,
+                            events.first == record.event,
+                            Set(events.map(\.insiderIdentity)).count == events.count,
+                            let omitted = record.insiderOmittedRecordCount, (0...1_000).contains(omitted),
+                            events.allSatisfy({ StockSageMassiveEvents.inWindow($0.date, feed: .insider, now: record.checkedAt) }) else { return false }
+                  } else if record.insiderOmittedRecordCount != nil { return false }
+                  return (record.insiderEvents ?? record.event.map { [$0] } ?? []).allSatisfy { event in
+                      record.outcome == .answered && event.symbol == record.symbol && event.feed == record.feed
                       && event.date.timeIntervalSince1970.isFinite && event.id.utf8.count <= 256
                       && event.headline.utf8.count <= 1_024 && event.details.count <= 6
                       && event.details.allSatisfy { $0.utf8.count <= 2_048 }
+                      && (event.transactionIdentity.map { $0.count == 64 && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } } ?? true)
                       && (event.link == nil || StockSageMassiveEvents.sourceLink(event.link?.absoluteString, feed: event.feed) == event.link)
+                  }
               }) else { return nil }
         return cache
     }

@@ -161,7 +161,7 @@ struct CatalystsSection: View {
     /// restarts (it reads `@AppStorage`, not one-shot local state).
     private var isNonLoopbackConfig: Bool {
         guard let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel) else { return false }
-        return !StockSageLocalModelServer.isLoopback(config.baseURL)
+        return config.requiresExternalAccess
     }
 
     /// True only when an "Explain" press (or the auto-probe) would ACTUALLY reach out to that
@@ -448,6 +448,17 @@ struct CatalystsSection: View {
                 }
                 .pickerStyle(.menu)
                 #if os(macOS)
+                Button("Use RunPod GPU · Gemma 4 31B") {
+                    updateModelSetting("localServerOnly", key: StockSageLocalModelServer.backendKey)
+                    updateModelSetting(StockSageLocalModelServer.runPodURL, key: StockSageLocalModelServer.urlKey)
+                    updateModelSetting(StockSageLocalModelServer.gemmaModel, key: StockSageLocalModelServer.modelKey)
+                    automaticModelStartup = false
+                }
+                if StockSageLocalModelServer.config(url: serverURL, model: serverModel)?.isRunPodGemma == true {
+                    Text("Gemma runs on the RunPod GPU through your private connection. Research gathers Massive data and saves results on this Mac. The GPU server and connection must be running; there is no on-device fallback.")
+                        .font(.system(size: metadataSize)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Use LM Studio · Gemma 4 31B") {
                     updateModelSetting("localServerOnly", key: StockSageLocalModelServer.backendKey)
                     updateModelSetting(StockSageLocalModelServer.lmStudioURL, key: StockSageLocalModelServer.urlKey)
@@ -496,7 +507,7 @@ struct CatalystsSection: View {
                 Button(probing ? "Testing…" : "Test connection") { testConnection() }
                     .buttonStyle(.plain).touchHitArea().disabled(probing)
                     .font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
-                Text("On-device: \(onDeviceStatusLine(availability)) Local server: \(probe?.detail ?? "not tested yet.")")
+                Text("On-device: \(onDeviceStatusLine(availability)) Model server: \(probe?.detail ?? "not tested yet.")")
                     .font(.system(size: font11)).foregroundStyle(probeStatusColor)
                     .fixedSize(horizontal: false, vertical: true)
                 // The full [network-safety-warn-first] warning now renders unconditionally in the
@@ -536,7 +547,8 @@ struct CatalystsSection: View {
     /// meaninglessness is not a warning.
     @ViewBuilder
     private func nonLoopbackWarning(compact: Bool = false) -> some View {
-        Text(compact
+        let cloud = StockSageLocalModelServer.config(url: serverURL, model: serverModel)?.isRunPodGemma == true
+        Text(cloud ? "RunPod GPU: supplied research facts leave this Mac through your encrypted private connection." : compact
             ? "Not loopback — this will send the facts above over your network."
             : "Not loopback: the facts (symbol, price, stop, target) will leave this device "
                 + "over your network. Prefer 127.0.0.1 or a Tailscale address. Plain-HTTP LAN "

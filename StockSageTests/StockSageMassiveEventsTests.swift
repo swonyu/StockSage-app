@@ -149,11 +149,80 @@ struct StockSageMassiveEventsTests {
                 requests.append(request)
                 return .success(requests.count == 1 ? first : body(original))
             }
-            #expect(complete == expected)
+            #expect(complete.event == expected.event && complete.outcome == expected.outcome)
+            if feed == .insider { #expect(complete.insiderEvents?.count == 2) }
+            else { #expect(complete == expected) }
             #expect(requests.count == 2)
             #expect(requests.last?.url?.absoluteString == next)
             #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-only" })
         }
+    }
+
+    @Test @MainActor func insiderRetainsDistinctTransactionsAcrossPagesWithAnExplicitCap() async throws {
+        let rows = (1...12).map { index in
+            fixture(.insider).replacingOccurrences(of: #""transaction_shares":25"#, with: "\"transaction_shares\":\(index)")
+        }
+        let next = "https://api.massive.com" + E.Feed.insider.path + "?cursor=second"
+        var calls = 0
+        let record = await E.fetch(.insider, symbol: "AAPL", now: now, key: "fixture-only") { _ in
+            calls += 1
+            return .success(calls == 1
+                ? body(rows.prefix(7).joined(separator: ","), tail: ",\"next_url\":\"\(next)\"")
+                : body(rows.dropFirst(5).reversed().joined(separator: ",")))
+        }
+        let retained = try #require(record.insiderEvents)
+        #expect(calls == 2 && record.outcome == .answered && retained.count == 10)
+        #expect(Set(retained.map(\.id)).count == 1, "An accession can contain several transactions")
+        #expect(Set(retained.map(\.insiderIdentity)).count == 10)
+        #expect(record.insiderOmittedRecordCount == 2)
+        #expect(record.event == retained.first)
+        let reordered = E.observation(.success(body(rows.reversed().joined(separator: ","))), feed: .insider, symbol: "AAPL", now: now)
+        #expect(record == reordered)
+        #expect(E.statusLine(.insider, observation: record, now: now).contains("10 retained"))
+        #expect(E.statusLine(.insider, observation: record, now: now).contains("2 omitted"))
+    }
+
+    @Test func insiderIdentityPreservesRawPrecisionAndBothSidesWithoutChangingText() throws {
+        let buy = fixture(.insider)
+        let sale = buy.replacingOccurrences(of: #""transaction_code":"P""#, with: #""transaction_code":"S""#)
+            .replacingOccurrences(of: #""transaction_acquired_disposed":"A""#, with: #""transaction_acquired_disposed":"D""#)
+        let precise = [100.0000001, 100.0000002].map { value in
+            buy.replacingOccurrences(of: #""transaction_price_per_share":100"#, with: "\"transaction_price_per_share\":\(value)")
+        }
+        let amendment = buy.replacingOccurrences(of: #""form_type":"4""#, with: #""form_type":"4/A""#)
+        let record = E.observation(.success(body(([sale, amendment] + precise).joined(separator: ","))), feed: .insider, symbol: "AAPL", now: now)
+        let events = try #require(record.insiderEvents)
+        #expect(events.count == 4 && Set(events.map(\.insiderIdentity)).count == 4)
+        #expect(events.contains { $0.headline.contains("sale") })
+        #expect(events.contains { $0.details.contains("Amendment, not an additional transaction.") })
+        #expect(events.allSatisfy { $0.details.contains("Reported under a Rule 10b5-1 plan.") })
+        let preciseEvents = try precise.map { try #require(try E.parse(body($0), feed: .insider, symbol: "AAPL", now: now)) }
+        #expect(preciseEvents[0].details == preciseEvents[1].details)
+        #expect(preciseEvents[0].insiderIdentity != preciseEvents[1].insiderIdentity)
+    }
+
+    @Test func insiderExpansionDecodesLegacyAndValidatesEveryCachedTransaction() throws {
+        let selected = try #require(try E.parse(body(fixture(.insider)), feed: .insider, symbol: "AAPL", now: now))
+        let legacy = E.Observation(symbol: "AAPL", feed: .insider, checkedAt: now, outcome: .answered, event: selected)
+        var raw = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        raw.removeValue(forKey: "insiderEvents"); raw.removeValue(forKey: "insiderOmittedRecordCount")
+        var oldEvent = try #require(raw["event"] as? [String: Any]); oldEvent.removeValue(forKey: "transactionIdentity")
+        raw["event"] = oldEvent
+        let restored = try JSONDecoder().decode(E.Observation.self, from: JSONSerialization.data(withJSONObject: raw))
+        #expect(restored.insiderEvents == nil && restored.insiderOmittedRecordCount == nil)
+        #expect(restored.event?.headline == selected.headline && restored.event?.transactionIdentity == nil)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("insider-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let expanded = E.observation(.success(body(fixture(.insider))), feed: .insider, symbol: "AAPL", now: now)
+        #expect(StockSageCompanyEventCache(entries: [restored, expanded]).save(to: url))
+        #expect(StockSageCompanyEventCache.load(from: url)?.entries == [restored, expanded])
+        var corrupt = expanded
+        corrupt.insiderEvents = [selected, event(.insider, symbol: "MSFT")]
+        #expect(StockSageCompanyEventCache(entries: [corrupt]).save(to: url))
+        #expect(StockSageCompanyEventCache.load(from: url) == nil)
+        corrupt = expanded; corrupt.insiderOmittedRecordCount = -1
+        #expect(StockSageCompanyEventCache(entries: [corrupt]).save(to: url))
+        #expect(StockSageCompanyEventCache.load(from: url) == nil)
     }
 
     @Test @MainActor func pagingNeverPublishesPartialDataOrFollowsUnsafeContinuations() async {
@@ -175,6 +244,7 @@ struct StockSageMassiveEventsTests {
                 return calls == 1 ? .success(first) : last
             }
             #expect(calls == 2 && record.outcome == .unavailable && record.event == nil && record.failure == failure)
+            #expect(record.insiderEvents == nil && record.insiderOmittedRecordCount == nil)
         }
         for unsafe in [next.replacingOccurrences(of: "https:", with: "http:"),
                        next.replacingOccurrences(of: "api.massive.com", with: "api.massive.com.evil.test"),

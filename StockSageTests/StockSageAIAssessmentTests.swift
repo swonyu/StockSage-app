@@ -253,6 +253,42 @@ struct StockSageAIAssessmentTests {
             optionalKeys: ["duplicate", "duplicate"], outputTokens: 192, contextTokens: 600) == nil)
     }
 
+    @Test func extraInsiderTransactionsFollowExistingSourcesAndKeepOmissionReceipts() throws {
+        typealias E = StockSageMassiveEvents
+        let events = (1...3).map { index in
+            E.Event(id: "one-accession", symbol: "ORCL", feed: .insider, date: now,
+                headline: "Form 4 sale filed", details: ["Owner \(index) sold \(index) shares.", "Reported under a Rule 10b5-1 plan."], link: nil)
+        }
+        let record = E.Observation(symbol: "ORCL", feed: .insider, checkedAt: now, outcome: .answered,
+            event: events[0], insiderEvents: events, insiderOmittedRecordCount: 4)
+        let news = StockSageNewsService.NewsItem(date: now, title: "Existing news", snippet: "Original news evidence.",
+            link: nil, sentiment: nil, source: "Fixture")
+        let captured = A.Context(idea: idea(), earnings: nil, company: [.insider: record], news: [news], at: now)
+        let packet = captured.evidencePacket()
+        let extra = packet.facts.filter { $0.key.hasPrefix("feed.insider.transaction.") }
+        #expect(extra.count == 2 && extra.allSatisfy { !$0.required })
+        #expect(Set(packet.facts.map(\.key)).count == packet.facts.count)
+        #expect(Array(packet.facts.suffix(2)) == extra)
+        #expect(packet.facts.first { $0.key == "feed.insider.event" }?.text.contains(events[0].details[0]) == true)
+        #expect(extra.allSatisfy { $0.text.contains("Reported under a Rule 10b5-1 plan.") })
+        #expect(packet.prePromptOmittedRecordCount == 4)
+        #expect(captured.facts.filter { $0.contains("Form 4 sale filed") }.count == 1,
+                "Legacy preflight keeps its bounded selection; research fits additional records separately")
+        let mandatory = packet.facts.filter(\.required).map(\.text)
+        let optional = packet.facts.filter { !$0.required }
+        let existing = optional.filter { !$0.key.hasPrefix("feed.insider.transaction.") }
+        let budget = "Fixture".utf8.count + A.prompt(facts: existing.map(\.text) + mandatory).utf8.count + 192 + 128
+        let fitted = try #require(A.fittedResearchPrompt(optional: optional.map(\.text), mandatory: mandatory,
+            system: { _ in "Fixture" }, optionalKeys: optional.map(\.key), outputTokens: 192, contextTokens: budget))
+        #expect(existing.allSatisfy { fitted.facts.contains($0.text) })
+        #expect(extra.allSatisfy { fitted.omittedKeys.contains($0.key) })
+        let offered = Array(optional.prefix(fitted.optionalKept)) + packet.facts.filter(\.required)
+        let receipt = captured.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount)
+        #expect(receipt.prePromptOmittedRecordCount == 4 && receipt.omittedKeys == extra.map(\.key))
+        #expect(mandatory.allSatisfy(fitted.facts.contains))
+    }
+
     @Test(arguments: ["answer", "repair"], ["success", "failure", "truncated"])
     func settingsReleaseObsoleteSlotAndLateResultCannotTouchReplacement(phase: String, result: String) async throws {
         let suite = "assessment.settings.\(UUID().uuidString)"

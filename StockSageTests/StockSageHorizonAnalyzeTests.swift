@@ -205,6 +205,7 @@ struct StockSageHorizonAnalyzeTests {
                      supplemental: ((String, Date) async -> StockSageBenzinga.Snapshot)? = nil,
                      news: @escaping (Date) -> StockSageNewsService.Observation = { _ in .init(attempts: []) },
                      company: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation] = [:],
+                     insider: ((String, Date) async -> StockSageMassiveEvents.Observation)? = nil,
                      earningsReceipt: ((String, Date) async -> StockSageMassiveEarnings.Observation)? = nil,
                      next: @escaping (String, Date) async -> StockSageCatalystChain.Answer<StockSageMassiveEarnings.Row?> = { _, _ in .unavailable },
                      filings: @escaping (String, Date) async -> StockSageDisclosureService.FilingsObservation = { _, at in .init(checkedAt: at, outcome: .unavailable(.unreachable), filings: []) },
@@ -241,7 +242,7 @@ struct StockSageHorizonAnalyzeTests {
                 case .answered(let row): return .init(outcome: .answered(row), checkedAt: at, recordedAt: at)
                 case .unavailable: return .init(outcome: .unavailable, checkedAt: at, recordedAt: at)
                 }
-            }, filingsObservation: filings,
+            }, filingsObservation: filings, insiderObservation: insider,
             evidenceIsCurrent: { _ in true })
     }
 
@@ -250,13 +251,17 @@ struct StockSageHorizonAnalyzeTests {
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
-        var historyCalls = 0, newsCalls = 0, earningsCalls = 0, filingsCalls = 0, snapshotCalls = 0
+        var historyCalls = 0, newsCalls = 0, earningsCalls = 0, filingsCalls = 0, snapshotCalls = 0, insiderCalls = 0
         let gathered = await Research.gather(Self.listing(), store: store, key: "fixture", allowed: { true },
             historyTransport: { historyCalls += 1; return Self.ok(Self.historyPayload(), $0) },
             benzingaSnapshot: { symbol, at in snapshotCalls += 1; return .init(symbol: symbol, capturedAt: at, credentialGeneration: nil, pages: []) },
             newsObservation: { _, _, _ in newsCalls += 1; return .init(attempts: []) },
             nextEarnings: { _, at in earningsCalls += 1; return .init(outcome: .answered(nil), checkedAt: at, recordedAt: at) },
             filingsObservation: { _, at in filingsCalls += 1; return .init(checkedAt: at, outcome: .answered, filings: []) },
+            insiderObservation: { symbol, at in
+                insiderCalls += 1
+                return .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered, event: nil)
+            },
             evidenceIsCurrent: { _ in true })
         guard case .captured(let capture) = gathered else { Issue.record("Expected isolated capture"); return }
         #expect(historyCalls == 1 && newsCalls == 1 && earningsCalls == 1 && filingsCalls == 1 && snapshotCalls == 1)
@@ -273,7 +278,7 @@ struct StockSageHorizonAnalyzeTests {
         }
         #expect(prompts.count == 2 && prompts[0].contains("1–7 trading days") && prompts[1].contains("7–14 trading days"))
         #expect(results.allSatisfy { $0.verdict != nil && $0.at == capture.at && $0.referenceClose?.at == capture.referenceClose.at })
-        #expect(results[0].coverage == results[1].coverage && historyCalls == 1)
+        #expect(results[0].coverage == results[1].coverage && historyCalls == 1 && insiderCalls == 1)
         #expect(Set(results.compactMap(\.diagnosticID)).count == 2)
         for (index, result) in results.enumerated() {
             let receipt = try #require(result.evidenceReceipt)
@@ -444,6 +449,38 @@ struct StockSageHorizonAnalyzeTests {
             model: { calls += 1; return Self.ok(Self.verdictPayload(), $0) })
         #expect(calls == (stale ? 0 : 1))
         #expect((result.verdict == nil) == stale)
+    }
+
+    @Test func researchCollectsInsiderEvidenceWithoutABoardObservation() async throws {
+        var symbols: [String] = []
+        let result = await run(insider: { symbol, at in
+            symbols.append(symbol)
+            let events = (1...3).map { index in
+                StockSageMassiveEvents.Event(id: "same-accession", symbol: symbol, feed: .insider, date: at,
+                    headline: "Form 4 sale filed", details: ["Insider \(index) sold \(index) shares.", "Reported under a Rule 10b5-1 plan."], link: nil)
+            }
+            return .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered, event: events[0],
+                insiderEvents: events, insiderOmittedRecordCount: 2)
+        }, model: { Self.ok(Self.verdictPayload(), $0) })
+        #expect(symbols == ["ACME"] && result.verdict != nil)
+        #expect(result.facts.filter { $0.contains("Form 4 sale filed") }.count == 3)
+        #expect(result.coverage.first { $0.source == "Massive/SEC Form 4" }?.state == .answered)
+        #expect(result.facts.contains { $0.contains("3 retained") && $0.contains("2 omitted") })
+    }
+
+    @Test func stoppedResearchCannotCollectInsiderEvidenceOrPublishALateObservation() async {
+        var calls = 0, modelCalls = 0
+        let blocked = await run(allowed: { false }, insider: { symbol, at in
+            calls += 1
+            return .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered, event: nil)
+        }, model: { modelCalls += 1; return Self.ok(Self.verdictPayload(), $0) })
+        #expect(blocked.verdict == nil && calls == 0 && modelCalls == 0)
+        var active = true
+        let stopped = await run(allowed: { active }, insider: { symbol, at in
+            calls += 1; active = false
+            return .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered, event: nil)
+        }, model: { modelCalls += 1; return Self.ok(Self.verdictPayload(), $0) })
+        #expect(stopped.verdict == nil && calls == 1 && modelCalls == 0)
     }
 
     @Test func coverageKeepsMixedNewsPartialAndUniqueCompanyFamilies() async throws {

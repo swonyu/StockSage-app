@@ -443,7 +443,7 @@ struct StockSageChatSection: View {
     static let composerLineLimit = 4
 
     #if os(macOS)
-    static let modelSetupGuidance = "AI answers require a local server on this Mac, configured in Model settings. Watchlist commands work without a model."
+    static let modelSetupGuidance = "AI answers require a model server configured in Model settings, including a private RunPod connection. Watchlist commands work without a model."
     #else
     static let modelSetupGuidance = "Watchlist commands work without a model. AI answers require a server in Model settings. On iPhone, localhost refers to this phone; a private Mac connection is not configured."
     #endif
@@ -529,11 +529,17 @@ struct StockSageChatSection: View {
     }
 
     private var connectionNotice: some View {
-        let missing = Self.modelSetupGuidance
-        return Text(config == nil
-                    ? missing
-                    : "Uses your configured local model server. Explicit ticker questions add selected news (Massive, when web access is enabled; EODHD disabled) and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local. No broker credentials, account identifiers, journal notes, live WhatsApp connection, training or cloud fallback. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation.")
-                    .font(.caption).foregroundStyle(.secondary)
+        Text(Self.connectionDisclosure(config))
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    static func connectionDisclosure(_ config: StockSageLocalModelServer.Config?) -> String {
+        guard let config else { return modelSetupGuidance }
+        let destination = config.requiresExternalAccess
+            ? "Uses your selected remote model server. Your question, recent Chat history, selected news and private WhatsApp export excerpts leave this device for the model."
+            : "Uses your configured local model server. Explicit ticker questions add selected news and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local."
+        let connection = config.isRunPodEndpoint ? " The RunPod connection uses an encrypted SSH tunnel." : ""
+        return destination + connection + " News uses Massive when web access is enabled; EODHD is disabled. No broker credentials, account identifiers, journal notes, live WhatsApp connection or training are included. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation."
     }
 
     private static func sourceCard(_ source: StockSageChat.Source) -> some View {

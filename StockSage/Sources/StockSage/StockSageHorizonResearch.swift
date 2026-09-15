@@ -274,6 +274,16 @@ final class StockSageHorizonResearch: ObservableObject {
 
     typealias Analysis = @MainActor @Sendable (Horizon) async -> Result
 
+    /// Structured lookahead: one local capture or two cloud captures, never an unbounded queue.
+    private static func prepareAnalyses(_ first: Listing, second: Listing?,
+        makeAnalysis: @escaping @MainActor (Listing) async -> Analysis) async -> [Analysis] {
+        guard let second else { return [await makeAnalysis(first)] }
+        async let firstAnalysis = makeAnalysis(first)
+        let secondAnalysis = await makeAnalysis(second)
+        let firstResult = await firstAnalysis
+        return [firstResult, secondAnalysis]
+    }
+
     func start(_ horizons: [Horizon], allowed: @escaping @MainActor () -> Bool,
         interruptionReason: @escaping @MainActor () -> String? = { nil },
         universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
@@ -291,6 +301,7 @@ final class StockSageHorizonResearch: ObservableObject {
         universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
         rank: (@MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>)? = nil,
         parallelism: @escaping @MainActor () -> Int = { 1 },
+        concurrentGathering: Bool = false,
         makeAnalysis: @escaping @MainActor (Listing) async -> Analysis) -> Bool {
         guard task == nil, allowed(), !horizons.isEmpty, Set(horizons).count == horizons.count else { return false }
         let previous = scans
@@ -337,30 +348,38 @@ final class StockSageHorizonResearch: ObservableObject {
                         self.scans[horizon]?.status = "Checking \(self.activeDescription) · \(self.scans[horizon]?.results.count ?? 0)/\(names.count) finished"
                     }
                 }
-                // One provider producer; model assessments overlap only within the loaded capacity.
+                // Cloud preparation overlaps at most two stocks. Captures reserve model slots,
+                // so the producer cannot gather past the loaded capacity while models are busy.
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    var occupied = 0
-                    for item in names {
-                        while occupied >= min(8, max(1, parallelism())) {
+                    var occupied = 0, next = 0
+                    let gatherLimit = concurrentGathering ? 2 : 1
+                    while next < names.count {
+                        while occupied + min(gatherLimit, min(min(8, max(1, parallelism())), names.count - next))
+                            > min(8, max(1, parallelism())) {
                             try await group.next()
                             occupied -= 1
                         }
                         guard valid() else { throw CancellationError() }
-                        activeSymbols.insert(item.ticker)
+                        let count = min(gatherLimit, min(min(8, max(1, parallelism())), names.count - next))
+                        let items = Array(names[next..<(next + count)])
+                        for item in items { activeSymbols.insert(item.ticker) }
                         updateProgress()
-                        let analyze = await makeAnalysis(item)
+                        let analyses = await Self.prepareAnalyses(items[0], second: items.count == 2 ? items[1] : nil,
+                            makeAnalysis: makeAnalysis)
                         guard valid() else { throw CancellationError() }
-                        group.addTask { @MainActor @Sendable in
-                            defer { self.activeSymbols.remove(item.ticker); updateProgress() }
-                            for horizon in horizons {
-                                guard valid() else { throw CancellationError() }
-                                let result = await analyze(horizon)
-                                guard valid() else { throw CancellationError() }
-                                self.scans[horizon]?.results[item.ticker] = result
-                                updateProgress()
+                        for (item, analyze) in zip(items, analyses) {
+                            group.addTask { @MainActor @Sendable in
+                                defer { self.activeSymbols.remove(item.ticker); updateProgress() }
+                                for horizon in horizons {
+                                    guard valid() else { throw CancellationError() }
+                                    let result = await analyze(horizon)
+                                    guard valid() else { throw CancellationError() }
+                                    self.scans[horizon]?.results[item.ticker] = result
+                                    updateProgress()
+                                }
                             }
                         }
-                        occupied += 1
+                        occupied += count; next += count
                     }
                     try await group.waitForAll()
                 }
@@ -513,6 +532,7 @@ final class StockSageHorizonResearch: ObservableObject {
     /// New dated observations for failed checks only; all accepted checks remain byte-for-byte.
     @discardableResult func retryIncomplete(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
         parallelism: @escaping @MainActor () -> Int = { 1 },
+        concurrentGathering: Bool = false,
         makeAnalysis: @escaping @MainActor (Listing) async -> Analysis,
         rank: @escaping @MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>) -> Bool {
         let missing = incompleteListings(horizon)
@@ -542,18 +562,28 @@ final class StockSageHorizonResearch: ObservableObject {
             }
             do {
                 try await withThrowingTaskGroup(of: (String, Result).self) { group in
-                    var occupied = 0
-                    for item in missing {
-                        while occupied >= min(8, max(1, parallelism())) {
+                    var occupied = 0, next = 0
+                    let gatherLimit = concurrentGathering ? 2 : 1
+                    while next < missing.count {
+                        while occupied + min(gatherLimit, min(min(8, max(1, parallelism())), missing.count - next))
+                            > min(8, max(1, parallelism())) {
                             if let result = try await group.next() { try accept(result) }
                             occupied -= 1
                         }
                         guard valid() else { throw CancellationError() }
-                        activeSymbols.insert(item.ticker)
-                        let analyze = await makeAnalysis(item)
+                        let count = min(gatherLimit, min(min(8, max(1, parallelism())), missing.count - next))
+                        let items = Array(missing[next..<(next + count)])
+                        for item in items { activeSymbols.insert(item.ticker) }
+                        let analyses = await Self.prepareAnalyses(items[0], second: items.count == 2 ? items[1] : nil,
+                            makeAnalysis: makeAnalysis)
                         guard valid() else { throw CancellationError() }
-                        group.addTask { @MainActor @Sendable in (item.ticker, await analyze(horizon)) }
-                        occupied += 1
+                        for (item, analyze) in zip(items, analyses) {
+                            group.addTask { @MainActor @Sendable in
+                                guard valid() else { throw CancellationError() }
+                                return (item.ticker, await analyze(horizon))
+                            }
+                        }
+                        occupied += count; next += count
                     }
                     while let result = try await group.next() { try accept(result) }
                 }
@@ -593,7 +623,8 @@ final class StockSageHorizonResearch: ObservableObject {
         var isOllama = false
         var prepared = false
         var modelReady = true
-        retryIncomplete(horizon, allowed: { allowed() && modelReady }, parallelism: { capacity }, makeAnalysis: { item in
+        retryIncomplete(horizon, allowed: { allowed() && modelReady }, parallelism: { capacity },
+            concurrentGathering: config.isRunPodGemma, makeAnalysis: { item in
             if !prepared {
                 let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
                 prepared = true; capacity = probe.researchParallelism; isOllama = probe.isOllama
@@ -655,7 +686,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 isOllama: isOllama, allowed: allowed, progress: { status in
                     self.scans[horizon]?.status = status
                 })
-        }, parallelism: { parallelism }, makeAnalysis: { item in
+        }, parallelism: { parallelism }, concurrentGathering: config.isRunPodGemma, makeAnalysis: { item in
             let gathered = await Self.gather(item, store: store, key: key, allowed: allowed,
                 selectionFact: selection?.detail(for: item.ticker))
             let analyze = Self.preparedAnalysis(gathered, config: config, isOllama: isOllama, allowed: allowed)
@@ -725,6 +756,7 @@ final class StockSageHorizonResearch: ObservableObject {
         newsObservation: ((String, Date, StockSageBenzinga.Page?) async -> StockSageNewsService.Observation)? = nil,
         nextEarnings: ((String, Date) async -> StockSageMassiveEarnings.Observation)? = nil,
         filingsObservation: ((String, Date) async -> StockSageDisclosureService.FilingsObservation)? = nil,
+        insiderObservation: ((String, Date) async -> StockSageMassiveEvents.Observation)? = nil,
         evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil,
         selectionFact: String? = nil) async -> Gathered {
         func failed(_ note: String) -> Gathered { .failed(.init(note: note)) }
@@ -774,6 +806,15 @@ final class StockSageHorizonResearch: ObservableObject {
                 forms: ["8-K", "10-Q", "10-K", "6-K", "20-F"], limit: 5, now: $1)
         })(item.ticker, filingsAt)
         guard evidenceAllowed() else { return failed("Analysis interrupted.") }
+        var company = companyObservations ?? store.companyEventChecks[item.ticker] ?? [:]
+        // A research listing need not be on the Markets board. Each capture gets its own
+        // current Form 4 check; explicit company observations remain an offline replay seam.
+        if insiderObservation != nil || companyObservations == nil {
+            company[.insider] = await (insiderObservation ?? {
+                await StockSageMassiveEvents.fetch(.insider, symbol: $0, now: $1, allowed: evidenceAllowed)
+            })(item.ticker, Date())
+            guard evidenceAllowed() else { return failed("Analysis interrupted.") }
+        }
         let capturedAt = Date()
         var coverage = [EvidenceCoverage(source: "Daily history", state: .answered, checkedAt: began)]
         var extra: [StockSageAIAssessment.EvidenceFact] = []
@@ -820,7 +861,7 @@ final class StockSageHorizonResearch: ObservableObject {
             }
         }
         let context = StockSageAIAssessment.Context(idea: idea, earnings: nil,
-            company: companyObservations ?? store.companyEventChecks[item.ticker] ?? [:], at: capturedAt,
+            company: company, at: capturedAt,
             newsObservation: news, quotedInUSD: true, benzinga: benzinga)
         for product in StockSageBenzinga.Product.allCases where product != .news {
             let pages = benzinga.pages.filter { $0.query.product == product }
@@ -866,7 +907,9 @@ final class StockSageHorizonResearch: ObservableObject {
         // Keep independent forward earnings and SEC statuses mandatory, even when records are trimmed.
         let packet = context.evidencePacket(maximumUTF8Bytes: 12_000)
         var evidence = packet.facts.filter { $0.key != "earnings" }
-        let providerIndex = evidence.firstIndex { $0.key == "benzinga.status" } ?? evidence.count
+        let providerIndex = evidence.firstIndex {
+            $0.key == "benzinga.status" || $0.key.hasPrefix("feed.insider.transaction.")
+        } ?? evidence.count
         evidence.insert(contentsOf: extra, at: providerIndex)
         return .captured(.init(history: history, context: context, facts: evidence.map(\.text),
             coverage: coverage, at: began, blockedByThrottle: blocked,
@@ -906,10 +949,12 @@ final class StockSageHorizonResearch: ObservableObject {
         newsObservation: ((String, Date, StockSageBenzinga.Page?) async -> StockSageNewsService.Observation)? = nil,
         nextEarnings: ((String, Date) async -> StockSageMassiveEarnings.Observation)? = nil,
         filingsObservation: ((String, Date) async -> StockSageDisclosureService.FilingsObservation)? = nil,
+        insiderObservation: ((String, Date) async -> StockSageMassiveEvents.Observation)? = nil,
         evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil) async -> Result {
         let gathered = await gather(item, store: store, key: key, allowed: allowed,
             companyObservations: companyObservations, historyTransport: historyTransport, benzingaSnapshot: benzingaSnapshot, newsObservation: newsObservation,
-            nextEarnings: nextEarnings, filingsObservation: filingsObservation, evidenceIsCurrent: evidenceIsCurrent)
+            nextEarnings: nextEarnings, filingsObservation: filingsObservation, insiderObservation: insiderObservation,
+            evidenceIsCurrent: evidenceIsCurrent)
         return await preparedAnalysis(gathered, config: config, isOllama: isOllama,
             allowed: allowed, modelTransport: modelTransport, evidenceIsCurrent: evidenceIsCurrent)(horizon)
     }

@@ -201,6 +201,7 @@ enum StockSageLocalModelServer {
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
     nonisolated static let lmStudioModel = "qwen3.5-9b"
     nonisolated static let gemmaModel = "google/gemma-4-31b-qat"
+    nonisolated static let runPodURL = "http://127.0.0.1:18080"
     nonisolated static let maximumResponseBytes = 1_048_576
 
     /// Qwen3.5's installed NFC + byte-level BPE tokenizer cannot emit more tokens than
@@ -289,6 +290,20 @@ enum StockSageLocalModelServer {
                 && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
         }
         nonisolated var isManagedLMStudio: Bool { isLMStudio9B || isLMStudioGemma }
+        nonisolated var isRunPodEndpoint: Bool {
+            StockSageLocalModelServer.isLoopback(baseURL) && baseURL.port == 18080
+        }
+        nonisolated var isRunPodGemma: Bool {
+            model == StockSageLocalModelServer.gemmaModel && baseURL.scheme?.lowercased() == "http"
+                && isRunPodEndpoint && ["", "/"].contains(baseURL.path)
+        }
+        nonisolated var requiresStrictOutput: Bool { isManagedLMStudio || isRunPodGemma }
+        // SSH ends on loopback, but the selected RunPod model receives evidence off-device.
+        nonisolated var requiresExternalAccess: Bool { isRunPodEndpoint || !StockSageLocalModelServer.isLoopback(baseURL) }
+        nonisolated var supportsLocalUnload: Bool {
+            StockSageLocalModelServer.isLoopback(baseURL) && ["", "/"].contains(baseURL.path)
+                && baseURL.port.map { [1234, 11434].contains($0) } == true
+        }
         nonisolated var isLMStudio9B: Bool {
             model == StockSageLocalModelServer.lmStudioModel && StockSageLocalModelServer.isLoopback(baseURL)
                 && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
@@ -350,7 +365,7 @@ enum StockSageLocalModelServer {
         guard config(url: c.baseURL.absoluteString, model: c.model) == c else {
             return .init(diagnostic: .init(category: .invalidConfig))
         }
-        if !isLoopback(c.baseURL), !externalAllowed() {
+        if c.requiresExternalAccess, !externalAllowed() {
             return .init(diagnostic: .init(category: .policyDenied))
         }
         return nil
@@ -390,6 +405,28 @@ enum StockSageLocalModelServer {
         let stopped = Probe(reachable: false, isOllama: false, models: [], hasModel: false,
                             detail: "Model check stopped: request cancelled, settings changed, or network access disabled.")
         guard !denied() else { return stopped }
+        if c.isRunPodGemma {
+            guard let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("v1/models"), transport: transport) else {
+                return denied() ? stopped : Probe(reachable: false, isOllama: false, models: [], hasModel: false,
+                    detail: "RunPod unavailable. Check the private SSH connection and GPU server.")
+            }
+            guard !denied() else { return stopped }
+            let rows = inventory["data"] as? [[String: Any]] ?? []
+            let names = rows.compactMap { $0["id"] as? String }
+            guard rows.count == 1, names == [c.model] else {
+                return Probe(reachable: true, isOllama: false, models: names, hasModel: false,
+                    detail: "RunPod did not identify the selected Gemma model; no local fallback.")
+            }
+            let properties = await fetchJSONObject(c.baseURL.appendingPathComponent("props"), transport: transport)
+            guard !denied() else { return stopped }
+            guard let properties, let capacity = runPodCapacity(properties) else {
+                return Probe(reachable: true, isOllama: false, models: names, hasModel: false,
+                    detail: "RunPod serving context is unverified or below 16K; research is not ready.")
+            }
+            return Probe(reachable: true, isOllama: false, models: names, hasModel: true,
+                detail: "RunPod · Gemma 4 31B ready · \(capacity.context / 1024)K context · \(capacity.parallel) research workers.",
+                researchParallelism: capacity.parallel, servingContext: capacity.context)
+        }
         if c.isManagedLMStudio,
            let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport),
            let native = managedInventory(inventory, modelKey: c.model) {
@@ -424,13 +461,21 @@ enum StockSageLocalModelServer {
 
     // MARK: Chat
 
+    /// llama.cpp /props reports the serving slot's n_ctx, not the model's training limit.
+    private static func runPodCapacity(_ properties: [String: Any]) -> (context: Int, parallel: Int)? {
+        guard properties["is_sleeping"] as? Bool != true,
+              let settings = properties["default_generation_settings"] as? [String: Any],
+              let context = tokenCount(settings["n_ctx"]), (researchContextTokens..<1_048_576).contains(context) else { return nil }
+        let slots = tokenCount(properties["total_slots"]) ?? 1
+        return (context, [1, 2, 4, 8].contains(slots) ? slots : 1)
+    }
+
     /// Normal Mac quit unloads only the selected local model, never the server or weight files.
     /// A separate short-lived session works after beginShutdown cancels inference transports.
     static func unloadOnQuit(_ c: Config, inferenceWasActive: Bool = false,
                              transport: (@MainActor (URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Bool {
         guard transport != nil || !StockSageStore.isRunningTests else { return false }
-        guard isLoopback(c.baseURL), ["", "/"].contains(c.baseURL.path),
-              let port = c.baseURL.port, [1234, 11434].contains(port) else { return false }
+        guard c.supportsLocalUnload else { return false }
         let cleanupSession = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
         defer { cleanupSession.invalidateAndCancel() }
         do {
@@ -617,10 +662,10 @@ enum StockSageLocalModelServer {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
             if c.isLMStudio9B { body["ttl"] = 180 }
-            if c.isLMStudioGemma { body["reasoning_effort"] = "none" }
+            if c.isLMStudioGemma || c.isRunPodGemma { body["reasoning_effort"] = "none" }
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        if c.isManagedLMStudio, !isOllama, let jsonSchema,
+        if c.requiresStrictOutput, !isOllama, let jsonSchema,
            let schema = try? JSONSerialization.jsonObject(with: jsonSchema),
            var data = request.httpBody, data.last == 0x7D {
             // Preserve generation order; decoding then reserializing would shuffle it.
@@ -942,6 +987,7 @@ enum StockSageLocalModelServer {
         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
             return .failure(failure)
         }
+        if c.isRunPodGemma && isOllama { return .failure(.init(diagnostic: .init(category: .invalidConfig))) }
         // The budget applies to EVERY backend, not only the LM Studio profile. Before this, the
         // shipped Ollama default dispatched any size of prompt and let the server truncate it
         // silently, so a caller that packed 12,000 bytes into a 4,096-unit window was never told.
@@ -962,7 +1008,7 @@ enum StockSageLocalModelServer {
         let recordedSystem = boundedAttemptText(system)
         let recordedUser = boundedAttemptText(user)
         let recordedSchema: (text: String, bytes: Int, truncated: Bool)? = {
-            guard attemptObserver != nil, c.isManagedLMStudio, !isOllama, let jsonSchema,
+            guard attemptObserver != nil, c.requiresStrictOutput, !isOllama, let jsonSchema,
                   let object = try? JSONSerialization.jsonObject(with: jsonSchema),
                   let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
                   let text = String(data: data, encoding: .utf8) else { return nil }
@@ -1076,7 +1122,7 @@ enum StockSageLocalModelServer {
                         httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
                         bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
                 }
-                switch parseCompletion(data, isOllama: isOllama, allowEmptyTruncated: c.isManagedLMStudio) {
+                switch parseCompletion(data, isOllama: isOllama, allowEmptyTruncated: c.requiresStrictOutput) {
                 case .success(let reply):
                     returnedModel = reply.model
                     // No backend may publish another model's answer under the selected ID. Ollama
@@ -1084,8 +1130,8 @@ enum StockSageLocalModelServer {
                     // sides are compared with the suffix stripped. A server that reports no model at
                     // all stays acceptable off the strict profile — absent metadata is not a mismatch.
                     let identityMismatch = reply.model.map {
-                        stripLatestSuffix($0) != stripLatestSuffix(c.model)
-                    } ?? c.isManagedLMStudio
+                        c.isRunPodGemma ? $0 != c.model : stripLatestSuffix($0) != stripLatestSuffix(c.model)
+                    } ?? c.requiresStrictOutput
                     if identityMismatch {
                         return await failed(.init(diagnostic: .init(category: .responseShape,
                                                                 httpStatus: http.statusCode,
@@ -1095,7 +1141,7 @@ enum StockSageLocalModelServer {
                     // One same-evidence restart for a confirmed output limit, never a continuation
                     // stitched onto an unfinished verdict. Reserve the extra output before sending;
                     // both attempts and context verification retain the ORIGINAL caller deadline.
-                    if c.isManagedLMStudio, attempt == 0, reply.diagnostic.finish == .tokenLimit,
+                    if c.requiresStrictOutput, attempt == 0, reply.diagnostic.finish == .tokenLimit,
                        (1...512).contains(maxTokens), clock() < deadline,
                        promptFits(system: system, user: user, outputTokens: maxTokens * 2, contextTokens: contextTokens) {
                         var diagnostic = enriched(reply.diagnostic)
@@ -1111,20 +1157,22 @@ enum StockSageLocalModelServer {
                     // worth showing, while a truncated financial verdict is not. The decision
                     // therefore belongs to each caller: `financialOutputRejection` and evidence
                     // validation gate verdicts; `rejectsTruncatedOutput` annotates Chat prose.
-                    if c.isManagedLMStudio, reply.diagnostic.finish != .stop {
+                    if c.requiresStrictOutput, reply.diagnostic.finish != .stop {
                         var diagnostic = reply.diagnostic
                         diagnostic.category = .incompleteOutput
                         diagnostic.httpStatus = http.statusCode
                         return await failed(.init(diagnostic: diagnostic))
                     }
-                    if c.isManagedLMStudio {
-                        let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
+                    if c.requiresStrictOutput {
+                        let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent(c.isRunPodGemma ? "props" : "api/v1/models"),
                             transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
                         guard clock() < deadline else { return await failed(.init(diagnostic: .init(category: .timeout))) }
                         guard lifecycle == lifecycleRevision else { return await failed(.init(diagnostic: .init(category: .cancelled))) }
                         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return await failed(failure) }
-                        guard let inventory, let model = reply.model,
-                              let context = verifiedContext(inventory, model: model), context >= contextTokens else {
+                        let context = inventory.flatMap { object in
+                            c.isRunPodGemma ? runPodCapacity(object)?.context : reply.model.flatMap { verifiedContext(object, model: $0) }
+                        }
+                        guard let context, context >= contextTokens else {
                             return await failed(.init(diagnostic: .init(category: .contextBudget)))
                         }
                     }

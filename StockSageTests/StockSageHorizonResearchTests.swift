@@ -66,6 +66,42 @@ import Testing
         #expect(research.scans[.week]?.results["AAA"]?.note == "Original unavailable check")
     }
 
+    @Test func cloudRetryStartsWithOneSlotThenOwnsItsTwoGatherLookahead() async throws {
+        let r = R()
+        let names = (0..<4).map { listing("S\($0)") }
+        let started = r.start(.week, allowed: { true }, universe: { .init(names) }, analyze: { item in
+            .init(facts: [item.ticker], note: "Original incomplete")
+        })
+        try #require(started)
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        let original = try #require(r.scans[.week])
+        var capacity = 1, prepared: [String] = [], modelCalls = 0, compared = false
+        var held: [String: CheckedContinuation<Void, Never>] = [:]
+        defer { r.stop(); for continuation in held.values { continuation.resume() } }
+        let retried = r.retryIncomplete(.week, allowed: { true }, parallelism: { capacity },
+            concurrentGathering: true, makeAnalysis: { item in
+                prepared.append(item.ticker)
+                await withCheckedContinuation { held[item.ticker] = $0 }
+                capacity = 8
+                return { _ in modelCalls += 1; return .init(note: "Fresh retry") }
+            }, rank: { _, _ in compared = true; return .failure(.unavailable) })
+        try #require(retried)
+        for _ in 0..<100 where held.isEmpty { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(prepared == ["S0"] && held.count == 1)
+        held.removeValue(forKey: "S0")?.resume()
+        for _ in 0..<100 where held.count < 2 || modelCalls < 1 { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(Set(held.keys) == Set(["S1", "S2"]) && prepared.count == 3 && modelCalls == 1)
+        r.stop()
+        held.removeValue(forKey: "S1")?.resume()
+        try await Task.sleep(for: .milliseconds(5))
+        #expect(r.running != nil && modelCalls == 1)
+        held.removeValue(forKey: "S2")?.resume()
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(r.running == nil && prepared.count == 3 && modelCalls == 1 && !compared)
+        #expect(r.scans[.week]?.at == original.at)
+        #expect(names.allSatisfy { r.scans[.week]?.results[$0.ticker]?.note == "Original incomplete" })
+    }
+
     @Test(arguments: [false, true]) func checkpointSuccessDoesNotStrandUnsavedPredictionsAfterRelaunch(manualRetry: Bool) async throws {
         let suite = "stocksage.research.history-save.\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
@@ -995,6 +1031,88 @@ import Testing
         #expect(r.scans[horizon]?.listings.count == 500)
         #expect(r.scans[horizon]?.results.count == 500)
         #expect(r.scans[horizon]?.status.contains("500 listings checked once") == true)
+    }
+
+    @Test(arguments: [false, true])
+    func twoCloudGathersFeedEightModelSlotsWithoutChangingLocalScheduling(cloud: Bool) async throws {
+        let r = R()
+        let names = (0..<10).map { listing("S\($0)") }
+        var gathers: [String: CheckedContinuation<Void, Never>] = [:]
+        var models: [String: CheckedContinuation<Void, Never>] = [:]
+        var prepared: [String] = [], calls: [String] = []
+        var gathering = 0, peakGathering = 0, activeModels = 0, peakModels = 0, comparisons = 0
+        defer {
+            r.stop()
+            for held in gathers.values { held.resume() }
+            for held in models.values { held.resume() }
+        }
+        let started = r.start(R.Horizon.allCases, allowed: { true }, universe: { .init(names) },
+            rank: { scan, _ in
+                #expect(gathering == 0 && activeModels == 0 && scan.results.count == names.count)
+                comparisons += 1; return .failure(.unavailable)
+            }, parallelism: { 8 }, concurrentGathering: cloud, makeAnalysis: { item in
+                prepared.append(item.ticker)
+                gathering += 1; peakGathering = max(peakGathering, gathering)
+                await withCheckedContinuation { gathers[item.ticker] = $0 }
+                gathering -= 1
+                let capturedAt = Date()
+                return { horizon in
+                    let key = item.ticker + horizon.rawValue
+                    calls.append(key); activeModels += 1; peakModels = max(peakModels, activeModels)
+                    await withCheckedContinuation { models[key] = $0 }
+                    activeModels -= 1
+                    return .init(facts: [item.ticker], note: horizon.rawValue, at: capturedAt)
+                }
+            })
+        try #require(started)
+        for _ in 0..<100 where gathers.count < (cloud ? 2 : 1) { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(gathers.count == (cloud ? 2 : 1))
+        for _ in 0..<500 where models.count < 8 {
+            let ready = Array(gathers.values); gathers.removeAll()
+            for held in ready { held.resume() }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        try #require(models.count == 8 && prepared.count == 8)
+        #expect(peakGathering == (cloud ? 2 : 1) && peakModels == 8 && comparisons == 0)
+        for _ in 0..<500 where r.running != nil {
+            let ready = Array(gathers.values) + Array(models.values)
+            gathers.removeAll(); models.removeAll()
+            for held in ready { held.resume() }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(r.running == nil && Set(prepared) == Set(names.map(\.ticker)) && prepared.count == 10)
+        #expect(calls.count == 20 && Set(calls).count == 20 && comparisons == 2)
+        for item in names {
+            #expect(r.scans[.week]?.results[item.ticker]?.facts == [item.ticker])
+            #expect(r.scans[.week]?.results[item.ticker]?.at == r.scans[.fortnight]?.results[item.ticker]?.at)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func cloudGatherCancellationOwnsBothPendingCaptures(cancel: Bool) async throws {
+        let r = R()
+        var allowed = true, modelCalls = 0, compared = false
+        var gathers: [String: CheckedContinuation<Void, Never>] = [:]
+        defer { r.stop(); for held in gathers.values { held.resume() } }
+        let started = r.start([.week], allowed: { allowed }, universe: { .init([listing("AAA"), listing("BBB"), listing("CCC")]) },
+            rank: { _, _ in compared = true; return .failure(.unavailable) },
+            parallelism: { 8 }, concurrentGathering: true, makeAnalysis: { item in
+                await withCheckedContinuation { gathers[item.ticker] = $0 }
+                return { _ in modelCalls += 1; return .init(note: "Late capture") }
+            })
+        try #require(started)
+        for _ in 0..<100 where gathers.count < 2 { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(gathers.count == 2)
+        if cancel { r.stop() } else { allowed = false }
+        gathers.removeValue(forKey: "AAA")?.resume()
+        try await Task.sleep(for: .milliseconds(5))
+        #expect(r.running != nil && modelCalls == 0 && !compared)
+        let restarted = r.start(.week, allowed: { true }, universe: { .init([]) }, analyze: { _ in .init(note: "Must not run") })
+        #expect(!restarted)
+        gathers.removeValue(forKey: "BBB")?.resume()
+        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(r.running == nil && r.activeSymbols.isEmpty && modelCalls == 0 && !compared)
+        #expect(r.scans[.week]?.results.isEmpty == true)
     }
 
     @Test func stockWorkersOverlapWithoutPreparingPastTheirBound() async throws {

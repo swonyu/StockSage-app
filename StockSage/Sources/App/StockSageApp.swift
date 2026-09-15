@@ -25,7 +25,9 @@ import AppKit
         Task {
             let wasBusy = await StockSageLocalModelServer.beginShutdown()
             let unloaded: Bool
-            if let config { unloaded = await StockSageLocalModelServer.unloadOnQuit(config, inferenceWasActive: wasBusy) }
+            if let config, config.supportsLocalUnload {
+                unloaded = await StockSageLocalModelServer.unloadOnQuit(config, inferenceWasActive: wasBusy)
+            }
             else { unloaded = true }
             var shouldQuit = true
             if !unloaded {

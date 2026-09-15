@@ -998,7 +998,11 @@ struct StockSageChatTests {
 
     @Test func macGuidanceNamesTheActualActionSourceAndRawLength() {
         #expect(StockSageChatSection.modelSetupGuidance.contains("Model settings"))
-        #expect(StockSageChatSection.modelSetupGuidance.contains("on this Mac"))
+        #expect(StockSageChatSection.modelSetupGuidance.contains("RunPod"))
+        let remote = StockSageLocalModelServer.config(url: StockSageLocalModelServer.runPodURL, model: StockSageLocalModelServer.gemmaModel)
+        let disclosure = StockSageChatSection.connectionDisclosure(remote)
+        #expect(disclosure.contains("private WhatsApp export excerpts leave this device"))
+        #expect(!disclosure.contains("group text stays local"))
         #expect(!StockSageChatSection.modelSetupGuidance.contains("iPhone"))
         for attribution in ["Fixture news", "مصدر تجريبي"] {
             let source = StockSageChat.Source(id: "fixture", subject: "ORCL", attribution: attribution,
