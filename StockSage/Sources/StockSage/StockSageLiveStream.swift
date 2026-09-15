@@ -9,10 +9,11 @@ final class StockSageLiveStream: ObservableObject {
     @Published private(set) var isStreaming = false
     @Published private(set) var quotes: [String: StockSageNBBO] = [:]
     @Published private(set) var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
-    @Published private(set) var diagnostics = StockSageFeedIngress.Metrics()
+    private(set) var diagnostics = StockSageFeedIngress.Metrics()
     @Published private(set) var connectionLabel = "Feed stopped"
     @Published private(set) var gapCount = 0
     private(set) var lastGap: String?
+    private var diagnosticsNotificationUptime: TimeInterval?
     private var delivered: [String: Tick] = [:]
     var subscribed: Set<String> {
         guard isStreaming else { return [] }
@@ -225,7 +226,7 @@ final class StockSageLiveStream: ObservableObject {
                         await ingress.acknowledge(snapshot.receivedUptime, at: ProcessInfo.processInfo.systemUptime)
                     } else { current.retry() }
                 } else {
-                    self.connectionLabel = "Feed reconnecting"
+                    if self.connectionLabel != "Feed reconnecting" { self.connectionLabel = "Feed reconnecting" }
                     self.clearPrices()
                 }
                 try? await Task.sleep(for: .milliseconds(250))
@@ -300,7 +301,7 @@ final class StockSageLiveStream: ObservableObject {
             let reason = ingress.failureReason ?? (snapshot.publicationExpired(at: ProcessInfo.processInfo.systemUptime)
                 ? "UI publication delayed over 10s; gap and reconnect" : "Feed session invalidated; gap and reconnect")
             ingress.invalidate(reason)
-            report.failure = reason; diagnostics = report
+            report.failure = reason; recordDiagnostics(report)
             recordGap(reason)
             clearPrices { apply([:], [:], now) }
             return false
@@ -309,7 +310,8 @@ final class StockSageLiveStream: ObservableObject {
         let recent = snapshot.authorized && Self.isLiveObservation(snapshot.newestSIP, at: now)
             && (report.sipToReceive.map { (0...Self.maximumLiveAge).contains($0) } ?? false)
         if isStreaming != recent { isStreaming = recent }
-        connectionLabel = !snapshot.authorized ? "Feed authenticating" : recent ? "US trades + quotes" : "Feed connected · no recent observation"
+        let label = !snapshot.authorized ? "Feed authenticating" : recent ? "US trades + quotes" : "Feed connected · no recent observation"
+        if connectionLabel != label { connectionLabel = label }
         delivered = snapshot.authorized ? snapshot.trades : [:]
         let regular = conditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true ? regularConditions : []
         // ponytail: retained cache/requalification can reach the existing 32,768-symbol
@@ -327,7 +329,7 @@ final class StockSageLiveStream: ObservableObject {
         report.peakReceiveToPublish = max(report.peakReceiveToPublish, report.receiveToPublish)
         // Recheck after the synchronous merge too, without locking out the receive callback.
         guard valid() else { return reject() }
-        diagnostics = report
+        recordDiagnostics(report)
         if report.receiveToPublish > Self.maximumLiveAge {
             ingress.invalidate("UI price publication exceeded 10s; gap and reconnect")
             return reject()
@@ -335,9 +337,21 @@ final class StockSageLiveStream: ObservableObject {
         return true
     }
 
+    /// Keep every report available, but ordinary diagnostics invalidate the UI at most once per second.
+    /// Failure changes and recovery notify immediately; quote and health publication remain independent.
+    func recordDiagnostics(_ report: StockSageFeedIngress.Metrics,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
+        if diagnostics.failure != report.failure || diagnosticsNotificationUptime.map({ uptime - $0 >= 1 }) != false {
+            diagnosticsNotificationUptime = uptime
+            objectWillChange.send()
+        }
+        diagnostics = report
+    }
+
     private func recordGap(_ reason: String) {
         gapCount += 1; lastGap = reason
-        connectionLabel = "Feed gap · reconnecting"
+        if connectionLabel != "Feed gap · reconnecting" { connectionLabel = "Feed gap · reconnecting" }
     }
 
     private func clearPrices(clearNBBO: @MainActor () -> Void = { StockSageStore.shared.applyLiveNBBO([:]) }) {
@@ -370,7 +384,7 @@ final class StockSageLiveStream: ObservableObject {
         connection?.close(); connection = nil
         regularConditions = []; conditionsAsOf = nil; exchanges = [:]; exchangesAsOf = nil
         clearPrices(clearNBBO: clearNBBO)
-        connectionLabel = "Feed stopped"
+        if connectionLabel != "Feed stopped" { connectionLabel = "Feed stopped" }
     }
 }
 

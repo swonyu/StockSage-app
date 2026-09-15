@@ -1,5 +1,8 @@
 import Testing
 import Foundation
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 @testable import StockSage
 
 // Pure-part tests for the optional on-device catalyst paragraph (owner request 2026-09-06,
@@ -10,6 +13,51 @@ import Foundation
 struct StockSageCatalystNarratorTests {
 
     typealias N = StockSageCatalystNarrator
+
+    @Test func serverFailuresExplainTheirCauseWithoutDiagnosticDump() {
+        typealias S = StockSageLocalModelServer
+        let cases: [(S.FailureCategory, String)] = [
+            (.timeout, "timed out"), (.contextBudget, "context"),
+            (.policyDenied, "turned off"), (.modelMissing, "requested model"),
+            (.obsoleteRequest, "settings changed"), (.cancelled, "cancelled"),
+            (.http, "HTTP 503")
+        ]
+        for (category, explanation) in cases {
+            let message = N.humanServerError(S.Diagnostic(category: category, httpStatus: 503))
+            #expect(message.localizedCaseInsensitiveContains(explanation), "Wrong explanation for \(category): \(message)")
+            #expect(!message.contains("server=") && !message.contains("body="),
+                    "Internal diagnostic fields are not a useful explanation")
+            #expect(!message.contains("32,768"), "Catalyst does not request Chat's context window")
+        }
+    }
+
+    @Test @MainActor func serverTimeoutKeepsItsCauseThroughTheTransportCaller() async throws {
+        let config = try #require(StockSageLocalModelServer.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        var calls = 0
+        let result = await N.explainViaServer(brief(symbol: "AAPL"), config: config,
+            isOllama: true, transport: { _ in
+                calls += 1
+                throw URLError(.timedOut)
+            })
+        #expect(calls == 1)
+        guard case .unavailable(let message) = result else {
+            Issue.record("A timeout must not become an explanation"); return
+        }
+        #expect(message.localizedCaseInsensitiveContains("timed out"))
+        #expect(!message.contains("server="))
+    }
+
+    #if canImport(FoundationModels)
+    @Test func onDeviceContextOverflowExplainsTheLimitWithoutRawError() {
+        let context = LanguageModelSession.GenerationError.Context(debugDescription: "private fixture evidence")
+        let message = N.humanOnDeviceError(LanguageModelSession.GenerationError.exceededContextWindowSize(context))
+        #expect(message.localizedCaseInsensitiveContains("context"))
+        #expect(message.localizedCaseInsensitiveContains("smaller"))
+        #expect(!message.contains("private fixture evidence") && !message.contains("try again"))
+        #expect(N.humanOnDeviceError(LanguageModelSession.GenerationError.guardrailViolation(context))
+            .contains("content guardrail"))
+    }
+    #endif
 
     @Test @MainActor func serverExplanationPreservesTheFinishStatus() async throws {
         let config = try #require(StockSageLocalModelServer.config(url: "http://127.0.0.1:8765", model: "fixture"))

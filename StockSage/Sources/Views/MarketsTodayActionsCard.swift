@@ -60,7 +60,7 @@ struct MarketsTodayActionsCard: View {
             let shownPlans = executableOnly ? plans.filter(isExecutableNow(_:)) : plans
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Image(systemName: "list.number").font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+                    Image(systemName: "list.number").font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
                     Text("Today's plan — executable equities first").font(.system(size: font11, weight: .bold)).foregroundStyle(.white)
                     Spacer()
                     Toggle("Executable now only", isOn: $executableOnly)
@@ -114,7 +114,7 @@ struct MarketsTodayActionsCard: View {
                     } label: {
                         Label("Copy all \(shownPlans.count)", systemImage: "doc.on.doc").font(.system(size: font9, weight: .medium))
                     }
-                    .buttonStyle(.plain).foregroundStyle(DS.Palette.accent).disabled(shownPlans.isEmpty)
+                    .buttonStyle(.plain).foregroundStyle(DS.Palette.accentText).disabled(shownPlans.isEmpty)
                     .help("Copy the ranked plan — entry/stop/target, size, and each gate verdict — to the clipboard. A row whose price is sample data, undated, future-dated, or more than 60 seconds old exports as \"Draft only — refresh price\" with NO order line — a wider check than the prior-day cue shown on the row itself. Estimates, not advice.")
                 }
                 if let weekly = weeklyExecutedVsBlockedMetric {
@@ -311,7 +311,7 @@ struct MarketsTodayActionsCard: View {
                 Image(systemName: "square.and.pencil").font(.system(size: font12))
                 Text("Log").font(.system(size: font8, weight: .semibold))
             }
-            .foregroundStyle(DS.Palette.accent)
+            .foregroundStyle(DS.Palette.accentText)
             .padding(.horizontal, 8).padding(.vertical, 6)
             .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }

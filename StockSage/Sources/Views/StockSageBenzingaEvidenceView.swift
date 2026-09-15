@@ -28,8 +28,8 @@ struct StockSageBenzingaEvidenceView: View {
                             ForEach(projection.records) { record in
                                 Self.recordContent(record)
                             }
-                            if projection.omittedRecordCount > 0 {
-                                Text("\(projection.omittedRecordCount) records omitted by capture/display bounds.")
+                            ForEach(Self.omissionLines(for: projection), id: \.self) { line in
+                                Text(verbatim: line)
                             }
                         }
                     }
@@ -46,6 +46,20 @@ struct StockSageBenzingaEvidenceView: View {
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    nonisolated static func omissionLines(for projection: StockSageBenzinga.Projection) -> [String] {
+        var lines: [String] = []
+        if projection.notEligibleCount > 0 {
+            lines.append("\(projection.notEligibleCount) records excluded by evidence eligibility or validation rules.")
+        }
+        if projection.cappedRecordCount > 0 {
+            lines.append("\(projection.cappedRecordCount) records beyond the retained cap of 3 per product.")
+        }
+        if projection.trimmedRecordCount > 0 {
+            lines.append("\(projection.trimmedRecordCount) retained records not shown in this panel.")
+        }
+        return lines
     }
 
     /// Use the same whole source text as the model projection; never invent a source date.
@@ -67,6 +81,9 @@ struct StockSageBenzingaEvidenceView: View {
     nonisolated static func checkLabel(_ page: StockSageBenzinga.Page) -> String {
         let query = "\(page.query.product.label) · \(page.query.subject)"
         if page.status == .notChecked { return query + " · Not checked" }
+        if case .unavailable(.priorAuthenticationRejection) = page.status {
+            return query + " · " + statusLabel(page.status) + " · Decision recorded " + page.checkedAt.ISO8601Format()
+        }
         return query + " · " + statusLabel(page.status)
             + " · Locally checked \(page.checkedAt.ISO8601Format())"
             + " · \(page.records.count) retained, \(page.excludedCount) excluded"
@@ -83,6 +100,8 @@ struct StockSageBenzingaEvidenceView: View {
             case .invalidQuery: return "Unavailable: unsupported query"
             case .missingCredential: return "Unavailable: Massive credential missing"
             case .unauthorized: return "Unavailable: authentication rejected"
+            case .priorAuthenticationRejection(let subject, let checkedAt):
+                return "Not requested: this product rejected authentication for \(subject) at \(checkedAt.ISO8601Format()); retry after the short cache expires or use Recheck access."
             case .entitlement: return "Unavailable: product access denied"
             case .throttled: return "Unavailable: rate limited"
             case .transport: return "Unavailable: transport failure"

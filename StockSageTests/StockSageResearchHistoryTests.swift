@@ -9,14 +9,29 @@ struct StockSageResearchHistoryTests {
 
     private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
     private func run(id: UUID = UUID(), completed: String = "2026-09-14T21:00:00Z",
-                     horizon: History.Horizon = .week, referencePrice: Double? = 200) -> History.Run {
+                     horizon: History.Horizon = .week, referencePrice: Double? = 200,
+                     policy: History.MeasurementPolicy? = nil) -> History.Run {
         .init(id: id, startedAt: date(completed).addingTimeInterval(-60), completedAt: date(completed),
               horizon: horizon, predictions: [.init(symbol: "ACME", name: "Acme", action: "Buy",
                 reason: "Dated evidence supports the setup", risk: "Demand may weaken", evidence: ["F1"],
                 facts: ["Original observed facts"], model: "fixture-model", note: "Unvalidated research",
                 referencePrice: referencePrice,
                 referenceDate: referencePrice == nil ? nil : date("2026-09-11T04:00:00Z"), levels: nil)],
-              coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil))
+              coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil),
+              measurementPolicy: policy)
+    }
+
+    private var fortnightDates: [String] {
+        ["09-15", "09-16", "09-17", "09-18", "09-21", "09-22", "09-23", "09-24",
+         "09-25", "09-28", "09-29", "09-30", "10-01", "10-02"].map { "2026-\($0)T04:00:00Z" }
+    }
+
+    private func pathObservation(dates: [String], closes: [Double]) -> History.Observation {
+        .init(history: .init(symbol: "ACME", dates: dates.map { date($0) },
+            opens: Array(repeating: 100, count: closes.count), highs: closes.map { max(100, $0) + 2 },
+            lows: closes.map { min(100, $0) - 2 }, closes: closes,
+            volumes: Array(repeating: 100, count: closes.count), priceSource: .massiveDaily),
+            splitAdjusted: true, provider: "Fixture Massive daily", fetchedAt: date("2026-10-06T12:00:00Z"))
     }
     private func observation(baseline: Double = 100, target: Double = 110,
                              adjusted: Bool = true, fetched: String = "2026-09-24T12:00:00Z") -> History.Observation {
@@ -118,6 +133,175 @@ struct StockSageResearchHistoryTests {
         let dayBoundary = History.homeSummary([due], now: date("2026-09-15T00:30:00Z"))
         #expect(dayBoundary.completedToday == 1)
         #expect(History.homeSummary([due], now: date("2026-09-15T04:00:00Z")).completedToday == 0)
+    }
+
+    @Test func newSnapshotsMeasureSevenOrFourteenFullSessionsFromTheNextDateOpen() {
+        // The reference excludes completion's whole New York date. A completion before
+        // today's close must not spend one of its seven/fourteen sessions before entry.
+        for horizon in StockSageHorizonResearch.Horizon.allCases {
+            let expected = date(horizon == .week ? "2026-09-23T20:00:00Z" : "2026-10-02T20:00:00Z")
+            for clock in ["2026-09-14T08:00:00Z", "2026-09-14T19:59:59Z",
+                          "2026-09-14T20:00:00Z", "2026-09-14T21:00:00Z"] {
+                let completed = date(clock)
+                let snapshot = History.snapshot(startedAt: completed.addingTimeInterval(-60),
+                    completedAt: completed, horizon: horizon, scan: .init())
+                #expect(History.benchmarkDay(after: completed) == date("2026-09-15T04:00:00Z"))
+                #expect(History.availability(for: snapshot, now: date("2026-10-05T12:00:00Z")).targetCloseAt == expected,
+                        "A new \(horizon.rawValue) run completed at \(clock) needs the whole forward window")
+            }
+        }
+    }
+
+    @Test func fullSessionPolicyHonorsHolidaysEarlyCloseDSTAndUnknownYear() {
+        let cases: [(String, String?)] = [
+            ("2026-09-04T18:00:00Z", "2026-09-16T20:00:00Z"), // Labor Day is excluded.
+            ("2026-11-17T18:00:00Z", "2026-11-27T18:00:00Z"), // Thanksgiving, then an early close.
+            ("2026-10-30T18:00:00Z", "2026-11-10T21:00:00Z"), // DST changes before the benchmark.
+            ("2026-12-23T18:00:00Z", nil)
+        ]
+        for (completed, expected) in cases {
+            let original = run(completed: completed, policy: .nextTradingDateSessions)
+            #expect(History.targetClose(for: original) == expected.map { date($0) })
+        }
+    }
+
+    @Test func legacyAndNewPoliciesRoundTripWithoutMovingAnObservedOutcome() throws {
+        let suite = "stocksage.research.policy.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let url = directory.appendingPathComponent("history.json")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let legacy = run(completed: "2026-09-14T19:59:59Z")
+        let current = run(completed: "2026-09-14T19:59:59Z", policy: .nextTradingDateSessions)
+        let oldData = pathObservation(dates: [fortnightDates[0], fortnightDates[5]], closes: [105, 110])
+        let oldReceipt = History.evaluate(legacy.predictions[0], in: legacy, observation: oldData,
+                                         now: date("2026-10-06T13:00:00Z"))
+        try #require(oldReceipt.state == .evaluated && oldReceipt.dailyCloses == nil)
+        let history = History(storageURL: url, defaults: defaults)
+        #expect(history.record(legacy) && history.record(current))
+        #expect(history.recordEvaluation(oldReceipt, runID: legacy.id, symbol: "ACME"))
+        let bytes = try Data(contentsOf: url)
+        let reopened = History(storageURL: url, defaults: defaults)
+        let savedLegacy = try #require(reopened.runs.first { $0.id == legacy.id })
+        let savedCurrent = try #require(reopened.runs.first { $0.id == current.id })
+        #expect(savedLegacy.measurementPolicy == nil && savedCurrent.measurementPolicy == .nextTradingDateSessions)
+        #expect(History.targetClose(for: savedLegacy) == date("2026-09-22T20:00:00Z"))
+        #expect(History.targetClose(for: savedCurrent) == date("2026-09-23T20:00:00Z"))
+        let reopenedBytes = try Data(contentsOf: url)
+        #expect(savedLegacy.evaluations["ACME"] == oldReceipt && reopenedBytes == bytes)
+        #expect(savedLegacy.predictions == legacy.predictions && savedCurrent.predictions == current.predictions)
+
+        var encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(current)) as? [String: Any])
+        encoded["measurementPolicy"] = 999
+        let unknownPolicy = try JSONSerialization.data(withJSONObject: encoded)
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(History.Run.self, from: unknownPolicy) }
+        // Optional fields absent in baseline files must remain absent, not be backfilled.
+        var oldEncoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(oldReceipt)) as? [String: Any])
+        oldEncoded.removeValue(forKey: "dailyCloses")
+        #expect(try JSONDecoder().decode(History.Evaluation.self,
+            from: JSONSerialization.data(withJSONObject: oldEncoded)) == oldReceipt)
+    }
+
+    @Test func completeDailyClosePathShowsWeekOneReversalWithoutCountingOutsideBars() throws {
+        let original = run(horizon: .fortnight, policy: .nextTradingDateSessions)
+        let closes: [Double] = [105, 110, 140, 120, 125, 128, 130, 125, 120, 110, 100, 95, 80, 90]
+        let data = pathObservation(dates: ["2026-09-14T04:00:00Z"] + fortnightDates + ["2026-10-05T04:00:00Z"],
+            closes: [500] + closes + [10])
+        let result = History.evaluate(original.predictions[0], in: original, observation: data,
+                                      now: date("2026-10-06T13:00:00Z"))
+        try #require(result.state == .evaluated)
+        #expect(result.direction == .fell && result.comparisonReferencePrice == 100 && result.targetPrice == 90)
+        let path = try #require(result.dailyCloses)
+        #expect(path.map(\.price) == closes && path.count == 14)
+        #expect(path.map(\.price).max() == 140 && path.map(\.price).min() == 80)
+        #expect(History.seventhSessionClose(in: result, for: original)
+            == .init(date: date("2026-09-23T04:00:00Z"), price: 130))
+        let store = History(storageURL: nil)
+        #expect(store.record(original) && store.recordEvaluation(result, runID: original.id, symbol: "ACME"))
+        #expect(store.runs[0].predictions == original.predictions)
+    }
+
+    @Test func missingInteriorSessionKeepsOnlyTheEndpointResult() throws {
+        let original = run(horizon: .fortnight, policy: .nextTradingDateSessions)
+        let dates = fortnightDates.enumerated().filter { $0.offset != 3 }.map(\.element)
+        let result = History.evaluate(original.predictions[0], in: original,
+            observation: pathObservation(dates: dates, closes: Array(repeating: 110, count: dates.count)),
+            now: date("2026-10-06T13:00:00Z"))
+        #expect(result.state == .evaluated && result.targetPrice == 110 && result.direction == .rose)
+        #expect(result.dailyCloses == nil && History.seventhSessionClose(in: result, for: original) == nil)
+        #expect(result.note.contains("intervening sessions are missing or unverified"))
+    }
+
+    @Test func invalidPathsAreRejectedAndRicherRetriesCannotRewriteObservedOutcomes() throws {
+        let original = run(horizon: .fortnight, policy: .nextTradingDateSessions)
+        let full = History.evaluate(original.predictions[0], in: original,
+            observation: pathObservation(dates: fortnightDates, closes: Array(repeating: 110, count: 14)),
+            now: date("2026-10-06T13:00:00Z"))
+        let path = try #require(full.dailyCloses)
+        let store = History(storageURL: nil)
+        try #require(store.record(original))
+        let invalid: [[History.DailyClose]] = [
+            Array(path.dropFirst()), Array(path.dropLast()), [path[0]] + path,
+            [path[1], path[0]] + Array(path.dropFirst(2)),
+            [.init(date: path[0].date, price: .nan)] + Array(path.dropFirst()),
+            Array(path.dropLast()) + [.init(date: path.last!.date, price: 120)],
+            [.init(date: date("2026-09-14T04:00:00Z"), price: 110)] + Array(path.dropFirst())
+        ]
+        for badPath in invalid {
+            var corrupt = full; corrupt.dailyCloses = badPath
+            #expect(!store.recordEvaluation(corrupt, runID: original.id, symbol: "ACME"))
+            #expect(store.runs[0].evaluations.isEmpty)
+        }
+        var endpointOnly = full; endpointOnly.dailyCloses = nil
+        #expect(store.recordEvaluation(endpointOnly, runID: original.id, symbol: "ACME"))
+        #expect(store.recordEvaluation(full, runID: original.id, symbol: "ACME"))
+        #expect(store.runs[0].evaluations["ACME"] == endpointOnly)
+    }
+
+    @Test func homeCountsObservedDirectionsWithoutTreatingOverlappingPicksAsTrades() {
+        let now = date("2026-09-24T13:00:00Z")
+        let finished = [110.0, 90, 100].map { target in
+            var record = run()
+            record.evaluations["ACME"] = History.evaluate(record.predictions[0], in: record,
+                observation: observation(target: target), now: now)
+            return record
+        }
+        var unavailable = run()
+        unavailable.evaluations["ACME"] = History.evaluate(unavailable.predictions[0], in: unavailable,
+            observation: nil, now: now)
+        let summary = History.homeSummary(finished + [unavailable, run()], now: now)
+        #expect(summary.evaluatedPredictions == 3 && summary.rosePredictions == 1)
+        #expect(summary.fellPredictions == 1 && summary.flatPredictions == 1 && summary.readyPredictions == 2)
+    }
+
+    @Test func completePathReloadsAndCorruptOptionalMetadataPreservesOriginalBytes() throws {
+        let suite = "stocksage.research.path.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let url = directory.appendingPathComponent("history.json")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let original = run(horizon: .fortnight, policy: .nextTradingDateSessions)
+        let receipt = History.evaluate(original.predictions[0], in: original,
+            observation: pathObservation(dates: fortnightDates, closes: Array(repeating: 110, count: 14)),
+            now: date("2026-10-06T13:00:00Z"))
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.record(original) && history.recordEvaluation(receipt, runID: original.id, symbol: "ACME"))
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.lastError == nil && reopened.runs[0].evaluations["ACME"] == receipt)
+        let validBytes = try Data(contentsOf: url)
+        var object = try #require(JSONSerialization.jsonObject(with: validBytes) as? [String: Any])
+        var runs = try #require(object["runs"] as? [[String: Any]])
+        var evaluations = try #require(runs[0]["evaluations"] as? [String: [String: Any]])
+        var path = try #require(evaluations["ACME"]?["dailyCloses"] as? [[String: Any]])
+        path.remove(at: 3)
+        evaluations["ACME"]?["dailyCloses"] = path
+        runs[0]["evaluations"] = evaluations; object["runs"] = runs
+        let corruptBytes = try JSONSerialization.data(withJSONObject: object)
+        try corruptBytes.write(to: url)
+        let blocked = History(storageURL: url, defaults: defaults)
+        #expect(blocked.lastError != nil && !blocked.record(run()))
+        #expect(try Data(contentsOf: url) == corruptBytes)
+        #expect(history.runs[0].evaluations["ACME"] == receipt, "An unreadable disk update must not mutate a last-good capture")
     }
 
     @Test func futureClosesRespectHolidaysEarlyCloseAndDST() {

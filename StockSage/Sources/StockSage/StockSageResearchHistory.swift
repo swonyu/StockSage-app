@@ -12,6 +12,10 @@ final class StockSageResearchHistory: ObservableObject {
         case week = 7, fortnight = 14
         var title: String { self == .week ? "1–7 trading days" : "7–14 trading days" }
     }
+    nonisolated enum MeasurementPolicy: Int, Codable, Sendable {
+        /// Seven/fourteen whole sessions beginning on the next trading date, never completion's date.
+        case nextTradingDateSessions = 1
+    }
     nonisolated struct Levels: Codable, Sendable, Equatable {
         let entry: Double
         let stop: Double
@@ -58,8 +62,22 @@ final class StockSageResearchHistory: ObservableObject {
         let horizon: Horizon
         let predictions: [Prediction]
         let coverage: Coverage
+        /// Missing in older files: retain the legacy count of future closes after completion.
+        let measurementPolicy: MeasurementPolicy?
         // Only these subsequent receipts change; the original prediction fields above never do.
         var evaluations: [String: Evaluation] = [:]
+
+        init(id: UUID, startedAt: Date, completedAt: Date, horizon: Horizon,
+             predictions: [Prediction], coverage: Coverage, evaluations: [String: Evaluation] = [:],
+             measurementPolicy: MeasurementPolicy? = nil) {
+            self.id = id; self.startedAt = startedAt; self.completedAt = completedAt
+            self.horizon = horizon; self.predictions = predictions; self.coverage = coverage
+            self.evaluations = evaluations; self.measurementPolicy = measurementPolicy
+        }
+    }
+    nonisolated struct DailyClose: Codable, Sendable, Equatable {
+        let date: Date
+        let price: Double
     }
     nonisolated struct Evaluation: Codable, Sendable, Equatable {
         enum State: String, Codable, Sendable { case notDue, due, dataUnavailable, evaluated }
@@ -77,6 +95,8 @@ final class StockSageResearchHistory: ObservableObject {
         var direction: Direction? = nil
         /// Flat is reported separately, not counted as support or converted into a win probability.
         var buyDirectionSupported: Bool? = nil
+        /// Complete comparison-date path only; nil means unrecorded or missing sessions.
+        var dailyCloses: [DailyClose]? = nil
         let note: String
     }
     nonisolated struct Observation: Sendable {
@@ -140,7 +160,7 @@ final class StockSageResearchHistory: ObservableObject {
             coverage: Coverage(requested: scan.listings.count, checked: scan.results.count,
                 incomplete: scan.results.values.filter { $0.verdict == nil }.count,
                 buyCount: scan.results.values.filter { $0.verdict?.action == .buy || $0.verdict?.action == .strongBuy }.count,
-                selection: selection))
+                selection: selection), measurementPolicy: .nextTradingDateSessions)
     }
 
     @discardableResult func record(_ run: Run) -> Bool {
@@ -162,15 +182,14 @@ final class StockSageResearchHistory: ObservableObject {
         commit { document in
             guard let index = document.runs.firstIndex(where: { $0.id == runID }),
                   document.runs[index].predictions.contains(where: { $0.symbol == symbol }),
-                  evaluation.targetCloseAt == Self.targetClose(after: document.runs[index].completedAt,
-                      horizon: document.runs[index].horizon),
-                  evaluation.calendarBasis == Self.benchmarkCalendarBasis,
+                  evaluation.targetCloseAt == Self.targetClose(for: document.runs[index]),
+                  evaluation.calendarBasis == Self.calendarBasis(for: document.runs[index]),
                   evaluation.state != .evaluated || evaluation.comparisonReferenceDate == Self.benchmarkDay(after: document.runs[index].completedAt),
                   Self.valid(evaluation, run: document.runs[index]) else { throw CocoaError(.fileWriteInvalidFileName) }
             if let old = document.runs[index].evaluations[symbol] {
                 guard evaluation.checkedAt >= old.checkedAt else { throw CocoaError(.fileWriteInvalidFileName) }
-                // A failed retry does not erase an already observed outcome.
-                if old.state == .evaluated && evaluation.state != .evaluated { return }
+                // A later provider revision or richer path must not rewrite an observed outcome.
+                if old.state == .evaluated { return }
             }
             document.runs[index].evaluations[symbol] = evaluation
         }
@@ -184,6 +203,10 @@ final class StockSageResearchHistory: ObservableObject {
         var unavailablePredictions = 0
         var nextReviewAt: Date?
         var completedToday = 0
+        var evaluatedPredictions = 0
+        var rosePredictions = 0
+        var fellPredictions = 0
+        var flatPredictions = 0
     }
 
     nonisolated static func pendingPredictions(in run: Run) -> [Prediction] {
@@ -199,6 +222,15 @@ final class StockSageResearchHistory: ObservableObject {
             }) { summary.latest.append(latest) }
         }
         for run in runs {
+            for receipt in run.evaluations.values where receipt.state == .evaluated {
+                switch receipt.direction {
+                case .rose: summary.rosePredictions += 1
+                case .fell: summary.fellPredictions += 1
+                case .flat: summary.flatPredictions += 1
+                case nil: continue
+                }
+                summary.evaluatedPredictions += 1
+            }
             if validDate(now), run.completedAt <= now, calendar.isDate(run.completedAt, inSameDayAs: now) {
                 summary.completedToday += 1
             }
@@ -309,14 +341,18 @@ final class StockSageResearchHistory: ObservableObject {
         }
         return nil
     }
-    /// Count CLOSE instants strictly after completion: today's close counts only when still future.
-    /// Calendar-day arithmetic preserves DST and the verified exchange calendar handles half days.
-    nonisolated static func targetClose(after completedAt: Date, horizon: Horizon) -> Date? {
+    nonisolated static func targetClose(for run: Run) -> Date? {
+        targetClose(after: run.completedAt, horizon: run.horizon, policy: run.measurementPolicy)
+    }
+    /// Legacy callers count future CLOSE instants, including today's when still future.
+    /// New runs exclude completion's date, matching their next-date opening benchmark.
+    nonisolated static func targetClose(after completedAt: Date, horizon: Horizon,
+                                       policy: MeasurementPolicy? = nil) -> Date? {
         guard validDate(completedAt) else { return nil }
         let calendar = calendar
         let firstDay = calendar.startOfDay(for: completedAt)
         var remaining = horizon.rawValue
-        for offset in 0..<45 {
+        for offset in (policy == .nextTradingDateSessions ? 1 : 0)..<45 {
             guard let day = calendar.date(byAdding: .day, value: offset, to: firstDay),
                   let schedule = StockSageMarketHours.nasdaqDay(at: day) else { return nil }
             guard schedule.trading,
@@ -327,21 +363,25 @@ final class StockSageResearchHistory: ObservableObject {
         }
         return nil
     }
+    private nonisolated static func calendarBasis(for run: Run) -> String {
+        benchmarkCalendarBasis + (run.measurementPolicy == .nextTradingDateSessions
+            ? "; seven/fourteen full sessions from the next trading-date open (policy 1)" : "")
+    }
     /// A provider daily close can change after the regular close. Wait until the entire
     /// target New York date has ended before accepting its completed daily aggregate.
     nonisolated static func reviewAvailableAt(for run: Run) -> Date? {
-        guard let target = targetClose(after: run.completedAt, horizon: run.horizon) else { return nil }
+        guard let target = targetClose(for: run) else { return nil }
         return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: target))
     }
     nonisolated static func availability(for run: Run, now: Date) -> Evaluation {
         guard valid(run), validDate(now), now >= run.completedAt,
-              let target = targetClose(after: run.completedAt, horizon: run.horizon),
+              let target = targetClose(for: run),
               let availableAt = reviewAvailableAt(for: run) else {
-            return Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: nil,
+            return Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: nil, calendarBasis: calendarBasis(for: run),
                 note: "The future Nasdaq session calendar or evaluation clock could not be verified.")
         }
-        return Evaluation(state: now < availableAt ? .notDue : .due, checkedAt: now, targetCloseAt: target,
-            note: now < availableAt ? "Waiting until the New York date of the \(run.horizon.rawValue)th future Nasdaq regular-session close ends, so its daily aggregate is complete."
+        return Evaluation(state: now < availableAt ? .notDue : .due, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
+            note: now < availableAt ? "Waiting until the target New York date ends, so its daily aggregate is complete. " + measurementDescription(for: run)
                 : "Due for a dated price-direction check. No outcome has been observed yet.")
     }
     nonisolated static func evaluate(_ prediction: Prediction, in run: Run,
@@ -349,7 +389,7 @@ final class StockSageResearchHistory: ObservableObject {
         let available = availability(for: run, now: now)
         guard available.state == .due, let target = available.targetCloseAt else { return available }
         func unavailable(_ note: String) -> Evaluation {
-            Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: target,
+            Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
                 provider: observation?.provider,
                 fetchedAt: observation.flatMap { validDate($0.fetchedAt) && $0.fetchedAt <= now ? $0.fetchedAt : nil }, note: note)
         }
@@ -394,12 +434,50 @@ final class StockSageResearchHistory: ObservableObject {
         guard change.isFinite else { return unavailable("The comparable price return is not finite.") }
         let direction: Evaluation.Direction = targetPrice == baseline ? .flat : (targetPrice > baseline ? .rose : .fell)
         let isBuy = prediction.action == "Buy" || prediction.action == "Strong Buy"
-        return Evaluation(state: .evaluated, checkedAt: now, targetCloseAt: target,
+        let byDate = Dictionary(uniqueKeysWithValues: (baselineIndex...targetIndex).map {
+            (calendar.startOfDay(for: history.dates[$0]), history.closes[$0])
+        })
+        let sessionDates = comparisonSessionDates(from: benchmark, through: target)
+        let path: [DailyClose]? = sessionDates.flatMap { dates in
+            guard dates.allSatisfy({ byDate[$0] != nil }) else { return nil }
+            return dates.map { DailyClose(date: $0, price: byDate[$0]!) }
+        }
+        return Evaluation(state: .evaluated, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
             provider: observation.provider, fetchedAt: observation.fetchedAt,
             comparisonReferencePrice: baseline, comparisonReferenceDate: benchmark,
             targetPrice: targetPrice, priceReturn: change, direction: direction,
-            buyDirectionSupported: isBuy && direction != .flat ? direction == .rose : nil,
-            note: "Price direction from the next trading day's daily open to the target day's daily close, on the same split-adjusted basis. Daily aggregates may include qualifying extended-hours trades; this is not a guaranteed execution price. Excludes dividends, fees and execution costs; not realized trading profit or a win probability.")
+            buyDirectionSupported: isBuy && direction != .flat ? direction == .rose : nil, dailyCloses: path,
+            note: "Price direction from the next trading day's daily open to the target day's daily close, on the same split-adjusted basis. Daily aggregates may include qualifying extended-hours trades; this is not a guaranteed execution price. Excludes dividends, fees and execution costs; not realized trading profit or a win probability. No market comparison is made."
+                + (path == nil ? " Complete daily-close path unavailable; intervening sessions are missing or unverified." : ""))
+    }
+
+    nonisolated static func measurementDescription(for run: Run) -> String {
+        run.measurementPolicy == .nextTradingDateSessions
+            ? "\(run.horizon.rawValue) full Nasdaq sessions, starting at the next trading-date open."
+            : "Legacy schedule: the \(run.horizon.rawValue)th close after completion; a still-future completion-day close counted, so the opening benchmark may cover one fewer session."
+    }
+
+    /// Whole verified comparison dates, never adjacent-row positions or a weekday-only guess.
+    private nonisolated static func comparisonSessionDates(from start: Date, through target: Date) -> [Date]? {
+        let calendar = calendar
+        let last = calendar.startOfDay(for: target)
+        guard validDate(start), validDate(target), start == calendar.startOfDay(for: start), start < last else { return nil }
+        var dates: [Date] = []
+        for offset in 0..<45 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: start), day <= last,
+                  let schedule = StockSageMarketHours.nasdaqDay(at: day) else { return nil }
+            if schedule.trading {
+                guard dates.count < 14 else { return nil }
+                dates.append(day)
+            }
+            if day == last { return dates.first == start && dates.last == last ? dates : nil }
+        }
+        return nil
+    }
+
+    nonisolated static func seventhSessionClose(in evaluation: Evaluation, for run: Run) -> DailyClose? {
+        guard let target = targetClose(after: run.completedAt, horizon: .week, policy: run.measurementPolicy) else { return nil }
+        return evaluation.dailyCloses?.first { calendar.isDate($0.date, inSameDayAs: target) }
     }
 
     private nonisolated static func validDate(_ date: Date) -> Bool {
@@ -456,6 +534,7 @@ final class StockSageResearchHistory: ObservableObject {
             }
             return evaluation.comparisonReferenceDate == nil && evaluation.comparisonReferencePrice == nil && evaluation.targetPrice == nil
                 && evaluation.priceReturn == nil && evaluation.direction == nil && evaluation.buyDirectionSupported == nil
+                && evaluation.dailyCloses == nil
         }
         guard let target = evaluation.targetCloseAt,
               let availableAt = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: target)),
@@ -467,6 +546,12 @@ final class StockSageResearchHistory: ObservableObject {
               let referenceDate = evaluation.comparisonReferenceDate, validDate(referenceDate) else { return false }
         guard referenceDate > run.completedAt, referenceDate < target,
               referenceDate == calendar.startOfDay(for: referenceDate) else { return false }
+        if let path = evaluation.dailyCloses {
+            guard let dates = comparisonSessionDates(from: referenceDate, through: target),
+                  path.count <= 14, path.map(\.date) == dates,
+                  path.allSatisfy({ $0.price.isFinite && $0.price > 0 }),
+                  path.last?.price == targetPrice else { return false }
+        }
         let direction: Evaluation.Direction = targetPrice == baseline ? .flat : (targetPrice > baseline ? .rose : .fell)
         return evaluation.direction == direction && evaluation.buyDirectionSupported == (direction == .flat ? nil : direction == .rose)
     }

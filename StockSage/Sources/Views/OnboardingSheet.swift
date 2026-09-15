@@ -49,7 +49,7 @@ struct OnboardingSheet: View {
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: step.icon)
                                 .fixedSize().frame(minWidth: 22, alignment: .leading)
-                                .foregroundStyle(DS.Palette.accent)
+                                .foregroundStyle(DS.Palette.accentText)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(step.id). \(step.title)").font(.callout.weight(.semibold))
                                 Text(step.detail).font(.callout).foregroundStyle(.secondary)

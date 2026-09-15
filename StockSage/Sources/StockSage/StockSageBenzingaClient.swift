@@ -37,14 +37,16 @@ import Foundation
         let query: B.Query?
         let request: URLRequest
         let capture: Capture
+        let authorizationReset: UUID
         let deadline = ContinuousClock.now.advanced(by: .seconds(12))
         var waiters: [UUID: CheckedContinuation<Result<Output, B.Failure>, Never>] = [:]
         var operation: Task<Void, Never>?
         var timer: Task<Void, Never>?
         var finished = false
 
-        init(key: RequestKey, query: B.Query?, request: URLRequest, capture: Capture) {
+        init(key: RequestKey, query: B.Query?, request: URLRequest, capture: Capture, authorizationReset: UUID) {
             self.key = key; self.query = query; self.request = request; self.capture = capture
+            self.authorizationReset = authorizationReset
         }
     }
 
@@ -56,6 +58,9 @@ import Foundation
     private let transport: @MainActor @Sendable (URLRequest) async throws -> (Data, URLResponse)
     private let sleepUntil: @MainActor @Sendable (ContinuousClock.Instant) async throws -> Void
     private var capture: Capture?
+    private var authorizationReset = UUID()
+    // At most one short-lived 401 receipt per product. A 402/403 remains query-scoped.
+    private var authenticationRejections: [B.Product: (subject: String, checkedAt: Date)] = [:]
     private var cache: [RequestKey: CacheEntry] = [:]
     private var access: UInt64 = 0
     private var flights: [RequestKey: Job] = [:]
@@ -108,6 +113,8 @@ import Foundation
 
     /// Forget cached HTTP 401/402/403 only; no request, epoch change, or cooldown reset.
     func clearAuthorizationFailures() {
+        authorizationReset = UUID()
+        authenticationRejections.removeAll()
         cache = cache.filter {
             switch $0.value.page.status {
             case .unavailable(.unauthorized), .unavailable(.entitlement): return false
@@ -126,6 +133,7 @@ import Foundation
         let next = Capture(key: key, revision: revision, allowed: allowed, policyRevision: policyRevision, epoch: UUID().uuidString)
         capture = next
         cache.removeAll()
+        authenticationRejections.removeAll()
         // Cooldown survives policy/key toggles: neither is permission to evade Retry-After.
         for job in Array(flights.values) {
             finish(job, .failure(allowed ? .obsoleteCredential : .policyDenied))
@@ -153,6 +161,16 @@ import Foundation
                status: .unavailable(failure), records: [], excludedCount: 0, hasMore: false)
     }
 
+    private func priorAuthenticationFailure(_ query: B.Query?) -> B.Failure? {
+        guard let query, let prior = authenticationRejections[query.product] else { return nil }
+        let age = now().timeIntervalSince(prior.checkedAt)
+        guard age >= 0, age < min(query.product.cacheTTL, 300) else {
+            authenticationRejections.removeValue(forKey: query.product)
+            return nil
+        }
+        return .priorAuthenticationRejection(subject: prior.subject, checkedAt: prior.checkedAt)
+    }
+
     func page(for query: StockSageBenzinga.Query,
               recheckAuthorization: Bool = false) async -> StockSageBenzinga.Page {
         let original = synchronize()
@@ -174,7 +192,22 @@ import Foundation
             }
             cache.removeValue(forKey: key)
         }
+        if recheckAuthorization {
+            authorizationReset = UUID()
+            authenticationRejections.removeValue(forKey: query.product)
+            // An explicit recheck replaces this pending query only. Existing waiters receive
+            // cancellation; an old transport keeps its slot until it actually returns.
+            // Incompatible rolling windows use the exact-query key while another
+            // window owns the shared key. Either flight may finish before a recheck.
+            for candidate in Set([key, RequestKey.page(query)]) {
+                if let pending = flights[candidate], pending.query == query {
+                    finish(pending, .failure(.cancelled))
+                    pending.operation?.cancel()
+                }
+            }
+        }
         if let failure = admissionFailure(original) { return unavailable(query, original, failure) }
+        if let failure = priorAuthenticationFailure(query) { return unavailable(query, original, failure) }
         // An earlier caller's wider/different window cannot supply this caller's result.
         let flightKey: RequestKey
         if let existing = flights[key], let prior = existing.query, !compatible(prior, query) {
@@ -223,7 +256,8 @@ import Foundation
                 if let existing = flights[key] {
                     job = existing
                 } else {
-                    job = Job(key: key, query: query, request: request, capture: capture)
+                    job = Job(key: key, query: query, request: request, capture: capture,
+                              authorizationReset: authorizationReset)
                     flights[key] = job; queue.append(job)
                     job.timer = Task { @MainActor in
                         do {
@@ -258,6 +292,9 @@ import Foundation
             if let failure = admissionFailure(job.capture) {
                 finish(job, .failure(failure)); continue
             }
+            if let failure = priorAuthenticationFailure(job.query) {
+                finish(job, .failure(failure)); continue
+            }
             if ContinuousClock.now >= job.deadline {
                 finish(job, .failure(.timedOut)); continue
             }
@@ -272,6 +309,7 @@ import Foundation
                 do {
                     try Task.checkCancellation()
                     if let failure = self.admissionFailure(job.capture) { throw failure }
+                    if let failure = self.priorAuthenticationFailure(job.query) { throw failure }
                     let (data, response) = try await self.transport(job.request)
                     try Task.checkCancellation()
                     if let failure = self.receiptFailure(job.capture) { throw failure }
@@ -297,7 +335,18 @@ import Foundation
                                 : (http.statusCode == 402 || http.statusCode == 403) ? .entitlement : .http(http.statusCode)
                             page = self.unavailable(query, job.capture, failure)
                         }
-                        self.remember(page, key: job.key)
+                        if job.authorizationReset == self.authorizationReset {
+                            if http.statusCode == 401 {
+                                self.authenticationRejections[query.product] = (query.subject, page.checkedAt)
+                            } else if http.statusCode == 200 {
+                                self.authenticationRejections.removeValue(forKey: query.product)
+                            }
+                        }
+                        // A cleared/rechecked denial may finish for its original caller, but an
+                        // older request cannot restore that denial as reusable client state.
+                        if ![401, 402, 403].contains(http.statusCode) || job.authorizationReset == self.authorizationReset {
+                            self.remember(page, key: job.key)
+                        }
                         self.finish(job, .success(.page(page)))
                     } else {
                         self.finish(job, .success(.raw(data, response)))
@@ -330,7 +379,16 @@ import Foundation
         access &+= 1
         cache[key] = CacheEntry(page: page, access: access)
         // At most 501 entries here: a linear oldest-access lookup avoids another index.
-        if cache.count > 500, let oldest = cache.min(by: { $0.value.access < $1.value.access })?.key {
+        guard cache.count > 500 else { return }
+        let clock = now()
+        let disposable = cache.filter {
+            let page = $0.value.page
+            let age = clock.timeIntervalSince(page.checkedAt)
+            return !(page.query.product == .analysts || page.query.product == .firms)
+                || !(page.status == .answered || page.status == .partial)
+                || !(age >= 0 && age < page.query.product.cacheTTL)
+        }
+        if let oldest = (disposable.isEmpty ? cache : disposable).min(by: { $0.value.access < $1.value.access })?.key {
             cache.removeValue(forKey: oldest)
         }
     }

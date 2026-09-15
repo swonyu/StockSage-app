@@ -8,6 +8,12 @@ struct StockSageMassiveEventsTests {
     private typealias W = StockSageCatalystWatch
     private let now = Date(timeIntervalSince1970: 1_788_652_800) // 2026-09-06 UTC
 
+    @Test func refreshIdentityDependsOnMembershipInsteadOfSortOrder() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(E.RefreshKey(symbols: ["AAPL", "MSFT"], refreshedAt: at) == E.RefreshKey(symbols: ["MSFT", "AAPL"], refreshedAt: at))
+        #expect(E.RefreshKey(symbols: ["AAPL"], refreshedAt: at) != E.RefreshKey(symbols: ["MSFT"], refreshedAt: at))
+    }
+
     @Test func credentialRotationReopensFailedObservationWithoutDiscardingDatedFacts() throws {
         var failure = E.Observation(symbol: "AAPL", feed: .ratings, checkedAt: now, outcome: .unavailable,
                                     event: nil, failure: .cooldown, credentialRevision: "A")

@@ -12,6 +12,18 @@ enum StockSageMassiveEarnings {
         let date: Date
         let confirmed: Bool
     }
+    nonisolated struct Observation: Sendable, Equatable {
+        enum Outcome: Sendable, Equatable { case answered(Row?), unavailable, notRequested }
+        enum NotRequestedReason: Sendable, Equatable {
+            case externalAccessDisabled, cancelled, requestUnavailable
+            case priorAuthenticationRejection(checkedAt: Date)
+        }
+        let outcome: Outcome
+        /// Nil means no transport was started. Failed transports retain their attempt time.
+        let checkedAt: Date?
+        let recordedAt: Date
+        var notRequestedReason: NotRequestedReason? = nil
+    }
     private nonisolated enum Failure: Error { case invalidPayload }
     private nonisolated static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -22,8 +34,15 @@ enum StockSageMassiveEarnings {
         f.isLenient = false
         return f
     }()
-    private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
-    private static let gateKey = "stocksage.massive.earningsUnavailableUntil"
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 12
+        return URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
+    }()
+    // Only this versioned key can establish a recent HTTP 401. The old gate also stored
+    // unqualified 402/403 responses for a day, so it cannot provide authentication provenance.
+    private static let gateKey = "stocksage.massive.earningsAuthenticationUnavailableUntil.v2"
 
     nonisolated static func request(symbol: String, now: Date, key: String, limit: Int = 100) -> URLRequest? {
         guard StockSageMassive.covers(symbol), !key.isEmpty, (1...100).contains(limit),
@@ -72,12 +91,15 @@ enum StockSageMassiveEarnings {
     }
 
     nonisolated static func availabilityOutcome(statusCode: Int?, now: Date) -> Date? {
-        guard let statusCode, [401, 402, 403].contains(statusCode) else { return nil }
-        return now.addingTimeInterval(86_400)
+        guard statusCode == 401, now.timeIntervalSince1970.isFinite else { return nil }
+        return now.addingTimeInterval(300)
     }
 
     nonisolated static func isAvailable(unavailableUntil: Date?, now: Date) -> Bool {
-        unavailableUntil.map { now >= $0 } ?? true
+        guard let until = unavailableUntil, until.timeIntervalSince1970.isFinite,
+              now.timeIntervalSince1970.isFinite else { return true }
+        let remaining = until.timeIntervalSince(now)
+        return remaining <= 0 || remaining > 300
     }
 
     /// One status-only probe before the Store's four-wide sweep, skipped while a known
@@ -92,24 +114,76 @@ enum StockSageMassiveEarnings {
     }
 
     static func fetch(_ symbol: String, now: Date = Date()) async -> StockSageCatalystChain.Answer<Row?> {
-        let revision = StockSageMassive.credentialRevision()
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey, defaults: .standard), now: now),
-              let req = request(symbol: symbol, now: now, key: StockSageMassive.apiKey),
-              let (data, status) = await get(req, revision: revision), status == 200 else { return .unavailable }
-        do { return .answered(try parseNext(data, symbol: symbol, now: now)) }
-        catch { return .unavailable }
+        switch await observe(symbol, now: now).outcome {
+        case .answered(let row): return .answered(row)
+        case .unavailable, .notRequested: return .unavailable
+        }
+    }
+
+    static func observe(_ symbol: String, now: Date = Date()) async -> Observation {
+        guard !Task.isCancelled else {
+            return .init(outcome: .notRequested, checkedAt: nil, recordedAt: Date(), notRequestedReason: .cancelled)
+        }
+        guard ToolPolicy.isExternalAllowed else {
+            return .init(outcome: .notRequested, checkedAt: nil, recordedAt: Date(), notRequestedReason: .externalAccessDisabled)
+        }
+        return await observe(symbol, now: now, key: StockSageMassive.apiKey,
+            revision: StockSageMassive.credentialRevision())
+    }
+
+    /// The same request and parser as the fallback chain, with a receipt that does not label
+    /// local suppression as a provider check. Tests supply every credential and transport.
+    static func observe(_ symbol: String, now: Date, key: String, revision: String?,
+        defaults: UserDefaults = .standard, allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+        clock: @escaping () -> Date = { Date() },
+        transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Observation {
+        func notRequested() -> Observation {
+            let at = clock()
+            let reason: Observation.NotRequestedReason
+            if Task.isCancelled { reason = .cancelled }
+            else if !allowed() { reason = .externalAccessDisabled }
+            else if revision != StockSageMassive.credentialRevision(defaults) { reason = .requestUnavailable }
+            else if let until = StockSageMassiveCredential.denialUntil(gateKey, defaults: defaults),
+                    !isAvailable(unavailableUntil: until, now: at) {
+                reason = .priorAuthenticationRejection(checkedAt: until.addingTimeInterval(-300))
+            } else { reason = .requestUnavailable }
+            return .init(outcome: .notRequested, checkedAt: nil, recordedAt: at, notRequestedReason: reason)
+        }
+        guard !Task.isCancelled, allowed(), revision == StockSageMassive.credentialRevision(defaults),
+              let request = request(symbol: symbol, now: now, key: key) else { return notRequested() }
+        var attemptedAt: Date?
+        let response = await get(request, revision: revision, defaults: defaults, allowed: allowed, clock: clock,
+            transport: { request in
+                attemptedAt = clock()
+                if let transport { return try await transport(request) }
+                return try await StockSageHTTP.data(for: request, session: session, maximumBytes: 2_000_000)
+            })
+        guard let attemptedAt else { return notRequested() }
+        let recordedAt = clock()
+        guard let (data, status) = response, status == 200 else {
+            return .init(outcome: .unavailable, checkedAt: attemptedAt, recordedAt: recordedAt)
+        }
+        do {
+            return .init(outcome: .answered(try parseNext(data, symbol: symbol, now: now)),
+                checkedAt: attemptedAt, recordedAt: recordedAt)
+        } catch {
+            return .init(outcome: .unavailable, checkedAt: attemptedAt, recordedAt: recordedAt)
+        }
     }
 
     static func get(_ request: URLRequest, revision: String?, defaults: UserDefaults = .standard,
                     allowed: () -> Bool = { ToolPolicy.isExternalAllowed },
+                    clock: () -> Date = { Date() },
                     transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> (Data, Int)? {
         guard allowed(), !Task.isCancelled, revision == StockSageMassive.credentialRevision(defaults),
-              isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey, defaults: defaults), now: Date()),
-              let (data, response) = try? await (transport ?? { try await session.data(for: $0) })(request),
+              isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey, defaults: defaults), now: clock()),
+              let (data, response) = try? await (transport ?? {
+                  try await StockSageHTTP.data(for: $0, session: session, maximumBytes: 2_000_000)
+              })(request),
               !Task.isCancelled, allowed(), revision == StockSageMassive.credentialRevision(defaults),
-              let response = response as? HTTPURLResponse else { return nil }
-        if let until = availabilityOutcome(statusCode: response.statusCode, now: Date()) {
+              data.count <= 2_000_000, let response = response as? HTTPURLResponse,
+              response.url == request.url else { return nil }
+        if let until = availabilityOutcome(statusCode: response.statusCode, now: clock()) {
             StockSageMassiveCredential.recordDenial(until, gate: gateKey, revision: revision, defaults: defaults)
         }
         return (data, response.statusCode)

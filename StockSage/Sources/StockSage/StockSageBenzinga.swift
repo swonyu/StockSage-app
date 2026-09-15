@@ -109,12 +109,14 @@ enum StockSageBenzinga {
         case invalidQuery, missingCredential, unauthorized, entitlement
         case throttled, transport, timedOut, cancelled, policyDenied
         case obsoleteCredential, malformed, oversized, http(Int)
+        case priorAuthenticationRejection(subject: String, checkedAt: Date)
 
         fileprivate var tag: String {
             switch self {
             case .invalidQuery: "bad query"
             case .missingCredential: "no key"
             case .unauthorized: "auth"
+            case .priorAuthenticationRejection(let subject, let checkedAt): "not requested; prior authentication rejection for \(subject) at \(checkedAt.ISO8601Format())"
             case .entitlement: "entitlement"
             case .throttled: "throttled"
             case .transport: "network"
@@ -181,7 +183,13 @@ enum StockSageBenzinga {
             guard pages.count <= 13, omitted >= 0, capturedAt.timeIntervalSince1970.isFinite,
                   pages.allSatisfy({ page in
                       counts[page.query.product, default: 0] += page.records.count
-                      return counts[page.query.product, default: 0] <= 3
+                      if case .unavailable(.priorAuthenticationRejection(let subject, let at)) = page.status {
+                        guard at.timeIntervalSince1970.isFinite, at.timeIntervalSince1970 > 0,
+                              at <= page.checkedAt,
+                              StockSageBenzinga.valid(.init(product: page.query.product, subject: subject, from: nil, through: nil)),
+                              page.records.isEmpty else { return false }
+                    }
+                    return counts[page.query.product, default: 0] <= 3
                           && page.excludedCount >= 0 && page.checkedAt.timeIntervalSince1970.isFinite
                           && page.checkedAt <= capturedAt && StockSageBenzinga.valid(page.query)
                           && page.records.allSatisfy { $0.product == page.query.product }
@@ -204,11 +212,8 @@ enum StockSageBenzinga {
         /// byte-budget trimming. Deliberately unchanged in meaning — `notEligibleCount` is the
         /// separate bucket that used to be invisible.
         let omittedRecordCount: Int
-        /// Records the provider returned that never became evidence, because a parse rule rejected
-        /// them: the ratings 7-day and guidance 14-day recency windows, the ratings
-        /// change-or-price-move rule, and malformed rows. Added 2026-09-11 because collapsing this
-        /// into `omittedRecordCount` made "no recent analyst action" indistinguishable from "we
-        /// could not fit it", and that ambiguity produced two wrong diagnoses in one session.
+        /// Returned rows excluded by date, identity, eligibility or value validation.
+        /// Individual exclusion reasons are not retained; unchanged ratings can be eligible.
         var notEligibleCount: Int = 0
         /// The share of `omittedRecordCount` caused by the 3-records-per-product storage cap.
         var cappedRecordCount: Int = 0
@@ -217,8 +222,8 @@ enum StockSageBenzinga {
             (["Massive/Benzinga sample; unverified claims, not execution prices. Missing is not none."]
              + statusLines + records.map { "[" + $0.id + "] " + $0.sourceText }
              + ["Omitted records: \(omittedRecordCount)",
-                "Not eligible at capture: \(notEligibleCount) (recency window or no rating change); "
-                + "capped per product: \(cappedRecordCount); trimmed to fit: \(trimmedRecordCount)."])
+                "Not eligible at capture: \(notEligibleCount) (eligibility, date or validation; individual reasons not retained); "
+                + "capped per product: \(cappedRecordCount); retained records not shown: \(trimmedRecordCount)."])
                 .joined(separator: "\n")
         }
     }
@@ -361,7 +366,7 @@ enum StockSageBenzinga {
         !text.isEmpty && text.utf8.count <= 256
             && text.utf8.allSatisfy { (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 || $0 == 46 }
     }
-    private nonisolated static func valid(_ query: Query) -> Bool {
+    nonisolated static func valid(_ query: Query) -> Bool {
         if query.product.metadata {
             return validID(query.subject) && query.from == nil && query.through == nil
         }
@@ -531,7 +536,7 @@ enum StockSageBenzinga {
             // Chat EVIDENCE, not a catalyst. The feed's 7-day window and its change-only rule exist
             // so Catalysts surfaces things that just happened; borrowing them here meant a symbol
             // with no rating action in a week produced zero analyst evidence and a disclosure that
-            // read like missing data. Ratings evidence therefore looks back 30 days and keeps
+            // read like missing data. Ratings evidence therefore uses ratingsEvidenceDays and keeps
             // "maintains"/"reiterates" rows, which carry their own date into the prompt so the
             // model can see they are weeks old. Guidance keeps the feed's own window: it is
             // genuinely an event, not a standing opinion.

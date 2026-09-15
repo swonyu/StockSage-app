@@ -147,7 +147,7 @@ struct PortfolioWidgetView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "chart.line.uptrend.xyaxis")
-                    .foregroundStyle(DS.Palette.accent)
+                    .foregroundStyle(DS.Palette.accentText)
                 Text("Portfolio")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(DS.Palette.textSecondary)
@@ -179,7 +179,7 @@ struct PortfolioWidgetView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Image(systemName: "chart.line.uptrend.xyaxis")
-                        .foregroundStyle(DS.Palette.accent)
+                        .foregroundStyle(DS.Palette.accentText)
                     Text("Portfolio")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(DS.Palette.textSecondary)
@@ -247,7 +247,7 @@ struct PortfolioWidgetView: View {
             HStack {
                 Image(systemName: "chart.line.uptrend.xyaxis")
                     .font(.title3)
-                    .foregroundStyle(DS.Palette.accent)
+                    .foregroundStyle(DS.Palette.accentText)
                 Text("Portfolio Summary")
                     .font(.headline)
                     .foregroundStyle(DS.Palette.textPrimary)

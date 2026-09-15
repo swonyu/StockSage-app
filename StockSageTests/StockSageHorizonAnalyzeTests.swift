@@ -83,6 +83,12 @@ struct StockSageHorizonAnalyzeTests {
                      isOllama: Bool = true,
                      horizon: Research.Horizon = .week,
                      allowed: @escaping @MainActor () -> Bool = { true },
+                     supplemental: ((String, Date) async -> StockSageBenzinga.Snapshot)? = nil,
+                     news: @escaping (Date) -> StockSageNewsService.Observation = { _ in .init(attempts: []) },
+                     company: [StockSageMassiveEvents.Feed: StockSageMassiveEvents.Observation] = [:],
+                     earningsReceipt: ((String, Date) async -> StockSageMassiveEarnings.Observation)? = nil,
+                     next: @escaping (String, Date) async -> StockSageCatalystChain.Answer<StockSageMassiveEarnings.Row?> = { _, _ in .unavailable },
+                     filings: @escaping (String, Date) async -> StockSageDisclosureService.FilingsObservation = { _, at in .init(checkedAt: at, outcome: .unavailable(.unreachable), filings: []) },
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
                      ) async -> Research.Result {
         let config = Server.config(url: isOllama ? Server.defaultURL : Server.lmStudioURL,
@@ -97,7 +103,7 @@ struct StockSageHorizonAnalyzeTests {
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         return await Research.analyze(
             listing, horizon: horizon, store: store, config: config,
-            isOllama: isOllama, key: "fixture-key", allowed: allowed,
+            isOllama: isOllama, key: "fixture-key", allowed: allowed, companyObservations: company,
             historyTransport: { request in
                 (history, HTTPURLResponse(url: request.url!, statusCode: historyStatus,
                                           httpVersion: nil, headerFields: nil)!)
@@ -105,11 +111,205 @@ struct StockSageHorizonAnalyzeTests {
             modelTransport: model,
             // Synthetic evidence: no client, no credential, no request.
             benzingaSnapshot: { symbol, at in
-                StockSageBenzinga.Snapshot(symbol: symbol, capturedAt: at,
+                if let supplemental { return await supplemental(symbol, at) }
+                return StockSageBenzinga.Snapshot(symbol: symbol, capturedAt: at,
                                            credentialGeneration: nil, pages: [])
             },
-            newsObservation: { _, _, _ in StockSageNewsService.Observation(attempts: []) },
+            newsObservation: { _, at, _ in news(at) },
+            nextEarnings: { symbol, at in
+                if let earningsReceipt { return await earningsReceipt(symbol, at) }
+                switch await next(symbol, at) {
+                case .answered(let row): return .init(outcome: .answered(row), checkedAt: at, recordedAt: at)
+                case .unavailable: return .init(outcome: .unavailable, checkedAt: at, recordedAt: at)
+                }
+            }, filingsObservation: filings,
             evidenceIsCurrent: { _ in true })
+    }
+
+    @Test func oneCaptureSuppliesTwoDistinctHorizonsAndRejectsChangedOwnershipOrClock() async throws {
+        let name = "stocksage.research.capture.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        var historyCalls = 0, newsCalls = 0, earningsCalls = 0, filingsCalls = 0, snapshotCalls = 0
+        let gathered = await Research.gather(Self.listing(), store: store, key: "fixture", allowed: { true },
+            historyTransport: { historyCalls += 1; return Self.ok(Self.historyPayload(), $0) },
+            benzingaSnapshot: { symbol, at in snapshotCalls += 1; return .init(symbol: symbol, capturedAt: at, credentialGeneration: nil, pages: []) },
+            newsObservation: { _, _, _ in newsCalls += 1; return .init(attempts: []) },
+            nextEarnings: { _, at in earningsCalls += 1; return .init(outcome: .answered(nil), checkedAt: at, recordedAt: at) },
+            filingsObservation: { _, at in filingsCalls += 1; return .init(checkedAt: at, outcome: .answered, filings: []) },
+            evidenceIsCurrent: { _ in true })
+        guard case .captured(let capture) = gathered else { Issue.record("Expected isolated capture"); return }
+        #expect(historyCalls == 1 && newsCalls == 1 && earningsCalls == 1 && filingsCalls == 1 && snapshotCalls == 1)
+        let config = try #require(Server.config(url: Server.defaultURL, model: Server.defaultModel))
+        var prompts: [String] = [], results: [Research.Result] = []
+        for horizon in Research.Horizon.allCases {
+            results.append(await Research.assess(capture, horizon: horizon, config: config, isOllama: true, allowed: { true },
+                modelTransport: { request in prompts.append(String(decoding: request.httpBody ?? Data(), as: UTF8.self)); return Self.ok(Self.verdictPayload(), request) },
+                evidenceIsCurrent: { _ in true }))
+        }
+        #expect(prompts.count == 2 && prompts[0].contains("1–7 trading days") && prompts[1].contains("7–14 trading days"))
+        #expect(results.allSatisfy { $0.verdict != nil && $0.at == capture.at && $0.referenceClose?.at == capture.referenceClose.at })
+        #expect(results[0].coverage == results[1].coverage && historyCalls == 1)
+        let staleOwner = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: true, allowed: { true },
+            modelTransport: { Issue.record("Obsolete evidence cannot reach the model"); return Self.ok(Self.verdictPayload(), $0) }, evidenceIsCurrent: { _ in false })
+        #expect(staleOwner.verdict == nil)
+        #expect(!capture.isFresh(at: capture.at.addingTimeInterval(301)))
+        #expect(!capture.isFresh(at: capture.at.addingTimeInterval(-1)))
+        #expect(!capture.isFresh(at: capture.context.asOf.addingTimeInterval(-0.001)))
+    }
+
+    @Test(arguments: [false, true]) func companyFallbackDistinguishesFreshFromStaleDuringThrottle(stale: Bool) async throws {
+        var calls = 0
+        let result = await run(supplemental: { symbol, at in .init(symbol: symbol, capturedAt: at, credentialGeneration: nil, pages: [
+            .init(query: .init(product: .news, subject: symbol, from: nil, through: nil), checkedAt: at, credentialGeneration: nil,
+                status: .unavailable(.throttled), records: [], excludedCount: 0, hasMore: false)]) },
+            company: [.insider: .init(symbol: "ACME", feed: .insider,
+                checkedAt: Date().addingTimeInterval(stale ? -172_800 : -1), outcome: .answered, event: nil)],
+            model: { calls += 1; return Self.ok(Self.verdictPayload(), $0) })
+        #expect(calls == (stale ? 0 : 1))
+        #expect((result.verdict == nil) == stale)
+    }
+
+    @Test func coverageKeepsMixedNewsPartialAndUniqueCompanyFamilies() async throws {
+        let at = Date().addingTimeInterval(-1)
+        let result = await run(news: { _ in .init(attempts: [
+            .init(provider: .benzinga, checkedAt: at, status: .answered),
+            .init(provider: .massive, checkedAt: at.addingTimeInterval(0.1), status: .unavailable(.transport))]) },
+            company: [.insider: .init(symbol: "ACME", feed: .insider, checkedAt: at, outcome: .answered, event: nil)],
+            model: { Self.ok(Self.verdictPayload(), $0) })
+        let news = try #require(result.coverage.first { $0.source == "Recent news" })
+        #expect(news.state == .partial && news.checkedAt == at)
+        #expect(result.coverage.filter { $0.source == "Massive/SEC Form 4" }.count == 1)
+        #expect(result.coverage.first { $0.source == "Massive/SEC Form 4" }?.state == .answered)
+        #expect(result.coverage.first { $0.source == "Massive dividends" }?.state == .unchecked)
+    }
+
+    @Test func suppressedEarningsDoesNotInventANewProviderCheck() async throws {
+        let origin = Date().addingTimeInterval(-30)
+        let result = await run(earningsReceipt: { _, at in .init(outcome: .notRequested, checkedAt: nil, recordedAt: at,
+            notRequestedReason: .priorAuthenticationRejection(checkedAt: origin)) }, model: { Self.ok(Self.verdictPayload(), $0) })
+        let coverage = try #require(result.coverage.first { $0.source == "Next earnings" })
+        #expect(coverage.state == .unchecked && coverage.checkedAt == nil)
+        #expect(result.facts.contains { $0.contains("not requested") && $0.contains(origin.ISO8601Format()) })
+    }
+
+    @Test func historicalLiquidityAndGapsStayIndependentOnOverflow() {
+        func history(closes: [Double], opens: [Double], volumes: [Double]) -> StockSagePriceHistory {
+            .init(symbol: "ACME", dates: [Date(timeIntervalSince1970: 100), Date(timeIntervalSince1970: 200), Date(timeIntervalSince1970: 300)],
+                opens: opens, highs: opens, lows: closes, closes: closes, volumes: volumes, priceSource: .massiveDaily)
+        }
+        let ordinary = Research.historicalFacts(history(closes: [100,100,100], opens: [100,200,50], volumes: [10,10,10]))
+        #expect(ordinary.contains { $0.contains("1000.0 USD") })
+        #expect(ordinary.contains { $0.contains("mean absolute 75.0%") && $0.contains("largest absolute 100.0%") })
+        let overflow = Research.historicalFacts(history(closes: [100,100,100], opens: [100,200,50], volumes: [.greatestFiniteMagnitude,10,10]))
+        #expect(overflow.count == 1 && overflow[0].hasPrefix("Historical open-to-prior-close gaps"))
+        let gapOverflow = Research.historicalFacts(history(closes: [.leastNonzeroMagnitude,100,100], opens: [100,.greatestFiniteMagnitude,50], volumes: [10,10,10]))
+        #expect(gapOverflow.count == 1 && gapOverflow[0].hasPrefix("Historical average daily dollar volume"))
+    }
+
+    @Test func independentEarningsAndSECChecksKeepDatesAndDoNotClaimDocumentContents() async throws {
+        let future = Date().addingTimeInterval(7 * 86_400)
+        var earningsCalls = 0, filingsCalls = 0
+        let result = await run(next: { symbol, _ in
+            earningsCalls += 1; #expect(symbol == "ACME")
+            return .answered(.init(date: future, confirmed: false))
+        }, filings: { symbol, at in
+            filingsCalls += 1; #expect(symbol == "ACME")
+            return .init(checkedAt: at, outcome: .answered,
+                filings: [.init(accessionNumber: "0000000001-26-000001", form: "8-K", filingDate: at.addingTimeInterval(-86_400),
+                    acceptedAt: at.addingTimeInterval(-82_000), items: ["2.02"], documentURL: nil)])
+        }, model: { Self.ok(Self.verdictPayload(), $0) })
+        #expect(earningsCalls == 1 && filingsCalls == 1 && result.verdict != nil)
+        let facts = result.facts.joined(separator: "\n")
+        #expect(facts.contains(future.ISO8601Format()) && facts.contains("projected, not announced"))
+        #expect(facts.contains("0000000001-26-000001") && facts.contains("not retrieved filing documents"))
+        #expect(result.coverage.first { $0.source == "Next earnings" }?.state == .answered)
+        #expect(result.coverage.first { $0.source == "SEC submissions metadata" }?.state == .answered)
+    }
+
+    @Test func providerEmptyIsAnsweredAndRevocationStopsLaterDependencies() async throws {
+        var allowed = true, filingsCalls = 0, modelCalls = 0
+        _ = await run(allowed: { allowed }, next: { _, _ in allowed = false; return .answered(nil) },
+            filings: { _, at in filingsCalls += 1; return .init(checkedAt: at, outcome: .answered, filings: []) },
+            model: { modelCalls += 1; return Self.ok(Self.verdictPayload(), $0) })
+        #expect(filingsCalls == 0 && modelCalls == 0)
+        let empty = await run(next: { _, _ in .answered(nil) }, filings: { _, at in .init(checkedAt: at, outcome: .answered, filings: []) },
+            model: { Self.ok(Self.verdictPayload(), $0) })
+        #expect(empty.verdict != nil)
+        #expect(empty.facts.contains { $0.contains("no scheduled date in the queried") })
+        #expect(empty.coverage.first { $0.source == "Next earnings" }?.state == .answered)
+        #expect(empty.coverage.first { $0.source == "SEC submissions metadata" }?.state == .answered)
+    }
+
+    @Test func acceptedSECFilingCanCarryTheNextBusinessDate() async throws {
+        let result = await run(filings: { _, at in .init(checkedAt: at, outcome: .answered,
+            filings: [.init(accessionNumber: "PUBLIC-TODAY", form: "8-K", filingDate: at.addingTimeInterval(86_400),
+                acceptedAt: at.addingTimeInterval(-60), items: [], documentURL: nil)]) },
+            model: { Self.ok(Self.verdictPayload(), $0) })
+        #expect(result.facts.joined().contains("PUBLIC-TODAY"))
+    }
+
+    @Test func throttlingMixedWithSuppressedAuthenticationDoesNotRequestAnOpinion() async throws {
+        var calls = 0
+        let result = await run(supplemental: { symbol, at in
+            .init(symbol: symbol, capturedAt: at, credentialGeneration: nil, pages: [
+                .init(query: .init(product: .news, subject: symbol, from: nil, through: nil), checkedAt: at,
+                    credentialGeneration: nil, status: .unavailable(.throttled), records: [], excludedCount: 0, hasMore: false),
+                .init(query: .init(product: .consensusRatings, subject: symbol, from: nil, through: nil), checkedAt: at,
+                    credentialGeneration: nil, status: .unavailable(.priorAuthenticationRejection(subject: "OTHER", checkedAt: at.addingTimeInterval(-30))),
+                    records: [], excludedCount: 0, hasMore: false)])
+        }, model: { calls += 1; return Self.ok(Self.verdictPayload(), $0) })
+        #expect(calls == 0 && result.verdict == nil)
+    }
+
+    @Test func staleSECCaptureCannotContributeMetadataAndSECReturnRechecksPermission() async throws {
+        let result = await run(filings: { _, at in .init(checkedAt: at.addingTimeInterval(-400), outcome: .answered,
+            filings: [.init(accessionNumber: "STALE-IDENTITY", form: "8-K", filingDate: at.addingTimeInterval(-500), acceptedAt: nil, items: [], documentURL: nil)]) },
+            model: { Self.ok(Self.verdictPayload(), $0) })
+        #expect(!result.facts.joined().contains("STALE-IDENTITY"))
+        #expect(result.coverage.first { $0.source == "SEC submissions metadata" }?.state == .stale)
+        var allowed = true, calls = 0
+        _ = await run(allowed: { allowed }, filings: { _, at in allowed = false; return .init(checkedAt: at, outcome: .answered, filings: []) },
+            model: { calls += 1; return Self.ok(Self.verdictPayload(), $0) })
+        #expect(calls == 0)
+    }
+
+    @Test func researchDisclosesForwardEarningsSECAndDatedLiquidityAndGaps() async throws {
+        let result = await run(model: { Self.ok(Self.verdictPayload(), $0) })
+        let facts = result.facts.joined(separator: "\n")
+        #expect(facts.contains("Next earnings"))
+        #expect(facts.contains("SEC submissions metadata"))
+        #expect(facts.contains("Historical average daily dollar volume"))
+        #expect(facts.contains("Historical open-to-prior-close gaps"))
+        #expect(facts.contains("Full filings were not retrieved"))
+    }
+
+    @Test func supplementalUnsupportedSymbolCannotReceiveAnOpinion() async throws {
+        var root = try #require(try JSONSerialization.jsonObject(with: Self.historyPayload()) as? [String: Any])
+        root["ticker"] = "ACME.A"
+        var calls = 0
+        let result = await run(listing: Self.listing("ACME.A"), history: try JSONSerialization.data(withJSONObject: root), model: {
+            calls += 1
+            return Self.ok(Self.verdictPayload(), $0)
+        })
+        #expect(calls == 0 && result.verdict == nil)
+        #expect(result.referenceClose != nil)
+        #expect(result.note.contains("supplemental evidence"))
+    }
+
+    @Test func entirelyThrottledSupplementalEvidenceDoesNotSpendAModelRequest() async throws {
+        var calls = 0
+        let result = await run(supplemental: { symbol, at in
+            .init(symbol: symbol, capturedAt: at, credentialGeneration: nil,
+                pages: [.init(query: .init(product: .news, subject: symbol, from: nil, through: nil), checkedAt: at,
+                    credentialGeneration: nil, status: .unavailable(.throttled), records: [], excludedCount: 0, hasMore: false)])
+        }, model: {
+            calls += 1
+            return Self.ok(Self.verdictPayload(), $0)
+        })
+        #expect(calls == 0 && result.verdict == nil)
+        #expect(result.note.localizedCaseInsensitiveContains("throttl"))
     }
 
     // MARK: The path runs, and what it sends is bounded

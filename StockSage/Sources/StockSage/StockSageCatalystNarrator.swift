@@ -421,10 +421,12 @@ enum StockSageCatalystNarrator {
     /// minor (b)): the previous code surfaced `String(describing: error)` — a `GenerationError`
     /// dump — straight to the viewer. The raw description is still available, but only in the
     /// `#if DEBUG` print at the call site above, never in what a viewer reads.
-    private nonisolated static func humanOnDeviceError(_ error: Error) -> String {
+    nonisolated static func humanOnDeviceError(_ error: Error) -> String {
         #if canImport(FoundationModels)
         if let generationError = error as? LanguageModelSession.GenerationError {
             switch generationError {
+            case .exceededContextWindowSize:
+                return "The supplied evidence exceeds the on-device model's context window. Use a local server with a larger context or a smaller evidence request."
             case .guardrailViolation, .refusal:
                 return "The on-device model declined this request (content guardrail)."
             default:
@@ -457,20 +459,41 @@ enum StockSageCatalystNarrator {
             return checkedResponse(completion.text, facts: briefFacts, source: .localServer(model: config.model), sourceCount: sources.count,
                                    symbol: brief.idea.symbol)
         case .failure(let error):
-            return .unavailable(humanServerError(error.legacyError))
+            return .unavailable(humanServerError(error.diagnostic))
         }
     }
 
-    private nonisolated static func humanServerError(_ error: StockSageLocalModelServer.ServerError) -> String {
-        switch error {
-        case .invalidConfig:
+    nonisolated static func humanServerError(_ diagnostic: StockSageLocalModelServer.Diagnostic) -> String {
+        switch StockSageLocalModelServer.cause(for: diagnostic) {
+        case .cancelled:
+            return "The explanation request was cancelled."
+        case .settingsChanged:
+            return "Model settings changed while the explanation was running, so its answer was discarded."
+        case .networkDenied:
+            return "Network access to a non-loopback model server is turned off."
+        case .badSettings:
             return "The local server URL or model is not set correctly in the Explanation model settings."
-        case .unreachable(let detail):
-            return "Could not reach the local server: \(detail)"
-        case .modelMissing(let detail):
-            return "The local server does not have the requested model: \(detail)"
-        case .badResponse(let detail):
-            return "The local server returned an unexpected response: \(detail)"
+        case .modelMissing:
+            return "The requested model is unavailable on the local server. Check its model ID in the Explanation model settings."
+        case .timedOut:
+            return "The local model request timed out. It may still be loading; check the server and retry."
+        case .unreachable:
+            return "The local model server could not be reached. Check that it is running, then test its connection in Model settings."
+        case .serverRejected:
+            return "The local model server rejected the explanation request"
+                + (diagnostic.httpStatus.map { " (HTTP \($0))" } ?? "") + "."
+        case .tooLarge:
+            return "The local model returned more data than this app will read."
+        case .contextBudget:
+            return "The explanation does not fit, or the loaded model's context size could not be verified. Check the loaded context size in the server and retry with a smaller evidence request."
+        case .unfinished:
+            return "The local model stopped before finishing its explanation. Retry with a smaller evidence request."
+        case .emptyAnswer:
+            return "The local model returned an empty explanation."
+        case .unreadable:
+            return "The local model server returned a response this app could not read, or one identifying a different model."
+        case .unknown:
+            return "The local model explanation request did not complete."
         }
     }
 
@@ -538,7 +561,7 @@ enum StockSageCatalystNarrator {
 
         case .localServerOnly:
             guard let config = StockSageLocalModelServer.config(url: urlSetting, model: modelSetting) else {
-                return .unavailable(humanServerError(.invalidConfig))
+                return .unavailable(humanServerError(.init(category: .invalidConfig)))
             }
             let probe = await fetchProbe(config)
             guard active() else { return stopped }

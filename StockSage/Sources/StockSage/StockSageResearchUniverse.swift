@@ -4,6 +4,13 @@ import CoreFoundation
 /// Research selection only; no model, record store or execution dependency.
 nonisolated enum StockSageResearchUniverse {
     typealias Listing = StockSageHorizonResearch.Listing
+    enum Failure: LocalizedError, Equatable {
+        case unverifiedCalendar
+
+        var errorDescription: String? {
+            "The NASDAQ trading calendar is verified only for 2026. The requested date or prior session is outside this build’s coverage; update the app before researching it."
+        }
+    }
     struct Receipt: Sendable, Equatable {
         let session: String
         let requestedAt: Date
@@ -14,7 +21,11 @@ nonisolated enum StockSageResearchUniverse {
         var fallback = false
         let dollarVolume: [String: Double]
         var summary: String {
-            "Activity session: \(session) ET\(partialSession ? " · session-to-date" : "") · \(eligibleCount) eligible of \(returnedCount) returned observations."
+            let boundary = dollarVolume.values.min().map {
+                " \(dollarVolume.count < eligibleCount ? "Selection cutoff" : "Lowest selected activity"): \($0.formatted(.currency(code: "USD").notation(.compactName))) traded (volume × VWAP)."
+            } ?? ""
+            return "Activity session: \(session) ET\(partialSession ? " · session-to-date" : "") · \(dollarVolume.count) of \(eligibleCount) eligible selected from \(returnedCount) returned observations."
+                + boundary
                 + (fallback ? " Prior session used for wider verified coverage." : "")
         }
         func detail(for symbol: String) -> String? {
@@ -58,13 +69,13 @@ nonisolated enum StockSageResearchUniverse {
         return nil
     }
     static func sessions(at now: Date) throws -> (primary: String, previous: String?) {
-        guard now.timeIntervalSince1970.isFinite,
-              let schedule = StockSageMarketHours.nasdaqDay(at: now) else { throw URLError(.dataNotAllowed) }
+        guard now.timeIntervalSince1970.isFinite else { throw URLError(.dataNotAllowed) }
+        guard let schedule = StockSageMarketHours.nasdaqDay(at: now) else { throw Failure.unverifiedCalendar }
         let today = calendar.startOfDay(for: now)
         if schedule.trading, calendar.component(.hour, from: now) >= 4 {
             return (formatter.string(from: today), previousSession(before: today).map { formatter.string(from: $0) })
         }
-        guard let prior = previousSession(before: today) else { throw URLError(.dataNotAllowed) }
+        guard let prior = previousSession(before: today) else { throw Failure.unverifiedCalendar }
         return (formatter.string(from: prior), nil) // A closed-day run never walks back again for coverage.
     }
 
@@ -100,6 +111,7 @@ nonisolated enum StockSageResearchUniverse {
             guard let symbol = row["T"] as? String else { continue }
             guard seen.insert(symbol).inserted else { throw URLError(.cannotParseResponse) }
             guard let listing = known[symbol], listing.active, listing.locale == "us", listing.market == "stocks",
+                  listing.primary_exchange == "XNAS", listing.type == "CS",
                   listing.currency_name?.lowercased() == "usd", StockSageHorizonResearch.validTicker(symbol),
                   row["otc"] == nil || (row["otc"] as? NSNumber).map({
                       CFGetTypeID($0) == CFBooleanGetTypeID() && !$0.boolValue }) == true,

@@ -44,6 +44,7 @@ enum StockSageNewsService {
     nonisolated enum Failure: String, Sendable, Equatable {
         case policyDenied = "external access off", cancelled, unsupported, invalidBounds = "invalid bounds"
         case missingKey = "missing key", transport, http, malformed, oversized
+        case priorAuthenticationRejection = "prior authentication rejection; request suppressed"
         case unauthorized, entitlement, throttled, timedOut, obsoleteCredential
         case notRequested = "not requested"
     }
@@ -228,6 +229,8 @@ enum StockSageNewsService {
               page.records.count <= 20, page.excludedCount >= 0,
               page.checkedAt.timeIntervalSince1970.isFinite else { return failed(.malformed) }
         switch page.status {
+        case .unavailable(.priorAuthenticationRejection):
+            return .init(provider: .benzinga, checkedAt: page.checkedAt, status: .notChecked(.priorAuthenticationRejection))
         case .unavailable(let reason): return failed(newsFailure(reason))
         case .notChecked:
             return .init(provider: .benzinga, checkedAt: page.checkedAt, status: .notChecked(.notRequested))
@@ -273,6 +276,7 @@ enum StockSageNewsService {
         case .invalidQuery: .invalidBounds
         case .missingCredential: .missingKey
         case .unauthorized: .unauthorized
+        case .priorAuthenticationRejection: .priorAuthenticationRejection
         case .entitlement: .entitlement
         case .throttled: .throttled
         case .transport: .transport

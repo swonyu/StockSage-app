@@ -2262,7 +2262,7 @@ final class StockSageStore: ObservableObject {
     private var companyEventGeneration = UUID()
 
     /// Native Markets task, keyed to tracked symbols/full refresh (never stream ticks). Daily
-    /// successful TTL,15min transient retry, per-feed24h entitlement gate. Four requests maximum
+    /// successful TTL,15min transient retry, per-feed five-minute authentication gate. Four requests maximum
     /// in flight, five serial feed passes; earnings never wait for this independent sweep.
     func refreshCompanyEvents() async {
         guard !Self.isRunningTests, ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }

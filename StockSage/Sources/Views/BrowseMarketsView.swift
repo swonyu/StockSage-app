@@ -91,7 +91,7 @@ struct BrowseMarketsView: View {
                         .font(.system(size: bmFont12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button("Done") { dismiss() }.buttonStyle(.plain).foregroundStyle(DS.Palette.accent)
+                Button("Done") { dismiss() }.buttonStyle(.plain).foregroundStyle(DS.Palette.accentText)
                     .keyboardShortcut(.cancelAction).help("Close (Esc)")
             }
 
@@ -185,7 +185,7 @@ struct BrowseMarketsView: View {
                         addingSymbol = nil
                     }
                 } label: {
-                    Image(systemName: "plus.circle.fill").font(.system(size: bmFont15)).foregroundStyle(DS.Palette.accent)
+                    Image(systemName: "plus.circle.fill").font(.system(size: bmFont15)).foregroundStyle(DS.Palette.accentText)
                 }
                 .buttonStyle(.plain)
                 .frame(minWidth: 44, minHeight: 44)

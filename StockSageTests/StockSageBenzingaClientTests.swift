@@ -246,6 +246,218 @@ struct StockSageBenzingaClientTests {
         #expect(calls == 504)
     }
 
+    @Test func reusableMetadataSurvivesSymbolChurnWithinTheSharedCacheBound() async {
+        var calls = 0
+        let clock = Date(timeIntervalSince1970: 1_789_041_600)
+        let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { clock },
+            transport: { request in calls += 1; return Self.reply(request) })
+        let analyst = query(.analysts, "Analyst1"), firm = query(.firms, "Firm1")
+        let originalAnalyst = await client.page(for: analyst)
+        let originalFirm = await client.page(for: firm)
+        let names = (0..<500).map { "STOCK" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
+        for name in names { _ = await client.page(for: query(.ratings, name)) }
+        #expect(calls == 502)
+        #expect(await client.page(for: analyst) == originalAnalyst)
+        #expect(await client.page(for: firm) == originalFirm)
+        #expect(calls == 502, "Recent analyst/firm pages must remain reusable across a 500-symbol scan")
+        _ = await client.page(for: query(.ratings, names.last!))
+        #expect(calls == 502, "A recent symbol page still occupies the shared cache")
+        _ = await client.page(for: query(.ratings, names[0]))
+        #expect(calls == 503, "Protecting metadata must evict an older symbol page, not grow beyond 500 entries")
+    }
+
+    @Test func priorAuthenticationRejectionSuppressesOnlyItsProductWithOriginalProvenance() async throws {
+        let firstCheck = Date(timeIntervalSince1970: 1_789_041_600)
+        var clock = firstCheck, calls = 0
+        let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { clock },
+            transport: { request in
+                calls += 1
+                return Self.reply(request, status: request.url!.path.hasSuffix("/ratings") ? 401 : 200)
+            })
+        let original = await client.page(for: query(.ratings, "AAPL"))
+        #expect(original.status == .unavailable(.unauthorized) && original.checkedAt == firstCheck)
+        clock = clock.addingTimeInterval(10)
+        let suppressed = await client.page(for: query(.ratings, "MSFT"))
+        #expect(suppressed.status == .unavailable(.priorAuthenticationRejection(subject: "AAPL", checkedAt: firstCheck)))
+        #expect(suppressed.query.subject == "MSFT" && suppressed.checkedAt == clock && calls == 1)
+        #expect(suppressed.credentialGeneration == original.credentialGeneration)
+        #expect(await client.page(for: query(.earnings, "MSFT")).status == .answered && calls == 2)
+        let encoded = String(decoding: try JSONEncoder().encode(suppressed), as: UTF8.self)
+        #expect(!encoded.contains("synthetic"))
+    }
+
+    @Test func authenticationSuppressionExpiresAndDoesNotBroadenOtherHTTPDenials() async {
+        let start = Date(timeIntervalSince1970: 1_789_041_600)
+        for product in [B.Product.news, .ratings, .firms] {
+            var clock = start, calls = 0
+            let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { clock },
+                transport: { request in calls += 1; return Self.reply(request, status: 401) })
+            _ = await client.page(for: query(product, "AAPL"))
+            clock = start.addingTimeInterval(min(product.cacheTTL, 300) - 1)
+            _ = await client.page(for: query(product, "MSFT"))
+            #expect(calls == 1)
+            clock = clock.addingTimeInterval(1)
+            #expect(await client.page(for: query(product, "NVDA")).status == .unavailable(.unauthorized))
+            #expect(calls == 2, "Authentication suppression cannot outlive its product TTL or five minutes")
+            clock = start.addingTimeInterval(-1)
+            #expect(await client.page(for: query(product, "AMZN")).status == .unavailable(.unauthorized) && calls == 3)
+        }
+        for code in [402, 403] {
+            var calls = 0
+            let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { start },
+                transport: { request in calls += 1; return Self.reply(request, status: code) })
+            for symbol in ["AAPL", "MSFT"] {
+                #expect(await client.page(for: query(.ratings, symbol)).status == .unavailable(.entitlement))
+            }
+            #expect(calls == 2, "A query-specific 402/403 cannot establish another symbol's entitlement")
+        }
+    }
+
+    @Test func recheckClearAndCredentialPolicyChangesReleaseAuthenticationSuppression() async {
+        let start = Date(timeIntervalSince1970: 1_789_041_600)
+        for reset in ["recheck", "clear", "revision", "key", "policy", "policy-revision"] {
+            var key = "synthetic", revision = "one", policyRevision = "one", allowed = true, status = 401, calls = 0
+            let client = C(key: { key }, revision: { revision }, allowed: { allowed },
+                policyRevision: { policyRevision }, now: { start }, transport: { request in
+                    calls += 1; return Self.reply(request, status: status)
+                })
+            let original = await client.page(for: query(.ratings, "AAPL"))
+            _ = await client.page(for: query(.ratings, "MSFT"))
+            #expect(calls == 1)
+            status = 200
+            switch reset {
+            case "clear": client.clearAuthorizationFailures()
+            case "revision": revision = "two"
+            case "key": key = "synthetic-new"
+            case "policy":
+                allowed = false
+                #expect(await client.page(for: query(.ratings, "NVDA")).status == .unavailable(.policyDenied))
+                allowed = true
+            case "policy-revision": policyRevision = "two"
+            default: break
+            }
+            let resumed = await client.page(for: query(.ratings, "NVDA"), recheckAuthorization: reset == "recheck")
+            #expect(resumed.status == .answered && calls == 2)
+            if reset == "clear" || reset == "recheck" {
+                #expect(resumed.credentialGeneration == original.credentialGeneration)
+            } else { #expect(resumed.credentialGeneration != original.credentialGeneration) }
+            #expect(await client.page(for: query(.ratings, "AMZN")).status == .answered && calls == 3)
+        }
+    }
+
+    @Test func queuedAuthenticationSuppressionAndLateClearRetainRequestOwnership() async throws {
+        let clock = Date(timeIntervalSince1970: 1_789_041_600)
+        let wire = Wire(), timers = Timers()
+        let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { clock },
+            transport: { try await wire.send($0) }, sleepUntil: { try await timers.sleep(until: $0) })
+        var operations: [Task<B.Page, Never>] = []
+        defer { operations.forEach { $0.cancel() }; wire.finishAll(); timers.releaseAll() }
+        for (index, symbol) in ["AAPL", "MSFT", "NVDA", "AMZN"].enumerated() {
+            operations.append(Task { await client.page(for: query(.ratings, symbol)) })
+            try await waitFor { timers.pending.count == index + 1 && wire.calls.count == min(index + 1, 3) }
+        }
+        wire.finish(0, status: 401)
+        #expect(await operations[0].value.status == .unavailable(.unauthorized))
+        try await waitFor { timers.pending.count <= 2 || wire.calls.count == 4 }
+        if wire.calls.count == 4 { wire.finish(wire.pending.count - 1, status: 401) }
+        #expect(await operations[3].value.status == .unavailable(.priorAuthenticationRejection(subject: "AAPL", checkedAt: clock)))
+        #expect(wire.calls.count == 3, "An already queued symbol must not dispatch after this product rejects authentication")
+        client.clearAuthorizationFailures()
+        wire.finish(0, status: 401) // An older request must not restore the cleared memo or query denial.
+        #expect(await operations[1].value.status == .unavailable(.unauthorized))
+        let retry = Task { await client.page(for: query(.ratings, "MSFT")) }
+        defer { retry.cancel() }
+        try await waitFor { wire.calls.count == 4 }
+        wire.finish(wire.pending.count - 1)
+        #expect(await retry.value.status == .answered)
+        wire.finishAll()
+        _ = await operations[2].value
+    }
+
+    @Test func explicitAuthorizationRecheckReplacesOnlyTheSamePendingQuery() async throws {
+        let wire = Wire(), timers = Timers()
+        let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true },
+            transport: { try await wire.send($0) }, sleepUntil: { try await timers.sleep(until: $0) })
+        let old = Task { await client.page(for: query(.ratings, "AAPL")) }
+        defer { old.cancel(); wire.finishAll(); timers.releaseAll() }
+        try await waitFor { wire.calls.count == 1 }
+        let recheck = Task { await client.page(for: query(.ratings, "AAPL"), recheckAuthorization: true) }
+        defer { recheck.cancel() }
+        for _ in 0..<1000 where wire.calls.count < 2 { await Task.yield() }
+        #expect(wire.calls.count == 2, "Explicit recheck starts a new request instead of joining the prior one")
+        if wire.calls.count == 2 {
+            wire.finish(1)
+            #expect(await recheck.value.status == .answered)
+            #expect(await old.value.status == .unavailable(.cancelled))
+            wire.finish(0, status: 401)
+            for _ in 0..<20 { await Task.yield() }
+            #expect(await client.page(for: query(.ratings, "AAPL")).status == .answered)
+            #expect(wire.calls.count == 2, "Late cancelled rejection cannot replace the new cached success")
+        } else {
+            wire.finish(0, status: 401)
+            _ = await recheck.value
+            #expect(await old.value.status == .unavailable(.cancelled))
+        }
+    }
+
+    @Test func explicitRecheckReplacesTheExactFlightForAnEarlierRollingNewsWindow() async throws {
+        let clock = try Date.ISO8601FormatStyle().parse("2026-09-10T12:00:00Z")
+        let wire = Wire(), timers = Timers()
+        let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { clock },
+            transport: { try await wire.send($0) }, sleepUntil: { try await timers.sleep(until: $0) })
+        let newer = query(.news, from: "2026-09-03T12:00:00Z", through: "2026-09-10T12:00:00Z")
+        let earlier = query(.news, from: "2026-09-03T11:59:59Z", through: "2026-09-10T11:59:59Z")
+        let otherWindow = Task { await client.page(for: newer) }
+        defer { otherWindow.cancel(); wire.finishAll(); timers.releaseAll() }
+        try await waitFor { wire.calls.count == 1 }
+        let old = Task { await client.page(for: earlier) }
+        defer { old.cancel() }
+        try await waitFor { wire.calls.count == 2 }
+        let recheck = Task { await client.page(for: earlier, recheckAuthorization: true) }
+        defer { recheck.cancel() }
+        for _ in 0..<1000 where wire.calls.count < 3 { await Task.yield() }
+        #expect(wire.calls.count == 3, "Recheck must replace the exact earlier-window flight, not join it")
+        if wire.calls.count == 3 {
+            #expect(await old.value.status == .unavailable(.cancelled))
+            wire.finish(2)
+            let fresh = await recheck.value
+            #expect(fresh.status == .answered && fresh.query == earlier)
+            wire.finish(1, status: 401) // Cancellation-ignoring old transport must not restore a denial.
+            wire.finish(0)
+            let unaffected = await otherWindow.value
+            #expect(unaffected.status == .answered && unaffected.query == newer)
+            #expect(wire.peak == 3, "The cancelled transport keeps its slot until it returns")
+        } else {
+            wire.finishAll()
+            _ = await recheck.value
+            _ = await old.value
+            _ = await otherWindow.value
+        }
+    }
+
+    @Test func authenticationRecheckCannotBypassCooldownAndUsablePagesKeepTheirOwnReceipt() async {
+        let start = Date(timeIntervalSince1970: 1_789_041_600)
+        var clock = start, calls = 0, status = 200
+        let client = C(key: { "synthetic" }, revision: { nil }, allowed: { true }, now: { clock },
+            transport: { request in
+                calls += 1; return Self.reply(request, status: status, headers: ["Retry-After": "300"])
+            })
+        let usable = await client.page(for: query(.ratings, "AMZN"))
+        status = 401
+        _ = await client.page(for: query(.ratings, "AAPL"))
+        #expect(await client.page(for: query(.ratings, "AMZN")) == usable && calls == 2)
+        _ = await client.page(for: query(.ratings, "MSFT"))
+        #expect(calls == 2)
+        status = 429
+        #expect(await client.page(for: query(.earnings, "AAPL")).status == .unavailable(.throttled) && calls == 3)
+        status = 200
+        #expect(await client.page(for: query(.ratings, "MSFT"), recheckAuthorization: true).status == .unavailable(.throttled))
+        client.clearAuthorizationFailures()
+        #expect(await client.page(for: query(.ratings, "NVDA")).status == .unavailable(.throttled) && calls == 3)
+        clock = clock.addingTimeInterval(300)
+        #expect(await client.page(for: query(.ratings, "NVDA")).status == .answered && calls == 4)
+    }
+
     @Test func clearAuthorizationFailuresPreservesOtherCacheEntriesAndCooldown() async throws {
         var clock = try Date.ISO8601FormatStyle().parse("2026-09-10T12:00:00Z")
         var calls = 0, reads = 0
@@ -271,7 +483,7 @@ struct StockSageBenzingaClientTests {
         #expect(kept["ServerError"]?.status == .unavailable(.http(500)))
         let deniedIDs = ["Denied401", "Denied402", "Denied403"]
         for id in deniedIDs {
-            let denied = await client.page(for: query(.firms, id))
+            let denied = await client.page(for: query(.firms, id), recheckAuthorization: true)
             #expect(denied.status == .unavailable(id == "Denied401" ? .unauthorized : .entitlement))
         }
         let throttle = await client.page(for: query(.firms, "Throttle"))

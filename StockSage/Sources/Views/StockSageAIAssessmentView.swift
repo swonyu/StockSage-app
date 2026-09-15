@@ -13,9 +13,10 @@ struct StockSageAIBadge: View {
             Text(ai.label(for: idea, store: store))
                 .font(.caption2.bold())
                 .foregroundStyle(MarketsView.actionTextColorForTest(action))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: true)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(MarketsView.actionColorForTest(action), in: Capsule())
-                .fixedSize(horizontal: false, vertical: true)
             Text("Rules: \(idea.advice.action.rawValue)").font(.caption2).foregroundStyle(.secondary)
             if let record {
                 Text("Snapshot \(record.timeLabel)").font(.caption2).foregroundStyle(.secondary)

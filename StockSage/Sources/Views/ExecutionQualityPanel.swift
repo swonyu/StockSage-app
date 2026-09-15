@@ -42,7 +42,7 @@ struct ExecutionQualityPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack(spacing: DS.Space.sm) {
-                Image(systemName: "target").font(.system(size: font16)).foregroundStyle(DS.Palette.accent)
+                Image(systemName: "target").font(.system(size: font16)).foregroundStyle(DS.Palette.accentText)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Execution quality").font(DS.Typography.titleM).foregroundStyle(.white)
                     Text("Your measured fills vs. the assumptions the engine costs your trades at.")

@@ -38,6 +38,48 @@ struct StockSageBenzingaConsumerTests {
             context: C.snapshotContext)
     }
 
+    @Test func chatDisclosureDoesNotInventExclusionOrOmissionCauses() throws {
+        // The aggregate excludes two rows without preserving their reasons. The retained row
+        // belongs to an obsolete credential epoch, so it is omitted even with ample byte space.
+        let page = B.Page(query: .init(product: .consensusRatings, subject: "ORCL", from: nil, through: nil),
+            checkedAt: now, credentialGeneration: "old-epoch", status: .answered,
+            records: [record()], excludedCount: 2, hasMore: false)
+        let snapshot = B.Snapshot(symbol: "ORCL", capturedAt: now, credentialGeneration: "fixture-epoch", pages: [page])
+        let captured = C.addingBenzinga(to: chat(), evidence: snapshot)
+        let before = try encoded(captured)
+        let projection = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000))
+        #expect(projection.notEligibleCount == 2 && projection.trimmedRecordCount == 1)
+        let prepared = try #require(C.request(question: "Explain ORCL", snapshot: captured, history: []))
+        let status = try #require(prepared.snapshot.researchStatus)
+        #expect(status.contains("2 not eligible at capture"))
+        #expect(status.contains("eligibility or validation"))
+        #expect(status.contains("1 retained records not sent in this request"))
+        #expect(!status.contains("ratings 7-day") && !status.contains("no rating change"))
+        #expect(!status.contains("trimmed to fit"))
+        #expect(projection.statusLines.count == 9)
+        for line in projection.statusLines { #expect(prepared.prompt.replacingOccurrences(of: "\\/", with: "/").contains(line)) }
+        #expect(try encoded(captured) == before)
+    }
+
+    @Test func panelSeparatesExcludedCappedAndNotDisplayedCounts() {
+        let projection = B.Projection(statusLines: [], records: [], omittedRecordCount: 5,
+            notEligibleCount: 4, cappedRecordCount: 2)
+        let lines = StockSageBenzingaEvidenceView.omissionLines(for: projection)
+        #expect(lines.count == 3)
+        #expect(lines.contains { $0.contains("4 records excluded") && $0.contains("eligibility or validation") })
+        #expect(lines.contains { $0.contains("2 records beyond") && $0.contains("3 per product") })
+        #expect(lines.contains("3 retained records not shown in this panel."))
+        #expect(lines.allSatisfy { !$0.contains("model") && !$0.contains("trimmed") })
+    }
+
+    @Test func panelKeepsExclusionsVisibleWhenNoRetainedRecordWasOmitted() {
+        let excluded = B.Projection(statusLines: [], records: [], omittedRecordCount: 0, notEligibleCount: 4)
+        let lines = StockSageBenzingaEvidenceView.omissionLines(for: excluded)
+        #expect(lines.count == 1 && lines.first?.contains("4 records excluded") == true)
+        let empty = B.Projection(statusLines: [], records: [], omittedRecordCount: 0)
+        #expect(StockSageBenzingaEvidenceView.omissionLines(for: empty).isEmpty)
+    }
+
     @Test func assessmentAndNarratorUseSameCaptureWithoutInventingPublication() throws {
         let item = SageFix.idea("ORCL", conviction: 0.6, rr: 2, price: 100, riskDistance: 10)
             .withLivePrice(100, asOf: now, priceSource: .massiveSIP)
@@ -91,11 +133,10 @@ struct StockSageBenzingaConsumerTests {
             }
         }
         #expect(offered.count < records.count)
-        // The disclosure must name the REASON, not just a count (2026-09-11). These records are
-        // dropped to fit the request, which is a different fact from "the provider had nothing
-        // recent" — and collapsing the two is what produced two wrong diagnoses in one session.
-        #expect(prepared.snapshot.researchStatus?.contains("\(records.count - offered.count) trimmed to fit.") == true,
-                "status did not attribute the drop: \(prepared.snapshot.researchStatus ?? "nil")")
+        // Count actual request omissions separately from capture exclusions. The aggregate
+        // omission count does not retain a reason for every rejected or over-budget record.
+        #expect(prepared.snapshot.researchStatus?.contains("\(records.count - offered.count) retained records not sent in this request.") == true,
+                "status did not disclose request omissions: \(prepared.snapshot.researchStatus ?? "nil")")
         #expect(prepared.snapshot.researchStatus?.contains("not eligible at capture") == true,
                 "the capture-time exclusion bucket must be stated even when it is zero")
         #expect(try encoded(captured) == before)

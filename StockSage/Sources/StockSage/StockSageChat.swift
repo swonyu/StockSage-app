@@ -309,8 +309,8 @@ enum StockSageChat {
             // changes is that the reader can tell a quiet market from a starved request.
             let benzingaDisclosure = projection.map { p in
                 " Benzinga: \(p.records.count) sent; \(p.notEligibleCount) not eligible at capture"
-                + " (outside the ratings 7-day or guidance 14-day recency window, or no rating change);"
-                + " \(p.cappedRecordCount) capped at 3 per product; \(p.trimmedRecordCount) trimmed to fit."
+                + " (excluded by evidence eligibility or validation rules);"
+                + " \(p.cappedRecordCount) capped at 3 per product; \(p.trimmedRecordCount) retained records not sent in this request."
             } ?? ""
             let disclosure = "Budget: \(omittedFacts) facts, \(omittedSources)/\(total) sources omitted." + benzingaDisclosure + " Context/research details and links remain in the original snapshot. Missing evidence is not evidence of absence. Full filings not retrieved."
             let offered = Snapshot(at: snapshot.at, facts: offeredFacts, context: snapshot.context,

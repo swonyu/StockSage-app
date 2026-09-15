@@ -1,11 +1,71 @@
 import Testing
 import Foundation
+import Combine
 @testable import StockSage
 
 @Suite("Massive live stream")
 struct StockSageLiveStreamTests {
     typealias L = StockSageLiveStream
     typealias ExchangeContinuation = CheckedContinuation<[Int64: StockSageMassiveTicks.Exchange], Never>
+
+    @MainActor @Test("diagnostics notify once per second, with immediate failure changes and recovery")
+    func diagnosticsNotificationsKeepLatestReportWithoutInvalidatingEverySnapshot() {
+        let live = L()
+        var notifications = 0
+        let subscription = live.objectWillChange.sink { notifications += 1 }
+        defer { subscription.cancel() }
+        var report = StockSageFeedIngress.Metrics()
+
+        report.elapsed = 1
+        live.recordDiagnostics(report, uptime: 100)
+        #expect(notifications == 1)
+
+        report.elapsed = 1.25
+        report.processedEvents = 4
+        live.recordDiagnostics(report, uptime: 100.25)
+        #expect(notifications == 1)
+        #expect(live.diagnostics == report, "The latest raw report remains available between notifications")
+
+        report.elapsed = 1.99
+        report.processedEvents = 8
+        live.recordDiagnostics(report, uptime: 100.99)
+        #expect(notifications == 1)
+        #expect(live.diagnostics == report)
+
+        report.elapsed = 2
+        live.recordDiagnostics(report, uptime: 101)
+        #expect(notifications == 2)
+
+        report.elapsed = 2.1
+        report.failure = "Feed session invalidated; gap and reconnect"
+        live.recordDiagnostics(report, uptime: 101.1)
+        #expect(notifications == 3, "A new failure is visible immediately inside the cadence window")
+        #expect(live.diagnostics == report)
+
+        report.elapsed = 2.2
+        live.recordDiagnostics(report, uptime: 101.2)
+        #expect(notifications == 3, "Repeated failure details do not invalidate on every snapshot")
+        #expect(live.diagnostics == report)
+
+        report.failure = "UI price publication exceeded 10s; gap and reconnect"
+        live.recordDiagnostics(report, uptime: 101.25)
+        #expect(notifications == 4, "A changed failure is also visible immediately")
+
+        report.elapsed = 2.3
+        report.failure = nil
+        live.recordDiagnostics(report, uptime: 101.3)
+        #expect(notifications == 5, "Recovery is visible immediately inside the cadence window")
+        #expect(live.diagnostics == report)
+
+        report.elapsed = 3
+        live.recordDiagnostics(report, uptime: 102)
+        #expect(notifications == 5, "Cadence is measured from the most recent notification")
+        #expect(live.diagnostics == report)
+
+        report.elapsed = 3.5
+        live.recordDiagnostics(report, uptime: 102.5)
+        #expect(notifications == 6)
+    }
 
     @MainActor @Test func connectionOwnershipChangesWithoutOpeningASocket() {
         var revision: String? = nil

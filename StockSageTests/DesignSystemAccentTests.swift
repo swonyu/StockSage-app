@@ -10,21 +10,20 @@ import UIKit
 @Suite("Magenta brand accent")
 struct DesignSystemAccentTests {
     @Test @MainActor func sharedAndNativeAccentsUseMagentaWithoutChangingStatusColors() throws {
-        for color in [DS.Palette.accent, DS.Palette.accent2, DS.Palette.accentText, Color("AccentColor")] {
+        for color in [DS.Palette.accent, DS.Palette.accentText, Color("AccentColor")] {
             let rgb = try components(color)
             #expect(rgb[0] > 0.65 && rgb[2] > 0.6)
             #expect(rgb[1] < min(rgb[0], rgb[2]) * 0.6, "Magenta has strong red/blue, not an indigo or red-only accent")
         }
         #expect(DS.Palette.success == Color.green)
         #expect(DS.Palette.danger == Color.red)
-        #expect(DS.Palette.warning == Color.orange)
         #if os(macOS)
         #expect(StockSageDesktop.berry == DS.Palette.accentText, "Navigation must use the shared accent")
         #endif
     }
 
     @Test @MainActor func whiteButtonLabelsAndAccentTextRetainAAContrast() throws {
-        for fill in [DS.Palette.accent, DS.Palette.accent2, Color("AccentColor")] {
+        for fill in [DS.Palette.accent, Color("AccentColor")] {
             #expect(contrast(try components(fill), [1, 1, 1]) >= 4.5)
         }
         let text = try components(DS.Palette.accentText)

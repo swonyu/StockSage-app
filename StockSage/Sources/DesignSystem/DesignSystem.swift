@@ -32,7 +32,6 @@ enum DS {
         // Keep white-label fills dark enough for AA; use the lighter sibling for
         // text/icons on dark surfaces. Financial/status colors remain separate.
         static let accent        = Color("AccentColor")
-        static let accent2       = Color(.sRGB, red: 197 / 255.0, green: 39 / 255.0, blue: 173 / 255.0)
         static let accentText    = Color(.sRGB, red: 244 / 255.0, green: 123 / 255.0, blue: 222 / 255.0)
         // One charcoal canvas on Mac and iPhone; magenta belongs to controls.
         static let bgTop         = Color(red: 0.094, green: 0.094, blue: 0.102)
@@ -44,7 +43,6 @@ enum DS {
         static let textPrimary   = Color.white
         static let textSecondary = Color.white.opacity(0.66)
         static let success       = Color.green
-        static let warning       = Color.orange
         static let danger        = Color.red
         static let successSoft   = Color(red: 0.45, green: 0.85, blue: 0.55)
         static let warningSoft   = Color(red: 1.0,  green: 0.72, blue: 0.35)
@@ -65,7 +63,7 @@ enum DS {
     // live app-wide consumers belong here; the parent app's chat-scale ladder
     // was deleted in the macOS 27 overhaul (2026-07-16).
     enum Typography {
-        static let titleM = Font.system(size: 17, weight: .semibold, design: .rounded)
+        static let titleM = Font.system(.headline, design: .rounded, weight: .semibold)
     }
 
     // MARK: Motion
@@ -119,8 +117,6 @@ enum DS {
 
     // MARK: Gradients
     enum Gradient {
-        static let brand = LinearGradient(colors: [Palette.accent, Palette.accent2],
-                                          startPoint: .topLeading, endPoint: .bottomTrailing)
         /// The canvas wash — base layer of `DSCanvasBackground` and the detail
         /// sheet's owner-drawn root (QA snapshot path needs an opaque backing).
         static let bg = LinearGradient(colors: [Palette.bgTop, Palette.bgBottom],
@@ -143,21 +139,6 @@ struct DSCanvasBackground: View {
 // repo-wide grep including StockSageTests. The DS.Bezel token namespace stays:
 // the card recipes consume it inline.
 
-// MARK: - Card
-struct Card<Content: View>: View {
-    var padding: CGFloat = DS.Space.md
-    var radius: CGFloat = DS.Radius.card
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        content()
-            .padding(padding)
-            .background(DS.Palette.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-    }
-}
-
 // MARK: - Button styles
 /// Gravity-pull press: 0.97 settle on the lux curve — heavier and more
 /// deliberate than a plain press-curve settle. Use on tinted pill/capsule CTAs
@@ -165,33 +146,13 @@ struct Card<Content: View>: View {
 /// Moved from CodeView so all tabs share one definition. (Marathon EN)
 struct LuxPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration c: Configuration) -> some View {
         c.label
-            .scaleEffect(reduceMotion ? 1 : (c.isPressed ? 0.97 : 1))
+            .opacity(isEnabled ? 1 : 0.45)
+            .scaleEffect(reduceMotion || !isEnabled ? 1 : (c.isPressed ? 0.97 : 1))
             .animation(reduceMotion ? nil : DS.Motion.lux, value: c.isPressed)
-    }
-}
-
-// MARK: - Eyebrow
-struct Eyebrow: View {
-    let text: String
-    var color: Color = DS.Palette.accent
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(2)
-            .foregroundStyle(color.opacity(0.85))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.10), in: Capsule())
-            .overlay(Capsule().stroke(
-                LinearGradient(colors: [color.opacity(0.40), color.opacity(0.08)],
-                               startPoint: .top, endPoint: .bottom),
-                lineWidth: 0.5))
-            .accessibilityLabel(text)
-            .accessibilityAddTraits(.isStaticText)
     }
 }
 
@@ -217,6 +178,7 @@ struct PriceFlash: ViewModifier {
 
     let price: Double?
     @State private var flashDirection: Direction?
+    @State private var flashID: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -229,12 +191,16 @@ struct PriceFlash: ViewModifier {
             .onChange(of: price) { old, new in
                 guard !reduceMotion, let dir = Self.direction(from: old, to: new) else { return }
                 flashDirection = dir
-                Task {
-                    try? await Task.sleep(for: .milliseconds(600))
-                    // Only clear OUR OWN flash — a second flash that landed during the sleep
-                    // (rapid consecutive ticks) must not be cut short by the earlier task's timer.
-                    if flashDirection == dir { flashDirection = nil }
-                }
+                flashID = UUID()
+            }
+            .task(id: flashID) {
+                guard flashID != nil else { return }
+                do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+                guard !Task.isCancelled else { return }
+                flashDirection = nil
+            }
+            .onChange(of: reduceMotion) { _, reduced in
+                if reduced { flashID = nil; flashDirection = nil }
             }
     }
 }

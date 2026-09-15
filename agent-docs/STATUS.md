@@ -1,3 +1,16 @@
+> **Historical implementation notes — not current setup instructions.**
+>
+> The original text below is preserved as a dated record. Its black-screen fallback
+> and manual target-membership steps are obsolete. The missing HapticFeedback,
+> PullToRefresh and iPadLayout helpers were superseded; do not recreate them from
+> this checklist. Current source and test folders use synchronized Xcode groups.
+>
+> Start with the [project README](../README.md) and the
+> [documentation index](../docs/reviews/README.md). Current owner directives and
+> the active implementation plan take precedence over this historical checklist.
+
+---
+
 # ✅ Build Fixed + Status Report
 
 ## 🎉 BUILD SHOULD WORK NOW

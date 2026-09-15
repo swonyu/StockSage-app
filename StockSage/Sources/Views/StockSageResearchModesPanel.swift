@@ -4,9 +4,18 @@ struct StockSageResearchModesPanel: View {
     @ObservedObject var store: StockSageStore
     @ObservedObject var research = StockSageHorizonResearch.shared
     struct Presentation {
-        var horizon: StockSageHorizonResearch.Horizon = .week
+        var horizon: StockSageHorizonResearch.Horizon
         var search = ""
         var selected: String?
+        init(horizon: StockSageHorizonResearch.Horizon? = nil) {
+            self.horizon = horizon ?? (StockSageStore.isRunningTests ? .week : Self.restore(from: .standard))
+        }
+        static func restore(from defaults: UserDefaults) -> StockSageHorizonResearch.Horizon {
+            defaults.string(forKey: "stocksage.research.horizon") == "fortnight" ? .fortnight : .week
+        }
+        static func save(_ horizon: StockSageHorizonResearch.Horizon, to defaults: UserDefaults) {
+            defaults.set(horizon == .week ? "week" : "fortnight", forKey: "stocksage.research.horizon")
+        }
     }
     @Binding var presentation: Presentation
     #if os(macOS)
@@ -25,6 +34,7 @@ struct StockSageResearchModesPanel: View {
 
     var body: some View {
         manual(presentation.horizon)
+            .onAppear { if !StockSageStore.isRunningTests { Presentation.save(presentation.horizon, to: .standard) } }
     }
 
     private var visibleListings: [StockSageHorizonResearch.Listing] {
@@ -76,8 +86,11 @@ struct StockSageResearchModesPanel: View {
                 #endif
             }
             .controlSize(.large)
-            .onChange(of: presentation.horizon) { _, _ in selected = nil; search = "" }
-            if let running = research.running, running != presentation.horizon {
+            .onChange(of: presentation.horizon) { _, horizon in
+                selected = nil; search = ""
+                if !StockSageStore.isRunningTests { Presentation.save(horizon, to: .standard) }
+            }
+            if let running = research.running, !research.isRunning(presentation.horizon) {
                 Self.runningScanControls(running: running,
                     show: { presentation.horizon = running }, stop: { research.stop() })
             }
@@ -94,17 +107,36 @@ struct StockSageResearchModesPanel: View {
     private func manual(_ horizon: StockSageHorizonResearch.Horizon) -> some View {
         let scan = research.scans[horizon] ?? .init()
         let rows = visibleListings
-        let isRunning = research.running == horizon
+        let isRunning = research.isRunning(horizon)
         // A blocked preflight can have no request date or listings but still has useful status.
         // Suppress only the untouched model's repeated "Press Run" instruction.
         let isUntouched = !isRunning && scan.at == nil && scan.listings.isEmpty
             && scan.results.isEmpty && scan.selection == nil
             && scan.status == StockSageHorizonResearch.Scan().status
         let controls = VStack(alignment: .leading, spacing: 16) {
-            Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: research.running,
+            Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: isRunning ? horizon : research.running,
                 run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
+            #if os(macOS)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    horizonControls.fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 0)
+                    bothHorizonsButton
+                    StockSageResearchHistoryButton(store: store)
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    horizonControls
+                    HStack(spacing: 12) {
+                        bothHorizonsButton
+                        StockSageResearchHistoryButton(store: store)
+                    }
+                }
+            }
+            #else
+            bothHorizonsButton
             horizonControls
             StockSageResearchHistoryButton(store: store)
+            #endif
             if !isUntouched { scanSummary(scan, isRunning: isRunning) }
         }
         // Selection belongs to the workspace and is limited to the visible top results.
@@ -125,7 +157,7 @@ struct StockSageResearchModesPanel: View {
         // The window owns the inspector. The table owns its scrolling, with no enclosing card.
         return VStack(alignment: .leading, spacing: 0) {
             ScrollView { controls.padding(24) }
-                .frame(height: scan.listings.isEmpty ? 260 : 300)
+                .frame(height: scan.listings.isEmpty ? 220 : 300)
             Divider()
             if !scan.listings.isEmpty { resultsHeader.padding(.horizontal, 24).padding(.vertical, 12) }
             if rows.isEmpty {
@@ -161,6 +193,14 @@ struct StockSageResearchModesPanel: View {
         .tint(DS.Palette.accentText)
         .sheet(isPresented: detailPresented) { selectedDetail }
         #endif
+    }
+
+    private var bothHorizonsButton: some View {
+        Button("Research both horizons", systemImage: "rectangle.split.2x1") {
+            selected = nil; research.start(StockSageHorizonResearch.Horizon.allCases, store: store)
+        }
+        .disabled(research.running != nil)
+        .help("Gather evidence once per stock, then ask Qwen separately for each horizon. Both completed runs are saved. No orders.")
     }
 
     private func scanSummary(_ scan: StockSageHorizonResearch.Scan, isRunning: Bool) -> some View {
@@ -219,8 +259,9 @@ struct StockSageResearchModesPanel: View {
 
     private func coverageDetails(_ scan: StockSageHorizonResearch.Scan) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment or the S&P 500. Confirmed USD listings, including ETFs and share classes; no OTC. Missing observations are not filled alphabetically. One manual worker researches the selected list in order.")
+            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment or the S&P 500. Only NASDAQ-listed common stocks with confirmed USD currency; no ETFs, other listing types or OTC securities. Missing observations are not filled alphabetically. One manual worker researches the selected list in order.")
             Text(StockSageHorizonResearch.topBuyRankingNote)
+            Text("Both horizons use the same evidence-selection rules and technical-level formula. The model is asked about a different holding period; differing opinions are unvalidated.")
             if let selection = scan.selection {
                 Text("\(selection.directoryCount) active US directory entries considered. Selection requested \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)). \(selection.summary)")
             }
@@ -263,6 +304,11 @@ struct StockSageResearchModesPanel: View {
                     .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.successSoft : .secondary)
                     .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
             }.width(min: 90, ideal: 120, max: 200)
+            TableColumn("Evidence") { item in
+                Text(Self.coverageSummary(scan.results[item.ticker]?.coverage ?? []))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .help(scan.results[item.ticker]?.coverage.map(\.detail).joined(separator: "\n") ?? "Coverage not captured")
+            }.width(min: 95, ideal: 130, max: 180)
             TableColumn("Daily close") { item in
                 Text(Self.price(scan.results[item.ticker]?.referenceClose?.value)).monospacedDigit()
                     .accessibilityLabel(scan.results[item.ticker]?.referenceClose.map { "Daily close reference \(Self.price($0.value)), \($0.at.formatted(date: .abbreviated, time: .omitted))" } ?? "Daily close reference not available")
@@ -291,6 +337,9 @@ struct StockSageResearchModesPanel: View {
                             Image(systemName: "chevron.right").font(.caption.weight(.semibold))
                                 .foregroundStyle(.tertiary).accessibilityHidden(true)
                         }
+                        Text(Self.coverageSummary(scan.results[item.ticker]?.coverage ?? []))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(item.name).font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         ViewThatFits(in: .horizontal) {
@@ -394,13 +443,16 @@ struct StockSageResearchModesPanel: View {
                 } else {
                     Button(hasRun ? "Run again" : "Run \(StockSageHorizonResearch.scanLimit)-stock scan", systemImage: "play.fill", action: run)
                         .buttonStyle(.borderedProminent).tint(DS.Palette.accent)
+                        #if os(macOS)
+                        .buttonBorderShape(.capsule)
+                        #endif
                         .controlSize(.large)
                         .accessibilityLabel("Run \(horizon.rawValue) research scan")
                         .disabled(running != nil)
                         .help("Research once; no orders. A new run replaces this horizon’s visible results. Completed runs stay in saved research.")
                 }
             }
-            Text("One-time research across up to \(StockSageHorizonResearch.scanLimit) US listings. Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open.")
+            Text("One-time research across up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks. Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -468,9 +520,9 @@ struct StockSageResearchModesPanel: View {
     static func resultLabel(_ symbol: String, research: StockSageHorizonResearch,
                             scan: StockSageHorizonResearch.Scan,
                             horizon: StockSageHorizonResearch.Horizon) -> String {
-        if research.running == horizon, research.activeSymbol == symbol { return "Checking…" }
+        if research.isRunning(horizon), research.activeSymbol == symbol { return "Checking…" }
         if let result = scan.results[symbol] { return result.verdict?.action.rawValue ?? "Incomplete" }
-        return research.running == horizon && research.activeSymbol != nil ? "Queued" : "Not checked"
+        return research.isRunning(horizon) && research.activeSymbol != nil ? "Queued" : "Not checked"
     }
 
     static func searchField(search: Binding<String>) -> some View {
@@ -549,10 +601,27 @@ struct StockSageResearchModesPanel: View {
                     Text("No valid ATR-based entry/stop/target plan could be calculated. Do not treat this opinion as an order plan.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
+                if !result.coverage.isEmpty {
+                    DisclosureGroup("Evidence coverage · " + Self.coverageSummary(result.coverage)) {
+                        ForEach(Array(result.coverage.enumerated()), id: \.offset) { _, item in
+                            Text(item.detail).font(.callout)
+                        }
+                        Text("Coverage records checks, not predictive quality. The exact facts below show what was offered to the model.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if !result.facts.isEmpty {
                     DisclosureGroup("Evidence captured \(result.at.formatted(date: .abbreviated, time: .shortened))") {
                         Text("Model: \(result.model.isEmpty ? "no verified model answer" : result.model) · References: \(result.verdict?.evidence.joined(separator: ", ") ?? "none")")
-                        ForEach(Array(result.facts.enumerated()), id: \.offset) { index, fact in Text("F\(index + 1): \(fact)") }
+                        ForEach(Array(result.facts.enumerated()), id: \.offset) { index, fact in
+                            if fact.hasPrefix("Massive/Benzinga sample;") {
+                                DisclosureGroup("F\(index + 1): Offered Benzinga evidence") {
+                                    Text(verbatim: fact).font(.callout).fixedSize(horizontal: false, vertical: true)
+                                }
+                            } else { Text("F\(index + 1): \(fact)").font(.callout) }
+                        }
+                        if !result.facts.contains(where: { $0.hasPrefix("Massive/Benzinga sample;") }) {
+                            Text("Benzinga record details were not included in these model facts. Check the captured source statuses above.").font(.callout).foregroundStyle(.secondary)
+                        }
                     }.font(.caption)
                 }
             } else { Text("This listing has not been checked. No opinion or price levels are assumed.") }
@@ -561,6 +630,15 @@ struct StockSageResearchModesPanel: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+
+    static func coverageSummary(_ coverage: [StockSageHorizonResearch.EvidenceCoverage]) -> String {
+        guard !coverage.isEmpty else { return "Not captured" }
+        let answered = coverage.filter { $0.state == .answered }.count
+        let partial = coverage.filter { $0.state == .partial }.count
+        let unavailable = coverage.count - answered - partial
+        return "\(answered) answered" + (partial > 0 ? " · \(partial) partial" : "")
+            + (unavailable > 0 ? " · \(unavailable) gaps" : "")
+    }
 
     private static func price(_ value: Double?) -> String { value.map { "$" + StockSageCurrency.adaptivePrice($0) } ?? "—" }
     private static func isBuy(_ action: TradeAdvice.Action?) -> Bool { action == .buy || action == .strongBuy }

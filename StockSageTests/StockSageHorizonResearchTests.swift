@@ -4,6 +4,81 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
+    @Test func bothHorizonsShareOneSelectionAndOneSymbolWorkerAndSaveIndependentRuns() async throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let research = R(history: history)
+        defer { research.stop() }
+        let names = [listing("AAPL"), listing("MSFT")]
+        var selections = 0, captures = 0
+        let started = research.start(R.Horizon.allCases, allowed: { true }, universe: {
+            selections += 1; return .init(names)
+        }, analyze: { item, horizon in
+            if horizon == .week { captures += 1 }
+            let verdict = StockSageAIAssessment.Verdict(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"])
+            return .init(verdict: verdict, facts: ["One capture \(item.ticker)"], note: horizon.rawValue)
+        })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil)
+        #expect(selections == 1 && captures == 2)
+        #expect(history.runs.count == 2)
+        #expect(Set(history.runs.map(\.horizon)) == [.week, .fortnight])
+        for horizon in R.Horizon.allCases { #expect(research.scans[horizon]?.topBuys.map(\.ticker) == ["AAPL", "MSFT"]) }
+    }
+
+    @Test func stoppingBothHorizonsDoesNotSaveAPartialRun() async throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let owningResearch = R(history: history)
+        defer { owningResearch.stop() }
+        var resume: CheckedContinuation<Void, Never>?
+        let started = owningResearch.start(R.Horizon.allCases, allowed: { true }, universe: { .init([listing("AAPL")]) }, analyze: { _, _ in
+            await withCheckedContinuation { resume = $0 }
+            return .init(note: "late")
+        })
+        try #require(started)
+        for _ in 0..<100 where resume == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(resume != nil)
+        owningResearch.stop(); resume?.resume()
+        for _ in 0..<100 where owningResearch.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(owningResearch.running == nil && history.runs.isEmpty)
+        #expect(owningResearch.scans.values.allSatisfy { $0.results.isEmpty })
+    }
+
+    @Test func stoppingSecondHorizonPreservesTheFirstCompletedRun() async throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let owner = R(history: history)
+        defer { owner.stop() }
+        var resume: CheckedContinuation<Void, Never>?
+        let started = owner.start(R.Horizon.allCases, allowed: { true }, universe: { .init([listing("AAPL")]) }, analyze: { _, horizon in
+            if horizon == .fortnight { await withCheckedContinuation { resume = $0 } }
+            return .init(note: horizon.rawValue)
+        })
+        try #require(started)
+        for _ in 0..<100 where resume == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(resume != nil)
+        #expect(history.runs.count == 1 && history.runs.first?.horizon == .week)
+        owner.stop(); resume?.resume()
+        for _ in 0..<100 where owner.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(owner.scans[.week]?.results["AAPL"] != nil)
+        #expect(owner.scans[.week]?.status.hasPrefix("Scan finished") == true && !owner.isRunning(.week))
+        #expect(owner.scans[.fortnight]?.results.isEmpty == true)
+        #expect(history.runs.count == 1)
+    }
+
+    @Test func lastHorizonUsesIsolatedPreferencesAndExplicitHomeChoiceClearsSelection() throws {
+        let name = "stocksage.research.presentation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        typealias P = StockSageResearchModesPanel.Presentation
+        #expect(P.restore(from: defaults) == .week)
+        P.save(.fortnight, to: defaults)
+        #expect(P.restore(from: defaults) == .fortnight)
+        defaults.set("unrecognized", forKey: "stocksage.research.horizon")
+        #expect(P.restore(from: defaults) == .week)
+        let explicit = P(horizon: .week)
+        #expect(explicit.horizon == .week && explicit.search.isEmpty && explicit.selected == nil)
+    }
+
     @Test func topBuysKeepOnlyFiveAcceptedOpinionsInDeclaredOrder() {
         var scan = R.Scan()
         scan.listings = ["BUY1", "HOLD", "STRONG1", "INCOMPLETE", "STRONG2", "BUY2",
@@ -541,7 +616,7 @@ import Testing
         #expect(retained.results["AAPL"]?.at == now)
         #expect(retained.results["AAPL"]?.levels == levels && retained.results["AAPL"]?.model == "synthetic-model")
         #expect(retained.status.contains("Earlier scan data retained; no new listings checked."))
-        #expect(retained.status.contains(outcome == "cancel" || outcome == "settings" ? "Scan stopped" : "could not be verified"))
+        #expect(retained.status.contains(outcome == "cancel" || outcome == "settings" ? "Scan stopped" : "Scan incomplete"))
     }
 
     @Test func firstPreflightFailureDoesNotInventPreviousResults() async throws {
@@ -554,7 +629,7 @@ import Testing
         try #require(r.running == nil)
         let scan = try #require(r.scans[.week])
         #expect(scan.at != nil && scan.listings.isEmpty && scan.results.isEmpty && !analyzed)
-        #expect(scan.status == "Scan incomplete: US directory or dated market activity could not be verified. Check Massive settings and retry.")
+        #expect(scan.status == "Scan incomplete: the directory or dated activity response was unavailable or inconsistent. No verified selection could be made; retry after checking data access.")
     }
 
     @Test(arguments: [false, true])

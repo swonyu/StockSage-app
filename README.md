@@ -10,6 +10,10 @@ picks for each horizon and predictions ready for review, with dates and direct l
 iPhone uses the same charcoal/magenta design and Home-first native tabs.
 Legacy same-day paper records remain on Mac; new runs and automatic resumption are retired.
 
+Start with this README for product scope and [HANDOFF.md](HANDOFF.md) for dated
+verification receipts. The [documentation index](docs/reviews/README.md) separates
+the active implementation plan, incoming reviews and historical notes.
+
 ## What it is
 
 - **Market data:** Massive US snapshots, trade/quote streaming and adjusted daily
@@ -18,16 +22,20 @@ Legacy same-day paper records remain on Mac; new runs and automatic resumption a
   Endpoint access, freshness and licensing rights are separate questions.
 - **Research:** rules-based indicators and sizing, company catalysts, evidence-bound
   AI opinions, local Qwen Chat, and manual 1–7 / 7–14 trading-day scans. Each manual
-  horizon scans at most 500 validated active US names and displays at most five
+  horizon scans at most 500 validated NASDAQ-listed common stocks and displays at most five
   accepted Buy / Strong Buy results. Strong Buy precedes Buy; ties retain the dated
-  activity order. The rank is not a validated return forecast. No positions are opened.
+  activity order. “Research both horizons” gathers evidence once per stock and asks the model
+  separately and sequentially for each horizon. The rank is not a validated return forecast. No positions are opened.
 - **Saved research:** completed runs preserve original ordered picks, opinions,
   evidence, model and reference prices in `Application Support/StockSage/ResearchHistory/runs.json`.
-  Saved research → Check due results reviews the seventh or fourteenth future Nasdaq
-  regular-session target date, once that New York date has ended. The benchmark uses the
-  next trading date’s daily open after completion and the target date’s daily close from
-  one verified split-adjusted history; missing dates/calendar/data stay unavailable. Flat is distinct from rose/fell.
-  Active or cancelled scans are not durable completed runs. Review is manual while
+  Saved research → Check due results reviews seven or fourteen complete Nasdaq sessions,
+  starting on the next trading date after completion, once the target New York date has ended.
+  Existing saved runs keep their original scheduling policy and observed outcomes.
+  The benchmark uses the next trading date’s daily open and the target date’s daily close
+  from one verified split-adjusted history. Complete daily-close paths add a seventh-session
+  checkpoint and best/worst closes; missing path data stays explicit. Results measure direction,
+  not market outperformance. Flat is distinct from rose/fell.
+  An unfinished horizon is never saved as completed; a completed sibling horizon is retained. Review is manual while
   the app is open, not a background execution service.
 - **Legacy paper:** retained account/history/export remain readable. No new same-day
   runs start from the app or resume on launch. Open legacy positions are not monitored
@@ -38,7 +46,8 @@ Legacy same-day paper records remain on Mac; new runs and automatic resumption a
   Saved research is a separate local file and is not yet part of that normal backup.
 - **Code:** financial/data logic in `StockSage/Sources/StockSage/`; views in
   `StockSage/Sources/Views/`; shared refresh/lifecycle ownership in `MarketsView`.
-  `AppSettings` and `ToolPolicy` enforce web-access/offline controls.
+  `AppSettings` and `ToolPolicy` enforce web-access/offline controls. See the
+  [source map](#source-map) for app, widget and test entry points.
 
 ## Honesty floor (inherited, non-negotiable)
 
@@ -58,6 +67,18 @@ provider path; infrastructure FX pairs are not tradable recommendations.
 Up-to-60-second Massive observations are permitted for research only; native paper
 fills/marks and LIVE labels retain stricter gates. Quiet symbols may have older
 last trades even when the connection is healthy.
+
+## Source map
+
+| Path | Purpose |
+|---|---|
+| [StockSage/Sources/App/](StockSage/Sources/App/) | App lifecycle, settings, intents, menu bar and network policy. Also retains the separate PortfolioWidget prototype. |
+| [StockSage/Sources/StockSage/](StockSage/Sources/StockSage/) | Financial calculations, provider adapters, research and local record stores. |
+| [StockSage/Sources/Views/](StockSage/Sources/Views/) | Native Mac/iPhone views and MarketsView's shared refresh/lifecycle ownership. |
+| [StockSage/Sources/DesignSystem/](StockSage/Sources/DesignSystem/) | Shared colors, typography, spacing and view styles. |
+| [StockSageWidget/](StockSageWidget/) | Shipped widget extension, separate from the retained app-target prototype. |
+| [StockSageTests/](StockSageTests/) | Offline domain regressions and isolated native presentation/interaction fixtures. |
+| [tools/](tools/) | Verification tools and separately documented research/integration utilities; these are not automatically enabled by the app. |
 
 ## Build & run
 

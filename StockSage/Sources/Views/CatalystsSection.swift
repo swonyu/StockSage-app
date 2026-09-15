@@ -478,7 +478,7 @@ struct CatalystsSection: View {
                     .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
                 Button(probing ? "Testing…" : "Test connection") { testConnection() }
                     .buttonStyle(.plain).touchHitArea().disabled(probing)
-                    .font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+                    .font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
                 Text("On-device: \(onDeviceStatusLine(availability)) Local server: \(probe?.detail ?? "not tested yet.")")
                     .font(.system(size: font11)).foregroundStyle(probeStatusColor)
                     .fixedSize(horizontal: false, vertical: true)
@@ -579,16 +579,26 @@ struct CatalystsSection: View {
         let idea = brief.idea
         let primary = brief.primary
         let content = VStack(alignment: .leading, spacing: DS.Space.xxs) {
-            HStack(spacing: DS.Space.xs) {
-                Text(idea.symbol).font(.system(size: font13, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                actionCapsule(idea)
-                Text(StockSageCurrency.adaptivePrice(idea.price))
-                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
-                Spacer()
-                Self.weightDot(primary.weight)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DS.Space.xs) {
+                    Text(idea.symbol).font(.system(size: font13, weight: .bold, design: .rounded)).foregroundStyle(.white).fixedSize()
+                    actionCapsule(idea).fixedSize()
+                    Text(StockSageCurrency.adaptivePrice(idea.price)).font(.system(size: font11)).monospacedDigit().fixedSize()
+                    Spacer()
+                    Self.weightDot(primary.weight)
+                }
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    HStack {
+                        Text(idea.symbol).font(.system(size: font13, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                        Spacer()
+                        Self.weightDot(primary.weight)
+                    }
+                    actionCapsule(idea)
+                    Text(StockSageCurrency.adaptivePrice(idea.price)).font(.system(size: font11)).monospacedDigit()
+                }
             }
             HStack(alignment: .top, spacing: DS.Space.xs) {
-                Image(systemName: rowIconName(for: brief)).font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+                Image(systemName: rowIconName(for: brief)).font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
                 Text(primary.headline).font(.system(size: font12, weight: .semibold)).foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
                 if let date = primary.date {
@@ -688,7 +698,7 @@ struct CatalystsSection: View {
                         .disabled(narrating.contains(idea.symbol))
                 }
             }
-            .font(.system(size: font11)).foregroundStyle(DS.Palette.accent)
+            .font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
             // [network-safety-warn-first], fix pass 2026-09-06 (review blocker): the header's
             // warning scrolls off-screen together with the rest of the header on any card list
             // long enough to scroll (up to ~450 briefs) — restated here, right next to the actual

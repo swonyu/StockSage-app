@@ -119,17 +119,165 @@ struct StockSageMassiveEarningsTests {
         #expect(forward == reversed && !forward.confirmed)
     }
 
-    @Test func onlyAuthOrEntitlementRejectionClosesTheDailyGate() {
-        for status in [401, 402, 403] {
-            let until = E.availabilityOutcome(statusCode: status, now: today)
-            #expect(until == today.addingTimeInterval(86_400))
-            #expect(!E.isAvailable(unavailableUntil: until, now: today.addingTimeInterval(86_399)))
-            #expect(E.isAvailable(unavailableUntil: until, now: today.addingTimeInterval(86_400)))
-        }
-        for status: Int? in [nil, 200, 429, 500, 503] {
+    @Test func onlyAuthenticationRejectionClosesTheShortGate() {
+        let until = E.availabilityOutcome(statusCode: 401, now: today)
+        #expect(until == today.addingTimeInterval(300))
+        #expect(!E.isAvailable(unavailableUntil: until, now: today))
+        #expect(!E.isAvailable(unavailableUntil: until, now: today.addingTimeInterval(299)))
+        #expect(E.isAvailable(unavailableUntil: until, now: today.addingTimeInterval(300)))
+        for status: Int? in [nil, 200, 402, 403, 429, 500, 503] {
             #expect(E.availabilityOutcome(statusCode: status, now: today) == nil)
         }
         #expect(E.isAvailable(unavailableUntil: nil, now: today))
+    }
+
+    @Test func legacyDailyAndInvalidDenialClocksCannotBlockFreshRequests() {
+        #expect(E.isAvailable(unavailableUntil: today.addingTimeInterval(86_400), now: today))
+        #expect(E.isAvailable(unavailableUntil: today.addingTimeInterval(300), now: today.addingTimeInterval(-1)),
+            "A backwards clock cannot lengthen a short authentication suppression")
+        #expect(E.isAvailable(unavailableUntil: Date(timeIntervalSince1970: .infinity), now: today))
+        #expect(E.isAvailable(unavailableUntil: Date(timeIntervalSince1970: .nan), now: today))
+        #expect(E.availabilityOutcome(statusCode: 401, now: Date(timeIntervalSince1970: .infinity)) == nil)
+    }
+
+    @MainActor @Test(arguments: ["oversized", "different URL"])
+    func earningsTransportRejectsAnOversizedOrMismatchedResponse(scenario: String) async throws {
+        let name = "provider.earnings.bounds.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let request = try #require(E.request(symbol: "AAPL", now: today, key: "fixture-only"))
+        let other = try #require(E.request(symbol: "MSFT", now: today, key: "fixture-only"))
+        var requests = 0
+        let result = await E.get(request, revision: nil, defaults: defaults, allowed: { true }, transport: { _ in
+            requests += 1
+            let data = scenario == "oversized" ? Data(repeating: 32, count: 2_000_001) : Data("{}".utf8)
+            let url = scenario == "different URL" ? other.url! : request.url!
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        #expect(requests == 1 && result == nil)
+    }
+
+    @MainActor @Test(arguments: [402, 403])
+    func unqualifiedDenialsDoNotSuppressOtherSymbols(status: Int) async throws {
+        let name = "provider.earnings.denial.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var requests = 0
+        for symbol in ["AAPL", "MSFT"] {
+            let request = try #require(E.request(symbol: symbol, now: today, key: "fixture-only"))
+            let result = await E.get(request, revision: nil, defaults: defaults, allowed: { true }, transport: { req in
+                requests += 1
+                return (Data(), HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            })
+            #expect(result?.1 == status)
+        }
+        #expect(requests == 2, "A query-specific denial does not establish product-wide entitlement")
+    }
+
+    @MainActor @Test func legacyDailyGateDoesNotPreventEarningsTransport() async throws {
+        let name = "provider.earnings.legacy-gate.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        StockSageMassiveCredential.recordDenial(Date().addingTimeInterval(86_400),
+            gate: "stocksage.massive.earningsUnavailableUntil", revision: nil, defaults: defaults)
+        let request = try #require(E.request(symbol: "AAPL", now: today, key: "fixture-only"))
+        var requests = 0
+        let result = await E.get(request, revision: nil, defaults: defaults, allowed: { true }, transport: { req in
+            requests += 1
+            return (Data(), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        #expect(requests == 1 && result?.1 == 200)
+    }
+
+    @MainActor @Test func observationsKeepProviderEmptySeparateFromLocalSuppressionAndPreserveOrigin() async throws {
+        let name = "provider.earnings.receipt.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var clock = today
+        var requests = 0
+        let transport: (URLRequest) async throws -> (Data, URLResponse) = { req in
+            requests += 1
+            return (Data(#"{"status":"OK","results":[]}"#.utf8),
+                HTTPURLResponse(url: req.url!, statusCode: requests == 1 ? 401 : 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let rejected = await E.observe("AAPL", now: today, key: "fixture-only", revision: nil,
+            defaults: defaults, allowed: { true }, clock: { clock }, transport: transport)
+        #expect(rejected.outcome == .unavailable && rejected.checkedAt == today)
+        #expect(rejected.notRequestedReason == nil)
+        clock = today.addingTimeInterval(10)
+        let suppressed = await E.observe("MSFT", now: today, key: "fixture-only", revision: nil,
+            defaults: defaults, allowed: { true }, clock: { clock }, transport: transport)
+        #expect(requests == 1 && suppressed.outcome == .notRequested)
+        #expect(suppressed.checkedAt == nil && suppressed.recordedAt == clock)
+        #expect(suppressed.notRequestedReason == .priorAuthenticationRejection(checkedAt: today))
+        clock = today.addingTimeInterval(300)
+        let empty = await E.observe("MSFT", now: today, key: "fixture-only", revision: nil,
+            defaults: defaults, allowed: { true }, clock: { clock }, transport: transport)
+        #expect(requests == 2 && empty.outcome == .answered(nil))
+        #expect(empty.checkedAt == clock && empty.recordedAt == clock && empty.notRequestedReason == nil)
+    }
+
+    @MainActor @Test func observationPreservesActualAttemptOnFailureAndWithholdsAfterAccessChange() async throws {
+        let name = "provider.earnings.receipt-failure.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        for failure in ["transport", "malformed", "policy", "credential"] {
+            defaults.set("A", forKey: "stocksage.massive.credentialRevision")
+            var allowed = true
+            var requests = 0
+            let result = await E.observe("AAPL", now: today, key: "fixture-only", revision: "A",
+                defaults: defaults, allowed: { allowed }, clock: { self.today }, transport: { req in
+                    requests += 1
+                    if failure == "transport" { throw URLError(.notConnectedToInternet) }
+                    if failure == "policy" { allowed = false }
+                    if failure == "credential" { defaults.set("B", forKey: "stocksage.massive.credentialRevision") }
+                    let body = failure == "malformed" ? "{}" : #"{"status":"OK","results":[]}"#
+                    return (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+            #expect(requests == 1 && result.outcome == .unavailable && result.checkedAt == today)
+            #expect(result.recordedAt == today && result.notRequestedReason == nil)
+        }
+    }
+
+    @MainActor @Test func observationDoesNotInventProviderChecksWhenAdmissionFails() async throws {
+        let name = "provider.earnings.receipt-admission.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var requests = 0
+        for policy in [false, true] {
+            let result = await E.observe("AAPL", now: today, key: "", revision: nil,
+                defaults: defaults, allowed: { policy }, clock: { self.today }, transport: { req in
+                    requests += 1
+                    return (Data(), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+            #expect(result.outcome == .notRequested && result.checkedAt == nil && result.recordedAt == today)
+            #expect(result.notRequestedReason == (policy ? .requestUnavailable : .externalAccessDisabled))
+        }
+        #expect(requests == 0)
+    }
+
+    @MainActor @Test func cancellationReceiptsDistinguishBeforeAndAfterTransport() async throws {
+        let name = "provider.earnings.receipt-cancellation.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        for before in [true, false] {
+            var requests = 0
+            let task = Task { @MainActor in
+                if before { withUnsafeCurrentTask { $0?.cancel() } }
+                return await E.observe("AAPL", now: self.today, key: "fixture-only", revision: nil,
+                    defaults: defaults, allowed: { true }, clock: { self.today }, transport: { req in
+                        requests += 1
+                        withUnsafeCurrentTask { $0?.cancel() }
+                        return (Data(#"{"status":"OK","results":[]}"#.utf8),
+                            HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                    })
+            }
+            let result = await task.value
+            #expect(requests == (before ? 0 : 1))
+            #expect(result.outcome == (before ? .notRequested : .unavailable))
+            #expect(result.checkedAt == (before ? nil : today))
+            #expect(result.notRequestedReason == (before ? .cancelled : nil))
+        }
     }
 
     @Test func benzingaFirstPreservesProviderEstimateAndShortCircuitsFallbacks() async {

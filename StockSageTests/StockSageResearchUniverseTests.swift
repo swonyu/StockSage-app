@@ -6,9 +6,9 @@ import Testing
     typealias U = StockSageResearchUniverse
     let now = ISO8601DateFormatter().date(from: "2026-09-12T15:00:00Z")!
     let day = "2026-09-11"
-    func listing(_ symbol: String, currency: String = "usd") -> U.Listing {
+    func listing(_ symbol: String, currency: String = "usd", type: String? = "CS", exchange: String? = "XNAS") -> U.Listing {
         .init(ticker: symbol, name: symbol, market: "stocks", locale: "us", active: true,
-              type: "CS", currency_name: currency, primary_exchange: "XNAS")
+              type: type, currency_name: currency, primary_exchange: exchange)
     }
     func payload(_ symbols: [String], date: String = "2026-09-11", volumes: [Double]? = nil) throws -> Data {
         let stamp = ISO8601DateFormatter().date(from: date + "T04:00:00Z")!.timeIntervalSince1970 * 1000
@@ -27,6 +27,67 @@ import Testing
         let ranked = try U.select(directory: classes.map { listing($0) }, data: payload(classes), session: day, at: now)
         #expect(ranked.listings.map(\.ticker) == ["ZZZ", "BRK.B", "AAA"])
         #expect(ranked.receipt?.dollarVolume["BRK.B"] == 200)
+    }
+
+    @Test func nasdaqCommonStockEligibilityPrecedesTheActivityCap() throws {
+        let common = (0..<501).map { listing(String(format: "S%05d", $0)) }
+        let excluded = [listing("NYSE", exchange: "XNYS"), listing("ARCA", exchange: "ARCX"),
+            listing("UNKNOWN", exchange: nil), listing("ETF", type: "ETF"),
+            listing("ADR", type: "ADRC"), listing("PREFERRED", type: "PFD"),
+            listing("UNIT", type: "UNIT"), listing("MISSING", type: nil),
+            listing("LOWER", type: "cs"), listing("LOWEREX", exchange: "xnas")]
+        let directory = common + excluded // Excluded instruments have the highest observed activity.
+        let selected = try U.select(directory: directory, data: payload(directory.map(\.ticker)), session: day, at: now)
+        #expect(selected.listings.count == 500)
+        #expect(selected.listings.map(\.ticker) == common.dropFirst().reversed().map(\.ticker))
+        #expect(selected.receipt?.eligibleCount == 501)
+        #expect(selected.receipt?.returnedCount == directory.count)
+        #expect(selected.receipt?.directoryCount == directory.count)
+    }
+
+    @Test func selectionSummarySeparatesSelectionFromResearchAndNamesTheActivityBoundary() throws {
+        for count in [0, 2, 500, 501] {
+            let names = (0..<count).map { String(format: "S%05d", $0) }
+            let selected = try U.select(directory: names.map { listing($0) }, data: payload(names), session: day, at: now)
+            let receipt = try #require(selected.receipt)
+            let summary = receipt.summary
+            #expect(summary.contains("\(min(count, 500)) of \(count) eligible selected"))
+            #expect(!summary.localizedCaseInsensitiveContains("researched"))
+            if count == 0 {
+                #expect(!summary.contains("Lowest selected activity:") && !summary.contains("Selection cutoff:"))
+            } else if count <= 500 {
+                #expect(summary.contains("Lowest selected activity:"))
+                #expect(summary.contains("100") && !summary.contains("Selection cutoff:"))
+            } else {
+                #expect(summary.contains("Selection cutoff:"))
+                #expect(summary.contains("200") && !summary.contains("Lowest selected activity:"))
+            }
+        }
+        var partial = try #require(U.select(directory: [listing("AAA")], data: payload(["AAA"]), session: day,
+            at: ISO8601DateFormatter().date(from: "2026-09-11T15:00:00Z")!).receipt)
+        #expect(partial.summary.contains("session-to-date") && partial.summary.contains("1 of 1 eligible selected"))
+        partial.fallback = true
+        #expect(partial.summary.contains("Prior session used") && !partial.summary.contains("researched"))
+    }
+
+    @Test func unverifiedCalendarExplainsTheBuildLimitBeforeAnyNetworkRequest() async throws {
+        for clock in ["2027-01-04T15:00:00Z", "2026-01-02T08:00:00Z"] {
+            var requests = 0
+            do {
+                _ = try await U.fetch(key: "synthetic-only", allowed: { true },
+                    at: ISO8601DateFormatter().date(from: clock)!, transport: { _ in
+                        requests += 1
+                        throw URLError(.cannotConnectToHost)
+                    })
+                Issue.record("Unverified calendar accepted")
+            } catch {
+                #expect(error as? U.Failure == .unverifiedCalendar)
+                let message = (error as? LocalizedError)?.errorDescription ?? ""
+                #expect(message.contains("calendar") && message.contains("2026"))
+                #expect(!message.contains("Massive") && !message.contains("credentials"))
+            }
+            #expect(requests == 0)
+        }
     }
 
     @Test func sessionChoiceUsesExchangeDatesHolidaysDSTAndSupportedCalendar() throws {

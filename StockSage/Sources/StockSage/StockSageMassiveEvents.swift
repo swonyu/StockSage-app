@@ -94,7 +94,7 @@ enum StockSageMassiveEvents {
         }
     }
     nonisolated struct RefreshKey: Equatable {
-        let symbols: [String]
+        let symbols: Set<String>
         let refreshedAt: Date?
         var credentialRevision: String? = nil
     }
@@ -374,7 +374,7 @@ enum StockSageMassiveEvents {
         return n.stringValue
     }
 
-    private static func gateKey(_ feed: Feed) -> String { "stocksage.massive.\(feed.rawValue).unavailableUntil" }
+    private static func gateKey(_ feed: Feed) -> String { "stocksage.massive.\(feed.rawValue).authenticationUnavailableUntil.v2" }
     private static func available(_ feed: Feed, now: Date, defaults: UserDefaults = .standard) -> Bool {
         StockSageMassiveEarnings.isAvailable(unavailableUntil: StockSageMassiveCredential.denialUntil(gateKey(feed), defaults: defaults), now: now)
     }

@@ -255,6 +255,16 @@ struct StockSageChatTests {
                     "The actual desktop page must retain a usable viewport beside its sidebar")
             #expect(document.bounds.width <= scroll.contentView.bounds.width + 2,
                     "The page must fit its native scroll viewport without horizontal overflow")
+            if page == "research" {
+                let saved = try #require(nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityIdentifier?() == "research.saved"
+                })
+                let window = try #require(root.window)
+                let visible = window.convertToScreen(scroll.contentView.convert(scroll.contentView.bounds, to: nil))
+                let button = try #require(saved.accessibilityFrame?())
+                #expect(button.width > 0 && button.height > 0 && visible.contains(button),
+                        "Saved research must fit entirely in the initial control viewport")
+            }
         }
         #expect(size == viewport, "Mounting a page must not force the requested window wider or taller")
         if page == "home" {

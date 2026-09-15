@@ -444,14 +444,44 @@ struct StockSageIOSPresentationTests {
 
     // Actual phone navigation and the first viewport only. Content below the fold and
     // keyboard/menu presentation require their separate interaction fixtures.
-    @Test(arguments: [false, true], ["home", "markets", "watchlist", "portfolio", "alerts", "catalysts", "research", "chat"])
+    @Test(arguments: [false, true], ["home", "markets", "watchlist", "portfolio", "alerts", "catalysts", "research", "chat", "ideas", "heatmap"])
     func wholePhonePagesRenderFirstViewport(accessibility: Bool, page: String) async throws {
         try #require(StockSageStore.isRunningTests)
         let sections: [String: MarketSection] = ["home": .briefing, "markets": .all,
             "watchlist": .watchlist, "portfolio": .portfolio, "alerts": .alerts,
-            "catalysts": .catalysts, "research": .research, "chat": .chat]
+            "catalysts": .catalysts, "research": .research, "chat": .chat,
+            "ideas": .ideas, "heatmap": .heatmap]
         let section = try #require(sections[page])
         try await captureWorkspace(section: section, name: "page-\(page)-first-viewport", accessibility: accessibility)
+    }
+
+    @Test(arguments: [false, true])
+    func ideasCardDetailKeepsHeaderControlsVisibleAndCaveatReachable(accessibility: Bool) async throws {
+        try await captureWorkspace(section: .ideas, name: "ideas-detail-route", accessibility: accessibility) { _, window in
+            let card = try await reveal(in: window, identifier: "ideas.result.AAPL")
+            try await saveViewport(window, name: "ideas-card", accessibility: accessibility)
+            try #require(card.accessibilityActivate(), "Open the actual idea card's detail sheet")
+            let close = try await element(in: window, identifier: "idea.detail.close")
+            let identity = try await element(in: window, identifier: "idea.detail.identity")
+            let position = try await element(in: window, identifier: "idea.detail.position")
+            try await saveViewport(window, name: "idea-detail-first-viewport", accessibility: accessibility)
+            let viewport = window.convert(window.bounds, to: nil)
+            for control in [close, identity, position] {
+                let frame = control.accessibilityFrame
+                #expect(!frame.isEmpty && viewport.contains(frame),
+                        "The initial sheet viewport must contain its identity, board position and Close control: \(nativeDescription(control))")
+            }
+            #expect(identity.accessibilityLabel?.contains("AAPL") == true)
+            let caveat = try await reveal(in: window, identifier: "idea.detail.caveat")
+            #expect(caveat.accessibilityLabel == StockSageAdvisor.caveat, "The complete existing caveat must remain reachable")
+            #expect(viewport.intersects(caveat.accessibilityFrame), "Scrolling must bring the caveat into the visible sheet")
+            try await saveViewport(window, name: "idea-detail-caveat", accessibility: accessibility)
+            let visibleClose = try await reveal(in: window, identifier: "idea.detail.close")
+            try #require(visibleClose.accessibilityActivate(), "Close must dismiss the actual idea sheet")
+            try await waitUntil("Close must dismiss the actual idea detail sheet") {
+                !nativeElements(window).contains { nativeIdentifier($0) == "idea.detail.close" }
+            }
+        }
     }
 
     @Test(arguments: [false, true])
@@ -933,6 +963,12 @@ struct StockSageIOSPresentationTests {
         return try #require(match, "Native element missing: \(identifier ?? label ?? "unspecified")")
     }
 
+    private func visibleContentView(in window: UIWindow) -> UIView? {
+        var controller = window.rootViewController
+        while let presented = controller?.presentedViewController { controller = presented }
+        return controller?.view
+    }
+
     private func reveal(in window: UIWindow, identifier: String? = nil, labelContaining: String? = nil) async throws -> NSObject {
         let description = identifier ?? labelContaining ?? "unspecified"
         for attempt in 0..<30 {
@@ -940,7 +976,7 @@ struct StockSageIOSPresentationTests {
                 if let identifier { return nativeIdentifier(object) == identifier }
                 return labelContaining.map { text in object.accessibilityLabel?.contains(text) == true } ?? false
             }) {
-                if let root = window.rootViewController?.view {
+                if let root = visibleContentView(in: window) {
                     for scroll in descendants(root).compactMap({ $0 as? UIScrollView })
                     where scroll.contentSize.height + scroll.adjustedContentInset.top
                         + scroll.adjustedContentInset.bottom > scroll.bounds.height + 1 {
@@ -953,7 +989,7 @@ struct StockSageIOSPresentationTests {
                 print("Native reveal matched: \(nativeDescription(match))")
                 return match
             }
-            if let root = window.rootViewController?.view {
+            if let root = visibleContentView(in: window) {
                 for scroll in descendants(root).compactMap({ $0 as? UIScrollView })
                 where scroll.contentSize.height + scroll.adjustedContentInset.top
                         + scroll.adjustedContentInset.bottom > scroll.bounds.height + 1 {
