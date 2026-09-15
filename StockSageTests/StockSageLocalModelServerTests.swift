@@ -10,6 +10,245 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    @Test @MainActor func attemptObserverKeepsBoundedUTF8PromptsAndExactReplyBytes() async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:9876", model: "fixture"))
+        let events = ModelAttemptRecorder()
+        let system = "x" + String(repeating: "🚀", count: 6001)
+        let user = String(repeating: "é", count: 12_001)
+        let body = try JSONSerialization.data(withJSONObject: ["model": "fixture",
+            "choices": [["message": ["content": String(repeating: "🚀", count: 7000)], "finish_reason": "stop"]]])
+        let result = await S.completeDetailed(config, isOllama: false, system: system, user: user,
+            contextTokens: 100_000, jsonSchema: Data(#"{"unused":"not-sent"}"#.utf8), phase: "assessment",
+            attemptObserver: { await events.append($0) }, transport: { request in
+                (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: ["X-Private-Fixture": "header-must-not-be-recorded"])!)
+            })
+        let values = await events.snapshot()
+        try #require(values.count == 2)
+        let start = values[0], finish = values[1]
+        #expect(start.stage == .started && finish.stage == .finished)
+        #expect(start.callID == finish.callID && start.ordinal == 1 && finish.ordinal == 1)
+        #expect(!start.transportStarted && finish.transportStarted)
+        #expect(start.phase == "assessment" && finish.phase == "assessment")
+        let endedAt = try #require(finish.endedAt)
+        #expect(start.endedAt == nil && endedAt >= start.startedAt)
+        let completion = try result.get()
+        #expect(start.diagnostic == nil && finish.diagnostic == completion.diagnostic)
+        #expect(finish.requestedModel == "fixture" && finish.returnedModel == "fixture")
+        #expect(finish.outputLimit == 170 && finish.contextTokens == 100_000 && finish.temperature == 0.2)
+        #expect(finish.system == "x" + String(repeating: "🚀", count: 5999))
+        #expect(finish.user == String(repeating: "é", count: 12_000))
+        #expect(finish.systemBytes == system.utf8.count && finish.userBytes == user.utf8.count)
+        #expect(finish.systemTruncated && finish.userTruncated)
+        #expect(finish.schema == nil && finish.schemaBytes == nil && !finish.schemaTruncated)
+        #expect(start.responseBody == nil && finish.responseBody == body.prefix(24_000))
+        #expect(finish.responseBodyBytes == body.count && finish.responseBodyTruncated)
+        #expect(finish.httpStatus == 200)
+        let encoded = try JSONEncoder().encode(values)
+        let decoded = try JSONDecoder().decode([S.ModelAttemptEvent].self, from: encoded)
+        #expect(decoded == values)
+        let text = String(decoding: encoded, as: UTF8.self)
+        #expect(!text.contains("127.0.0.1") && !text.contains("/v1/chat/completions") && !text.contains("header-must-not-be-recorded"))
+        #expect(!text.contains("not-sent"))
+    }
+
+    @Test @MainActor func attemptObserverSeparatesLengthRetryAndKeepsTheAppliedSchema() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let events = ModelAttemptRecorder()
+        let schema = Data(#"{"type":"object","properties":{"action":{"type":"string"}}}"#.utf8)
+        let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":16384}}]"#)
+        var posts = 0
+        let result = await S.completeDetailed(config, isOllama: false, system: "original system", user: "original facts",
+            maxTokens: 192, contextTokens: 16_384, jsonSchema: schema, phase: "ranking",
+            attemptObserver: { await events.append($0) }, transport: { request in
+                if request.httpMethod == "GET" { return StockSageModelDownloadTests.response(request, inventory) }
+                posts += 1
+                let finish = posts == 1 ? "length" : "stop"
+                return StockSageModelDownloadTests.response(request,
+                    #"{"model":"qwen3.5-9b","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}],"usage":{"prompt_tokens":42,"completion_tokens":12}}"#)
+            })
+        let values = await events.snapshot()
+        try #require(values.count == 4)
+        #expect(posts == 2 && values.map(\.stage) == [.started, .finished, .started, .finished])
+        #expect(values.map(\.ordinal) == [1, 1, 2, 2] && Set(values.map(\.callID)).count == 2)
+        #expect(values[0].callID == values[1].callID && values[2].callID == values[3].callID)
+        #expect(values.map(\.outputLimit) == [192, 192, 384, 384])
+        #expect(values.allSatisfy { $0.system == "original system" && $0.user == "original facts" && $0.phase == "ranking" })
+        let recordedSchema = try #require(values[0].schema)
+        let canonical = try JSONSerialization.data(withJSONObject: JSONSerialization.jsonObject(with: schema), options: [.sortedKeys])
+        #expect(Data(recordedSchema.utf8) == canonical && values[0].schemaBytes == canonical.count)
+        #expect(!values[0].schemaTruncated)
+        #expect(values[1].diagnostic?.finish == .tokenLimit && values[1].diagnostic?.outputLimitRetries == 0)
+        #expect(values[3].diagnostic?.finish == .stop && values[3].diagnostic?.outputLimitRetries == 1)
+        let completion = try result.get()
+        #expect(values[3].diagnostic == completion.diagnostic)
+    }
+
+    @Test(arguments: ["http", "malformed", "nonUTF8", "model", "context", "finish", "revoked", "nonHTTP", "oversized"])
+    @MainActor func attemptObserverRetainsRejectedReplyWithoutChangingAcceptance(scenario: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let events = ModelAttemptRecorder()
+        let normal = Data(#"{"model":"qwen3.5-9b","choices":[{"message":{"content":"fixture"},"finish_reason":"stop"}]}"#.utf8)
+        let data: Data
+        let category: S.FailureCategory
+        switch scenario {
+        case "http": data = Data(#"{"error":"rejected fixture"}"#.utf8); category = .http
+        case "malformed": data = Data("unfinished {".utf8); category = .malformedJSON
+        case "nonUTF8": data = Data([0xFF, 0xFE, 0x81, 0x00]); category = .malformedJSON
+        case "model": data = Data(String(decoding: normal, as: UTF8.self).replacingOccurrences(of: "qwen3.5-9b", with: "other-model").utf8); category = .responseShape
+        case "context": data = normal; category = .contextBudget
+        case "finish": data = Data(String(decoding: normal, as: UTF8.self).replacingOccurrences(of: "\"stop\"", with: "\"tool_calls\"").utf8); category = .incompleteOutput
+        case "revoked": data = normal; category = .obsoleteRequest
+        case "nonHTTP": data = normal; category = .nonHTTP
+        default: data = Data(repeating: 0xFF, count: S.maximumResponseBytes + 1); category = .responseTooLarge
+        }
+        var valid = true
+        var posts = 0
+        let result = await S.completeDetailed(config, isOllama: false, system: "s", user: "u",
+            attemptObserver: { await events.append($0) }, stillValid: { valid }, transport: { request in
+                if request.httpMethod == "GET" { return StockSageModelDownloadTests.response(request, #"{"models":[]}"#) }
+                posts += 1
+                if scenario == "revoked" { valid = false }
+                if scenario == "nonHTTP" { return (data, URLResponse(url: request.url!, mimeType: nil, expectedContentLength: data.count, textEncodingName: nil)) }
+                return (data, HTTPURLResponse(url: request.url!, statusCode: scenario == "http" ? 400 : 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let values = await events.snapshot()
+        try #require(values.count == 2)
+        let finish = values[1]
+        #expect(posts == 1 && finish.stage == .finished && finish.transportStarted)
+        #expect(finish.responseBody == data.prefix(24_000) && finish.responseBodyBytes == data.count)
+        #expect(finish.responseBodyTruncated == (data.count > 24_000))
+        #expect(finish.httpStatus == (scenario == "nonHTTP" ? nil : scenario == "http" ? 400 : 200))
+        if case .failure(let failure) = result {
+            #expect(failure.diagnostic.category == category && finish.diagnostic == failure.diagnostic)
+        } else { Issue.record("Diagnostic recording changed rejection into success") }
+        if scenario == "model" { #expect(finish.returnedModel == "other-model") }
+    }
+
+    @Test(arguments: ["budget", "obsolete", "policy", "timeout"])
+    @MainActor func attemptObserverDoesNotInventPostsForPreflightRejection(scenario: String) async throws {
+        let config = try #require(S.config(url: scenario == "policy" ? "http://fixture.invalid:1234" : "http://127.0.0.1:8765", model: "fixture"))
+        let events = ModelAttemptRecorder()
+        var calls = 0
+        let result = await S.completeDetailed(config, isOllama: true, system: "s", user: scenario == "budget" ? String(repeating: "x", count: 5000) : "u",
+            timeout: scenario == "timeout" ? 0 : 90, attemptObserver: { await events.append($0) },
+            stillValid: { scenario != "obsolete" }, externalAllowed: { scenario != "policy" }, transport: { request in
+                calls += 1
+                return StockSageModelDownloadTests.response(request, #"{"message":{"content":"fixture"}}"#)
+            })
+        let values = await events.snapshot()
+        #expect(values.isEmpty && calls == 0 && (try? result.get()) == nil)
+    }
+
+    @Test(arguments: ["cancelled", "deadline", "obsolete"])
+    @MainActor func suspendedAttemptReceiptCannotDispatchAfterRevocation(scenario: String) async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        let gate = ModelAttemptGate()
+        var instant = ContinuousClock.now
+        var valid = true
+        var posts = 0
+        var settled = false
+        let task = Task { @MainActor in
+            let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
+                attemptObserver: { await gate.observe($0) }, stillValid: { valid }, transport: { request in
+                    posts += 1
+                    return StockSageModelDownloadTests.response(request, #"{"message":{"content":"fixture"}}"#)
+                }, clock: { instant })
+            settled = true
+            return result
+        }
+        var entered = false
+        for _ in 0..<2000 {
+            entered = await gate.isWaiting
+            if entered || settled { break }
+            await Task.yield()
+        }
+        guard entered else {
+            task.cancel()
+            await gate.release()
+            _ = await task.value
+            Issue.record("No dispatch-preparation receipt was observed")
+            return
+        }
+        #expect(posts == 0 && !settled)
+        if scenario == "cancelled" { task.cancel() }
+        if scenario == "deadline" { instant = instant.advanced(by: .seconds(10)) }
+        if scenario == "obsolete" { valid = false }
+        await gate.release()
+        let result = await task.value
+        let values = await gate.snapshot()
+        try #require(values.count == 2)
+        #expect(posts == 0 && !values[1].transportStarted && values[1].responseBody == nil)
+        let expected: S.FailureCategory = scenario == "cancelled" ? .cancelled : scenario == "deadline" ? .timeout : .obsoleteRequest
+        if case .failure(let failure) = result {
+            #expect(failure.diagnostic.category == expected && values[1].diagnostic == failure.diagnostic)
+        } else { Issue.record("A suspended receipt bypassed the existing request guards") }
+    }
+
+    @Test(arguments: ["cancelled", "deadline", "obsolete"])
+    @MainActor func terminalReceiptCannotPublishAnAcceptedReplyAfterRevocation(scenario: String) async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        let gate = ModelAttemptGate(stage: .finished)
+        var instant = ContinuousClock.now
+        var valid = true
+        var posts = 0
+        var settled = false
+        let task = Task { @MainActor in
+            let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
+                attemptObserver: { await gate.observe($0) }, stillValid: { valid }, transport: { request in
+                    posts += 1
+                    return StockSageModelDownloadTests.response(request, #"{"model":"fixture","message":{"content":"fixture"}}"#)
+                }, clock: { instant })
+            settled = true
+            return result
+        }
+        var entered = false
+        for _ in 0..<2000 {
+            entered = await gate.isWaiting
+            if entered || settled { break }
+            await Task.yield()
+        }
+        guard entered else {
+            task.cancel()
+            await gate.release()
+            _ = await task.value
+            Issue.record("No terminal receipt was observed")
+            return
+        }
+        #expect(posts == 1 && !settled)
+        if scenario == "cancelled" { task.cancel() }
+        if scenario == "deadline" { instant = instant.advanced(by: .seconds(10)) }
+        if scenario == "obsolete" { valid = false }
+        await gate.release()
+        let result = await task.value
+        let values = await gate.snapshot()
+        try #require(values.count == 2)
+        #expect(values[1].transportStarted && values[1].responseBody != nil)
+        #expect(values[1].diagnostic?.category == nil, "The immutable POST receipt precedes publication revocation")
+        let expected: S.FailureCategory = scenario == "cancelled" ? .cancelled : scenario == "deadline" ? .timeout : .obsoleteRequest
+        if case .failure(let failure) = result { #expect(failure.diagnostic.category == expected) }
+        else { Issue.record("A reply was published after its final receipt suspended past revocation") }
+    }
+
+    @Test @MainActor func overdueReplyBytesRemainAvailableInTheSingleTimeoutReceipt() async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        let events = ModelAttemptRecorder()
+        let body = Data(#"{"model":"fixture","message":{"content":"overdue"}}"#.utf8)
+        var instant = ContinuousClock.now
+        let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
+            attemptObserver: { await events.append($0) }, transport: { request in
+                instant = instant.advanced(by: .seconds(10))
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }, clock: { instant })
+        let values = await events.snapshot()
+        try #require(values.count == 2)
+        #expect(values[1].transportStarted && values[1].responseBody == body && values[1].httpStatus == 200)
+        #expect(values[1].returnedModel == "fixture" && values[1].diagnostic?.category == .timeout)
+        if case .failure(let failure) = result { #expect(failure.diagnostic.category == .timeout) }
+        else { Issue.record("The overdue body must remain rejected") }
+    }
+
     @Test(arguments: ["1", "2", "4", "8", "9", "64", "2.0", "0", "-1", "2.5", "true", "false", "\"8\"", "null", "1e300"])
     @MainActor func researchCapacityUsesOnlySafeIntegralSelectedInstanceMetadata(parallel: String) async throws {
         let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
@@ -88,12 +327,14 @@ struct StockSageLocalModelServerTests {
     @Test(arguments: [false, true]) @MainActor
     func totalDeadlineAndCancellationSettleBeforeAnUncooperativeTransport(cancel: Bool) async throws {
         let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
+        let events = ModelAttemptRecorder()
         var instant = ContinuousClock.now
         var wire: CheckedContinuation<(Data, URLResponse), Error>?
         var timer: CheckedContinuation<Void, Error>?
         var settled = false
         let task = Task { @MainActor in
             let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
+                attemptObserver: { await events.append($0) },
                 transport: { _ in try await withCheckedThrowingContinuation { wire = $0 } },
                 clock: { instant }, sleepUntil: { _ in try await withCheckedThrowingContinuation { timer = $0 } })
             settled = true
@@ -115,6 +356,17 @@ struct StockSageLocalModelServerTests {
             #expect(failure.diagnostic.category == (cancel ? .cancelled : .timeout))
         } else { Issue.record("Expected a deadline/cancellation failure") }
         #expect(wire != nil)
+        let values = await events.snapshot()
+        try #require(values.count == 2)
+        #expect(values[0].stage == .started && values[1].stage == .finished)
+        #expect(values[0].callID == values[1].callID && values[1].transportStarted)
+        #expect(values[1].diagnostic?.category == (cancel ? .cancelled : .timeout))
+        #expect(values[1].responseBody == nil)
+        wire?.resume(returning: (Data(#"{"message":{"content":"late reply"}}"#.utf8),
+            HTTPURLResponse(url: config.baseURL, statusCode: 200, httpVersion: nil, headerFields: nil)!)); wire = nil
+        for _ in 0..<100 { await Task.yield() }
+        let afterLateReply = await events.snapshot()
+        #expect(afterLateReply == values, "Late bytes cannot overwrite a recorded timeout or create another terminal event")
     }
 
     @Test(arguments: [false, true]) @MainActor func resultAfterDeadlineCannotBeatADelayedTimer(throwsError: Bool) async throws {
@@ -345,6 +597,26 @@ struct StockSageLocalModelServerTests {
         #expect(S.parseChatResponse(Data(#"{"message":{"content":"   "}}"#.utf8), isOllama: true) == nil)
         #expect(S.parseChatResponse(Data(#"{"choices":[]}"#.utf8), isOllama: false) == nil)
     }
+}
+
+private actor ModelAttemptRecorder {
+    private var values: [StockSageLocalModelServer.ModelAttemptEvent] = []
+    func append(_ value: StockSageLocalModelServer.ModelAttemptEvent) { values.append(value) }
+    func snapshot() -> [StockSageLocalModelServer.ModelAttemptEvent] { values }
+}
+
+private actor ModelAttemptGate {
+    private let stage: StockSageLocalModelServer.ModelAttemptEvent.Stage
+    private var values: [StockSageLocalModelServer.ModelAttemptEvent] = []
+    private var continuation: CheckedContinuation<Void, Never>?
+    init(stage: StockSageLocalModelServer.ModelAttemptEvent.Stage = .started) { self.stage = stage }
+    var isWaiting: Bool { continuation != nil }
+    func observe(_ event: StockSageLocalModelServer.ModelAttemptEvent) async {
+        values.append(event)
+        if event.stage == stage { await withCheckedContinuation { continuation = $0 } }
+    }
+    func release() { continuation?.resume(); continuation = nil }
+    func snapshot() -> [StockSageLocalModelServer.ModelAttemptEvent] { values }
 }
 
 /// URLProtocol provides actual URLSession bytes without network, credentials or a server.

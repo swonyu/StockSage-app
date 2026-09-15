@@ -750,6 +750,36 @@ extension StockSageResearchHistoryTests {
             horizon: .fortnight, scan: scan), scan)
     }
 
+    @Test func completedCheckRoundTripRetainsEvidenceAndDiagnosticReceipts() throws {
+        let (original, scan) = checkpointFixture(count: 8)
+        let captured = try #require(History.captureChecks(scan: scan, horizon: .fortnight,
+            startedAt: original.startedAt, completedAt: original.completedAt))
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(captured)) as? [String: Any])
+        var checks = try #require(object["checks"] as? [[String: Any]])
+        let symbol = scan.listings[0].ticker
+        let diagnosticID = UUID().uuidString
+        checks[0]["evidenceReceipt"] = ["symbol": symbol, "requiredKeys": ["quote"],
+            "missingOrUnknownRequiredKeys": [], "offeredKeys": ["quote", "news.item"],
+            "omittedKeys": ["news.other"], "prePromptOmittedRecordCount": 2,
+            "citedKeys": ["quote", "news.item"]] as [String: Any]
+        checks[0]["diagnosticID"] = diagnosticID
+        checks[0]["diagnosticsComplete"] = true
+        object["checks"] = checks
+        let decoded = try History.decodeCapturedChecks(JSONSerialization.data(withJSONObject: object), matching: original)
+        let restored = try #require(History.restoreChecks(decoded, matching: original))
+        let recaptured = try #require(History.captureChecks(scan: restored, horizon: .fortnight,
+            startedAt: original.startedAt, completedAt: original.completedAt))
+        let result = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(recaptured)) as? [String: Any])
+        let rows = try #require(result["checks"] as? [[String: Any]])
+        #expect(rows[0]["diagnosticID"] as? String == diagnosticID)
+        #expect(rows[0]["diagnosticsComplete"] as? Bool == true)
+        let evidence = rows[0]["evidenceReceipt"] as? [String: Any]
+        #expect(evidence?["offeredKeys"] as? [String] == ["quote", "news.item"])
+        #expect(evidence?["omittedKeys"] as? [String] == ["news.other"])
+        #expect(evidence?["prePromptOmittedRecordCount"] as? Int == 2)
+        #expect(restored.results[symbol]?.facts == scan.results[symbol]?.facts)
+    }
+
     @Test func latestCheckpointRetainsAllChecksAndOriginalDatesWithoutGrowingPredictionHistory() throws {
         let (original, scan) = checkpointFixture()
         let suite = "stocksage.research.checkpoint.\(UUID().uuidString)"

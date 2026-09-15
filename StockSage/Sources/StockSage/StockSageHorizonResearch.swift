@@ -54,6 +54,9 @@ final class StockSageHorizonResearch: ObservableObject {
         var model: String = ""
         var referenceClose: (value: Double, at: Date)? = nil
         var coverage: [EvidenceCoverage] = []
+        var evidenceReceipt: StockSageAIAssessment.EvidenceCoverage? = nil
+        var diagnosticID: UUID? = nil
+        var diagnosticsComplete: Bool? = nil
     }
     struct Scan {
         var listings: [Listing] = []
@@ -682,6 +685,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let coverage: [EvidenceCoverage]
         let at: Date
         let blockedByThrottle: Bool
+        var evidencePacket: StockSageAIAssessment.EvidencePacket? = nil
         var referenceClose: (value: Double, at: Date) { (history.closes.last!, history.dates.last!) }
         func isFresh(at now: Date) -> Bool {
             (0...300).contains(now.timeIntervalSince(at))
@@ -770,7 +774,11 @@ final class StockSageHorizonResearch: ObservableObject {
         guard evidenceAllowed() else { return failed("Analysis interrupted.") }
         let capturedAt = Date()
         var coverage = [EvidenceCoverage(source: "Daily history", state: .answered, checkedAt: began)]
-        var extra: [String] = []
+        var extra: [StockSageAIAssessment.EvidenceFact] = []
+        func appendExtra(_ key: String, _ text: String, required: Bool = true,
+                         availability: StockSageAIAssessment.FactAvailability = .available) {
+            extra.append(.init(key: key, text: text, required: required, availability: availability))
+        }
         var earningsAnswered = false
         switch earnings.outcome {
         case .answered(let row):
@@ -779,20 +787,20 @@ final class StockSageHorizonResearch: ObservableObject {
             earningsAnswered = validCheck && (row.map { $0.date.timeIntervalSince1970.isFinite && (todayUTC...(todayUTC + 401 * 86_400 - 1)).contains($0.date.timeIntervalSince1970) } ?? true)
             coverage.append(.init(source: "Next earnings", state: earningsAnswered ? .answered : .unavailable, checkedAt: earningsCheckedAt))
             if let row, earningsAnswered {
-                extra.append("Next earnings: \(row.date.ISO8601Format()), \(row.confirmed ? "confirmed" : "projected, not announced"). Source: \(StockSageMassiveEarnings.source); checked \(earningsCheckedAt?.ISO8601Format() ?? "not checked"). Date-only precision, no release time or earnings outcome inferred.")
+                appendExtra("nextEarnings", "Next earnings: \(row.date.ISO8601Format()), \(row.confirmed ? "confirmed" : "projected, not announced"). Source: \(StockSageMassiveEarnings.source); checked \(earningsCheckedAt?.ISO8601Format() ?? "not checked"). Date-only precision, no release time or earnings outcome inferred.")
             } else {
-                extra.append(earningsAnswered ? "Next earnings: provider answered with no scheduled date in the queried 400-day window, checked \(earningsCheckedAt?.ISO8601Format() ?? "not checked"). Not proof of no upcoming earnings risk." : "Next earnings: invalid provider date; unavailable.")
+                appendExtra("nextEarnings", earningsAnswered ? "Next earnings: provider answered with no scheduled date in the queried 400-day window, checked \(earningsCheckedAt?.ISO8601Format() ?? "not checked"). Not proof of no upcoming earnings risk." : "Next earnings: invalid provider date; unavailable.", availability: earningsAnswered ? .missing : .unknown)
             }
         case .unavailable:
             coverage.append(.init(source: "Next earnings", state: .unavailable, checkedAt: earningsCheckedAt))
-            extra.append("Next earnings: unavailable from \(StockSageMassiveEarnings.source), attempted \(earningsCheckedAt?.ISO8601Format() ?? "not checked"). Missing is not no earnings risk.")
+            appendExtra("nextEarnings", "Next earnings: unavailable from \(StockSageMassiveEarnings.source), attempted \(earningsCheckedAt?.ISO8601Format() ?? "not checked"). Missing is not no earnings risk.", availability: .unknown)
         case .notRequested:
             coverage.append(.init(source: "Next earnings", state: .unchecked, checkedAt: nil))
             let origin: String
             if case .priorAuthenticationRejection(let at) = earnings.notRequestedReason {
                 origin = "prior authentication rejection at \(at.ISO8601Format())"
             } else { origin = "access, cancellation or request availability" }
-            extra.append("Next earnings: not requested (\(origin)); decision recorded \(earnings.recordedAt.ISO8601Format()). Missing is not no earnings risk.")
+            appendExtra("nextEarnings", "Next earnings: not requested (\(origin)); decision recorded \(earnings.recordedAt.ISO8601Format()). Missing is not no earnings risk.", availability: .unknown)
         }
         let filingsFresh = (0...300).contains(capturedAt.timeIntervalSince(filings.checkedAt))
         let filingsAnswered = filingsFresh && filings.outcome == .answered
@@ -802,11 +810,11 @@ final class StockSageHorizonResearch: ObservableObject {
         case .answered: filingsStatus = filingsFresh ? "answered; bounded selection of up to five recent 8-K, 10-Q, 10-K, 6-K and 20-F records" : "stale or invalid check clock"
         case .unavailable(let reason): filingsStatus = "unavailable; " + reason.message
         }
-        extra.append("SEC submissions metadata: \(filingsStatus). Checked \(filings.checkedAt.ISO8601Format()). These are filing identities and dates, not retrieved filing documents or interpreted contents.")
+        appendExtra("sec.status", "SEC submissions metadata: \(filingsStatus). Checked \(filings.checkedAt.ISO8601Format()). These are filing identities and dates, not retrieved filing documents or interpreted contents.", availability: filingsAnswered ? .available : .unknown)
         if filingsAnswered {
             for filing in filings.filings.prefix(5) where filing.filingDate.timeIntervalSince1970.isFinite && filing.filingDate.timeIntervalSince1970 > 0
                 && (filing.acceptedAt.map { $0.timeIntervalSince1970.isFinite && $0.timeIntervalSince1970 > 0 && $0 <= capturedAt } ?? (filing.filingDate <= capturedAt)) {
-                extra.append("SEC metadata: form \(filing.form); accession \(filing.accessionNumber); filed \(filing.filingDate.ISO8601Format()); accepted \(filing.acceptedAt?.ISO8601Format() ?? "time not supplied"). Metadata does not establish the filing's meaning or price impact.")
+                appendExtra("sec.record." + filing.accessionNumber, "SEC metadata: form \(filing.form); accession \(filing.accessionNumber); filed \(filing.filingDate.ISO8601Format()); accepted \(filing.acceptedAt?.ISO8601Format() ?? "time not supplied"). Metadata does not establish the filing's meaning or price impact.", required: false)
             }
         }
         let context = StockSageAIAssessment.Context(idea: idea, earnings: nil,
@@ -849,15 +857,18 @@ final class StockSageHorizonResearch: ObservableObject {
                 }
             }
             && !newsAnswered && !earningsAnswered && !filingsAnswered && !companyAnswered
-        extra += historicalFacts(history)
-        if let selectionFact { extra.append(selectionFact) }
-        // Replace the generic board-only earnings line with this capture's independent check.
-        var facts = context.facts(maximumUTF8Bytes: 12_000).filter { !$0.hasPrefix("Earnings:") }
-        // Preserve concise research facts before optional long provider excerpts are trimmed.
-        let providerIndex = facts.firstIndex { $0.hasPrefix("Massive/Benzinga sample;") } ?? facts.count
-        facts.insert(contentsOf: extra, at: providerIndex)
-        return .captured(.init(history: history, context: context, facts: facts,
-            coverage: coverage, at: began, blockedByThrottle: blocked))
+        for (index, text) in historicalFacts(history).enumerated() {
+            appendExtra("history.liquidityAndGaps.\(index)", text, required: false)
+        }
+        if let selectionFact { appendExtra("universe.selection", selectionFact) }
+        // Keep independent forward earnings and SEC statuses mandatory, even when records are trimmed.
+        let packet = context.evidencePacket(maximumUTF8Bytes: 12_000)
+        var evidence = packet.facts.filter { $0.key != "earnings" }
+        let providerIndex = evidence.firstIndex { $0.key == "benzinga.status" } ?? evidence.count
+        evidence.insert(contentsOf: extra, at: providerIndex)
+        return .captured(.init(history: history, context: context, facts: evidence.map(\.text),
+            coverage: coverage, at: began, blockedByThrottle: blocked,
+            evidencePacket: .init(facts: evidence, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount)))
     }
 
     nonisolated static func historicalFacts(_ history: StockSagePriceHistory) -> [String] {
@@ -905,14 +916,57 @@ final class StockSageHorizonResearch: ObservableObject {
         allowed: @escaping @MainActor () -> Bool,
         modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
         evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil,
-        outputTokens: Int = researchOutputTokens) async -> Result {
+        outputTokens: Int = researchOutputTokens,
+        diagnostics: StockSageResearchDiagnostics? = nil) async -> Result {
+        let writer = diagnostics ?? (modelTransport == nil && !StockSageStore.isRunningTests ? .shared : nil)
+        let receipt = StockSageResearchDiagnostics.Context(symbol: capture.context.idea.symbol,
+            horizon: horizon == .week ? 7 : 14, purpose: .assessment)
+        let began = await writer?.begin(receipt) ?? false
+        let observer: (@Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void)?
+        if let writer {
+            observer = { event in _ = await writer.record(event, context: receipt) }
+        } else { observer = nil }
+        var result = await assessCaptured(capture, horizon: horizon, config: config, isOllama: isOllama,
+            allowed: allowed, modelTransport: modelTransport, evidenceIsCurrent: evidenceIsCurrent,
+            outputTokens: outputTokens, attemptObserver: observer)
+        if let writer {
+            // This records validation at this instant, not publication, an order or a prediction outcome.
+            let state: StockSageResearchDiagnostics.Outcome.State = Task.isCancelled ? .cancelled
+                : result.verdict != nil ? .accepted : result.evidenceReceipt == nil ? .notRequested : .rejected
+            let finished = await writer.finish(receipt, outcome: .init(state: state, note: result.note))
+            result.diagnosticID = receipt.id
+            result.diagnosticsComplete = began && finished
+            let current = capture.context.benzinga.map {
+                evidenceIsCurrent?($0) ?? StockSageBenzingaClient.shared.isCurrent($0)
+            } ?? true
+            if !allowed() || Task.isCancelled || !capture.isFresh(at: Date()) || !current {
+                result.verdict = nil; result.levels = nil
+                if let evidence = result.evidenceReceipt {
+                    result.evidenceReceipt = .init(symbol: evidence.symbol, requiredKeys: evidence.requiredKeys,
+                        missingOrUnknownRequiredKeys: evidence.missingOrUnknownRequiredKeys,
+                        offeredKeys: evidence.offeredKeys, omittedKeys: evidence.omittedKeys,
+                        prePromptOmittedRecordCount: evidence.prePromptOmittedRecordCount, citedKeys: [])
+                }
+                result.note = "Analysis interrupted or captured evidence expired before publication."
+            }
+        }
+        return result
+    }
+
+    private static func assessCaptured(_ capture: Capture, horizon: Horizon,
+        config: StockSageLocalModelServer.Config, isOllama: Bool,
+        allowed: @escaping @MainActor () -> Bool,
+        modelTransport: ((URLRequest) async throws -> (Data, URLResponse))?,
+        evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)?, outputTokens: Int,
+        attemptObserver: (@Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void)?) async -> Result {
         let history = capture.history, context = capture.context, referenceClose = capture.referenceClose
+        var evidenceReceipt: StockSageAIAssessment.EvidenceCoverage?
         func evidenceAllowed() -> Bool {
             allowed() && !Task.isCancelled && capture.isFresh(at: Date())
                 && (context.benzinga.map { evidenceIsCurrent?($0) ?? StockSageBenzingaClient.shared.isCurrent($0) } ?? true)
         }
         func result(_ note: String, facts: [String] = []) -> Result {
-            .init(facts: facts, note: note, at: capture.at, referenceClose: referenceClose, coverage: capture.coverage)
+            .init(facts: facts, note: note, at: capture.at, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt)
         }
         guard [researchOutputTokens, 384].contains(outputTokens) else { return result("Unsupported research output budget; no opinion.") }
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
@@ -924,20 +978,29 @@ final class StockSageHorizonResearch: ObservableObject {
             }
         }
         horizonFacts.append("Evidence coverage at capture (not a quality score): " + capture.coverage.map(\.detail).joined(separator: "; "))
-        if let benzinga = context.benzinga, let statuses = StockSageBenzinga.projection(benzinga, maximumUTF8Bytes: 12_000, maximumRecords: 0) {
-            horizonFacts.append("Provider check states; record details may be omitted: " + statuses.statusLines.joined(separator: "; "))
+        // Legacy injected captures conservatively keep every fact; live captures carry explicit keys.
+        let packet = capture.evidencePacket ?? .init(facts: capture.facts.enumerated().map {
+            .init(key: "captured.\($0.offset)", text: $0.element, required: true, availability: .unknown)
+        }, prePromptOmittedRecordCount: 0)
+        let optional = packet.facts.filter { !$0.required }
+        let mandatory = packet.facts.filter(\.required) + horizonFacts.enumerated().map {
+            StockSageAIAssessment.EvidenceFact(key: "horizon.\($0.offset)", text: $0.element,
+                                             required: true, availability: .available)
         }
-        let optionalFacts = capture.facts
-        guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optionalFacts, mandatory: horizonFacts,
-            system: { _ in horizon.instructions }, outputTokens: outputTokens) else {
-            return result("Evidence could not fit the model context budget without dropping a mandatory horizon or source-status fact; no opinion.", facts: horizonFacts)
+        guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optional.map(\.text),
+            mandatory: mandatory.map(\.text), system: { _ in horizon.instructions },
+            optionalKeys: optional.map(\.key), outputTokens: outputTokens) else {
+            return result("Evidence could not fit the model context budget without dropping a mandatory horizon or source-status fact; no opinion.", facts: mandatory.map(\.text))
         }
+        let offered = Array(optional.prefix(fitted.optionalKept)) + mandatory
+        evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount)
         let facts = fitted.facts
-        let trimmedNote = fitted.isComplete ? "" : " \(fitted.omitted) of \(optionalFacts.count) optional evidence records were omitted to fit the context budget."
+        let trimmedNote = fitted.isComplete ? "" : " \(fitted.omitted) of \(optional.count) optional evidence records were omitted to fit the context budget."
         let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
             system: fitted.system, user: fitted.user, facts: facts, maxTokens: outputTokens,
-            stillValid: evidenceAllowed, transport: modelTransport)
-        guard evidenceAllowed() else { return result("Analysis interrupted or captured evidence expired.") }
+            attemptObserver: attemptObserver, stillValid: evidenceAllowed, transport: modelTransport)
+        guard evidenceAllowed() else { return result("Analysis interrupted or captured evidence expired.", facts: facts) }
         if case .success(let completion) = response, let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
             return result("No verified opinion. " + rejection + trimmedNote + " " + completion.diagnostic.summary, facts: facts)
         }
@@ -945,8 +1008,10 @@ final class StockSageHorizonResearch: ObservableObject {
               case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
             return result("No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, facts: facts)
         }
+        evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict)
         return .init(verdict: verdict, levels: levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated Qwen research · \(horizon.rawValue). No order created." + trimmedNote,
-            at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage)
+            at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt)
     }
 }

@@ -46,6 +46,99 @@ extension StockSageResearchRanking.Receipt {
         .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "offline-ranking-fixture")
     }
 
+    @Test func rankingDiagnosticsGroupTransientAndLengthRetriesWithoutChangingTheSelection() async throws {
+        typealias Server = StockSageLocalModelServer
+        typealias Store = StockSageResearchDiagnostics
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Store(directory: dir)
+        let local = Server.Config(baseURL: URL(string: Server.lmStudioURL)!, model: Server.lmStudioModel)
+        var posts = 0, limits: [Int] = []
+        let result = await Ranking.rank(scan: fixtureScan(["AAA", "BBB"]), horizon: .fortnight,
+            config: local, isOllama: false, allowed: { true }, diagnostics: store, modelTransport: { request in
+                if request.httpMethod == "GET" {
+                    #expect(request.url?.path == "/api/v1/models")
+                    let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+                        with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":1}}]"#)
+                    return (Data(inventory.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                }
+                posts += 1
+                let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+                limits.append(try #require(body["max_tokens"] as? Int))
+                if posts == 1 { throw URLError(.networkConnectionLost) }
+                let response = try JSONSerialization.data(withJSONObject: ["model": Server.lmStudioModel,
+                    "choices": [["message": ["content": posts == 2 ? "" : #"{"symbols":["BBB","AAA"]}"#],
+                                 "finish_reason": posts == 2 ? "length" : "stop"]]])
+                return (response, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let receipt = try result.get()
+        #expect(receipt.symbols == ["BBB", "AAA"] && posts == 3 && limits == [256, 256, 512])
+        let round = try #require(receipt.rounds.first)
+        let id = try #require(round.diagnosticID)
+        #expect(round.diagnosticsComplete == true && Ranking.valid(receipt))
+        let entries = await Store(directory: dir).entries(for: id)
+        #expect(entries.allSatisfy { $0.context.id == id && $0.context.symbol == nil && $0.context.horizon == 14 && $0.context.purpose == .ranking })
+        let attempts = entries.compactMap(\.attempt)
+        #expect(attempts.count == 6 && Set(attempts.map(\.callID)).count == 3)
+        #expect(attempts.filter { $0.stage == .finished }.map(\.outputLimit) == limits)
+        #expect(attempts.filter { $0.stage == .finished }.compactMap { $0.diagnostic?.finish } == [.absent, .tokenLimit, .stop])
+        #expect(entries.last?.outcome?.state == .accepted && entries.last?.complete == true)
+        let encoded = try JSONEncoder().encode(receipt)
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("responseBody"))
+    }
+
+    @Test func rankingDiagnosticStorageFailureDoesNotDiscardValidComparison() async throws {
+        let result = await Ranking.rank(scan: fixtureScan(["AAA", "BBB"]), horizon: .week,
+            config: config, isOllama: false, allowed: { true },
+            diagnostics: StockSageResearchDiagnostics(directory: nil), completion: { _, _, _ in
+                self.response(["BBB", "AAA"])
+            })
+        let receipt = try result.get()
+        #expect(receipt.symbols == ["BBB", "AAA"] && Ranking.valid(receipt))
+        #expect(receipt.rounds.first?.diagnosticID != nil && receipt.rounds.first?.diagnosticsComplete == false)
+    }
+
+    @Test(arguments: [false, true])
+    func rankingDiagnosticOutcomeDistinguishesInvalidOutputFromCancellation(cancel: Bool) async throws {
+        typealias Store = StockSageResearchDiagnostics
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Store(directory: dir)
+        var allowed = true, posts = 0
+        let result = await Ranking.rank(scan: fixtureScan(["AAA", "BBB"]), horizon: .week,
+            config: config, isOllama: false, allowed: { allowed }, diagnostics: store, modelTransport: { request in
+                posts += 1
+                if cancel { allowed = false }
+                let body = try JSONSerialization.data(withJSONObject: ["model": self.config.model,
+                    "choices": [["message": ["content": #"{"symbols":["AAA","AAA"]}"#], "finish_reason": "stop"]]])
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(posts == 1 && result == .failure(cancel ? .cancelled : .invalidOutput))
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "jsonl" }
+        let file = try #require(files.first)
+        let id = try #require(UUID(uuidString: file.deletingPathExtension().lastPathComponent))
+        let entries = await store.entries(for: id)
+        #expect(files.count == 1 && entries.allSatisfy { $0.context.id == id && $0.context.horizon == 7 && $0.context.purpose == .ranking })
+        #expect(entries.compactMap(\.attempt).count == 2)
+        #expect(entries.last?.outcome?.state == (cancel ? .cancelled : .rejected))
+        #expect(entries.last?.complete == true)
+        if !cancel {
+            #expect(entries.compactMap(\.attempt).last?.diagnostic?.finish == .stop,
+                    "A completed HTTP/model reply is distinct from valid ranking output")
+        }
+    }
+
+    @Test func legacyRankingRoundOmitsNewDiagnosticFieldsAndReencodesIdentically() throws {
+        let receipt = Ranking.Receipt.fixture(scan: fixtureScan(["AAA", "BBB"]), symbols: ["AAA", "BBB"], horizon: .week, at: at)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(receipt)
+        #expect(!String(decoding: bytes, as: UTF8.self).contains("diagnostic"))
+        let restored = try JSONDecoder().decode(Ranking.Receipt.self, from: bytes)
+        #expect(restored == receipt && Ranking.valid(restored))
+        #expect(try encoder.encode(restored) == bytes)
+    }
+
     @Test func lateBuyCanBeatEarlierStrongBuysAcrossAllCompletedChecks() async throws {
         var scan = fixtureScan(["AAA", "BBB", "CCC", "DDD", "EEE", "ZZZ"])
         scan.results["ZZZ"]?.verdict = .init(action: .buy, reason: "Best supported case", risk: "Original risk", evidence: ["F1"])
@@ -72,10 +165,12 @@ extension StockSageResearchRanking.Receipt {
     }
 
     @Test func boundedRoundsConsiderEveryCandidateAndLateBestSurvives() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
         let names = (0..<48).map { String(format: "S%03d", $0) }
         let scan = fixtureScan(names.reversed(), caseText: String(repeating: "Dated supporting case. ", count: 25))
         var seen = Set<String>(), calls = 0
-        let result = await Ranking.rank(scan: scan, horizon: .fortnight, config: config, isOllama: false, allowed: { true }, completion: { system, user, _ in
+        let result = await Ranking.rank(scan: scan, horizon: .fortnight, config: config, isOllama: false, allowed: { true }, diagnostics: StockSageResearchDiagnostics(directory: dir), completion: { system, user, _ in
             calls += 1
             let ids = self.symbols(in: user)
             seen.formUnion(ids)
@@ -89,6 +184,8 @@ extension StockSageResearchRanking.Receipt {
         #expect(seen == Set(names))
         #expect(receipt.symbols == Array(names.reversed().prefix(5)))
         #expect(receipt.method == Ranking.rollingMethod && receipt.horizon == Research.Horizon.fortnight.rawValue)
+        #expect(Set(receipt.rounds.compactMap(\.diagnosticID)).count == receipt.rounds.count)
+        #expect(receipt.rounds.allSatisfy { $0.diagnosticsComplete == true })
         #expect(Ranking.valid(receipt))
     }
 
@@ -270,6 +367,45 @@ extension StockSageResearchRanking.Receipt {
             }
             let corrupt = try JSONDecoder().decode(Ranking.Receipt.self, from: JSONSerialization.data(withJSONObject: altered))
             #expect(!Ranking.valid(corrupt))
+        }
+    }
+
+    @Test func rankingReceiptRejectsIncompleteOrReusedDiagnosticReferences() async throws {
+        let names = (0..<48).map { String(format: "S%03d", $0) }
+        let result = await Ranking.rank(
+            scan: fixtureScan(names, caseText: String(repeating: "Dated supporting case. ", count: 25)),
+            horizon: .week, config: config, isOllama: false, allowed: { true }, completion: { _, user, _ in
+                self.response(Array(self.symbols(in: user).sorted(by: >).prefix(5)))
+            })
+        let original = try result.get()
+        try #require(original.rounds.count >= 2 && Ranking.valid(original))
+        let body = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        let legacy = try #require(body["rounds"] as? [[String: Any]])
+        func decode(_ rounds: [[String: Any]]) throws -> Ranking.Receipt {
+            var object = body
+            object["rounds"] = rounds
+            return try JSONDecoder().decode(Ranking.Receipt.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        #expect(legacy.allSatisfy { $0["diagnosticID"] == nil && $0["diagnosticsComplete"] == nil })
+        #expect(Ranking.valid(try decode(legacy)))
+        let paired = legacy.enumerated().map { index, row in
+            var copy = row
+            copy["diagnosticID"] = UUID().uuidString
+            copy["diagnosticsComplete"] = index.isMultiple(of: 2)
+            return copy
+        }
+        #expect(Ranking.valid(try decode(paired)), "Both complete and incomplete retention references are valid")
+        for corruption in ["id-only", "complete-only", "incomplete-only", "reused-id"] {
+            var altered = paired
+            switch corruption {
+            case "id-only": altered[0].removeValue(forKey: "diagnosticsComplete")
+            case "complete-only": altered[0].removeValue(forKey: "diagnosticID")
+            case "incomplete-only":
+                altered[0].removeValue(forKey: "diagnosticID")
+                altered[0]["diagnosticsComplete"] = false
+            default: altered[1]["diagnosticID"] = altered[0]["diagnosticID"]
+            }
+            #expect(!Ranking.valid(try decode(altered)), "Diagnostic reference corruption: \(corruption)")
         }
     }
 

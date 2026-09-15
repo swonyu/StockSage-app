@@ -95,8 +95,8 @@ enum StockSageLocalSentiment {
         case available(Record), unavailable(Failure)
     }
     static func classify(_ evidence: Evidence, config: StockSageLocalModelServer.Config,
-                         defaults: UserDefaults = .standard, clock: () -> Date = { Date() },
-                         stillValid: @MainActor () -> Bool = { true },
+                         defaults: UserDefaults = .standard, clock: @escaping () -> Date = { Date() },
+                         stillValid: @escaping @MainActor () -> Bool = { true },
                          transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result {
         let revision = StockSageLocalModelServer.settingsRevision(defaults)
         let settings = [StockSageLocalModelServer.backendKey, StockSageLocalModelServer.urlKey, StockSageLocalModelServer.modelKey]

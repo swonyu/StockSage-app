@@ -444,7 +444,7 @@ enum StockSageCatalystNarrator {
                                          isOllama: Bool,
                                          sources: [CitedSource] = [],
                                          benzinga: StockSageBenzinga.Snapshot? = nil,
-                                         stillValid: @MainActor () -> Bool = { true },
+                                         stillValid: @escaping @MainActor () -> Bool = { true },
                                          transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result {
         let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
         let result = await StockSageLocalModelServer.completeDetailed(

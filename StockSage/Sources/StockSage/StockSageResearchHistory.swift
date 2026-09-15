@@ -617,6 +617,9 @@ extension StockSageResearchHistory {
         let at: Date
         let model: String
         let coverage: [SourceCoverage]
+        let evidenceReceipt: StockSageAIAssessment.EvidenceCoverage?
+        let diagnosticID: UUID?
+        let diagnosticsComplete: Bool?
 
         init(listing: StockSageHorizonResearch.Listing, result: StockSageHorizonResearch.Result) {
             self.listing = listing
@@ -626,6 +629,8 @@ extension StockSageResearchHistory {
             referenceClose = result.referenceClose.map { .init(value: $0.value, at: $0.at) }
             facts = result.facts; note = result.note; at = result.at; model = result.model
             coverage = result.coverage.map { .init(source: $0.source, state: $0.state.rawValue, checkedAt: $0.checkedAt) }
+            evidenceReceipt = result.evidenceReceipt
+            diagnosticID = result.diagnosticID; diagnosticsComplete = result.diagnosticsComplete
         }
 
         var result: StockSageHorizonResearch.Result? {
@@ -638,7 +643,8 @@ extension StockSageResearchHistory {
             return .init(verdict: verdict?.value,
                 levels: levels.map { .init(entry: $0.entry, stop: $0.stop, target: $0.target, at: $0.at, basis: $0.basis) },
                 facts: facts, note: note, at: at, model: model,
-                referenceClose: referenceClose.map { (value: $0.value, at: $0.at) }, coverage: sources)
+                referenceClose: referenceClose.map { (value: $0.value, at: $0.at) }, coverage: sources,
+                evidenceReceipt: evidenceReceipt, diagnosticID: diagnosticID, diagnosticsComplete: diagnosticsComplete)
         }
 
         var prediction: Prediction? {
@@ -713,6 +719,25 @@ extension StockSageResearchHistory {
                           guard id.first == "F", let index = Int(id.dropFirst()), id == "F\(index)" else { return false }
                           return index > 0 && index <= check.facts.count
                       }) else { return false }
+            }
+            guard (check.diagnosticID == nil) == (check.diagnosticsComplete == nil) else { return false }
+            if let receipt = check.evidenceReceipt {
+                let offered = Set(receipt.offeredKeys), required = Set(receipt.requiredKeys)
+                let omitted = Set(receipt.omittedKeys), missing = Set(receipt.missingOrUnknownRequiredKeys)
+                let cited = Set(receipt.citedKeys)
+                let keys = receipt.offeredKeys + receipt.omittedKeys
+                let expectedCited = Set((check.verdict?.evidence ?? []).compactMap { id -> String? in
+                    guard let index = Int(id.dropFirst()), index > 0, index <= receipt.offeredKeys.count else { return nil }
+                    return receipt.offeredKeys[index - 1]
+                })
+                guard receipt.symbol == listing.ticker, receipt.offeredKeys.count == check.facts.count,
+                      keys.count <= 20_000, keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512
+                          && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }),
+                      offered.count == receipt.offeredKeys.count, omitted.count == receipt.omittedKeys.count,
+                      required.count == receipt.requiredKeys.count, missing.count == receipt.missingOrUnknownRequiredKeys.count,
+                      cited.count == receipt.citedKeys.count, required.isSubset(of: offered), missing.isSubset(of: required),
+                      offered.isDisjoint(with: omitted), cited == expectedCited,
+                      (0...1_000_000).contains(receipt.prePromptOmittedRecordCount) else { return false }
             }
             if let reference = check.referenceClose {
                 guard reference.value.isFinite, reference.value > 0, validDate(reference.at), reference.at <= check.at else { return false }

@@ -732,12 +732,25 @@ struct StockSageResearchModesPanel: View {
                     Text("No valid ATR-based entry/stop/target plan could be calculated. Do not treat this opinion as an order plan.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                 }
-                if !result.coverage.isEmpty {
+                if !result.coverage.isEmpty || result.evidenceReceipt != nil || result.diagnosticID != nil {
                     DisclosureGroup("Evidence coverage · " + Self.coverageSummary(result.coverage)) {
                         ForEach(Array(result.coverage.enumerated()), id: \.offset) { _, item in
                             Text(item.detail).font(.callout)
                         }
-                        Text("Coverage records checks, not predictive quality. The exact facts below show what was offered to the model.").font(.caption).foregroundStyle(.secondary)
+                        if let receipt = result.evidenceReceipt {
+                            Text("\(receipt.offeredKeys.count) facts in the prepared prompt · \(receipt.citedKeys.count) cited · \(receipt.missingOrUnknownRequiredKeys.count) required facts missing or unknown")
+                                .font(.callout).monospacedDigit()
+                            Text("\(receipt.omittedKeys.count) optional records omitted to fit the prompt; \(receipt.prePromptOmittedRecordCount) provider records omitted before fitting.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let id = result.diagnosticID {
+                            Text(result.diagnosticsComplete == true
+                                ? "Local diagnostic receipt recorded. Older diagnostics expire under the storage limit."
+                                : "Local diagnostic receipt was not fully saved. Saved research evidence is separate.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Diagnostic reference: " + id.uuidString).font(.caption.monospaced())
+                        }
+                        Text("Coverage records checks, not predictive quality. The exact facts below show the prepared evidence. Diagnostics record whether a model request began.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if !result.facts.isEmpty {
@@ -750,7 +763,8 @@ struct StockSageResearchModesPanel: View {
                                 }
                             } else { Text("F\(index + 1): \(fact)").font(.callout) }
                         }
-                        if !result.facts.contains(where: { $0.hasPrefix("Massive/Benzinga sample;") }) {
+                        if !(result.evidenceReceipt.map { $0.offeredKeys.contains(where: { $0.hasPrefix("benzinga.record.") }) }
+                            ?? result.facts.contains(where: { $0.hasPrefix("Massive/Benzinga sample;") })) {
                             Text("Benzinga record details were not included in these model facts. Check the captured source statuses above.").font(.callout).foregroundStyle(.secondary)
                         }
                     }.font(.caption)

@@ -22,6 +22,8 @@ import Foundation
         let symbols: [String]
         let model: String
         let omittedCitedFacts: [String: Int]
+        var diagnosticID: UUID? = nil
+        var diagnosticsComplete: Bool? = nil
     }
 
     nonisolated struct Receipt: Codable, Equatable, Sendable {
@@ -97,8 +99,14 @@ import Foundation
                      config: StockSageLocalModelServer.Config, isOllama: Bool,
                      allowed: @escaping @MainActor () -> Bool,
                      progress: @escaping @MainActor (String) -> Void = { _ in },
+                     diagnostics: StockSageResearchDiagnostics? = nil,
+                     modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
                      completion: Completion? = nil) async -> Swift.Result<Receipt, Failure> {
         guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
+        let recorder: StockSageResearchDiagnostics?
+        if let diagnostics { recorder = diagnostics }
+        else if completion == nil, modelTransport == nil, !StockSageStore.isRunningTests { recorder = .shared }
+        else { recorder = nil }
         let listed = scan.listings.map(\.ticker)
         guard listed.count <= StockSageHorizonResearch.scanLimit,
               Set(listed).count == listed.count,
@@ -168,38 +176,75 @@ import Foundation
             guard let schema = responseSchema(symbols: offered) else { return .failure(.invalidCandidates) }
             progress("Comparing research · \(cursor)/\(candidates.count) eligible candidates considered · round \(rounds.count + 1)")
             guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
-            func request() async -> StockSageLocalModelServer.CompletionResult {
+            let context = recorder.map { _ in StockSageResearchDiagnostics.Context(
+                symbol: nil, horizon: horizon == .week ? 7 : 14, purpose: .ranking) }
+            let began: Bool
+            if let recorder, let context { began = await recorder.begin(context) }
+            else { began = false }
+            let observer: (@Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void)?
+            if let recorder, let context {
+                observer = { event in _ = await recorder.record(event, context: context) }
+            } else { observer = nil }
+            func finish(_ state: StockSageResearchDiagnostics.Outcome.State, note: String) async -> Bool? {
+                guard let recorder, let context else { return nil }
+                let saved = await recorder.finish(context, outcome: .init(state: state, note: note))
+                return began && saved
+            }
+            guard !Task.isCancelled, allowed() else {
+                _ = await finish(.cancelled, note: Failure.cancelled.message)
+                return .failure(.cancelled)
+            }
+            func request(phase: String) async -> StockSageLocalModelServer.CompletionResult {
                 if let completion { return await completion(system, user, schema) }
                 return await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
                     system: system, user: user, maxTokens: 256,
                     contextTokens: StockSageLocalModelServer.researchContextTokens,
-                    jsonSchema: schema, stillValid: allowed)
+                    jsonSchema: schema, phase: phase, attemptObserver: observer,
+                    stillValid: allowed, transport: modelTransport)
             }
-            var answer = await request()
+            var answer = await request(phase: "ranking")
             // One identical retry for a transient connection/server failure. Invalid output,
             // timeouts, policy changes and unsupported requests still fail immediately.
             if case .failure(let failure) = answer,
                failure.diagnostic.category == .network || (failure.diagnostic.category == .http
                    && [500, 502, 503, 504].contains(failure.diagnostic.httpStatus ?? 0)) {
-                guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
+                guard !Task.isCancelled, allowed() else {
+                    _ = await finish(.cancelled, note: Failure.cancelled.message)
+                    return .failure(.cancelled)
+                }
                 progress("Model connection interrupted · retrying comparison round \(rounds.count + 1) once…")
-                answer = await request()
+                answer = await request(phase: "ranking-retry")
             }
-            guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
+            guard !Task.isCancelled, allowed() else {
+                _ = await finish(.cancelled, note: Failure.cancelled.message)
+                return .failure(.cancelled)
+            }
             switch answer {
             case .failure(let failure):
                 if failure.diagnostic.category == .cancelled || failure.diagnostic.category == .obsoleteRequest {
+                    _ = await finish(.cancelled, note: Failure.cancelled.message)
                     return .failure(.cancelled)
                 }
-                return .failure(failure.diagnostic.category == .contextBudget ? .contextBudget : .modelFailure)
+                let reason: Failure = failure.diagnostic.category == .contextBudget ? .contextBudget : .modelFailure
+                _ = await finish(.rejected, note: reason.message)
+                guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
+                return .failure(reason)
             case .success(let output):
                 guard StockSageLocalModelServer.financialOutputRejection(output) == nil,
                       let selected = selection(output.text, from: offered),
-                      validModel(output.model ?? config.model) else { return .failure(.invalidOutput) }
+                      validModel(output.model ?? config.model) else {
+                    _ = await finish(.rejected, note: Failure.invalidOutput.message)
+                    guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
+                    return .failure(.invalidOutput)
+                }
+                let diagnosticsComplete = await finish(.accepted,
+                    note: "Round output passed comparison validation; final scan publication remains subject to cancellation.")
+                guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
                 winners = selected
                 rounds.append(.init(candidateSymbols: offered, system: system, user: user, symbols: selected,
                                     model: output.model ?? config.model,
-                                    omittedCitedFacts: Dictionary(uniqueKeysWithValues: batch.map { ($0.symbol, $0.omittedCitedFacts) })))
+                                    omittedCitedFacts: Dictionary(uniqueKeysWithValues: batch.map { ($0.symbol, $0.omittedCitedFacts) }),
+                                    diagnosticID: context?.id, diagnosticsComplete: diagnosticsComplete))
             }
         }
         guard !Task.isCancelled, allowed() else { return .failure(.cancelled) }
@@ -228,7 +273,11 @@ import Foundation
         var previous: [String] = []
         var original: [String: Candidate] = [:]
         var citedText: [String: String] = [:]
+        var diagnosticIDs = Set<UUID>()
         for round in receipt.rounds {
+            if let id = round.diagnosticID {
+                guard round.diagnosticsComplete != nil, diagnosticIDs.insert(id).inserted else { return false }
+            } else if round.diagnosticsComplete != nil { return false }
             let offered = round.candidateSymbols
             guard offered == offered.sorted(), Set(offered).count == offered.count,
                   Set(previous).isSubset(of: Set(offered)),

@@ -262,14 +262,41 @@ struct StockSageHorizonAnalyzeTests {
         #expect(historyCalls == 1 && newsCalls == 1 && earningsCalls == 1 && filingsCalls == 1 && snapshotCalls == 1)
         let config = try #require(Server.config(url: Server.defaultURL, model: Server.defaultModel))
         var prompts: [String] = [], results: [Research.Result] = []
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let diagnostics = StockSageResearchDiagnostics(directory: directory)
         for horizon in Research.Horizon.allCases {
             results.append(await Research.assess(capture, horizon: horizon, config: config, isOllama: true, allowed: { true },
                 modelTransport: { request in prompts.append(String(decoding: request.httpBody ?? Data(), as: UTF8.self)); return Self.ok(Self.verdictPayload(), request) },
-                evidenceIsCurrent: { _ in true }))
+                evidenceIsCurrent: { _ in true }, diagnostics: diagnostics))
         }
         #expect(prompts.count == 2 && prompts[0].contains("1–7 trading days") && prompts[1].contains("7–14 trading days"))
         #expect(results.allSatisfy { $0.verdict != nil && $0.at == capture.at && $0.referenceClose?.at == capture.referenceClose.at })
         #expect(results[0].coverage == results[1].coverage && historyCalls == 1)
+        #expect(Set(results.compactMap(\.diagnosticID)).count == 2)
+        for (index, result) in results.enumerated() {
+            let receipt = try #require(result.evidenceReceipt)
+            #expect(receipt.symbol == "ACME" && receipt.offeredKeys.count == result.facts.count)
+            #expect(receipt.requiredKeys.contains("quote") && receipt.requiredKeys.contains("nextEarnings")
+                    && receipt.requiredKeys.contains("sec.status") && !receipt.requiredKeys.contains("earnings"))
+            #expect(receipt.missingOrUnknownRequiredKeys.contains("nextEarnings"))
+            #expect(receipt.citedKeys.count == result.verdict?.evidence.count)
+            let id = try #require(result.diagnosticID)
+            let entries = await diagnostics.entries(for: id)
+            #expect(result.diagnosticsComplete == true && entries.last?.outcome?.state == .accepted)
+            #expect(entries.allSatisfy { $0.context.symbol == "ACME" && $0.context.horizon == (index == 0 ? 7 : 14) })
+            #expect(entries.compactMap(\.attempt).map(\.stage) == [.started, .finished])
+        }
+        let rejected = await Research.assess(capture, horizon: .week, config: config, isOllama: true,
+            allowed: { true }, modelTransport: { request in
+                Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                    "message": ["content": "invalid research answer"], "done": true, "done_reason": "stop"]), request)
+            }, evidenceIsCurrent: { _ in true }, diagnostics: diagnostics)
+        let rejectedID = try #require(rejected.diagnosticID)
+        let rejectedEntries = await diagnostics.entries(for: rejectedID)
+        #expect(rejected.verdict == nil && rejected.evidenceReceipt != nil && !rejected.facts.isEmpty)
+        #expect(rejectedEntries.last?.outcome?.state == .rejected)
+        #expect(rejectedEntries.compactMap(\.attempt).last?.responseBody != nil)
         let staleOwner = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: true, allowed: { true },
             modelTransport: { Issue.record("Obsolete evidence cannot reach the model"); return Self.ok(Self.verdictPayload(), $0) }, evidenceIsCurrent: { _ in false })
         #expect(staleOwner.verdict == nil)

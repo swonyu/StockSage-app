@@ -595,12 +595,12 @@ enum StockSageLocalModelServer {
     }
 
     /// Metadata is observational: unknown/invalid fields never change text acceptance.
-    nonisolated enum Finish: String, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
-    nonisolated enum FailureCategory: String, Sendable {
+    nonisolated enum Finish: String, Codable, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
+    nonisolated enum FailureCategory: String, Codable, Sendable {
         case invalidConfig, unavailable, modelMissing, unsupportedModel, nonHTTP, http, malformedJSON, responseShape, missingContent, emptyContent
         case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge, contextBudget, incompleteOutput
     }
-    nonisolated struct Diagnostic: Sendable, Equatable {
+    nonisolated struct Diagnostic: Codable, Sendable, Equatable {
         var category: FailureCategory? = nil
         var httpStatus: Int? = nil
         var bodyBytes: Int? = nil
@@ -644,6 +644,51 @@ enum StockSageLocalModelServer {
     }
     typealias CompletionResult = Swift.Result<Completion, CompletionFailure>
     nonisolated static func boundedCount(_ value: Int) -> Int { min(max(value, 0), 16_777_216) }
+
+    /// Local prompt/reply diagnostics; endpoint and request headers are never copied into this payload.
+    /// Started means dispatch preparation; a receipt write can suspend before transport begins.
+    nonisolated struct ModelAttemptEvent: Codable, Equatable, Sendable {
+        enum Stage: String, Codable, Sendable { case started, finished }
+        let callID: UUID
+        let ordinal: Int
+        let phase: String
+        let stage: Stage
+        let startedAt: Date
+        let endedAt: Date?
+        let transportStarted: Bool
+        let requestedModel: String
+        let returnedModel: String?
+        let isOllama: Bool
+        let outputLimit: Int
+        let contextTokens: Int
+        let temperature: Double
+        let system: String
+        let systemBytes: Int
+        let systemTruncated: Bool
+        let user: String
+        let userBytes: Int
+        let userTruncated: Bool
+        let schema: String?
+        let schemaBytes: Int?
+        let schemaTruncated: Bool
+        let responseBody: Data?
+        let responseBodyBytes: Int?
+        let responseBodyTruncated: Bool
+        let httpStatus: Int?
+        let diagnostic: Diagnostic?
+    }
+
+    private nonisolated static func boundedAttemptText(_ text: String) -> (text: String, bytes: Int, truncated: Bool) {
+        let count = text.utf8.count
+        guard count > 24_000 else { return (text, count, false) }
+        var prefix = Data(text.utf8.prefix(24_000))
+        // Removing at most three trailing bytes preserves UTF-8 without replacement characters.
+        while !prefix.isEmpty {
+            if let value = String(data: prefix, encoding: .utf8) { return (value, count, true) }
+            prefix.removeLast()
+        }
+        return ("", count, true)
+    }
 
     // MARK: In-flight observation
     //
@@ -836,8 +881,10 @@ enum StockSageLocalModelServer {
                                  maxTokens: Int = 170, contextTokens: Int = 4096,
                                  timeout: TimeInterval = 90,
                                  jsonSchema: Data? = nil,
-                                 stillValid: @MainActor () -> Bool = { true },
-                                 externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
+                                 phase: String = "model",
+                                 attemptObserver: (@Sendable (ModelAttemptEvent) async -> Void)? = nil,
+                                 stillValid: @escaping @MainActor () -> Bool = { true },
+                                 externalAllowed: @escaping @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
                                  transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
                                  clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
                                  sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }) async -> CompletionResult {
@@ -863,57 +910,126 @@ enum StockSageLocalModelServer {
         // cancellation, so an abandoned request can never inflate the observed concurrency.
         var concurrent = 0
         let deadline = clock().advanced(by: .seconds(timeout))
+        let recordedSystem = boundedAttemptText(system)
+        let recordedUser = boundedAttemptText(user)
+        let recordedSchema: (text: String, bytes: Int, truncated: Bool)? = {
+            guard attemptObserver != nil, c.isLMStudio9B, !isOllama, let jsonSchema,
+                  let object = try? JSONSerialization.jsonObject(with: jsonSchema),
+                  let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+                  let text = String(data: data, encoding: .utf8) else { return nil }
+            return boundedAttemptText(text)
+        }()
+        func failureAfterSuspension() -> CompletionFailure? {
+            if Task.isCancelled || lifecycle != lifecycleRevision || isShuttingDown {
+                return .init(diagnostic: .init(category: .cancelled))
+            }
+            if clock() >= deadline { return .init(diagnostic: .init(category: .timeout)) }
+            return requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed)
+        }
         var outputLimit = maxTokens
         for attempt in 0...1 {
-            func failed(_ failure: CompletionFailure) -> CompletionResult {
-                var diagnostic = failure.diagnostic
+            let callID = UUID()
+            var preparedAt: Date?
+            var transportStarted = false
+            var terminalRecorded = false
+            var responseBody: Data?
+            var responseBodyBytes: Int?
+            var responseStatus: Int?
+            var returnedModel: String?
+            func observe(_ stage: ModelAttemptEvent.Stage, diagnostic: Diagnostic? = nil) async {
+                guard let attemptObserver, let preparedAt else { return }
+                if stage == .finished {
+                    guard !terminalRecorded else { return }
+                    terminalRecorded = true
+                }
+                let observedModel = returnedModel ?? {
+                    guard let responseBody, responseBodyBytes == responseBody.count,
+                          let object = (try? JSONSerialization.jsonObject(with: responseBody)) as? [String: Any],
+                          let model = object["model"] as? String, !model.isEmpty, model.utf8.count <= 512 else { return nil as String? }
+                    return model
+                }()
+                await attemptObserver(.init(callID: callID, ordinal: attempt + 1, phase: phase, stage: stage,
+                    startedAt: preparedAt, endedAt: stage == .finished ? Date() : nil,
+                    transportStarted: transportStarted, requestedModel: c.model, returnedModel: observedModel,
+                    isOllama: isOllama, outputLimit: outputLimit, contextTokens: contextTokens, temperature: 0.2,
+                    system: recordedSystem.text, systemBytes: recordedSystem.bytes, systemTruncated: recordedSystem.truncated,
+                    user: recordedUser.text, userBytes: recordedUser.bytes, userTruncated: recordedUser.truncated,
+                    schema: recordedSchema?.text, schemaBytes: recordedSchema?.bytes, schemaTruncated: recordedSchema?.truncated ?? false,
+                    responseBody: responseBody, responseBodyBytes: responseBodyBytes,
+                    responseBodyTruncated: (responseBodyBytes ?? 0) > 24_000, httpStatus: responseStatus, diagnostic: diagnostic))
+            }
+            func enriched(_ value: Diagnostic) -> Diagnostic {
+                var diagnostic = value
                 diagnostic.outputLimitRetries = attempt
                 diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                 diagnostic.concurrentRequests = concurrent
+                return diagnostic
+            }
+            func failed(_ failure: CompletionFailure) async -> CompletionResult {
+                let diagnostic = enriched(failure.diagnostic)
+                await observe(.finished, diagnostic: diagnostic)
                 return .failure(.init(diagnostic: diagnostic))
             }
-            guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
-            if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return failed(failure) }
+            guard lifecycle == lifecycleRevision else { return await failed(.init(diagnostic: .init(category: .cancelled))) }
+            if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return await failed(failure) }
             let request = chatRequest(c, system: system, user: user, isOllama: isOllama,
                                       maxTokens: outputLimit, contextTokens: contextTokens, timeout: timeout, jsonSchema: jsonSchema)
             do {
                 let (data, response) = try await Pending<(Data, URLResponse)>().run(
                     deadline: deadline, now: clock, sleepUntil: sleepUntil) {
+                        guard lifecycle == lifecycleRevision, !isShuttingDown else { throw CancellationError() }
+                        preparedAt = Date()
+                        await observe(.started)
+                        // Writing a receipt is inside the caller's original deadline. It cannot
+                        // authorize a POST after cancellation, policy change or timeout.
+                        if let failure = failureAfterSuspension() { throw failure }
                         concurrent = await inFlight.enter()
                         let result: Result<(Data, URLResponse), Error>
                         do {
-                            guard lifecycle == lifecycleRevision, !isShuttingDown else { throw CancellationError() }
-                            if let transport { result = .success(try await transport(request)) }
-                            else { result = .success(try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: maximumResponseBytes)) }
+                            if let failure = failureAfterSuspension() { throw failure }
+                            transportStarted = true
+                            let reply: (Data, URLResponse)
+                            if let transport { reply = try await transport(request) }
+                            else { reply = try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: maximumResponseBytes) }
+                            // Capture received bytes before Pending rejects an overdue or cancelled
+                            // result. A later return after a terminal event cannot rewrite that event.
+                            if attemptObserver != nil {
+                                responseBody = Data(reply.0.prefix(24_000))
+                                responseBodyBytes = reply.0.count
+                                responseStatus = (reply.1 as? HTTPURLResponse)?.statusCode
+                            }
+                            result = .success(reply)
                         } catch { result = .failure(error) }
                         await inFlight.leave()
                         return try result.get()
                     }
-                guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
+                guard lifecycle == lifecycleRevision else { return await failed(.init(diagnostic: .init(category: .cancelled))) }
                 if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
-                    return failed(failure)
+                    return await failed(failure)
                 }
                 guard data.count <= maximumResponseBytes else {
-                    return failed(.init(diagnostic: .init(category: .responseTooLarge,
+                    return await failed(.init(diagnostic: .init(category: .responseTooLarge,
                         bodyBytes: boundedCount(data.count), oversizedBody: true)))
                 }
                 guard let http = response as? HTTPURLResponse else {
-                    return failed(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
+                    return await failed(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
                                                             oversizedBody: data.count > 1_048_576)))
                 }
                 guard (200..<300).contains(http.statusCode) else {
-                    // Preserve the legacy model-missing detection; never retain/emit the body.
+                    // Preserve model-missing detection without putting server prose in the error.
+                    // Only the optional bounded local observer receives response bytes.
                     let missing = (String(data: data, encoding: .utf8) ?? "").lowercased().contains("not found")
                     let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                     let code = (object?["error"] as? [String: Any])?["code"] as? String
                     let category: FailureCategory = (missing || code == "model_not_found") ? .modelMissing
                         : (code == "unsupported_model" ? .unsupportedModel : .http)
-                    return failed(.init(diagnostic: .init(category: category,
+                    return await failed(.init(diagnostic: .init(category: category,
                         httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
                         bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
                 }
                 switch parseCompletion(data, isOllama: isOllama, allowEmptyTruncated: c.isLMStudio9B) {
                 case .success(let reply):
+                    returnedModel = reply.model
                     // No backend may publish another model's answer under the selected ID. Ollama
                     // serves a model as "name:latest" while a viewer types the bare name, so both
                     // sides are compared with the suffix stripped. A server that reports no model at
@@ -922,7 +1038,7 @@ enum StockSageLocalModelServer {
                         stripLatestSuffix($0) != stripLatestSuffix(c.model)
                     } ?? c.isLMStudio9B
                     if identityMismatch {
-                        return failed(.init(diagnostic: .init(category: .responseShape,
+                        return await failed(.init(diagnostic: .init(category: .responseShape,
                                                                 httpStatus: http.statusCode,
                                                                 concurrentRequests: concurrent,
                                                                 elapsedMilliseconds: elapsedMilliseconds())))
@@ -933,6 +1049,10 @@ enum StockSageLocalModelServer {
                     if c.isLMStudio9B, attempt == 0, reply.diagnostic.finish == .tokenLimit,
                        (1...512).contains(maxTokens), clock() < deadline,
                        promptFits(system: system, user: user, outputTokens: maxTokens * 2, contextTokens: contextTokens) {
+                        var diagnostic = enriched(reply.diagnostic)
+                        diagnostic.httpStatus = http.statusCode
+                        await observe(.finished, diagnostic: diagnostic)
+                        if attemptObserver != nil, let failure = failureAfterSuspension() { return await failed(failure) }
                         outputLimit = maxTokens * 2
                         continue
                     }
@@ -946,32 +1066,31 @@ enum StockSageLocalModelServer {
                         var diagnostic = reply.diagnostic
                         diagnostic.category = .incompleteOutput
                         diagnostic.httpStatus = http.statusCode
-                        return failed(.init(diagnostic: diagnostic))
+                        return await failed(.init(diagnostic: diagnostic))
                     }
                     if c.isLMStudio9B {
                         let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
                             transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
-                        guard clock() < deadline else { return failed(.init(diagnostic: .init(category: .timeout))) }
-                        guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
-                        if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return failed(failure) }
+                        guard clock() < deadline else { return await failed(.init(diagnostic: .init(category: .timeout))) }
+                        guard lifecycle == lifecycleRevision else { return await failed(.init(diagnostic: .init(category: .cancelled))) }
+                        if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return await failed(failure) }
                         guard let inventory, let model = reply.model,
                               let context = verifiedContext(inventory, model: model), context >= contextTokens else {
-                            return failed(.init(diagnostic: .init(category: .contextBudget)))
+                            return await failed(.init(diagnostic: .init(category: .contextBudget)))
                         }
                     }
-                    var diagnostic = reply.diagnostic
+                    var diagnostic = enriched(reply.diagnostic)
                     diagnostic.httpStatus = http.statusCode
-                    diagnostic.elapsedMilliseconds = elapsedMilliseconds()
-                    diagnostic.concurrentRequests = concurrent
-                    diagnostic.outputLimitRetries = attempt
+                    await observe(.finished, diagnostic: diagnostic)
+                    if attemptObserver != nil, let failure = failureAfterSuspension() { return await failed(failure) }
                     return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
                 case .failure(let failure):
                     var diagnostic = failure.diagnostic
                     diagnostic.httpStatus = http.statusCode
-                    return failed(.init(diagnostic: diagnostic))
+                    return await failed(.init(diagnostic: diagnostic))
                 }
             } catch {
-                return failed(transportFailure(error))
+                return await failed((error as? CompletionFailure) ?? transportFailure(error))
             }
         }
         return .failure(.init(diagnostic: .init(category: .incompleteOutput)))
@@ -980,7 +1099,7 @@ enum StockSageLocalModelServer {
     static func complete(_ c: Config, isOllama: Bool, system: String, user: String,
                          maxTokens: Int = 170, contextTokens: Int = 4096,
                          timeout: TimeInterval = 90,
-                         stillValid: @MainActor () -> Bool = { true }) async -> Swift.Result<String, ServerError> {
+                         stillValid: @escaping @MainActor () -> Bool = { true }) async -> Swift.Result<String, ServerError> {
         await completeDetailed(c, isOllama: isOllama, system: system, user: user,
             maxTokens: maxTokens, contextTokens: contextTokens, timeout: timeout, stillValid: stillValid)
             .map(\.text).mapError(\.legacyError)
