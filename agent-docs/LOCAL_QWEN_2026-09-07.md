@@ -1,5 +1,7 @@
 # Local fine-tuned Qwen — installed and connected
 
+> Historical snapshot (2026-09-07): this document describes the Saleh-host Qwen3.8 27B MLX conversion and serving snapshot. Present-tense configuration and hardware statements below are dated evidence, not the current host or runtime. The September 14 audit used Qwen3.5-9B MLX 6-bit on an Apple M5 Pro with 24 GB; local and remote loaded context must be verified separately. See current `HANDOFF.md` and the single colored audit report.
+
 Owner explicitly approved conversion and server startup at01:41 +03. This is
 the owner's existing fine-tune, not a newly downloaded base model. No cloud
 service, public listener, credential change or automatic trade was enabled.

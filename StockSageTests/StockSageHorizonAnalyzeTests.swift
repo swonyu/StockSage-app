@@ -80,6 +80,7 @@ struct StockSageHorizonAnalyzeTests {
     private func run(listing: Research.Listing = StockSageHorizonAnalyzeTests.listing(),
                      history: Data = StockSageHorizonAnalyzeTests.historyPayload(),
                      historyStatus: Int = 200,
+                     news: StockSageNewsService.Observation? = nil,
                      isOllama: Bool = true,
                      horizon: Research.Horizon = .week,
                      allowed: @escaping @MainActor () -> Bool = { true },
@@ -108,11 +109,66 @@ struct StockSageHorizonAnalyzeTests {
                 StockSageBenzinga.Snapshot(symbol: symbol, capturedAt: at,
                                            credentialGeneration: nil, pages: [])
             },
-            newsObservation: { _, _, _ in StockSageNewsService.Observation(attempts: []) },
+            newsObservation: { _, _, _ in news ?? StockSageNewsService.Observation(attempts: []) },
             evidenceIsCurrent: { _ in true })
     }
 
+    @Test func coverageMapsLastHorizonCitationToItsExactOfferedSlot() async throws {
+        let result = await run(model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            let user = try #require(messages.last?["content"])
+            let last = try #require(user.split(separator: "\n").last { $0.hasPrefix("F") })
+            let reference = String(try #require(last.split(separator: ":").first))
+            let verdict = try JSONSerialization.data(withJSONObject: ["evidence": [reference], "action": "Hold",
+                "reason": "Mixed evidence", "risk": "Uncertain outlook"])
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["message": ["content": String(decoding: verdict, as: UTF8.self)], "done_reason": "stop"]), request)
+        })
+        #expect(result.verdict != nil)
+        let coverage = try #require(result.evidenceCoverage)
+        #expect(coverage.symbol == "ACME")
+        #expect(coverage.offeredKeys.count == result.facts.count)
+        #expect(coverage.citedKeys == ["horizon.return.14"])
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("earnings"))
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("news.status"))
+    }
+
+    @Test func oversizedMandatorySourceStatePreventsModelDispatch() async {
+        // Deliberately malformed oversized input at an injected boundary; no external client runs.
+        let attempts = Array(repeating: StockSageNewsService.Attempt(provider: .massive, checkedAt: Date(),
+            status: .notChecked(.notRequested)), count: 250)
+        var calls = 0
+        let result = await run(news: .init(attempts: attempts), model: { request in
+            calls += 1
+            return Self.ok(Self.verdictPayload(), request)
+        })
+        #expect(calls == 0 && result.verdict == nil)
+        #expect(result.note.contains("mandatory source or horizon fact"))
+    }
+
     // MARK: The path runs, and what it sends is bounded
+
+    @Test(arguments: ["ETF", "CS"])
+    func productionPathPreservesProviderIdentityAndChecksApplicability(_ type: String) async throws {
+        let listing = Research.Listing(ticker: "ACME", name: "Fixture", market: "stocks", locale: "us",
+                                       active: true, type: type, currency_name: "usd", primary_exchange: "XNYS")
+        var sentUser = ""
+        let result = await run(listing: listing, model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            sentUser = messages.last?["content"] ?? ""
+            let draft = #"{"evidence":["F1"],"action":"Hold","reason":"Earnings will beat expectations","risk":"Market risk"}"#
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                "message": ["content": draft], "done_reason": "stop"]), request)
+        })
+        #expect(sentUser.contains("provider type " + type))
+        #expect(sentUser.components(separatedBy: "Instrument identity from Massive").count == 2)
+        #expect(result.referenceClose != nil)
+        if type == "ETF" {
+            #expect(result.verdict == nil)
+            #expect(result.validationFailure == "instrumentApplicability")
+        } else { #expect(result.verdict != nil) }
+    }
 
     @Test func lmStudioResearchConstrainsTheRequiredAnswerShape() async throws {
         var dispatched = false
@@ -131,9 +187,12 @@ struct StockSageHorizonAnalyzeTests {
             let ids = try #require(items["enum"] as? [String])
             #expect(ids.first == "F1" && !ids.contains("W1"))
             let reason = try #require(properties["reason"] as? [String: Any])
-            let pattern = try #require(reason["pattern"] as? String)
-            #expect("Qualitative case".range(of: pattern, options: .regularExpression) != nil)
-            #expect("Gains of 50%".range(of: pattern, options: .regularExpression) == nil)
+            #expect(reason["type"] as? String == "string")
+            #expect(reason["minLength"] as? Int == 1)
+            #expect(reason["maxLength"] as? Int == 600)
+            #expect(reason["pattern"] as? String == StockSageAIAssessment.qualitativeProsePattern)
+            let messages = try #require(object["messages"] as? [[String: String]])
+            #expect(messages.contains { $0["role"] == "system" && ($0["content"]?.contains("ANY script") ?? false) })
             throw URLError(.cancelled) // No inventory or real network needed for this request-boundary test.
         })
         #expect(dispatched)
@@ -214,6 +273,8 @@ struct StockSageHorizonAnalyzeTests {
                                   contextTokens: Server.researchContextTokens))
         #expect(result.model == Server.defaultModel)
         #expect(!result.facts.isEmpty)
+        #expect(result.validationOutcome == .validated)
+        #expect(result.validationFailure == nil)
     }
 
     // The horizon facts define the requested holding period and the reference entry. They are
@@ -235,6 +296,10 @@ struct StockSageHorizonAnalyzeTests {
         #expect(sentSystem.contains("historical windows are background evidence"))
         #expect(sentUser.contains(horizon.rawValue))
         #expect(sentUser.localizedCaseInsensitiveContains("Research only"))
+        #expect(sentUser.contains("Holding-risk calendar"))
+        #expect(sentUser.contains("Current captured event timing")
+                || sentUser.contains("Captured event timing is unknown"))
+        #expect(sentUser.localizedCaseInsensitiveContains("not proof of no events"))
     }
 
     // MARK: Honest failure, never a fabricated opinion
@@ -248,12 +313,28 @@ struct StockSageHorizonAnalyzeTests {
         let result = await run(model: { Self.ok(truncated, $0) })
         #expect(result.verdict == nil, "a truncated answer became a published opinion")
         #expect(result.note.localizedCaseInsensitiveContains("output limit"))
+        #expect(result.validationOutcome == .unknown)
+        #expect(result.validationFailure == nil)
     }
 
     @Test func aModelFailureYieldsNoOpinionAndSaysSo() async throws {
         let result = await run(model: { _ in throw URLError(.timedOut) })
         #expect(result.verdict == nil)
         #expect(result.note.localizedCaseInsensitiveContains("no verified opinion"))
+        #expect(result.validationOutcome == .unknown)
+        #expect(result.validationFailure == nil)
+    }
+
+    @Test func anInvalidNumericClaimIsMarkedRejectedWithTheValidatorReason() async throws {
+        let invalid = try! JSONSerialization.data(withJSONObject: [
+            "model": Server.defaultModel,
+            "message": ["content": #"{"evidence":["F1"],"action":"Hold","reason":"Expected profit 999%","risk":"The setup can reverse."}"#],
+            "done_reason": "stop",
+        ])
+        let result = await run(model: { Self.ok(invalid, $0) })
+        #expect(result.verdict == nil)
+        #expect(result.validationOutcome == .rejected)
+        #expect(result.validationFailure == StockSageAIAssessment.ValidationFailure.foreignNumber.rawValue)
     }
 
     @Test func anUnparseableAnswerYieldsNoOpinion() async throws {
@@ -265,6 +346,8 @@ struct StockSageHorizonAnalyzeTests {
         let result = await run(model: { Self.ok(garbage, $0) })
         #expect(result.verdict == nil)
         #expect(result.note.localizedCaseInsensitiveContains("no verified opinion"))
+        #expect(result.validationOutcome == .rejected)
+        #expect(result.validationFailure == StockSageAIAssessment.ValidationFailure.malformedJSON.rawValue)
     }
 
     // MARK: Gates that must stop the request before it ever reaches the model
@@ -276,6 +359,8 @@ struct StockSageHorizonAnalyzeTests {
         #expect(!called, "a non-USD listing reached the model")
         #expect(result.verdict == nil)
         #expect(result.note.localizedCaseInsensitiveContains("usd"))
+        #expect(result.validationOutcome == .unknown)
+        #expect(result.validationFailure == nil)
     }
 
     @Test func anUnsupportedTickerIsNeverAnalysed() async throws {

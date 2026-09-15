@@ -165,35 +165,31 @@ enum StockSageLocalModelServer {
     static let defaultURL = "http://127.0.0.1:11434"
     static let defaultModel = "qwen3.8"
 
-    /// Context window declared by the EVIDENCE-HEAVY callers (paper research, horizon research,
-    /// AI assessment, Catalyst explanations). Conversational Chat keeps the owner's 4,096
-    /// interactive target, which its own prompt budget already fits inside.
+    /// Client context target for evidence-heavy research callers. Chat declares its own
+    /// 32,768 target. These are input/output budgets, not verified server allocations.
+    /// Research compiles up to 12,000 UTF-8 bytes; 4,096 could not hold that evidence plus
+    /// instructions and output. The Ollama path sends this target as `num_ctx`; the
+    /// OpenAI-compatible path does not configure the model's load-time context.
     ///
-    /// Why this is not 4,096: those callers compile up to 12,000 UTF-8 bytes of facts, and
-    /// `chatRequest` sends `contextTokens` to Ollama verbatim as `num_ctx`. Declaring 4,096 while
-    /// sending 12,000 bytes meant the server silently truncated evidence — mandatory execution
-    /// facts, cash constraints and risk disclosures could fall off the end with nothing reported.
-    /// 16,384 leaves every one of those callers' existing 12,000-byte budgets fitting whole.
+    /// Dated observations differ: the September 10 probe reported 262,144 and accepted
+    /// a 24,206-byte prompt as 11,015 units. On September 14 this M5 Pro/24 GB host's
+    /// Qwen3.5-9B MLX load reported 71,680 after a 16,384 request. A separate remote
+    /// instance reported 262,144. None guarantees a later local or remote allocation;
+    /// verify the actual model, device and loaded context before inference.
     ///
-    /// Measured 2026-09-10 (receipts in `StockSage-harness-20260910.opus/`): LM Studio auto-fits
-    /// this model to a 262,144 runtime window regardless of the requested value, and accepted a
-    /// single 24,206-byte prompt as 11,015 units, so 16,384 is well inside the served capacity.
-    /// This is a REQUEST target, not a claim about the model's maximum or the server's allocation.
-    ///
-    /// COST OF RAISING IT, derived from the model's own config rather than assumed: this is a
-    /// HYBRID architecture — `full_attention_interval` 4 over 64 layers, so only 16 layers hold
-    /// a KV cache that grows with context; the other 48 are linear-attention (Gated DeltaNet)
-    /// layers whose state is constant-size regardless of context length. With 4 KV heads and a
-    /// 256 head dim, the growing part is 2 (K and V) x 16 layers x 4 heads x 256 dim = 32,768
-    /// elements per token, and the config's dtype is bfloat16, so at 2 bytes each that is
-    /// 64 KiB per token. 4,096 -> 16,384 therefore costs about 768 MiB, or about 384 MiB if the
-    /// server keeps an 8-bit KV cache. Negligible on this 48 GB machine.
-    ///
-    /// Scope of that derivation: it is the ARCHITECTURE's cost, not a measurement of any server.
-    /// A runtime that ignored the hybrid layout and allocated KV uniformly across all 64 layers
-    /// would pay roughly 4x more (~3 GiB), and LM Studio — which clamps this model to its own
-    /// 262,144 window regardless of the requested value — may not track `num_ctx` at all. The
-    /// conclusion holds either way at this scale; the arithmetic bounds the honest case.
+    /// Config-derived estimate, NOT measured allocation: the audited artifact is
+    /// mlx-community/Qwen3.5-9B-6bit, config SHA256
+    /// 6d92400233a58e9ea0e61198aeaee4ef671e9ad2bed4658066a547e3149edbe8.
+    /// Its text config has 32 layers, with 8 labelled full_attention (interval 4),
+    /// 4 KV heads, head_dim 256 and dtype bfloat16. An idealized growing KV cache is
+    /// 2 (K/V) x 8 layers x 4 heads x 256 elements x 2 bytes = 32 KiB/token.
+    /// A 4,096 -> 16,384 increase would add 384 MiB at bf16, or 192 MiB with a
+    /// hypothetical 8-bit KV cache. The artifact's 6-bit WEIGHT quantization does not
+    /// establish KV precision. Uniform allocation across all 32 layers would instead
+    /// add 1.5 GiB at bf16. These estimates exclude linear-attention state, weights,
+    /// vision, work buffers and allocator overhead; they predict neither total usage
+    /// nor LM Studio's actual allocation. They do not apply to the Ollama qwen3.8 tag
+    /// or a different local/remote model. Source receipts: September 14 audit report.
     nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
@@ -579,7 +575,9 @@ enum StockSageLocalModelServer {
                     "name": "assessment", "strict": true, "schema": schema]]
             }
         }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        // Stable nested schema/property order permits backend grammar-cache reuse.
+        // This is deterministic serialization, not a claim of faster token decoding.
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
     }
 
@@ -587,7 +585,49 @@ enum StockSageLocalModelServer {
     nonisolated enum Finish: String, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
     nonisolated enum FailureCategory: String, Sendable {
         case invalidConfig, unavailable, modelMissing, unsupportedModel, nonHTTP, http, malformedJSON, responseShape, missingContent, emptyContent
-        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge, contextBudget, incompleteOutput
+        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge, contextBudget, incompleteOutput, degenerateOutput
+    }
+    /// A bounded, deterministic reason for rejecting an obviously cyclic model answer. This is
+    /// deliberately narrower than word-frequency filtering: repeated legitimate terms in a
+    /// sentence or a list remain valid unless a contiguous token sequence dominates the answer.
+    nonisolated enum DegenerateReason: String, Sendable {
+        case repeatedTokenSequence
+        case repeatedCharacterRun
+    }
+    /// One safe observation for one actual model POST. This carries no URL, headers, request
+    /// object, lifecycle token or server error string. Text fields are capped before the callback
+    /// receives them, so a receipt sink cannot accidentally retain an unbounded body.
+    nonisolated enum ModelAttemptStage: String, Sendable {
+        case started, finished
+    }
+    nonisolated struct ModelAttemptEvent: Sendable, Equatable {
+        let callID: UUID
+        let ordinal: Int
+        let phase: String
+        let stage: ModelAttemptStage
+        let startedAt: Date
+        let endedAt: Date?
+        let model: String
+        let isOllama: Bool
+        let outputLimit: Int
+        let contextTokens: Int
+        let temperature: Double
+        let schema: String?
+        let schemaBytes: Int?
+        let schemaTruncated: Bool
+        let system: String
+        let user: String
+        let systemBytes: Int
+        let userBytes: Int
+        let systemTruncated: Bool
+        let userTruncated: Bool
+        let body: String?
+        let statusCode: Int?
+        let responseBytes: Int?
+        let bodyTruncated: Bool
+        let finish: Finish
+        let category: FailureCategory?
+        let elapsedMilliseconds: Int
     }
     nonisolated struct Diagnostic: Sendable, Equatable {
         var category: FailureCategory? = nil
@@ -599,6 +639,7 @@ enum StockSageLocalModelServer {
         var promptTokens: Int? = nil
         var completionTokens: Int? = nil
         var malformedUsage = false
+        var degenerateReason: DegenerateReason? = nil
         var outputLimitRetries = 0
         /// How many OTHER model requests were already running when this one started.
         /// 0 means this request had the local model to itself. Non-zero is the measurement the
@@ -612,7 +653,7 @@ enum StockSageLocalModelServer {
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries)"
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) degenerate=\(degenerateReason?.rawValue ?? "none") elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries)"
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -633,6 +674,38 @@ enum StockSageLocalModelServer {
     }
     typealias CompletionResult = Swift.Result<Completion, CompletionFailure>
     nonisolated static func boundedCount(_ value: Int) -> Int { min(max(value, 0), 16_777_216) }
+    nonisolated static let observerPayloadBytes = 24_000
+
+    private nonisolated struct BoundedObserverText: Sendable {
+        let value: String
+        let bytes: Int
+        let truncated: Bool
+    }
+
+    private nonisolated static func boundedObserverText(_ value: String) -> BoundedObserverText {
+        let originalBytes = value.utf8.count
+        var bounded = String(decoding: value.utf8.prefix(observerPayloadBytes), as: UTF8.self)
+        // String(decoding:) replaces a split scalar with U+FFFD (three bytes), which can make
+        // the resulting value exceed the advertised byte cap. Drop the replacement character
+        // (and any other final scalar needed) until the retained UTF-8 is strictly bounded.
+        while bounded.utf8.count > observerPayloadBytes { bounded.removeLast() }
+        return .init(value: bounded, bytes: boundedCount(originalBytes),
+                     truncated: originalBytes > observerPayloadBytes)
+    }
+
+    private nonisolated static func boundedObserverBody(_ data: Data) -> BoundedObserverText? {
+        guard !data.isEmpty else { return nil }
+        let text = boundedObserverText(String(decoding: data.prefix(observerPayloadBytes), as: UTF8.self))
+        return .init(value: text.value, bytes: boundedCount(data.count),
+                     truncated: data.count > observerPayloadBytes || text.truncated)
+    }
+
+    private nonisolated static func boundedObserverSchema(_ c: Config, isOllama: Bool, jsonSchema: Data?) -> BoundedObserverText? {
+        guard c.isLMStudio9B, !isOllama, let jsonSchema,
+              let object = try? JSONSerialization.jsonObject(with: jsonSchema),
+              let canonical = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
+        return boundedObserverText(String(decoding: canonical, as: UTF8.self))
+    }
 
     // MARK: In-flight observation
     //
@@ -703,6 +776,7 @@ enum StockSageLocalModelServer {
         case .responseTooLarge:                 return .tooLarge
         case .contextBudget:                    return .contextBudget
         case .incompleteOutput:                 return .unfinished
+        case .degenerateOutput:                 return .unreadable
         case .emptyContent, .missingContent:    return .emptyAnswer
         case .malformedJSON, .responseShape:    return .unreadable
         case .none:                             return .unknown
@@ -733,6 +807,54 @@ enum StockSageLocalModelServer {
         case .toolCall: return "The model requested a tool call instead of completing its answer."
         case .unknown, .malformed: return "The model did not report a valid completion state."
         }
+    }
+
+    /// Detect only a strongly dominant contiguous cycle or character run in a bounded prefix of
+    /// model text. Token cycles are limited to unstructured whole-answer output: a JSON-object
+    /// prefix can contain a legitimate repeated F-reference tail, so only the character-run guard
+    /// applies there.
+    ///
+    /// This is intentionally conservative. A single repeated word is considered degenerate only
+    /// after eight repetitions; longer cycles need five repetitions and at least 75% of the
+    /// inspected answer. The strict research schema is the only caller that enables this check,
+    /// so conversational partial-output semantics are unchanged.
+    nonisolated static func degenerateOutputReason(in text: String) -> DegenerateReason? {
+        let bounded = String(decoding: text.utf8.prefix(8_192), as: UTF8.self)
+        let scalars = Array(bounded.unicodeScalars)
+        if scalars.count >= 48 {
+            var run = 1
+            for index in 1..<scalars.count {
+                run = scalars[index] == scalars[index - 1] ? run + 1 : 1
+                if run >= 48 { return .repeatedCharacterRun }
+            }
+        }
+        guard !bounded.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") else { return nil }
+        let tokens = bounded.split { !$0.isLetter && !$0.isNumber }
+        guard tokens.count >= 16 else { return nil }
+        let maxCycleLength = min(8, tokens.count / 4)
+        let maxStart = min(64, tokens.count - 16)
+        for cycleLength in 1...maxCycleLength {
+            let minimumRepeats = cycleLength == 1 ? 8 : 5
+            let minimumRegion = max(16, cycleLength * minimumRepeats)
+            guard minimumRegion <= tokens.count else { continue }
+            for start in 0...maxStart {
+                guard start + minimumRegion <= tokens.count else { continue }
+                let sequence = Array(tokens[start..<(start + cycleLength)])
+                var repeats = 1
+                while start + (repeats + 1) * cycleLength <= tokens.count {
+                    let next = Array(tokens[(start + repeats * cycleLength)..<(start + (repeats + 1) * cycleLength)])
+                    guard next == sequence else { break }
+                    repeats += 1
+                }
+                let repeatedTokens = repeats * cycleLength
+                let remainingTokens = tokens.count - start
+                if repeats >= minimumRepeats, repeatedTokens >= 16,
+                   Double(repeatedTokens) / Double(remainingTokens) >= 0.75 {
+                    return .repeatedTokenSequence
+                }
+            }
+        }
+        return nil
     }
 
     private nonisolated static func tokenCount(_ value: Any?) -> Int? {
@@ -821,7 +943,7 @@ enum StockSageLocalModelServer {
     }
 
     /// Shared transport seam; injected transport is for deterministic offline tests only.
-    static func completeDetailed(_ c: Config, isOllama: Bool, system: String, user: String,
+    @MainActor static func completeDetailed(_ c: Config, isOllama: Bool, system: String, user: String,
                                  maxTokens: Int = 170, contextTokens: Int = 4096,
                                  timeout: TimeInterval = 90,
                                  jsonSchema: Data? = nil,
@@ -829,7 +951,9 @@ enum StockSageLocalModelServer {
                                  externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed },
                                  transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
                                  clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
-                                 sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }) async -> CompletionResult {
+                                 sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) },
+                                 phase: String = "model",
+                                 attemptObserver: (@MainActor @Sendable (ModelAttemptEvent) -> Void)? = nil) async -> CompletionResult {
         let lifecycle = lifecycleRevision
         let requestSession = session
         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
@@ -853,7 +977,41 @@ enum StockSageLocalModelServer {
         var concurrent = 0
         let deadline = clock().advanced(by: .seconds(timeout))
         var outputLimit = maxTokens
+        let observerPhase = boundedObserverText(phase)
+        let observerModel = boundedObserverText(c.model)
+        let observerSystem = boundedObserverText(system)
+        let observerUser = boundedObserverText(user)
+        let observerSchema = boundedObserverSchema(c, isOllama: isOllama, jsonSchema: jsonSchema)
         for attempt in 0...1 {
+            let callID = UUID()
+            var attemptStartedAt = Date()
+            var attemptStart = DispatchTime.now()
+            var transportStarted = false
+            var terminalObserved = false
+            func observeAttempt(stage: ModelAttemptStage, body: Data? = nil, statusCode: Int? = nil,
+                                finish: Finish = .absent, category: FailureCategory? = nil) {
+                guard transportStarted, let attemptObserver else { return }
+                if stage == .finished {
+                    guard !terminalObserved else { return }
+                    terminalObserved = true
+                }
+                let elapsed = Int((DispatchTime.now().uptimeNanoseconds &- attemptStart.uptimeNanoseconds) / 1_000_000)
+                let observerBody = body.flatMap(boundedObserverBody)
+                attemptObserver(.init(callID: callID, ordinal: attempt, phase: observerPhase.value, stage: stage,
+                    startedAt: attemptStartedAt, endedAt: stage == .finished ? Date() : nil, model: observerModel.value,
+                    isOllama: isOllama, outputLimit: boundedCount(outputLimit),
+                    contextTokens: boundedCount(contextTokens), temperature: 0.2,
+                    schema: observerSchema?.value, schemaBytes: observerSchema.map(\.bytes),
+                    schemaTruncated: observerSchema?.truncated ?? false,
+                    system: observerSystem.value, user: observerUser.value,
+                    systemBytes: observerSystem.bytes, userBytes: observerUser.bytes,
+                    systemTruncated: observerSystem.truncated, userTruncated: observerUser.truncated,
+                    body: observerBody?.value,
+                    statusCode: statusCode.flatMap { (100...599).contains($0) ? $0 : nil },
+                    responseBytes: body.map { boundedCount($0.count) }, bodyTruncated: observerBody?.truncated ?? false,
+                    finish: finish, category: category,
+                    elapsedMilliseconds: boundedCount(elapsed)))
+            }
             func failed(_ failure: CompletionFailure) -> CompletionResult {
                 var diagnostic = failure.diagnostic
                 diagnostic.outputLimitRetries = attempt
@@ -872,31 +1030,46 @@ enum StockSageLocalModelServer {
                         let result: Result<(Data, URLResponse), Error>
                         do {
                             guard lifecycle == lifecycleRevision, !isShuttingDown else { throw CancellationError() }
+                            transportStarted = true
+                            attemptStartedAt = Date()
+                            attemptStart = DispatchTime.now()
+                            observeAttempt(stage: .started)
                             if let transport { result = .success(try await transport(request)) }
                             else { result = .success(try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: maximumResponseBytes)) }
                         } catch { result = .failure(error) }
                         await inFlight.leave()
                         return try result.get()
                     }
-                guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
+                guard lifecycle == lifecycleRevision else {
+                    observeAttempt(stage: .finished, body: data, statusCode: (response as? HTTPURLResponse)?.statusCode,
+                                   category: .cancelled)
+                    return failed(.init(diagnostic: .init(category: .cancelled)))
+                }
                 if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
+                    observeAttempt(stage: .finished, body: data, statusCode: (response as? HTTPURLResponse)?.statusCode,
+                                   category: failure.diagnostic.category)
                     return failed(failure)
                 }
+                let responseStatus = (response as? HTTPURLResponse)?.statusCode
                 guard data.count <= maximumResponseBytes else {
+                    observeAttempt(stage: .finished, body: data, statusCode: responseStatus, category: .responseTooLarge)
                     return failed(.init(diagnostic: .init(category: .responseTooLarge,
                         bodyBytes: boundedCount(data.count), oversizedBody: true)))
                 }
                 guard let http = response as? HTTPURLResponse else {
+                    observeAttempt(stage: .finished, body: data, category: .nonHTTP)
                     return failed(.init(diagnostic: .init(category: .nonHTTP, bodyBytes: boundedCount(data.count),
                                                             oversizedBody: data.count > 1_048_576)))
                 }
                 guard (200..<300).contains(http.statusCode) else {
-                    // Preserve the legacy model-missing detection; never retain/emit the body.
+                    // Preserve the legacy model-missing detection; the observer receives only a
+                    // bounded body prefix and never the unbounded response.
                     let missing = (String(data: data, encoding: .utf8) ?? "").lowercased().contains("not found")
                     let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                     let code = (object?["error"] as? [String: Any])?["code"] as? String
                     let category: FailureCategory = (missing || code == "model_not_found") ? .modelMissing
                         : (code == "unsupported_model" ? .unsupportedModel : .http)
+                    observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, category: category)
                     return failed(.init(diagnostic: .init(category: category,
                         httpStatus: (100...599).contains(http.statusCode) ? http.statusCode : nil,
                         bodyBytes: boundedCount(data.count), oversizedBody: data.count > 1_048_576)))
@@ -911,10 +1084,26 @@ enum StockSageLocalModelServer {
                         stripLatestSuffix($0) != stripLatestSuffix(c.model)
                     } ?? c.isLMStudio9B
                     if identityMismatch {
+                        observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, finish: reply.diagnostic.finish,
+                                       category: .responseShape)
                         return failed(.init(diagnostic: .init(category: .responseShape,
                                                                 httpStatus: http.statusCode,
                                                                 concurrentRequests: concurrent,
                                                                 elapsedMilliseconds: elapsedMilliseconds())))
+                    }
+                    // A strict schema response that is clearly cycling is unusable. Reject it
+                    // before the one permitted length recovery so a known junk tail cannot spend
+                    // a second generation attempt. Identity remains the earlier gate, and this
+                    // path is schema-only so generic Chat keeps its partial-output contract.
+                    if c.isLMStudio9B, jsonSchema != nil,
+                       let reason = degenerateOutputReason(in: reply.text) {
+                        var diagnostic = reply.diagnostic
+                        diagnostic.category = .degenerateOutput
+                        diagnostic.degenerateReason = reason
+                        diagnostic.httpStatus = http.statusCode
+                        observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, finish: diagnostic.finish,
+                                       category: .degenerateOutput)
+                        return failed(.init(diagnostic: diagnostic))
                     }
                     // One same-evidence restart for a confirmed output limit, never a continuation
                     // stitched onto an unfinished verdict. Reserve the extra output before sending;
@@ -922,6 +1111,7 @@ enum StockSageLocalModelServer {
                     if c.isLMStudio9B, attempt == 0, reply.diagnostic.finish == .tokenLimit,
                        (1...512).contains(maxTokens), clock() < deadline,
                        promptFits(system: system, user: user, outputTokens: maxTokens * 2, contextTokens: contextTokens) {
+                        observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, finish: reply.diagnostic.finish)
                         outputLimit = maxTokens * 2
                         continue
                     }
@@ -935,16 +1125,32 @@ enum StockSageLocalModelServer {
                         var diagnostic = reply.diagnostic
                         diagnostic.category = .incompleteOutput
                         diagnostic.httpStatus = http.statusCode
+                        observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, finish: diagnostic.finish,
+                                       category: .incompleteOutput)
                         return failed(.init(diagnostic: diagnostic))
                     }
                     if c.isLMStudio9B {
                         let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"),
                             transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
-                        guard clock() < deadline else { return failed(.init(diagnostic: .init(category: .timeout))) }
-                        guard lifecycle == lifecycleRevision else { return failed(.init(diagnostic: .init(category: .cancelled))) }
-                        if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return failed(failure) }
+                        guard clock() < deadline else {
+                            observeAttempt(stage: .finished, body: data, statusCode: http.statusCode,
+                                           finish: reply.diagnostic.finish, category: .timeout)
+                            return failed(.init(diagnostic: .init(category: .timeout)))
+                        }
+                        guard lifecycle == lifecycleRevision else {
+                            observeAttempt(stage: .finished, body: data, statusCode: http.statusCode,
+                                           finish: reply.diagnostic.finish, category: .cancelled)
+                            return failed(.init(diagnostic: .init(category: .cancelled)))
+                        }
+                        if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) {
+                            observeAttempt(stage: .finished, body: data, statusCode: http.statusCode,
+                                           finish: reply.diagnostic.finish, category: failure.diagnostic.category)
+                            return failed(failure)
+                        }
                         guard let inventory, let model = reply.model,
                               let context = verifiedContext(inventory, model: model), context >= contextTokens else {
+                            observeAttempt(stage: .finished, body: data, statusCode: http.statusCode,
+                                           finish: reply.diagnostic.finish, category: .contextBudget)
                             return failed(.init(diagnostic: .init(category: .contextBudget)))
                         }
                     }
@@ -953,14 +1159,19 @@ enum StockSageLocalModelServer {
                     diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                     diagnostic.concurrentRequests = concurrent
                     diagnostic.outputLimitRetries = attempt
+                    observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, finish: diagnostic.finish)
                     return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))
                 case .failure(let failure):
                     var diagnostic = failure.diagnostic
                     diagnostic.httpStatus = http.statusCode
+                    observeAttempt(stage: .finished, body: data, statusCode: http.statusCode, finish: diagnostic.finish,
+                                   category: diagnostic.category)
                     return failed(.init(diagnostic: diagnostic))
                 }
             } catch {
-                return failed(transportFailure(error))
+                let failure = transportFailure(error)
+                observeAttempt(stage: .finished, category: failure.diagnostic.category)
+                return failed(failure)
             }
         }
         return .failure(.init(diagnostic: .init(category: .incompleteOutput)))

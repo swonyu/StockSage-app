@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StockSage
 
 // Pure-part tests for the local-server (Ollama / LM Studio) client behind the Catalysts tab's
@@ -12,6 +13,26 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
+    @Test func equivalentSchemasProduceIdenticalWireRequests() throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let schemas = [
+            Data(#"{"type":"object","properties":{"risk":{"type":"string"},"reason":{"type":"string"}}}"#.utf8),
+            Data(#"{"properties":{"reason":{"type":"string"},"risk":{"type":"string"}},"type":"object"}"#.utf8)
+        ]
+        let requests = schemas.map { S.chatRequest(config, system: "unchanged instructions",
+            user: "unchanged facts", isOllama: false, maxTokens: 192, jsonSchema: $0) }
+        let first = try #require(requests[0].httpBody)
+        #expect(first == requests[1].httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: first) as? [String: Any])
+        #expect(body["max_tokens"] as? Int == 192)
+        #expect(body["response_format"] != nil)
+    }
+
+    private static func ok(_ object: [String: Any], _ request: URLRequest) throws -> (Data, URLResponse) {
+        (try JSONSerialization.data(withJSONObject: object),
+         HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func totalDeadlineAndCancellationSettleBeforeAnUncooperativeTransport(cancel: Bool) async throws {
         let config = try #require(S.config(url: "http://127.0.0.1:8765", model: "fixture"))
@@ -19,10 +40,12 @@ struct StockSageLocalModelServerTests {
         var wire: CheckedContinuation<(Data, URLResponse), Error>?
         var timer: CheckedContinuation<Void, Error>?
         var settled = false
+        let events = Mutex<[S.ModelAttemptEvent]>([])
         let task = Task { @MainActor in
             let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
                 transport: { _ in try await withCheckedThrowingContinuation { wire = $0 } },
-                clock: { instant }, sleepUntil: { _ in try await withCheckedThrowingContinuation { timer = $0 } })
+                clock: { instant }, sleepUntil: { _ in try await withCheckedThrowingContinuation { timer = $0 } },
+                attemptObserver: { event in events.withLock { $0.append(event) } })
             settled = true
             return result
         }
@@ -42,6 +65,13 @@ struct StockSageLocalModelServerTests {
             #expect(failure.diagnostic.category == (cancel ? .cancelled : .timeout))
         } else { Issue.record("Expected a deadline/cancellation failure") }
         #expect(wire != nil)
+        let captured = events.withLock { $0 }
+        #expect(captured.count == 2)
+        if captured.count == 2 {
+            #expect(captured[0].stage == .started && captured[1].stage == .finished)
+            #expect(captured[0].callID == captured[1].callID)
+            #expect(captured[1].category == (cancel ? .cancelled : .timeout))
+        }
     }
 
     @Test(arguments: [false, true]) @MainActor func resultAfterDeadlineCannotBeatADelayedTimer(throwsError: Bool) async throws {
@@ -108,6 +138,255 @@ struct StockSageLocalModelServerTests {
             return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
         if case .success = result { Issue.record("Wrong model response was accepted under the configured 9B identity") }
+    }
+
+    @Test @MainActor func lmStudioResearchRejectsRepetitiveJunkBeforeLengthRetry() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let schema = Data(#"{"type":"object"}"#.utf8)
+        let junk = String(repeating: "Buy ", count: 8_000)
+        var calls = 0
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+            maxTokens: 192, jsonSchema: schema, transport: { request in
+                calls += 1
+                return try Self.ok(["model": config.model,
+                    "choices": [["message": ["content": junk], "finish_reason": "length"]]], request)
+            }, phase: "research", attemptObserver: { event in events.withLock { $0.append(event) } })
+        guard case .failure(let failure) = result else {
+            Issue.record("repetitive research output was accepted"); return
+        }
+        #expect(calls == 1, "obvious cyclic junk must not spend the length-recovery retry")
+        #expect(failure.diagnostic.category == .degenerateOutput)
+        #expect(failure.diagnostic.degenerateReason == .repeatedTokenSequence)
+        #expect(failure.diagnostic.outputLimitRetries == 0)
+        #expect(failure.diagnostic.summary.contains("degenerate=repeatedTokenSequence"))
+        let captured = events.withLock { $0 }
+        let event = try #require(captured.first)
+        #expect(captured.count == 2 && event.ordinal == 0 && event.phase == "research")
+        #expect(captured.map(\.stage) == [.started, .finished])
+        #expect(event.stage == .started && event.endedAt == nil)
+        if captured.count == 2 {
+            let terminal = captured[1]
+            #expect(terminal.finish == .tokenLimit && terminal.category == .degenerateOutput)
+            #expect(terminal.body?.utf8.count ?? 0 <= S.observerPayloadBytes)
+            #expect(terminal.bodyTruncated && (terminal.responseBytes ?? 0) > S.observerPayloadBytes)
+            #expect(terminal.system.utf8.count <= S.observerPayloadBytes && terminal.user == "facts")
+            #expect(terminal.schema != nil && terminal.schemaBytes == schema.count && !terminal.schemaTruncated)
+            #expect(terminal.contextTokens == 4_096 && terminal.temperature == 0.2)
+            #expect(event.callID == terminal.callID && terminal.endedAt != nil)
+        }
+    }
+
+    @Test func legitimateRepeatedTermsAreNotClassifiedAsDegenerate() {
+        let text = "The report repeats Buy when describing both the bullish Buy case and the cautious Buy case; each use refers to a different context and evidence record."
+        #expect(S.degenerateOutputReason(in: text) == nil)
+        let structured = "{\"risk\": \"" + String(repeating: "F1 ", count: 32) + "\"}"
+        #expect(S.degenerateOutputReason(in: structured) == nil)
+    }
+
+    @Test @MainActor func lmStudioWithoutSchemaLeavesRepeatedChatTextAccepted() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let inventory: [String: Any] = ["models": [[
+            "key": config.model, "type": "llm", "format": "mlx", "architecture": "qwen3_5",
+            "params_string": "9B", "quantization": ["bits_per_weight": 6],
+            "loaded_instances": [["id": config.model, "config": ["context_length": 16_384]]]
+        ]]]
+        let text = String(repeating: "Buy ", count: 128)
+        var calls = 0
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: false, system: "chat", user: "question",
+            transport: { request in
+                if request.url?.path == "/api/v1/models" { return try Self.ok(inventory, request) }
+                calls += 1
+                return try Self.ok(["model": config.model,
+                    "choices": [["message": ["content": text], "finish_reason": "stop"]]], request)
+            }, attemptObserver: { event in events.withLock { $0.append(event) } })
+        let completion = try #require(try? result.get())
+        #expect(completion.text == text.trimmingCharacters(in: .whitespacesAndNewlines) && completion.diagnostic.category == nil)
+        #expect(calls == 1)
+        let captured = events.withLock { $0 }
+        #expect(captured.count == 2)
+        if captured.count == 2 {
+            #expect(captured.map(\.stage) == [.started, .finished])
+            #expect(captured[0].callID == captured[1].callID)
+            #expect(captured.allSatisfy { $0.schema == nil && !$0.schemaTruncated })
+        }
+    }
+
+    @Test @MainActor func structuredRepeatedTailStillGetsUsefulLengthRetry() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let schema = Data(#"{"type":"object"}"#.utf8)
+        let inventory: [String: Any] = ["models": [[
+            "key": config.model, "type": "llm", "format": "mlx", "architecture": "qwen3_5",
+            "params_string": "9B", "quantization": ["bits_per_weight": 6],
+            "loaded_instances": [["id": config.model, "config": ["context_length": 16_384]]]
+        ]]]
+        let tail = #"{"risk":""# + String(repeating: "F1 ", count: 64) + #""}"#
+        let complete = #"{"evidence":["F1"],"action":"Buy","reason":"Support holds.","risk":"The setup can reverse."}"#
+        var calls = 0
+        var maxTokens: [Int] = []
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+            maxTokens: 192, jsonSchema: schema, transport: { request in
+                if request.url?.path == "/api/v1/models" { return try Self.ok(inventory, request) }
+                calls += 1
+                let body = try #require(request.httpBody)
+                let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                maxTokens.append(try #require(object["max_tokens"] as? Int))
+                let content = calls == 1 ? tail : complete
+                let finish = calls == 1 ? "length" : "stop"
+                return try Self.ok(["model": config.model,
+                    "choices": [["message": ["content": content], "finish_reason": finish]]], request)
+            }, phase: "research", attemptObserver: { event in events.withLock { $0.append(event) } })
+        let completion = try #require(try? result.get())
+        #expect(completion.text == complete && calls == 2 && maxTokens == [192, 384])
+        let captured = events.withLock { $0 }
+        #expect(captured.count == 4)
+        if captured.count == 4 {
+            #expect(captured.map(\.stage) == [.started, .finished, .started, .finished])
+            #expect(captured[0].callID == captured[1].callID && captured[2].callID == captured[3].callID)
+            #expect(captured[0].callID != captured[2].callID)
+            #expect(captured[1].category == nil && captured[1].finish == .tokenLimit)
+        }
+    }
+
+    @Test @MainActor func observerPayloadCapDoesNotExpandSplitUTF8() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let system = String(repeating: "a", count: S.observerPayloadBytes - 1) + "é"
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        _ = await S.completeDetailed(config, isOllama: true, system: system, user: "question",
+            contextTokens: 32_768,
+            transport: { request in
+                try Self.ok(["model": config.model, "message": ["content": "ok"], "done_reason": "stop"], request)
+            }, attemptObserver: { event in events.withLock { $0.append(event) } })
+        let event = try #require(events.withLock { $0.first })
+        #expect(event.systemBytes == system.utf8.count)
+        #expect(event.systemTruncated)
+        #expect(event.system.utf8.count <= S.observerPayloadBytes)
+    }
+
+    @Test @MainActor func observerBodyMarksExactCapInvalidUTF8AsTruncated() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        _ = await S.completeDetailed(config, isOllama: true, system: "chat", user: "question",
+            transport: { request in
+                (Data(repeating: 0xFF, count: S.observerPayloadBytes),
+                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }, attemptObserver: { event in events.withLock { $0.append(event) } })
+        let captured = events.withLock { $0 }
+        #expect(captured.count == 2)
+        if captured.count == 2 {
+            #expect(captured[1].bodyTruncated)
+            #expect(captured[1].responseBytes == S.observerPayloadBytes)
+            #expect(captured[1].body?.utf8.count ?? 0 <= S.observerPayloadBytes)
+        }
+    }
+
+    @Test @MainActor func lmStudioResearchStillRetriesUsefulTruncation() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let schema = Data(#"{"type":"object"}"#.utf8)
+        let complete = #"{"evidence":["F1"],"action":"Buy","reason":"The setup has support.","risk":"The setup can reverse."}"#
+        let inventory: [String: Any] = ["models": [[
+            "key": config.model, "type": "llm", "format": "mlx", "architecture": "qwen3_5",
+            "params_string": "9B", "quantization": ["bits_per_weight": 6],
+            "loaded_instances": [["id": config.model, "config": ["context_length": 16_384]]]
+        ]]]
+        var calls = 0
+        var maxTokens: [Int] = []
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+            maxTokens: 192, jsonSchema: schema, transport: { request in
+                if request.url?.path == "/api/v1/models" {
+                    return try Self.ok(inventory, request)
+                }
+                calls += 1
+                let body = try #require(request.httpBody)
+                let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                maxTokens.append(try #require(object["max_tokens"] as? Int))
+                let content = calls == 1 ? "A useful answer with distinct facts and a pending conclusion." : complete
+                let finish = calls == 1 ? "length" : "stop"
+                return try Self.ok(["model": config.model,
+                    "choices": [["message": ["content": content], "finish_reason": finish]]], request)
+            }, phase: "initial", attemptObserver: { event in events.withLock { $0.append(event) } })
+        let completion = try #require(try? result.get())
+        #expect(calls == 2)
+        #expect(maxTokens == [192, 384])
+        #expect(completion.text == complete)
+        #expect(completion.diagnostic.outputLimitRetries == 1)
+        let captured = events.withLock { $0 }
+        #expect(captured.count == 4)
+        guard captured.count == 4 else { return }
+        #expect(captured.map(\.ordinal) == [0, 0, 1, 1])
+        #expect(captured.map(\.stage) == [.started, .finished, .started, .finished])
+        #expect(captured.map(\.outputLimit) == [192, 192, 384, 384])
+        #expect(captured.map(\.finish) == [.absent, .tokenLimit, .absent, .stop])
+        #expect(captured.allSatisfy { $0.category == nil && $0.schema != nil && !$0.schemaTruncated && $0.phase == "initial" })
+        #expect(captured[0].callID == captured[1].callID && captured[2].callID == captured[3].callID)
+        #expect(captured[0].callID != captured[2].callID)
+    }
+
+    @Test @MainActor func genericChatKeepsItsTruncatedPartialOutput() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let text = String(repeating: "Buy ", count: 32)
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: true, system: "chat", user: "question",
+            jsonSchema: Data(#"{"type":"object"}"#.utf8), transport: { request in
+                try Self.ok(["model": config.model, "message": ["content": text], "done_reason": "length"], request)
+            }, attemptObserver: { event in events.withLock { $0.append(event) } })
+        let completion = try #require(try? result.get())
+        #expect(completion.text == text.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(completion.diagnostic.category == nil)
+        #expect(S.rejectsTruncatedOutput(completion))
+        let event = try #require(events.withLock { $0 }.first)
+        #expect(event.schema == nil && !event.schemaTruncated)
+    }
+
+    @Test @MainActor func observerCapturesTransportFailureWithoutRequestSecrets() async throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: true,
+            system: "system secret should remain bounded", user: "user secret should remain bounded",
+            transport: { _ in
+                throw URLError(.timedOut)
+            }, phase: "transport", attemptObserver: { event in events.withLock { $0.append(event) } })
+        guard case .failure(let failure) = result else {
+            Issue.record("expected transport failure"); return
+        }
+        #expect(failure.diagnostic.category == .timeout)
+        let captured = events.withLock { $0 }
+        let event = try #require(captured.first)
+        #expect(captured.count == 2 && event.stage == .started)
+        if captured.count == 2 {
+            let terminal = captured[1]
+            #expect(terminal.category == .timeout && terminal.finish == .absent)
+            #expect(terminal.statusCode == nil && terminal.body == nil && terminal.responseBytes == nil)
+            #expect(terminal.phase == "transport" && terminal.ordinal == 0)
+            #expect(terminal.system.utf8.count <= S.observerPayloadBytes && terminal.user.utf8.count <= S.observerPayloadBytes)
+            #expect(event.callID == terminal.callID && terminal.endedAt != nil)
+        }
+    }
+
+    @Test @MainActor func observerFinishesAResponseRejectedByContextVerification() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let events = Mutex<[S.ModelAttemptEvent]>([])
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+            transport: { request in
+                if request.url?.path == "/api/v1/models" {
+                    return try Self.ok(["models": []], request)
+                }
+                return try Self.ok(["model": config.model,
+                    "choices": [["message": ["content": "A complete answer."], "finish_reason": "stop"]]], request)
+            }, attemptObserver: { event in events.withLock { $0.append(event) } })
+        guard case .failure(let failure) = result else {
+            Issue.record("missing context verification should fail"); return
+        }
+        #expect(failure.diagnostic.category == .contextBudget)
+        let captured = events.withLock { $0 }
+        #expect(captured.count == 2)
+        guard captured.count == 2 else { return }
+        #expect(captured[0].stage == .started && captured[1].stage == .finished)
+        #expect(captured[0].callID == captured[1].callID)
+        #expect(captured[1].category == .contextBudget && captured[1].body != nil)
     }
 
     @Test @MainActor func responseReaderCapsActualBytesNotJustContentLength() async throws {
