@@ -248,7 +248,12 @@ enum StockSageChat {
         let benzingaIDs = Set((snapshot.benzinga?.pages.flatMap(\.records) ?? []).map(\.id))
             .intersection(snapshot.offeredBenzingaIDs ?? [])
         let availableIDs = Set(snapshot.facts.map(\.id) + (snapshot.sources ?? []).map(\.id)).union(benzingaIDs)
-        guard raw.count <= replyCharacterLimit, let data = raw.data(using: .utf8),
+        guard raw.count <= replyCharacterLimit else { return draft }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fence = ["```json\n", "```\n"].first { trimmed.hasPrefix($0) && trimmed.hasSuffix("\n```") }
+        // Only unwrap a complete enclosing code block; content and evidence checks stay unchanged.
+        let json = fence.map { String(trimmed.dropFirst($0.count).dropLast(4)) } ?? raw
+        guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(obj.keys) == ["analysis", "evidence"],
               let analysis = obj["analysis"] as? String, !analysis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

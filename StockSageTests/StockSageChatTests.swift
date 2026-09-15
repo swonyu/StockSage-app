@@ -1614,6 +1614,34 @@ struct StockSageChatTests {
         }
     }
 
+    @Test func oneEnclosingJSONFencePreservesTheReplyWithoutWeakeningValidation() throws {
+        let facts = snapshot([symbol(), symbol("QCOM")])
+        let analysis = "Keep the original \"uncertain\" wording.\nالمصادر محدودة."
+        let ids = ["QCOM.quote", "ORCL.quote"]
+        let data = try JSONSerialization.data(withJSONObject: ["analysis": analysis, "evidence": ids])
+        let json = String(decoding: data, as: UTF8.self)
+        let fenced = "```json\n\(json)\n```"
+        for raw in [fenced, " \n```\n\(json)\n```\n "] {
+            let reply = StockSageChat.reply(raw, snapshot: facts)
+            #expect(reply.text == analysis && reply.evidence == ids)
+            #expect(reply.notice.contains("conclusions not verified"))
+        }
+        for raw in [fenced.replacingOccurrences(of: "QCOM.quote", with: "FOREIGN.quote"),
+                    "Explanation before the answer.\n" + fenced,
+                    fenced + "\nExplanation after the answer.",
+                    "```json\n\(json)```", "```json\(json)\n```",
+                    "```json\n\(json)\n``", "```json\n\(json)",
+                    "```json\n{\"analysis\":\"x\",\"evidence\":[],\"extra\":true}\n```",
+                    "```json\n{\"analysis\":\"  \",\"evidence\":[]}\n```"] {
+            let reply = StockSageChat.reply(raw, snapshot: facts)
+            #expect(reply.text == raw && reply.evidence.isEmpty && reply.notice.contains("Unverified draft"))
+        }
+        let oversized = String(repeating: " ", count: StockSageChat.replyCharacterLimit) + fenced
+        let limited = StockSageChat.reply(oversized, snapshot: facts)
+        #expect(limited.text == String(oversized.prefix(StockSageChat.replyCharacterLimit)))
+        #expect(limited.evidence.isEmpty && limited.notice.contains("Unverified draft"))
+    }
+
     @Test func historyIsBoundedAndLateResultsCannotResurrectDeletedTurns() throws {
         let chat = StockSageChatSession(historyURL: nil)
         let original = try #require(chat.begin(question: "ORCL?", snapshot: snapshot(), model: "qwen"))
