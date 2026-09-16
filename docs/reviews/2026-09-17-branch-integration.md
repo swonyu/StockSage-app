@@ -25,7 +25,7 @@ Uncommitted files, stashes and other worktrees are preserved. This integration d
 - Baseline Mac: 2,765 passed, zero failed, three skipped.
 - The new stale-record regression failed before the correction: captured rows disappeared and the stale label was absent.
 - Integrated Mac after the correction: 2,800 passed, zero failed, three skipped. Receipt: `/private/tmp/stocksage-integrated-mac-20260917.ynZbgF/result.xcresult`.
-- Integrated iOS 27 (iPhone 17 Pro simulator): 2,733 passed, zero failed, three skipped. Receipt: `/private/tmp/stocksage-integrated-ios27-20260917.k1oKkB/result.xcresult`.
+- Integrated iOS 27 (iPhone 17 Pro simulator): 2,734 passed, zero failed, two skipped. Receipt: `/private/tmp/stocksage-integrated-ios27-20260917.k1oKkB/result.xcresult`.
 - Independent read-only source review found no remaining blocker after the correction. `git diff --check` passes.
 
 Native tests run serially using the real test host and the repository's standard exclusions for calibration persistence, live-universe verification and strategy-baseline measurements. They do not activate a research scan or place orders.
