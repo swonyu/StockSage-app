@@ -676,7 +676,7 @@ enum StockSageLocalModelServer {
             body["max_tokens"] = maxTokens
             if c.isLMStudioGemma || c.isRunPodGemma { body["reasoning_effort"] = "none" }
         }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
         if c.requiresStrictOutput, !isOllama, let jsonSchema,
            let schema = try? JSONSerialization.jsonObject(with: jsonSchema),
            var data = request.httpBody, data.last == 0x7D {

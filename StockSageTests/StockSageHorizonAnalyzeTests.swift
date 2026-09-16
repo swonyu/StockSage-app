@@ -269,6 +269,7 @@ struct StockSageHorizonAnalyzeTests {
             return Self.ok(Self.verdictPayload(), $0)
         })
         #expect(result.verdict == nil && result.note.contains("18 daily bars") && result.note.contains("at least 30"))
+        #expect(result.qualityReport?.state == .dataUnavailable && result.inferenceProfile == nil)
     }
 
     @Test func oneCaptureSuppliesTwoDistinctHorizonsAndRejectsChangedOwnershipOrClock() async throws {
@@ -316,9 +317,22 @@ struct StockSageHorizonAnalyzeTests {
             #expect(result.facts.contains(StockSageMassiveEarnings.Window(observation: capture.nextEarnings,
                 asOf: capture.context.asOf, horizon: index == 0 ? .week : .fortnight).fact))
             #expect(receipt.citedKeys.count == result.verdict?.evidence.count)
+            let saved = StockSageResearchHistory.CompletedCheck(listing: Self.listing(), result: result)
+            let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
+            #expect(object["qualityReport"] != nil, "Real assessment quality must survive persistence")
+            #expect(object["inferenceProfile"] != nil, "Real assessment settings must survive persistence")
+            let profile = try #require(result.inferenceProfile)
+            #expect(profile.valid(model: result.model) && profile.packetDigest == receipt.packetDigest)
+            #expect(profile.endpointProfile == .ollama && profile.topP == nil && profile.seed == nil)
+            #expect(profile.initialOutputTokens == 192 && profile.maxOutputTokens == 192)
+            let restored = try JSONDecoder().decode(StockSageResearchHistory.CompletedCheck.self, from: JSONEncoder().encode(saved))
+            #expect(restored.result?.qualityReport == result.qualityReport && restored.result?.inferenceProfile == profile)
+            #expect(restored.result?.factClasses == result.factClasses)
             let id = try #require(result.diagnosticID)
             let entries = await diagnostics.entries(for: id)
             #expect(result.diagnosticsComplete == true && entries.last?.outcome?.state == .accepted)
+            #expect(entries.last?.outcome?.inferenceProfile == result.inferenceProfile)
+            #expect(entries.last?.outcome?.qualityReport == result.qualityReport)
             #expect(entries.allSatisfy { $0.context.symbol == "ACME" && $0.context.horizon == (index == 0 ? 7 : 14) })
             #expect(entries.compactMap(\.attempt).map(\.stage) == [.started, .finished])
         }
@@ -345,10 +359,22 @@ struct StockSageHorizonAnalyzeTests {
         let rejectedEntries = await diagnostics.entries(for: rejectedID)
         #expect(rejected.verdict == nil && rejected.evidenceReceipt != nil && !rejected.facts.isEmpty)
         #expect(rejectedEntries.last?.outcome?.state == .rejected)
+        let rejectedObject = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            StockSageResearchHistory.CompletedCheck(listing: Self.listing(), result: rejected))) as? [String: Any])
+        #expect((rejectedObject["qualityReport"] as? [String: Any])?["state"] as? String == "modelRejected")
         #expect(rejectedEntries.compactMap(\.attempt).last?.responseBody != nil)
+        let replay = await Research.assess(capture, horizon: .week, config: config, isOllama: true,
+            allowed: { true }, modelTransport: { request in
+                #expect(String(decoding: request.httpBody ?? Data(), as: UTF8.self) == prompts[0],
+                        "An unchanged capture/config must produce byte-identical requests")
+                return Self.ok(Self.verdictPayload(), request)
+            }, evidenceIsCurrent: { _ in true })
+        #expect(replay.verdict == results[0].verdict && replay.inferenceProfile == results[0].inferenceProfile)
+        #expect(replay.qualityReport == results[0].qualityReport)
         let staleOwner = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: true, allowed: { true },
             modelTransport: { Issue.record("Obsolete evidence cannot reach the model"); return Self.ok(Self.verdictPayload(), $0) }, evidenceIsCurrent: { _ in false })
         #expect(staleOwner.verdict == nil)
+        #expect(staleOwner.qualityReport?.state == .dataUnavailable && staleOwner.inferenceProfile == nil)
         #expect(!capture.isFresh(at: capture.at.addingTimeInterval(301)))
         #expect(!capture.isFresh(at: capture.at.addingTimeInterval(-1)))
         #expect(!capture.isFresh(at: capture.context.asOf.addingTimeInterval(-0.001)))
@@ -505,6 +531,52 @@ struct StockSageHorizonAnalyzeTests {
         #expect(result.facts.filter { $0.contains("Form 4 sale filed") }.count == 3)
         #expect(result.coverage.first { $0.source == "Massive/SEC Form 4" }?.state == .answered)
         #expect(result.facts.contains { $0.contains("3 retained") && $0.contains("2 omitted") })
+    }
+
+    @Test(arguments: [false, true])
+    func insiderPurchasesAndSalesSurviveRealAssessmentAndRejection(rejected: Bool) async throws {
+        typealias E = StockSageMassiveEvents
+        var transactions: [E.InsiderTransaction] = []
+        let result = await run(insider: { symbol, at in
+            // The query occurs AFTER capture began, as it does with a real provider.
+            let events = [E.InsiderTransaction.Direction.purchase, .sale].enumerated().map { index, direction in
+                let transaction = E.InsiderTransaction(direction: direction,
+                    transactionDate: at.addingTimeInterval(-172_800), filingDate: at.addingTimeInterval(-86_400),
+                    ownerName: "Reported owner \(index)", role: "Director", shares: 100,
+                    pricePerShare: 50, planReported: direction == .sale, amendment: false)
+                transactions.append(transaction)
+                return E.Event(id: "filing-\(index)", symbol: symbol, feed: .insider,
+                    date: transaction.filingDate, headline: "Filed insider \(direction.rawValue)",
+                    details: ["Source reported a \(direction.rawValue)."],
+                    link: URL(string: "https://www.sec.gov/Archives/filing-\(index)"),
+                    transactionIdentity: "transaction-\(index)", insider: transaction)
+            }
+            return .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered,
+                event: events[0], insiderEvents: events, insiderOmittedRecordCount: 1)
+        }, model: { request in
+            if rejected {
+                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
+                    "message": ["content": "invalid research answer"], "done_reason": "stop"]), request)
+            }
+            return Self.ok(Self.verdictPayload(action: "Buy"), request)
+        })
+        #expect((result.verdict == nil) == rejected)
+        #expect(result.insiderTransactions == transactions, "Fresh records queried during capture must not disappear")
+        #expect(result.factClasses.count == result.facts.count)
+        #expect(result.qualityReport?.insiderPurchases == 1 && result.qualityReport?.insiderSales == 1)
+        let saved = StockSageResearchHistory.CompletedCheck(listing: Self.listing(), result: result)
+        let bytes = try JSONEncoder().encode(saved)
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        #expect(object["insiderEvidence"] != nil, "Retain filing identities, links and provider coverage")
+        #expect(result.insiderEvidence?.insiderEvents?.map(\.id) == ["filing-0", "filing-1"])
+        #expect(result.insiderEvidence?.insiderEvents?.allSatisfy { $0.link?.host == "www.sec.gov" } == true)
+        #expect(result.insiderEvidence?.insiderOmittedRecordCount == 1)
+        #expect(try JSONDecoder().decode(StockSageResearchHistory.CompletedCheck.self, from: bytes).result?.insiderTransactions == transactions)
+        if let prediction = saved.prediction {
+            let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(prediction)) as? [String: Any])
+            #expect(object["insiderEvidence"] != nil && object["insiderCoverage"] != nil && object["factClasses"] != nil,
+                    "A saved pick must retain its insider evidence independently of the latest-check cache")
+        }
     }
 
     // The receipt has carried packet identity fields since typed packets existed, but no production
@@ -898,6 +970,10 @@ struct StockSageHorizonAnalyzeTests {
             && receipt.omittedKeys.count == calibration.facts.count - result.facts.count)
         #expect(result.facts.contains { $0.hasPrefix("Earnings holding-window check:") })
         #expect(result.note.contains("optional evidence records were omitted"))
+        let profile = try #require(result.inferenceProfile)
+        #expect(profile.initialOutputTokens == 192 && profile.maxOutputTokens == 384)
+        #expect(profile.retryReason == "outputLimit" && profile.endpointProfile == .lmStudioGemma)
+        #expect(profile.topP == nil && profile.seed == nil && profile.temperature == bodies[0]["temperature"] as? Double)
     }
 
     @Test func aModelFailureYieldsNoOpinionAndSaysSo() async throws {
