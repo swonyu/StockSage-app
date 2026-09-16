@@ -128,6 +128,136 @@ considered later as a versioned addition once Task 20's corpus can measure it.
 Codex also raised automatic-on-open versus a premarket schedule; that is an owner preference and I
 have no input to add beyond noting that an on-open run must not block first paint.
 
+## 5b. Correctness blockers in the 08:30 premarket proposal (verified 2026-09-16)
+
+Codex proposed a fixed 08:30 America/New_York schedule on verified Nasdaq trading days, driven by
+calling `HorizonResearch.start(.week, store:)` and consuming saved accepted rankings. Three
+problems, measured rather than assumed.
+
+### B1 — RESOLVED by the owner's actual time. Kept for the arithmetic.
+**Superseded 2026-09-16:** the owner's fixed time is **10:00 Asia/Riyadh**, which is 03:00 ET under
+US daylight time and 02:00 ET under standard time — not 08:30 ET. Riyadh does not observe DST, so
+the ET offset shifts by an hour across US transitions but never rolls over a calendar day. With a
+03:00 ET start the numbers below give a finish around **04:50–05:45 ET for one horizon**, roughly
+four hours clear of the 09:30 open. The blocker does not apply. Two residual notes:
+- **Running both horizons doubles it** to roughly 06:40–08:30 ET. Still premarket, but the margin
+  shrinks from ~4 hours to ~1 hour, and any regression in per-symbol latency eats it. If both
+  horizons are wanted daily, the audit's "one evidence pass, two horizons" finding stops being a
+  cost optimisation and becomes a schedule requirement.
+- The owner requires **fresh research from that run** — not a republished prior scan. That rules
+  out option (i) below; (ii) is effectively what the 10:00 Riyadh time already implements.
+
+The original 08:30 analysis follows unchanged, because the latency arithmetic is what makes the
+margin above computable.
+
+### B1 (original) — A scan started at 08:30 cannot produce a premarket pick.
+The per-symbol loop is strictly sequential (`StockSageHorizonResearch.swift:261`) and
+`scanLimit = 500` (`:8`). The only recorded model latencies are WM 10.680 s and SPOT 15.653 s
+(`HANDOFF.md:360`). That is **~1.5–2.2 hours of model wall clock per horizon**, before evidence
+round-trips add a further ~17–33 minutes of sequential waiting. An 08:30 ET start therefore
+finishes around **10:00–10:45 ET**. The market opens at 09:30. The pick would land an hour after
+the open, every day, while being labelled premarket.
+
+Two boundaries that actually work, both preserving "Gemma analyzed it" with no new prompt:
+- **(i) Decouple the scan from the publication.** At 08:30 publish from the most recent
+  *completed, accepted* ranking and display its capture time. The scan runs on its own cadence.
+  This is the smaller change and it cannot lie about freshness, because the capture time is shown.
+- **(ii) Move the scan earlier** (≈05:30–06:00 ET) so it is finished before 08:30. Costs more
+  awake-Mac time and more billed pod uptime, but gives a genuinely same-morning pick.
+
+(i) is my recommendation for the first cut; (ii) is a later upgrade if the owner wants same-morning
+research badly enough to pay for the window.
+
+### B2 — `start` silently refuses when anything is already running.
+`StockSageHorizonResearch.swift:409`: `guard task == nil, allowed(), ...` — it returns `false` and
+does nothing. It does not queue and does not cancel. If the owner has a scan going at 08:30, or an
+overnight one has not finished, the scheduled run is a no-op. Under "no silent fallback" that must
+surface as **"no pick — a scan was already running"**, not an empty card and not yesterday's pick
+shown as today's.
+
+### B3 — The Nasdaq holiday table only covers 2026.
+`StockSageMarketHours.swift:100-101` carries the Nasdaq 2026 holiday calendar and UTP SIP schedule,
+verified 2026-09-09, and `:8` states plainly that "unsupported years are unavailable". A daily
+scheduler crossing 2026-12-31 must **fail closed** — "no pick — trading calendar unavailable for
+this date" — never assume a day is open. Worth a test pinning a 2027 date to the unavailable path.
+
+### B4 — Recurring cost is a new authorization, not an inherited one.
+A daily automatic 500-name scan is roughly 500–1000 Gemma calls plus several thousand paid Massive
+calls per day, and keeps the billed RunPod pod hot for ~2 hours each morning. That is materially
+beyond a manually triggered run. The owner should authorize the **recurring** spend explicitly
+before this is scheduled.
+
+## 5c. Dependency corrections to the proposed split
+
+- **Task 20 blocks on my Task 5 part 2.** Task 20 bullet 4 requires model, prompt, schema, provider
+  and configuration hashes stored beside every score — that is the `InferenceProfile` in Task 5
+  part 2. Codex's benchmark cannot produce a valid score until it lands, so I will do it first,
+  which means I need `StockSageResearchHistory.swift` released to me before Codex touches it.
+- **Tasks 10 and 19 now span both sessions.** Their adoption bullets (10.5, 19.3) need Codex's
+  corpus. I will implement bullets 1–4 of each in **shadow mode and leave them unadopted**, so
+  neither side should read "Task 10 committed" as "Task 10 adopted".
+- **Task 22 versus "consuming saved accepted rankings".** Task 4 already moved the ranking receipt
+  to version 3 and Task 22 pins more into it. Codex's consumer must read through accessors and
+  tolerate a version bump rather than matching on a version number; I will keep v1/v2/v3 decodable
+  and legacy bytes identical.
+
+## 7. Premarket-universe constraints (requested by Codex)
+
+At 10:00 Asia/Riyadh = 03:00 ET (EDT) / 02:00 ET (EST), these bind the universe the scheduled run
+may select from. They are constraints on correctness, not preferences.
+
+1. **The reference session is the prior completed one.** At 02:00–03:00 ET on day D, no bar for D
+   exists. Ranking and every indicator must use D-1's completed, settled session (or the last
+   completed trading day before D). Nothing may read a forming bar — this is already Task 7's rule
+   and the schedule must not quietly break it.
+2. **Fail closed, and dated, if the prior session is not published yet.** If the grouped-daily for
+   D-1 is not available at 03:00 ET, the run must either wait or record the older session it
+   actually used, with its date visible. Silently ranking on D-2 while presenting it as today's
+   research is the failure mode to avoid.
+3. **ETFs must be excluded from the pick.** Dollar-volume ranking puts SPY, QQQ and the leveraged
+   single-stock/sector funds at the very top of the Nasdaq tape. I verified on 2026-09-16 that SPY
+   returns **zero rows for all six purchased Benzinga products** (news only). For a 500-name list
+   that is a slot-allocation defect; for a **single daily pick** it is much worse — an ETF could
+   win the day with no earnings, guidance, ratings, insights, bull/bear or insider evidence
+   whatsoever. The plan's own global constraint keeps NASDAQ common-stock eligibility; the daily
+   pick must enforce it rather than inherit the board's ranking unchanged.
+4. **Trading-day validity comes from the US calendar, not the Riyadh clock.** 10:00 Riyadh maps to
+   the same ET calendar day in both EDT and EST, so there is no date-rollover trap at this time —
+   but that is a property of this specific time and should be pinned by a test, not assumed. The
+   holiday table is 2026-only (B3): 2027 dates must fail closed.
+5. **No look-ahead.** Nothing published after the decision instant may enter the packet. This is
+   Task 20's out-of-sample rule applied live, and it is what makes the pick's later outcome review
+   meaningful rather than circular.
+6. **An earnings event inside the horizon is disclosed, never used as a silent filter.** A name
+   reporting that morning is gap risk that must appear in the packet; it is neither an automatic
+   exclusion nor an automatic catalyst.
+7. **"No pick" is a first-class outcome.** If nothing qualifies, if the model is unavailable, or if
+   a scan was already running (B2), the surface says so explicitly with the reason. No relaxed
+   threshold, no rules-only substitute, no yesterday's pick shown as today's.
+
+## 8. Planned receipt fields — Task 5 part 2 (requested by Codex)
+
+A versioned `InferenceProfile`, optional on the stored records so legacy archives re-encode
+byte-identically, carrying:
+
+| Field | Notes |
+|---|---|
+| `version` | profile schema version |
+| `model` | must equal the record's existing `model`; a disagreement fails validation |
+| `promptVersion` | `StockSageAIAssessment.PromptVersion` raw value |
+| `schemaVersion` / `packetVersion` | response-schema and evidence-packet versions |
+| `packetDigest` | SHA-256 of the packet; 64-char lowercase hex. **Today this is nil in every shipped receipt** — the field exists but no production call site passes `packet:`. Part 2 fixes that. |
+| `temperature` | from `StockSageLocalModelServer.researchTemperature` (0.2) |
+| `topP`, `seed` | **both `nil` on purpose** — the served model owns them (top_p 0.95, random seed). Recorded as unpinned rather than fabricated. |
+| `contextTokens`, `maxOutputTokens` | reserved output value, not the raw request |
+| `endpointProfile` | closed enum `lmStudioGemma` / `runPodGemma` / `ollama` / `generic`. **Never a URL, host or port** — an existing test asserts no endpoint string reaches an owner-readable payload. |
+| `retryReason` | already landed in `090771c` |
+
+Plus `comparableCohort(with:)`, true only when model, prompt, schema, packet version, sampling,
+context, output limit and endpoint profile all match — so receipts from different configurations
+are never pooled into one quality claim. **This is the field set Task 20's "no quality claim is
+valid without them" bullet needs**, which is why it goes first.
+
 ## 6. What I am doing right now
 
 Holding. Task 5 part 1 is committed and green; I have not started part 2 or any other shared-file
