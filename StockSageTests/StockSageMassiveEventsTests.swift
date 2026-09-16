@@ -28,6 +28,9 @@ struct StockSageMassiveEventsTests {
                 E.RefreshKey(symbols: ["AAPL"], refreshedAt: now, credentialRevision: "B"))
     }
 
+
+    /// The production Form 4 date parser is UTC; the fixture must use the same basis.
+    private func day(_ value: String) throws -> Date { try #require(E.day(value)) }
     private func body(_ rows: String, tail: String = "") -> Data {
         Data("{\"status\":\"OK\",\"results\":[\(rows)]\(tail)}".utf8)
     }
@@ -508,4 +511,57 @@ struct StockSageMassiveEventsTests {
         } } }
         #expect(checked == 3_402)
     }
+
+    @Test func formFourParsingRetainsTypedTransactionDetailWithUnknownIntent() throws {
+        let purchase = try #require(E.observation(.success(body(fixture(.insider))), feed: .insider,
+            symbol: "AAPL", now: now).event)
+        let detail = try #require(purchase.insider, "Form 4 direction and amounts are typed at parse time")
+        #expect(detail.direction == .purchase)
+        let transactionDay = try day("2026-09-04"), filingDay = try day("2026-09-06")
+        #expect(detail.transactionDate == transactionDay && detail.filingDate == filingDay)
+        #expect(detail.ownerName == "Fixture Owner" && detail.role == "Director")
+        #expect(detail.shares == 25 && detail.pricePerShare == 100)
+        #expect(detail.reportedNotionalUSD == 2500, "shares x reported price, not proceeds")
+        #expect(detail.planReported == true && !detail.amendment)
+        #expect(detail.intent == .unknown, "Form 4 never states why; intent is never inferred")
+
+        let saleBody = fixture(.insider)
+            .replacingOccurrences(of: #""transaction_code":"P""#, with: #""transaction_code":"S""#)
+            .replacingOccurrences(of: #""transaction_acquired_disposed":"A""#, with: #""transaction_acquired_disposed":"D""#)
+        let sale = try #require(E.observation(.success(body(saleBody)), feed: .insider, symbol: "AAPL", now: now).event)
+        let saleDetail = try #require(sale.insider)
+        #expect(saleDetail.direction == .sale)
+        #expect(sale.headline.contains("sale") && purchase.headline.contains("purchase"))
+
+        // A record without a reported price keeps shares and refuses to invent a value.
+        let noPrice = fixture(.insider).replacingOccurrences(of: #","transaction_price_per_share":100"#, with: "")
+        let priceless = try #require(E.observation(.success(body(noPrice)), feed: .insider, symbol: "AAPL", now: now).event)
+        let pricelessDetail = try #require(priceless.insider)
+        #expect(pricelessDetail.shares == 25 && pricelessDetail.pricePerShare == nil)
+        #expect(pricelessDetail.reportedNotionalUSD == nil)
+    }
+
+    @Test func typedInsiderDetailIsAdditiveAndKeepsLegacyIdentitiesAndBytes() throws {
+        let parsed = try #require(E.observation(.success(body(fixture(.insider))), feed: .insider,
+            symbol: "AAPL", now: now).event)
+        // A legacy cached event has no typed payload and must decode and re-encode unchanged.
+        let legacy = E.Event(id: parsed.id, symbol: parsed.symbol, feed: .insider, date: parsed.date,
+            headline: parsed.headline, details: parsed.details, link: parsed.link,
+            transactionIdentity: parsed.transactionIdentity)
+        #expect(legacy.insider == nil)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(legacy)
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        #expect(object["insider"] == nil, "The new payload stays absent from legacy encodings")
+        let decoded = try JSONDecoder().decode(E.Event.self, from: bytes)
+        let reencoded = try encoder.encode(decoded)
+        #expect(decoded == legacy && reencoded == bytes)
+        #expect(decoded.insiderIdentity == legacy.insiderIdentity)
+        #expect(parsed.insiderIdentity == legacy.insiderIdentity,
+                "Adding typed detail cannot change an existing transaction identity")
+        let parsedBytes = try encoder.encode(parsed)
+        let round = try JSONDecoder().decode(E.Event.self, from: parsedBytes)
+        #expect(round == parsed && round.insider == parsed.insider)
+    }
+
 }

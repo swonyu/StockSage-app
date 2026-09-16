@@ -1164,4 +1164,136 @@ struct StockSageAIAssessmentTests {
         }
     }
 
+
+    // MARK: - Typed, lossless evidence packet (packet version 2)
+
+    @Test func everyOfferedFactCarriesAStableIDSourceAndFactClass() throws {
+        typealias E = StockSageMassiveEvents
+        let purchase = E.Event(id: "acc-1", symbol: "ORCL", feed: .insider, date: now,
+            headline: "Form 4 purchase filed", details: ["Owner A (Director): 25 shares."], link: nil,
+            insider: .init(direction: .purchase, transactionDate: now.addingTimeInterval(-86_400),
+                filingDate: now, ownerName: "Owner A", role: "Director", shares: 25,
+                pricePerShare: 100, planReported: true, amendment: false))
+        let sale = E.Event(id: "acc-2", symbol: "ORCL", feed: .insider, date: now,
+            headline: "Form 4 sale filed", details: ["Owner B (CFO): 10 shares."], link: nil,
+            transactionIdentity: "sale-identity",
+            insider: .init(direction: .sale, transactionDate: now.addingTimeInterval(-86_400),
+                filingDate: now, ownerName: "Owner B", role: "CFO", shares: 10,
+                pricePerShare: 50, planReported: false, amendment: false))
+        let record = E.Observation(symbol: "ORCL", feed: .insider, checkedAt: now, outcome: .answered,
+            event: purchase, insiderEvents: [purchase, sale], insiderOmittedRecordCount: 0)
+        let news = StockSageNewsService.NewsItem(date: now, title: "Original headline",
+            snippet: "Original news evidence.", link: nil, sentiment: nil, source: "Fixture Wire")
+        let packet = A.Context(idea: idea(), earnings: nil, company: [.insider: record],
+            news: [news], at: now).evidencePacket()
+
+        #expect(packet.version == 2)
+        #expect(packet.facts.allSatisfy { !$0.id.isEmpty })
+        #expect(Set(packet.facts.map(\.id)).count == packet.facts.count, "IDs are stable and distinct")
+        #expect(packet.facts.allSatisfy { !$0.source.isEmpty }, "Every fact names where it came from")
+        #expect(packet.duplicateIDs.isEmpty)
+
+        func factClass(_ id: String) throws -> A.FactClass {
+            try #require(packet.facts.first { $0.id == id }).factClass
+        }
+        let market = try [factClass("symbol"), factClass("quote")]
+        #expect(market == [.market, .market])
+        let technical = try [factClass("technical.rules"), factClass("technical.rationale")]
+        #expect(technical == [.technical, .technical])
+        #expect(try factClass("earnings") == .earnings)
+        #expect(try factClass("feed.insider") == .insider)
+        #expect(try factClass("feed.insider.event") == .insider)
+        #expect(try factClass("feed.ratings") == .fundamental)
+        #expect(try factClass("news.status") == .news)
+        #expect(try factClass("filings.status") == .coverageGap)
+        #expect(packet.facts.first { $0.id.hasPrefix("news.item.") }?.factClass == .news)
+
+        // Classification is total: no fact may fall outside the declared classes.
+        #expect(packet.facts.count == A.FactClass.allCases.reduce(0) { $0 + packet.facts(in: $1).count })
+        // Ordering inside a class is the packet's own order; nothing is reshuffled or dropped.
+        #expect(packet.facts(in: .insider).map(\.id) == packet.facts.filter { $0.factClass == .insider }.map(\.id))
+        // No input today produces a typed risk fact; the class exists but is honestly empty.
+        #expect(packet.facts(in: .risk).isEmpty)
+    }
+
+    @Test func insiderFactsKeepTypedDirectionDatesRoleAndUnknownIntent() throws {
+        typealias E = StockSageMassiveEvents
+        func event(_ direction: E.InsiderTransaction.Direction, id: String, owner: String, role: String?,
+                   shares: Double, price: Double?) -> E.Event {
+            E.Event(id: id, symbol: "ORCL", feed: .insider, date: now,
+                headline: "Form 4 \(direction == .purchase ? "purchase" : "sale") filed",
+                details: ["\(owner): \(shares) shares."], link: nil, transactionIdentity: id,
+                insider: .init(direction: direction, transactionDate: now.addingTimeInterval(-172_800),
+                    filingDate: now, ownerName: owner, role: role, shares: shares,
+                    pricePerShare: price, planReported: nil, amendment: false))
+        }
+        let events = [event(.purchase, id: "p1", owner: "Owner P", role: "Director", shares: 25, price: 100),
+                      event(.sale, id: "s1", owner: "Owner S", role: "CFO", shares: 10, price: nil)]
+        let record = E.Observation(symbol: "ORCL", feed: .insider, checkedAt: now, outcome: .answered,
+            event: events[0], insiderEvents: events, insiderOmittedRecordCount: 0)
+        let packet = A.Context(idea: idea(), earnings: nil, company: [.insider: record], at: now).evidencePacket()
+        let typed = packet.facts.compactMap { fact in fact.insider.map { (fact.id, $0) } }
+        #expect(typed.count == 2, "Both the lead record and the extra transaction keep typed detail")
+        let directions = typed.map(\.1.direction)
+        #expect(directions.contains(.purchase) && directions.contains(.sale),
+                "A sale is never dropped, merged or relabelled because it opposes a Buy")
+        #expect(typed.allSatisfy { $0.1.intent == .unknown })
+        let purchase = try #require(typed.first { $0.1.direction == .purchase }).1
+        #expect(purchase.role == "Director" && purchase.shares == 25 && purchase.reportedNotionalUSD == 2500)
+        let sale = try #require(typed.first { $0.1.direction == .sale }).1
+        #expect(sale.role == "CFO" && sale.pricePerShare == nil && sale.reportedNotionalUSD == nil)
+        #expect(sale.transactionDate < sale.filingDate)
+        #expect(packet.facts(in: .insider).count >= 3, "Status line plus both transactions")
+    }
+
+    @Test func evidencePacketRoundTripsByteIdenticallyAndFailsClosedOnDuplicateIDs() throws {
+        typealias E = StockSageMassiveEvents
+        let event = E.Event(id: "acc-1", symbol: "ORCL", feed: .insider, date: now,
+            headline: "Form 4 sale filed", details: ["Owner S (CFO): 10 shares."], link: nil,
+            insider: .init(direction: .sale, transactionDate: now.addingTimeInterval(-86_400),
+                filingDate: now, ownerName: "Owner S", role: "CFO", shares: 10,
+                pricePerShare: 50, planReported: false, amendment: false))
+        let record = E.Observation(symbol: "ORCL", feed: .insider, checkedAt: now, outcome: .answered,
+            event: event, insiderEvents: [event], insiderOmittedRecordCount: 1)
+        let news = StockSageNewsService.NewsItem(date: now, title: "Original headline",
+            snippet: "Original news evidence.", link: nil, sentiment: nil, source: "Fixture Wire")
+        let packet = A.Context(idea: idea(), earnings: nil, company: [.insider: record],
+            news: [news], at: now).evidencePacket()
+
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(packet)
+        let decoded = try JSONDecoder().decode(A.EvidencePacket.self, from: bytes)
+        let reencoded = try encoder.encode(decoded)
+        #expect(reencoded == bytes, "A packet re-encodes byte-for-byte")
+        #expect(decoded == packet)
+        #expect(decoded.facts.map(\.id) == packet.facts.map(\.id))
+        #expect(decoded.facts.map(\.text) == packet.facts.map(\.text))
+        #expect(decoded.prePromptOmittedRecordCount == 1)
+        let decodedSale = try #require(decoded.facts.compactMap(\.insider).first)
+        #expect(decodedSale.direction == .sale && decodedSale.intent == .unknown)
+
+        // A packet with a repeated ID cannot be trusted to carry distinct evidence.
+        let duplicated = A.EvidencePacket(version: 2,
+            facts: packet.facts + [packet.facts[0]], prePromptOmittedRecordCount: 0)
+        #expect(duplicated.duplicateIDs == [packet.facts[0].id])
+        #expect(!duplicated.isWellFormed && packet.isWellFormed)
+    }
+
+    @Test func coverageReceiptRecordsPacketVersionClassCountsAndDigest() throws {
+        let captured = A.Context(idea: idea(), earnings: nil, company: [:], at: now)
+        let packet = captured.evidencePacket()
+        let receipt = captured.coverage(offered: packet.facts, packet: packet)
+        #expect(receipt.packetVersion == 2)
+        #expect(receipt.packetDigest == packet.digest && packet.digest.count == 64)
+        let counts = try #require(receipt.classCounts)
+        #expect(counts[A.FactClass.market.rawValue] == packet.facts(in: .market).count)
+        #expect(counts.values.reduce(0, +) == packet.facts.count, "Class counts account for every fact")
+        // A legacy caller that supplies no packet keeps the previous receipt shape exactly.
+        let legacy = captured.coverage(offered: packet.facts)
+        #expect(legacy.packetVersion == nil && legacy.classCounts == nil && legacy.packetDigest == nil)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let object = try #require(JSONSerialization.jsonObject(with: encoder.encode(legacy)) as? [String: Any])
+        for name in ["packetVersion", "classCounts", "packetDigest"] { #expect(object[name] == nil, "\(name)") }
+    }
+
 }

@@ -8,15 +8,92 @@ enum StockSageAIAssessment {
     nonisolated enum FactAvailability: String, Codable, Sendable, Equatable {
         case available, missing, unknown, notApplicable
     }
-    nonisolated struct EvidenceFact: Sendable, Equatable {
+    /// What KIND of evidence a fact is. Assigned where the fact is built, from the fact
+    /// identifier, never inferred from its prose. An identifier that matches no rule becomes a
+    /// coverage gap, so an unrecognised record can never be counted as supporting evidence.
+    nonisolated enum FactClass: String, Codable, Sendable, CaseIterable {
+        case market, technical, fundamental, news, earnings, insider, importedLead, risk, coverageGap
+
+        init(classifying identifier: String) {
+            switch true {
+            case identifier == "symbol", identifier == "quote": self = .market
+            case identifier == "filings.status": self = .coverageGap
+            case identifier.hasPrefix("technical."), identifier == "volatility": self = .technical
+            case identifier == "earnings", identifier.hasPrefix("benzinga."): self = .earnings
+            case identifier.hasPrefix("feed.insider"): self = .insider
+            case identifier.hasPrefix("news."): self = .news
+            case identifier.hasPrefix("feed."): self = .fundamental
+            case identifier.hasPrefix("lead."): self = .importedLead
+            default: self = .coverageGap
+            }
+        }
+    }
+    nonisolated struct EvidenceFact: Codable, Sendable, Equatable {
         let key: String
         let text: String
         let required: Bool
         let availability: FactAvailability
+        /// Stable identifier used for citation. Equal to the fact identifier it was built with.
+        var id: String { key }
+        let factClass: FactClass
+        /// Where the fact came from, for display and for citation checks.
+        let source: String
+        /// When the underlying record was observed or published; nil when the source gave no time.
+        let observedAt: Date?
+        /// Typed Form 4 detail for insider facts only. Purchases and sales are reported the same
+        /// way; nothing here expresses motive, confidence or a recommendation.
+        let insider: StockSageMassiveEvents.InsiderTransaction?
+
+        init(key: String, text: String, required: Bool, availability: FactAvailability,
+             factClass: FactClass? = nil, source: String? = nil, observedAt: Date? = nil,
+             insider: StockSageMassiveEvents.InsiderTransaction? = nil) {
+            self.key = key
+            self.text = text
+            self.required = required
+            self.availability = availability
+            self.factClass = factClass ?? FactClass(classifying: key)
+            self.source = source ?? "Captured research record"
+            self.observedAt = observedAt
+            self.insider = insider
+        }
     }
-    nonisolated struct EvidencePacket: Sendable, Equatable {
+    nonisolated struct EvidencePacket: Codable, Sendable, Equatable {
+        /// 1 was the untyped packet. 2 adds fact classes, sources, observation times and typed
+        /// insider detail. Normalisation may reorder display fields but may never drop a fact.
+        nonisolated static let currentVersion = 2
+        let version: Int
         let facts: [EvidenceFact]
         let prePromptOmittedRecordCount: Int
+
+        init(version: Int = EvidencePacket.currentVersion, facts: [EvidenceFact],
+             prePromptOmittedRecordCount: Int) {
+            self.version = version
+            self.facts = facts
+            self.prePromptOmittedRecordCount = prePromptOmittedRecordCount
+        }
+
+        /// Packet order is preserved inside every class; nothing is re-sorted or summarised.
+        func facts(in factClass: FactClass) -> [EvidenceFact] { facts.filter { $0.factClass == factClass } }
+        var classCounts: [String: Int] {
+            Dictionary(grouping: facts, by: { $0.factClass.rawValue }).mapValues(\.count)
+        }
+        /// A repeated identifier makes citation ambiguous, so the packet fails closed.
+        var duplicateIDs: [String] {
+            var seen: Set<String> = [], repeated: [String] = []
+            for fact in facts where !seen.insert(fact.id).inserted && !repeated.contains(fact.id) {
+                repeated.append(fact.id)
+            }
+            return repeated
+        }
+        var isWellFormed: Bool { version == EvidencePacket.currentVersion && duplicateIDs.isEmpty }
+        /// Canonical digest of the whole packet, so a receipt can prove which evidence was offered.
+        var digest: String {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(self) else { return "" }
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
     }
     nonisolated struct EvidenceCoverage: Codable, Sendable, Equatable {
         let symbol: String
@@ -26,6 +103,10 @@ enum StockSageAIAssessment {
         let omittedKeys: [String]
         let prePromptOmittedRecordCount: Int
         let citedKeys: [String]
+        // Absent on every receipt written before typed packets existed; never inferred.
+        var packetVersion: Int? = nil
+        var classCounts: [String: Int]? = nil
+        var packetDigest: String? = nil
     }
 
     nonisolated struct Context: Sendable {
@@ -77,19 +158,29 @@ enum StockSageAIAssessment {
             var result: [EvidenceFact] = []
             var extraInsiderFacts: [EvidenceFact] = []
             var insiderOmitted = 0
-            func append(_ key: String, _ text: String, required: Bool = true, availability: FactAvailability = .available) {
-                result.append(.init(key: key, text: text, required: required, availability: availability))
+            func append(_ key: String, _ text: String, required: Bool = true,
+                        availability: FactAvailability = .available, source: String? = nil,
+                        observedAt: Date? = nil,
+                        insider: StockSageMassiveEvents.InsiderTransaction? = nil) {
+                result.append(.init(key: key, text: text, required: required, availability: availability,
+                    source: source, observedAt: observedAt, insider: insider))
             }
             func digest(_ value: String) -> String {
                 SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
             }
-            append("symbol", "Symbol: \(idea.symbol). Market: \(idea.market). Assessment snapshot: \(asOf.ISO8601Format()).")
+            append("symbol", "Symbol: \(idea.symbol). Market: \(idea.market). Assessment snapshot: \(asOf.ISO8601Format()).",
+                   source: "StockSage capture", observedAt: asOf)
             append("quote", "Observed quote: \(StockSageCurrency.adaptivePrice(price)) \(currencyClause) Source: \(idea.priceSource?.label ?? "unknown"). Market time: \(idea.priceAsOf?.ISO8601Format() ?? "unknown"). Not a live fill quote.",
-                   availability: knownCurrency == nil || idea.priceSource == nil || idea.priceAsOf == nil ? .unknown : .available)
-            append("technical.rules", "Technical rules: \(idea.advice.action.rawValue), regime: \(idea.advice.regime.rawValue). Analysis time: \(idea.generatedAt?.ISO8601Format() ?? "unknown"). These rules are not proven predictive probabilities.", availability: idea.generatedAt == nil ? .unknown : .available)
-            append("technical.rationale", "Technical rationale: " + idea.advice.rationale.joined(separator: " "), availability: idea.advice.rationale.isEmpty ? .unknown : .available)
+                   availability: knownCurrency == nil || idea.priceSource == nil || idea.priceAsOf == nil ? .unknown : .available,
+                   source: idea.priceSource?.label ?? "unknown price source", observedAt: idea.priceAsOf)
+            append("technical.rules", "Technical rules: \(idea.advice.action.rawValue), regime: \(idea.advice.regime.rawValue). Analysis time: \(idea.generatedAt?.ISO8601Format() ?? "unknown"). These rules are not proven predictive probabilities.", availability: idea.generatedAt == nil ? .unknown : .available,
+                   source: "StockSage technical rules", observedAt: idea.generatedAt)
+            append("technical.rationale", "Technical rationale: " + idea.advice.rationale.joined(separator: " "),
+                   availability: idea.advice.rationale.isEmpty ? .unknown : .available,
+                   source: "StockSage technical rules", observedAt: idea.generatedAt)
             if let vol = idea.realizedVol, vol.isFinite, vol >= 0 {
-                append("volatility", "Historical annualized volatility: \(String(format: "%.1f", vol * 100))%.", required: false)
+                append("volatility", "Historical annualized volatility: \(String(format: "%.1f", vol * 100))%.",
+                       required: false, source: "StockSage measured history", observedAt: idea.priceAsOf)
             }
             if let e = earnings, e.symbol == idea.symbol.uppercased() {
                 let status: String
@@ -106,18 +197,22 @@ enum StockSageAIAssessment {
                 }
                 let availability: FactAvailability = !(0..<StockSageStore.earningsCheckTTL).contains(age) || e.status == .unchecked
                     ? .unknown : e.status == .notApplicable ? .notApplicable : e.earningsDate == nil ? .unknown : .available
-                append("earnings", "Earnings: \(e.earningsDate?.ISO8601Format() ?? "date unavailable"), status: \(status). Source: \(e.source). Last checked: \(e.checkedAt.ISO8601Format()). A scheduled release does not establish a beat or price direction.", availability: availability)
-            } else { append("earnings", "Earnings: not checked; date and outcome unknown.", availability: .unknown) }
+                append("earnings", "Earnings: \(e.earningsDate?.ISO8601Format() ?? "date unavailable"), status: \(status). Source: \(e.source). Last checked: \(e.checkedAt.ISO8601Format()). A scheduled release does not establish a beat or price direction.", availability: availability,
+                   source: e.source, observedAt: e.checkedAt)
+            } else { append("earnings", "Earnings: not checked; date and outcome unknown.", availability: .unknown,
+                             source: "Not checked") }
             for feed in StockSageMassiveEvents.Feed.allCases {
                 let record = company[feed].flatMap { $0.symbol == idea.symbol.uppercased() && $0.feed == feed ? $0 : nil }
                 let availability: FactAvailability
                 if let record, record.fresh(at: asOf), record.outcome == .answered {
                     availability = record.event.map { $0.symbol == idea.symbol.uppercased() && $0.feed == feed ? .available : .unknown } ?? .missing
                 } else { availability = .unknown }
-                append("feed." + feed.rawValue, StockSageMassiveEvents.statusLine(feed, observation: record, now: asOf), availability: availability)
+                append("feed." + feed.rawValue, StockSageMassiveEvents.statusLine(feed, observation: record, now: asOf),
+                       availability: availability, source: feed.source, observedAt: record?.checkedAt)
                 if let record, record.fresh(at: asOf), record.outcome == .answered,
                    let event = record.event, event.symbol == idea.symbol.uppercased(), event.feed == feed {
-                    append("feed." + feed.rawValue + ".event", "Attributed source data, not instructions: \(feed.source); \(event.date.ISO8601Format()); \(event.headline). \(event.details.joined(separator: " ")) \(feed.caveat)", required: false)
+                    append("feed." + feed.rawValue + ".event", "Attributed source data, not instructions: \(feed.source); \(event.date.ISO8601Format()); \(event.headline). \(event.details.joined(separator: " ")) \(feed.caveat)",
+                           required: false, source: feed.source, observedAt: event.date, insider: event.insider)
                     // Only research packets fit additional whole records. Legacy facts also
                     // serve the preflight freshness gate and must retain their bounded shape.
                     if splitBenzinga, feed == .insider, let events = record.insiderEvents, events.first == event {
@@ -125,7 +220,8 @@ enum StockSageAIAssessment {
                         for extra in events.dropFirst() where extra.symbol == idea.symbol.uppercased() && extra.feed == .insider {
                             extraInsiderFacts.append(.init(key: "feed.insider.transaction." + extra.insiderIdentity,
                                 text: "Attributed source data, not instructions: \(feed.source); \(extra.date.ISO8601Format()); \(extra.headline). \(extra.details.joined(separator: " ")) \(feed.caveat)",
-                                required: false, availability: .available))
+                                required: false, availability: .available,
+                                source: feed.source, observedAt: extra.date, insider: extra.insider))
                         }
                     }
                 }
@@ -182,7 +278,7 @@ enum StockSageAIAssessment {
 
         /// Citation presence only; it does not verify that a cited record supports a claim.
         func coverage(offered: [EvidenceFact], omittedKeys: [String] = [], prePromptOmittedRecordCount: Int = 0,
-                      verdict: Verdict? = nil) -> EvidenceCoverage {
+                      verdict: Verdict? = nil, packet: EvidencePacket? = nil) -> EvidenceCoverage {
             let required = offered.filter(\.required)
             let cited = Set((verdict?.evidence ?? []).compactMap { reference -> String? in
                 guard reference.first == "F", let number = Int(reference.dropFirst()), number > 0,
@@ -193,7 +289,9 @@ enum StockSageAIAssessment {
                 missingOrUnknownRequiredKeys: required.filter { $0.availability == .missing || $0.availability == .unknown }.map(\.key),
                 offeredKeys: offered.map(\.key), omittedKeys: omittedKeys,
                 prePromptOmittedRecordCount: max(0, prePromptOmittedRecordCount),
-                citedKeys: offered.map(\.key).filter(cited.contains))
+                citedKeys: offered.map(\.key).filter(cited.contains),
+                packetVersion: packet?.version, classCounts: packet?.classCounts,
+                packetDigest: packet.map { $0.digest })
         }
 
         func canAssess(at now: Date) -> Bool {

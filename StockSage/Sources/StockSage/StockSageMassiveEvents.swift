@@ -65,6 +65,41 @@ enum StockSageMassiveEvents {
         }
     }
 
+    /// Typed Form 4 detail captured WHERE THE RAW ROW IS: direction is decided by the validated
+    /// transaction code, never re-read from prose. Absent on every legacy cached event.
+    nonisolated struct InsiderTransaction: Codable, Sendable, Equatable {
+        enum Direction: String, Codable, Sendable { case purchase, sale }
+        /// Form 4 never states motive. This is the only permitted value; it is not a placeholder
+        /// for a value to be filled in later, and no code may infer intent from a filing.
+        enum Intent: String, Codable, Sendable { case unknown }
+        let direction: Direction
+        /// The reported trade date, always on or before the filing date.
+        let transactionDate: Date
+        let filingDate: Date
+        let ownerName: String
+        let role: String?
+        let shares: Double
+        let pricePerShare: Double?
+        /// shares x the reported per-share price. Gross reported notional, NOT proceeds,
+        /// realized profit, or the size of any remaining position. nil when no price was supplied.
+        let reportedNotionalUSD: Double?
+        let planReported: Bool?
+        let amendment: Bool
+        let intent: Intent
+
+        init(direction: Direction, transactionDate: Date, filingDate: Date, ownerName: String,
+             role: String?, shares: Double, pricePerShare: Double?, planReported: Bool?, amendment: Bool) {
+            self.direction = direction; self.transactionDate = transactionDate; self.filingDate = filingDate
+            self.ownerName = ownerName; self.role = role; self.shares = shares
+            self.pricePerShare = pricePerShare
+            self.reportedNotionalUSD = pricePerShare.flatMap {
+                let value = shares * $0
+                return value.isFinite ? value : nil
+            }
+            self.planReported = planReported; self.amendment = amendment
+            self.intent = .unknown
+        }
+    }
     nonisolated struct Event: Codable, Sendable, Equatable {
         let id: String
         let symbol: String
@@ -75,6 +110,9 @@ enum StockSageMassiveEvents {
         let link: URL?
         /// Optional for saved single-event caches. Hash raw transaction fields before display rounding.
         var transactionIdentity: String? = nil
+        /// Typed Form 4 detail. Absent on legacy caches and on every non-insider feed; it is
+        /// additive and is deliberately excluded from `insiderIdentity` so identities never move.
+        var insider: InsiderTransaction? = nil
         var insiderIdentity: String {
             if let transactionIdentity { return transactionIdentity }
             let fields = [id, symbol, feed.rawValue, String(date.timeIntervalSince1970), headline] + details + [link?.absoluteString ?? ""]
@@ -315,6 +353,7 @@ enum StockSageMassiveEvents {
         let numericID = try numberID(row[idKey])
         guard let id = text(row, idKey) ?? numericID else { throw Failure.invalidPayload }
         var details = ["\(feed.source) · \(dateText)."]
+        var insider: InsiderTransaction? = nil
         let headline: String
         let link = sourceLink(row[feed.pluralTicker ? "filing_url" : "benzinga_news_url"], feed: feed)
         switch feed {
@@ -387,12 +426,20 @@ enum StockSageMassiveEvents {
             if let price, price < 0 { throw Failure.invalidPayload }
             details.append("\(owner)\(text(row, "officer_title").map { " (\($0))" } ?? ""): \(amount(shares)) shares on \(StockSageCatalystWatch.dateStr(txDate))\(price.map { " at reported USD \(amount($0))/share" } ?? "; price not supplied").")
             details.append(form == "4/A" ? "Amendment, not an additional transaction." : "One reported transaction; not an aggregate of all insider activity.")
+            var planReported: Bool? = nil
             if let plan = row["aff_10b5_one"], !(plan is NSNull) {
                 guard let flag = plan as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() else { throw Failure.invalidPayload }
+                planReported = flag.boolValue
                 details.append(flag.boolValue ? "Reported under a Rule 10b5-1 plan." : "No Rule 10b5-1 plan reported in this record.")
             } else { details.append("Rule 10b5-1 plan status not supplied.") }
+            // Typed alongside the prose, from the same validated row. The prose stays byte-identical.
+            insider = InsiderTransaction(direction: code == "P" ? .purchase : .sale,
+                transactionDate: txDate, filingDate: date, ownerName: owner,
+                role: text(row, "officer_title"), shares: shares, pricePerShare: price,
+                planReported: planReported, amendment: form == "4/A")
         }
         var result = Event(id: id, symbol: symbol, feed: feed, date: date, headline: headline, details: details, link: link)
+        result.insider = insider
         if feed == .insider {
             // A filing accession alone is not a transaction identity. Preserve source precision,
             // even when two prices/shares render to the same eight significant digits.
