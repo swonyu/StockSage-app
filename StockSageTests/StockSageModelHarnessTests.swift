@@ -60,6 +60,15 @@ struct StockSageModelHarnessTests {
          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 
+    // Qwen removal Step 7: the shipped default flipped from the generic Ollama pair to the
+    // managed Gemma one. A fresh install must get a servable, strict-output pair, not silently
+    // regress to something requiresStrictOutput treats as generic.
+    @Test func theShippedDefaultIsTheManagedGemmaProfile() throws {
+        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        #expect(config.isLMStudioGemma == true)
+        #expect(config.requiresStrictOutput == true)
+    }
+
     // MARK: Budget is shared, not LM-Studio-only
 
     // Confirmed defect: `promptFits` ran only when `Config.isLMStudio9B`, so the shipped default

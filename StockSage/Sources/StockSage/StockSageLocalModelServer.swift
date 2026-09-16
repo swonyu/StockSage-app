@@ -172,8 +172,22 @@ enum StockSageLocalModelServer {
         return true
     }
 
-    static let defaultURL = "http://127.0.0.1:11434"
-    static let defaultModel = "qwen3.8"
+    // Flipped to the managed Gemma pair (Qwen removal Step 7). Reference the constants, never
+    // re-type the literals -- they are read independently in seven places across the app, and
+    // changing one without the other ships an unservable pair.
+    //
+    // Two consequences, not discovered later: (1) a fresh install's first Explain/assessment now
+    // routes through prepare() -> StockSageLocalModelStartup.ensureLoaded, which opens LM Studio
+    // and POSTs an active 31B load, where the retired Ollama default was a read-only /api/tags
+    // probe -- launch-time auto-start stays the opt-in it is today (StockSageLocalModelStartup.
+    // enabledKey defaults false), but the interactive first use is heavier than before. (2)
+    // chatRequest moves from the Ollama branch (which sends contextTokens as num_ctx verbatim) to
+    // the OpenAI-compatible branch (which does not send it at all): researchContextTokens stops
+    // being a value the app SETS and becomes a value it ASSUMES, protected only by
+    // StockSageLocalModelStartup's readiness floor and the post-response verifiedContext check.
+    // Chat clamps to the real serving window; research callers do not.
+    static let defaultURL = lmStudioURL
+    static let defaultModel = gemmaModel
 
     /// Context window declared by the EVIDENCE-HEAVY callers (paper research, horizon research,
     /// AI assessment, Catalyst explanations). Conversational Chat keeps the owner's 4,096
