@@ -144,8 +144,8 @@ struct StockSageHorizonAnalyzeTests {
 
     // MARK: Fixtures
 
-    /// A Massive daily-aggregate payload with enough completed prior-day bars to pass the
-    /// 30-bar / four-day-recency gate. Prices trend gently so indicators are well defined.
+    /// A Massive daily-aggregate payload through the latest ended session.
+    /// Prices trend gently so indicators are well defined.
     private static func historyPayload(ticker: String = "ACME", baseClose: Double = 40,
                                        bars: Int = 90, endingDaysAgo: Int = 1) -> Data {
         var calendar = Calendar(identifier: .gregorian)
@@ -154,11 +154,8 @@ struct StockSageHorizonAnalyzeTests {
                                    to: calendar.startOfDay(for: Date()))!
         // A normal successful fixture ends at a real completed session, including when
         // this suite runs on Monday or after a market holiday. The stale fixture stays stale.
-        if endingDaysAgo == 1 {
-            for _ in 0..<8 {
-                if StockSageMarketHours.nasdaqDay(at: lastDay)?.trading == true { break }
-                lastDay = calendar.date(byAdding: .day, value: -1, to: lastDay)!
-            }
+        if endingDaysAgo == 1, let completed = StockSageMarketHours.latestCompletedDailySession(at: Date()) {
+            lastDay = completed
         }
         var rows: [[String: Any]] = []
         for index in 0..<bars {

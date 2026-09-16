@@ -99,6 +99,42 @@ struct StockSageResearchQualificationTests {
         #expect(roundTrip == receipt)
     }
 
+    @Test func completedSessionPolicyPreservesLegacyAfterCloseReceipts() throws {
+        let captured = try capture(), key = newsKey(news())
+        let original = Q.prepare(captured, horizon: .week).receipt(verdict: buy, citedKeys: [key])
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        #expect(json["completedSessionPolicy"] as? Int == 1)
+        let afterClose = try Date("2026-09-16T00:59:00Z", strategy: .iso8601)
+        let time = afterClose.timeIntervalSinceReferenceDate
+        json["capturedAt"] = time - 2
+        json["evidenceAsOf"] = time
+        var earnings = try #require(json["earnings"] as? [String: Any])
+        earnings["checkedAt"] = time; earnings["recordedAt"] = time
+        json["earnings"] = earnings
+        var catalysts = try #require(json["candidateCatalysts"] as? [[String: Any]])
+        for index in catalysts.indices { catalysts[index]["checkedAt"] = time }
+        json["candidateCatalysts"] = catalysts
+        json.removeValue(forKey: "completedSessionPolicy")
+        func decode() throws -> Q.Receipt {
+            try JSONDecoder().decode(Q.Receipt.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        func valid(_ receipt: Q.Receipt) -> Bool {
+            Q.valid(receipt, symbol: "ACME", horizon: R.Horizon.week.rawValue,
+                    at: afterClose.addingTimeInterval(-2), citedKeys: [key])
+        }
+        let legacy = try decode()
+        #expect(legacy.isQualified && valid(legacy), "Keep the old September 14 capture readable after the date-rule correction")
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        #expect(encoded["completedSessionPolicy"] == nil, "Absent legacy fields must stay absent for archive digests")
+        json["completedSessionPolicy"] = 1
+        #expect(!valid(try decode()), "New captures must not silently keep September 14 after September 15 ends")
+        json["barDate"] = try Date("2026-09-15T04:00:00Z", strategy: .iso8601).timeIntervalSinceReferenceDate
+        #expect(valid(try decode()))
+        json["completedSessionPolicy"] = 2
+        let unsupported = try decode()
+        #expect(!unsupported.isQualified && !valid(unsupported))
+    }
+
     @Test func downsideVolumeSpikeCannotQualify() throws {
         let h = history(closes: { $0[$0.count - 1] = 90 }, volumes: { $0[$0.count - 1] = 1000 })
         let result = Q.prepare(try capture(history: h), horizon: .week).receipt(verdict: buy, citedKeys: [newsKey(news())])

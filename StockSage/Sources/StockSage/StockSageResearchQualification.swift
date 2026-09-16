@@ -66,8 +66,11 @@ enum StockSageResearchQualification {
         let originalAction: String
         let scenario: Scenario?
         let reasons: [String]
+        /// Nil preserves the original prior-New-York-date rule and legacy archive encoding.
+        var completedSessionPolicy: Int? = nil
 
-        var isQualified: Bool { version == StockSageResearchQualification.version && reasons.isEmpty && exclusions(self).isEmpty }
+        var isQualified: Bool { version == StockSageResearchQualification.version
+            && (completedSessionPolicy == nil || completedSessionPolicy == 1) && reasons.isEmpty && exclusions(self).isEmpty }
         var levels: StockSageHorizonResearch.Levels? {
             guard isQualified, let scenario, let barDate else { return nil }
             return .init(entry: scenario.entry, stop: scenario.stop, target: scenario.target, at: barDate, basis: scenario.basis)
@@ -93,12 +96,14 @@ enum StockSageResearchQualification {
                 capturedAt: draft.capturedAt, evidenceAsOf: draft.evidenceAsOf, barDate: draft.barDate,
                 criticalCaptureReady: draft.criticalCaptureReady, measurements: draft.measurements, earnings: draft.earnings,
                 candidateCatalysts: candidates, citedQualifyingKeys: keys,
-                originalAction: verdict.action.rawValue, scenario: draft.scenario, reasons: [])
+                originalAction: verdict.action.rawValue, scenario: draft.scenario, reasons: [],
+                completedSessionPolicy: draft.completedSessionPolicy)
             return Receipt(version: pending.version, symbol: pending.symbol, horizon: pending.horizon,
                 capturedAt: pending.capturedAt, evidenceAsOf: pending.evidenceAsOf, barDate: pending.barDate,
                 criticalCaptureReady: pending.criticalCaptureReady, measurements: pending.measurements, earnings: pending.earnings,
                 candidateCatalysts: pending.candidateCatalysts, citedQualifyingKeys: pending.citedQualifyingKeys,
-                originalAction: pending.originalAction, scenario: pending.scenario, reasons: exclusions(pending))
+                originalAction: pending.originalAction, scenario: pending.scenario, reasons: exclusions(pending),
+                completedSessionPolicy: pending.completedSessionPolicy)
         }
     }
 
@@ -163,12 +168,13 @@ enum StockSageResearchQualification {
         return Inputs(draft: .init(version: version, symbol: context.idea.symbol, horizon: horizon.rawValue,
             capturedAt: capture.at, evidenceAsOf: asOf, barDate: h?.dates.last, criticalCaptureReady: ready,
             measurements: m, earnings: earnings, candidateCatalysts: catalysts, citedQualifyingKeys: [],
-            originalAction: "", scenario: scenario(m, horizon: horizon), reasons: []))
+            originalAction: "", scenario: scenario(m, horizon: horizon), reasons: [], completedSessionPolicy: 1))
     }
 
     /// Structural/archive validation; the immutable measurements are not a backtest or proof of claim support.
     nonisolated static func valid(_ receipt: Receipt, symbol: String, horizon: String, at: Date, citedKeys: [String]) -> Bool {
-        guard receipt.version == version, receipt.symbol == symbol, StockSageHorizonResearch.validTicker(symbol),
+        guard receipt.version == version, receipt.completedSessionPolicy == nil || receipt.completedSessionPolicy == 1,
+              receipt.symbol == symbol, StockSageHorizonResearch.validTicker(symbol),
               receipt.horizon == horizon, let h = StockSageHorizonResearch.Horizon(rawValue: horizon),
               receipt.capturedAt == at, validDate(at), validDate(receipt.evidenceAsOf),
               fresh(at, at: receipt.evidenceAsOf, seconds: 300),
@@ -180,7 +186,8 @@ enum StockSageResearchQualification {
               [m.volumeRatio, m.atr14].compactMap({ $0 }).allSatisfy({ $0 >= 0 }) else { return false }
         if let count = m.completedBars {
             guard (30...5000).contains(count), let bar = receipt.barDate,
-                  StockSageMarketHours.isLatestCompletedDailyBar(bar, at: receipt.evidenceAsOf),
+                  StockSageMarketHours.isLatestCompletedDailyBar(bar, at: receipt.evidenceAsOf,
+                      includingCurrentSession: receipt.completedSessionPolicy == 1),
                   m.close != nil, m.sma20 != nil, m.horizonReturnPercent != nil, m.stopLow != nil,
                   (count > (h == .week ? 20 : 60)) == (m.targetHigh != nil) else { return false }
         } else if receipt.barDate != nil || numbers.contains(where: { $0 != nil }) { return false }

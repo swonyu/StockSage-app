@@ -240,14 +240,15 @@ final class StockSageHorizonResearch: ObservableObject {
         return listings.values.sorted { $0.ticker < $1.ticker }
     }
 
-    /// Prior New York dates only: today's daily candle is never assumed complete.
+    /// Use the latest session whose full daily-aggregate window has ended in New York.
     nonisolated static func completedHistory(_ h: StockSagePriceHistory, at now: Date) -> StockSagePriceHistory? {
         guard now.timeIntervalSince1970.isFinite, h.priceSource == .massiveDaily,
               h.count == h.dates.count, h.count == h.opens.count, h.count == h.highs.count,
               h.count == h.lows.count, h.count == h.volumes.count else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
-        let boundary = calendar.startOfDay(for: now)
+        guard let latest = StockSageMarketHours.latestCompletedDailySession(at: now),
+              let boundary = calendar.date(byAdding: .day, value: 1, to: latest) else { return nil }
         for i in h.dates.indices {
             guard h.dates[i].timeIntervalSince1970.isFinite, h.dates[i].timeIntervalSince1970 > 0,
                   i == 0 || h.dates[i] > h.dates[i - 1],
@@ -255,7 +256,7 @@ final class StockSageHorizonResearch: ObservableObject {
                   h.volumes[i].isFinite, h.volumes[i] >= 0,
                   h.highs[i] >= max(h.opens[i], h.closes[i]), h.lows[i] <= min(h.opens[i], h.closes[i]) else { return nil }
         }
-        let n = h.dates.prefix { $0 < boundary }.count
+        let n = h.dates.prefix { $0 < boundary && $0 <= now }.count
         guard n >= 30, StockSageMarketHours.isLatestCompletedDailyBar(h.dates[n - 1], at: now) else { return nil }
         return .init(symbol: h.symbol, dates: Array(h.dates.prefix(n)), opens: Array(h.opens.prefix(n)),
             highs: Array(h.highs.prefix(n)), lows: Array(h.lows.prefix(n)), closes: Array(h.closes.prefix(n)),
@@ -795,7 +796,7 @@ final class StockSageHorizonResearch: ObservableObject {
             return failed("Massive daily-history response did not satisfy the symbol, adjustment and bar-validity contract; no opinion.")
         }
         guard let history = completedHistory(raw, at: Date()) else {
-            return failed("Massive returned \(raw.count) daily bars. Need at least 30 valid, completed daily bars including the latest prior trading session from a verified calendar. History is insufficient or stale; no opinion.")
+            return failed("Massive returned \(raw.count) daily bars. Need at least 30 valid, completed daily bars including the latest ended aggregate session from a verified calendar. History is insufficient or stale; no opinion.")
         }
         let referenceClose = (value: history.closes.last!, at: history.dates.last!)
         guard StockSageMassive.covers(item.ticker), item.ticker.utf8.allSatisfy({ (65...90).contains($0) }) else {
@@ -1038,7 +1039,7 @@ final class StockSageHorizonResearch: ObservableObject {
         guard [researchOutputTokens, 384].contains(outputTokens) else { return result("Unsupported research output budget; no opinion.") }
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
         if capture.blockedByThrottle { return result("Supplemental evidence requests were blocked by throttling or access denial, with no usable fallback; no model request or opinion. Retry after provider access recovers.", facts: capture.facts) }
-        var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. Current daily candle excluded."]
+        var horizonFacts = ["Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management. Reference entry is the last completed split-adjusted daily close, NOT a live quote. An unfinished daily aggregate is excluded until the scheduled extended-hours session ends."]
         let earningsWindow = StockSageMassiveEarnings.Window(observation: capture.nextEarnings,
             asOf: context.asOf, horizon: horizon)
         for period in [7, 14] {

@@ -827,6 +827,41 @@ import Testing
             highs: [0], lows: h.lows, closes: h.closes, volumes: h.volumes, priceSource: .massiveDaily)
         #expect(R.completedHistory(broken, at: now) == nil)
     }
+    @Test(arguments: [
+        ("2026-09-15T20:00:00Z", "2026-09-15T04:00:00Z", false),
+        ("2026-09-15T23:59:59Z", "2026-09-15T04:00:00Z", false),
+        ("2026-09-16T00:00:00Z", "2026-09-15T04:00:00Z", true),
+        ("2026-09-16T00:59:00Z", "2026-09-15T04:00:00Z", true),
+        ("2026-11-27T21:59:59Z", "2026-11-27T05:00:00Z", false),
+        ("2026-11-27T22:00:00Z", "2026-11-27T05:00:00Z", true),
+        ("2026-11-03T01:00:00Z", "2026-11-02T05:00:00Z", true)
+    ])
+    func completedHistoryIncludesEndedAggregateSession(clock: String, today: String, includeToday: Bool) throws {
+        let formatter = ISO8601DateFormatter()
+        let at = try #require(formatter.date(from: clock))
+        let day = try #require(formatter.date(from: today))
+        var dates = [Date](), cursor = day
+        while dates.count < 70 {
+            if StockSageMarketHours.nasdaqDay(at: cursor)?.trading == true { dates.append(cursor) }
+            cursor = cursor.addingTimeInterval(-86_400)
+        }
+        dates.reverse()
+        let closes = Array(repeating: 153.40, count: 69) + [156.99]
+        let h = StockSagePriceHistory(symbol: "AVAV", dates: dates, opens: closes,
+            highs: closes.map { $0 + 2 }, lows: closes.map { $0 - 2 }, closes: closes,
+            volumes: Array(repeating: 1_000, count: 70), priceSource: .massiveDaily)
+        let completed = try #require(R.completedHistory(h, at: at))
+        #expect(completed.count == (includeToday ? 70 : 69))
+        #expect(completed.closes.last == (includeToday ? 156.99 : 153.40))
+        #expect(R.levels(history: h, action: .buy, at: at)?.entry == completed.closes.last)
+        if includeToday {
+            let missing = StockSagePriceHistory(symbol: h.symbol, dates: Array(dates.dropLast()),
+                opens: Array(h.opens.dropLast()), highs: Array(h.highs.dropLast()), lows: Array(h.lows.dropLast()),
+                closes: Array(h.closes.dropLast()), volumes: Array(h.volumes.dropLast()), priceSource: .massiveDaily)
+            #expect(R.completedHistory(missing, at: at) == nil, "Do not silently use yesterday after today's aggregate session ends")
+        }
+    }
+
     @Test func completedHistoryAcceptsHolidayGapsButRejectsMissingSessions() throws {
         let cases: [(String, String, Bool)] = [
             ("2026-09-08T14:00:00Z", "2026-09-04T04:00:00Z", true), // Tuesday after Labor Day; Friday is latest.

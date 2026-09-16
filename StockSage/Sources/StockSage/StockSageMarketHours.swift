@@ -114,22 +114,32 @@ enum StockSageMarketHours {
                      regularClose: early ? 13 : 16, extendedClose: early ? 17 : 20)
     }
 
-    /// Whether a daily bar belongs to the latest trading session before today's New York date.
-    /// Today's candle is never assumed complete. Unknown calendar years and missing sessions
-    /// fail closed; a weekend or a published holiday does not make the last session stale.
-    nonisolated static func isLatestCompletedDailyBar(_ bar: Date, at now: Date) -> Bool {
-        guard now.timeIntervalSince1970.isFinite, bar.timeIntervalSince1970.isFinite,
-              bar <= now, nasdaqDay(at: now) != nil else { return false }
+    /// Full-day aggregates can include extended hours. The legacy prior-date rule remains
+    /// available only for validating saved captures that predate this correction.
+    nonisolated static func latestCompletedDailySession(at now: Date, includingCurrentSession: Bool = true) -> Date? {
+        guard now.timeIntervalSince1970.isFinite, nasdaqDay(at: now) != nil else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
         let today = calendar.startOfDay(for: now)
-        guard bar < today else { return false }
-        for offset in 1...8 {
+        for offset in (includingCurrentSession ? 0 : 1)...8 {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: today),
-                  let session = nasdaqDay(at: day) else { return false }
-            if session.trading { return calendar.isDate(bar, inSameDayAs: day) }
+                  let session = nasdaqDay(at: day) else { return nil }
+            guard session.trading else { continue }
+            if offset == 0 {
+                guard let end = calendar.date(bySettingHour: session.extendedClose, minute: 0, second: 0, of: day) else { return nil }
+                if now < end { continue }
+            }
+            return day
         }
-        return false
+        return nil
+    }
+
+    nonisolated static func isLatestCompletedDailyBar(_ bar: Date, at now: Date, includingCurrentSession: Bool = true) -> Bool {
+        guard bar.timeIntervalSince1970.isFinite, bar <= now,
+              let latest = latestCompletedDailySession(at: now, includingCurrentSession: includingCurrentSession) else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        return calendar.isDate(bar, inSameDayAs: latest)
     }
 
     /// General research retains its existing age ceiling, including today's daily background.
