@@ -507,6 +507,22 @@ struct StockSageHorizonAnalyzeTests {
         #expect(result.facts.contains { $0.contains("3 retained") && $0.contains("2 omitted") })
     }
 
+    // The receipt has carried packet identity fields since typed packets existed, but no production
+    // call site ever passed the packet, so every shipped receipt recorded nil and could not prove
+    // which evidence was offered. A benchmark score is not valid without that anchor.
+    @Test func anAcceptedResearchReceiptProvesWhichEvidencePacketWasOffered() async throws {
+        let result = await run(model: { Self.ok(Self.verdictPayload(), $0) })
+        try #require(result.verdict != nil)
+        let receipt = try #require(result.evidenceReceipt)
+        #expect(receipt.packetVersion == StockSageAIAssessment.EvidencePacket.currentVersion)
+        let digest = try #require(receipt.packetDigest)
+        #expect(digest.count == 64 && digest.allSatisfy { $0.isHexDigit && !$0.isUppercase },
+                "The packet digest is a lowercase SHA-256, so two receipts can be compared byte-exactly")
+        let counts = try #require(receipt.classCounts)
+        #expect(!counts.isEmpty && counts.values.allSatisfy { $0 > 0 })
+        #expect(counts.keys.allSatisfy { StockSageAIAssessment.FactClass(rawValue: $0) != nil })
+    }
+
     @Test func stoppedResearchCannotCollectInsiderEvidenceOrPublishALateObservation() async {
         var calls = 0, modelCalls = 0
         let blocked = await run(allowed: { false }, insider: { symbol, at in

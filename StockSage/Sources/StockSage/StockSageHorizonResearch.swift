@@ -1174,7 +1174,7 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         let offered = Array(optional.prefix(fitted.optionalKept)) + mandatory
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
-            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount)
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, packet: packet)
         let facts = fitted.facts
         let trimmedNote = fitted.isComplete ? "" : " \(fitted.omitted) of \(optional.count) optional evidence records were omitted to fit the context budget."
         let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
@@ -1194,7 +1194,7 @@ final class StockSageHorizonResearch: ObservableObject {
             return result("No verified opinion. " + failure.explanation(model: completion.model) + trimmedNote, facts: facts)
         }
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
-            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict)
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict, packet: packet)
         let qualified = qualification?.receipt(verdict: verdict, citedKeys: evidenceReceipt?.citedKeys ?? [], offeredKeys: offered.map(\.key))
         return .init(verdict: verdict, levels: qualified?.levels ?? levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated model research · \(horizon.rawValue). No order created." + trimmedNote,
