@@ -259,6 +259,10 @@ final class StockSageResearchHistory: ObservableObject {
         var rosePredictions = 0
         var fellPredictions = 0
         var flatPredictions = 0
+        // Daily-bar first-hit receipts only, reported separately and never blended into a win rate.
+        var targetHits = 0
+        var stopHits = 0
+        var horizonCloses = 0
     }
 
     nonisolated static func pendingPredictions(in run: Run) -> [Prediction] {
@@ -275,6 +279,17 @@ final class StockSageResearchHistory: ObservableObject {
         }
         for run in runs {
             for receipt in run.evaluations.values where receipt.state == .evaluated {
+                // A terminal scenario is counted by the level it reached. A horizon close keeps its
+                // own signed return and is never converted into a target hit.
+                if let terminal = receipt.terminalKind, run.outcomePolicy == .dailyBarFirstHit {
+                    switch terminal {
+                    case .targetHit: summary.targetHits += 1
+                    case .stopHit: summary.stopHits += 1
+                    case .horizonClose: summary.horizonCloses += 1
+                    }
+                    summary.evaluatedPredictions += 1
+                    continue
+                }
                 switch receipt.direction {
                 case .rose: summary.rosePredictions += 1
                 case .fell: summary.fellPredictions += 1
@@ -427,6 +442,8 @@ final class StockSageResearchHistory: ObservableObject {
     private nonisolated static func calendarBasis(for run: Run) -> String {
         benchmarkCalendarBasis + (run.measurementPolicy == .nextTradingDateSessions
             ? "; seven/fourteen full sessions from the next trading-date open (policy 1)" : "")
+            + (run.outcomePolicy == .dailyBarFirstHit
+                ? "; completed at the first verified target or stop on settled adjusted daily bars, otherwise at the horizon session close (outcome policy 2)" : "")
     }
     /// A provider daily close can change after the regular close. Wait until the entire
     /// target New York date has ended before accepting its completed daily aggregate.
@@ -796,7 +813,10 @@ final class StockSageResearchHistory: ObservableObject {
     }
 
     nonisolated static func measurementDescription(for run: Run) -> String {
-        run.measurementPolicy == .nextTradingDateSessions
+        if run.outcomePolicy == .dailyBarFirstHit {
+            return "Completes at the first settled daily session that reaches the captured stop or target, otherwise at the \(run.horizon.rawValue)th session close. Monitoring starts at the next trading-date open."
+        }
+        return run.measurementPolicy == .nextTradingDateSessions
             ? "\(run.horizon.rawValue) full Nasdaq sessions, starting at the next trading-date open."
             : "Legacy schedule: the \(run.horizon.rawValue)th close after completion; a still-future completion-day close counted, so the opening benchmark may cover one fewer session."
     }

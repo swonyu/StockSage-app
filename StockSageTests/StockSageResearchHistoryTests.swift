@@ -1541,6 +1541,12 @@ extension StockSageResearchHistoryTests {
         }
         #expect(calls == 1 && store.runs[0].evaluations["ACME"] == nil,
                 "A verified no-hit result before the horizon stores no receipt and stays active")
+        let activeReceipt = History.evaluate(active.predictions[0], in: active,
+            observation: dailyObservation(highs: [105, 106], lows: [95, 96]),
+            now: dailyNow(afterSessions: 2))
+        #expect(activeReceipt.state == .notDue && activeReceipt.terminalKind == nil)
+        #expect(!store.recordEvaluation(activeReceipt, runID: active.id, symbol: "ACME"),
+                "The store itself refuses to persist a still-active prediction as a receipt")
         #expect(store.lastCheckSummary == "Checked 1 active prediction.")
 
         await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in
@@ -1589,6 +1595,193 @@ extension StockSageResearchHistoryTests {
                 "The new policy becomes checkable long before the legacy horizon date ends")
         let afterFirstSession = History.homeSummary([active, legacy], now: dailyNow(afterSessions: 1))
         #expect(afterFirstSession.readyPredictions == 1 && afterFirstSession.ready.map(\.id) == [active.id])
+    }
+
+
+    /// A terminal receipt of the requested kind, produced by the real evaluator.
+    private func terminalReceipt(_ kind: History.Evaluation.TerminalKind) -> (History.Run, History.Evaluation) {
+        let original = dailyRun()
+        let observation: History.Observation
+        let now: Date
+        switch kind {
+        case .targetHit:
+            observation = dailyObservation(highs: [105, 121], lows: [98, 95])
+            now = dailyNow(afterSessions: 2)
+        case .stopHit:
+            observation = dailyObservation(highs: [105, 121], lows: [98, 89])
+            now = dailyNow(afterSessions: 2)
+        case .horizonClose:
+            observation = dailyObservation(highs: Array(repeating: 105, count: 7),
+                lows: Array(repeating: 95, count: 7), closes: Array(repeating: 97, count: 7))
+            now = dailyNow(afterSessions: 7)
+        }
+        return (original, History.evaluate(original.predictions[0], in: original,
+            observation: observation, now: now))
+    }
+
+    @Test func homeSummaryCountsTerminalKindsSeparatelyFromLegacyDirections() throws {
+        var runs: [History.Run] = []
+        for kind in [History.Evaluation.TerminalKind.targetHit, .stopHit, .horizonClose] {
+            var (original, receipt) = terminalReceipt(kind)
+            try #require(receipt.terminalKind == kind)
+            original.evaluations["ACME"] = receipt
+            runs.append(original)
+        }
+        let legacy = run()
+        var legacyRun = legacy
+        legacyRun.evaluations["ACME"] = History.evaluate(legacy.predictions[0], in: legacy,
+            observation: observation(), now: date("2026-09-24T13:00:00Z"))
+        runs.append(legacyRun)
+
+        let summary = History.homeSummary(runs, now: date("2026-10-06T13:00:00Z"))
+        #expect(summary.targetHits == 1)
+        #expect(summary.stopHits == 1)
+        #expect(summary.horizonCloses == 1)
+        #expect(summary.rosePredictions == 1 && summary.fellPredictions == 0 && summary.flatPredictions == 0,
+                "Legacy direction counts cover only endpoint-policy receipts")
+        #expect(summary.evaluatedPredictions == 4)
+        let horizon = try #require(runs[2].evaluations["ACME"])
+        #expect(horizon.direction == .fell && horizon.priceReturn != nil,
+                "A horizon close reports its own signed return and is never relabelled a target hit")
+    }
+
+    @Test func outcomeCopyNamesTheTerminalStateAndItsSession() throws {
+        let (_, stopReceipt) = terminalReceipt(.stopHit)
+        #expect(StockSageResearchHistoryView.outcomeSummary(stopReceipt).hasPrefix("Stop hit"))
+        let (_, targetReceipt) = terminalReceipt(.targetHit)
+        #expect(StockSageResearchHistoryView.outcomeSummary(targetReceipt).hasPrefix("Target hit"))
+        let (_, horizonReceipt) = terminalReceipt(.horizonClose)
+        #expect(StockSageResearchHistoryView.outcomeSummary(horizonReceipt).hasPrefix("Horizon close"))
+        for receipt in [stopReceipt, targetReceipt, horizonReceipt] {
+            let text = StockSageResearchHistoryView.outcomeSummary(receipt)
+            #expect(text.contains("%"), "Every terminal state shows its measured return")
+            #expect(text.contains(StockSageResearchHistoryView.sessionDateLabel(try #require(receipt.terminalAt))),
+                    "The terminal session date, not the scheduled horizon date")
+        }
+        let active = dailyRun()
+        #expect(StockSageResearchHistoryView.outcomeSummary(
+            History.availability(for: active, now: dailyNow(afterSessions: 1)), run: active) == "Active")
+        #expect(StockSageResearchHistoryView.outcomeSummary(
+            History.availability(for: active, now: date("2026-09-15T12:00:00Z")), run: active) == "Active")
+        var unavailable = stopReceipt
+        unavailable = History.evaluate(active.predictions[0], in: active, observation: nil,
+            now: dailyNow(afterSessions: 2))
+        #expect(StockSageResearchHistoryView.outcomeSummary(unavailable) == "Data unavailable")
+        #expect(StockSageResearchHistoryView.outcomeSummary(
+            History.evaluate(run().predictions[0], in: run(), observation: observation(),
+                now: date("2026-09-24T13:00:00Z"))).hasPrefix("Rose"),
+            "Legacy endpoint receipts keep their direction copy")
+    }
+
+    @Test func sameBarOutcomesDiscloseTheConservativeStopFirstRule() throws {
+        let original = dailyRun()
+        let sameBar = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 121], lows: [98, 89]),
+            now: dailyNow(afterSessions: 2))
+        try #require(sameBar.sameBarStopFirst == true)
+        #expect(sameBar.note.contains("The daily bar reached both levels; intraday order is unavailable, so the conservative stop-first rule was applied."))
+        #expect(sameBar.note.contains("Daily bars cannot establish intraday order or an actual fill."))
+    }
+
+
+    // MARK: - Compatibility regressions
+
+    private func fileStore(_ name: String) throws -> (History, URL, UserDefaults, String) {
+        let suite = "stocksage.research.\(name).\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let url = directory.appendingPathComponent("history.json")
+        return (History(storageURL: url, defaults: defaults), url, defaults, suite)
+    }
+
+    @Test func legacyRunsAndEndpointReceiptsRoundTripByteIdentically() throws {
+        var legacy = run()
+        legacy.evaluations["ACME"] = History.evaluate(legacy.predictions[0], in: legacy,
+            observation: observation(), now: date("2026-09-24T13:00:00Z"))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(legacy)
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        #expect(object["outcomePolicy"] == nil)
+        let receipt = try #require((object["evaluations"] as? [String: Any])?["ACME"] as? [String: Any])
+        for key in ["terminalKind", "terminalAt", "outcomePrice", "adjustmentRatio", "adjustedEntry",
+                    "adjustedStop", "adjustedTarget", "dailyBars", "sameBarStopFirst"] {
+            #expect(receipt[key] == nil, "\(key)")
+        }
+        let decoded = try JSONDecoder().decode(History.Run.self, from: bytes)
+        #expect(decoded == legacy && decoded.outcomePolicy == nil)
+        #expect(try encoder.encode(decoded) == bytes, "A decoded legacy run re-encodes to the same bytes")
+
+        let (store, url, defaults, suite) = try fileStore("legacy-bytes")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try #require(store.record(run(id: legacy.id)))
+        try #require(store.recordEvaluation(try #require(legacy.evaluations["ACME"]), runID: legacy.id, symbol: "ACME"))
+        func storedLegacy() throws -> Data {
+            let document = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+            let runs = try #require(document["runs"] as? [[String: Any]])
+            let match = try #require(runs.first { $0["id"] as? String == legacy.id.uuidString.lowercased()
+                || $0["id"] as? String == legacy.id.uuidString })
+            return try JSONSerialization.data(withJSONObject: match, options: [.sortedKeys])
+        }
+        let before = try storedLegacy()
+        try #require(store.record(dailyRun()))
+        #expect(try storedLegacy() == before, "Saving a new-policy run cannot rewrite a legacy run's bytes")
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.lastError == nil && reopened.runs.count == 2)
+        #expect(try storedLegacy() == before)
+    }
+
+    @Test(arguments: ["terminalKind", "unknownTerminalKind", "missingTerminalKind", "terminalAt",
+                      "outcomePrice", "adjustmentRatio", "adjustedEntry", "adjustedStop", "adjustedTarget",
+                      "dailyBars", "sameBarStopFirst", "unknownOutcomePolicy", "control"])
+    func corruptedTerminalReceiptsPreserveOriginalBytesAndReportAnError(field: String) throws {
+        let (store, url, defaults, suite) = try fileStore("terminal-corrupt")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let original = dailyRun()
+        try #require(store.record(original))
+        let stopped = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 121], lows: [98, 89]),
+            now: dailyNow(afterSessions: 2))
+        try #require(stopped.terminalKind == .stopHit && stopped.sameBarStopFirst == true)
+        try #require(store.recordEvaluation(stopped, runID: original.id, symbol: "ACME"))
+        let saved = try Data(contentsOf: url)
+
+        var document = try #require(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        var runs = try #require(document["runs"] as? [[String: Any]])
+        var evaluations = try #require(runs[0]["evaluations"] as? [String: Any])
+        var receipt = try #require(evaluations["ACME"] as? [String: Any])
+        switch field {
+        case "terminalKind": receipt["terminalKind"] = "targetHit"
+        case "unknownTerminalKind": receipt["terminalKind"] = "gapFill"
+        case "missingTerminalKind": receipt.removeValue(forKey: "terminalKind")
+        case "terminalAt": receipt["terminalAt"] = date("2026-09-15T04:00:00Z").timeIntervalSinceReferenceDate
+        case "outcomePrice": receipt["outcomePrice"] = 121
+        case "adjustmentRatio": receipt["adjustmentRatio"] = 2
+        case "adjustedEntry": receipt["adjustedEntry"] = 101
+        case "adjustedStop": receipt["adjustedStop"] = 80
+        case "adjustedTarget": receipt["adjustedTarget"] = 119
+        case "dailyBars": receipt["dailyBars"] = Array((receipt["dailyBars"] as! [[String: Any]]).dropLast())
+        case "sameBarStopFirst": receipt.removeValue(forKey: "sameBarStopFirst")
+        case "unknownOutcomePolicy": runs[0]["outcomePolicy"] = 99
+        default: break
+        }
+        evaluations["ACME"] = receipt
+        runs[0]["evaluations"] = evaluations
+        document["runs"] = runs
+        let corrupted = try JSONSerialization.data(withJSONObject: document)
+        try corrupted.write(to: url)
+
+        let reopened = History(storageURL: url, defaults: defaults)
+        if field == "control" {
+            #expect(reopened.lastError == nil && reopened.runs.first?.evaluations["ACME"] == stopped)
+        } else {
+            #expect(reopened.runs.isEmpty && reopened.lastError != nil, "\(field)")
+            #expect(!reopened.record(dailyRun()), "An unreadable store never overwrites the owner's bytes")
+        }
+        #expect(try Data(contentsOf: url) == corrupted, "\(field)")
+        // The pre-corruption bytes still decode on their own; nothing about the format changed.
+        try saved.write(to: url)
+        let restored = History(storageURL: url, defaults: defaults)
+        #expect(restored.lastError == nil && restored.runs.first?.evaluations["ACME"] == stopped)
     }
 
 }

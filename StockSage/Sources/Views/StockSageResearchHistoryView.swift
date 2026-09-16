@@ -32,7 +32,7 @@ struct StockSageResearchHomeSummary: View {
                 Text("Ready for review").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                 #endif
                 if summary.readyPredictions > 0 {
-                    Text("\(summary.readyPredictions) saved \(summary.readyPredictions == 1 ? "prediction is" : "predictions are") ready to check.")
+                    Text("\(summary.readyPredictions) saved \(summary.readyPredictions == 1 ? "prediction is" : "predictions are") active and ready to check.")
                         .font(.headline)
                     ForEach(summary.ready.prefix(3)) { run in
                         Button { selectedRun = run } label: {
@@ -63,15 +63,20 @@ struct StockSageResearchHomeSummary: View {
                     Text("Review dates could not be verified for \(summary.unavailablePredictions) saved \(summary.unavailablePredictions == 1 ? "prediction" : "predictions"). Open Saved research for details.")
                         .font(.callout).foregroundStyle(.orange)
                 }
-                Text("\(summary.evaluatedPredictions) outcomes checked · \(summary.rosePredictions) rose · \(summary.fellPredictions) fell · \(summary.flatPredictions) flat")
+                Text("\(summary.evaluatedPredictions) outcomes recorded · \(summary.targetHits) target hit · \(summary.stopHits) stop hit · \(summary.horizonCloses) horizon close")
                     .font(.callout).monospacedDigit()
                     .accessibilityIdentifier("home.research.outcomes")
-                Text("Direction only; no market comparison. Saved predictions can overlap, so these counts are not independent trades or a win rate.")
+                if summary.rosePredictions + summary.fellPredictions + summary.flatPredictions > 0 {
+                    Text("Earlier endpoint-only checks · \(summary.rosePredictions) rose · \(summary.fellPredictions) fell · \(summary.flatPredictions) flat")
+                        .font(.callout).monospacedDigit()
+                        .accessibilityIdentifier("home.research.legacy.outcomes")
+                }
+                Text("Separate counts, not a win rate. Saved predictions can overlap, so these are not independent trades, and still-active or unavailable predictions are excluded.")
                     .font(.caption).foregroundStyle(.secondary)
                 #if os(iOS)
                 StockSageResearchHistoryButton(store: store, history: history)
                 #endif
-                Text("Open Saved research to check due results. Outcomes are fetched only when you request a check.")
+                Text("Open Saved research to check active results. Settled sessions are also checked once when the app becomes active; nothing is fetched while it is closed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             #if os(macOS)
@@ -138,7 +143,8 @@ struct StockSageResearchHomeSummary: View {
                                 Text(prediction.name).font(.callout)
                                 Text(prediction.reason).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                                 Text(StockSageResearchHistoryView.outcomeSummary(
-                                    run.evaluations[prediction.symbol] ?? StockSageResearchHistory.availability(for: run, now: now)))
+                                    run.evaluations[prediction.symbol] ?? StockSageResearchHistory.availability(for: run, now: now),
+                                    run: run))
                                     .font(.caption).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                                 .contentShape(Rectangle())
@@ -217,11 +223,11 @@ struct StockSageResearchHistoryView: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Original picks stay unchanged. New runs measure 7 or 14 full trading sessions from the next trading date’s open.")
+                        Text("Original picks stay unchanged. New runs complete at the first settled session that reaches the captured stop or target, otherwise at the exact 7th or 14th session close.")
                             .font(.callout)
                         DisclosureGroup("How outcome checks work") {
-                            Text("Review dates use the verified Nasdaq calendar, including holidays and early closes. Checks become available after the target New York date ends. Older runs retain their original schedule, shown in each saved run.")
-                            Text("Compare the next trading date’s opening price with the review close, on the same split-adjusted basis. Movement before completion cannot count as success. This is a forward price benchmark, not realized trading profit.")
+                            Text("Sessions use the verified Nasdaq calendar, including holidays and early closes. Only New York dates that have wholly ended are examined, so each split-adjusted daily aggregate is settled. Older runs retain their original endpoint-only schedule, shown in each saved run.")
+                            Text("Daily bars cannot establish intraday order or an actual fill. A session reaching both levels is recorded as a stop, and a session that gaps through a level is observed at its open. This is a measured research scenario, not realized trading profit.")
                             Text(Self.directionOnlyDisclosure)
                         }
                         .font(.callout).foregroundStyle(.secondary)
@@ -264,7 +270,7 @@ struct StockSageResearchHistoryView: View {
                                     Text(run.horizon.title).font(.headline)
                                     Text(run.completedAt.formatted(date: .abbreviated, time: .shortened))
                                         .font(.subheadline).foregroundStyle(.secondary)
-                                    Text("\(run.predictions.count) saved \(run.predictions.count == 1 ? "pick" : "picks") · \(reviewed) \(reviewed == 1 ? "outcome" : "outcomes") available")
+                                    Text("\(run.predictions.count) saved \(run.predictions.count == 1 ? "pick" : "picks") · \(reviewed) \(reviewed == 1 ? "outcome" : "outcomes") recorded")
                                         .font(.callout)
                                     Text(Self.status(for: run)).font(.caption).foregroundStyle(.secondary)
                                 }.padding(.vertical, 4)
@@ -301,24 +307,43 @@ struct StockSageResearchHistoryView: View {
         return formatter.string(from: date) + " ET"
     }
 
-    static func outcomeSummary(_ evaluation: StockSageResearchHistory.Evaluation) -> String {
+    static func terminalLabel(_ kind: StockSageResearchHistory.Evaluation.TerminalKind) -> String {
+        switch kind {
+        case .targetHit: return "Target hit"
+        case .stopHit: return "Stop hit"
+        case .horizonClose: return "Horizon close"
+        }
+    }
+
+    static func outcomeSummary(_ evaluation: StockSageResearchHistory.Evaluation,
+                               run: StockSageResearchHistory.Run? = nil) -> String {
+        if evaluation.state == .evaluated, let kind = evaluation.terminalKind, let change = evaluation.priceReturn {
+            return terminalLabel(kind) + " · " + change.formatted(.percent.precision(.fractionLength(2)))
+                + (evaluation.terminalAt.map { " · " + sessionDateLabel($0) } ?? "")
+        }
         if evaluation.state == .evaluated, let change = evaluation.priceReturn, let direction = evaluation.direction {
             let label = direction == .flat ? "Flat" : (direction == .rose ? "Rose" : "Fell")
             return label + " · " + change.formatted(.percent.precision(.fractionLength(2)))
                 + (evaluation.targetCloseAt.map { " · " + sessionDateLabel($0) } ?? "")
         }
         switch evaluation.state {
-        case .due: return "Ready for review"
-        case .notDue: return "Awaiting review date"
-        case .dataUnavailable, .evaluated: return "Outcome unavailable"
+        case .due, .notDue:
+            // A daily-policy prediction is simply active until a level or the horizon resolves it.
+            if run?.outcomePolicy == .dailyBarFirstHit { return "Active" }
+            return evaluation.state == .due ? "Ready for review" : "Awaiting review date"
+        case .dataUnavailable: return "Data unavailable"
+        case .evaluated: return "Outcome unavailable"
         }
     }
 
     static func status(for run: StockSageResearchHistory.Run, now: Date = Date()) -> String {
         if run.rankingFailure != nil { return "Comparison unavailable · no ranked picks to review" }
         let availability = StockSageResearchHistory.availability(for: run, now: now)
-        guard let date = StockSageResearchHistory.reviewAvailableAt(for: run) else { return availability.note }
+        guard let date = StockSageResearchHistory.checkAvailableAt(for: run) else { return availability.note }
         let dateLabel = date.formatted(date: .abbreviated, time: .shortened)
+        if run.outcomePolicy == .dailyBarFirstHit {
+            return availability.state == .notDue ? "Monitoring starts after \(dateLabel)" : "Checked on settled sessions since \(dateLabel)"
+        }
         return availability.state == .notDue ? "Review available after \(dateLabel)" : "Review available since \(dateLabel)"
     }
 }
@@ -422,7 +447,46 @@ struct StockSageResearchHistoryDetail: View {
     @ViewBuilder private func outcome(_ evaluation: StockSageResearchHistory.Evaluation,
                                      run: StockSageResearchHistory.Run) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let change = evaluation.priceReturn, let direction = evaluation.direction {
+            if let kind = evaluation.terminalKind, let change = evaluation.priceReturn {
+                Text("\(StockSageResearchHistoryView.terminalLabel(kind)) · \(change.formatted(.percent.precision(.fractionLength(2))))")
+                    .font(.title3.weight(.semibold))
+                if let session = evaluation.terminalAt {
+                    Text("Terminal session: \(StockSageResearchHistoryView.sessionDateLabel(session))")
+                        .font(.callout)
+                }
+                if let outcomePrice = evaluation.outcomePrice {
+                    Text("Observed outcome price: \(price(outcomePrice))")
+                        .font(.callout).monospacedDigit()
+                }
+                if let entry = evaluation.adjustedEntry, let stop = evaluation.adjustedStop,
+                   let target = evaluation.adjustedTarget {
+                    Text("Adjusted scenario · entry \(price(entry)), stop \(price(stop)), target \(price(target))")
+                        .font(.callout).monospacedDigit()
+                    if let ratio = evaluation.adjustmentRatio, ratio != 1 {
+                        Text("Captured levels rebased by \(ratio.formatted(.number.precision(.fractionLength(6)))) from the freshly adjusted reference close. The original saved scenario is unchanged.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if let baseline = evaluation.comparisonReferencePrice,
+                   let day = evaluation.comparisonReferenceDate {
+                    Text("Measured from the next trading-day open \(price(baseline)) · \(StockSageResearchHistoryView.sessionDateLabel(day))")
+                        .font(.callout).monospacedDigit()
+                }
+                if let bars = evaluation.dailyBars {
+                    DisclosureGroup("Verified daily bars · \(bars.count) \(bars.count == 1 ? "session" : "sessions")") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Every session examined through the terminal one. A missing session is never replaced by an adjacent bar.")
+                                .foregroundStyle(.secondary)
+                            ForEach(bars, id: \.date) { bar in
+                                LabeledContent(StockSageResearchHistoryView.sessionDateLabel(bar.date),
+                                    value: "O \(price(bar.open)) · H \(price(bar.high)) · L \(price(bar.low)) · C \(price(bar.close))")
+                            }
+                        }.font(.callout).padding(.vertical, 6)
+                    }
+                }
+                Text(StockSageResearchHistoryView.directionOnlyDisclosure)
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let change = evaluation.priceReturn, let direction = evaluation.direction {
                 Text(direction == .flat ? "Flat · unchanged" :
                     "\(direction == .rose ? "Rose" : "Fell") · \(change.formatted(.percent.precision(.fractionLength(2))))")
                     .font(.title3.weight(.semibold))
@@ -461,13 +525,18 @@ struct StockSageResearchHistoryDetail: View {
                     Text("Complete daily-close path was not recorded or could not be verified; only the endpoint comparison is available.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+            } else if run.outcomePolicy == .dailyBarFirstHit {
+                Text(evaluation.state == .dataUnavailable ? "Data unavailable" : "Active")
+                    .font(.headline)
             } else {
                 Text(evaluation.state == .notDue ? "Not due yet" :
                     (evaluation.state == .due ? "Ready to check" : "Outcome unavailable"))
                     .font(.headline)
             }
             if let close = evaluation.targetCloseAt {
-                Text("Review session: \(StockSageResearchHistoryView.sessionDateLabel(close))")
+                Text(run.outcomePolicy == .dailyBarFirstHit
+                        ? "Scheduled horizon session: \(StockSageResearchHistoryView.sessionDateLabel(close))"
+                        : "Review session: \(StockSageResearchHistoryView.sessionDateLabel(close))")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(evaluation.note).font(.caption).foregroundStyle(.secondary)

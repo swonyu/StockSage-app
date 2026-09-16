@@ -114,6 +114,129 @@ struct StockSageIOSPresentationTests {
     }
 
     @Test(arguments: [false, true])
+    func savedResearchRendersEveryTerminalOutcomeAtAccessibilitySizes(accessibility: Bool) async throws {
+        typealias H = StockSageResearchHistory
+        let suite = "stocksage.ios.terminal-outcomes.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        let history = H(storageURL: nil, defaults: defaults)
+        func stamp(_ value: String) throws -> Date { try Date(value, strategy: .iso8601) }
+        let reference = try stamp("2026-09-11T04:00:00Z")
+
+        func dailyRun(_ symbol: String, completed: String) throws -> H.Run {
+            .init(id: UUID(), startedAt: try stamp(completed).addingTimeInterval(-60),
+                completedAt: try stamp(completed), horizon: .week,
+                predictions: [.init(symbol: symbol, name: "\(symbol) synthetic company", action: "Strong Buy",
+                    reason: "Original \(symbol) research opinion, captured before any outcome.",
+                    risk: "Synthetic risk: demand and prices can change.", evidence: ["F1"],
+                    facts: ["Original synthetic evidence captured before review."], model: "fixture-model",
+                    note: "Synthetic unvalidated research only.", referencePrice: 100, referenceDate: reference,
+                    levels: .init(entry: 100, stop: 90, target: 120, at: reference,
+                        basis: "Synthetic original daily-price scenario, not a forecast."))],
+                coverage: .init(requested: 2, checked: 2, incomplete: 1, buyCount: 1, selection: nil),
+                measurementPolicy: .nextTradingDateSessions, outcomePolicy: .dailyBarFirstHit)
+        }
+        func observation(_ symbol: String, sessions: [String], highs: [Double], lows: [Double],
+                         closes: [Double]) throws -> H.Observation {
+            var dates = [reference], opens = [100.0], high = [100.0], low = [100.0], close = [100.0]
+            for (index, session) in sessions.enumerated() {
+                dates.append(try stamp(session)); opens.append(100)
+                high.append(highs[index]); low.append(lows[index]); close.append(closes[index])
+            }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "America/New_York")!
+            let settled = calendar.date(byAdding: .day, value: 1,
+                to: calendar.startOfDay(for: try stamp(sessions[sessions.count - 1])))!
+            return .init(history: .init(symbol: symbol, dates: dates, opens: opens, highs: high, lows: low,
+                closes: close, volumes: Array(repeating: 100, count: dates.count), priceSource: .massiveDaily),
+                splitAdjusted: true, provider: "Synthetic adjusted daily prices", fetchedAt: settled)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        func settledNow(_ session: String) throws -> Date {
+            calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: try stamp(session)))!
+                .addingTimeInterval(60)
+        }
+
+        // One bar reaching both levels: the conservative stop-first rule applies.
+        let stopped = try dailyRun("STOP", completed: "2026-09-14T21:00:00Z")
+        let stopReceipt = H.evaluate(stopped.predictions[0], in: stopped,
+            observation: try observation("STOP", sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z"],
+                highs: [105, 121], lows: [98, 89], closes: [100, 100]),
+            now: try settledNow("2026-09-16T04:00:00Z"))
+        try #require(stopReceipt.terminalKind == .stopHit && stopReceipt.sameBarStopFirst == true)
+
+        let hit = try dailyRun("TGET", completed: "2026-09-14T21:00:00Z")
+        let hitReceipt = H.evaluate(hit.predictions[0], in: hit,
+            observation: try observation("TGET", sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z"],
+                highs: [105, 121], lows: [98, 95], closes: [100, 118]),
+            now: try settledNow("2026-09-16T04:00:00Z"))
+        try #require(hitReceipt.terminalKind == .targetHit)
+
+        let quiet = try dailyRun("HRZN", completed: "2026-09-14T21:00:00Z")
+        let sessions = ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z", "2026-09-17T04:00:00Z",
+                        "2026-09-18T04:00:00Z", "2026-09-21T04:00:00Z", "2026-09-22T04:00:00Z",
+                        "2026-09-23T04:00:00Z"]
+        let quietReceipt = H.evaluate(quiet.predictions[0], in: quiet,
+            observation: try observation("HRZN", sessions: sessions,
+                highs: Array(repeating: 105, count: 7), lows: Array(repeating: 95, count: 7),
+                closes: Array(repeating: 97, count: 7)),
+            now: try settledNow("2026-09-23T04:00:00Z"))
+        try #require(quietReceipt.terminalKind == .horizonClose)
+
+        // Completed long enough ago that it is always past its first monitoring session.
+        let active = try dailyRun("ACTV", completed: "2026-01-02T21:00:00Z")
+
+        for (run, receipt) in [(stopped, stopReceipt), (hit, hitReceipt), (quiet, quietReceipt)] {
+            try #require(history.record(run))
+            try #require(history.recordEvaluation(receipt, runID: run.id, symbol: run.predictions[0].symbol))
+        }
+        try #require(history.record(active))
+        let originalRuns = history.runs
+
+        try await capture(StockSageResearchHistoryView(store: store, history: history).defaultAppStorage(defaults),
+            name: "research-terminal-outcomes", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
+            let check = try await reveal(in: window, identifier: "research.history.check")
+            #expect(check.accessibilityLabel?.contains("Check active results") == true)
+            #expect(check.accessibilityTraits.contains(.notEnabled), "Native fixture outcome checks stay disabled")
+            _ = try await reveal(in: window, labelContaining: "1 target hit")
+            _ = try await reveal(in: window, labelContaining: "1 stop hit")
+            _ = try await reveal(in: window, labelContaining: "1 horizon close")
+            try await saveViewport(window, name: "research-terminal-summary", accessibility: accessibility)
+
+            let link = try await reveal(in: window, identifier: "research.history.run.\(stopped.id)")
+            try #require(link.accessibilityActivate())
+            _ = try await reveal(in: window, labelContaining: "Stop hit")
+            _ = try await reveal(in: window, labelContaining: "Adjusted scenario")
+            _ = try await reveal(in: window, labelContaining: "Observed outcome price")
+            _ = try await reveal(in: window, labelContaining: "the conservative stop-first rule was applied")
+            _ = try await reveal(in: window, labelContaining: "Synthetic adjusted daily prices")
+            try await saveViewport(window, name: "research-terminal-stop-detail", accessibility: accessibility)
+        }
+        try await capture(NavigationStack { StockSageResearchHistoryDetail(history: history, runID: hit.id) },
+            name: "research-terminal-target", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
+            _ = try await reveal(in: window, labelContaining: "Target hit")
+            _ = try await reveal(in: window, labelContaining: "Daily bars cannot establish intraday order")
+            #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("stop-first rule") == true })
+            try await saveViewport(window, name: "research-terminal-target-detail", accessibility: accessibility)
+        }
+        try await capture(NavigationStack { StockSageResearchHistoryDetail(history: history, runID: quiet.id) },
+            name: "research-terminal-horizon", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
+            _ = try await reveal(in: window, labelContaining: "Horizon close")
+            try await saveViewport(window, name: "research-terminal-horizon-detail", accessibility: accessibility)
+        }
+        try await capture(NavigationStack { StockSageResearchHistoryDetail(history: history, runID: active.id) },
+            name: "research-terminal-active", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
+            _ = try await reveal(in: window, labelContaining: "Active")
+            #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("Target hit") == true })
+            try await saveViewport(window, name: "research-terminal-active-detail", accessibility: accessibility)
+        }
+        #expect(history.runs == originalRuns && history.lastError == nil && !history.isChecking,
+                "Rendering terminal outcomes must not rewrite original research or recorded receipts")
+    }
+
+    @Test(arguments: [false, true])
     func savedResearchHistoryShowsOriginalEvidenceAndLaterOutcomes(accessibility: Bool) async throws {
         typealias H = StockSageResearchHistory
         let suite = "stocksage.ios.saved-research.\(UUID().uuidString)"
