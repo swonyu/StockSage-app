@@ -187,7 +187,7 @@ struct StockSageHorizonAnalyzeTests {
     private static func verdictPayload(action: String = "Hold") -> Data {
         let json = #"{"evidence":["F1"],"action":"\#(action)","reason":"qualitative case","risk":"qualitative counter-case"}"#
         return try! JSONSerialization.data(withJSONObject: [
-            "model": Server.defaultModel,
+            "model": StockSageModelHarnessTests.ollamaFixtureModel,
             "message": ["content": json],
             "done_reason": "stop",
         ])
@@ -208,8 +208,8 @@ struct StockSageHorizonAnalyzeTests {
                      filings: @escaping (String, Date) async -> StockSageDisclosureService.FilingsObservation = { _, at in .init(checkedAt: at, outcome: .unavailable(.unreachable), filings: []) },
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
                      ) async -> Research.Result {
-        let config = Server.config(url: isOllama ? Server.defaultURL : Server.lmStudioURL,
-                                   model: isOllama ? Server.defaultModel : Server.lmStudioModel)!
+        let config = Server.config(url: isOllama ? StockSageModelHarnessTests.ollamaFixtureURL : Server.lmStudioURL,
+                                   model: isOllama ? StockSageModelHarnessTests.ollamaFixtureModel : Server.lmStudioModel)!
         // Isolated defaults: never the real parent-app preference domain.
         let suiteName = "stocksage.horizon.analyze.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
@@ -271,7 +271,7 @@ struct StockSageHorizonAnalyzeTests {
         guard case .captured(let capture) = gathered else { Issue.record("Expected isolated capture"); return }
         #expect(historyCalls == 1 && newsCalls == 1 && earningsCalls == 1 && filingsCalls == 1 && snapshotCalls == 1)
         #expect(capture.nextEarnings?.checkedAt != nil)
-        let config = try #require(Server.config(url: Server.defaultURL, model: Server.defaultModel))
+        let config = try #require(Server.config(url: StockSageModelHarnessTests.ollamaFixtureURL, model: StockSageModelHarnessTests.ollamaFixtureModel))
         var prompts: [String] = [], results: [Research.Result] = []
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -318,7 +318,7 @@ struct StockSageHorizonAnalyzeTests {
             at: strict.at, citedKeys: strict.evidenceReceipt?.citedKeys ?? []))
         let rejected = await Research.assess(capture, horizon: .week, config: config, isOllama: true,
             allowed: { true }, modelTransport: { request in
-                Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
                     "message": ["content": "invalid research answer"], "done": true, "done_reason": "stop"]), request)
             }, evidenceIsCurrent: { _ in true }, diagnostics: diagnostics)
         let rejectedID = try #require(rejected.diagnosticID)
@@ -339,7 +339,7 @@ struct StockSageHorizonAnalyzeTests {
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
-        let config = try #require(Server.config(url: Server.defaultURL, model: Server.defaultModel))
+        let config = try #require(Server.config(url: StockSageModelHarnessTests.ollamaFixtureURL, model: StockSageModelHarnessTests.ollamaFixtureModel))
         var providerCalls: [String: Int] = [:]
         var prompts: [String: String] = [:]
         var held: [String: CheckedContinuation<Void, Never>] = [:]
@@ -682,7 +682,7 @@ struct StockSageHorizonAnalyzeTests {
             #expect(system.contains("same-session day-trading"))
             #expect(system.contains("beyond 14 trading days"))
             if calls == 1 {
-                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
                     "message": ["content": draft], "done_reason": "stop"]), request)
             }
             #expect(messages.last?["content"]?.contains("Copy action, reason and risk EXACTLY") == true)
@@ -704,14 +704,14 @@ struct StockSageHorizonAnalyzeTests {
             calls += 1
             if calls == 1 {
                 if scenario == "cancelled" { allowed = false }
-                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+                return Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
                     "message": ["content": String(decoding: draft, as: UTF8.self)], "done_reason": "stop"]), request)
             }
             let repaired = try JSONSerialization.data(withJSONObject: ["evidence": ["F1"],
                 "action": scenario == "changed action" ? "Buy" : "Hold",
                 "reason": scenario == "changed prose" ? "rewritten case" : "qualitative case",
                 "risk": "qualitative counter-case"])
-            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
                 "message": ["content": String(decoding: repaired, as: UTF8.self)], "done_reason": "stop"]), request)
         })
         #expect(result.verdict == nil)
@@ -743,7 +743,7 @@ struct StockSageHorizonAnalyzeTests {
         #expect(Server.promptFits(system: sentSystem, user: sentUser,
                                   outputTokens: Research.researchOutputTokens,
                                   contextTokens: Server.researchContextTokens))
-        #expect(result.model == Server.defaultModel)
+        #expect(result.model == StockSageModelHarnessTests.ollamaFixtureModel)
         #expect(!result.facts.isEmpty)
     }
 
@@ -772,7 +772,7 @@ struct StockSageHorizonAnalyzeTests {
 
     @Test func aDistantEarningsDateCannotBecomeAnImminentReport() async throws {
         let content = #"{"evidence":["F1"],"action":"Buy","reason":"Demand supports the case.","risk":"Earnings gap risk exists as the next report is in two weeks."}"#
-        let payload = try JSONSerialization.data(withJSONObject: ["model": Server.defaultModel,
+        let payload = try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
             "message": ["content": content], "done_reason": "stop"])
         let result = await run(horizon: .fortnight, next: { _, at in
             .answered(.init(date: at.addingTimeInterval(60 * 86_400), confirmed: true))
@@ -783,7 +783,7 @@ struct StockSageHorizonAnalyzeTests {
 
     @Test func aTruncatedVerdictIsRefusedRatherThanPublished() async throws {
         let truncated = try! JSONSerialization.data(withJSONObject: [
-            "model": Server.defaultModel,
+            "model": StockSageModelHarnessTests.ollamaFixtureModel,
             "message": ["content": #"{"evidence":["F1"],"action":"Buy","reason":"cut off mid"#],
             "done_reason": "length",
         ])
@@ -872,7 +872,7 @@ struct StockSageHorizonAnalyzeTests {
 
     @Test func anUnparseableAnswerYieldsNoOpinion() async throws {
         let garbage = try! JSONSerialization.data(withJSONObject: [
-            "model": Server.defaultModel,
+            "model": StockSageModelHarnessTests.ollamaFixtureModel,
             "message": ["content": "I think you should buy it."],
             "done_reason": "stop",
         ])

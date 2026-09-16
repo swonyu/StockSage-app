@@ -18,7 +18,10 @@ import Testing
         #expect(config.isRunPodGemma && config.requiresExternalAccess && config.requiresStrictOutput)
         #expect(!config.isManagedLMStudio && !config.isLMStudioGemma)
         #expect(config.isRunPodEndpoint && !config.supportsLocalUnload)
-        for url in [S.lmStudioURL, S.defaultURL] {
+        // Literal, not S.defaultURL: this is the only assertion that 11434 is in
+        // supportsLocalUnload's allow-list. Once Qwen removal Step 7 flips defaultURL to
+        // lmStudioURL, using the constant here would silently test the same URL twice.
+        for url in [S.lmStudioURL, "http://127.0.0.1:11434"] {
             #expect(S.config(url: url, model: S.gemmaModel)?.supportsLocalUnload == true)
         }
         for url in ["http://example.com:1234", S.lmStudioURL + "/v1", S.runPodURL] {

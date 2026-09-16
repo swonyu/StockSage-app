@@ -142,7 +142,9 @@ struct StockSageModelDownloadTests {
 
     @Test(arguments: [false, true])
     func quitUnloadsOnlySelectedModelAndVerifiesItIsGone(ollama: Bool) async throws {
-        let config = try #require(S.config(url: ollama ? S.defaultURL : S.lmStudioURL, model: S.lmStudioModel))
+        // Literal, not S.defaultURL: this test is about Ollama-vs-LM-Studio unload branching by
+        // port, not about whatever the shipped default happens to be (Qwen removal Step 7 flips it).
+        let config = try #require(S.config(url: ollama ? "http://127.0.0.1:11434" : S.lmStudioURL, model: S.lmStudioModel))
         var unloaded = false
         var posts = 0
         let result = await S.unloadOnQuit(config, transport: { request in

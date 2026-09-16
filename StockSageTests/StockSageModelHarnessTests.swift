@@ -48,6 +48,13 @@ struct StockSageModelHarnessTests {
 
     typealias S = StockSageLocalModelServer
 
+    // A generic Ollama backend fixture, distinct from StockSageLocalModelServer's shipped
+    // defaultURL/defaultModel so that flipping the shipped default (Qwen removal Step 7) does
+    // not silently repoint what these tests exercise. These constants describe "a generic
+    // Ollama server", not the app's default.
+    static let ollamaFixtureURL = "http://127.0.0.1:11434"
+    static let ollamaFixtureModel = "fixture-ollama-model"
+
     private static func ok(_ object: [String: Any], _ request: URLRequest) throws -> (Data, URLResponse) {
         (try JSONSerialization.data(withJSONObject: object),
          HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
@@ -59,7 +66,7 @@ struct StockSageModelHarnessTests {
     // (Ollama, 127.0.0.1:11434, "qwen3.8") dispatched any size of prompt and relied on the server
     // to truncate silently. A caller that packs 12,000 bytes into a 4,096-unit window must be told.
     @Test @MainActor func defaultOllamaBackendAlsoBoundsThePromptBeforeDispatch() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         var calls = 0
         let result = await S.completeDetailed(config, isOllama: true, system: "instructions",
             user: String(repeating: "b", count: 12_000), maxTokens: 192, transport: { request in
@@ -76,7 +83,7 @@ struct StockSageModelHarnessTests {
     // A larger declared context window must actually raise the allowance; the budget was hardcoded
     // to 4096 regardless of the `contextTokens` the caller asked for.
     @Test @MainActor func budgetFollowsTheDeclaredContextWindow() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let user = String(repeating: "b", count: 6_000)
         var narrowCalls = 0, wideCalls = 0
         _ = await S.completeDetailed(config, isOllama: true, system: "s", user: user,
@@ -111,8 +118,17 @@ struct StockSageModelHarnessTests {
     // budget to every backend silently broke AI assessment and the Catalyst narrator: both
     // compile up to 12,000 bytes of facts, and neither fitted a 4,096-unit window. These cases
     // use each caller's ACTUAL instruction string and ACTUAL output budget.
+    //
+    // STRENGTHENED (Qwen removal Step 3): production never sends a caller's raw output token
+    // count -- it sends `config.reservedOutputTokens(for:)`, which DOUBLES any initial value in
+    // 1...512 once `requiresStrictOutput` is true. After Step 7 the strict Gemma profile is the
+    // DEFAULT path, so this guard must model that doubling, not the pre-doubling raw value, or a
+    // caller could pass this test while failing on every real request. Also adds the previously
+    // uncovered `qualify` binding caller (outputTokens: 384, StockSageHorizonResearch.swift).
     @Test func everyEvidenceHeavyCallerFitsItsDeclaredWindow() {
         let research = S.researchContextTokens
+        let strictConfig = try! #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        #expect(strictConfig.requiresStrictOutput)
         let callers: [(name: String, system: String, outputTokens: Int, context: Int)] = [
             ("assessment", StockSageAIAssessment.instructions, 240, research),
             ("paper", StockSagePaperAutomation.researchInstructions,
@@ -121,15 +137,19 @@ struct StockSageModelHarnessTests {
              StockSageHorizonResearch.researchOutputTokens, research),
             ("horizon-fortnight", StockSageHorizonResearch.Horizon.fortnight.instructions,
              StockSageHorizonResearch.researchOutputTokens, research),
+            ("horizon-qualify", StockSageHorizonResearch.Horizon.week.instructions, 384, research),
             ("narrator", StockSageCatalystNarrator.instructions, 170, research),
         ]
         for caller in callers {
-            let allowance = S.maximumUserBytes(system: caller.system, outputTokens: caller.outputTokens,
+            let reserved = strictConfig.reservedOutputTokens(for: caller.outputTokens)
+            let allowance = S.maximumUserBytes(system: caller.system, outputTokens: reserved,
                                                contextTokens: caller.context)
             // Each of these callers caps its compiled facts at 12,000 UTF-8 bytes. If the
             // allowance drops below that, the caller starts failing on every real request.
+            // Measured, not guessed: print the actual headroom above the 12,000-byte floor.
+            print("[everyEvidenceHeavyCallerFitsItsDeclaredWindow] \(caller.name): raw=\(caller.outputTokens) reserved=\(reserved) allowance=\(allowance) headroom=\(allowance - 12_000)")
             #expect(allowance >= 12_000,
-                    "\(caller.name) allows only \(allowance) bytes but compiles up to 12,000")
+                    "\(caller.name) allows only \(allowance) bytes (reserved output \(reserved), doubled from \(caller.outputTokens)) but compiles up to 12,000")
         }
     }
 
@@ -284,7 +304,7 @@ struct StockSageModelHarnessTests {
     // text, because a cut-off Chat answer is still worth reading. The refusal therefore belongs to
     // the callers that publish a financial verdict, and is expressed by this predicate.
     @Test @MainActor func truncationIsReportedBySeamAndRefusedByVerdictCallers() async throws {
-        for (url, model, isOllama) in [(S.defaultURL, S.defaultModel, true),
+        for (url, model, isOllama) in [(Self.ollamaFixtureURL, Self.ollamaFixtureModel, true),
                                        ("http://127.0.0.1:9999", "some-other-model", false)] {
             let config = try #require(S.config(url: url, model: model))
             let result = await S.completeDetailed(config, isOllama: isOllama, system: "s", user: "f",
@@ -303,10 +323,10 @@ struct StockSageModelHarnessTests {
     }
 
     @Test @MainActor func aFinishedAnswerIsNotTreatedAsTruncated() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
-                try Self.ok(["model": S.defaultModel, "message": ["content": "Complete."],
+                try Self.ok(["model": Self.ollamaFixtureModel, "message": ["content": "Complete."],
                              "done_reason": "stop"], request)
             })
         let completion = try #require(try? result.get())
@@ -339,10 +359,10 @@ struct StockSageModelHarnessTests {
     // The strict LM Studio profile keeps its stricter rule: it requires a positively confirmed
     // "stop", so absent metadata is refused there and accepted everywhere else.
     @Test @MainActor func absentFinishMetadataStaysAcceptableOffTheStrictProfile() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
-                try Self.ok(["model": S.defaultModel, "message": ["content": "A complete answer."]], request)
+                try Self.ok(["model": Self.ollamaFixtureModel, "message": ["content": "A complete answer."]], request)
             })
         #expect((try? result.get())?.text == "A complete answer.")
         let completion = try result.get()
@@ -352,7 +372,7 @@ struct StockSageModelHarnessTests {
     // MARK: Model identity on every backend, without breaking Ollama's ":latest" spelling
 
     @Test @MainActor func anotherModelsAnswerIsRejectedOnEveryBackend() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
                 try Self.ok(["model": "some-other-model", "message": ["content": "answer"],
@@ -367,10 +387,10 @@ struct StockSageModelHarnessTests {
     // Ollama tags a served model "name:latest" while the viewer types the bare name. The identity
     // check must not reject the very server the app ships pointed at.
     @Test @MainActor func ollamaLatestSuffixIsTheSameModel() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
-                try Self.ok(["model": S.defaultModel + ":latest", "message": ["content": "answer"],
+                try Self.ok(["model": Self.ollamaFixtureModel + ":latest", "message": ["content": "answer"],
                              "done_reason": "stop"], request)
             })
         #expect((try? result.get())?.text == "answer")
@@ -378,7 +398,7 @@ struct StockSageModelHarnessTests {
 
     // A server that reports no model at all stays acceptable off the strict profile.
     @Test @MainActor func absentModelMetadataStaysAcceptableOffTheStrictProfile() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
                 try Self.ok(["message": ["content": "answer"], "done_reason": "stop"], request)
@@ -425,11 +445,11 @@ struct StockSageModelHarnessTests {
     // Nothing anywhere measured how long a model turn spent waiting versus generating, so no
     // caller could show elapsed time or explain a slow turn.
     @Test @MainActor func completionCarriesItsOwnElapsedTime() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
                 try await Task.sleep(nanoseconds: 20_000_000)
-                return try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                return try Self.ok(["model": Self.ollamaFixtureModel, "message": ["content": "answer"],
                                     "done_reason": "stop"], request)
             })
         let completion = try #require(try? result.get())
@@ -440,7 +460,7 @@ struct StockSageModelHarnessTests {
     }
 
     @Test @MainActor func elapsedTimeIsRecordedForFailuresToo() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { _ in throw URLError(.timedOut) })
         guard case .failure(let failure) = result else {
@@ -573,7 +593,7 @@ struct StockSageModelHarnessTests {
     // it must never block a request, and it must never leave a request permanently counted.
 
     @Test @MainActor func aLoneRequestReportsNoContention() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         // The release is deferred onto an unstructured task, so an earlier case's slot may still
         // be draining. Wait for zero before asserting zero, or this reads another test's request.
         for _ in 0..<100 where await S.currentInFlight() != 0 {
@@ -581,7 +601,7 @@ struct StockSageModelHarnessTests {
         }
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
-                try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                try Self.ok(["model": Self.ollamaFixtureModel, "message": ["content": "answer"],
                              "done_reason": "stop"], request)
             })
         let completion = try #require(try? result.get())
@@ -592,13 +612,13 @@ struct StockSageModelHarnessTests {
     // Two overlapping requests must each observe the other. The transport blocks until both
     // have entered, which is only possible if the counter does not serialise them.
     @Test @MainActor func overlappingRequestsEachObserveTheOther() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         let bothEntered = AsyncGate()
         func call() async -> S.CompletionResult {
             await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
                 transport: { request in
                     await bothEntered.arriveAndWait()
-                    return try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                    return try Self.ok(["model": Self.ollamaFixtureModel, "message": ["content": "answer"],
                                         "done_reason": "stop"], request)
                 })
         }
@@ -614,7 +634,7 @@ struct StockSageModelHarnessTests {
     // A request that fails must still release its slot, or observed concurrency would creep
     // upward forever and the measurement would be worthless.
     @Test @MainActor func aFailedRequestDoesNotStayCounted() async throws {
-        let config = try #require(S.config(url: S.defaultURL, model: S.defaultModel))
+        let config = try #require(S.config(url: Self.ollamaFixtureURL, model: Self.ollamaFixtureModel))
         for _ in 0..<5 {
             _ = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
                 transport: { _ in throw URLError(.timedOut) })
@@ -627,7 +647,7 @@ struct StockSageModelHarnessTests {
 
         let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "f",
             transport: { request in
-                try Self.ok(["model": S.defaultModel, "message": ["content": "answer"],
+                try Self.ok(["model": Self.ollamaFixtureModel, "message": ["content": "answer"],
                              "done_reason": "stop"], request)
             })
         #expect((try? result.get())?.diagnostic.concurrentRequests == 0,
