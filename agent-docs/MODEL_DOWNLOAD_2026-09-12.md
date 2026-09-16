@@ -1,5 +1,11 @@
 # Missing-model recovery
 
+**RETIRED (Qwen removal Step 9, 2026-09-16).** This document describes the Qwen 9B managed
+download subsystem, deleted whole in Step 5 of `docs/reviews/2026-09-16-qwen-to-gemma-audit.md`
+(`StockSageModelDownload.swift`, its "Use LM Studio · Qwen3.5 9B" button and download panel).
+Gemma has no verified download source and no equivalent mechanism exists. Kept below as the
+historical record of what shipped and why, not as current behavior.
+
 Owner request: download the model when missing, using the current recommended version.
 
 ## Implementation contract

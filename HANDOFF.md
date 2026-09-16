@@ -1,3 +1,46 @@
+## Qwen-to-Gemma removal, Steps 1-8 of 9 complete — 16 September 2026
+
+Owner directive: "i dont want qwen anymore i have gemma4 31b." A 199-agent audit
+(`docs/reviews/2026-09-16-qwen-to-gemma-audit.md`, 265 findings) produced a 9-step
+ordered removal plan; 8 of 9 steps are implemented, TDD'd, gated and committed in
+this worktree (`codex/research-pipeline-fixes-20260915`, commits `027b5fc`..`7ede07d`
+on top of `c532ce7`). Step 9 (this entry, plus full gate + visual QA) is in progress.
+
+Summary: `lmStudioModel`/`isLMStudio9B`/`isManagedLMStudio` and the entire Qwen
+9B managed download subsystem (`StockSageModelDownload.swift`, its UI button and
+panel) are deleted. `managedInventory(_:modelKey:)` no longer defaults to a Qwen
+identity. A one-time migration (`StockSageModelIdentityMigration.swift`) moves a
+saved Qwen setting to Gemma on next launch; a scoped `isRetiredManagedIdentity`
+backstop refuses the retired identity on the two managed ports (:1234/:18080)
+without affecting Qwen models used generically elsewhere. The shipped default
+(`defaultURL`/`defaultModel`) now points at the managed Gemma pair. Every
+user-facing "Qwen" string now says "the model"/"model research" generically, or
+names the actually-configured model where a request is in flight. Two persisted
+identifiers are deliberately untouched (`stocksage.qwenPaper.enabled`,
+`StockSageQwenPaper/account.json`) to avoid orphaning owner state. Real,
+disclosed coverage loss: LM Studio's multi-slot parallelism reporting has no
+Gemma equivalent (Gemma always serves at `parallel==1`) and its tests were
+deleted, not faked.
+
+Gemma tokenizer measurements (Qwen removal Step 0, done against the live
+private-tunnel endpoint `127.0.0.1:18080`, receipts in
+`StockSage-harness-20260910.opus/gemma-{context-budget,adversarial}-calibration.json`):
+`promptFits()`'s 1-byte>=1-token bound holds for Gemma but with a measured floor
+of EXACTLY 1.0 bytes/unit on long digit runs — zero margin, flagged as a residual
+risk, not resolved.
+
+Mac full suite: 2771 tests: only the same pre-existing parallel-test-runner
+flaky tests seen throughout this work (confirmed by isolated re-run every time).
+iOS: the "iPhone 17 Pro (gate)" simulator got into a bad state mid-session
+(the entire StockSageIOSPresentationTests suite failed uniformly on it); a
+second simulator ("iPhone 17 Pro (ios27)", `CC923127-11DD-4234-A379-457A667E9D4F`)
+confirms all tests pass cleanly — use that device for iOS verification until
+`(gate)` is reset. **No merge, push, deployment, or install.** This worktree
+remains on its own branch; `main` is currently exactly at the merge-base with
+it (`aeb9dab`), so nothing to reconcile yet on that front. Full detail, exact
+commit-by-commit receipts and the live handoff for this workstream:
+`/Users/saleh/.claude/projects/-Users-saleh/memory/salehman-gemma-research-quality-plan.md`.
+
 ## Publication authorized — 15 September 2026
 
 Owner explicitly requested “commit merge and push” for the completed iOS design

@@ -235,7 +235,9 @@ Disclosure source. These were NOT the native app's URLSession or parser/UI.
 - Process completed exit0 because it records per-route failures; that process
   status is NOT an API pass. No retry loop was started after the failures.
 
-01:06:05 +03: one GET to the CODE DEFAULT `127.0.0.1:11434/api/tags`, three-second
+01:06:05 +03: one GET to `127.0.0.1:11434/api/tags` -- THE CODE DEFAULT AS OF THIS
+2026-09-07 SESSION, not current (Qwen removal Step 7, 2026-09-16, flipped the
+shipped default to the managed Gemma pair at 127.0.0.1:1234) -- three-second
 timeout, returned a transport URLError. No registered-model names or app
 preferences were read. This does not establish that the owner's configured
 server is down; only that this default probe did not reach one. No chat request,
