@@ -64,6 +64,11 @@ final class StockSageHorizonResearch: ObservableObject {
         /// `qualification`. Absent on every result written before this existed. Every purchase
         /// AND sale is retained here; the deterministic Top-5 ranking is the only reader.
         var insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = []
+        /// Fact class of each entry in `facts`, positionally parallel to it, so comparison ranking
+        /// can keep every class visible instead of trimming by byte order alone. Empty on results
+        /// written before this existed; readers must treat an empty array as "unclassified", never
+        /// as "no classes present".
+        var factClasses: [StockSageAIAssessment.FactClass] = []
     }
     struct Scan {
         var listings: [Listing] = []
@@ -1194,6 +1199,9 @@ final class StockSageHorizonResearch: ObservableObject {
         return .init(verdict: verdict, levels: qualified?.levels ?? levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated model research · \(horizon.rawValue). No order created." + trimmedNote,
             at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified,
-            insiderTransactions: insiderTransactions(from: context, at: capture.at))
+            insiderTransactions: insiderTransactions(from: context, at: capture.at),
+            // `offered` is positionally identical to `fitted.facts`: optional kept records first
+            // (dropped only from the end), then mandatory records. F-numbering therefore matches.
+            factClasses: offered.map(\.factClass))
     }
 }
