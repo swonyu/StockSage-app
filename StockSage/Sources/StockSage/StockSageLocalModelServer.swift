@@ -7,9 +7,9 @@ import Synchronization
 // Owner request (2026-09-06): "okay" to a LOCAL-SERVER backend for the Catalysts tab's optional
 // explanation paragraph, alongside the existing on-device FoundationModels path
 // (StockSageCatalystNarrator). This file is the client for that server — an OpenAI-compatible
-// HTTP endpoint, which covers both Ollama's native `/api/chat` (what the owner actually smoke-
-// tested: Ollama 0.33.3, qwen3.8, loopback 127.0.0.1:11434) and a generic OpenAI-compatible
-// server such as LM Studio (port 1234) through the same `complete(_:isOllama:...)` call.
+// HTTP endpoint, which covers both Ollama's native `/api/chat` (the historical Ollama smoke test,
+// not the shipped default: Ollama 0.33.3, qwen3.8, loopback 127.0.0.1:11434) and a generic
+// OpenAI-compatible server such as LM Studio (port 1234) through the same `complete(_:isOllama:...)` call.
 //
 // LOOPBACK BY DEFAULT, LAN IS A DELIBERATE STEP DOWN: `defaultURL` is 127.0.0.1 — nothing here
 // ever guesses a LAN address. If a viewer points this at a LAN address anyway, the idea's
@@ -186,25 +186,11 @@ enum StockSageLocalModelServer {
     /// facts, cash constraints and risk disclosures could fall off the end with nothing reported.
     /// 16,384 leaves every one of those callers' existing 12,000-byte budgets fitting whole.
     ///
-    /// Measured 2026-09-10 (receipts in `StockSage-harness-20260910.opus/`): LM Studio auto-fits
-    /// this model to a 262,144 runtime window regardless of the requested value, and accepted a
-    /// single 24,206-byte prompt as 11,015 units, so 16,384 is well inside the served capacity.
-    /// This is a REQUEST target, not a claim about the model's maximum or the server's allocation.
-    ///
-    /// COST OF RAISING IT, derived from the model's own config rather than assumed: this is a
-    /// HYBRID architecture — `full_attention_interval` 4 over 64 layers, so only 16 layers hold
-    /// a KV cache that grows with context; the other 48 are linear-attention (Gated DeltaNet)
-    /// layers whose state is constant-size regardless of context length. With 4 KV heads and a
-    /// 256 head dim, the growing part is 2 (K and V) x 16 layers x 4 heads x 256 dim = 32,768
-    /// elements per token, and the config's dtype is bfloat16, so at 2 bytes each that is
-    /// 64 KiB per token. 4,096 -> 16,384 therefore costs about 768 MiB, or about 384 MiB if the
-    /// server keeps an 8-bit KV cache. Negligible on this 48 GB machine.
-    ///
-    /// Scope of that derivation: it is the ARCHITECTURE's cost, not a measurement of any server.
-    /// A runtime that ignored the hybrid layout and allocated KV uniformly across all 64 layers
-    /// would pay roughly 4x more (~3 GiB), and LM Studio — which clamps this model to its own
-    /// 262,144 window regardless of the requested value — may not track `num_ctx` at all. The
-    /// conclusion holds either way at this scale; the arithmetic bounds the honest case.
+    /// KV cost for gemma-4-31b-qat is not derived here; the value is a request target and a
+    /// readiness floor (see `verifiedContext` and `StockSageLocalModelStartup.readyProbe`), not a
+    /// memory claim. The Qwen3.5 hybrid-attention KV arithmetic that used to justify this number
+    /// as cheap does not transfer to Gemma's architecture and has been removed rather than ported
+    /// — do not re-derive it from memory; measure it fresh against the served model if it matters.
     nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
@@ -213,18 +199,28 @@ enum StockSageLocalModelServer {
     nonisolated static let runPodURL = "http://127.0.0.1:18080"
     nonisolated static let maximumResponseBytes = 1_048_576
 
-    /// Qwen3.5's installed NFC + byte-level BPE tokenizer cannot emit more tokens than
-    /// normalized UTF-8 bytes. The verified two-string-message non-thinking template has
-    /// fewer than 128 framing bytes. This is a sufficient bound, not an exact token count.
+    /// measured on qwen3.5-9b: its installed NFC + byte-level BPE tokenizer cannot emit more
+    /// tokens than normalized UTF-8 bytes. The verified two-string-message non-thinking template
+    /// has fewer than 128 framing bytes. This is a sufficient bound, not an exact token count.
+    /// The <=1-token-per-NFC-byte property and the 128-byte framing allowance are UNVERIFIED for
+    /// google/gemma-4-31b-qat as a general claim — Gemma's tokenizer is SentencePiece-derived
+    /// with NMT_NFKC normalization, which can expand some codepoints rather than only shrink
+    /// them. An adversarial sweep (receipts in `StockSage-harness-20260910.opus/
+    /// gemma-adversarial-calibration.json`, 2026-09-16) found the bound holds on that sample set
+    /// but with a measured floor of EXACTLY 1.0 bytes/unit on a long digit run — zero margin, not
+    /// a comfortable pass. Do not loosen this bound for Gemma without a wider measurement.
     ///
     /// MEASURED CONSERVATISM (2026-09-10, qwen3.5-9b via LM Studio, receipts in
     /// `StockSage-harness-20260910.opus/context-budget-calibration.json`): the real ratio is
     /// 1.21 bytes/unit for dense numeric tables, 2.0 for JSON facts, 4.0 for English news and
     /// 5.5 for Arabic news. So this bound is nearly tight for tables and costs Arabic evidence
-    /// about 5.5x of its allowance. It is kept because it is SOUND — the installed LM Studio
-    /// build exposes no tokenizer endpoint (`/v1/tokenize` and `/api/v0/tokenize` both return
-    /// an "Unexpected endpoint" body), so there is nothing exact to ask. Callers must therefore
-    /// pack to `maximumUserBytes` and DISCLOSE what they dropped, never silently truncate.
+    /// about 5.5x of its allowance. Re-measured 2026-09-16 for google/gemma-4-31b-qat (receipts
+    /// in `gemma-context-budget-calibration.json`): 1.21/2.04/3.75/4.63 respectively — nearly
+    /// identical for tables/JSON, but Gemma needs more tokens than Qwen for English and Arabic
+    /// prose. It is kept because it is SOUND — the installed LM Studio build exposes no tokenizer
+    /// endpoint (`/v1/tokenize` and `/api/v0/tokenize` both return an "Unexpected endpoint"
+    /// body), so there is nothing exact to ask. Callers must therefore pack to `maximumUserBytes`
+    /// and DISCLOSE what they dropped, never silently truncate.
     // ponytail: swap for a real count if a tokenizer endpoint ships; never guess bytes/4.
     nonisolated static func promptFits(system: String, user: String, outputTokens: Int,
                                        contextTokens: Int = 4096) -> Bool {
@@ -356,7 +352,7 @@ enum StockSageLocalModelServer {
         let models: [String]
         let hasModel: Bool
         /// One-line human status, ready to render as-is — e.g. "Reachable · Ollama · model
-        /// qwen3.8 present" or "Unreachable: <error>".
+        /// llama3 present" or "Unreachable: <error>".
         let detail: String
         var canDownload = false
         /// Verified processing slots for the selected instance; unknown capacity stays serial.
@@ -364,7 +360,7 @@ enum StockSageLocalModelServer {
         var servingContext: Int? = nil
     }
 
-    /// Ollama tags a locally-served model "name:latest" (e.g. "qwen3.8:latest") while a viewer
+    /// Ollama tags a locally-served model "name:latest" (e.g. "llama3:latest") while a viewer
     /// types the bare name; strip the suffix on both sides before comparing so either spelling
     /// matches.
     private nonisolated static func stripLatestSuffix(_ s: String) -> String {
@@ -650,8 +646,9 @@ enum StockSageLocalModelServer {
     }
 
     /// Builds the POST request for one chat turn — Ollama's native `/api/chat` (with
-    /// `"think": false`, matching the owner's smoke test: Ollama defaults qwen3.8 to emitting a
-    /// `<think>` block first, which both wastes the 90 s budget and is not the paragraph we want)
+    /// `"think": false` — an Ollama server flag, not a Qwen-specific one; the owner's smoke test
+    /// found Ollama defaults qwen3.8 to emitting a `<think>` block first, which both wastes the
+    /// 90 s budget and is not the paragraph we want, but the flag is correct for any Ollama model)
     /// or an OpenAI-compatible `/v1/chat/completions`. Short explanations keep the 4k/90s
     /// defaults; conversational Chat supplies its own output budget and timeout. OpenAI-compatible
     /// servers receive an output limit only; the caller bounds input before sending it.

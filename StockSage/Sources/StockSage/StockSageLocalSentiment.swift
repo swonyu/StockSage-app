@@ -121,9 +121,10 @@ enum StockSageLocalSentiment {
         if case .failure(let failure) = reply {
             return .unavailable(Failure.from(failure.diagnostic))
         }
-        // The seam already verifies model identity using Ollama's ":latest" spelling rule; a
-        // strict equality check here rejected "qwen3.8:latest" from the very server the app
-        // ships pointed at. Requiring a reported model at all is kept.
+        // The seam already verifies model identity using Ollama's ":latest" spelling rule (a
+        // generic Ollama server convention, not Qwen-specific); a strict equality check here
+        // rejected "qwen3.8:latest" from the very server the app shipped pointed at, historically.
+        // Requiring a reported model at all is kept.
         guard case .success(let completion) = reply, completion.model != nil else {
             return .unavailable(.unreadable)
         }

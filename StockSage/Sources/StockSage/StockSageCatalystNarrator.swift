@@ -208,8 +208,9 @@ enum StockSageCatalystNarrator {
 
     /// System instructions for the session — fixed, never per-idea (the facts carry everything
     /// idea-specific), so this string is also what a test pins. Tightened 90→80 words and added
-    /// the ticker-only sentence (fix pass 2026-09-06): the owner's smoke test against qwen3.8
-    /// produced "Apple" from a bare "AAPL" fact and ran 95–106 words despite the 90-word ask.
+    /// the ticker-only sentence (fix pass 2026-09-06): the owner's historical smoke test against
+    /// qwen3.8 (not the currently-shipped model) produced "Apple" from a bare "AAPL" fact and ran
+    /// 95–106 words despite the 90-word ask.
     nonisolated static let instructions =
         "You receive app facts and attributed source excerpts about one stock idea. Write at most 80 words of plain "
         + "English explaining why the catalyst matters for THIS idea and what to watch. Use "

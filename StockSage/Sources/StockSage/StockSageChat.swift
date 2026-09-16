@@ -9,8 +9,12 @@ enum StockSageChat {
     nonisolated static let outputTokens = 512
     nonisolated static let requestTimeout: TimeInterval = 300
     nonisolated static let replyCharacterLimit = 16_384
-    // Qwen's byte-level tokenizer uses at most one token per UTF-8 byte. Reserve
+    // measured on qwen3.5-9b's byte-level tokenizer: at most one token per UTF-8 byte. Reserve
     // output, system instructions and ample chat-template overhead separately.
+    // UNVERIFIED for google/gemma-4-31b-qat as a general claim (SentencePiece + NMT_NFKC can
+    // expand some codepoints); an adversarial sweep found the bound holds with a measured floor
+    // of exactly 1.0 bytes/unit on long digit runs (StockSage-harness-20260910.opus/
+    // gemma-adversarial-calibration.json, 2026-09-16) — zero margin, not a comfortable pass.
     // ponytail: conservative byte bound; use a tokenizer endpoint if this wastes needed context.
     nonisolated static var promptByteLimit: Int {
         contextTokens - outputTokens - instructions.utf8.count - 1_024
