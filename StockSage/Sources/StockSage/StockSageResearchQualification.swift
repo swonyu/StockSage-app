@@ -21,6 +21,42 @@ enum StockSageResearchQualification {
         let target: Double
         let basis: String
     }
+
+    // MARK: - Technical confluence (shadow evidence; never gates the strict screen above)
+    //
+    // A neutral read of the technical snapshot. `Gemma may explain this verdict but cannot
+    // override it` — nothing here rewrites the model's action, and nothing here participates in
+    // `exclusions()` or `isQualified`. Adoption as a real gate is a separate, measured decision.
+    nonisolated enum TechnicalVerdict: String, Codable, Sendable {
+        case aligned, mixed, conflicted, insufficient
+    }
+    /// Relative to a BULLISH thesis, since confluence is only ever computed for Buy/Strong Buy
+    /// candidates. A nil input is `unavailable`, never defaulted to confirmed or contrary.
+    nonisolated enum ConfluenceCheck: String, Codable, Sendable {
+        case confirmed, contrary, unavailable
+    }
+    nonisolated struct Confluence: Codable, Equatable, Sendable {
+        nonisolated static let version = 1
+        let version: Int
+        let verdict: TechnicalVerdict
+        let trendAlignment: ConfluenceCheck
+        let momentumDirection: ConfluenceCheck
+        let volatilitySuitability: ConfluenceCheck
+        let liquidityConfirmation: ConfluenceCheck
+        let resistanceDistance: ConfluenceCheck
+        /// One entry per contrary or unavailable check; empty exactly when `verdict == .aligned`
+        /// with all five confirmed. An aligned or mixed verdict names only its failed checks.
+        let reasons: [String]
+
+        fileprivate var confirmedCount: Int {
+            [trendAlignment, momentumDirection, volatilitySuitability, liquidityConfirmation, resistanceDistance]
+                .filter { $0 == .confirmed }.count
+        }
+        fileprivate var contraryCount: Int {
+            [trendAlignment, momentumDirection, volatilitySuitability, liquidityConfirmation, resistanceDistance]
+                .filter { $0 == .contrary }.count
+        }
+    }
     nonisolated struct Catalyst: Codable, Equatable, Sendable {
         enum Kind: String, Codable, Sendable { case news, publicInsiderFiling }
         let key: String
@@ -68,6 +104,10 @@ enum StockSageResearchQualification {
         let reasons: [String]
         /// Nil preserves the original prior-New-York-date rule and legacy archive encoding.
         var completedSessionPolicy: Int? = nil
+        /// Absent on every receipt written before confluence existed. Present and absent
+        /// together with `confluence`; a receipt with only one of the pair fails `valid(...)`.
+        var technicalSnapshot: StockSageTechnical.Snapshot? = nil
+        var confluence: Confluence? = nil
 
         var isQualified: Bool { version == StockSageResearchQualification.version
             && (completedSessionPolicy == nil || completedSessionPolicy == 1) && reasons.isEmpty && exclusions(self).isEmpty }
@@ -75,6 +115,9 @@ enum StockSageResearchQualification {
             guard isQualified, let scenario, let barDate else { return nil }
             return .init(entry: scenario.entry, stop: scenario.stop, target: scenario.target, at: barDate, basis: scenario.basis)
         }
+        /// Shadow-mode only: never read by `isQualified`, never changes the original action.
+        /// True only when the technical picture is genuinely aligned AND a dated catalyst was cited.
+        var confluenceQualified: Bool { confluence?.verdict == .aligned && !citedQualifyingKeys.isEmpty }
     }
     nonisolated struct Inputs: Sendable {
         fileprivate let draft: Receipt
@@ -97,13 +140,15 @@ enum StockSageResearchQualification {
                 criticalCaptureReady: draft.criticalCaptureReady, measurements: draft.measurements, earnings: draft.earnings,
                 candidateCatalysts: candidates, citedQualifyingKeys: keys,
                 originalAction: verdict.action.rawValue, scenario: draft.scenario, reasons: [],
-                completedSessionPolicy: draft.completedSessionPolicy)
+                completedSessionPolicy: draft.completedSessionPolicy,
+                technicalSnapshot: draft.technicalSnapshot, confluence: draft.confluence)
             return Receipt(version: pending.version, symbol: pending.symbol, horizon: pending.horizon,
                 capturedAt: pending.capturedAt, evidenceAsOf: pending.evidenceAsOf, barDate: pending.barDate,
                 criticalCaptureReady: pending.criticalCaptureReady, measurements: pending.measurements, earnings: pending.earnings,
                 candidateCatalysts: pending.candidateCatalysts, citedQualifyingKeys: pending.citedQualifyingKeys,
                 originalAction: pending.originalAction, scenario: pending.scenario, reasons: exclusions(pending),
-                completedSessionPolicy: pending.completedSessionPolicy)
+                completedSessionPolicy: pending.completedSessionPolicy,
+                technicalSnapshot: pending.technicalSnapshot, confluence: pending.confluence)
         }
     }
 
@@ -165,10 +210,18 @@ enum StockSageResearchQualification {
         let ready = StockSageHorizonResearch.validTicker(context.idea.symbol) && context.quotedInUSD
             && capture.history.symbol == context.idea.symbol && !capture.blockedByThrottle
             && validDate(capture.at) && fresh(capture.at, at: asOf, seconds: 300)
+        // No benchmark series is wired into Capture yet; relative strength stays absent rather
+        // than guessed. The snapshot is computed from the SAME completed history as `m` above,
+        // so its close and bar date share `m`'s basis by construction.
+        let technicalSnapshot = h.flatMap { StockSageTechnical.snapshot(history: $0, horizon: horizon, calculatedAt: asOf) }
+        let barDate = h?.dates.last
+        let confluenceEvidence = confluence(snapshot: technicalSnapshot, symbol: context.idea.symbol,
+            barDate: barDate, measurements: m, horizon: horizon)
         return Inputs(draft: .init(version: version, symbol: context.idea.symbol, horizon: horizon.rawValue,
-            capturedAt: capture.at, evidenceAsOf: asOf, barDate: h?.dates.last, criticalCaptureReady: ready,
+            capturedAt: capture.at, evidenceAsOf: asOf, barDate: barDate, criticalCaptureReady: ready,
             measurements: m, earnings: earnings, candidateCatalysts: catalysts, citedQualifyingKeys: [],
-            originalAction: "", scenario: scenario(m, horizon: horizon), reasons: [], completedSessionPolicy: 1))
+            originalAction: "", scenario: scenario(m, horizon: horizon), reasons: [], completedSessionPolicy: 1,
+            technicalSnapshot: technicalSnapshot, confluence: confluenceEvidence))
     }
 
     /// Structural/archive validation; the immutable measurements are not a backtest or proof of claim support.
@@ -211,8 +264,16 @@ enum StockSageResearchQualification {
             }
         }
         let cited = Set(citedKeys)
-        return receipt.citedQualifyingKeys == receipt.candidateCatalysts.map(\.key).filter(cited.contains)
-            && receipt.reasons == exclusions(receipt)
+        guard receipt.citedQualifyingKeys == receipt.candidateCatalysts.map(\.key).filter(cited.contains),
+              receipt.reasons == exclusions(receipt) else { return false }
+        // Confluence is additive shadow evidence: absent on every legacy receipt (skip entirely),
+        // but a receipt carrying only one of the pair, or a hand-edited verdict, fails closed.
+        guard (receipt.technicalSnapshot == nil) == (receipt.confluence == nil) else { return false }
+        if receipt.confluence != nil {
+            guard receipt.confluence == confluence(snapshot: receipt.technicalSnapshot, symbol: receipt.symbol,
+                barDate: receipt.barDate, measurements: receipt.measurements, horizon: h) else { return false }
+        }
+        return true
     }
 
     private nonisolated static func scenario(_ m: Measurements, horizon: StockSageHorizonResearch.Horizon) -> Scenario? {
@@ -220,6 +281,92 @@ enum StockSageResearchQualification {
               [entry, stop, target].allSatisfy({ $0.isFinite && $0 > 0 }), stop < entry, entry < target else { return nil }
         return .init(entry: entry, stop: stop, target: target,
             basis: "Strict qualification v1: last completed adjusted close; stop is the last \(horizon == .week ? 5 : 10)-bar low; target is the prior \(horizon == .week ? 20 : 60)-bar high excluding the latest bar. Unvalidated historical scenario, not a forecast or live fill; gaps may cross the stop.")
+    }
+    /// Pure and deterministic: identical inputs always produce identical output, so `valid(...)`
+    /// can recompute and compare a stored `Confluence` byte-for-byte. `snapshot` and `measurements`
+    /// must share ONE adjustment basis; a mismatch or missing snapshot fails closed to `.insufficient`
+    /// rather than mixing pre/post-split values or guessing at a stale session.
+    nonisolated static func confluence(snapshot: StockSageTechnical.Snapshot?, symbol: String, barDate: Date?,
+                                       measurements m: Measurements, horizon: StockSageHorizonResearch.Horizon) -> Confluence {
+        func insufficient(_ reason: String) -> Confluence {
+            .init(version: Confluence.version, verdict: .insufficient, trendAlignment: .unavailable,
+                momentumDirection: .unavailable, volatilitySuitability: .unavailable,
+                liquidityConfirmation: .unavailable, resistanceDistance: .unavailable, reasons: [reason])
+        }
+        guard let snapshot else { return insufficient("No technical snapshot was captured for this qualification.") }
+        guard snapshot.symbol == symbol else {
+            return insufficient("The technical snapshot's symbol does not match this qualification's symbol.")
+        }
+        guard let close = m.close, snapshot.close == close else {
+            return insufficient("The technical snapshot's reference close does not match the qualification's measured close; confluence cannot be verified on one adjustment basis.")
+        }
+        if let barDate, snapshot.barDate != barDate {
+            return insufficient("The technical snapshot's session does not match the qualification's completed bar; the research record stays available but confluence is incomplete.")
+        }
+        let week = horizon == .week
+        let (trend, trendReason) = confluenceTrendAlignment(snapshot)
+        let (momentum, momentumReason) = confluenceMomentumDirection(snapshot)
+        let (volatility, volatilityReason) = confluenceVolatilitySuitability(snapshot, week: week)
+        let (liquidity, liquidityReason) = confluenceLiquidity(snapshot)
+        let (resistance, resistanceReason) = confluenceResistanceDistance(snapshot)
+        let confirmedCount = [trend, momentum, volatility, liquidity, resistance].filter { $0 == .confirmed }.count
+        let contraryCount = [trend, momentum, volatility, liquidity, resistance].filter { $0 == .contrary }.count
+        let verdict: TechnicalVerdict
+        if confirmedCount + contraryCount < 2 { verdict = .insufficient }
+        else if contraryCount >= 2 { verdict = .conflicted }
+        else if contraryCount == 0 && confirmedCount >= 2 { verdict = .aligned }
+        else { verdict = .mixed }
+        let reasons = [trendReason, momentumReason, volatilityReason, liquidityReason, resistanceReason].compactMap { $0 }
+        return .init(version: Confluence.version, verdict: verdict, trendAlignment: trend, momentumDirection: momentum,
+            volatilitySuitability: volatility, liquidityConfirmation: liquidity, resistanceDistance: resistance, reasons: reasons)
+    }
+    /// Bullish structure: the close must clear its own SMA20, and if SMA50 is known the shorter
+    /// average must not still trail it (a bounce inside a still-declining intermediate trend).
+    private nonisolated static func confluenceTrendAlignment(_ s: StockSageTechnical.Snapshot) -> (ConfluenceCheck, String?) {
+        guard let sma20 = s.sma20 else { return (.unavailable, nil) }
+        guard s.close > sma20 else { return (.contrary, "Close is at or below its own SMA20.") }
+        if let sma50 = s.sma50, sma20 < sma50 {
+            return (.contrary, "SMA20 remains below SMA50; the trend structure is not yet aligned.")
+        }
+        return (.confirmed, nil)
+    }
+    /// Requires BOTH signals bullish when both are known; either one alone is enough when the
+    /// other is unavailable, but a known bearish signal on one side denies confirmation outright.
+    private nonisolated static func confluenceMomentumDirection(_ s: StockSageTechnical.Snapshot) -> (ConfluenceCheck, String?) {
+        let rsiUp = s.rsi14.map { $0 > 50 }
+        let macdUp = s.macdHistogram.map { $0 > 0 }
+        switch (rsiUp, macdUp) {
+        case (nil, nil): return (.unavailable, nil)
+        case (.some(let r), nil): return r ? (.confirmed, nil) : (.contrary, "RSI14 is at or below 50.")
+        case (nil, .some(let m)): return m ? (.confirmed, nil) : (.contrary, "MACD histogram is at or below zero.")
+        case (.some(let r), .some(let m)):
+            return (r && m) ? (.confirmed, nil) : (.contrary, "RSI14 and MACD histogram do not both confirm bullish momentum.")
+        }
+    }
+    /// A wider ATR% band for the longer horizon: too little movement cannot reach a measured
+    /// target inside the horizon, and too much makes the stop/target distance unreliable.
+    private nonisolated static func confluenceVolatilitySuitability(_ s: StockSageTechnical.Snapshot, week: Bool) -> (ConfluenceCheck, String?) {
+        guard let atrPercent = s.atrPercent else { return (.unavailable, nil) }
+        let band = 0.5...(week ? 10.0 : 15.0)
+        guard band.contains(atrPercent) else {
+            return (.contrary, "ATR is \(atrPercent)% of price, outside the measured band this horizon uses for a reliable stop/target distance.")
+        }
+        return (.confirmed, nil)
+    }
+    /// Reuses the strict screen's own 1.5x participation bar as evidence, computed independently.
+    private nonisolated static func confluenceLiquidity(_ s: StockSageTechnical.Snapshot) -> (ConfluenceCheck, String?) {
+        guard let ratio = s.volumeRatio else { return (.unavailable, nil) }
+        guard ratio >= 1.5 else { return (.contrary, "Recent volume ratio is below the 1.5x participation bar.") }
+        return (.confirmed, nil)
+    }
+    /// A close already near the top of its own lookback range has little measured room left
+    /// before the strict screen's own resistance target; flagged as a risk, not a confirmation.
+    private nonisolated static func confluenceResistanceDistance(_ s: StockSageTechnical.Snapshot) -> (ConfluenceCheck, String?) {
+        guard let position = s.rangePosition else { return (.unavailable, nil) }
+        guard position < 0.85 else {
+            return (.contrary, "Close sits within the top of its lookback range, near the measured high with little room to the target.")
+        }
+        return (.confirmed, nil)
     }
     private nonisolated static func exclusions(_ r: Receipt) -> [String] {
         let m = r.measurements, week = r.horizon == StockSageHorizonResearch.Horizon.week.rawValue
