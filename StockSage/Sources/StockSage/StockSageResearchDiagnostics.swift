@@ -25,6 +25,8 @@ actor StockSageResearchDiagnostics {
         enum State: String, Codable, Sendable { case accepted, rejected, notRequested, cancelled }
         let state: State
         let note: String
+        var inferenceProfile: StockSageAIAssessment.InferenceProfile? = nil
+        var qualityReport: StockSageAIAssessment.QualityReport? = nil
     }
     nonisolated struct Entry: Codable, Equatable, Sendable {
         enum Kind: String, Codable, Sendable { case started, attempt, outcome }
@@ -90,7 +92,8 @@ actor StockSageResearchDiagnostics {
         }
         defer { active.removeValue(forKey: context.id); failed.remove(context.id) }
         let complete = !failed.contains(context.id)
-        let bounded = Outcome(state: outcome.state, note: String(decoding: outcome.note.utf8.prefix(2_000), as: UTF8.self))
+        let bounded = Outcome(state: outcome.state, note: String(decoding: outcome.note.utf8.prefix(2_000), as: UTF8.self),
+            inferenceProfile: outcome.inferenceProfile, qualityReport: outcome.qualityReport)
         let written = append(.init(context: context, at: Date(), kind: .outcome,
                                    attempt: nil, outcome: bounded, complete: complete))
         return written && complete

@@ -218,6 +218,60 @@ struct StockSageLocalModelServerTests {
         #expect(values[3].diagnostic == completion.diagnostic)
     }
 
+    // The observer used to re-type the temperature literal, so it could silently disagree with the
+    // value chatRequest actually sent. Read it back off the wire instead.
+    @Test @MainActor func theRecordedTemperatureIsReadFromTheRequestItActuallySent() async throws {
+        let model = S.gemmaModel
+        let config = try #require(S.config(url: S.lmStudioURL, model: model))
+        let events = ModelAttemptRecorder()
+        let schema = Data(#"{"type":"object","properties":{"action":{"type":"string"}}}"#.utf8)
+        let inventory = String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
+        var sentTemperature: Double?
+        let result = await S.completeDetailed(config, isOllama: false, system: "s", user: "u",
+            maxTokens: 192, contextTokens: 16_384, jsonSchema: schema, phase: "research",
+            attemptObserver: { await events.append($0) }, transport: { request in
+                if request.httpMethod == "GET" { return StockSageManagedModelLifecycleTests.response(request, inventory) }
+                if let body = request.httpBody,
+                   let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                    sentTemperature = object["temperature"] as? Double
+                }
+                return StockSageManagedModelLifecycleTests.response(request,
+                    #"{"model":"\#(model)","choices":[{"message":{"content":"fixture"},"finish_reason":"stop"}]}"#)
+            })
+        _ = try result.get()
+        let values = await events.snapshot()
+        let recorded = try #require(values.last?.temperature)
+        #expect(sentTemperature == recorded, "The recorded temperature must come from the request, never a re-typed literal")
+        #expect(recorded == S.researchTemperature)
+    }
+
+    // outputLimitRetries counts that a retry happened; it never said why. A receipt has to state
+    // the cause, and a transport failure must stay distinguishable from a truncation restart.
+    @Test @MainActor func theSingleLengthRetryRecordsWhyItRepeated() async throws {
+        let model = S.gemmaModel
+        let config = try #require(S.config(url: S.lmStudioURL, model: model))
+        let events = ModelAttemptRecorder()
+        let schema = Data(#"{"type":"object","properties":{"action":{"type":"string"}}}"#.utf8)
+        let inventory = String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
+        var posts = 0
+        let result = await S.completeDetailed(config, isOllama: false, system: "original system", user: "original facts",
+            maxTokens: 192, contextTokens: 16_384, jsonSchema: schema, phase: "ranking",
+            attemptObserver: { await events.append($0) }, transport: { request in
+                if request.httpMethod == "GET" { return StockSageManagedModelLifecycleTests.response(request, inventory) }
+                posts += 1
+                let finish = posts == 1 ? "length" : "stop"
+                return StockSageManagedModelLifecycleTests.response(request,
+                    #"{"model":"\#(model)","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}]}"#)
+            })
+        let values = await events.snapshot()
+        try #require(values.count == 4)
+        #expect(values[1].diagnostic?.retryReason == nil, "The first attempt is not itself a retry")
+        #expect(values[3].diagnostic?.retryReason == "outputLimit" && values[3].diagnostic?.outputLimitRetries == 1)
+        let completion = try result.get()
+        #expect(completion.diagnostic.retryReason == "outputLimit")
+        #expect(completion.diagnostic.summary.contains("retryReason=outputLimit"))
+    }
+
     @Test(arguments: ["http", "malformed", "nonUTF8", "model", "context", "finish", "revoked", "nonHTTP", "oversized"])
     @MainActor func attemptObserverRetainsRejectedReplyWithoutChangingAcceptance(scenario: String) async throws {
         let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))

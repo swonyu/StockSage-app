@@ -420,9 +420,12 @@ struct StockSageResearchHistoryDetail: View {
                                 outcome(StockSageResearchHistory.availability(for: run, now: Date()), run: run)
                             }
                         }.padding(.vertical, 6)
+                        qualityBadge(prediction)
+                        insiderActivity(prediction)
                         DisclosureGroup("Original evidence and model") {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("Model: \(prediction.model.isEmpty ? "Not recorded" : prediction.model)")
+                                evidenceByClass(prediction)
                                 if !prediction.note.isEmpty { Text(prediction.note) }
                                 Text("Evidence references: \(prediction.evidence.joined(separator: ", "))")
                                 ForEach(Array(prediction.facts.enumerated()), id: \.offset) { _, fact in Text(fact) }
@@ -548,4 +551,67 @@ struct StockSageResearchHistoryDetail: View {
     }
 
     private func price(_ value: Double) -> String { value.formatted(.currency(code: "USD")) }
+
+    /// Shadow-mode evidence checks. A run with no recorded report reads as "not assessed" and is
+    /// styled neutrally, because absent metadata is not a negative result.
+    @ViewBuilder private func qualityBadge(_ prediction: StockSageResearchHistory.Prediction) -> some View {
+        let state = StockSageResearchQualityPresentation.state(for: prediction)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(state.badge)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(state.isNegative ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            Text(state.explanation).font(.caption).foregroundStyle(.secondary)
+            ForEach(state.findingDescriptions, id: \.self) { finding in
+                Text("• " + finding).font(.caption)
+            }
+            if !state.uncitedInsiderIDs.isEmpty {
+                Text("Insider records offered but not cited: " + state.uncitedInsiderIDs.joined(separator: ", "))
+                    .font(.caption)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(state.badge + ". " + state.explanation)
+    }
+
+    /// Two different denominators, deliberately never summed: `captured` is the packet before
+    /// prompt fitting, `offered` is what reached the model. Their difference is what fitting
+    /// trimmed, which is worth showing rather than hiding.
+    @ViewBuilder private func evidenceByClass(_ prediction: StockSageResearchHistory.Prediction) -> some View {
+        let rows = StockSageResearchQualityPresentation.state(for: prediction).classCoverage
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Evidence by class — captured in the packet, then offered to the model")
+                    .font(.caption.weight(.semibold))
+                ForEach(rows, id: \.factClass) { row in
+                    Text("\(row.factClass): captured \(row.captured.map(String.init) ?? "not recorded"), offered \(row.offered)"
+                         + ((row.trimmed ?? 0) > 0 ? ", \(row.trimmed ?? 0) trimmed to fit the context budget" : ""))
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    /// Deliberately NOT inside the collapsed "Original evidence and model" group: insider evidence
+    /// is core content here, so it stays visible without a tap. The states it renders are distinct
+    /// on purpose — a not-recorded archive and an unchecked source are gaps, not findings, and an
+    /// answered empty query speaks only about the window it queried.
+    @ViewBuilder private func insiderActivity(_ prediction: StockSageResearchHistory.Prediction) -> some View {
+        let state = StockSageInsiderActivityPresentation.state(for: prediction)
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Insider activity", systemImage: "person.text.rectangle")
+                .font(.subheadline.weight(.semibold))
+            Text(state.headline)
+                .font(.callout)
+                .foregroundStyle(state.hasRecordedActivity ? .primary : .secondary)
+            ForEach(Array(state.transactions.enumerated()), id: \.offset) { _, transaction in
+                Text(StockSageInsiderActivityPresentation.row(for: transaction))
+                    .font(.callout)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(state.accessibilityLabel)
+    }
 }

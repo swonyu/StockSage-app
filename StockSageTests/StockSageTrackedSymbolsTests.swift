@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import StockSage
 
 // MARK: - trackedSymbols union (coverage: watchlist ∪ board ∪ portfolio ∪ journal-open)
@@ -8,6 +9,69 @@ import Testing
 // watchlist/portfolio/journalOpen in first-seen order; dedup is case-folded (uppercase).
 
 struct StockSageTrackedSymbolsTests {
+    @Test(arguments: [false, true]) @MainActor
+    func newlyHeldSymbolReceivesItsFirstPrice(streamed: Bool) throws {
+        let name = "stocksage-held-price-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var held = ["vra"]
+        let store = StockSageStore(defaults: defaults, heldSymbols: { held })
+        let at = Date().addingTimeInterval(-5)
+        #expect(store.latestPrice("VRA") == nil)
+        #expect(store.trackedSymbolsUnion == ["VRA"])
+
+        // Invalid responses and a response for a holding removed during the fetch
+        // must not invent a price row.
+        for quote in [
+            StockSageQuoteService.LiveQuote(symbol: "VRA", price: 0, previousClose: 4, marketTime: at),
+            .init(symbol: "OTHER", price: 4.13, previousClose: 4, marketTime: at),
+            .init(symbol: "VRA", price: 4.13, previousClose: 4, marketTime: at.addingTimeInterval(3_600))
+        ] { store.applyPolledQuotes(["VRA": quote]) }
+        let valid = StockSageQuoteService.LiveQuote(symbol: "VRA", price: 4.13,
+            previousClose: 4.09, marketTime: at, priceSource: .massiveSIP)
+        held = []
+        store.applyPolledQuotes(["VRA": valid])
+        #expect(store.symbols.isEmpty && store.symbolIndex.isEmpty)
+        held = ["vra"]
+
+        if streamed {
+            store.applyLiveTicks(["VRA": .init(symbol: "VRA", price: 4.13, timestamp: at)])
+        } else {
+            store.applyPolledQuotes(["VRA": valid])
+        }
+        let quote = try #require(store.latestQuote("VRA"))
+        #expect(quote.price == 4.13 && quote.marketTime == at && quote.priceSource == .massiveSIP)
+        #expect(store.symbolIndex["VRA"] == 0 && store.symbols.count == 1)
+        let id = store.symbols[0].id
+        store.applyPolledQuotes(["VRA": .init(symbol: "VRA", price: 9, previousClose: 4,
+            marketTime: at.addingTimeInterval(-1), priceSource: .massiveSIP)])
+        #expect(store.latestPrice("VRA") == 4.13 && store.symbols[0].id == id)
+        store.applyPolledQuotes(["VRA": .init(symbol: "VRA", price: 4.15, previousClose: 4,
+            marketTime: at.addingTimeInterval(1), priceSource: .massiveSIP)])
+        #expect(store.latestPrice("VRA") == 4.15 && store.symbols.count == 1)
+    }
+
+    @Test @MainActor func mixedBatchKeepsExistingIndexesAndOnlyAddsAcceptedTrackedRows() throws {
+        let name = "stocksage-held-price-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["ORCL"], forKey: "stocksage_user_symbols")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { ["BAD", "vra", "VRA"] })
+        let at = Date().addingTimeInterval(-5)
+        store.applyPolledQuotes(["ORCL": .init(symbol: "ORCL", price: 100, previousClose: 99,
+            marketTime: at, priceSource: .massiveSIP)])
+        let original = try #require(store.symbols.first)
+        store.applyPolledQuotes([
+            "vra": .init(symbol: "VRA", price: 4.13, previousClose: 4.09, marketTime: at, priceSource: .massiveSIP),
+            "BAD": .init(symbol: "BAD", price: 5, previousClose: 4, marketTime: at.addingTimeInterval(3_600)),
+            "OTHER": .init(symbol: "OTHER", price: 7, previousClose: 6, marketTime: at)
+        ])
+        #expect(store.symbols.map(\.symbol) == ["ORCL", "VRA"])
+        #expect(store.symbols.first == original)
+        #expect(store.symbolIndex == ["ORCL": 0, "VRA": 1])
+        #expect(store.latestPrice("vra") == 4.13 && store.latestPrice("ORCL") == 100)
+    }
+
     @Test func dedupsAcrossAllFourSets() {
         let result = StockSageStore.trackedSymbols(
             board: ["AAPL", "MSFT"],

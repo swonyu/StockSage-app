@@ -51,6 +51,15 @@ final class StockSageResearchHistory: ObservableObject {
         let referencePrice: Double?
         let referenceDate: Date?
         let levels: Levels?
+        var inferenceProfile: StockSageAIAssessment.InferenceProfile? = nil
+        var qualityReport: StockSageAIAssessment.QualityReport? = nil
+        var evidenceReceipt: StockSageAIAssessment.EvidenceCoverage? = nil
+        var qualification: StockSageResearchQualification.Receipt? = nil
+        var factClasses: [StockSageAIAssessment.FactClass]? = nil
+        var insiderEvidence: StockSageMassiveEvents.Observation? = nil
+        var insiderCoverage: CompletedCheck.SourceCoverage? = nil
+
+        var hasRecordedInsiderEvidence: Bool { insiderEvidence != nil || insiderCoverage != nil }
     }
     nonisolated struct SelectionReceipt: Codable, Sendable, Equatable {
         let session: String
@@ -190,13 +199,7 @@ final class StockSageResearchHistory: ObservableObject {
                          horizon: StockSageHorizonResearch.Horizon,
                          scan: StockSageHorizonResearch.Scan, originalRunID: UUID? = nil) -> Run {
         let predictions = scan.topBuys.compactMap { listing -> Prediction? in
-            guard let result = scan.results[listing.ticker], let verdict = result.verdict else { return nil }
-            return Prediction(symbol: listing.ticker, name: listing.name, action: verdict.action.rawValue,
-                reason: verdict.reason, risk: verdict.risk, evidence: verdict.evidence, facts: result.facts,
-                model: result.model, note: result.note, referencePrice: result.referenceClose?.value,
-                referenceDate: result.referenceClose?.at, levels: result.levels.map {
-                    Levels(entry: $0.entry, stop: $0.stop, target: $0.target, at: $0.at, basis: $0.basis)
-                })
+            scan.results[listing.ticker].flatMap { CompletedCheck(listing: listing, result: $0).prediction }
         }
         let selection = scan.selection.map {
             SelectionReceipt(session: $0.session, requestedAt: $0.requestedAt, returnedCount: $0.returnedCount,
@@ -858,7 +861,7 @@ final class StockSageResearchHistory: ObservableObject {
         }
         if let ranking = run.ranking {
             guard run.rankingFailure == nil, StockSageResearchRanking.valid(ranking),
-                  ranking.version == (run.coverage.qualifiedBuyCount == nil ? 1 : 2),
+                  (ranking.version == 3 || ranking.version == (run.coverage.qualifiedBuyCount == nil ? 1 : 2)),
                   ranking.horizon == run.horizon.title,
                   ranking.symbols == run.predictions.map(\.symbol),
                   ranking.candidateSymbols.count == (run.coverage.qualifiedBuyCount ?? run.coverage.buyCount),
@@ -876,6 +879,22 @@ final class StockSageResearchHistory: ObservableObject {
             guard !prediction.symbol.isEmpty, !prediction.name.isEmpty,
                   prediction.action == "Buy" || prediction.action == "Strong Buy",
                   (prediction.referencePrice == nil) == (prediction.referenceDate == nil) else { return false }
+            guard validEvidence(prediction.evidenceReceipt, profile: prediction.inferenceProfile,
+                model: prediction.model, symbol: prediction.symbol, factCount: prediction.facts.count,
+                citations: prediction.evidence) else { return false }
+            if let qualification = prediction.qualification {
+                guard let evidence = prediction.evidenceReceipt,
+                      qualification.originalAction == prediction.action,
+                      qualification.capturedAt <= run.completedAt, qualification.evidenceAsOf <= run.completedAt,
+                      Set(qualification.candidateCatalysts.map(\.key)).isSubset(of: Set(evidence.offeredKeys)),
+                      StockSageResearchQualification.valid(qualification, symbol: prediction.symbol,
+                        horizon: run.horizon.title, at: qualification.capturedAt, citedKeys: evidence.citedKeys) else { return false }
+            }
+            if let quality = prediction.qualityReport,
+               !quality.valid(action: prediction.action, evidenceCount: prediction.evidence.count, factCount: prediction.facts.count) { return false }
+            if let classes = prediction.factClasses, classes.count != prediction.facts.count { return false }
+            guard validInsiderEvidence(prediction.insiderEvidence, coverage: prediction.insiderCoverage,
+                symbol: prediction.symbol, through: run.completedAt) else { return false }
             if let price = prediction.referencePrice, let date = prediction.referenceDate {
                 guard price.isFinite, price > 0, validDate(date), date <= run.completedAt else { return false }
             }
@@ -982,6 +1001,12 @@ extension StockSageResearchHistory {
         var qualification: StockSageResearchQualification.Receipt? = nil
         /// Absent on every archive written before this existed; decodes as empty, never guessed.
         var insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = []
+        var factClasses: [StockSageAIAssessment.FactClass] = []
+        var inferenceProfile: StockSageAIAssessment.InferenceProfile? = nil
+        var qualityReport: StockSageAIAssessment.QualityReport? = nil
+        var insiderEvidence: StockSageMassiveEvents.Observation? = nil
+        var insiderCoverage: SourceCoverage? = nil
+        var hasRecordedInsiderTransactions: Bool { includesInsiderTransactions }
 
         init(listing: StockSageHorizonResearch.Listing, result: StockSageHorizonResearch.Result) {
             self.listing = listing
@@ -995,6 +1020,80 @@ extension StockSageResearchHistory {
             diagnosticID = result.diagnosticID; diagnosticsComplete = result.diagnosticsComplete
             qualification = result.qualification
             insiderTransactions = result.insiderTransactions
+            factClasses = result.factClasses
+            inferenceProfile = result.inferenceProfile; qualityReport = result.qualityReport
+            insiderEvidence = result.insiderEvidence
+            includesInsiderTransactions = result.hasRecordedInsiderTransactions
+            if insiderEvidence != nil || qualityReport != nil {
+                insiderCoverage = coverage.first { $0.source == StockSageMassiveEvents.Feed.insider.source }
+            }
+        }
+
+        // Older checks omit this key; the first insider-aware writer also saved empty arrays.
+        // Preserve both representations when reading, without reconstructing historical data.
+        private var includesInsiderTransactions = true
+        private enum CodingKeys: String, CodingKey {
+            case listing, verdict, levels, referenceClose, facts, note, at, model, coverage
+            case evidenceReceipt, diagnosticID, diagnosticsComplete, qualification, insiderTransactions
+            case factClasses, inferenceProfile, qualityReport, insiderEvidence, insiderCoverage
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            listing = try c.decode(StockSageHorizonResearch.Listing.self, forKey: .listing)
+            verdict = try c.decodeIfPresent(Verdict.self, forKey: .verdict)
+            levels = try c.decodeIfPresent(Levels.self, forKey: .levels)
+            referenceClose = try c.decodeIfPresent(Reference.self, forKey: .referenceClose)
+            facts = try c.decode([String].self, forKey: .facts)
+            note = try c.decode(String.self, forKey: .note)
+            at = try c.decode(Date.self, forKey: .at)
+            model = try c.decode(String.self, forKey: .model)
+            coverage = try c.decode([SourceCoverage].self, forKey: .coverage)
+            evidenceReceipt = try c.decodeIfPresent(StockSageAIAssessment.EvidenceCoverage.self, forKey: .evidenceReceipt)
+            diagnosticID = try c.decodeIfPresent(UUID.self, forKey: .diagnosticID)
+            diagnosticsComplete = try c.decodeIfPresent(Bool.self, forKey: .diagnosticsComplete)
+            qualification = try c.decodeIfPresent(StockSageResearchQualification.Receipt.self, forKey: .qualification)
+            includesInsiderTransactions = c.contains(.insiderTransactions)
+            insiderTransactions = includesInsiderTransactions
+                ? try c.decode([StockSageMassiveEvents.InsiderTransaction].self, forKey: .insiderTransactions) : []
+            factClasses = try c.decodeIfPresent([StockSageAIAssessment.FactClass].self, forKey: .factClasses) ?? []
+            inferenceProfile = try c.decodeIfPresent(StockSageAIAssessment.InferenceProfile.self, forKey: .inferenceProfile)
+            qualityReport = try c.decodeIfPresent(StockSageAIAssessment.QualityReport.self, forKey: .qualityReport)
+            insiderEvidence = try c.decodeIfPresent(StockSageMassiveEvents.Observation.self, forKey: .insiderEvidence)
+            insiderCoverage = try c.decodeIfPresent(SourceCoverage.self, forKey: .insiderCoverage)
+        }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(listing, forKey: .listing)
+            try c.encodeIfPresent(verdict, forKey: .verdict)
+            try c.encodeIfPresent(levels, forKey: .levels)
+            try c.encodeIfPresent(referenceClose, forKey: .referenceClose)
+            try c.encode(facts, forKey: .facts)
+            try c.encode(note, forKey: .note)
+            try c.encode(at, forKey: .at)
+            try c.encode(model, forKey: .model)
+            try c.encode(coverage, forKey: .coverage)
+            try c.encodeIfPresent(evidenceReceipt, forKey: .evidenceReceipt)
+            try c.encodeIfPresent(diagnosticID, forKey: .diagnosticID)
+            try c.encodeIfPresent(diagnosticsComplete, forKey: .diagnosticsComplete)
+            try c.encodeIfPresent(qualification, forKey: .qualification)
+            if includesInsiderTransactions || !insiderTransactions.isEmpty { try c.encode(insiderTransactions, forKey: .insiderTransactions) }
+            if !factClasses.isEmpty { try c.encode(factClasses, forKey: .factClasses) }
+            try c.encodeIfPresent(inferenceProfile, forKey: .inferenceProfile)
+            try c.encodeIfPresent(qualityReport, forKey: .qualityReport)
+            try c.encodeIfPresent(insiderEvidence, forKey: .insiderEvidence)
+            try c.encodeIfPresent(insiderCoverage, forKey: .insiderCoverage)
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            // Encoding-key presence is provenance, not a change to the captured evidence.
+            lhs.listing == rhs.listing && lhs.verdict == rhs.verdict && lhs.levels == rhs.levels
+                && lhs.referenceClose == rhs.referenceClose && lhs.facts == rhs.facts && lhs.note == rhs.note
+                && lhs.at == rhs.at && lhs.model == rhs.model && lhs.coverage == rhs.coverage
+                && lhs.evidenceReceipt == rhs.evidenceReceipt && lhs.diagnosticID == rhs.diagnosticID
+                && lhs.diagnosticsComplete == rhs.diagnosticsComplete && lhs.qualification == rhs.qualification
+                && lhs.insiderTransactions == rhs.insiderTransactions && lhs.factClasses == rhs.factClasses
+                && lhs.inferenceProfile == rhs.inferenceProfile && lhs.qualityReport == rhs.qualityReport
+                && lhs.insiderEvidence == rhs.insiderEvidence && lhs.insiderCoverage == rhs.insiderCoverage
         }
 
         var result: StockSageHorizonResearch.Result? {
@@ -1009,14 +1108,23 @@ extension StockSageResearchHistory {
                 facts: facts, note: note, at: at, model: model,
                 referenceClose: referenceClose.map { (value: $0.value, at: $0.at) }, coverage: sources,
                 evidenceReceipt: evidenceReceipt, diagnosticID: diagnosticID, diagnosticsComplete: diagnosticsComplete,
-                qualification: qualification, insiderTransactions: insiderTransactions)
+                qualification: qualification, insiderTransactions: insiderTransactions, factClasses: factClasses,
+                inferenceProfile: inferenceProfile, qualityReport: qualityReport, insiderEvidence: insiderEvidence,
+                hasRecordedInsiderTransactions: includesInsiderTransactions)
         }
 
         var prediction: Prediction? {
             guard let verdict = verdict?.value, verdict.action == .buy || verdict.action == .strongBuy else { return nil }
+            // Older checkpoints have evidence/qualification fields but their original Predictions
+            // did not. Keep that original projection, rather than invalidating legacy checkpoints.
+            let recorded = inferenceProfile != nil || qualityReport != nil || insiderEvidence != nil
             return .init(symbol: listing.ticker, name: listing.name, action: verdict.action.rawValue,
                 reason: verdict.reason, risk: verdict.risk, evidence: verdict.evidence, facts: facts,
-                model: model, note: note, referencePrice: referenceClose?.value, referenceDate: referenceClose?.at, levels: levels)
+                model: model, note: note, referencePrice: referenceClose?.value, referenceDate: referenceClose?.at, levels: levels,
+                inferenceProfile: inferenceProfile, qualityReport: qualityReport,
+                evidenceReceipt: recorded ? evidenceReceipt : nil, qualification: recorded ? qualification : nil,
+                factClasses: factClasses.isEmpty ? nil : factClasses,
+                insiderEvidence: insiderEvidence, insiderCoverage: insiderCoverage)
         }
     }
 
@@ -1080,6 +1188,16 @@ extension StockSageResearchHistory {
                   validDate(check.at), check.at >= earliest, check.at <= completedAt,
                   check.result != nil, check.facts.count <= 10_000, check.coverage.count <= 64,
                   check.coverage.allSatisfy({ !$0.source.isEmpty && ($0.checkedAt.map { validDate($0) && $0 <= completedAt } ?? true) }) else { return false }
+            guard validEvidence(check.evidenceReceipt, profile: check.inferenceProfile,
+                model: check.model, symbol: listing.ticker, factCount: check.facts.count,
+                citations: check.verdict?.evidence ?? []) else { return false }
+            guard check.factClasses.isEmpty || check.factClasses.count == check.facts.count else { return false }
+            if let quality = check.qualityReport,
+               !quality.valid(action: check.verdict?.action, evidenceCount: check.verdict?.evidence.count ?? 0, factCount: check.facts.count) { return false }
+            guard validInsiderEvidence(check.insiderEvidence, coverage: check.insiderCoverage,
+                symbol: listing.ticker, through: completedAt) else { return false }
+            if let coverage = check.insiderCoverage,
+               coverage != check.coverage.first(where: { $0.source == StockSageMassiveEvents.Feed.insider.source }) { return false }
             if let verdict = check.verdict {
                 guard !verdict.reason.isEmpty, !verdict.risk.isEmpty, !verdict.evidence.isEmpty,
                       !check.model.isEmpty, check.model.utf8.count <= 512,
@@ -1099,24 +1217,6 @@ extension StockSageResearchHistory {
                         horizon: archive.horizon.title, at: check.at, citedKeys: evidence.citedKeys) else { return false }
             }
             guard (check.diagnosticID == nil) == (check.diagnosticsComplete == nil) else { return false }
-            if let receipt = check.evidenceReceipt {
-                let offered = Set(receipt.offeredKeys), required = Set(receipt.requiredKeys)
-                let omitted = Set(receipt.omittedKeys), missing = Set(receipt.missingOrUnknownRequiredKeys)
-                let cited = Set(receipt.citedKeys)
-                let keys = receipt.offeredKeys + receipt.omittedKeys
-                let expectedCited = Set((check.verdict?.evidence ?? []).compactMap { id -> String? in
-                    guard let index = Int(id.dropFirst()), index > 0, index <= receipt.offeredKeys.count else { return nil }
-                    return receipt.offeredKeys[index - 1]
-                })
-                guard receipt.symbol == listing.ticker, receipt.offeredKeys.count == check.facts.count,
-                      keys.count <= 20_000, keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512
-                          && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }),
-                      offered.count == receipt.offeredKeys.count, omitted.count == receipt.omittedKeys.count,
-                      required.count == receipt.requiredKeys.count, missing.count == receipt.missingOrUnknownRequiredKeys.count,
-                      cited.count == receipt.citedKeys.count, required.isSubset(of: offered), missing.isSubset(of: required),
-                      offered.isDisjoint(with: omitted), cited == expectedCited,
-                      (0...1_000_000).contains(receipt.prePromptOmittedRecordCount) else { return false }
-            }
             if let reference = check.referenceClose {
                 guard reference.value.isFinite, reference.value > 0, validDate(reference.at), reference.at <= check.at else { return false }
             }
@@ -1125,6 +1225,70 @@ extension StockSageResearchHistory {
                       validDate(levels.at), levels.at <= check.at else { return false }
             }
             return true
+        }
+    }
+
+    private nonisolated static func validEvidence(_ receipt: StockSageAIAssessment.EvidenceCoverage?,
+        profile: StockSageAIAssessment.InferenceProfile?, model: String, symbol: String,
+        factCount: Int, citations: [String]) -> Bool {
+        if let profile {
+            guard profile.valid(model: model), profile.packetDigest == receipt?.packetDigest,
+                  profile.packetVersion == receipt?.packetVersion else { return false }
+        }
+        guard let receipt else { return true }
+        let offered = Set(receipt.offeredKeys), required = Set(receipt.requiredKeys)
+        let omitted = Set(receipt.omittedKeys), missing = Set(receipt.missingOrUnknownRequiredKeys)
+        let cited = Set(receipt.citedKeys), keys = receipt.offeredKeys + receipt.omittedKeys
+        let expectedCited = citations.compactMap { id -> String? in
+            guard id.first == "F", let index = Int(id.dropFirst()), id == "F\(index)",
+                  index > 0, index <= receipt.offeredKeys.count else { return nil }
+            return receipt.offeredKeys[index - 1]
+        }
+        return receipt.symbol == symbol && receipt.offeredKeys.count == factCount
+            && keys.count <= 20_000 && keys.allSatisfy { !$0.isEmpty && $0.utf8.count <= 512
+                && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }
+            && offered.count == receipt.offeredKeys.count && omitted.count == receipt.omittedKeys.count
+            && required.count == receipt.requiredKeys.count && missing.count == receipt.missingOrUnknownRequiredKeys.count
+            && cited.count == receipt.citedKeys.count && required.isSubset(of: offered) && missing.isSubset(of: required)
+            && offered.isDisjoint(with: omitted) && cited == Set(expectedCited) && expectedCited.count == citations.count
+            && (0...1_000_000).contains(receipt.prePromptOmittedRecordCount)
+    }
+
+    private nonisolated static func validInsiderEvidence(_ evidence: StockSageMassiveEvents.Observation?,
+        coverage: CompletedCheck.SourceCoverage?, symbol: String, through: Date) -> Bool {
+        if let coverage {
+            guard coverage.source == StockSageMassiveEvents.Feed.insider.source,
+                  StockSageHorizonResearch.EvidenceCoverage.State(rawValue: coverage.state) != nil,
+                  coverage.checkedAt.map({ validDate($0) && $0 <= through }) ?? true else { return false }
+        }
+        guard let evidence else { return true }
+        guard evidence.symbol == symbol, evidence.feed == .insider,
+              validDate(evidence.checkedAt), evidence.checkedAt <= through,
+              coverage?.checkedAt == evidence.checkedAt,
+              evidence.insiderOmittedRecordCount.map({ (0...1_000).contains($0) }) ?? true else { return false }
+        switch evidence.outcome {
+        case .unavailable:
+            guard evidence.event == nil, evidence.insiderEvents == nil, evidence.insiderOmittedRecordCount == nil,
+                  coverage?.state == "unavailable" || coverage?.state == "stale" else { return false }
+        case .answered:
+            guard coverage?.state == "answered" || coverage?.state == "stale" else { return false }
+        }
+        if let events = evidence.insiderEvents {
+            guard events.first == evidence.event, evidence.insiderOmittedRecordCount != nil else { return false }
+        } else if evidence.insiderOmittedRecordCount != nil { return false }
+        let events = evidence.insiderEvents ?? evidence.event.map { [$0] } ?? []
+        guard events.count <= StockSageMassiveEvents.insiderRecordLimit,
+              Set(events.map(\.insiderIdentity)).count == events.count else { return false }
+        return events.allSatisfy { event in
+            guard event.symbol == symbol, event.feed == .insider, !event.id.isEmpty,
+                  validDate(event.date), event.date <= through,
+                  event.link.map({ ["http", "https"].contains($0.scheme?.lowercased() ?? "") }) ?? true else { return false }
+            guard let transaction = event.insider else { return true }
+            return validDate(transaction.transactionDate) && validDate(transaction.filingDate)
+                && transaction.transactionDate <= transaction.filingDate && transaction.filingDate <= through
+                && !transaction.ownerName.isEmpty && transaction.shares.isFinite && transaction.shares > 0
+                && (transaction.pricePerShare.map { $0.isFinite && $0 >= 0 } ?? true)
+                && (transaction.reportedNotionalUSD.map { $0.isFinite && $0 >= 0 } ?? true)
         }
     }
 
@@ -1353,6 +1517,14 @@ extension StockSageResearchHistory {
             lastError = "Saved completed checks could not be restored. Original bytes are preserved."
             return nil
         }
+    }
+
+    /// Only the latest checks for each horizon are retained; never substitute another run.
+    func completedScan(runID: UUID) -> (run: Run, scan: StockSageHorizonResearch.Scan)? {
+        guard let run = runs.first(where: { $0.id == runID }),
+              let completed = completedScan(horizon: run.horizon == .week ? .week : .fortnight),
+              completed.run.id == runID else { return nil }
+        return completed
     }
 
     /// Check under the existing history file lock on record(), and for every Run on read().

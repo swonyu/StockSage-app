@@ -5,6 +5,44 @@ import Testing
 @Suite("Qwen primary assessment")
 @MainActor
 struct StockSageAIAssessmentTests {
+    @Test func inferenceProfilesSeparateConfigurationFromEvidenceAndServerDefaults() throws {
+        typealias S = StockSageLocalModelServer
+        let config = try #require(S.config(url: S.runPodURL, model: S.gemmaModel))
+        let packet = A.EvidencePacket(facts: [plainFact("symbol", "Symbol: ORCL.")], prePromptOmittedRecordCount: 0)
+        let profile = A.InferenceProfile(config: config, isOllama: false, packet: packet,
+            outputTokens: 192, diagnostic: .init(finish: .stop))
+        #expect(profile.valid(model: S.gemmaModel) && !profile.valid(model: "another-model"))
+        #expect(profile.endpointProfile == .runPodGemma && profile.packetDigest == packet.digest)
+        #expect(profile.initialOutputTokens == 192 && profile.maxOutputTokens == 384)
+        #expect(profile.topP == nil && profile.seed == nil)
+        let bytes = try JSONEncoder().encode(profile)
+        #expect(!String(decoding: bytes, as: UTF8.self).contains("127.0.0.1"))
+        #expect(!String(decoding: bytes, as: UTF8.self).contains("18080"))
+        let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        let changes: [String: Any] = ["model": "another-model", "promptVersion": 2, "schemaVersion": 2,
+            "packetVersion": 1, "temperature": 0.3, "topP": 0.95, "seed": 7,
+            "contextTokens": 8192, "initialOutputTokens": 384, "maxOutputTokens": 768,
+            "endpointProfile": "lmStudioGemma"]
+        for (key, value) in changes {
+            var changed = object; changed[key] = value
+            let other = try JSONDecoder().decode(A.InferenceProfile.self, from: JSONSerialization.data(withJSONObject: changed))
+            #expect(!profile.comparableCohort(with: other), "Different \(key) must not share a configuration cohort")
+        }
+        let otherPacket = A.EvidencePacket(facts: [plainFact("symbol", "Symbol: ACME.")], prePromptOmittedRecordCount: 0)
+        let other = A.InferenceProfile(config: config, isOllama: false, packet: otherPacket,
+            outputTokens: 192, diagnostic: .init(finish: .stop))
+        #expect(profile.comparableCohort(with: other) && profile.packetDigest != other.packetDigest,
+                "Matching configurations are not evidence-equivalent replays")
+        let request = S.chatRequest(config, system: "Instructions", user: A.prompt(facts: packet.facts.map(\.text)),
+            isOllama: false, maxTokens: 192, contextTokens: 16384, jsonSchema: A.responseSchema(facts: packet.facts.map(\.text)))
+        let replay = S.chatRequest(config, system: "Instructions", user: A.prompt(facts: packet.facts.map(\.text)),
+            isOllama: false, maxTokens: 192, contextTokens: 16384, jsonSchema: A.responseSchema(facts: packet.facts.map(\.text)))
+        #expect(request.httpBody == replay.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+        #expect(body["temperature"] as? Double == profile.temperature && body["max_tokens"] as? Int == profile.initialOutputTokens)
+        #expect(body["top_p"] == nil && body["seed"] == nil)
+    }
+
     @Test func schemaKeepsExplanationsBeforeCitationsAndAction() throws {
         let facts = ["Uncertain outlook.", "Reported sale under a prearranged plan."]
         let data = try #require(StockSageAIAssessment.responseSchema(facts: facts))
@@ -1414,6 +1452,11 @@ struct StockSageAIAssessmentTests {
         // Shadow mode: the report describes the answer, it does not change it.
         #expect(report.acceptedAction == accepted.action.rawValue)
         #expect(A.quality(accepted, offered: offered, symbol: "ORCL") == report, "Deterministic")
+        let interrupted = report.rejectingPublication
+        #expect(interrupted.state == .modelRejected && interrupted.acceptedAction == nil && interrupted.citedCount == 0)
+        #expect(interrupted.classCounts == report.classCounts && interrupted.offeredCount == report.offeredCount)
+        #expect(interrupted.insiderPurchases == 1 && interrupted.insiderSales == 0)
+        #expect(interrupted.valid(action: nil, evidenceCount: 0, factCount: offered.count))
     }
 
     @Test func qualityFlagsAnUncitedAnswerAndAForeignSymbolCitation() throws {

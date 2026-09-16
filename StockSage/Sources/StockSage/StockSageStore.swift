@@ -122,9 +122,7 @@ final class StockSageStore: ObservableObject {
     @Published private(set) var symbols: [StockSageSymbol] = []
     /// P3 (2026-07-28 review): uppercased-symbol → index into `symbols`. Rebuilt only by the
     /// shape-changing writers (loadCachedQuotes / addSymbol / removeSymbol / replaceAll /
-    /// seedSampleData); the in-place per-row replacements (flushPendingTicks, mergeLiveQuote,
-    /// mergeLiveQuotes, applyPolledQuotes) preserve order and count, so the index survives them
-    /// untouched.
+    /// seedSampleData / first tracked quote); ordinary per-row replacements preserve the index.
     private(set) var symbolIndex: [String: Int] = [:]
     private func rebuildSymbolIndex() {
         symbolIndex = Dictionary(symbols.enumerated().map { ($0.element.symbol.uppercased(), $0.offset) },
@@ -541,17 +539,30 @@ final class StockSageStore: ObservableObject {
         return result
     }
 
-    /// Merge freshly-fetched live quotes into the matching board rows (used by the
+    /// Merge freshly-fetched live quotes into the matching tracked rows (used by the
     /// watchlist-only monitor so those names show live prices even though the full
     /// auto-refresh is paused). Deliberately does NOT flip isSampleData/loadedFromCache or
-    /// `lastUpdated` — it only updates the rows it has, so the board never over-claims that
+    /// `lastUpdated` — it only updates observed rows, so the board never over-claims that
     /// the WHOLE snapshot is live.
     @discardableResult
     func mergeLiveQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote]) -> Bool {
         guard !quotes.isEmpty else { return false }
-        let merged = Self.mergedPolledQuotes(symbols: symbols, ideas: ideas, symbolIndex: symbolIndex, quotes: quotes)
+        // Holdings can enter the feed before a full refresh creates their price row.
+        // Stage only current user-tracked members; the existing merger validates their
+        // first observation, including clock/source ordering against any existing idea.
+        let missing = Set(quotes.keys.map { $0.uppercased() }).subtracting(symbolIndex.keys)
+        let added = missing.isEmpty ? [] : Self.composeTrackedDefs(base: [],
+            userSymbols: userSymbols.map { $0.uppercased() }.filter { missing.contains($0) },
+            offBoardHoldings: offBoardHoldingSymbols.map { $0.uppercased() }.filter { missing.contains($0) })
+        var stagedIndex = symbolIndex
+        for (offset, row) in added.enumerated() { stagedIndex[row.symbol] = symbols.count + offset }
+        let merged = Self.mergedPolledQuotes(symbols: added.isEmpty ? symbols : symbols + added,
+            ideas: ideas, symbolIndex: stagedIndex, quotes: quotes)
         guard !merged.acceptedKeys.isEmpty || !merged.baselineKeys.isEmpty else { return false }
-        symbols = merged.symbols
+        symbols = added.isEmpty ? merged.symbols : merged.symbols.filter {
+            symbolIndex[$0.symbol.uppercased()] != nil || merged.acceptedKeys.contains($0.symbol.uppercased())
+        }
+        if !added.isEmpty { rebuildSymbolIndex() }
         ideas = merged.ideas
         let priced = quotes.filter { merged.acceptedKeys.union(merged.baselineKeys).contains($0.key.uppercased()) }
         newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: priced)
@@ -709,7 +720,9 @@ final class StockSageStore: ObservableObject {
             let candidates = Self.streamGapCandidates(
                 tracked: trackedSymbolsUnion,
                 subscribed: StockSageLiveStream.shared.subscribed,
-                needsBaseline: Set(symbols.filter { $0.sessionChangePercent == nil }.map { $0.symbol.uppercased() }),
+                needsBaseline: Set(trackedSymbolsUnion.filter { key in
+                    symbolIndex[key].map { symbols[$0].sessionChangePercent == nil } ?? true
+                }),
                 isTrading: { Self.marketIsTrading(symbol: $0) }
             )
             let knownLabels = Dictionary(symbols.map { ($0.symbol.uppercased(), $0.market) }, uniquingKeysWith: { a, _ in a })
@@ -3128,8 +3141,8 @@ final class StockSageStore: ObservableObject {
     /// the in-place merge above. Stamps `lastUpdated`/`quoteAsOf` (a poll IS a live observation)
     /// but DELIBERATELY never `lastFullRefreshAt`: that field gates the catalyst rescan
     /// (`refreshCatalysts`, reloads the whole on-disk history), which must not re-run every 30s
-    /// for a sweep touching a handful of rows. Never calls `replaceAll` — only rows that already
-    /// exist on the board/ideas array get touched, board shape is otherwise untouched.
+    /// for a sweep touching a handful of rows. A valid first observation also prices a newly
+    /// tracked holding/watchlist entry; arbitrary untracked symbols never create board rows.
     func applyPolledQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote]) {
         if mergeLiveQuotes(quotes) { lastUpdated = Date() }
     }

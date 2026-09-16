@@ -29,7 +29,7 @@ extension StockSageResearchRanking.Receipt {
         }
         let user = String(data: try! JSONSerialization.data(withJSONObject: ["horizon": horizon.rawValue, "candidates": packets], options: [.sortedKeys]), encoding: .utf8)!
         let round = StockSageResearchRanking.Round(candidateSymbols: candidates,
-                                                  system: StockSageResearchRanking.instructions(horizon: horizon),
+                                                  system: StockSageResearchRanking.instructions(horizon: horizon, version: 1),
                                                   user: user, symbols: symbols, model: "synthetic-test-fixture",
                                                   omittedCitedFacts: Dictionary(uniqueKeysWithValues: candidates.map { ($0, scan.results[$0]!.verdict!.evidence.count) }))
         return .init(version: 1, method: StockSageResearchRanking.wholePoolMethod, horizon: horizon.rawValue,
@@ -209,7 +209,7 @@ extension StockSageResearchRanking.Receipt {
                 return self.response(Array(self.symbols(in: user).prefix(5)))
             })
         let receipt = try result.get()
-        #expect(receipt.version == 1 && Ranking.valid(receipt))
+        #expect(receipt.version == Ranking.currentVersion && Ranking.valid(receipt))
         let restored = try JSONDecoder().decode(Ranking.Receipt.self, from: JSONEncoder().encode(receipt))
         #expect(restored == receipt && Ranking.valid(restored))
     }
@@ -450,6 +450,93 @@ extension StockSageResearchRanking.Receipt {
             }
             #expect(!Ranking.valid(try decode(altered)), "Diagnostic reference corruption: \(corruption)")
         }
+    }
+
+    // MARK: Task 4 — evidence selection must never drop a whole fact class
+
+    /// Confirmed risk: the byte-fair trim fills each candidate's allowance in evidence order, so a
+    /// single oversized technical record could consume the whole share and silently remove the only
+    /// insider SALE record from the comparison packet. An insider sale is exactly the evidence that
+    /// must never disappear because it is inconvenient or late in the array.
+    @Test func everyFactClassSurvivesTheRankingTrimAndOmissionsAreSummarisedPerClass() async throws {
+        let names = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+        var scan = fixtureScan(names)
+        let mandatory = Ranking.Receipt.fixture(scan: scan, symbols: Array(names.prefix(5)), horizon: .week, at: at).rounds[0]
+        let available = StockSageLocalModelServer.maximumUserBytes(system: mandatory.system, outputTokens: 256, contextTokens: 16_384)
+            - mandatory.user.precomposedStringWithCanonicalMapping.utf8.count
+        try #require(available > 2_000)
+        // One huge technical record first, then the short insider sale and lead records.
+        let huge = String(repeating: "T", count: available)
+        for symbol in names {
+            scan.results[symbol]?.facts = [
+                huge,
+                "Form 4: officer SALE of 10,000 shares on 2026-09-02, filed 2026-09-04.",
+                "Imported WhatsApp lead mentioning \(symbol); author and claims unverified.",
+            ]
+            scan.results[symbol]?.factClasses = [.technical, .insider, .importedLead]
+            scan.results[symbol]?.verdict = .init(action: .buy, reason: "Case \(symbol)", risk: "Risk \(symbol)",
+                                                  evidence: ["F1", "F2", "F3"])
+        }
+        let result = await Ranking.rank(scan: scan, horizon: .week, config: config, isOllama: false, allowed: { true }, completion: { _, user, _ in
+            for packet in self.packets(in: user) {
+                let symbol = packet["symbol"] as! String
+                let cited = (packet["citedFacts"] as? [[String: String]]) ?? []
+                let cls = (packet["classSummary"] as? [String: [String: Any]]) ?? [:]
+                #expect(Set(cls.keys) == ["technical", "insider", "importedLead"],
+                        "every class present in the evidence must appear in the summary for \(symbol)")
+                for (name, entry) in cls { #expect(entry["total"] as? Int == 1, "\(name) total for \(symbol)") }
+                // The oversized technical record cannot starve the two short classes.
+                #expect(cited.contains { $0["id"] == "\(symbol):F2" },
+                        "the insider SALE record must survive the trim for \(symbol)")
+                #expect(cited.contains { $0["id"] == "\(symbol):F3" },
+                        "the imported lead record must survive the trim for \(symbol)")
+                let technicalOmitted = (cls["technical"]?["omittedIDs"] as? [String]) ?? []
+                #expect(technicalOmitted == ["\(symbol):F1"],
+                        "the dropped oversized technical record must be named, not silently absent")
+            }
+            return self.response(Array(names.prefix(5)))
+        })
+        #expect(Ranking.valid(try result.get()))
+    }
+
+    /// An imported lead is a claim, not evidence. Ranking must be able to see that it is a lead.
+    @Test func importedLeadStaysLabelledUnverifiedInTheRankingPacket() async throws {
+        let names = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+        var scan = fixtureScan(names)
+        for symbol in names {
+            scan.results[symbol]?.facts = ["Imported lead about \(symbol); unverified author and claims."]
+            scan.results[symbol]?.factClasses = [.importedLead]
+            scan.results[symbol]?.verdict = .init(action: .buy, reason: "Case \(symbol)", risk: "Risk \(symbol)", evidence: ["F1"])
+        }
+        let result = await Ranking.rank(scan: scan, horizon: .week, config: config, isOllama: false, allowed: { true }, completion: { system, user, _ in
+            #expect(system.contains("unverified lead"), "the comparison instructions must define lead handling")
+            for packet in self.packets(in: user) {
+                let cls = (packet["classSummary"] as? [String: [String: Any]]) ?? [:]
+                #expect(Set(cls.keys) == ["importedLead"])
+            }
+            return self.response(names)
+        })
+        #expect(Ranking.valid(try result.get()))
+    }
+
+    /// Absent data is uncertainty. It must be visible as a gap class and must never read as support.
+    @Test func missingCoverageIsSummarisedAsAGapNotAsSupport() async throws {
+        let names = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+        var scan = fixtureScan(names)
+        for symbol in names {
+            scan.results[symbol]?.facts = ["Dated technical record \(symbol)", "News coverage unavailable for \(symbol)."]
+            scan.results[symbol]?.factClasses = [.technical, .coverageGap]
+            scan.results[symbol]?.verdict = .init(action: .buy, reason: "Case \(symbol)", risk: "Risk \(symbol)", evidence: ["F1", "F2"])
+        }
+        let result = await Ranking.rank(scan: scan, horizon: .week, config: config, isOllama: false, allowed: { true }, completion: { _, user, _ in
+            for packet in self.packets(in: user) {
+                let cls = (packet["classSummary"] as? [String: [String: Any]]) ?? [:]
+                #expect(cls["coverageGap"]?["total"] as? Int == 1, "the gap must be counted as a gap")
+                #expect(cls["technical"]?["total"] as? Int == 1)
+            }
+            return self.response(names)
+        })
+        #expect(Ranking.valid(try result.get()))
     }
 
     private func fixtureScan<S: Sequence>(_ names: S, caseText: String = "Dated supporting case") -> Research.Scan where S.Element == String {

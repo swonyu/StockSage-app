@@ -6,6 +6,37 @@ conversation.
 
 Companion doc (different subject, still current): `HANDOFF-CODEX-2026-09-12.md`.
 
+> ## ⚠️ ENTITLEMENT CORRECTION — 2026-09-16: DO NOT IMPLEMENT FINDING #1 AS WRITTEN
+>
+> This audit assumes the owner holds only Earnings, Analyst Ratings and Corporate
+> Guidance, and that `analystInsights`, `bullsBearsSay`, `news` and `consensusRatings`
+> return 402/403 — "~2,000 guaranteed-failing paid calls per horizon run". **That is no
+> longer true.** The owner has since purchased Benzinga News, Bulls Bears Say and Analyst
+> Insights (billing summary supplied 2026-09-16), alongside Earnings, Analyst Ratings,
+> Corporate Guidance and Stocks Advanced.
+>
+> Live probe against `api.massive.com` on 2026-09-16 with the Keychain credential, one
+> request per product:
+>
+> | Product | Result | Product | Result |
+> |---|---|---|---|
+> | Earnings | HTTP 200, rows | Bulls Bears Say | HTTP 200, rows |
+> | Analyst Ratings | HTTP 200, rows | Analyst Insights | HTTP 200, rows |
+> | Corporate Guidance | HTTP 200, rows | Consensus Ratings | HTTP 200, rows |
+> | News | HTTP 200, rows | Analysts / Firms (metadata) | HTTP 200, rows |
+>
+> Stocks Advanced is also live: snapshot, dividends, Form 4 and 8-K disclosures all 200.
+> Nothing is entitlement-blocked. Suppressing those four products would now delete four
+> paid evidence families from every assessment, against the owner's explicit 2026-09-16
+> instruction that StockSage and Gemma must use all purchased products.
+>
+> The *mechanical* half of finding #1 still stands and is worth doing: an entitlement
+> denial is an account fact cached under a per-ticker key, so a real future denial still
+> cannot memoize across symbols. Fix the cache key. Do not pre-disable products.
+>
+> Findings #2 and #3, and the per-scan call-volume arithmetic, are unaffected except that
+> the "guaranteed-failing" share of that volume is zero.
+
 ## Read this before acting
 
 These are the constraints an agent without context walks into. They are not style preferences.
@@ -1004,6 +1035,11 @@ Load the cache once in `start`, pass `cachedHistory: StockSagePriceHistory?` int
 
 #### Account-level Benzinga entitlement denials are re-learned once per symbol, up to ~2,000 guaranteed-failing paid calls per run
 
+> **[SUPERSEDED 2026-09-16]** The premise below — that four of the seven products are
+> unentitled — was measured before the owner purchased them. All nine now return HTTP 200
+> with data (see the entitlement correction at the top of this file). The savings estimate
+> is void; the per-ticker cache-key defect is real but currently costs nothing.
+
 - **Where:** `StockSage/Sources/StockSage/StockSageBenzingaClient.swift:428`
 - **Confidence:** high  ·  **Est. effort:** ~35 lines
 - **Owner impact:** Seven products are requested for every symbol: earnings, guidance, ratings, analystInsights, bullsBearsSay, news, consensusRatings. The owner's add-ons are Earnings, Analyst Ratings and Corporate Guidance, so the rest come back 402/403. The cache key is `.page(query)` and Query includes `subject` (the ticker), so an entitlement denial on AAPL/bullsBearsSay does nothing to stop the identical request for MSFT/bullsBearsSay — and its TTL is only 300 s anyway (StockSageBenzinga.swift:25-31). Entitlement is an account fact, not a symbol fact. With four unentitled products that is ~2,000 paid requests per horizon run, ~4,000 across both, every one of which can only ever return the same denial. Each also adds a round-trip to a scan the owner is already waiting hours on.
@@ -1118,7 +1154,7 @@ VERIFICATION BASE. Every code citation in the surviving findings checks out agai
 
 WHY THE TOP THREE, IN THAT ORDER.
 
-#1 entitlement memo. Confirmed exactly: snapshot() issues all 7 non-metadata products per symbol (StockSageBenzingaClient.swift:428-432); a 402/403 becomes `.unavailable(.entitlement)` (:296-298) and IS cached (:300) — but under `.page(query)` and Query carries `subject` (StockSageBenzinga.swift:59-64), so the denial is a per-ticker fact, and its TTL is 300 s anyway (StockSageBenzinga.swift:24-32, default branch). With Earnings/Ratings/Guidance owned, the other four (analystInsights, bullsBearsSay, news, consensusRatings) are ~2,000 guaranteed-failing paid calls per horizon run. Smallest change, fires on EVERY run regardless of workflow, and it has a second-order win the finding did not claim: dropping 4 of 7 base queries leaves one 3-wide wave, which removes most of the queue-wait exposure that finding #9 is about. ONE CORRECTION TO THE PROPOSAL, and it is the honesty-floor one: a memoized page must NOT be stamped `checkedAt: now()` (that is the shape of unavailable(), :151-153) — nothing was checked at now(). Carry the original denial's checkedAt and epoch, or the app starts printing a fresh timestamp for a call it never made. That plumbing pushes it past 35 lines, but not past ~100.
+#1 entitlement memo. **[SUPERSEDED 2026-09-16 — see the entitlement correction at the top of this file. All nine products return HTTP 200 with data; none are denied. Fix the per-ticker cache key if you like, but do not stop requesting any product.]** Confirmed exactly: snapshot() issues all 7 non-metadata products per symbol (StockSageBenzingaClient.swift:428-432); a 402/403 becomes `.unavailable(.entitlement)` (:296-298) and IS cached (:300) — but under `.page(query)` and Query carries `subject` (StockSageBenzinga.swift:59-64), so the denial is a per-ticker fact, and its TTL is 300 s anyway (StockSageBenzinga.swift:24-32, default branch). With Earnings/Ratings/Guidance owned, the other four (analystInsights, bullsBearsSay, news, consensusRatings) are ~2,000 guaranteed-failing paid calls per horizon run. Smallest change, fires on EVERY run regardless of workflow, and it has a second-order win the finding did not claim: dropping 4 of 7 base queries leaves one 3-wide wave, which removes most of the queue-wait exposure that finding #9 is about. ONE CORRECTION TO THE PROPOSAL, and it is the honesty-floor one: a memoized page must NOT be stamped `checkedAt: now()` (that is the shape of unavailable(), :151-153) — nothing was checked at now(). Carry the original denial's checkedAt and epoch, or the app starts printing a fresh timestamp for a call it never made. That plumbing pushes it past 35 lines, but not past ~100.
 
 #2 throttled names. This is the only finding in the set that makes the RESEARCH better rather than cheaper, which is why it outranks the bigger dollar savings. Verified end to end: during cooldown every query short-circuits to `.throttled` via admissionFailure (:147) without being cached, the snapshot still carries the live epoch so evidenceAllowed() passes (StockSageHorizonResearch.swift:378-381), the Massive news fallback shares the same admission gate (:199) so it throttles too, projection() still returns a status-lines-only Projection (StockSageBenzinga.swift:290-330 with maximumRecords: 0), and canAssess (StockSageAIAssessment.swift:97-113) therefore passes on price history alone. So a name with zero external evidence gets a full inference, can validate a Buy on price facts, and lands in the 5-name shortlist next to fully-evidenced names. BUT RE-SCOPE THE FIX — as written it is both over-sized and contract-breaking: "counting the name as not-checked" collides with Coverage.checked = scan.results.count (StockSageResearchHistory.swift:138) and would trip record()'s `checked == requested` gate (:148), exactly the trap finding #1 flagged and this one did not. The correct version is SMALLER and needs no contract change: return `.init(facts: facts, note: "Evidence provider throttled; price history only — not checked.")` with no verdict, so it counts as checked AND lands in `incomplete` (:139), the counter the owner already reads on screen. ~10-15 lines, saves ~20 model calls per cooldown, and removes a thin-evidence name from the shortlist. Note "full-price Qwen calls" is loose — Qwen is local, the cost is wall clock, not cash.
 

@@ -205,6 +205,11 @@ enum StockSageLocalModelServer {
     /// as cheap does not transfer to Gemma's architecture and has been removed rather than ported
     /// — do not re-derive it from memory; measure it fresh against the served model if it matters.
     nonisolated static let researchContextTokens = 16_384
+    /// The one place this value exists. `chatRequest` sends it and the attempt observer records it,
+    /// so a recorded temperature can never drift from the temperature actually on the wire.
+    /// top_p and the seed are deliberately NOT sent: the served model owns them, so a receipt must
+    /// report them as unpinned rather than claim a determinism this app never requested.
+    nonisolated static let researchTemperature = 0.2
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
     nonisolated static let gemmaModel = "google/gemma-4-31b-qat"
@@ -665,13 +670,13 @@ enum StockSageLocalModelServer {
         var body: [String: Any] = ["model": c.model, "stream": false, "messages": messages]
         if isOllama {
             body["think"] = false
-            body["options"] = ["temperature": 0.2, "num_predict": maxTokens, "num_ctx": contextTokens]
+            body["options"] = ["temperature": researchTemperature, "num_predict": maxTokens, "num_ctx": contextTokens]
         } else {
-            body["temperature"] = 0.2
+            body["temperature"] = researchTemperature
             body["max_tokens"] = maxTokens
             if c.isLMStudioGemma || c.isRunPodGemma { body["reasoning_effort"] = "none" }
         }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
         if c.requiresStrictOutput, !isOllama, let jsonSchema,
            let schema = try? JSONSerialization.jsonObject(with: jsonSchema),
            var data = request.httpBody, data.last == 0x7D {
@@ -712,6 +717,11 @@ enum StockSageLocalModelServer {
         var completionTokens: Int? = nil
         var malformedUsage = false
         var outputLimitRetries = 0
+        /// Why this attempt was a repeat, from a closed vocabulary — currently only "outputLimit",
+        /// a same-evidence restart after a confirmed truncation. nil on a first attempt. The count
+        /// above says a retry happened; this says what caused it, which is what a receipt needs.
+        /// Transport failures are never retried, so they can never appear here.
+        var retryReason: String? = nil
         /// How many OTHER model requests were already running when this one started.
         /// 0 means this request had the local model to itself. Non-zero is the measurement the
         /// admission-policy decision needs: it shows real cross-caller contention rather than
@@ -724,7 +734,7 @@ enum StockSageLocalModelServer {
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries)"
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries) retryReason=\(retryReason ?? "none")"
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -1053,7 +1063,8 @@ enum StockSageLocalModelServer {
                 await attemptObserver(.init(callID: callID, ordinal: attempt + 1, phase: phase, stage: stage,
                     startedAt: preparedAt, endedAt: stage == .finished ? Date() : nil,
                     transportStarted: transportStarted, requestedModel: c.model, returnedModel: observedModel,
-                    isOllama: isOllama, outputLimit: outputLimit, contextTokens: contextTokens, temperature: 0.2,
+                    isOllama: isOllama, outputLimit: outputLimit, contextTokens: contextTokens,
+                    temperature: StockSageLocalModelServer.researchTemperature,
                     system: recordedSystem.text, systemBytes: recordedSystem.bytes, systemTruncated: recordedSystem.truncated,
                     user: recordedUser.text, userBytes: recordedUser.bytes, userTruncated: recordedUser.truncated,
                     schema: recordedSchema?.text, schemaBytes: recordedSchema?.bytes, schemaTruncated: recordedSchema?.truncated ?? false,
@@ -1063,6 +1074,8 @@ enum StockSageLocalModelServer {
             func enriched(_ value: Diagnostic) -> Diagnostic {
                 var diagnostic = value
                 diagnostic.outputLimitRetries = attempt
+                // The only path that sets `attempt` above 0 is the truncation restart below.
+                diagnostic.retryReason = attempt > 0 ? "outputLimit" : nil
                 diagnostic.elapsedMilliseconds = elapsedMilliseconds()
                 diagnostic.concurrentRequests = concurrent
                 return diagnostic

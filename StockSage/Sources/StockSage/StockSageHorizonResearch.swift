@@ -64,6 +64,16 @@ final class StockSageHorizonResearch: ObservableObject {
         /// `qualification`. Absent on every result written before this existed. Every purchase
         /// AND sale is retained here; the deterministic Top-5 ranking is the only reader.
         var insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = []
+        /// Fact class of each entry in `facts`, positionally parallel to it, so comparison ranking
+        /// can keep every class visible instead of trimming by byte order alone. Empty on results
+        /// written before this existed; readers must treat an empty array as "unclassified", never
+        /// as "no classes present".
+        var factClasses: [StockSageAIAssessment.FactClass] = []
+        var inferenceProfile: StockSageAIAssessment.InferenceProfile? = nil
+        var qualityReport: StockSageAIAssessment.QualityReport? = nil
+        /// Complete provider record: filing identities/links, typed transactions and omissions.
+        var insiderEvidence: StockSageMassiveEvents.Observation? = nil
+        var hasRecordedInsiderTransactions = true
     }
     struct Scan {
         var listings: [Listing] = []
@@ -838,7 +848,9 @@ final class StockSageHorizonResearch: ObservableObject {
         outputTokens: Int = researchOutputTokens, qualify: Bool = false) -> Analysis {
         { horizon in
             switch gathered {
-            case .failed(let result): return result
+            case .failed(var result):
+                result.qualityReport = StockSageAIAssessment.quality(nil, offered: [], symbol: "")
+                return result
             case .captured(let capture):
                 return await assess(capture, horizon: horizon, config: config, isOllama: isOllama,
                     allowed: allowed, modelTransport: modelTransport, evidenceIsCurrent: evidenceIsCurrent, outputTokens: outputTokens, qualify: qualify)
@@ -1087,7 +1099,8 @@ final class StockSageHorizonResearch: ObservableObject {
             // This records validation at this instant, not publication, an order or a prediction outcome.
             let state: StockSageResearchDiagnostics.Outcome.State = Task.isCancelled ? .cancelled
                 : result.verdict != nil ? .accepted : result.evidenceReceipt == nil ? .notRequested : .rejected
-            let finished = await writer.finish(receipt, outcome: .init(state: state, note: result.note))
+            let finished = await writer.finish(receipt, outcome: .init(state: state, note: result.note,
+                inferenceProfile: result.inferenceProfile, qualityReport: result.qualityReport))
             result.diagnosticID = receipt.id
             result.diagnosticsComplete = began && finished
             let current = capture.context.benzinga.map {
@@ -1095,11 +1108,13 @@ final class StockSageHorizonResearch: ObservableObject {
             } ?? true
             if !allowed() || Task.isCancelled || !capture.isFresh(at: Date()) || !current {
                 result.verdict = nil; result.levels = nil; result.qualification = nil
+                result.qualityReport = result.qualityReport?.rejectingPublication
                 if let evidence = result.evidenceReceipt {
                     result.evidenceReceipt = .init(symbol: evidence.symbol, requiredKeys: evidence.requiredKeys,
                         missingOrUnknownRequiredKeys: evidence.missingOrUnknownRequiredKeys,
                         offeredKeys: evidence.offeredKeys, omittedKeys: evidence.omittedKeys,
-                        prePromptOmittedRecordCount: evidence.prePromptOmittedRecordCount, citedKeys: [])
+                        prePromptOmittedRecordCount: evidence.prePromptOmittedRecordCount, citedKeys: [],
+                        packetVersion: evidence.packetVersion, classCounts: evidence.classCounts, packetDigest: evidence.packetDigest)
                 }
                 result.note = "Analysis interrupted or captured evidence expired before publication."
             }
@@ -1128,12 +1143,24 @@ final class StockSageHorizonResearch: ObservableObject {
         attemptObserver: (@Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void)?, qualify: Bool) async -> Result {
         let history = capture.history, context = capture.context, referenceClose = capture.referenceClose
         var evidenceReceipt: StockSageAIAssessment.EvidenceCoverage?
+        var inferenceProfile: StockSageAIAssessment.InferenceProfile?
+        var qualityReport: StockSageAIAssessment.QualityReport?
+        var offeredClasses: [StockSageAIAssessment.FactClass] = []
+        let insiderEvidence = context.company[.insider].flatMap {
+            $0.symbol == context.idea.symbol.uppercased() && $0.feed == .insider ? $0 : nil
+        }
+        let transactions = insiderTransactions(from: context, at: context.asOf)
         func evidenceAllowed() -> Bool {
             allowed() && !Task.isCancelled && capture.isFresh(at: Date())
                 && (context.benzinga.map { evidenceIsCurrent?($0) ?? StockSageBenzingaClient.shared.isCurrent($0) } ?? true)
         }
         func result(_ note: String, facts: [String] = []) -> Result {
-            .init(facts: facts, note: note, at: capture.at, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt)
+            .init(facts: facts, note: note, at: capture.at, model: config.model,
+                referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt,
+                insiderTransactions: transactions, factClasses: offeredClasses,
+                inferenceProfile: inferenceProfile, qualityReport: qualityReport
+                    ?? StockSageAIAssessment.quality(nil, offered: [], symbol: context.idea.symbol),
+                insiderEvidence: insiderEvidence)
         }
         guard [researchOutputTokens, 384].contains(outputTokens) else { return result("Unsupported research output budget; no opinion.") }
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
@@ -1168,13 +1195,22 @@ final class StockSageHorizonResearch: ObservableObject {
             return result("Evidence could not fit the model context budget without dropping a mandatory horizon or source-status fact; no opinion.", facts: mandatory.map(\.text))
         }
         let offered = Array(optional.prefix(fitted.optionalKept)) + mandatory
+        offeredClasses = offered.map(\.factClass)
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
-            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount)
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, packet: packet)
         let facts = fitted.facts
         let trimmedNote = fitted.isComplete ? "" : " \(fitted.omitted) of \(optional.count) optional evidence records were omitted to fit the context budget."
         let response = await StockSageAIAssessment.complete(config, isOllama: isOllama,
             system: fitted.system, user: fitted.user, facts: facts, maxTokens: outputTokens,
             attemptObserver: attemptObserver, stillValid: evidenceAllowed, transport: modelTransport)
+        let diagnostic: StockSageLocalModelServer.Diagnostic
+        switch response {
+        case .success(let completion): diagnostic = completion.diagnostic
+        case .failure(let failure): diagnostic = failure.diagnostic
+        }
+        inferenceProfile = .init(config: config, isOllama: isOllama, packet: packet,
+            outputTokens: outputTokens, diagnostic: diagnostic)
+        qualityReport = StockSageAIAssessment.quality(nil, offered: offered, symbol: context.idea.symbol)
         guard evidenceAllowed() else { return result("Analysis interrupted or captured evidence expired.", facts: facts) }
         if case .success(let completion) = response, let rejection = StockSageLocalModelServer.financialOutputRejection(completion) {
             return result("No verified opinion. " + rejection + trimmedNote + " " + completion.diagnostic.summary, facts: facts)
@@ -1186,14 +1222,20 @@ final class StockSageHorizonResearch: ObservableObject {
         switch StockSageAIAssessment.validate(completion.text, facts: facts, earningsWindow: earningsWindow) {
         case .success(let accepted): verdict = accepted
         case .failure(let failure):
+            qualityReport = StockSageAIAssessment.quality(nil, offered: offered, symbol: context.idea.symbol, failure: failure)
             return result("No verified opinion. " + failure.explanation(model: completion.model) + trimmedNote, facts: facts)
         }
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
-            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict)
+            prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict, packet: packet)
         let qualified = qualification?.receipt(verdict: verdict, citedKeys: evidenceReceipt?.citedKeys ?? [], offeredKeys: offered.map(\.key))
         return .init(verdict: verdict, levels: qualified?.levels ?? levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated model research · \(horizon.rawValue). No order created." + trimmedNote,
             at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified,
-            insiderTransactions: insiderTransactions(from: context, at: capture.at))
+            insiderTransactions: transactions,
+            // `offered` is positionally identical to `fitted.facts`: optional kept records first
+            // (dropped only from the end), then mandatory records. F-numbering therefore matches.
+            factClasses: offeredClasses, inferenceProfile: inferenceProfile,
+            qualityReport: StockSageAIAssessment.quality(verdict, offered: offered, symbol: context.idea.symbol),
+            insiderEvidence: insiderEvidence)
     }
 }
