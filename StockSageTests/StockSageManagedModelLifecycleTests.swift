@@ -2,17 +2,16 @@ import Foundation
 import Testing
 @testable import StockSage
 
-// Real behavioral lifecycle tests for the managed LM Studio profile, moved off
+// Real behavioral lifecycle tests for the managed LM Studio profile, moved off the (now deleted)
 // StockSageModelDownloadTests.swift and re-pointed from the 9B/Qwen managed fixture onto a
 // hand-derived Gemma one (Qwen removal Step 4; StockSageLocalModelServerTests.gemmaInventory is
 // the shared fixture shape, derived from the Step 0 LM Studio capture, not copied from the
 // shipped code's own emission). These are not about downloading (Gemma has no verified download
-// source — see StockSageModelDownloadTests.swift, which stays on the 9B fixture and is deleted
-// whole in Step 5), they are about probing, unloading and context verification against whatever
-// model is actually the managed profile.
+// source, and the whole download subsystem was deleted in Step 5), they are about probing,
+// unloading and context verification against whatever model is actually the managed profile.
 //
-// managedInventory(_:modelKey:) defaults to lmStudioModel (Qwen) -- every bare call below passes
-// modelKey: S.gemmaModel explicitly, or it would silently keep checking the retired identity.
+// managedInventory(_:modelKey:) has NO default (Step 5 removed the Qwen-shaped default) -- every
+// call below passes modelKey: S.gemmaModel explicitly, which is required, not a stylistic choice.
 @Suite("Managed model lifecycle (Gemma)") @MainActor
 struct StockSageManagedModelLifecycleTests {
     typealias S = StockSageLocalModelServer

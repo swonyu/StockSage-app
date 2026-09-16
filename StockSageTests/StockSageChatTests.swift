@@ -1439,19 +1439,9 @@ struct StockSageChatTests {
         }
     }
 
-    @Test(arguments: ["missing", "downloading", "uncertain"])
-    func renderModelAcquisitionControlsWithoutRuntimeActions(state: String) async throws {
-        var actions = 0
-        let message = state == "missing" ? "The 6-bit model is missing. Download the current release."
-            : state == "downloading" ? "Downloading Qwen3.5 9B · 20%."
-            : "Download acceptance is unknown. Check LM Studio Downloads; another transfer was not submitted."
-        let view = CatalystsSection.modelDownloadControls(message: message, working: state == "downloading",
-            fraction: state == "downloading" ? 0.2 : nil,
-            check: { actions += 1 }, open: { actions += 1 })
-            .padding(20).frame(width: 500).environment(\.colorScheme, .dark)
-        let size = try await capture(view, name: "stocksage-model-download-\(state)")
-        #expect(size.width == 500 && size.height > 0 && actions == 0)
-    }
+    // renderModelAcquisitionControlsWithoutRuntimeActions deleted here (Qwen removal Step 5):
+    // it rendered CatalystsSection.modelDownloadControls, the 9B download panel's view, which no
+    // longer exists (Gemma has no download mechanism to render controls for).
 
     // SwiftUI's native AX proxies can implement these public Objective-C methods
     // without declaring NSAccessibilityProtocol conformance.

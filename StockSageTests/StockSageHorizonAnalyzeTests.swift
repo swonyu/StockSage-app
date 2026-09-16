@@ -89,7 +89,12 @@ struct StockSageHorizonAnalyzeTests {
                     _ = try StockSageAIAssessment.validate(completion.text, facts: request.facts).get()
                     let inventory = try #require(JSONSerialization.jsonObject(with: response.inventory) as? [String: Any])
                     try #require((Server.verifiedContext(inventory, model: retiredModel) ?? 0) >= manifest.contextTokens)
-                    try #require((Server.managedInventory(inventory)?.researchParallelism ?? 1) >= response.parallelism)
+                    // The researchParallelism cross-check against this historical corpus was
+                    // removed here (Qwen removal Step 5): managedInventory(_:modelKey:) now only
+                    // recognizes gemmaModel, so it can no longer read the retired 9B profile's
+                    // multi-slot parallelism at all -- keeping the check would either always
+                    // trivially pass (against the ??1 fallback) or wrongly fail every archived
+                    // response with parallelism > 1, neither of which validates anything real.
                 } catch { failures.append(response.trial + "/" + response.id + ": " + String(describing: error)) }
             }
             try encoder.encode(failures).write(to: directory.appendingPathComponent("validation-errors.json"), options: .atomic)
@@ -101,7 +106,11 @@ struct StockSageHorizonAnalyzeTests {
                      "Synthetic demand softened and inventory rose; a recovery has not been confirmed.",
                      "Synthetic results were mixed and management kept its outlook unchanged.",
                      "Synthetic expansion may support sales, while funding and execution remain risks."]
-        let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+        // Historical Qwen 9B managed-inventory shape (StockSageModelDownloadTests.installed,
+        // deleted along with the 9B profile in Step 5) -- kept inline, byte-for-byte, since this
+        // is the retired identity's real shape, not something to update to Gemma's.
+        let retiredInstalled = #"{"models":[{"type":"llm","key":"qwen3.5-9b","publisher":"mlx-community","architecture":"qwen3_5","params_string":"9B","format":"mlx","quantization":{"name":"6bit","bits_per_weight":6},"loaded_instances":[]}]}"#
+        let inventory = retiredInstalled.replacingOccurrences(of: "\"loaded_instances\":[]",
             with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":1}}]"#)
         var requests: [Request] = []
         for (index, suffix) in Array("ABCDEFGHIJKLMNOP").enumerated() {
@@ -118,7 +127,7 @@ struct StockSageHorizonAnalyzeTests {
                 }, next: { _, at in
                     if index.isMultiple(of: 3) { return .unavailable }
                     return .answered(.init(date: at.addingTimeInterval(Double(3 + index % 10) * 86_400), confirmed: index.isMultiple(of: 2)))
-                }, model: { request in
+                }, modelIdentity: retiredModel, model: { request in
                     if request.httpMethod == "POST" {
                         posts.append((try #require(request.url), try #require(request.httpBody)))
                         let content = #"{"evidence":["F1"],"action":"Hold","reason":"Synthetic supporting case.","risk":"Synthetic uncertainty remains."}"#
@@ -213,10 +222,14 @@ struct StockSageHorizonAnalyzeTests {
                      earningsReceipt: ((String, Date) async -> StockSageMassiveEarnings.Observation)? = nil,
                      next: @escaping (String, Date) async -> StockSageCatalystChain.Answer<StockSageMassiveEarnings.Row?> = { _, _ in .unavailable },
                      filings: @escaping (String, Date) async -> StockSageDisclosureService.FilingsObservation = { _, at in .init(checkedAt: at, outcome: .unavailable(.unreachable), filings: []) },
+                     modelIdentity: String? = nil,
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
                      ) async -> Research.Result {
+        // modelIdentity overrides the shared per-isOllama default -- needed only by the historical
+        // throughput corpus test (Qwen removal Step 5), which pins the retired 9B identity and
+        // must not silently pick up the shared default's current model.
         let config = Server.config(url: isOllama ? StockSageModelHarnessTests.ollamaFixtureURL : Server.lmStudioURL,
-                                   model: isOllama ? StockSageModelHarnessTests.ollamaFixtureModel : Server.gemmaModel)!
+                                   model: modelIdentity ?? (isOllama ? StockSageModelHarnessTests.ollamaFixtureModel : Server.gemmaModel))!
         // Isolated defaults: never the real parent-app preference domain.
         let suiteName = "stocksage.horizon.analyze.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {

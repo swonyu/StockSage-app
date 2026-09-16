@@ -93,7 +93,6 @@ struct CatalystsSection: View {
     @AppStorage(StockSageLocalModelServer.urlKey) private var serverURL: String = StockSageLocalModelServer.defaultURL
     @AppStorage(StockSageLocalModelServer.modelKey) private var serverModel: String = StockSageLocalModelServer.defaultModel
     @State private var probeState = ConnectionProbeState()
-    @State private var modelDownload = StockSageModelDownload.shared
     private var probe: StockSageLocalModelServer.Probe? { probeState.current(for: explanationRequestSettings) }
     private var probing: Bool { probeState.isProbing(for: explanationRequestSettings) }
 
@@ -474,30 +473,11 @@ struct CatalystsSection: View {
                     Text(StockSageLocalModelStartup.shared.message ?? "Gemma loads automatically before AI use. Startup loading also opens LM Studio; enable its server auto-start setting.")
                         .font(.system(size: metadataSize)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                Button("Use LM Studio · Qwen3.5 9B") {
-                    updateModelSetting("localServerOnly", key: StockSageLocalModelServer.backendKey)
-                    updateModelSetting(StockSageLocalModelServer.lmStudioURL, key: StockSageLocalModelServer.urlKey)
-                    updateModelSetting(StockSageLocalModelServer.lmStudioModel, key: StockSageLocalModelServer.modelKey)
-                }
-                .help("Select the recommended 6-bit model on this Mac. AI use downloads the current release if missing and Web access is enabled. Does not start a server or alter other models.")
-                if StockSageLocalModelServer.config(url: serverURL, model: serverModel)?.isLMStudio9B == true {
-                    VStack(alignment: .leading, spacing: DS.Space.xs) {
-                        Self.modelDownloadControls(message: modelDownload.message,
-                            working: modelDownload.isWorking, fraction: modelDownload.fraction, check: {
-                                if let config = StockSageLocalModelServer.config(url: serverURL, model: serverModel) {
-                                    modelDownload.start(config, retry: true)
-                                }
-                            }, open: { NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/LM Studio.app")) })
-                        Text("Automatic setup keeps Qwen3.5 9B at 6-bit. Transfers use LM Studio and Hugging Face; your facts are not sent. Pause/cancel in LM Studio. A missing upstream release is an error, not permission to choose untested weights.")
-                            .font(.system(size: metadataSize)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        Text("Quitting StockSage unloads the selected local model from memory; downloaded files stay on disk. Force Quit cannot run this cleanup.")
-                            .font(.system(size: metadataSize)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    .onChange(of: modelDownload.ready) { _, ready in
-                        guard !StockSageStore.isRunningTests else { return }
-                        if ready { testConnection() }
-                    }
+                    // Moved from the retired 9B download block (Qwen removal Step 5): this is the
+                    // only disclosure of the quit-unload contract, and it applies to any managed
+                    // local model, not just the one that used to render it.
+                    Text("Quitting StockSage unloads the selected local model from memory; downloaded files stay on disk. Force Quit cannot run this cleanup.")
+                        .font(.system(size: metadataSize)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 #endif
                 TextField("Server URL", text: Binding(get: { serverURL }, set: { updateModelSetting($0, key: StockSageLocalModelServer.urlKey) }))
@@ -518,23 +498,6 @@ struct CatalystsSection: View {
             .padding(.top, DS.Space.xs)
         } label: {
             Text("Explanation model").font(.system(size: font11, weight: .medium)).foregroundStyle(DS.Palette.textSecondary)
-        }
-    }
-
-    static func modelDownloadControls(message: String, working: Bool, fraction: Double?,
-                                      check: @escaping () -> Void, open: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            Text(message).font(.caption).fixedSize(horizontal: false, vertical: true)
-            if working {
-                if let fraction {
-                    ProgressView("Model download", value: fraction, total: 1)
-                        .accessibilityValue("\(Int(fraction * 100)) percent")
-                } else { ProgressView("Checking model download…") }
-            }
-            HStack {
-                Button("Download / check current model", action: check).disabled(working)
-                Button("Open LM Studio", action: open)
-            }
         }
     }
 

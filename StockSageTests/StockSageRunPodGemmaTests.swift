@@ -16,7 +16,7 @@ import Testing
 
     @Test func exactTunnelProfileKeepsGemmaSchemaAndLocalLifecycleSeparate() async throws {
         #expect(config.isRunPodGemma && config.requiresExternalAccess && config.requiresStrictOutput)
-        #expect(!config.isManagedLMStudio && !config.isLMStudioGemma)
+        #expect(!config.isLMStudioGemma)
         #expect(config.isRunPodEndpoint && !config.supportsLocalUnload)
         // Literal, not S.defaultURL: this is the only assertion that 11434 is in
         // supportsLocalUnload's allow-list. Once Qwen removal Step 7 flips defaultURL to

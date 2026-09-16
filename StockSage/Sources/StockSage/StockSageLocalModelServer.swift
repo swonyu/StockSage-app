@@ -42,7 +42,6 @@ enum StockSageLocalModelServer {
         isShuttingDown = true
         if !StockSageStore.isRunningTests { UserDefaults.standard.set(UUID().uuidString, forKey: revisionKey) }
         StockSageAIAssessments.shared.cancelActiveAssessment(reason: "StockSage is closing; reassess after reopening.")
-        StockSageModelDownload.shared.stopChecking()
         let loadingWasActive = StockSageLocalModelStartup.shared.cancel()
         let wasBusy = await inFlight.current > 0
         let hadActiveWork = wasBusy || loadingWasActive
@@ -194,7 +193,6 @@ enum StockSageLocalModelServer {
     nonisolated static let researchContextTokens = 16_384
     // Stable inventory key supports LM Studio JIT reload; an lms --identifier alias does not.
     nonisolated static let lmStudioURL = "http://127.0.0.1:1234"
-    nonisolated static let lmStudioModel = "qwen3.5-9b"
     nonisolated static let gemmaModel = "google/gemma-4-31b-qat"
     nonisolated static let runPodURL = "http://127.0.0.1:18080"
     nonisolated static let maximumResponseBytes = 1_048_576
@@ -294,7 +292,6 @@ enum StockSageLocalModelServer {
             model == StockSageLocalModelServer.gemmaModel && StockSageLocalModelServer.isLoopback(baseURL)
                 && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
         }
-        nonisolated var isManagedLMStudio: Bool { isLMStudio9B || isLMStudioGemma }
         nonisolated var isRunPodEndpoint: Bool {
             StockSageLocalModelServer.isLoopback(baseURL) && baseURL.port == 18080
         }
@@ -302,7 +299,7 @@ enum StockSageLocalModelServer {
             model == StockSageLocalModelServer.gemmaModel && baseURL.scheme?.lowercased() == "http"
                 && isRunPodEndpoint && ["", "/"].contains(baseURL.path)
         }
-        nonisolated var requiresStrictOutput: Bool { isManagedLMStudio || isRunPodGemma }
+        nonisolated var requiresStrictOutput: Bool { isLMStudioGemma || isRunPodGemma }
         /// Reserve the existing same-evidence retry before fitting optional records.
         nonisolated func reservedOutputTokens(for initial: Int) -> Int {
             requiresStrictOutput && (1...512).contains(initial) ? initial * 2 : initial
@@ -312,10 +309,6 @@ enum StockSageLocalModelServer {
         nonisolated var supportsLocalUnload: Bool {
             StockSageLocalModelServer.isLoopback(baseURL) && ["", "/"].contains(baseURL.path)
                 && baseURL.port.map { [1234, 11434].contains($0) } == true
-        }
-        nonisolated var isLMStudio9B: Bool {
-            model == StockSageLocalModelServer.lmStudioModel && StockSageLocalModelServer.isLoopback(baseURL)
-                && baseURL.port == 1234 && ["", "/"].contains(baseURL.path)
         }
     }
 
@@ -436,7 +429,7 @@ enum StockSageLocalModelServer {
                 detail: "RunPod · Gemma 4 31B ready · \(capacity.context / 1024)K context · \(capacity.parallel) research workers.",
                 researchParallelism: capacity.parallel, servingContext: capacity.context)
         }
-        if c.isManagedLMStudio,
+        if c.isLMStudioGemma,
            let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport),
            let native = managedInventory(inventory, modelKey: c.model) {
             return denied() ? stopped : native
@@ -513,7 +506,7 @@ enum StockSageLocalModelServer {
                         guard let rows = inventory["models"] as? [[String: Any]],
                               rows.allSatisfy({ $0["key"] is String }) else { throw URLError(.cannotParseResponse) }
                         let selected = rows.filter { $0["key"] as? String == c.model }
-                        guard selected.count <= 1 || (c.isManagedLMStudio && managedInventory(inventory, modelKey: c.model)?.hasModel == true),
+                        guard selected.count <= 1 || (c.isLMStudioGemma && managedInventory(inventory, modelKey: c.model)?.hasModel == true),
                               let loaded = loadedInstances(selected) else {
                             throw URLError(.cannotParseResponse)
                         }
@@ -542,8 +535,11 @@ enum StockSageLocalModelServer {
 
     /// A native inventory includes downloaded-but-unloaded models. Wrong variants are not
     /// missing: downloading over the same key would not safely select the right weights.
-    static func managedInventory(_ json: [String: Any], modelKey: String = lmStudioModel) -> Probe? {
-        guard [lmStudioModel, gemmaModel].contains(modelKey) else { return nil }
+    // modelKey is required, not defaulted to gemmaModel: a default would silently repoint any
+    // caller that omitted it with no compile error, which is exactly the untested-weights
+    // substitution the allow-list below exists to forbid.
+    static func managedInventory(_ json: [String: Any], modelKey: String) -> Probe? {
+        guard modelKey == gemmaModel else { return nil }
         guard let rows = json["models"] as? [[String: Any]],
               rows.allSatisfy({
                   guard let key = $0["key"] as? String, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -552,37 +548,15 @@ enum StockSageLocalModelServer {
                   return ["llm", "embedding"].contains(type)
               }) else { return nil }
         let matches = rows.filter { $0["key"] as? String == modelKey }
-        if modelKey == gemmaModel {
-            let compatible = !matches.isEmpty && matches.allSatisfy {
-                $0["type"] as? String == "llm" && $0["format"] as? String == "gguf"
-                    && $0["architecture"] as? String == "gemma4" && $0["params_string"] as? String == "31B"
-                    && ($0["quantization"] as? [String: Any])?["name"] as? String == "Q4_0"
-                    && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 4
-            }
-            return Probe(reachable: true, isOllama: false, models: rows.compactMap { $0["key"] as? String },
-                hasModel: compatible, detail: compatible ? "Gemma 4 31B QAT Q4_0 downloaded; serving readiness checked before research."
-                    : "Gemma 4 31B QAT Q4_0 is missing or its variant is not verified. Check LM Studio My Models.")
-        }
         let compatible = !matches.isEmpty && matches.allSatisfy {
-            $0["type"] as? String == "llm" && $0["format"] as? String == "mlx"
-                && $0["architecture"] as? String == "qwen3_5" && $0["params_string"] as? String == "9B"
-                && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 6
-        }
-        var parallelism = 1
-        if compatible, let instances = loadedInstances(matches) {
-            let selected = instances.filter { $0["id"] as? String == lmStudioModel }
-            if selected.count == 1, let config = selected[0]["config"] as? [String: Any],
-               let number = config["parallel"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-               let slots = Int(exactly: number.doubleValue), slots > 0 {
-                parallelism = min(slots, 8)
-            }
+            $0["type"] as? String == "llm" && $0["format"] as? String == "gguf"
+                && $0["architecture"] as? String == "gemma4" && $0["params_string"] as? String == "31B"
+                && ($0["quantization"] as? [String: Any])?["name"] as? String == "Q4_0"
+                && ($0["quantization"] as? [String: Any])?["bits_per_weight"] as? Int == 4
         }
         return Probe(reachable: true, isOllama: false, models: rows.compactMap { $0["key"] as? String },
-            hasModel: compatible, detail: compatible
-                ? "Reachable · LM Studio · Qwen3.5 9B MLX 6-bit downloaded (loads on demand)."
-                : matches.isEmpty ? "Qwen3.5 9B is missing. Download the current 6-bit release in Model settings."
-                : "The model key exists but its 9B MLX 6-bit compatibility is not verified. Check the variant in LM Studio; no replacement downloaded.",
-            canDownload: matches.isEmpty, researchParallelism: parallelism)
+            hasModel: compatible, detail: compatible ? "Gemma 4 31B QAT Q4_0 downloaded; serving readiness checked before research."
+                : "Gemma 4 31B QAT Q4_0 is missing or its variant is not verified. Check LM Studio My Models.")
     }
 
     /// LM Studio can list multiple compatible copies under one key. Resolve instances across
@@ -613,15 +587,7 @@ enum StockSageLocalModelServer {
             return await StockSageLocalModelStartup.shared.ensureLoaded(c, stillValid: stillValid, transport: transport)
         }
         #endif
-        var result = await probe(c, stillValid: stillValid, transport: transport)
-        #if os(macOS)
-        if transport == nil, stillValid(), !Task.isCancelled, result.canDownload {
-            StockSageModelDownload.shared.start(c)
-            result = Probe(reachable: result.reachable, isOllama: false, models: result.models,
-                hasModel: false, detail: StockSageModelDownload.shared.message, canDownload: true)
-        }
-        #endif
-        return result
+        return await probe(c, stillValid: stillValid, transport: transport)
     }
 
     /// The model maximum is not the serving instance's actual window. Ambiguous instances
@@ -630,18 +596,16 @@ enum StockSageLocalModelServer {
     static func verifiedContext(_ inventory: [String: Any], model: String) -> Int? {
         guard managedInventory(inventory, modelKey: model)?.hasModel == true,
               let rows = inventory["models"] as? [[String: Any]],
-              [lmStudioModel, gemmaModel].contains(model),
+              model == gemmaModel,
               let instances = loadedInstances(rows.filter { $0["key"] as? String == model }) else { return nil }
         let matching = instances.filter { $0["id"] as? String == model }
         guard matching.count == 1, let config = matching[0]["config"] as? [String: Any],
               let number = config["context_length"] as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
               let context = Int(exactly: number.doubleValue), context > 0 else { return nil }
-        if model == gemmaModel {
-            guard let parallel = config["parallel"] as? NSNumber,
-                  CFGetTypeID(parallel) != CFBooleanGetTypeID(), parallel.intValue == 1,
-                  parallel.doubleValue == 1 else { return nil }
-        }
+        guard let parallel = config["parallel"] as? NSNumber,
+              CFGetTypeID(parallel) != CFBooleanGetTypeID(), parallel.intValue == 1,
+              parallel.doubleValue == 1 else { return nil }
         return context
     }
 
@@ -671,7 +635,6 @@ enum StockSageLocalModelServer {
         } else {
             body["temperature"] = 0.2
             body["max_tokens"] = maxTokens
-            if c.isLMStudio9B { body["ttl"] = 180 }
             if c.isLMStudioGemma || c.isRunPodGemma { body["reasoning_effort"] = "none" }
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)

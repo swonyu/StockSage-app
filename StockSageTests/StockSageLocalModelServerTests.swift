@@ -25,18 +25,20 @@ struct StockSageLocalModelServerTests {
         #expect(S.gemmaModel == "google/gemma-4-31b-qat")
         for url in [S.lmStudioURL, "http://localhost:1234", "http://[::1]:1234"] {
             let config = try #require(S.config(url: url, model: S.gemmaModel))
-            #expect(config.isLMStudioGemma && config.isManagedLMStudio && !config.isLMStudio9B)
+            #expect(config.isLMStudioGemma)
         }
+        // "qwen3.5-9b" is deliberately just another arbitrary non-Gemma string here (Qwen removal
+        // Step 5 deleted its managed identity entirely) -- this only proves an unmanaged model
+        // string never claims the Gemma-managed profile, not anything about Qwen specifically.
         for (url, model) in [("http://fixture.invalid:1234", S.gemmaModel),
                              ("http://127.0.0.1:11434", S.gemmaModel),
                              ("http://127.0.0.1:1234/proxy", S.gemmaModel),
                              (S.lmStudioURL, "stocksage-gemma4-31b-qat-benchmark"),
-                             (S.lmStudioURL, "other-model")] {
+                             (S.lmStudioURL, "other-model"),
+                             (S.lmStudioURL, "qwen3.5-9b")] {
             let config = try #require(S.config(url: url, model: model))
-            #expect(!config.isLMStudioGemma && !config.isManagedLMStudio)
+            #expect(!config.isLMStudioGemma)
         }
-        let qwen = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
-        #expect(qwen.isLMStudio9B && qwen.isManagedLMStudio && !qwen.isLMStudioGemma)
     }
 
     @Test(arguments: ["valid", "format", "architecture", "size", "quantization", "bits", "unloaded", "alias", "duplicate"])
@@ -67,7 +69,7 @@ struct StockSageLocalModelServerTests {
         let observed = await S.probe(config, transport: { request in
             calls += 1
             #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
-            return StockSageModelDownloadTests.response(request, json)
+            return StockSageManagedModelLifecycleTests.response(request, json)
         })
         #expect(calls == 1 && observed == probe)
     }
@@ -94,10 +96,10 @@ struct StockSageLocalModelServerTests {
             maxTokens: 192, contextTokens: 16_384, transport: { request in
                 if request.httpMethod == "GET" {
                     #expect(request.url?.path == "/api/v1/models")
-                    return StockSageModelDownloadTests.response(request, inventoryJSON)
+                    return StockSageManagedModelLifecycleTests.response(request, inventoryJSON)
                 }
                 posts += 1
-                return StockSageModelDownloadTests.response(request, replyJSON)
+                return StockSageManagedModelLifecycleTests.response(request, replyJSON)
             })
         #expect(posts == 1)
         if scenario == "valid" {
@@ -126,7 +128,7 @@ struct StockSageLocalModelServerTests {
                     ["role": "system", "content": "original system"], ["role": "user", "content": "original facts"]])
                 instant = instant.advanced(by: .seconds(outputs.count == 1 ? 60 : 31))
                 let finish = outputs.count == 1 ? "length" : "stop"
-                return StockSageModelDownloadTests.response(request,
+                return StockSageManagedModelLifecycleTests.response(request,
                     #"{"model":"\#(config.model)","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}]}"#)
             }, clock: { instant })
         #expect(outputs == [192, 384])
@@ -177,24 +179,26 @@ struct StockSageLocalModelServerTests {
         #expect(!text.contains("not-sent"))
     }
 
-    @Test(arguments: ["qwen3.5-9b", "google/gemma-4-31b-qat"])
-    @MainActor func attemptObserverSeparatesLengthRetryAndKeepsTheAppliedSchema(model: String) async throws {
+    // Was dual-parameterized ["qwen3.5-9b", "google/gemma-4-31b-qat"] before Qwen removal Step 5:
+    // once the 9B profile stopped being managed/strict-output, that branch silently stopped
+    // exercising the retry-doubling and schema-retry behavior this test exists to pin (a
+    // non-strict config's output limit does not double on retry) -- it would have started failing
+    // loudly, not passed as a no-op, which is why this is Gemma-only now rather than dual-tested.
+    @Test @MainActor func attemptObserverSeparatesLengthRetryAndKeepsTheAppliedSchema() async throws {
+        let model = S.gemmaModel
         let config = try #require(S.config(url: S.lmStudioURL, model: model))
         let events = ModelAttemptRecorder()
         let schema = Data(#"{"type":"object","properties":{"action":{"type":"string"}}}"#.utf8)
-        let inventory = model == S.gemmaModel
-            ? String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
-            : StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
-                with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":16384}}]"#)
+        let inventory = String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
         var posts = 0
         let result = await S.completeDetailed(config, isOllama: false, system: "original system", user: "original facts",
             maxTokens: 192, contextTokens: 16_384, jsonSchema: schema, phase: "ranking",
             attemptObserver: { await events.append($0) }, transport: { request in
-                if request.httpMethod == "GET" { return StockSageModelDownloadTests.response(request, inventory) }
+                if request.httpMethod == "GET" { return StockSageManagedModelLifecycleTests.response(request, inventory) }
                 posts += 1
                 #expect(request.httpBody?.range(of: schema) != nil, "Both initial and length-retry requests preserve the supplied schema")
                 let finish = posts == 1 ? "length" : "stop"
-                return StockSageModelDownloadTests.response(request,
+                return StockSageManagedModelLifecycleTests.response(request,
                     #"{"model":"\#(model)","choices":[{"message":{"content":"fixture"},"finish_reason":"\#(finish)"}],"usage":{"prompt_tokens":42,"completion_tokens":12}}"#)
             })
         let values = await events.snapshot()
@@ -236,7 +240,7 @@ struct StockSageLocalModelServerTests {
         var posts = 0
         let result = await S.completeDetailed(config, isOllama: false, system: "s", user: "u",
             attemptObserver: { await events.append($0) }, stillValid: { valid }, transport: { request in
-                if request.httpMethod == "GET" { return StockSageModelDownloadTests.response(request, #"{"models":[]}"#) }
+                if request.httpMethod == "GET" { return StockSageManagedModelLifecycleTests.response(request, #"{"models":[]}"#) }
                 posts += 1
                 if scenario == "revoked" { valid = false }
                 if scenario == "nonHTTP" { return (data, URLResponse(url: request.url!, mimeType: nil, expectedContentLength: data.count, textEncodingName: nil)) }
@@ -264,7 +268,7 @@ struct StockSageLocalModelServerTests {
             timeout: scenario == "timeout" ? 0 : 90, attemptObserver: { await events.append($0) },
             stillValid: { scenario != "obsolete" }, externalAllowed: { scenario != "policy" }, transport: { request in
                 calls += 1
-                return StockSageModelDownloadTests.response(request, #"{"message":{"content":"fixture"}}"#)
+                return StockSageManagedModelLifecycleTests.response(request, #"{"message":{"content":"fixture"}}"#)
             })
         let values = await events.snapshot()
         #expect(values.isEmpty && calls == 0 && (try? result.get()) == nil)
@@ -282,7 +286,7 @@ struct StockSageLocalModelServerTests {
             let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
                 attemptObserver: { await gate.observe($0) }, stillValid: { valid }, transport: { request in
                     posts += 1
-                    return StockSageModelDownloadTests.response(request, #"{"message":{"content":"fixture"}}"#)
+                    return StockSageManagedModelLifecycleTests.response(request, #"{"message":{"content":"fixture"}}"#)
                 }, clock: { instant })
             settled = true
             return result
@@ -327,7 +331,7 @@ struct StockSageLocalModelServerTests {
             let result = await S.completeDetailed(config, isOllama: true, system: "s", user: "u", timeout: 10,
                 attemptObserver: { await gate.observe($0) }, stillValid: { valid }, transport: { request in
                     posts += 1
-                    return StockSageModelDownloadTests.response(request, #"{"model":"fixture","message":{"content":"fixture"}}"#)
+                    return StockSageManagedModelLifecycleTests.response(request, #"{"model":"fixture","message":{"content":"fixture"}}"#)
                 }, clock: { instant })
             settled = true
             return result
@@ -378,77 +382,37 @@ struct StockSageLocalModelServerTests {
         else { Issue.record("The overdue body must remain rejected") }
     }
 
-    @Test(arguments: ["1", "2", "4", "8", "9", "64", "2.0", "0", "-1", "2.5", "true", "false", "\"8\"", "null", "1e300"])
-    @MainActor func researchCapacityUsesOnlySafeIntegralSelectedInstanceMetadata(parallel: String) async throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
-        let json = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
-            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":\#(parallel)}}]"#)
-        var requests = 0
-        let probe = await S.probe(config, transport: { request in
-            requests += 1
-            #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
-            return StockSageModelDownloadTests.response(request, json)
-        })
-        let expected = ["1": 1, "2": 2, "4": 4, "8": 8, "9": 8, "64": 8, "2.0": 2][parallel] ?? 1
-        #expect(probe.researchParallelism == expected)
-        #expect(requests == 1 && probe.reachable && probe.hasModel && !probe.canDownload && !probe.isOllama)
-    }
-
-    @Test(arguments: ["missing", "unloaded", "sibling", "duplicate", "malformed", "incompatible", "mixed-variant", "compatible-copies"])
-    @MainActor func researchCapacityKeepsAmbiguousOrIncompatibleInstancesSerial(scenario: String) async throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
-        let inventory = try #require(JSONSerialization.jsonObject(with: Data(StockSageModelDownloadTests.installed.utf8)) as? [String: Any])
-        let empty = try #require((inventory["models"] as? [[String: Any]])?.first)
-        var selected = empty
-        let instance: [String: Any] = ["id": config.model, "config": ["context_length": 262144, "parallel": 8]]
-        selected["loaded_instances"] = [instance]
-        switch scenario {
-        case "missing": selected["loaded_instances"] = [["id": config.model, "config": ["context_length": 262144]]]
-        case "unloaded": selected["loaded_instances"] = [[String: Any]]()
-        case "sibling": selected["loaded_instances"] = [["id": "another-instance", "config": ["context_length": 262144, "parallel": 8]]]
-        case "duplicate": selected["loaded_instances"] = [instance, instance]
-        case "malformed": selected["loaded_instances"] = "unverified"
-        case "incompatible": selected["quantization"] = ["bits_per_weight": 4]
-        default: break
-        }
-        var rows = [selected]
-        if scenario == "mixed-variant" {
-            var wrongVariant = empty
-            wrongVariant["quantization"] = ["bits_per_weight": 4]
-            rows.append(wrongVariant)
-        } else if scenario == "compatible-copies" { rows.insert(empty, at: 0) }
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: ["models": rows]), as: UTF8.self)
-        let probe = await S.probe(config, transport: { request in
-            #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
-            return StockSageModelDownloadTests.response(request, json)
-        })
-        #expect(probe.researchParallelism == (scenario == "compatible-copies" ? 8 : 1))
-        #expect(probe.hasModel == !["incompatible", "mixed-variant"].contains(scenario))
-    }
-
+    // researchCapacityUsesOnlySafeIntegralSelectedInstanceMetadata and
+    // researchCapacityKeepsAmbiguousOrIncompatibleInstancesSerial were deleted here (Qwen removal
+    // Step 5), not re-pointed: they tested LM Studio multi-slot parallelism (probe.researchParallelism
+    // reading a variable `parallel` slot count from the 9B managed profile's loaded_instances).
+    // Gemma's managedInventory branch never reads that field -- verifiedContext forces
+    // parallel==1 -- so researchParallelism is now always 1 for any managed profile and there is
+    // no Gemma equivalent to re-point these to. This is real, permanent coverage loss, disclosed
+    // here per the removal audit rather than silently dropped: refreshCapacityAfterLoad
+    // (StockSageHorizonResearch.swift) is now a permanent no-op on the managed LM Studio path.
     @Test @MainActor func researchCapacityCannotEscapeProbeIdentityOrAccessChecks() async throws {
-        let native = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
-            with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":8}}]"#)
-        let strict = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let native = String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory(context: 262_144)), as: UTF8.self)
+        let strict = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
         var valid = true
         let revoked = await S.probe(strict, stillValid: { valid }, transport: { request in
             valid = false
-            return StockSageModelDownloadTests.response(request, native)
+            return StockSageManagedModelLifecycleTests.response(request, native)
         })
         #expect(!revoked.hasModel && revoked.researchParallelism == 1)
         for config in [S.config(url: S.lmStudioURL, model: "another-model")!,
-                       S.config(url: "http://127.0.0.1:11434", model: S.lmStudioModel)!] {
+                       S.config(url: "http://127.0.0.1:11434", model: S.gemmaModel)!] {
             let other = await S.probe(config, transport: { request in
                 #expect(request.url?.path == "/api/tags")
-                return StockSageModelDownloadTests.response(request, #"{"models":[{"name":"\#(config.model)","parallel":8}]}"#)
+                return StockSageManagedModelLifecycleTests.response(request, #"{"models":[{"name":"\#(config.model)","parallel":8}]}"#)
             })
             #expect(other.isOllama && other.hasModel && other.researchParallelism == 1)
         }
-        let remote = try #require(S.config(url: "http://fixture.invalid:1234", model: S.lmStudioModel))
+        let remote = try #require(S.config(url: "http://fixture.invalid:1234", model: S.gemmaModel))
         var remoteRequests = 0
         let denied = await S.probe(remote, externalAllowed: { false }, transport: { request in
             remoteRequests += 1
-            return StockSageModelDownloadTests.response(request, native)
+            return StockSageManagedModelLifecycleTests.response(request, native)
         })
         #expect(remoteRequests == 0 && !denied.reachable && denied.researchParallelism == 1)
     }
@@ -543,18 +507,10 @@ struct StockSageLocalModelServerTests {
         }
     }
 
-    @Test func lmStudioStableProfileRequestsIdleUnloadWithoutOllamaOptions() throws {
-        let config = try #require(S.config(url: "http://127.0.0.1:1234", model: "qwen3.5-9b"))
-        let req = S.chatRequest(config, system: "instructions", user: "facts", isOllama: false, maxTokens: 16)
-        let data = try #require(req.httpBody)
-        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(req.url?.absoluteString == "http://127.0.0.1:1234/v1/chat/completions")
-        #expect(body["model"] as? String == "qwen3.5-9b")
-        #expect(body["ttl"] as? Int == 180)
-        #expect(body["think"] == nil && body["options"] == nil)
-        #expect(req.value(forHTTPHeaderField: "Authorization") == nil)
-    }
-
+    // lmStudioStableProfileRequestsIdleUnloadWithoutOllamaOptions deleted here (Qwen removal
+    // Step 5): it pinned body["ttl"] == 180, a Qwen-9B-specific request field
+    // (`if c.isLMStudio9B { body["ttl"] = 180 }`) that no longer exists for any model -- Gemma
+    // never sent it either, so there is no equivalent to re-point this to.
     @Test @MainActor func lmStudioProfileRejectsAnAnswerFromAnotherModel() async throws {
         let config = try #require(S.config(url: "http://127.0.0.1:1234", model: "qwen3.5-9b"))
         let result = await S.completeDetailed(config, isOllama: false, system: "facts only", user: "fixture", transport: { request in
@@ -663,9 +619,15 @@ struct StockSageLocalModelServerTests {
 
     // MARK: chatRequest — OpenAI-compatible
 
-    @Test(arguments: ["qwen3.5-9b", "google/gemma-4-31b-qat"])
-    func chatRequestPreservesSuppliedSchemaBytesAndEscaping(model: String) throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: model))
+    // Was dual-parameterized by model ["qwen3.5-9b", "google/gemma-4-31b-qat"] before Qwen
+    // removal Step 5: once the 9B profile stopped being managed/strict-output, that branch could
+    // no longer produce a response_format at all, which this test unconditionally requires.
+    // Dual-parameterize by URL instead, across the two profiles that ARE still strict-output
+    // (LM Studio Gemma and RunPod Gemma) -- a more meaningful split than the one it replaces.
+    @Test(arguments: [StockSageLocalModelServer.lmStudioURL, StockSageLocalModelServer.runPodURL])
+    func chatRequestPreservesSuppliedSchemaBytesAndEscaping(url: String) throws {
+        let model = S.gemmaModel
+        let config = try #require(S.config(url: url, model: model))
         let schema = Data(#"""
         { "type":"object", "properties":{
             "zeta":{"type":"string","description":"quote: \"; slash: \\; café 🚀"},
@@ -679,8 +641,7 @@ struct StockSageLocalModelServerTests {
         let body = try #require(request.httpBody)
         #expect(body.range(of: schema) != nil, "Serialization must not reorder or rewrite the supplied schema")
         let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        if model == S.gemmaModel { #expect(object["reasoning_effort"] as? String == "none") }
-        else { #expect(object["reasoning_effort"] == nil) }
+        #expect(object["reasoning_effort"] as? String == "none")
         #expect(object["model"] as? String == model && object["temperature"] as? Double == 0.2)
         let messages = try #require(object["messages"] as? [[String: String]])
         #expect(messages == [["role":"system", "content":system], ["role":"user", "content":user]])
