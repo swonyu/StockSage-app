@@ -60,6 +60,10 @@ final class StockSageHorizonResearch: ObservableObject {
         var diagnosticID: UUID? = nil
         var diagnosticsComplete: Bool? = nil
         var qualification: StockSageResearchQualification.Receipt? = nil
+        /// Typed Form 4 detail for this symbol, extracted from the SAME capture that produced
+        /// `qualification`. Absent on every result written before this existed. Every purchase
+        /// AND sale is retained here; the deterministic Top-5 ranking is the only reader.
+        var insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = []
     }
     struct Scan {
         var listings: [Listing] = []
@@ -90,6 +94,25 @@ final class StockSageHorizonResearch: ObservableObject {
                 guard isEligible(symbol) else { return nil }
                 return listings.first { $0.ticker == symbol }
             }
+        }
+
+        /// The deterministic, explainable Top-5 (see `StockSageTopFiveRanking`): always fills
+        /// five ranked slots from every FULLY CHECKED listing, regardless of action, even when
+        /// fewer than five pass strict Buy/Strong Buy qualification. nil only when the scan
+        /// itself is incomplete (checks still running) — there is nothing verified to rank yet.
+        /// This never calls a model and is independent of the LLM-driven `ranking`/`topBuys`
+        /// comparison above.
+        func rankedTopFive(horizon: Horizon, now: Date) -> StockSageTopFiveRanking.Result? {
+            guard results.count == listings.count, !listings.isEmpty else { return nil }
+            let candidates = listings.compactMap { listing -> StockSageTopFiveRanking.Candidate? in
+                guard let result = results[listing.ticker], let verdict = result.verdict,
+                      let qualification = result.qualification else { return nil }
+                return .init(symbol: listing.ticker, action: verdict.action.rawValue,
+                    catalystIdentity: qualification.candidateCatalysts.first?.identity,
+                    qualification: qualification, insiderTransactions: result.insiderTransactions)
+            }
+            guard !candidates.isEmpty else { return nil }
+            return StockSageTopFiveRanking.rank(candidates, horizon: horizon, now: now)
         }
     }
     @Published private(set) var scans: [Horizon: Scan] = [:]
@@ -1075,6 +1098,19 @@ final class StockSageHorizonResearch: ObservableObject {
         return result
     }
 
+    /// Fresh, symbol-matched, typed Form 4 detail only. Never a guess: an unfresh check or a
+    /// record for another symbol yields nothing, and a legacy cached event with no typed
+    /// `.insider` payload is simply skipped rather than reconstructed from its prose.
+    nonisolated static func insiderTransactions(from context: StockSageAIAssessment.Context,
+                                                at now: Date) -> [StockSageMassiveEvents.InsiderTransaction] {
+        guard let observation = context.company[.insider], observation.symbol == context.idea.symbol.uppercased(),
+              observation.feed == .insider, observation.outcome == .answered,
+              observation.fresh(at: now) else { return [] }
+        let events = observation.insiderEvents ?? observation.event.map { [$0] } ?? []
+        return events.filter { $0.symbol == context.idea.symbol.uppercased() && $0.feed == .insider }
+            .compactMap(\.insider)
+    }
+
     private static func assessCaptured(_ capture: Capture, horizon: Horizon,
         config: StockSageLocalModelServer.Config, isOllama: Bool,
         allowed: @escaping @MainActor () -> Bool,
@@ -1148,6 +1184,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let qualified = qualification?.receipt(verdict: verdict, citedKeys: evidenceReceipt?.citedKeys ?? [], offeredKeys: offered.map(\.key))
         return .init(verdict: verdict, levels: qualified?.levels ?? levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated model research · \(horizon.rawValue). No order created." + trimmedNote,
-            at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified)
+            at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified,
+            insiderTransactions: insiderTransactions(from: context, at: capture.at))
     }
 }
