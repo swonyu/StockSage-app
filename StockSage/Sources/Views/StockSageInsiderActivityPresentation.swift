@@ -21,41 +21,43 @@ nonisolated enum StockSageInsiderActivityPresentation: Equatable {
     /// Answered with evidence. `untypedEventCount` covers legacy caches that stored an event
     /// without typed Form 4 detail — still recorded evidence, never a confirmed empty window.
     case recorded(transactions: [StockSageMassiveEvents.InsiderTransaction],
-                  untypedEventCount: Int, omittedRecordCount: Int, checkedAt: Date)
+                  untypedEventCount: Int, omittedRecordCount: Int, checkedAt: Date, stale: Bool = false)
 
     static func state(for prediction: StockSageResearchHistory.Prediction) -> Self {
         guard prediction.hasRecordedInsiderEvidence else { return .notRecorded }
         guard let observation = prediction.insiderEvidence else {
             return .notChecked(checkedAt: prediction.insiderCoverage?.checkedAt)
         }
-        // Either recorded status may veto a confirmed-empty reading; neither may create one.
+        // Staleness vetoes a confirmed-empty reading, but must not hide captured records.
         let answered = StockSageHorizonResearch.EvidenceCoverage.State.answered.rawValue
+        let stale = prediction.insiderCoverage?.state == StockSageHorizonResearch.EvidenceCoverage.State.stale.rawValue
         let coverageAnswered = prediction.insiderCoverage.map { $0.state == answered } ?? true
-        guard observation.outcome == .answered, coverageAnswered else {
+        guard observation.outcome == .answered, coverageAnswered || stale else {
             return .notChecked(checkedAt: observation.checkedAt)
         }
         let events = observation.insiderEvents ?? observation.event.map { [$0] } ?? []
         let transactions = events.compactMap(\.insider)
         let omitted = max(0, observation.insiderOmittedRecordCount ?? 0)
         guard !events.isEmpty else {
+            guard !stale else { return .notChecked(checkedAt: observation.checkedAt) }
             return .noQualifyingRows(checkedAt: observation.checkedAt, omittedRecordCount: omitted)
         }
         return .recorded(transactions: transactions, untypedEventCount: events.count - transactions.count,
-                         omittedRecordCount: omitted, checkedAt: observation.checkedAt)
+                         omittedRecordCount: omitted, checkedAt: observation.checkedAt, stale: stale)
     }
 
     var transactions: [StockSageMassiveEvents.InsiderTransaction] {
-        if case .recorded(let rows, _, _, _) = self { return rows }
+        if case .recorded(let rows, _, _, _, _) = self { return rows }
         return []
     }
     var untypedEventCount: Int {
-        if case .recorded(_, let count, _, _) = self { return count }
+        if case .recorded(_, let count, _, _, _) = self { return count }
         return 0
     }
     var omittedRecordCount: Int {
         switch self {
         case .noQualifyingRows(_, let omitted): omitted
-        case .recorded(_, _, let omitted, _): omitted
+        case .recorded(_, _, let omitted, _, _): omitted
         case .notRecorded, .notChecked: 0
         }
     }
@@ -71,14 +73,15 @@ nonisolated enum StockSageInsiderActivityPresentation: Equatable {
         switch self {
         case .notRecorded, .notChecked, .noQualifyingRows:
             return "Insider activity. " + headline
-        case .recorded(let rows, let untyped, let omitted, _):
+        case .recorded(let rows, let untyped, let omitted, _, let stale):
             let purchases = rows.filter { $0.direction == .purchase }.count
             let sales = rows.filter { $0.direction == .sale }.count
             let counted = [purchases > 0 ? "\(purchases) purchase\(purchases == 1 ? "" : "s")" : nil,
                            sales > 0 ? "\(sales) sale\(sales == 1 ? "" : "s")" : nil,
                            untyped > 0 ? "\(untyped) filing\(untyped == 1 ? "" : "s") without typed detail" : nil,
                            omitted > 0 ? "\(omitted) omitted from the selection" : nil]
-            return "Insider activity. " + counted.compactMap { $0 }.joined(separator: ", ") + "."
+            return "Insider activity. " + (stale ? "Stale at capture. " : "")
+                + counted.compactMap { $0 }.joined(separator: ", ") + "."
         }
     }
 
@@ -127,8 +130,9 @@ nonisolated enum StockSageInsiderActivityPresentation: Equatable {
         case .noQualifyingRows(_, let omitted):
             "Checked — no qualifying purchases or sales returned for the queried window"
                 + (omitted > 0 ? ", with \(omitted) record\(omitted == 1 ? "" : "s") omitted from the selection" : "")
-        case .recorded(let rows, let untyped, let omitted, _):
-            ([rows.isEmpty ? nil : "\(rows.count) Form 4 transaction\(rows.count == 1 ? "" : "s")",
+        case .recorded(let rows, let untyped, let omitted, _, let stale):
+            ([stale ? "Stale at capture" : nil,
+              rows.isEmpty ? nil : "\(rows.count) Form 4 transaction\(rows.count == 1 ? "" : "s")",
               untyped == 0 ? nil : "\(untyped) recorded filing\(untyped == 1 ? "" : "s") without typed detail",
               omitted == 0 ? nil : "\(omitted) omitted from the selection"]
                 .compactMap { $0 }).joined(separator: " · ")
