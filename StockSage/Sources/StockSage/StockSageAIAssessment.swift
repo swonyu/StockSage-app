@@ -639,22 +639,26 @@ enum StockSageAIAssessment {
         case emptyProse, oversizedProse, repetitiveProse, bracketContent, nonASCIINumber, unknownReference, foreignNumber
         case referencePattern, changedOpinion, unboundNumber, unsupportedResearchClaim
 
-        var explanation: String {
+        /// `model` is the reply's reported model (`completion.model`), not the requested
+        /// `config.model` — the seam already rejects an identity mismatch before this is ever
+        /// reached, so the reported model is the one that actually answered.
+        func explanation(model: String?) -> String {
+            let who = model.map { "The model \($0)" } ?? "The model"
             switch self {
             case .foreignNumber, .unboundNumber, .nonASCIINumber:
-                "Qwen included numerical claims in its opinion. Use the captured figures below; this opinion did not pass validation."
+                return "\(who) included numerical claims in its opinion. Use the captured figures below; this opinion did not pass validation."
             case .emptyEvidence, .tooManyEvidence, .duplicateEvidence, .unknownEvidence, .unknownReference:
-                "Qwen did not provide valid references to the supplied evidence. No opinion was accepted."
+                return "\(who) did not provide valid references to the supplied evidence. No opinion was accepted."
             case .changedOpinion:
-                "The repair changed the original opinion, so it was not accepted."
+                return "The repair changed the original opinion, so it was not accepted."
             case .emptyFacts:
-                "No usable evidence was supplied. Check data access before retrying."
+                return "No usable evidence was supplied. Check data access before retrying."
             case .repetitiveProse:
-                "The model repeated text instead of completing a usable opinion. No opinion was accepted."
+                return "The model repeated text instead of completing a usable opinion. No opinion was accepted."
             case .unsupportedResearchClaim:
-                "Qwen stated earnings timing or a probability that the captured research does not establish. Use the earnings window check and original evidence; no opinion was accepted."
+                return "\(who) stated earnings timing or a probability that the captured research does not establish. Use the earnings window check and original evidence; no opinion was accepted."
             default:
-                "Qwen did not return the required complete answer format. Retry this research; no partial opinion was accepted."
+                return "\(who) did not return the required complete answer format. Retry this research; no partial opinion was accepted."
             }
         }
     }
@@ -1062,7 +1066,7 @@ final class StockSageAIAssessments: ObservableObject {
                 category = draft.map { StockSageAIAssessment.preservesOpinion(verdict, draft: $0) } == false
                     ? StockSageAIAssessment.ValidationFailure.changedOpinion.rawValue : "accepted"
             }
-            let explanation = StockSageAIAssessment.ValidationFailure(rawValue: category)?.explanation
+            let explanation = StockSageAIAssessment.ValidationFailure(rawValue: category)?.explanation(model: completion.model)
             return (explanation.map { $0 + "\n" } ?? "") + "validation=\(category) " + completion.diagnostic.summary
         }
     }

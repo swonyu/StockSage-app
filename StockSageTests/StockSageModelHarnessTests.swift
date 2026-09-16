@@ -386,6 +386,40 @@ struct StockSageModelHarnessTests {
         #expect((try? result.get())?.text == "answer")
     }
 
+    // Confirmed defect: ValidationFailure.explanation hardcoded "Qwen" regardless of which model
+    // actually answered. Every model-facing message must name the REPLY's reported model
+    // (completion.model), not the requested config.model, and never say "Qwen" for any model.
+    @Test func everyModelFacingMessageNamesTheAnsweringModel() throws {
+        typealias A = StockSageAIAssessment
+        for failure in [A.ValidationFailure.foreignNumber, .unboundNumber, .nonASCIINumber,
+                        .emptyEvidence, .tooManyEvidence, .duplicateEvidence, .unknownEvidence,
+                        .unknownReference, .unsupportedResearchClaim, .malformedJSON, .schema] {
+            let named = failure.explanation(model: "fixture-model-A")
+            #expect(!named.contains("Qwen"))
+            let generic = failure.explanation(model: nil)
+            #expect(!generic.contains("Qwen"))
+            switch failure {
+            case .foreignNumber, .unboundNumber, .nonASCIINumber, .emptyEvidence, .tooManyEvidence,
+                 .duplicateEvidence, .unknownEvidence, .unknownReference, .unsupportedResearchClaim:
+                #expect(named.hasPrefix("The model fixture-model-A "))
+                #expect(generic.hasPrefix("The model "), "\(failure) generic case: \(generic)")
+                #expect(!generic.hasPrefix("The model  "))
+            default:
+                #expect(named.hasPrefix("The model "))
+            }
+        }
+
+        let facts = ["Observed price 2000.0 USD."]
+        let validJSON = #"{"action":"Hold","reason":"Outlook uncertain (F1).","risk":"A loss remains possible.","evidence":["F1"]}"#
+        let foreignNumberText = validJSON.replacingOccurrences(of: "(F1)", with: "99999")
+        try #require(A.validate(foreignNumberText, facts: facts) == .failure(.foreignNumber))
+
+        let completion = S.Completion(text: foreignNumberText, diagnostic: .init(finish: .stop), model: "fixture-model-A")
+        let summary = StockSageAIAssessments.failureSummary(.success(completion), facts: facts, leadCount: 0)
+        #expect(summary.contains("fixture-model-A"))
+        #expect(!summary.contains("Qwen"))
+    }
+
     // MARK: Phase timings
 
     // Nothing anywhere measured how long a model turn spent waiting versus generating, so no

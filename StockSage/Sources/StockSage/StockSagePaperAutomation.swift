@@ -927,7 +927,7 @@ final class StockSagePaperAutomation: ObservableObject {
         guard evidenceActive() else { return }
         guard case .success(let completion) = response else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)
-            recordFailure("Qwen request failed; \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
+            recordFailure("Model request failed (\(config.model)); \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
         }
         // Explicit incomplete verdicts are refused even when their JSON parses. Measured
         // truncation previously produced a headline contradicted by its unfinished working.
@@ -937,7 +937,7 @@ final class StockSagePaperAutomation: ObservableObject {
         }
         guard case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: facts) else {
             let summary = StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0)
-            recordFailure("Qwen response rejected; \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
+            recordFailure("Model response rejected (\(config.model)); \(summary). No paper order. Scheduled exits remain active.", symbol: symbol, at: Date(), facts: facts); return
         }
         _ = await Self.decisionBook(symbol: symbol, verdict: verdict, facts: facts,
             model: config.model, researchQuote: quote, holdingID: held?.id,

@@ -1186,7 +1186,7 @@ final class StockSageHorizonResearch: ObservableObject {
         switch StockSageAIAssessment.validate(completion.text, facts: facts, earningsWindow: earningsWindow) {
         case .success(let accepted): verdict = accepted
         case .failure(let failure):
-            return result("No verified opinion. " + failure.explanation + trimmedNote, facts: facts)
+            return result("No verified opinion. " + failure.explanation(model: completion.model) + trimmedNote, facts: facts)
         }
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
             prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict)
