@@ -769,6 +769,140 @@ import Testing
         let release = held; held = nil; release?.resume()
         #expect(await task.value == nil)
     }
+
+    // MARK: - Settled-session review window (outcome policy 2)
+
+    private func dailyReviewRun(symbol: String = "ACME",
+                                horizon: StockSageResearchHistory.Horizon = .week,
+                                completed: String = "2026-09-14T21:00:00Z") -> StockSageResearchHistory.Run {
+        .init(id: UUID(), startedAt: reviewDate(completed).addingTimeInterval(-60),
+            completedAt: reviewDate(completed), horizon: horizon,
+            predictions: [.init(symbol: symbol, name: symbol, action: "Buy", reason: "Fixture", risk: "Fixture",
+                evidence: ["F1"], facts: ["Dated fixture"], model: "fixture-model", note: "Unvalidated research",
+                referencePrice: 100, referenceDate: reviewDate("2026-09-11T04:00:00Z"),
+                levels: .init(entry: 100, stop: 90, target: 120, at: reviewDate("2026-09-11T04:00:00Z"),
+                    basis: "Captured ATR scenario"))],
+            coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil),
+            measurementPolicy: .nextTradingDateSessions, outcomePolicy: .dailyBarFirstHit)
+    }
+
+    private func newYorkDateString(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        formatter.timeZone = TimeZone(identifier: "America/New_York")!
+        return formatter.string(from: date)
+    }
+
+    /// One adjusted series: the saved reference bar followed by settled monitoring sessions.
+    private func dailyReviewPayload(_ run: StockSageResearchHistory.Run, sessions: [String],
+                                    lastHigh: Double = 105) -> [String: Any] {
+        var rows: [[String: Any]] = [["t": reviewDate("2026-09-11T04:00:00Z").timeIntervalSince1970 * 1000,
+                                      "o": 100, "h": 100, "l": 100, "c": 100, "v": 100]]
+        for (index, stamp) in sessions.enumerated() {
+            let high = index == sessions.count - 1 ? lastHigh : 105
+            rows.append(["t": reviewDate(stamp).timeIntervalSince1970 * 1000,
+                         "o": 100, "h": high, "l": 95, "c": 100, "v": 100])
+        }
+        return ["status": "OK", "ticker": run.predictions[0].symbol, "adjusted": true,
+                "resultsCount": rows.count, "results": rows]
+    }
+
+    @Test(arguments: [("2026-09-16T04:01:00Z", "2026-09-15"), ("2026-09-16T16:00:00Z", "2026-09-15"),
+                      ("2026-09-17T03:59:59Z", "2026-09-15"), ("2026-09-17T04:00:00Z", "2026-09-16"),
+                      ("2026-09-20T12:00:00Z", "2026-09-18"), ("2026-09-15T23:59:00Z", ""),
+                      ("2026-10-05T12:00:00Z", "2026-09-23")])
+    func settledReviewEndIsTheLastWhollyEndedNewYorkSessionCappedAtTheHorizon(now: String, expected: String) throws {
+        let run = dailyReviewRun()
+        let end = R.reviewEnd(for: run, now: reviewDate(now))
+        #expect(end.map(newYorkDateString) == (expected.isEmpty ? nil : expected))
+    }
+
+    @Test func settledReviewEndWalksBackOverAHolidayAndLegacyRunsKeepTheHorizonWindow() throws {
+        let overLabourDay = dailyReviewRun(completed: "2026-09-02T21:00:00Z")
+        #expect(StockSageResearchHistory.benchmarkDay(after: overLabourDay.completedAt)
+            .map(newYorkDateString) == "2026-09-03")
+        #expect(R.reviewEnd(for: overLabourDay, now: reviewDate("2026-09-08T04:01:00Z"))
+            .map(newYorkDateString) == "2026-09-04", "2026-09-07 is a published Nasdaq holiday")
+        let legacy = reviewRun()
+        #expect(legacy.outcomePolicy == nil)
+        #expect(R.reviewEnd(for: legacy, now: reviewDate("2026-09-17T04:00:00Z"))
+            == StockSageResearchHistory.targetClose(for: legacy))
+    }
+
+    @Test func dailyPolicyReviewRequestsTheSavedReferenceDateThroughTheLastSettledSession() async throws {
+        let run = dailyReviewRun()
+        var clock = reviewDate("2026-09-18T04:01:00Z")
+        var calls = 0
+        let result = await R.fetchReviewObservation(prediction: run.predictions[0], run: run,
+            key: "synthetic-test-only", allowed: { true }, clock: { clock }, transport: { request in
+                calls += 1
+                #expect(request.url?.path.contains("/2026-09-11/2026-09-17") == true)
+                #expect(request.url?.path.contains("2026-09-18") == false,
+                        "A session that has not wholly ended is never requested")
+                clock = clock.addingTimeInterval(2)
+                return (try JSONSerialization.data(withJSONObject: dailyReviewPayload(run,
+                    sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z", "2026-09-17T04:00:00Z"],
+                    lastHigh: 121)),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let observation = try #require(result)
+        #expect(calls == 1 && observation.splitAdjusted && observation.history.count == 4)
+        let receipt = StockSageResearchHistory.evaluate(run.predictions[0], in: run,
+            observation: observation, now: clock)
+        #expect(receipt.terminalKind == .targetHit && receipt.terminalAt == reviewDate("2026-09-17T04:00:00Z"))
+        #expect(run.predictions[0].levels?.target == 120, "Reviewing never rewrites the captured scenario")
+    }
+
+    @Test func dailyPolicyReviewCapsTheRequestAtTheHorizonAndWaitsForTheFirstSession() async throws {
+        let run = dailyReviewRun()
+        var calls = 0
+        let capped = await R.fetchReviewObservation(prediction: run.predictions[0], run: run,
+            key: "synthetic-test-only", allowed: { true },
+            clock: { self.reviewDate("2026-10-05T12:00:00Z") }, transport: { request in
+                calls += 1
+                #expect(request.url?.path.contains("/2026-09-11/2026-09-23") == true,
+                        "The window never runs past the scheduled seventh session")
+                return (try JSONSerialization.data(withJSONObject: dailyReviewPayload(run,
+                    sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z", "2026-09-17T04:00:00Z",
+                               "2026-09-18T04:00:00Z", "2026-09-21T04:00:00Z", "2026-09-22T04:00:00Z",
+                               "2026-09-23T04:00:00Z"])),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(calls == 1)
+        let observation = try #require(capped)
+        let receipt = StockSageResearchHistory.evaluate(run.predictions[0], in: run, observation: observation,
+            now: reviewDate("2026-10-05T12:00:00Z"))
+        #expect(receipt.terminalKind == .horizonClose && receipt.terminalAt == reviewDate("2026-09-23T04:00:00Z"))
+
+        let tooEarly = await R.fetchReviewObservation(prediction: run.predictions[0], run: run,
+            key: "synthetic-test-only", allowed: { true },
+            clock: { self.reviewDate("2026-09-15T23:59:00Z") }, transport: { _ in
+                calls += 1
+                throw URLError(.unknown)
+            })
+        #expect(tooEarly == nil && calls == 1, "No request before the first monitoring session has ended")
+    }
+
+    @Test(arguments: ["denied", "cancelled", "unadjusted"])
+    func dailyPolicyReviewHonoursTheSameGates(reason: String) async throws {
+        let run = dailyReviewRun()
+        var payload = dailyReviewPayload(run, sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z"])
+        if reason == "unadjusted" { payload["adjusted"] = false }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        var calls = 0
+        let task = Task { @MainActor in
+            if reason == "cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+            return await R.fetchReviewObservation(prediction: run.predictions[0], run: run,
+                key: "synthetic-test-only", allowed: { reason != "denied" },
+                clock: { self.reviewDate("2026-09-17T04:01:00Z") }, transport: { request in
+                    calls += 1
+                    return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+        }
+        #expect(await task.value == nil)
+        #expect(calls == (reason == "unadjusted" ? 1 : 0))
+    }
+
     @Test func badPagesNeverBecomeCompleteCensuses() throws {
         let good = Data(#"{"status":"OK","results":[{"ticker":"BRK.B","name":"Berkshire","market":"stocks","locale":"us","active":true,"type":"CS","currency_name":"usd"}]}"#.utf8)
         #expect(try R.parsePage(good).results.first?.ticker == "BRK.B")

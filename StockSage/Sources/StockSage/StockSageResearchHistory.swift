@@ -294,7 +294,7 @@ final class StockSageResearchHistory: ObservableObject {
                 summary.readyPredictions += pending
             case .notDue:
                 summary.waitingPredictions += pending
-                if let date = reviewAvailableAt(for: run) {
+                if let date = checkAvailableAt(for: run) {
                     summary.nextReviewAt = min(summary.nextReviewAt ?? date, date)
                 }
             case .dataUnavailable:
@@ -306,11 +306,13 @@ final class StockSageResearchHistory: ObservableObject {
         return summary
     }
 
-    /// Manual only, sequential, and bounded per press. Cancellation or a revoked policy after
-    /// an await discards that response without persisting even an unavailable-data receipt.
-    func checkDue(clock: @escaping @MainActor () -> Date = { Date() },
-                  allowed: @escaping @MainActor () -> Bool,
-                  fetch: @escaping @MainActor (Prediction, Run) async -> Observation?) async {
+    /// Sequential and bounded per pass, from either the Saved Research action or one foreground
+    /// activation. Cancellation or a revoked policy after an await discards that response without
+    /// persisting even an unavailable-data receipt. A verified no-hit result before the horizon
+    /// leaves the prediction active with no stored receipt at all.
+    func checkActive(clock: @escaping @MainActor () -> Date = { Date() },
+                     allowed: @escaping @MainActor () -> Bool,
+                     fetch: @escaping @MainActor (Prediction, Run) async -> Observation?) async {
         guard !isChecking, !Task.isCancelled, allowed(), readable else { return }
         isChecking = true
         lastCheckSummary = nil
@@ -327,17 +329,24 @@ final class StockSageResearchHistory: ObservableObject {
             return left.1.symbol < right.1.symbol
         }
         var checked = 0
+        var completed = 0
         for (run, prediction) in pending.prefix(Self.maximumChecksPerRequest) {
             guard !Task.isCancelled, allowed() else { return }
             let observation = await fetch(prediction, run)
             guard !Task.isCancelled, allowed() else { return }
             let receipt = Self.evaluate(prediction, in: run, observation: observation, now: clock())
-            guard recordEvaluation(receipt, runID: run.id, symbol: prediction.symbol) else { return }
+            // A still-active prediction has no outcome to record; only a terminal result or a
+            // verified inability to obtain the required bars becomes a stored receipt.
+            if receipt.state == .evaluated || receipt.state == .dataUnavailable {
+                guard recordEvaluation(receipt, runID: run.id, symbol: prediction.symbol) else { return }
+                if receipt.state == .evaluated { completed += 1 }
+            }
             checked += 1
         }
         let remaining = pending.count - checked
-        lastCheckSummary = "Checked \(checked) saved prediction\(checked == 1 ? "" : "s")."
-            + (remaining > 0 ? " \(remaining) more are due; check again to continue." : "")
+        lastCheckSummary = "Checked \(checked) active prediction\(checked == 1 ? "" : "s")."
+            + (completed > 0 ? " \(completed) completed." : "")
+            + (remaining > 0 ? " \(remaining) remain\(remaining == 1 ? "s" : "") for another pass." : "")
     }
 
     private func read() throws -> Document {

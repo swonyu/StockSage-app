@@ -182,23 +182,40 @@ final class StockSageHorizonResearch: ObservableObject {
         return history
     }
 
-    /// Fetch the next trading date's daily open and the target close on one adjusted price basis.
-    /// This path does not fall back to another provider or request a model opinion.
+    /// The last date this review may request. A daily-policy run stops at the latest New York
+    /// session that has WHOLLY ended, so Massive's adjusted daily aggregate is settled, capped at
+    /// the scheduled horizon. A legacy run keeps requesting through its captured target close.
+    nonisolated static func reviewEnd(for run: StockSageResearchHistory.Run, now: Date) -> Date? {
+        guard run.outcomePolicy == .dailyBarFirstHit else { return StockSageResearchHistory.targetClose(for: run) }
+        return StockSageResearchHistory.settledReviewDate(for: run, now: now)
+    }
+
+    /// Fetch ONE adjusted daily series covering the review window. A daily-policy run starts at the
+    /// saved reference date, so the corporate-action ratio and the monitoring path share one basis;
+    /// a legacy run keeps its benchmark-through-target window. This path does not fall back to
+    /// another provider or request a model opinion.
     static func fetchReviewObservation(prediction: StockSageResearchHistory.Prediction,
         run: StockSageResearchHistory.Run, key: String,
         allowed: @escaping @MainActor () -> Bool, clock: @MainActor () -> Date = { Date() },
         transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> StockSageResearchHistory.Observation? {
         guard !Task.isCancelled, allowed() else { return nil }
         let requestedAt = clock()
+        let firstHit = run.outcomePolicy == .dailyBarFirstHit
         guard run.predictions.contains(prediction),
               StockSageResearchHistory.availability(for: run, now: requestedAt).state == .due,
-              let target = StockSageResearchHistory.targetClose(for: run),
+              let end = reviewEnd(for: run, now: requestedAt),
               let benchmark = StockSageResearchHistory.benchmarkDay(after: run.completedAt) else { return nil }
+        let start = firstHit ? (prediction.referenceDate ?? benchmark) : benchmark
+        guard start <= end else { return nil }
+        // The requested end date must itself be settled before its aggregate can be trusted.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        guard let settledAt = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end)) else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
         formatter.timeZone = TimeZone(identifier: "America/New_York")!
         guard let request = dailyHistoryRequest(symbol: prediction.symbol,
-            from: formatter.string(from: benchmark), to: formatter.string(from: target), key: key) else { return nil }
+            from: formatter.string(from: start), to: formatter.string(from: end), key: key) else { return nil }
         do {
             let data: Data
             let response: URLResponse
@@ -207,7 +224,8 @@ final class StockSageHorizonResearch: ObservableObject {
             guard !Task.isCancelled, allowed(), (response as? HTTPURLResponse)?.statusCode == 200,
                   let history = parseResearchHistory(data, symbol: prediction.symbol) else { return nil }
             let fetchedAt = clock()
-            guard fetchedAt.timeIntervalSince1970.isFinite, fetchedAt >= requestedAt, fetchedAt >= target else { return nil }
+            guard fetchedAt.timeIntervalSince1970.isFinite, fetchedAt >= requestedAt,
+                  fetchedAt >= (firstHit ? settledAt : end) else { return nil }
             return .init(history: history, splitAdjusted: true,
                 provider: "Massive split-adjusted daily aggregates", fetchedAt: fetchedAt)
         } catch { return nil }

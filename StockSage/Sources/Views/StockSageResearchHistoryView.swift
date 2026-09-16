@@ -292,7 +292,7 @@ struct StockSageResearchHistoryView: View {
                 !StockSageStore.isRunningTests && ToolPolicy.isExternalAllowed && !store.isSampleData
                     && StockSageMassive.apiKey == key && StockSageMassive.credentialRevision() == revision
             }
-            await history.checkDue(allowed: allowed) { prediction, run in
+            await history.checkActive(allowed: allowed) { prediction, run in
                 await StockSageHorizonResearch.fetchReviewObservation(prediction: prediction, run: run,
                     key: key, allowed: allowed)
             }

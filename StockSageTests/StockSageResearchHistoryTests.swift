@@ -691,25 +691,25 @@ struct StockSageResearchHistoryTests {
         #expect(first.runs.count == 2)
     }
 
-    @Test func manualChecksFetchOnlyDueUnevaluatedPredictionsAndRetryMissingData() async throws {
+    @Test func manualChecksFetchOnlyActiveUnevaluatedPredictionsAndRetryMissingData() async throws {
         let store = History(storageURL: nil)
         let due = run()
         let later = run(completed: "2026-09-24T21:00:00Z")
         #expect(store.record(due) && store.record(later))
         var calls = 0
-        await store.checkDue(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, current in
+        await store.checkActive(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, current in
             calls += 1
             #expect(current.id == due.id)
             return nil
         }
         #expect(calls == 1 && !store.isChecking)
         #expect(store.runs.first(where: { $0.id == due.id })?.evaluations["ACME"]?.state == .dataUnavailable)
-        await store.checkDue(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, _ in
+        await store.checkActive(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, _ in
             calls += 1
             return observation()
         }
         #expect(calls == 2)
-        await store.checkDue(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, _ in
+        await store.checkActive(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, _ in
             calls += 1
             return observation()
         }
@@ -717,17 +717,17 @@ struct StockSageResearchHistoryTests {
         #expect(store.runs.first(where: { $0.id == due.id })?.predictions == due.predictions)
     }
 
-    @Test func boundedManualCheckAdvancesPastUnavailableDataWithoutDroppingRuns() async {
+    @Test func boundedActiveCheckAdvancesPastUnavailableDataWithoutDroppingRuns() async {
         let store = History(storageURL: nil)
         for _ in 0..<26 { #expect(store.record(run())) }
         var visited: Set<UUID> = []
-        await store.checkDue(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, current in
+        await store.checkActive(clock: { date("2026-09-24T13:00:00Z") }, allowed: { true }) { _, current in
             visited.insert(current.id)
             return nil
         }
         #expect(visited.count == 25 && store.runs.count == 26)
-        #expect(store.lastCheckSummary?.contains("1 more") == true)
-        await store.checkDue(clock: { date("2026-09-25T13:00:00Z") }, allowed: { true }) { _, current in
+        #expect(store.lastCheckSummary == "Checked 25 active predictions. 1 remains for another pass.")
+        await store.checkActive(clock: { date("2026-09-25T13:00:00Z") }, allowed: { true }) { _, current in
             visited.insert(current.id)
             return nil
         }
@@ -741,7 +741,7 @@ struct StockSageResearchHistoryTests {
         var permitted = true
         var continuation: CheckedContinuation<History.Observation?, Never>?
         let checking = Task {
-            await store.checkDue(clock: { date("2026-09-24T13:00:00Z") }, allowed: { permitted }) { _, _ in
+            await store.checkActive(clock: { date("2026-09-24T13:00:00Z") }, allowed: { permitted }) { _, _ in
                 await withCheckedContinuation { continuation = $0 }
             }
         }
@@ -1524,6 +1524,71 @@ extension StockSageResearchHistoryTests {
         let reopened = History(storageURL: url, defaults: defaults)
         #expect(reopened.runs.first { $0.id == original.id }?.evaluations["ACME"] == hit)
         #expect(reopened.lastError == nil)
+    }
+
+
+    @Test func activeChecksStoreOnlyTerminalOrUnavailableReceipts() async throws {
+        let store = History(storageURL: nil)
+        let active = dailyRun()
+        try #require(store.record(active))
+        #expect(History.availability(for: active, now: dailyNow(afterSessions: 1)).state == .due,
+                "A daily-policy run is checkable once its first monitoring session has ended")
+        #expect(History.availability(for: active, now: date("2026-09-15T23:59:00Z")).state == .notDue)
+        var calls = 0
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in
+            calls += 1
+            return self.dailyObservation(highs: [105, 106], lows: [95, 96])
+        }
+        #expect(calls == 1 && store.runs[0].evaluations["ACME"] == nil,
+                "A verified no-hit result before the horizon stores no receipt and stays active")
+        #expect(store.lastCheckSummary == "Checked 1 active prediction.")
+
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in
+            calls += 1
+            return nil
+        }
+        #expect(calls == 2 && store.runs[0].evaluations["ACME"]?.state == .dataUnavailable)
+
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 3) }, allowed: { true }) { _, _ in
+            calls += 1
+            return self.dailyObservation(highs: [105, 106, 121], lows: [95, 96, 97])
+        }
+        #expect(calls == 3 && store.runs[0].evaluations["ACME"]?.terminalKind == .targetHit)
+        #expect(store.lastCheckSummary == "Checked 1 active prediction. 1 completed.")
+
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 4) }, allowed: { true }) { _, _ in
+            calls += 1
+            return nil
+        }
+        #expect(calls == 3, "A completed terminal outcome is never refetched")
+        #expect(store.runs[0].predictions == active.predictions)
+    }
+
+    @Test func boundedActiveCheckReportsCompletedAndRemainingCounts() async {
+        let store = History(storageURL: nil)
+        for _ in 0..<26 { #expect(store.record(dailyRun())) }
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in
+            self.dailyObservation(highs: [105, 121], lows: [95, 96])
+        }
+        #expect(store.lastCheckSummary == "Checked 25 active predictions. 25 completed. 1 remains for another pass.")
+        #expect(store.runs.filter { $0.evaluations["ACME"]?.terminalKind == .targetHit }.count == 25)
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in
+            self.dailyObservation(highs: [105, 121], lows: [95, 96])
+        }
+        #expect(store.lastCheckSummary == "Checked 1 active prediction. 1 completed.")
+        #expect(store.runs.count == 26)
+    }
+
+    @Test func homeSummaryWaitsForTheFirstMonitoringSessionOnDailyPolicyRuns() throws {
+        let active = dailyRun()
+        let legacy = run()
+        let summary = History.homeSummary([active, legacy], now: date("2026-09-15T12:00:00Z"))
+        #expect(summary.waitingPredictions == 2 && summary.readyPredictions == 0)
+        #expect(summary.nextReviewAt == History.checkAvailableAt(for: active))
+        #expect(try #require(summary.nextReviewAt) < #require(History.reviewAvailableAt(for: legacy)),
+                "The new policy becomes checkable long before the legacy horizon date ends")
+        let afterFirstSession = History.homeSummary([active, legacy], now: dailyNow(afterSessions: 1))
+        #expect(afterFirstSession.readyPredictions == 1 && afterFirstSession.ready.map(\.id) == [active.id])
     }
 
 }
