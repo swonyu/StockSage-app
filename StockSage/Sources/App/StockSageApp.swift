@@ -96,6 +96,7 @@ struct StockSageApp: App {
         // permits retry; a failed migration must not destroy a working credential.
         try? StockSageMassiveCredential.beginLaunch(defaults: .standard, storage: StockSageMassiveCredential.keychain,
             environment: ProcessInfo.processInfo.environment[StockSageMassive.keyEnvName])
+        StockSageModelIdentityMigration.migrate(defaults: .standard)
         #if os(iOS)
         // Set delegate BEFORE the app finishes launching so foreground banners work
         UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared

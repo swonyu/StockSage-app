@@ -310,7 +310,19 @@ enum StockSageLocalModelServer {
             StockSageLocalModelServer.isLoopback(baseURL) && ["", "/"].contains(baseURL.path)
                 && baseURL.port.map { [1234, 11434].contains($0) } == true
         }
+        /// A saved setting naming a retired Qwen identity on one of the two managed ports, where
+        /// that name used to select a profile whose strict-output guarantees no longer exist.
+        /// Scoped deliberately: on :11434 or any other endpoint, "qwen3.8" remains a perfectly
+        /// serveable generic model (no strict-output guarantee was ever claimed there), so the
+        /// server stays generic and nothing here silently downgrades it.
+        nonisolated var isRetiredManagedIdentity: Bool {
+            StockSageLocalModelServer.retiredManagedIdentities.contains(StockSageLocalModelServer.stripLatestSuffix(model))
+                && StockSageLocalModelServer.isLoopback(baseURL) && ["", "/"].contains(baseURL.path)
+                && baseURL.port.map { [1234, 18080].contains($0) } == true
+        }
     }
+
+    nonisolated static let retiredManagedIdentities: Set<String> = ["qwen3.8", "qwen3.5-9b"]
 
     /// Validates and normalizes the two raw settings strings into a `Config`, or `nil` when
     /// either is unusable. Trims whitespace from both; the URL must parse with an http/https
@@ -367,6 +379,7 @@ enum StockSageLocalModelServer {
         guard config(url: c.baseURL.absoluteString, model: c.model) == c else {
             return .init(diagnostic: .init(category: .invalidConfig))
         }
+        if c.isRetiredManagedIdentity { return .init(diagnostic: .init(category: .invalidConfig)) }
         if c.requiresExternalAccess, !externalAllowed() {
             return .init(diagnostic: .init(category: .policyDenied))
         }
@@ -406,6 +419,13 @@ enum StockSageLocalModelServer {
         func denied() -> Bool { lifecycle != lifecycleRevision || requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) != nil }
         let stopped = Probe(reachable: false, isOllama: false, models: [], hasModel: false,
                             detail: "Model check stopped: request cancelled, settings changed, or network access disabled.")
+        // Checked before denied(): requestFailure() also treats a retired identity as
+        // .invalidConfig (for completeDetailed's hard-fail path), which would otherwise make
+        // denied() mask this specific message with the generic "stopped" one.
+        if c.isRetiredManagedIdentity {
+            return Probe(reachable: true, isOllama: false, models: [], hasModel: false,
+                detail: "The Qwen managed profile was removed. \(c.model) is no longer served here — choose Gemma 4 31B in Model settings, or use a different endpoint.")
+        }
         guard !denied() else { return stopped }
         if c.isRunPodGemma {
             guard let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("v1/models"), transport: transport) else {
