@@ -33,6 +33,13 @@ struct StockSageHorizonAnalyzeTests {
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         let mode = environment["STOCKSAGE_THROUGHPUT_MODE"] ?? "export"
         try #require(["export", "validate", "validate-four-workers"].contains(mode))
+        // Historical archive of a real throughput corpus captured against the retired Qwen 9B
+        // managed profile. Pin the literal here, not the (soon to be deleted) Server.lmStudioModel
+        // constant -- Qwen removal Step 5 deletes that constant, and this corpus is a real
+        // measurement, not something to silently rewrite onto Gemma. The synthetic export path
+        // below also tags its manifest with this retired identity for the same reason: the two
+        // must keep matching.
+        let retiredModel = "qwen3.5-9b"
         struct Request: Codable {
             let id, symbol, horizon, url: String
             let body: Data; let facts: [String]; let inputUTF8Bytes: Int
@@ -53,7 +60,7 @@ struct StockSageHorizonAnalyzeTests {
             let bytes = try Data(contentsOf: manifestURL)
             let manifest = try decoder.decode(Manifest.self, from: bytes)
             try #require(manifest.version == 1 && manifest.synthetic && manifest.requests.count == 16)
-            try #require(manifest.model == Server.lmStudioModel && manifest.outputTokens == Research.researchOutputTokens
+            try #require(manifest.model == retiredModel && manifest.outputTokens == Research.researchOutputTokens
                          && manifest.contextTokens == Server.researchContextTokens)
             try #require(Set(manifest.requests.map(\.id)).count == 16)
             let requests = Dictionary(uniqueKeysWithValues: manifest.requests.map { ($0.id, $0) })
@@ -77,11 +84,11 @@ struct StockSageHorizonAnalyzeTests {
                     try #require((200..<300).contains(response.httpStatus) && response.body.count <= Server.maximumResponseBytes
                                  && response.inventory.count <= 262_144 && response.elapsedSeconds.isFinite && response.elapsedSeconds > 0)
                     let completion = try Server.parseCompletion(response.body, isOllama: false).get()
-                    try #require(completion.model == Server.lmStudioModel && completion.diagnostic.finish == .stop
+                    try #require(completion.model == retiredModel && completion.diagnostic.finish == .stop
                                  && Server.financialOutputRejection(completion) == nil)
                     _ = try StockSageAIAssessment.validate(completion.text, facts: request.facts).get()
                     let inventory = try #require(JSONSerialization.jsonObject(with: response.inventory) as? [String: Any])
-                    try #require((Server.verifiedContext(inventory, model: Server.lmStudioModel) ?? 0) >= manifest.contextTokens)
+                    try #require((Server.verifiedContext(inventory, model: retiredModel) ?? 0) >= manifest.contextTokens)
                     try #require((Server.managedInventory(inventory)?.researchParallelism ?? 1) >= response.parallelism)
                 } catch { failures.append(response.trial + "/" + response.id + ": " + String(describing: error)) }
             }
@@ -115,7 +122,7 @@ struct StockSageHorizonAnalyzeTests {
                     if request.httpMethod == "POST" {
                         posts.append((try #require(request.url), try #require(request.httpBody)))
                         let content = #"{"evidence":["F1"],"action":"Hold","reason":"Synthetic supporting case.","risk":"Synthetic uncertainty remains."}"#
-                        return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.lmStudioModel,
+                        return Self.ok(try JSONSerialization.data(withJSONObject: ["model": retiredModel,
                             "choices": [["message": ["content": content], "finish_reason": "stop"]]]), request)
                     }
                     try #require(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
@@ -125,7 +132,7 @@ struct StockSageHorizonAnalyzeTests {
             let (url, body) = posts[0]
             let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
             let messages = try #require(object["messages"] as? [[String: String]])
-            try #require(object["max_tokens"] as? Int == 192 && object["model"] as? String == Server.lmStudioModel)
+            try #require(object["max_tokens"] as? Int == 192 && object["model"] as? String == retiredModel)
             try #require(messages.first?["content"] == horizon.instructions
                          && messages.last?["content"] == StockSageAIAssessment.prompt(facts: result.facts))
             try #require(object["response_format"] != nil && result.facts.count > 10)
@@ -135,7 +142,7 @@ struct StockSageHorizonAnalyzeTests {
         }
         let manifest = Manifest(version: 1, synthetic: true,
             source: "\(#fileID): injected gather/assess; pair with native gate source receipt. Sixteen model requests, not a full-scan benchmark.",
-            generatedAt: Date().ISO8601Format(), model: Server.lmStudioModel, outputTokens: Research.researchOutputTokens,
+            generatedAt: Date().ISO8601Format(), model: retiredModel, outputTokens: Research.researchOutputTokens,
             contextTokens: Server.researchContextTokens, requests: requests)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
@@ -209,7 +216,7 @@ struct StockSageHorizonAnalyzeTests {
                      model: @escaping (URLRequest) async throws -> (Data, URLResponse)
                      ) async -> Research.Result {
         let config = Server.config(url: isOllama ? StockSageModelHarnessTests.ollamaFixtureURL : Server.lmStudioURL,
-                                   model: isOllama ? StockSageModelHarnessTests.ollamaFixtureModel : Server.lmStudioModel)!
+                                   model: isOllama ? StockSageModelHarnessTests.ollamaFixtureModel : Server.gemmaModel)!
         // Isolated defaults: never the real parent-app preference domain.
         let suiteName = "stocksage.horizon.analyze.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
@@ -807,13 +814,13 @@ struct StockSageHorizonAnalyzeTests {
         func reply(_ request: URLRequest, truncated: Bool = false) throws -> (Data, URLResponse) {
             if request.httpMethod == "GET" {
                 #expect(request.url?.path == "/api/v1/models")
-                let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
-                    with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":16384}}]"#)
+                let inventory = StockSageManagedModelLifecycleTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+                    with: #""loaded_instances":[{"id":"\#(Server.gemmaModel)","config":{"context_length":16384,"parallel":1}}]"#)
                 return Self.ok(Data(inventory.utf8), request)
             }
             let content = truncated ? #"{"reason":"Unfinished"#
                 : #"{"reason":"The evidence is mixed.","risk":"Price direction remains uncertain.","evidence":["F1"],"action":"Hold"}"#
-            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.lmStudioModel,
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": Server.gemmaModel,
                 "choices": [["message": ["content": content], "finish_reason": truncated ? "length" : "stop"]]]), request)
         }
         var calibrationMessages: [[String: String]] = []

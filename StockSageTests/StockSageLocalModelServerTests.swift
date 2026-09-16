@@ -10,7 +10,10 @@ struct StockSageLocalModelServerTests {
 
     typealias S = StockSageLocalModelServer
 
-    private static func gemmaInventory(context: Int = 16_384) -> [String: Any] {
+    // Not private: reused by StockSageManagedModelLifecycleTests.swift and other managed-profile
+    // tests (Qwen removal Step 4) so every Gemma inventory fixture in the test target shares one
+    // definition instead of drifting.
+    static func gemmaInventory(context: Int = 16_384) -> [String: Any] {
         ["models": [["type": "llm", "key": "google/gemma-4-31b-qat", "format": "gguf",
             "architecture": "gemma4", "params_string": "31B",
             "quantization": ["name": "Q4_0", "bits_per_weight": 4],
@@ -213,16 +216,16 @@ struct StockSageLocalModelServerTests {
 
     @Test(arguments: ["http", "malformed", "nonUTF8", "model", "context", "finish", "revoked", "nonHTTP", "oversized"])
     @MainActor func attemptObserverRetainsRejectedReplyWithoutChangingAcceptance(scenario: String) async throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
         let events = ModelAttemptRecorder()
-        let normal = Data(#"{"model":"qwen3.5-9b","choices":[{"message":{"content":"fixture"},"finish_reason":"stop"}]}"#.utf8)
+        let normal = Data(#"{"model":"\#(S.gemmaModel)","choices":[{"message":{"content":"fixture"},"finish_reason":"stop"}]}"#.utf8)
         let data: Data
         let category: S.FailureCategory
         switch scenario {
         case "http": data = Data(#"{"error":"rejected fixture"}"#.utf8); category = .http
         case "malformed": data = Data("unfinished {".utf8); category = .malformedJSON
         case "nonUTF8": data = Data([0xFF, 0xFE, 0x81, 0x00]); category = .malformedJSON
-        case "model": data = Data(String(decoding: normal, as: UTF8.self).replacingOccurrences(of: "qwen3.5-9b", with: "other-model").utf8); category = .responseShape
+        case "model": data = Data(String(decoding: normal, as: UTF8.self).replacingOccurrences(of: S.gemmaModel, with: "other-model").utf8); category = .responseShape
         case "context": data = normal; category = .contextBudget
         case "finish": data = Data(String(decoding: normal, as: UTF8.self).replacingOccurrences(of: "\"stop\"", with: "\"tool_calls\"").utf8); category = .incompleteOutput
         case "revoked": data = normal; category = .obsoleteRequest
@@ -512,7 +515,7 @@ struct StockSageLocalModelServerTests {
     }
 
     @Test @MainActor func lmStudioProfileBoundsTheEntirePromptBeforeDispatch() async throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
         // Output and both messages must fit together, including non-thinking chat framing.
         for (system, user, output) in [(String(repeating: "a", count: 2000), String(repeating: "b", count: 2000), 170),
                                       ("instructions", String(repeating: "ش", count: 2000), 170),
@@ -529,7 +532,7 @@ struct StockSageLocalModelServerTests {
     }
 
     @Test @MainActor func lmStudioProfileDoesNotAcceptTruncatedOrUnconfirmedFinish() async throws {
-        let config = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
         for finish in ["length", "tool_calls", "unknown", ""] {
             let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts", transport: { request in
                 let data = try JSONSerialization.data(withJSONObject: ["model": config.model,
@@ -689,7 +692,7 @@ struct StockSageLocalModelServerTests {
     }
 
     @Test func schemaEmbeddingNormalizesEncodingAndKeepsBackendGates() throws {
-        let managed = try #require(S.config(url: S.lmStudioURL, model: S.lmStudioModel))
+        let managed = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
         let other = try #require(S.config(url: "http://127.0.0.1:1234", model: "other-model"))
         let text = #"{"type":"object","properties":{"symbols":{"type":"array","items":{"type":"string"}}}}"#
         let bom = Data([0xEF, 0xBB, 0xBF]) + Data(text.utf8)

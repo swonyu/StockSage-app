@@ -52,21 +52,21 @@ extension StockSageResearchRanking.Receipt {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = Store(directory: dir)
-        let local = Server.Config(baseURL: URL(string: Server.lmStudioURL)!, model: Server.lmStudioModel)
+        let local = Server.Config(baseURL: URL(string: Server.lmStudioURL)!, model: Server.gemmaModel)
         var posts = 0, limits: [Int] = []
         let result = await Ranking.rank(scan: fixtureScan(["AAA", "BBB"]), horizon: .fortnight,
             config: local, isOllama: false, allowed: { true }, diagnostics: store, modelTransport: { request in
                 if request.httpMethod == "GET" {
                     #expect(request.url?.path == "/api/v1/models")
-                    let inventory = StockSageModelDownloadTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
-                        with: #""loaded_instances":[{"id":"qwen3.5-9b","config":{"context_length":262144,"parallel":1}}]"#)
+                    let inventory = StockSageManagedModelLifecycleTests.installed.replacingOccurrences(of: "\"loaded_instances\":[]",
+                        with: #""loaded_instances":[{"id":"\#(Server.gemmaModel)","config":{"context_length":262144,"parallel":1}}]"#)
                     return (Data(inventory.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
                 }
                 posts += 1
                 let body = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
                 limits.append(try #require(body["max_tokens"] as? Int))
                 if posts == 1 { throw URLError(.networkConnectionLost) }
-                let response = try JSONSerialization.data(withJSONObject: ["model": Server.lmStudioModel,
+                let response = try JSONSerialization.data(withJSONObject: ["model": Server.gemmaModel,
                     "choices": [["message": ["content": posts == 2 ? "" : #"{"symbols":["BBB","AAA"]}"#],
                                  "finish_reason": posts == 2 ? "length" : "stop"]]])
                 return (response, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)

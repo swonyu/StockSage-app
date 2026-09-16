@@ -7,7 +7,7 @@ struct StockSageLocalSentimentTests {
     typealias S = StockSageLocalSentiment
     typealias M = StockSageLocalModelServer
     let now = Date(timeIntervalSince1970: 1_800_000_000)
-    let config = M.Config(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "qwen3.5-9b")
+    let config = M.Config(baseURL: URL(string: "http://127.0.0.1:1234")!, model: M.gemmaModel)
 
     func evidence(_ text: String = "Profit rose.", checkedAt: Date? = nil) -> S.Evidence {
         .init(item: .init(date: now.addingTimeInterval(-60), title: text, snippet: "Not classified.",
@@ -18,9 +18,9 @@ struct StockSageLocalSentimentTests {
     func response(_ request: URLRequest, text: String = "positive", finish: String = "stop") throws -> (Data, URLResponse) {
         let body: [String: Any]
         if request.url!.path == "/api/v1/models" {
-            body = ["models": [["type": "llm", "key": config.model, "format": "mlx", "architecture": "qwen3_5",
-                "params_string": "9B", "quantization": ["bits_per_weight": 6],
-                "loaded_instances": [["id": config.model, "config": ["context_length": 32768]]]]]]
+            body = ["models": [["type": "llm", "key": config.model, "format": "gguf", "architecture": "gemma4",
+                "params_string": "31B", "quantization": ["name": "Q4_0", "bits_per_weight": 4],
+                "loaded_instances": [["id": config.model, "config": ["context_length": 32768, "parallel": 1]]]]]]
         }
         else if request.url!.path == "/v1/models" { body = ["data": [["id": config.model]]] }
         else { body = ["model": config.model, "choices": [["message": ["content": text], "finish_reason": finish]]] }
