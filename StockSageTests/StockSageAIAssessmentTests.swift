@@ -1296,4 +1296,89 @@ struct StockSageAIAssessmentTests {
         for name in ["packetVersion", "classCounts", "packetDigest"] { #expect(object[name] == nil, "\(name)") }
     }
 
+
+    // MARK: - Versioned prompt ordering and evidence-first instructions
+
+    @Test func promptVersionOneKeepsTheFrozenOrderAndVersionTwoPutsEvidenceFirst() throws {
+        let facts = ["Uncertain outlook.", "Reported sale under a prearranged plan."]
+        #expect(A.PromptVersion.current == .explanationFirst,
+                "The benchmarked order stays the default until a measured corpus adopts evidence-first")
+
+        let frozen = try #require(A.responseSchema(facts: facts, version: .explanationFirst))
+        #expect(frozen == A.responseSchema(facts: facts), "The default schema is unchanged, byte for byte")
+        let frozenText = String(decoding: frozen, as: UTF8.self)
+        let frozenOrder = try ["reason", "risk", "evidence", "action"].map { name in
+            try #require(frozenText.range(of: "\"\(name)\":")).lowerBound
+        }
+        #expect(frozenOrder == frozenOrder.sorted())
+
+        let evidenceFirst = try #require(A.responseSchema(facts: facts, version: .evidenceFirst))
+        let text = String(decoding: evidenceFirst, as: UTF8.self)
+        let order = try ["evidence", "reason", "risk", "action"].map { name in
+            try #require(text.range(of: "\"\(name)\":")).lowerBound
+        }
+        #expect(order == order.sorted(), "Version 2 selects its evidence before explaining it")
+        #expect(evidenceFirst != frozen)
+        // Both versions describe the same contract: same keys, same required set, same fact IDs.
+        func contract(_ data: Data) throws -> (Set<String>, Set<String>) {
+            let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let properties = try #require(object["properties"] as? [String: Any])
+            let required = try #require(object["required"] as? [String])
+            return (Set(properties.keys), Set(required))
+        }
+        #expect(try contract(frozen) == contract(evidenceFirst))
+        for version in A.PromptVersion.allCases {
+            #expect(A.responseSchema(facts: [], version: version) == nil)
+            for _ in 0..<5 { #expect(A.responseSchema(facts: facts, version: version) == A.responseSchema(facts: facts, version: version)) }
+        }
+    }
+
+    @Test func instructionsReportInsiderPurchasesAndSalesNeutrallyWithoutInferringIntent() {
+        let text = A.instructions
+        for rule in ["purchase", "sale", "intent", "momentum"] {
+            #expect(text.lowercased().contains(rule), "The insider section must mention \(rule)")
+        }
+        #expect(text.contains("Never omit an insider record because it conflicts with your action."))
+        #expect(text.contains("Do not infer motive"))
+        #expect(text.contains("An insider sale is not momentum"))
+        // Uncertainty and missing data stay separate from observed fact and from model inference.
+        #expect(text.contains("Separate what the records observe from what you infer"))
+        #expect(text.contains("Missing data is not negative evidence"))
+        // The existing anti-invention contract survives unchanged.
+        #expect(text.contains("Do not invent numbers, names, targets, probabilities, returns or earnings outcomes."))
+        #expect(text.contains("never put fact IDs in reason or risk") || text.contains("never put fact IDs in reason or risk."))
+    }
+
+    @Test func horizonInstructionsKeepBothHorizonsSeparateAndRequireDatedCatalysts() {
+        for horizon in StockSageHorizonResearch.Horizon.allCases {
+            let text = horizon.instructions
+            #expect(text.contains(horizon.rawValue))
+            #expect(text.contains("Longer historical windows are background evidence, not a holding horizon."))
+            #expect(text.contains("A catalyst must have a dated source"))
+            #expect(text.contains("Do not propose intraday or same-session day-trading strategies"))
+        }
+        // The shared focus statement names BOTH horizons on purpose; what must differ is the
+        // horizon this assessment is actually for.
+        let week = StockSageHorizonResearch.Horizon.week.instructions
+        let fortnight = StockSageHorizonResearch.Horizon.fortnight.instructions
+        #expect(week != fortnight)
+        for horizon in StockSageHorizonResearch.Horizon.allCases {
+            let target = "Assess the supplied stock for a \(horizon.rawValue) holding horizon"
+            #expect(horizon.instructions.contains(target))
+            let other = StockSageHorizonResearch.Horizon.allCases.first { $0 != horizon }!
+            #expect(!horizon.instructions.contains("Assess the supplied stock for a \(other.rawValue) holding horizon"))
+        }
+    }
+
+    @Test func everySuppliedFactReachesThePromptInOrderUnderBothVersions() throws {
+        let packet = A.Context(idea: idea(), earnings: nil, company: [:], at: now).evidencePacket()
+        let texts = packet.facts.map(\.text)
+        let numbered = A.prompt(facts: texts)
+        for (index, text) in texts.enumerated() {
+            #expect(numbered.contains("F\(index + 1): \(text)"), "Fact \(index + 1) is offered verbatim")
+        }
+        #expect(numbered.components(separatedBy: "\n").count == texts.count,
+                "Nothing is added, merged or dropped between the packet and the prompt")
+    }
+
 }

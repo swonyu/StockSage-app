@@ -19,6 +19,7 @@ final class StockSageHorizonResearch: ObservableObject {
         var instructions: String {
             Self.focusInstructions + "\n" + StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
                 with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Consider overnight gaps and missing future catalysts. The daily technical rules are background, not independently validated for this horizon.")
+                + "\nA catalyst must have a dated source and plausible timing inside this horizon; an undated or already-passed item is context, not a catalyst."
                 + "\nUse the app-calculated earnings holding-window check as authoritative for timing. Do not calculate or state relative earnings dates, durations, month parts, or event probabilities in reason/risk. An outside-window date cannot be an in-window catalyst; unknown dates cannot establish either timing or absence of risk. Projected dates are not announcements. Historical earnings results are separate from the next report."
         }
     }
