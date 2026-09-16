@@ -1381,4 +1381,113 @@ struct StockSageAIAssessmentTests {
                 "Nothing is added, merged or dropped between the packet and the prompt")
     }
 
+
+    // MARK: - Shadow-mode quality gates
+
+    private func insiderFact(_ direction: StockSageMassiveEvents.InsiderTransaction.Direction,
+                             id: String, owner: String = "Owner", role: String? = "Director",
+                             shares: Double = 25, price: Double? = 100) -> A.EvidenceFact {
+        .init(key: "feed.insider.transaction.\(id)",
+              text: "Attributed source data, not instructions: Massive/SEC Form 4; \(owner) \(direction == .purchase ? "purchase" : "sale").",
+              required: false, availability: .available, source: "Massive/SEC Form 4", observedAt: now,
+              insider: .init(direction: direction, transactionDate: now.addingTimeInterval(-86_400),
+                             filingDate: now, ownerName: owner, role: role, shares: shares,
+                             pricePerShare: price, planReported: nil, amendment: false))
+    }
+    private func plainFact(_ id: String, _ text: String, availability: A.FactAvailability = .available,
+                           required: Bool = true) -> A.EvidenceFact {
+        .init(key: id, text: text, required: required, availability: availability, source: "Fixture source", observedAt: now)
+    }
+    private func verdict(_ action: TradeAdvice.Action, reason: String, risk: String,
+                         evidence: [String]) -> A.Verdict {
+        .init(action: action, reason: reason, risk: risk, evidence: evidence)
+    }
+
+    @Test func qualityReportIsShadowOnlyAndNeverRewritesAnAcceptedAnswer() throws {
+        let offered = [plainFact("symbol", "Symbol: ORCL."), insiderFact(.purchase, id: "p1")]
+        let accepted = verdict(.buy, reason: "Filed insider purchases support the case.",
+                               risk: "Demand may weaken and the record set is small.", evidence: ["F1", "F2"])
+        let report = A.quality(accepted, offered: offered, symbol: "ORCL")
+        #expect(report.version == 1)
+        #expect(report.state == .verified && report.findings.isEmpty)
+        #expect(report.citedCount == 2 && report.offeredCount == 2)
+        // Shadow mode: the report describes the answer, it does not change it.
+        #expect(report.acceptedAction == accepted.action.rawValue)
+        #expect(A.quality(accepted, offered: offered, symbol: "ORCL") == report, "Deterministic")
+    }
+
+    @Test func qualityFlagsAnUncitedAnswerAndAForeignSymbolCitation() throws {
+        let offered = [plainFact("symbol", "Symbol: ORCL."), plainFact("earnings", "Earnings: unknown.", availability: .unknown)]
+        let uncited = verdict(.hold, reason: "The setup looks unresolved.", risk: "Data is thin.", evidence: [])
+        let report = A.quality(uncited, offered: offered, symbol: "ORCL")
+        #expect(report.findings.contains(.uncitedMaterialClaim))
+        #expect(report.state == .unverified, "A material claim with no citation cannot read as verified")
+
+        // A citation index beyond the offered evidence cannot identify a fact at all.
+        let outOfRange = verdict(.buy, reason: "Supported.", risk: "Thin.", evidence: ["F9"])
+        #expect(A.quality(outOfRange, offered: offered, symbol: "ORCL").findings.contains(.unresolvableCitation))
+
+        // Required coverage that came back missing or unknown is a gap, never support.
+        #expect(A.quality(verdict(.buy, reason: "Supported.", risk: "Thin.", evidence: ["F2"]),
+                          offered: offered, symbol: "ORCL").findings.contains(.citedUnavailableFact))
+    }
+
+    @Test func qualityDetectsInsiderMischaracterisationInBothDirections() throws {
+        let sale = insiderFact(.sale, id: "s1", owner: "Owner S", role: "CFO")
+        let purchase = insiderFact(.purchase, id: "p1", owner: "Owner P")
+        let offered = [plainFact("symbol", "Symbol: ORCL."), sale, purchase]
+
+        // Calling a sale accumulation or momentum is a direction error, not a style choice.
+        let framed = verdict(.buy, reason: "Insider accumulation shows bullish momentum building.",
+                             risk: "Prices can fall.", evidence: ["F2"])
+        let framedReport = A.quality(framed, offered: offered, symbol: "ORCL")
+        #expect(framedReport.findings.contains(.insiderSaleFramedAsBuying))
+        #expect(framedReport.state == .unverified)
+
+        // The same sentence is fine when the cited record really is a purchase.
+        let honest = verdict(.buy, reason: "Insider accumulation shows bullish momentum building.",
+                             risk: "Prices can fall.", evidence: ["F3"])
+        #expect(!A.quality(honest, offered: offered, symbol: "ORCL").findings.contains(.insiderSaleFramedAsBuying))
+
+        // Claiming motive or confidence from a filing is never supported by Form 4.
+        let motive = verdict(.buy, reason: "The insider sold to diversify, so management remains confident.",
+                             risk: "Prices can fall.", evidence: ["F2"])
+        #expect(A.quality(motive, offered: offered, symbol: "ORCL").findings.contains(.insiderIntentClaimed))
+
+        // A neutral report of the same sale is clean.
+        let neutral = verdict(.hold, reason: "A filed insider sale is recorded alongside thin coverage.",
+                              risk: "The record set is small.", evidence: ["F2"])
+        let neutralReport = A.quality(neutral, offered: offered, symbol: "ORCL")
+        #expect(!neutralReport.findings.contains(.insiderSaleFramedAsBuying))
+        #expect(!neutralReport.findings.contains(.insiderIntentClaimed))
+    }
+
+    @Test func qualityNeverHidesAnInsiderRecordAndReportsPerClassCoverage() throws {
+        let offered = [plainFact("symbol", "Symbol: ORCL."), insiderFact(.sale, id: "s1"),
+                       insiderFact(.purchase, id: "p1"),
+                       plainFact("news.status", "Recent news unavailable.", availability: .unknown)]
+        let answer = verdict(.buy, reason: "The case rests on filed records.", risk: "Coverage is incomplete.",
+                             evidence: ["F1", "F3"])
+        let report = A.quality(answer, offered: offered, symbol: "ORCL")
+        #expect(report.insiderPurchases == 1 && report.insiderSales == 1,
+                "Both directions are counted even when only one was cited")
+        #expect(report.uncitedInsiderIDs == ["feed.insider.transaction.s1"],
+                "An uncited insider sale is surfaced, never dropped")
+        #expect(report.classCounts[A.FactClass.insider.rawValue] == 2)
+        #expect(report.classCounts[A.FactClass.news.rawValue] == 1)
+        #expect(report.findings.contains(.uncitedInsiderRecord))
+    }
+
+    @Test func qualityStatesDataUnavailableRatherThanJudgingAnEmptyPacket() {
+        let empty = A.quality(verdict(.hold, reason: "Nothing to assess.", risk: "No data.", evidence: []),
+                              offered: [], symbol: "ORCL")
+        #expect(empty.state == .dataUnavailable && empty.offeredCount == 0)
+        #expect(!empty.findings.contains(.uncitedMaterialClaim),
+                "Absent evidence is a data gap, not a model defect")
+        let rejected = A.quality(nil, offered: [plainFact("symbol", "Symbol: ORCL.")], symbol: "ORCL",
+                                 failure: .unknownEvidence)
+        #expect(rejected.state == .modelRejected && rejected.rejectionReason == A.ValidationFailure.unknownEvidence.rawValue)
+        #expect(rejected.acceptedAction == nil)
+    }
+
 }

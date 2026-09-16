@@ -338,6 +338,109 @@ enum StockSageAIAssessment {
         }
     }
 
+    // MARK: - Shadow-mode quality report
+    //
+    // This describes an answer that the existing validator ALREADY accepted or rejected. It never
+    // changes an action, rewrites prose, or suppresses a record. Its findings are published as a
+    // badge and a diagnostic receipt so a later measured corpus can decide whether any of them
+    // should ever become a hard gate.
+    nonisolated struct QualityReport: Codable, Sendable, Equatable {
+        nonisolated static let version = 1
+        enum State: String, Codable, Sendable { case verified, unverified, dataUnavailable, modelRejected }
+        enum Finding: String, Codable, Sendable {
+            /// An answer that cites nothing at all cannot be traced back to the evidence.
+            case uncitedMaterialClaim
+            /// A citation that names no offered fact.
+            case unresolvableCitation
+            /// A cited fact whose own source reported it missing or unknown.
+            case citedUnavailableFact
+            /// An offered insider record that the answer never mentions.
+            case uncitedInsiderRecord
+            /// Buying language while every cited insider record is a sale.
+            case insiderSaleFramedAsBuying
+            /// Motive, reassurance or confidence attributed to a filing that states none.
+            case insiderIntentClaimed
+        }
+        let version: Int
+        let state: State
+        let findings: [Finding]
+        let citedCount: Int
+        let offeredCount: Int
+        let classCounts: [String: Int]
+        let insiderPurchases: Int
+        let insiderSales: Int
+        /// Offered insider records the answer did not cite. Surfaced, never removed.
+        let uncitedInsiderIDs: [String]
+        /// The action exactly as accepted. nil when the validator rejected the answer.
+        let acceptedAction: String?
+        let rejectionReason: String?
+    }
+
+    /// Vocabulary is matched on whole words so ordinary prose cannot trip a finding by accident.
+    private nonisolated static func mentions(_ text: String, _ terms: [String]) -> Bool {
+        let lowered = text.lowercased()
+        return terms.contains { term in
+            guard let range = lowered.range(of: term) else { return false }
+            let before = range.lowerBound == lowered.startIndex ? nil : lowered[lowered.index(before: range.lowerBound)]
+            let after = range.upperBound == lowered.endIndex ? nil : lowered[range.upperBound]
+            let boundary: (Character?) -> Bool = { $0.map { !$0.isLetter } ?? true }
+            return boundary(before) && boundary(after)
+        }
+    }
+
+    /// Pure and deterministic. `verdict` is nil when the validator rejected the answer.
+    nonisolated static func quality(_ verdict: Verdict?, offered: [EvidenceFact], symbol: String,
+                                    failure: ValidationFailure? = nil) -> QualityReport {
+        let classCounts = Dictionary(grouping: offered, by: { $0.factClass.rawValue }).mapValues(\.count)
+        let insider = offered.compactMap { fact in fact.insider.map { (fact.id, $0) } }
+        let purchases = insider.filter { $0.1.direction == .purchase }.count
+        let sales = insider.filter { $0.1.direction == .sale }.count
+
+        func report(_ state: QualityReport.State, _ findings: [QualityReport.Finding],
+                    cited: [EvidenceFact] = [], uncitedInsider: [String] = []) -> QualityReport {
+            .init(version: QualityReport.version, state: state, findings: findings,
+                  citedCount: cited.count, offeredCount: offered.count, classCounts: classCounts,
+                  insiderPurchases: purchases, insiderSales: sales, uncitedInsiderIDs: uncitedInsider,
+                  acceptedAction: verdict?.action.rawValue, rejectionReason: failure?.rawValue)
+        }
+        guard let verdict else { return report(.modelRejected, []) }
+        // No evidence reached the model: that is a data gap, never a model defect.
+        guard !offered.isEmpty else { return report(.dataUnavailable, []) }
+
+        var findings: [QualityReport.Finding] = []
+        var cited: [EvidenceFact] = []
+        var unresolvable = false
+        for reference in verdict.evidence {
+            guard reference.first == "F", let number = Int(reference.dropFirst()),
+                  number > 0, number <= offered.count else { unresolvable = true; continue }
+            cited.append(offered[number - 1])
+        }
+        if unresolvable { findings.append(.unresolvableCitation) }
+        if cited.isEmpty { findings.append(.uncitedMaterialClaim) }
+        if cited.contains(where: { $0.availability == .missing || $0.availability == .unknown }) {
+            findings.append(.citedUnavailableFact)
+        }
+        let citedIDs = Set(cited.map(\.id))
+        let uncitedInsider = insider.map(\.0).filter { !citedIDs.contains($0) }
+        if !uncitedInsider.isEmpty { findings.append(.uncitedInsiderRecord) }
+
+        // Insider direction and intent are judged against the TYPED source detail, never prose.
+        let prose = verdict.reason + " " + verdict.risk
+        let citedInsider = cited.compactMap(\.insider)
+        let buyingLanguage = mentions(prose, ["accumulation", "accumulating", "buying", "bought", "purchases", "purchasing"])
+            || mentions(prose, ["bullish"]) && mentions(prose, ["momentum"])
+        if buyingLanguage, !citedInsider.isEmpty, citedInsider.allSatisfy({ $0.direction == .sale }),
+           mentions(prose, ["insider", "insiders", "management", "executive", "executives"]) {
+            findings.append(.insiderSaleFramedAsBuying)
+        }
+        if !citedInsider.isEmpty, mentions(prose, ["insider", "insiders", "management", "executive", "executives"]),
+           mentions(prose, ["confident", "confidence", "diversify", "diversifying", "reassuring", "signals", "signalling", "signaling", "intent", "intends"]) {
+            findings.append(.insiderIntentClaimed)
+        }
+        return report(findings.isEmpty ? .verified : .unverified, findings,
+                      cited: cited, uncitedInsider: uncitedInsider)
+    }
+
     nonisolated struct Verdict: Sendable, Equatable {
         let action: TradeAdvice.Action
         let reason: String
