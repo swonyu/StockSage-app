@@ -96,14 +96,22 @@ enum StockSageTopFiveRanking {
         let catalystIdentity: String?
         let qualification: StockSageResearchQualification.Receipt
         let insiderTransactions: [StockSageMassiveEvents.InsiderTransaction]
+        /// False when the adapter's own structural validation of `qualification` (symbol,
+        /// horizon, action, evidence keys, capture time — the same check `Scan.isEligible`
+        /// already applies) failed. A receipt that fails this can never read as Qualified here,
+        /// however its own `isQualified` computes; the candidate still appears with its real
+        /// action and an explicit reason, it is simply never trusted as a qualified pass.
+        let isReceiptValid: Bool
 
         init(symbol: String, action: String, sector: String? = nil, catalystIdentity: String? = nil,
              qualification: StockSageResearchQualification.Receipt,
-             insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = []) {
+             insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = [],
+             isReceiptValid: Bool = true) {
             self.symbol = symbol; self.action = action; self.sector = sector
             self.catalystIdentity = catalystIdentity; self.qualification = qualification
-            self.insiderTransactions = insiderTransactions
+            self.insiderTransactions = insiderTransactions; self.isReceiptValid = isReceiptValid
         }
+        fileprivate var isQualified: Bool { isReceiptValid && qualification.isQualified }
     }
 
     /// Pure and deterministic. `now` drives freshness decay only; pass the run's own evidence
@@ -113,25 +121,37 @@ enum StockSageTopFiveRanking {
             let (components, signals, penaltyReasons) = score(candidate, horizon: horizon, now: now)
             return (candidate, components, signals, penaltyReasons)
         }
-        // Primary key: qualified before not-qualified. This is what guarantees insider evidence
-        // (or any other component) can never by itself promote a hard-gate failure over a pass.
-        // Secondary: total score descending. Final: symbol ascending, for a total, stable order.
-        let sorted = scored.sorted { lhs, rhs in
-            let lq = lhs.0.qualification.isQualified, rq = rhs.0.qualification.isQualified
-            if lq != rq { return lq && !rq }
+        // Score descending, symbol ascending as the final tie-break, within each group.
+        func byScore(_ lhs: (Candidate, ScoreComponents, [InsiderSignal], [String]),
+                    _ rhs: (Candidate, ScoreComponents, [InsiderSignal], [String])) -> Bool {
             if lhs.1.total != rhs.1.total { return lhs.1.total > rhs.1.total }
             return lhs.0.symbol < rhs.0.symbol
         }
-        let (final, guardApplied) = applyConcentrationGuard(sorted)
+        // The qualified quota is filled COMPLETELY before any fallback is even considered: the
+        // concentration guard runs SEPARATELY within each group, so it can never demote a
+        // qualified candidate to make room for a not-qualified "diversifying" alternative. This
+        // is what guarantees insider evidence (or any other component) can never by itself
+        // promote a hard-gate failure over a pass.
+        let qualifiedSorted = scored.filter { $0.0.isQualified }.sorted(by: byScore)
+        let notQualifiedSorted = scored.filter { !$0.0.isQualified }.sorted(by: byScore)
+        let (qualifiedChosen, qualifiedGuardApplied) = applyConcentrationGuard(qualifiedSorted, need: 5)
+        let remaining = 5 - qualifiedChosen.count
+        let (fallbackChosen, fallbackGuardApplied) = remaining > 0
+            ? applyConcentrationGuard(notQualifiedSorted, need: remaining) : ([], false)
+        let final = qualifiedChosen + fallbackChosen
         let ranked = final.prefix(5).enumerated().map { index, entry -> Ranked in
             let (candidate, components, signals, penaltyReasons) = entry
-            let status: QualificationStatus = candidate.qualification.isQualified ? .qualified : .notQualified
+            let status: QualificationStatus = candidate.isQualified ? .qualified : .notQualified
+            var failedGates = status == .notQualified ? candidate.qualification.reasons : []
+            if status == .notQualified, !candidate.isReceiptValid {
+                failedGates.append("The qualification receipt failed adapter validation (symbol, horizon, action, evidence or capture time mismatch); it cannot be trusted as qualified.")
+            }
             return Ranked(rank: index + 1, symbol: candidate.symbol, action: candidate.action, status: status,
                 components: components, insiderSignals: signals,
-                failedGates: status == .notQualified ? candidate.qualification.reasons : [],
-                hardPenaltyReasons: penaltyReasons)
+                failedGates: failedGates, hardPenaltyReasons: penaltyReasons)
         }
-        return Result(version: version, horizon: horizon.rawValue, ranked: ranked, concentrationGuardApplied: guardApplied)
+        return Result(version: version, horizon: horizon.rawValue, ranked: ranked,
+            concentrationGuardApplied: qualifiedGuardApplied || fallbackGuardApplied)
     }
 
     private nonisolated static func score(_ candidate: Candidate, horizon: StockSageHorizonResearch.Horizon,
@@ -209,17 +229,59 @@ enum StockSageTopFiveRanking {
     /// a sale contributes negatively — this is a QUANTITATIVE SCORE WEIGHT, never a claim about
     /// motive, and never described as momentum. Fully decayed (zero weight) past the decay window.
     private nonisolated static func insiderSignals(for candidate: Candidate, now: Date) -> [InsiderSignal] {
+        typealias Transaction = StockSageMassiveEvents.InsiderTransaction
         let base = 6.0
-        var clusterCount: [StockSageMassiveEvents.InsiderTransaction.Direction: Int] = [:]
-        for transaction in candidate.insiderTransactions {
-            let ageDays = now.timeIntervalSince(transaction.transactionDate) / 86_400
-            guard ageDays >= 0, ageDays <= insiderClusterWindowDays else { continue }
-            clusterCount[transaction.direction, default: 0] += 1
+        let transactions = candidate.insiderTransactions
+
+        /// A transaction is trustworthy only when its own dates are internally consistent AND
+        /// not in the future relative to this scoring pass. Decoded/cached data is not
+        /// re-validated by the network parser, so this scoring boundary is the last line of
+        /// defense: invalid raw evidence contributes nothing rather than being clamped to a
+        /// full-weight, age-zero score.
+        func isValid(_ transaction: Transaction) -> Bool {
+            transaction.transactionDate <= transaction.filingDate && transaction.transactionDate <= now
         }
-        return candidate.insiderTransactions.map { transaction in
+
+        // Distinct owners, not transaction rows, trading the SAME direction within the window —
+        // "multiple insiders" means multiple people, not one person filing twice.
+        var distinctOwnersInWindow: [Transaction.Direction: Set<String>] = [:]
+        for transaction in transactions where isValid(transaction) {
+            let ageDays = now.timeIntervalSince(transaction.transactionDate) / 86_400
+            guard ageDays <= insiderClusterWindowDays else { continue }
+            distinctOwnersInWindow[transaction.direction, default: []].insert(transaction.ownerName)
+        }
+
+        // A Form 4/A amendment corrects the original filing; it is not a second, additional
+        // trade (StockSageMassiveEvents already documents this distinction at parse time).
+        // Group by the economic identity of the trade (owner, date, direction); when a group
+        // contains an amendment, only its LAST amendment scores — every other record in the
+        // group remains a visible, zero-contribution signal so the evidence is never hidden.
+        struct EconomicKey: Hashable { let owner: String; let date: Date; let direction: Transaction.Direction }
+        var groupIndices: [EconomicKey: [Int]] = [:]
+        for (index, transaction) in transactions.enumerated() {
+            let key = EconomicKey(owner: transaction.ownerName, date: transaction.transactionDate, direction: transaction.direction)
+            groupIndices[key, default: []].append(index)
+        }
+        var representativeIndex: [Int: Int] = [:]
+        for (_, indices) in groupIndices {
+            if let lastAmendment = indices.filter({ transactions[$0].amendment }).last {
+                for index in indices { representativeIndex[index] = lastAmendment }
+            } else {
+                for index in indices { representativeIndex[index] = index }
+            }
+        }
+
+        return transactions.enumerated().map { index, transaction in
             let ageDays = max(0, now.timeIntervalSince(transaction.transactionDate) / 86_400)
+            guard isValid(transaction), representativeIndex[index] == index else {
+                // Invalid raw evidence, or superseded by another record's amendment: the
+                // transaction remains a visible signal, but contributes nothing to the score.
+                return InsiderSignal(direction: transaction.direction, ownerName: transaction.ownerName,
+                    ageDays: ageDays, contribution: 0)
+            }
             let decay = max(0, 1 - ageDays / insiderDecayWindowDays)
-            let clustered = (clusterCount[transaction.direction] ?? 0) >= 2
+            let clustered = ageDays <= insiderClusterWindowDays
+                && (distinctOwnersInWindow[transaction.direction]?.count ?? 0) >= 2
             let magnitude = base * decay * (clustered ? insiderClusterMultiplier : 1)
             let signed = transaction.direction == .purchase ? magnitude : -magnitude
             return InsiderSignal(direction: transaction.direction, ownerName: transaction.ownerName,
@@ -236,8 +298,12 @@ enum StockSageTopFiveRanking {
     /// gracefully rather than shorting the required five). Never promotes a not-qualified
     /// candidate ahead of a qualified one: `sorted`'s qualified-first partition is preserved
     /// because a skipped candidate is only ever pushed past OTHERS STILL TO COME, never ahead.
+    /// `need` is the number of slots THIS call is trying to fill — 5 for the qualified group, or
+    /// whatever remains after it for the not-qualified fallback group. Running the guard
+    /// separately per qualification tier (see `rank(...)`) is what guarantees it can only ever
+    /// trade concentration diversity for MORE of the SAME tier, never against the other tier.
     private nonisolated static func applyConcentrationGuard(
-        _ sorted: [(Candidate, ScoreComponents, [InsiderSignal], [String])]
+        _ sorted: [(Candidate, ScoreComponents, [InsiderSignal], [String])], need: Int
     ) -> ([(Candidate, ScoreComponents, [InsiderSignal], [String])], Bool) {
         func key(_ candidate: Candidate) -> String? { candidate.sector ?? candidate.catalystIdentity }
         var chosen: [(Candidate, ScoreComponents, [InsiderSignal], [String])] = []
@@ -245,7 +311,7 @@ enum StockSageTopFiveRanking {
         var counts: [String: Int] = [:]
         var applied = false
         for (index, entry) in sorted.enumerated() {
-            guard chosen.count < 5 else { break }
+            guard chosen.count < need else { break }
             guard let k = key(entry.0) else { chosen.append(entry); continue }
             let count = counts[k, default: 0]
             if count < maximumPerConcentrationKey {
@@ -254,9 +320,9 @@ enum StockSageTopFiveRanking {
                 continue
             }
             // Over the cap for this key. Skipping is only affordable when enough OTHER
-            // candidates remain after this one to still reach five without it.
+            // candidates remain after this one to still reach `need` without it.
             let remainingAfter = sorted.count - (index + 1)
-            let stillNeeded = 5 - chosen.count
+            let stillNeeded = need - chosen.count
             if remainingAfter >= stillNeeded {
                 let alternative = sorted[(index + 1)...].first { key($0.0) != k }
                 if let alternative, entry.1.total - alternative.1.total < materialAdvantageMargin {
@@ -268,9 +334,9 @@ enum StockSageTopFiveRanking {
             counts[k] = count + 1
             chosen.append(entry)
         }
-        // Only reached if the pool itself had fewer than five candidates overall; top up from
-        // whatever was skipped rather than coming back short.
-        for entry in skipped where chosen.count < 5 { chosen.append(entry) }
+        // Only reached if this group itself had fewer than `need` candidates overall; top up
+        // from whatever was skipped rather than coming back short.
+        for entry in skipped where chosen.count < need { chosen.append(entry) }
         return (chosen, applied)
     }
 }

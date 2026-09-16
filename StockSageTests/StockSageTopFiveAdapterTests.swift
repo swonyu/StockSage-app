@@ -101,4 +101,38 @@ struct StockSageTopFiveAdapterTests {
             active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS"))
         #expect(incomplete.rankedTopFive(horizon: .week, now: now) == nil)
     }
+
+    /// Regression (independent review, 2026-09-16): the adapter must reuse
+    /// `StockSageResearchQualification.valid(...)`, the same check `isEligible` already applies,
+    /// rather than trusting any non-nil receipt. A receipt whose symbol doesn't match its listing
+    /// must never read as Qualified, but the candidate still appears with its real action.
+    @Test func rankedTopFiveRejectsAReceiptThatFailsExistingValidationAsQualified() throws {
+        func receipt(_ symbol: String, action: String = "Buy") -> Q.Receipt {
+            let m = Q.Measurements(completedBars: 70, close: 100, sma20: 95, horizonReturnPercent: 5,
+                volumeRatio: 3, atr14: 2, stopLow: 95, targetHigh: 110)
+            return .init(version: Q.version, symbol: symbol, horizon: R.Horizon.week.rawValue,
+                capturedAt: now.addingTimeInterval(-2), evidenceAsOf: now, barDate: nil,
+                criticalCaptureReady: true, measurements: m,
+                earnings: .init(relation: "outside", outcome: "answered", date: now.addingTimeInterval(90 * 86_400),
+                    confirmed: true, checkedAt: now, recordedAt: now),
+                candidateCatalysts: [.init(key: "news.item.fixture", identity: "fixture", kind: .news,
+                    date: now.addingTimeInterval(-3600), checkedAt: now)],
+                citedQualifyingKeys: ["news.item.fixture"], originalAction: action, scenario: nil,
+                reasons: action == "Buy" ? [] : ["Original model opinion is not Buy / Strong Buy."],
+                completedSessionPolicy: nil, technicalSnapshot: nil, confluence: nil)
+        }
+        var scan = R.Scan()
+        scan.listings = [.init(ticker: "AAA", name: "AAA", market: "stocks", locale: "us",
+            active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")]
+        // The receipt's OWN symbol field says "WRONG" although it is stored under listing "AAA" —
+        // exactly the mismatch `StockSageResearchQualification.valid(...)` exists to catch.
+        scan.results = ["AAA": .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]),
+            note: "Original", qualification: receipt("WRONG"))]
+        let result = try #require(scan.rankedTopFive(horizon: .week, now: now))
+        #expect(result.ranked.count == 1)
+        #expect(result.ranked[0].status == .notQualified,
+                "A receipt that fails the existing validator must never read as Qualified")
+        #expect(result.ranked[0].action == "Buy", "The candidate's real action is still shown, not hidden")
+        #expect(!result.ranked[0].failedGates.isEmpty, "The reason it is not qualified is visible")
+    }
 }

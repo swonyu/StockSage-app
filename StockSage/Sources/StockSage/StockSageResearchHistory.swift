@@ -980,6 +980,8 @@ extension StockSageResearchHistory {
         let diagnosticID: UUID?
         let diagnosticsComplete: Bool?
         var qualification: StockSageResearchQualification.Receipt? = nil
+        /// Absent on every archive written before this existed; decodes as empty, never guessed.
+        var insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = []
 
         init(listing: StockSageHorizonResearch.Listing, result: StockSageHorizonResearch.Result) {
             self.listing = listing
@@ -992,6 +994,7 @@ extension StockSageResearchHistory {
             evidenceReceipt = result.evidenceReceipt
             diagnosticID = result.diagnosticID; diagnosticsComplete = result.diagnosticsComplete
             qualification = result.qualification
+            insiderTransactions = result.insiderTransactions
         }
 
         var result: StockSageHorizonResearch.Result? {
@@ -1006,7 +1009,7 @@ extension StockSageResearchHistory {
                 facts: facts, note: note, at: at, model: model,
                 referenceClose: referenceClose.map { (value: $0.value, at: $0.at) }, coverage: sources,
                 evidenceReceipt: evidenceReceipt, diagnosticID: diagnosticID, diagnosticsComplete: diagnosticsComplete,
-                qualification: qualification)
+                qualification: qualification, insiderTransactions: insiderTransactions)
         }
 
         var prediction: Prediction? {

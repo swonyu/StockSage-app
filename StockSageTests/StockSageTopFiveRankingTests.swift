@@ -59,10 +59,10 @@ struct StockSageTopFiveRankingTests {
             insiderTransactions: insider)
     }
     private func insider(_ direction: E.InsiderTransaction.Direction, owner: String = "Owner",
-                        ageDays: Double = 1) -> E.InsiderTransaction {
+                        ageDays: Double = 1, amendment: Bool = false) -> E.InsiderTransaction {
         .init(direction: direction, transactionDate: now.addingTimeInterval(-ageDays * 86_400),
               filingDate: now, ownerName: owner, role: "Director", shares: 100,
-              pricePerShare: 50, planReported: false, amendment: false)
+              pricePerShare: 50, planReported: false, amendment: amendment)
     }
 
     @Test func fewerThanFiveQualifiedFillsRemainingSlotsFromTheEligiblePool() {
@@ -212,5 +212,125 @@ struct StockSageTopFiveRankingTests {
         let decoded = try JSONDecoder().decode(StockSageTopFiveRanking.Result.self, from: bytes)
         let reencoded = try encoder.encode(decoded)
         #expect(decoded == result && reencoded == bytes)
+    }
+
+    // MARK: - Regressions from the independent 2026-09-16 review of commit 9a74d34
+
+    /// P1: the concentration guard must never demote a qualified candidate to admit an
+    /// unqualified one. Five qualified Tech candidates (all one concentration key) plus three
+    /// unqualified, higher-diversity candidates must still yield all five Tech qualified rows —
+    /// the qualified quota is filled BEFORE any fallback selection is even considered.
+    @Test func concentrationGuardNeverDemotesAQualifiedCandidateForAnUnqualifiedAlternative() {
+        let fiveQualifiedTech = (0..<5).map {
+            candidate("TECH\($0)", qualified: true, sector: "Tech", horizonReturn: 10 - Double($0))
+        }
+        let threeUnqualifiedDiverse = [
+            candidate("ENERGY0", qualified: false, sector: "Energy", horizonReturn: 9.9),
+            candidate("HEALTH0", qualified: false, sector: "Health", horizonReturn: 9.8),
+            candidate("FINANCE0", qualified: false, sector: "Finance", horizonReturn: 9.7),
+        ]
+        let result = T.rank(fiveQualifiedTech + threeUnqualifiedDiverse, horizon: .week, now: now)
+        #expect(result.ranked.count == 5)
+        #expect(result.ranked.allSatisfy { $0.status == .qualified },
+                "All five available qualified candidates are used before any fallback is considered, even though they share one concentration key")
+        #expect(Set(result.ranked.map(\.symbol)) == Set((0..<5).map { "TECH\($0)" }))
+    }
+
+    /// The same guarantee with only four qualified candidates available: the four qualified fill
+    /// first, and only the single remaining slot comes from the unqualified pool.
+    @Test func concentrationGuardFillsTheQualifiedQuotaFirstEvenWhenItIsFourOfFive() {
+        let fourQualifiedTech = (0..<4).map {
+            candidate("TECH\($0)", qualified: true, sector: "Tech", horizonReturn: 10 - Double($0))
+        }
+        let threeUnqualifiedDiverse = [
+            candidate("ENERGY0", qualified: false, sector: "Energy", horizonReturn: 9.9),
+            candidate("HEALTH0", qualified: false, sector: "Health", horizonReturn: 9.8),
+            candidate("FINANCE0", qualified: false, sector: "Finance", horizonReturn: 9.7),
+        ]
+        let result = T.rank(fourQualifiedTech + threeUnqualifiedDiverse, horizon: .week, now: now)
+        #expect(result.ranked.count == 5)
+        let qualifiedRows = result.ranked.filter { $0.status == .qualified }
+        #expect(qualifiedRows.count == 4, "All four available qualified candidates are used")
+        #expect(Set(qualifiedRows.map(\.symbol)) == Set((0..<4).map { "TECH\($0)" }))
+        #expect(result.ranked.filter { $0.status == .notQualified }.count == 1,
+                "Exactly one fallback slot remains once the qualified quota is exhausted")
+    }
+
+    /// P2: clustering must count DISTINCT OWNERS within the window, not transaction rows, and the
+    /// boost must apply only to transactions actually inside the window. Reproduces the review's
+    /// own numbers: one owner, two purchases aged 1 and 2 days, must score 10.7143 (unboosted),
+    /// not 16.0714 (the old row-counting bug's value).
+    @Test func clusterBoostRequiresDistinctOwnersWithinTheWindowNotRowCount() throws {
+        let sameOwnerTwice = candidate("SOLO", qualified: true,
+            insider: [insider(.purchase, owner: "Same Owner", ageDays: 1),
+                      insider(.purchase, owner: "Same Owner", ageDays: 2)])
+        let result = T.rank([sameOwnerTwice], horizon: .week, now: now)
+        let total = result.ranked[0].insiderSignals.map(\.contribution).reduce(0, +)
+        #expect(abs(total - 10.7143) < 0.001, "One owner trading twice is not a cluster; no boost applies")
+        #expect(abs(total - 16.0714) > 0.001, "Must not reproduce the old row-counting bug's value")
+    }
+
+    @Test func clusterBoostOnlyAppliesToTransactionsInsideTheWindowItself() throws {
+        // Two distinct owners buy within the 7-day window (a real cluster); a THIRD, unrelated
+        // purchase by a different owner ten days ago is outside the window and must not be
+        // boosted just because a same-direction cluster exists elsewhere for this candidate.
+        let c = candidate("CLUSTERED", qualified: true, insider: [
+            insider(.purchase, owner: "A", ageDays: 1),
+            insider(.purchase, owner: "B", ageDays: 2),
+            insider(.purchase, owner: "C", ageDays: 10),
+        ])
+        let result = T.rank([c], horizon: .week, now: now)
+        let signals = result.ranked[0].insiderSignals
+        let outside = try #require(signals.first { $0.ownerName == "C" })
+        let insideA = try #require(signals.first { $0.ownerName == "A" })
+        // Unboosted magnitude at 10 days: 6 * (1 - 10/14) = 6 * 4/14 ≈ 1.7143.
+        #expect(abs(outside.contribution - 1.7143) < 0.001, "The outside-window transaction is never boosted")
+        // Boosted magnitude at 1 day: 6 * (13/14) * 1.5 ≈ 8.3571.
+        #expect(abs(insideA.contribution - 8.3571) < 0.001, "The two in-window, distinct-owner transactions ARE boosted")
+    }
+
+    /// P2: a Form 4/A amendment corrects the original filing; it must not be scored as a second,
+    /// additional trade. Both records remain visible as evidence, but only one contributes.
+    @Test func amendmentsDoNotDoubleCountTheSameEconomicTrade() {
+        let sameDayOwner = now.addingTimeInterval(-1 * 86_400)
+        let original = E.InsiderTransaction(direction: .purchase, transactionDate: sameDayOwner,
+            filingDate: now.addingTimeInterval(-3600), ownerName: "Owner", role: "Director",
+            shares: 100, pricePerShare: 50, planReported: false, amendment: false)
+        let amendment = E.InsiderTransaction(direction: .purchase, transactionDate: sameDayOwner,
+            filingDate: now, ownerName: "Owner", role: "Director", shares: 100, pricePerShare: 50,
+            planReported: false, amendment: true)
+        let c = candidate("AMEND", qualified: true, insider: [original, amendment])
+        let result = T.rank([c], horizon: .week, now: now)
+        let signals = result.ranked[0].insiderSignals
+        #expect(signals.count == 2, "Both the original and the amendment remain visible as evidence")
+        let nonZero = signals.filter { $0.contribution != 0 }
+        #expect(nonZero.count == 1, "Only one of the pair contributes to the score")
+        // A single unboosted purchase at 1 day: 6 * 13/14 ≈ 5.5714, not double that.
+        let total = signals.map(\.contribution).reduce(0, +)
+        #expect(abs(total - 5.5714) < 0.001, "The amendment is a correction, not a second trade")
+    }
+
+    /// Finding 6: a corrupted or malicious cached record with a FUTURE transaction date must not
+    /// be clamped to age zero and scored at full weight. It contributes nothing.
+    @Test func futureDatedTransactionsContributeNothingRatherThanFullWeight() {
+        let future = E.InsiderTransaction(direction: .purchase, transactionDate: now.addingTimeInterval(30 * 86_400),
+            filingDate: now.addingTimeInterval(31 * 86_400), ownerName: "Owner", role: "Director",
+            shares: 100, pricePerShare: 50, planReported: false, amendment: false)
+        let c = candidate("FUTURE", qualified: true, insider: [future])
+        let result = T.rank([c], horizon: .week, now: now)
+        let signal = result.ranked[0].insiderSignals[0]
+        #expect(signal.contribution == 0, "A future-dated transaction must not be clamped to age zero and scored at full weight")
+    }
+
+    @Test func transactionDatedAfterItsOwnFilingDateContributesNothing() {
+        // transactionDate > filingDate is structurally invalid for a real Form 4 (filing follows
+        // the trade); decoded/cached data is not re-validated by the network parser, so the
+        // scoring boundary itself must reject it.
+        let invalid = E.InsiderTransaction(direction: .purchase, transactionDate: now,
+            filingDate: now.addingTimeInterval(-86_400), ownerName: "Owner", role: "Director",
+            shares: 100, pricePerShare: 50, planReported: false, amendment: false)
+        let c = candidate("INVALID", qualified: true, insider: [invalid])
+        let result = T.rank([c], horizon: .week, now: now)
+        #expect(result.ranked[0].insiderSignals[0].contribution == 0)
     }
 }

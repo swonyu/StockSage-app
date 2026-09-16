@@ -107,9 +107,18 @@ final class StockSageHorizonResearch: ObservableObject {
             let candidates = listings.compactMap { listing -> StockSageTopFiveRanking.Candidate? in
                 guard let result = results[listing.ticker], let verdict = result.verdict,
                       let qualification = result.qualification else { return nil }
+                // Reuse the SAME structural validator `isEligible` already applies, rather than
+                // trusting any non-nil receipt: symbol, requested horizon, evidence citations and
+                // capture time must all be internally consistent. A receipt that fails this can
+                // never read as Qualified below, but the candidate still appears with its real
+                // action and an explicit reason — this never hides a legitimate Hold/Avoid row.
+                let citedKeys = result.evidenceReceipt?.citedKeys ?? []
+                let valid = StockSageResearchQualification.valid(qualification, symbol: listing.ticker,
+                    horizon: horizon.rawValue, at: result.at, citedKeys: citedKeys)
                 return .init(symbol: listing.ticker, action: verdict.action.rawValue,
                     catalystIdentity: qualification.candidateCatalysts.first?.identity,
-                    qualification: qualification, insiderTransactions: result.insiderTransactions)
+                    qualification: qualification, insiderTransactions: result.insiderTransactions,
+                    isReceiptValid: valid)
             }
             guard !candidates.isEmpty else { return nil }
             return StockSageTopFiveRanking.rank(candidates, horizon: horizon, now: now)

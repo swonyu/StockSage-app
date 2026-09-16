@@ -1784,4 +1784,32 @@ extension StockSageResearchHistoryTests {
         #expect(restored.lastError == nil && restored.runs.first?.evaluations["ACME"] == stopped)
     }
 
+    /// Regression (independent review, 2026-09-16): CompletedCheck previously dropped
+    /// `Result.insiderTransactions` entirely on save/restore, silently changing a later
+    /// recomputed insider score for a restored historical scan.
+    @Test func completedCheckRoundTripsInsiderTransactions() throws {
+        var (run, scan) = checkpointFixture(count: 2)
+        typealias E = StockSageMassiveEvents
+        let symbol = scan.listings[0].ticker
+        let purchase = E.InsiderTransaction(direction: .purchase, transactionDate: date("2026-09-14T13:00:00Z"),
+            filingDate: date("2026-09-15T13:00:00Z"), ownerName: "Owner", role: "Director",
+            shares: 100, pricePerShare: 50, planReported: false, amendment: false)
+        scan.results[symbol]?.insiderTransactions = [purchase]
+        let history = History()
+        try #require(history.record(run))
+        try #require(history.saveCompletedChecks(run, scan: scan))
+        let restored = try #require(history.completedScan(horizon: .fortnight))
+        #expect(restored.scan.results[symbol]?.insiderTransactions == [purchase],
+                "The typed insider transaction survives a save/restore round trip")
+
+        // Legacy archive bytes (no insiderTransactions key) must still decode, with an empty array.
+        var checks = scan
+        checks.results[symbol]?.insiderTransactions = []
+        let legacyRun = run
+        let legacyHistory = History()
+        try #require(legacyHistory.record(legacyRun))
+        try #require(legacyHistory.saveCompletedChecks(legacyRun, scan: checks))
+        let legacyRestored = try #require(legacyHistory.completedScan(horizon: .fortnight))
+        #expect(legacyRestored.scan.results[symbol]?.insiderTransactions == [])
+    }
 }
