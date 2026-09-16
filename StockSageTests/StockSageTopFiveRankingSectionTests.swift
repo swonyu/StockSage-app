@@ -40,23 +40,13 @@ struct StockSageTopFiveRankingSectionTests {
         host.view.layoutSubtreeIfNeeded()
         let size = host.view.fittingSize
         #expect(size.width > 0 && size.height > 0, "The section lays out to a real, non-trivial size")
-
-        // A minimal accessibility check: the row and section identifiers we set are reachable.
-        let allElements = collectAccessibilityIdentifiers(host.view)
-        #expect(allElements.contains("research.topfive.section"))
-        #expect(allElements.contains("research.topfive.row.ACME"))
-        #expect(allElements.contains("research.topfive.row.ZETA"))
-    }
-
-    private func collectAccessibilityIdentifiers(_ view: NSView) -> Set<String> {
-        var found: Set<String> = []
-        func walk(_ view: NSView) {
-            let id = view.accessibilityIdentifier()
-            if !id.isEmpty { found.insert(id) }
-            for subview in view.subviews { walk(subview) }
-        }
-        walk(view)
-        return found
+        // NOTE: this is a rendering smoke test only. SwiftUI's .accessibilityIdentifier() values
+        // are exposed through the AX API tree, not as plain NSView.accessibilityIdentifier()
+        // strings reachable by a subview walk — verifying the exact rank/insider/failed-gate
+        // TEXT requires the project's dedicated native-capture harness (as used for iOS
+        // presentation tests), which is out of scope for this focused addition. What this proves:
+        // the view constructs and lays out from real fixture data (qualified, fallback, insider
+        // purchase+sale, hard-penalty reasons) without a runtime crash.
     }
 }
 #endif

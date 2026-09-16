@@ -237,6 +237,11 @@ struct StockSageResearchModesPanel: View {
             } else {
                 resultsTable(rows, scan: scan, horizon: horizon)
             }
+            if !isRunning, let ranked = scan.rankedTopFive(horizon: horizon, now: Date()) {
+                Divider()
+                ScrollView { StockSageTopFiveRankingSection(result: ranked).padding(24) }
+                    .frame(maxHeight: 420)
+            }
             Divider()
             researchFooter(scan).padding(.horizontal, 24).padding(.vertical, 14)
         }
@@ -256,6 +261,10 @@ struct StockSageResearchModesPanel: View {
                     .padding(.vertical, 24)
             } else {
                 phoneResults(rows, scan: scan, horizon: horizon)
+            }
+            if !isRunning, let ranked = scan.rankedTopFive(horizon: horizon, now: Date()) {
+                Divider()
+                StockSageTopFiveRankingSection(result: ranked).padding(.vertical, 16)
             }
             if rows.isEmpty { Divider() }
             researchFooter(scan).padding(.top, 16)
