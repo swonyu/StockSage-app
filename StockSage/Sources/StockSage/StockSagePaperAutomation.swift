@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import Darwin
 
-/// Qwen research and a separate, cash-funded SIMULATION. No broker or real-journal writes.
+/// Local-model research and a separate, cash-funded SIMULATION. No broker or real-journal writes.
 @MainActor
 final class StockSagePaperAutomation: ObservableObject {
     static let shared = StockSagePaperAutomation()
@@ -208,7 +208,7 @@ final class StockSagePaperAutomation: ObservableObject {
                     let levels = EntryPlan(entry: fill, at: quoteTime)
                     trades.append(TradeRecord(id: order.id, symbol: order.symbol, side: .long, entry: fill,
                         stop: levels.stop, target: levels.target, shares: shares, openedAt: now,
-                        note: "Qwen paper simulation; assumed costs, not a broker fill."))
+                        note: "Model-research paper simulation; assumed costs, not a broker fill."))
                 } else if let i = trades.firstIndex(where: { $0.isOpen && $0.symbol == order.symbol }) {
                     trades[i].exitPrice = fill; trades[i].closedAt = now
                 } else { continue }
@@ -757,14 +757,14 @@ final class StockSagePaperAutomation: ObservableObject {
         next = book
         if let market {
             let freshCount = market.rows.filter { Self.validSymbol($0.quote.symbol) && Self.fresh($0.quote, at: selectedAt, maximumAge: Self.researchMaximumAge) }.count
-            next.note(action: "Market scan", reason: "\(market.returnedCount) US listed tickers returned; \(market.rows.count) supported trade observations; \(freshCount) fresh. Selected \(targets.count) for Qwen: \(targets.joined(separator: ", ")). Up to \(Self.discoveryLimit) total checks: all holdings first, then new candidates, rotating by last attempt then daily dollar activity. Screening is not full model analysis; unsupported, missing and stale data are excluded.", at: selectedAt)
+            next.note(action: "Market scan", reason: "\(market.returnedCount) US listed tickers returned; \(market.rows.count) supported trade observations; \(freshCount) fresh. Selected \(targets.count) for model research: \(targets.joined(separator: ", ")). Up to \(Self.discoveryLimit) total checks: all holdings first, then new candidates, rotating by last attempt then daily dollar activity. Screening is not full model analysis; unsupported, missing and stale data are excluded.", at: selectedAt)
         } else {
             next.note(action: "Market scan unavailable", reason: "Full-market data could not be verified; no new discovery. Reviewing \(targets.count) existing paper holdings only.", at: selectedAt)
         }
         guard save(next) else { return }
         guard !targets.isEmpty else { status = market == nil ? "Waiting for full-market data; retries next research cycle" : "Market screened; no fresh affordable research candidates"; return }
         guard let config = StockSageAIAssessments.configuration else {
-            recordFailure("Local Qwen is disabled or not configured.", at: Date()); return
+            recordFailure("The local model server is disabled or not configured.", at: Date()); return
         }
         let revision = StockSageLocalModelServer.settingsRevision()
         let active: @MainActor @Sendable () -> Bool = { [self] in
@@ -776,7 +776,7 @@ final class StockSagePaperAutomation: ObservableObject {
         guard active() else { return }
         guard probe.reachable, probe.hasModel else { recordFailure(probe.detail, at: Date()); return }
         researchProgress?.totalUnitCount = Int64(targets.count)
-        status = "Qwen research 0/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
+        status = "Model research 0/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
         var finished = 0
         // researchTargets queues holdings first; a slow holding must not idle free workers.
         guard active() else { return }
@@ -789,7 +789,7 @@ final class StockSagePaperAutomation: ObservableObject {
             finished += 1
             if generation == run, isRunning {
                 researchProgress?.completedUnitCount = Int64(finished)
-                status = "Qwen research \(finished)/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
+                status = "Model research \(finished)/\(targets.count) completed · up to \(Self.researchConcurrency) in parallel"
             }
         }
         guard isRunning, !Task.isCancelled, generation == run else { return }

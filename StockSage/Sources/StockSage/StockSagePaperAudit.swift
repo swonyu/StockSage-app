@@ -50,7 +50,7 @@ extension StockSagePaperAutomation {
             "schemaVersion": 1, "exportedAt": now.ISO8601Format(),
             "encoding": "Each files[].content is the exact original UTF-8 JSON. Encode that string as UTF-8 to verify bytes and SHA256; decode its JSON separately. Original nulls, omissions, prose and IDs are unchanged.",
             "embeddedDateEncoding": "Foundation Date: numeric seconds since 2001-01-01T00:00:00Z, including fractional seconds. Preserve precision. Outer exportedAt is ISO-8601 export-time metadata, not a market-observation or information-availability timestamp.",
-            "scope": "Committed native Qwen paper account and all referenced audit chunks; unreferenced files excluded. Private local research export, not a broker statement or the separate frozen forecast pilot.",
+            "scope": "Committed native model-research paper account and all referenced audit chunks; unreferenced files excluded. Private local research export, not a broker statement or the separate frozen forecast pilot.",
             "recordOrder": "Concatenate archives in account.audit.archives order, then account.decisions. Commit order, not chronological sorting. No joins are inferred.",
             "hashScope": "Hashes verify the included original bytes, not historical truth, source authenticity or model quality. Export-time metadata cannot establish historical code or model versions.",
             "decisionCount": captured.decisions.count + archives.reduce(0) { $0 + $1.count },

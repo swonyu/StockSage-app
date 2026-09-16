@@ -606,7 +606,7 @@ final class StockSageHorizonResearch: ObservableObject {
     func retryTopFive(_ horizon: Horizon, store: StockSageStore) {
         guard canRetryTopFive(horizon) else { return }
         guard let config = StockSageAIAssessments.configuration, ToolPolicy.isExternalAllowed, !store.isSampleData else {
-            scans[horizon]?.status = "Enable web access and the local Qwen model in Settings to retry Top 5. Original checks retained."
+            scans[horizon]?.status = "Enable web access and the local model in Settings to retry Top 5. Original checks retained."
             return
         }
         let revision = StockSageLocalModelServer.settingsRevision()
@@ -753,7 +753,7 @@ final class StockSageHorizonResearch: ObservableObject {
         guard task == nil, !horizons.isEmpty else { return }
         guard let config = StockSageAIAssessments.configuration, StockSageMassive.isConfigured,
               ToolPolicy.isExternalAllowed, !store.isSampleData else {
-            for horizon in horizons { scans[horizon, default: Scan()].status = "Enable web access, Massive and the local Qwen model in Settings. No scan started." }
+            for horizon in horizons { scans[horizon, default: Scan()].status = "Enable web access, Massive and the local model in Settings. No scan started." }
             return
         }
         let key = StockSageMassive.apiKey

@@ -155,7 +155,7 @@ enum StockSageChat {
             if let idea = ideas.first(where: { $0.symbol == symbol.symbol }) {
                 facts.append(Fact(id: symbol.symbol + ".rules", subject: symbol.symbol, field: "technical rules opinion",
                     value: idea.advice.action.rawValue, unit: "", asOf: idea.generatedAt,
-                    source: "StockSage rules, not Qwen", status: "unvalidated; no proven predictive edge"))
+                    source: "StockSage rules, not the model", status: "unvalidated; no proven predictive edge"))
             }
             if let e = earnings[symbol.symbol], e.symbol == symbol.symbol {
                 let currentCheck = (0..<StockSageStore.earningsCheckTTL).contains(now.timeIntervalSince(e.checkedAt))

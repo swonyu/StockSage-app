@@ -6,6 +6,10 @@ import UniformTypeIdentifiers
 
 struct StockSagePaperAutomationPanel: View {
     @ObservedObject private var automation = StockSagePaperAutomation.shared
+    // Names the model actually configured for a request in flight, matching the @AppStorage
+    // key the settings pane itself writes -- not a hardcoded "Qwen" left over from before the
+    // Gemma switch (Qwen removal Step 8).
+    @AppStorage(StockSageLocalModelServer.modelKey) private var serverModel: String = StockSageLocalModelServer.defaultModel
     #if os(macOS)
     @State private var exporting = false
     @State private var exportResult: String?
@@ -103,12 +107,12 @@ struct StockSagePaperAutomationPanel: View {
 
     @ViewBuilder private var researchProgress: some View {
         if let progress = automation.researchProgress {
-            Text(progress.isIndeterminate ? "Preparing market data and Qwen…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
+            Text(progress.isIndeterminate ? "Preparing market data and \(serverModel)…" : "Research: \(progress.completedUnitCount)/\(progress.totalUnitCount) checks completed")
                 .font(.callout).monospacedDigit()
             #if os(macOS)
             ForEach(automation.researchingSymbols.sorted(), id: \.self) { symbol in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(symbol) · Checking sources and Qwen…")
+                    Text("\(symbol) · Checking sources and \(serverModel)…")
                         .font(.caption).monospaced()
                     ProgressView()
                         .progressViewStyle(.linear)
@@ -352,8 +356,8 @@ struct StockSagePaperAutomationPanel: View {
             Text("Same-day only · close-out begins at 19:55 normally, 16:55 on published early-close days")
             #endif
             Text("Research screening accepts Massive observations up to one minute old; model decisions also require qualifying trade conditions. This does not make them executable: simulated fills and live labels retain their stricter ten-second limit. Partial source evidence stays visible when no verified model decision is available.")
-            Text("Same-day horizon only. Qwen receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of Qwen. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
-            Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by Qwen. Up to \(StockSagePaperAutomation.discoveryLimit) total checks per cycle: all paper holdings first, then affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
+            Text("Same-day horizon only. The model receives completed minute bars from the latest hour, or explicitly labelled recent qualified trades when candles are unavailable. Individual trades are not candles or evidence of sufficient liquidity. Daily indicators are background, not intraday signals. New entries stop five minutes before the scheduled extended-session end and the timer requests exits independently of the model. If the app sleeps or fresh prices are missing, unresolved positions remain visible; overdue holdings block new buys and exits retry next open session. A same-day policy cannot guarantee a fill.")
+            Text("Separate $10,000 account. Full Massive US listed-market snapshots, excluding OTC. All supported fresh observations are screened, not individually analyzed by the model. Up to \(StockSagePaperAutomation.discoveryLimit) total checks per cycle: all paper holdings first, then affordable new candidates, least recently attempted first and daily dollar activity next. Research uses up to \(StockSagePaperAutomation.researchConcurrency) concurrent workers. Cycles start at least fifteen minutes apart and never overlap, so a longer cycle delays the next one. Missing/stale data and unsupported symbol formats are excluded. The feed can include ETFs; this is not a common-stock-only reference census. Your watchlist is unchanged.")
             Text("Whole shares, long only, no margin, five positions maximum, and $2,000 maximum per new position. Buy/Strong Buy must cite an actual intraday observation to request an entry; daily background alone is insufficient. Sell/Reduce requests closing the entire simulated holding. Hold/Avoid creates no order. A completed scan is not a promise of a trade or profit.")
             Text("Settled-cash simulation: purchases immediately reduce spending capacity; net sale proceeds wait until the scheduled T+1 settlement date. The calendar includes bank-only holidays and covers 2026 through January 2027; unknown dates keep proceeds unavailable. Release at New York midnight is a simulation convention, not confirmation of broker funds. Unexpected closures and settlement failures are not modeled. Total cash and equity still include unsettled receivables; historical fills are not rewritten.")
             Text("Simulated fills require a qualified Massive SIP trade after the current attempt and no more than ten seconds old. The bounded tape check excludes average-price, prior-reference, corrected and unknown-condition trades. Each attempt expires after two minutes. A triggered stop retains its protective intent across expiry, price recovery, pause and restart until that holding closes; retries still need a later eligible observation. Ordinary model sell and target requests keep their existing expiry behavior. Costs assume 10 basis points per side; they do not measure spread, depth or extended-hours liquidity. A 2% stop and 4% target are simulation rules, not price forecasts.")

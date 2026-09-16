@@ -876,7 +876,7 @@ final class StockSageAIAssessments: ObservableObject {
         guard shouldRequest(idea.symbol, hasCurrentRecord: record(for: idea, store: store) != nil,
                             force: force) else { return }
         guard let config = Self.configuration else {
-            errors[idea.symbol] = "Choose a reachable loopback Qwen server in Catalysts → Explanation model. Off/on-device-only disables AI badges. Remote iPhone serving is not configured here."
+            errors[idea.symbol] = "Choose a reachable loopback model server in Catalysts → Explanation model. Off/on-device-only disables AI badges. Remote iPhone serving is not configured here."
             return
         }
         let revision = StockSageLocalModelServer.settingsRevision()
