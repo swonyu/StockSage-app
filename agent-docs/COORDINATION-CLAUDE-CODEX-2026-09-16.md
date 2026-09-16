@@ -214,17 +214,32 @@ may select from. They are constraints on correctness, not preferences.
    D-1 is not available at 03:00 ET, the run must either wait or record the older session it
    actually used, with its date visible. Silently ranking on D-2 while presenting it as today's
    research is the failure mode to avoid.
-3. **ETFs must be excluded from the pick.** Dollar-volume ranking puts SPY, QQQ and the leveraged
-   single-stock/sector funds at the very top of the Nasdaq tape. I verified on 2026-09-16 that SPY
-   returns **zero rows for all six purchased Benzinga products** (news only). For a 500-name list
-   that is a slot-allocation defect; for a **single daily pick** it is much worse — an ETF could
-   win the day with no earnings, guidance, ratings, insights, bull/bear or insider evidence
-   whatsoever. The plan's own global constraint keeps NASDAQ common-stock eligibility; the daily
-   pick must enforce it rather than inherit the board's ranking unchanged.
-4. **Trading-day validity comes from the US calendar, not the Riyadh clock.** 10:00 Riyadh maps to
-   the same ET calendar day in both EDT and EST, so there is no date-rollover trap at this time —
-   but that is a property of this specific time and should be pinned by a test, not assumed. The
-   holiday table is 2026-only (B3): 2027 dates must fail closed.
+3. ~~**ETFs must be excluded from the pick.**~~ **WITHDRAWN 2026-09-16 — I was wrong, and so is the
+   2026-09-15 audit.** `StockSageResearchUniverse.swift:114` filters on
+   `listing.primary_exchange == "XNAS", listing.type == "CS"` **before** the dollar-volume sort and
+   the `prefix(scanLimit)`, alongside active / US locale / stocks market / USD / non-OTC / same-day
+   stamp guards. SPY is type ETF on ARCX and is excluded twice over; no ETF can reach the 500, so
+   none can reach the pick. The audit's claim that ETFs "land in the 500 and consume a full
+   evidence pass" does not hold against this tree.
+   My SPY probe result stands as data — SPY really does return zero rows for all six purchased
+   Benzinga products — but it describes no live risk on this path, because SPY is never scanned.
+   **The real constraint is to preserve that guard**: the daily pick must select from
+   `ResearchUniverse.select`, never from the mixed Ideas board, which carries no CS/XNAS filter.
+4. **Trading-day validity comes from the US calendar, not the Riyadh clock.** At 10:00 Riyadh there
+   was no date-rollover trap. **At the 06:00 Riyadh prepare time there is one, and it is now live:**
+   06:00 Riyadh is 23:00 ET the *previous* day under EDT and 22:00 ET the previous day under EST.
+   Three consequences:
+   - The holiday/weekday check must run against the **intended delivery date** in ET, never the
+     start date and never the Riyadh date. Codex's design already tracks an intended delivery date;
+     this is the thing that check must be keyed on.
+   - **"Weekdays" must mean US trading weekdays, not Riyadh weekdays.** The Saudi weekend is
+     Friday–Saturday. Riyadh Sunday 06:00 is Saturday 23:00 ET, preparing for a Sunday that is not
+     a trading day; and a Friday delivery needs a Friday 06:00 Riyadh prepare, which falls on a
+     Saudi weekend day. A Riyadh-weekday filter would both fire uselessly and miss a real day.
+   - At 23:00 ET the prior session's consolidated grouped-daily is only ~3 hours past the 20:00 ET
+     after-hours close, versus ~7 hours at 03:00 ET. Constraint 2 (record the session actually
+     used, with its date) therefore matters more at this time, not less.
+   The holiday table is 2026-only (B3): 2027 dates must fail closed.
 5. **No look-ahead.** Nothing published after the decision instant may enter the packet. This is
    Task 20's out-of-sample rule applied live, and it is what makes the pick's later outcome review
    meaningful rather than circular.
