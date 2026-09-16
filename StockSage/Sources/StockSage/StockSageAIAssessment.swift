@@ -374,6 +374,35 @@ enum StockSageAIAssessment {
         /// The action exactly as accepted. nil when the validator rejected the answer.
         let acceptedAction: String?
         let rejectionReason: String?
+
+        /// The facts were offered, but the answer cannot be published (for example, cancellation).
+        var rejectingPublication: Self {
+            .init(version: version, state: offeredCount == 0 ? .dataUnavailable : .modelRejected,
+                findings: [], citedCount: 0, offeredCount: offeredCount, classCounts: classCounts,
+                insiderPurchases: insiderPurchases, insiderSales: insiderSales, uncitedInsiderIDs: [],
+                acceptedAction: nil, rejectionReason: nil)
+        }
+
+        func valid(action: String?, evidenceCount: Int, factCount: Int) -> Bool {
+            guard version == Self.version, acceptedAction == action,
+                  (0...10_000).contains(offeredCount), (0...offeredCount).contains(citedCount),
+                  citedCount == evidenceCount, Set(findings).count == findings.count,
+                  classCounts.keys.allSatisfy({ FactClass(rawValue: $0) != nil }),
+                  classCounts.values.allSatisfy({ (0...offeredCount).contains($0) }),
+                  classCounts.values.reduce(0, +) == offeredCount,
+                  (0...offeredCount).contains(insiderPurchases),
+                  (0...offeredCount - insiderPurchases).contains(insiderSales),
+                  Set(uncitedInsiderIDs).count == uncitedInsiderIDs.count,
+                  uncitedInsiderIDs.count <= insiderPurchases + insiderSales,
+                  uncitedInsiderIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }),
+                  rejectionReason.map({ ValidationFailure(rawValue: $0) != nil }) ?? true else { return false }
+            switch state {
+            case .verified: return action != nil && findings.isEmpty && offeredCount == factCount && factCount > 0 && rejectionReason == nil
+            case .unverified: return action != nil && !findings.isEmpty && offeredCount == factCount && rejectionReason == nil
+            case .dataUnavailable: return offeredCount == 0 && findings.isEmpty && rejectionReason == nil
+            case .modelRejected: return action == nil && findings.isEmpty && offeredCount == factCount
+            }
+        }
     }
 
     /// Vocabulary is matched on whole words so ordinary prose cannot trip a finding by accident.
@@ -403,9 +432,9 @@ enum StockSageAIAssessment {
                   insiderPurchases: purchases, insiderSales: sales, uncitedInsiderIDs: uncitedInsider,
                   acceptedAction: verdict?.action.rawValue, rejectionReason: failure?.rawValue)
         }
-        guard let verdict else { return report(.modelRejected, []) }
         // No evidence reached the model: that is a data gap, never a model defect.
         guard !offered.isEmpty else { return report(.dataUnavailable, []) }
+        guard let verdict else { return report(.modelRejected, []) }
 
         var findings: [QualityReport.Finding] = []
         var cited: [EvidenceFact] = []
@@ -489,6 +518,65 @@ enum StockSageAIAssessment {
     nonisolated enum PromptVersion: Int, Codable, Sendable, CaseIterable {
         case explanationFirst = 1, evidenceFirst = 2
         nonisolated static let current = PromptVersion.explanationFirst
+    }
+
+    /// The app's requested settings, not an assertion about unpinned server defaults.
+    /// Exact prompts and individual output limits remain in the diagnostic attempt records.
+    nonisolated struct InferenceProfile: Codable, Sendable, Equatable {
+        enum EndpointProfile: String, Codable, Sendable { case lmStudioGemma, runPodGemma, ollama, generic }
+        let version: Int
+        let model: String
+        let promptVersion: Int
+        let schemaVersion: Int
+        let packetVersion: Int
+        let packetDigest: String
+        let temperature: Double
+        let topP: Double?
+        let seed: Int?
+        let contextTokens: Int
+        let initialOutputTokens: Int
+        /// Includes the existing output-limit retry reserved before evidence fitting.
+        let maxOutputTokens: Int
+        let endpointProfile: EndpointProfile
+        let retryReason: String?
+
+        init(config: StockSageLocalModelServer.Config, isOllama: Bool, packet: EvidencePacket,
+             outputTokens: Int, diagnostic: StockSageLocalModelServer.Diagnostic) {
+            version = 1; model = config.model
+            promptVersion = PromptVersion.current.rawValue; schemaVersion = PromptVersion.current.rawValue
+            packetVersion = packet.version; packetDigest = packet.digest
+            temperature = StockSageLocalModelServer.researchTemperature
+            topP = nil; seed = nil
+            contextTokens = StockSageLocalModelServer.researchContextTokens
+            initialOutputTokens = outputTokens; maxOutputTokens = config.reservedOutputTokens(for: outputTokens)
+            endpointProfile = isOllama ? .ollama : config.isRunPodGemma ? .runPodGemma
+                : config.isLMStudioGemma ? .lmStudioGemma : .generic
+            retryReason = diagnostic.retryReason
+        }
+
+        /// Comparable configuration is not deterministic output or identical evidence.
+        /// Evidence identity is checked separately using packetDigest and saved prompts.
+        func comparableCohort(with other: Self) -> Bool {
+            valid(model: model) && other.valid(model: other.model)
+                && version == other.version && model == other.model
+                && promptVersion == other.promptVersion && schemaVersion == other.schemaVersion
+                && packetVersion == other.packetVersion && temperature == other.temperature
+                && topP == other.topP && seed == other.seed && contextTokens == other.contextTokens
+                && initialOutputTokens == other.initialOutputTokens && maxOutputTokens == other.maxOutputTokens
+                && endpointProfile == other.endpointProfile
+        }
+
+        func valid(model expected: String) -> Bool {
+            version == 1 && model == expected && !model.isEmpty && model.utf8.count <= 512
+                && PromptVersion(rawValue: promptVersion) != nil && schemaVersion == promptVersion
+                && (1...EvidencePacket.currentVersion).contains(packetVersion)
+                && packetDigest.range(of: #"\A[0-9a-f]{64}\z"#, options: .regularExpression) != nil
+                && temperature.isFinite && (0...2).contains(temperature)
+                && (topP.map { $0.isFinite && (0...1).contains($0) } ?? true)
+                && contextTokens > 0 && contextTokens <= 1_048_576
+                && initialOutputTokens > 0 && maxOutputTokens >= initialOutputTokens && maxOutputTokens < contextTokens
+                && (retryReason == nil || retryReason == "outputLimit")
+        }
     }
 
     nonisolated static let instructions = """

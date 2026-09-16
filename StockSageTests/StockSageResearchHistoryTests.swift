@@ -110,7 +110,7 @@ struct StockSageResearchHistoryTests {
             })
         scan.ranking = try outcome.get(); scan.rankingFailure = nil
         let run = History.snapshot(startedAt: pending.startedAt, completedAt: Date(), horizon: .fortnight, scan: scan)
-        #expect(requests == (empty ? 0 : 1) && run.ranking?.version == 2)
+        #expect(requests == (empty ? 0 : 1) && run.ranking?.version == 3)
         #expect(run.coverage.buyCount == 3 && run.coverage.qualifiedBuyCount == (empty ? 0 : 1))
         #expect(run.predictions.map(\.symbol) == (empty ? [] : ["AAA"]))
         let history = History()
@@ -1811,5 +1811,126 @@ extension StockSageResearchHistoryTests {
         try #require(legacyHistory.saveCompletedChecks(legacyRun, scan: checks))
         let legacyRestored = try #require(legacyHistory.completedScan(horizon: .fortnight))
         #expect(legacyRestored.scan.results[symbol]?.insiderTransactions == [])
+    }
+
+    @Test func completedCheckDecodesActualLegacyBytesWithoutAddingFields() throws {
+        let (_, scan) = checkpointFixture(count: 2)
+        let listing = scan.listings[0]
+        let check = History.CompletedCheck(listing: listing, result: try #require(scan.results[listing.ticker]))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var object = try #require(JSONSerialization.jsonObject(with: encoder.encode(check)) as? [String: Any])
+        for key in ["insiderTransactions", "factClasses", "qualityReport", "inferenceProfile"] {
+            object.removeValue(forKey: key)
+        }
+        let legacy = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let decoded = try JSONDecoder().decode(History.CompletedCheck.self, from: legacy)
+        #expect(decoded.insiderTransactions.isEmpty)
+        #expect(decoded == check)
+        #expect(try encoder.encode(decoded) == legacy, "Reading a legacy check must not rewrite its evidence")
+        let restoredResult = try #require(decoded.result)
+        #expect(!decoded.hasRecordedInsiderTransactions && !restoredResult.hasRecordedInsiderTransactions)
+        #expect(try encoder.encode(History.CompletedCheck(listing: listing, result: restoredResult)) == legacy,
+                "Restoring then recapturing must also preserve legacy key absence")
+    }
+
+    @Test func savedPickRetainsInsiderSourcesAfterItsLatestCheckIsReplaced() throws {
+        typealias E = StockSageMassiveEvents
+        let (original, initial) = checkpointFixture(count: 8)
+        var scan = initial
+        let symbol = scan.listings[0].ticker
+        let at = try #require(scan.results[symbol]?.at)
+        let transaction = E.InsiderTransaction(direction: .sale, transactionDate: at.addingTimeInterval(-172_800),
+            filingDate: at.addingTimeInterval(-86_400), ownerName: "Reported director", role: "Director",
+            shares: 100, pricePerShare: 50, planReported: true, amendment: false)
+        let event = E.Event(id: "filing-id", symbol: symbol, feed: .insider, date: transaction.filingDate,
+            headline: "Filed sale", details: ["Reported under a Rule 10b5-1 plan."],
+            link: URL(string: "https://www.sec.gov/Archives/filing-id"), transactionIdentity: "transaction-id", insider: transaction)
+        scan.results[symbol]?.insiderTransactions = [transaction]
+        scan.results[symbol]?.insiderEvidence = .init(symbol: symbol, feed: .insider, checkedAt: at,
+            outcome: .answered, event: event, insiderEvents: [event], insiderOmittedRecordCount: 0)
+        scan.results[symbol]?.coverage.append(.init(source: E.Feed.insider.source, state: .answered, checkedAt: at))
+        scan.results[symbol]?.factClasses = [.insider, .coverageGap]
+        scan.ranking = .fixture(scan: scan, symbols: Array(scan.listings.prefix(4)).map(\.ticker), horizon: .fortnight, at: original.completedAt)
+        scan.rankingFailure = nil
+        let first = History.snapshot(startedAt: original.startedAt, completedAt: original.completedAt,
+            horizon: .fortnight, scan: scan)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(first)) as? [String: Any])
+        for change in ["unavailableWithEvents", "unavailableAnswered", "differentFirst", "missingOmitted"] {
+            var object = encoded
+            var predictions = object["predictions"] as! [[String: Any]]
+            var source = predictions[0]["insiderEvidence"] as! [String: Any]
+            switch change {
+            case "unavailableWithEvents": source["outcome"] = "unavailable"
+            case "unavailableAnswered":
+                source["outcome"] = "unavailable"
+                for key in ["event", "insiderEvents", "insiderOmittedRecordCount"] { source.removeValue(forKey: key) }
+            case "differentFirst":
+                var event = source["event"] as! [String: Any]; event["id"] = "different-filing"; source["event"] = event
+            default: source.removeValue(forKey: "insiderOmittedRecordCount")
+            }
+            predictions[0]["insiderEvidence"] = source; object["predictions"] = predictions
+            let changed = try JSONDecoder().decode(History.Run.self, from: JSONSerialization.data(withJSONObject: object))
+            #expect(!History().record(changed), "Reject contradictory source status: \(change)")
+        }
+        let (history, url, defaults, suite) = try fileStore("insider-prediction")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try #require(history.record(first) && history.saveCompletedChecks(first, scan: scan))
+        #expect(history.completedScan(runID: first.id)?.run.id == first.id)
+        let (second, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        try #require(history.record(second) && history.saveCompletedChecks(second, scan: replacement))
+        let reopened = History(storageURL: url, defaults: defaults)
+        let saved = try #require(reopened.runs.first { $0.id == first.id }?.predictions.first)
+        #expect(saved.insiderEvidence?.insiderEvents == [event] && saved.insiderEvidence?.insiderOmittedRecordCount == 0)
+        #expect(saved.hasRecordedInsiderEvidence && saved.insiderCoverage?.state == "answered")
+        #expect(saved.factClasses == [.insider, .coverageGap])
+        #expect(reopened.completedScan(runID: first.id) == nil, "Never substitute the newer scan's checks")
+        #expect(reopened.completedScan(runID: second.id)?.run.id == second.id)
+        #expect(reopened.completedScan(runID: UUID()) == nil)
+    }
+
+    @Test func savedPredictionRejectsContradictoryEvidenceAndQualification() async throws {
+        typealias A = StockSageAIAssessment
+        let (original, initial) = strictFixture()
+        var scan = initial
+        var result = try #require(scan.results["AAA"])
+        let oldReceipt = try #require(result.evidenceReceipt)
+        let facts = zip(oldReceipt.offeredKeys, result.facts).map {
+            A.EvidenceFact(key: $0.0, text: $0.1, required: true, availability: .available)
+        }
+        let packet = A.EvidencePacket(facts: facts, prePromptOmittedRecordCount: 0)
+        result.evidenceReceipt = .init(symbol: "AAA", requiredKeys: oldReceipt.requiredKeys,
+            missingOrUnknownRequiredKeys: oldReceipt.missingOrUnknownRequiredKeys,
+            offeredKeys: oldReceipt.offeredKeys, omittedKeys: oldReceipt.omittedKeys,
+            prePromptOmittedRecordCount: oldReceipt.prePromptOmittedRecordCount, citedKeys: oldReceipt.citedKeys,
+            packetVersion: packet.version, classCounts: packet.classCounts, packetDigest: packet.digest)
+        result.inferenceProfile = .init(config: .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: result.model),
+            isOllama: false, packet: packet, outputTokens: 192, diagnostic: .init(finish: .stop))
+        result.qualityReport = A.quality(result.verdict, offered: facts, symbol: "AAA")
+        scan.results["AAA"] = result
+        let outcome = await StockSageResearchRanking.rank(scan: scan, horizon: .fortnight,
+            config: .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "offline-fixture"), isOllama: false,
+            allowed: { true }, completion: { _, _, _ in
+                .success(.init(text: "{\"symbols\":[\"AAA\"]}", diagnostic: .init(finish: .stop), model: "offline-fixture"))
+            })
+        scan.ranking = try outcome.get(); scan.rankingFailure = nil
+        let run = History.snapshot(startedAt: original.startedAt, completedAt: Date(), horizon: .fortnight, scan: scan)
+        try #require(run.predictions.count == 1)
+        try #require(History().record(run))
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(run)) as? [String: Any])
+        for change in ["symbol", "digest", "qualification"] {
+            var object = encoded
+            var predictions = object["predictions"] as! [[String: Any]]
+            if change == "qualification" {
+                var receipt = predictions[0]["qualification"] as! [String: Any]
+                receipt["originalAction"] = "Hold"; predictions[0]["qualification"] = receipt
+            } else {
+                var receipt = predictions[0]["evidenceReceipt"] as! [String: Any]
+                receipt[change == "symbol" ? "symbol" : "packetDigest"] = change == "symbol" ? "OTHER" : String(repeating: "0", count: 64)
+                predictions[0]["evidenceReceipt"] = receipt
+            }
+            object["predictions"] = predictions
+            let changed = try JSONDecoder().decode(History.Run.self, from: JSONSerialization.data(withJSONObject: object))
+            #expect(!History().record(changed), "Reject contradictory saved metadata: \(change)")
+        }
     }
 }
