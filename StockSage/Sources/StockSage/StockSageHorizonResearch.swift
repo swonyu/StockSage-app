@@ -182,6 +182,41 @@ final class StockSageHorizonResearch: ObservableObject {
         return history
     }
 
+    /// Injected ownership for the one shared outcome trigger. Production reads the live policy,
+    /// credential and clock; a test host supplies its own so no real request can ever be made.
+    @MainActor struct SavedOutcomeGates {
+        var isRunningTests: @MainActor () -> Bool = { StockSageStore.isRunningTests }
+        var externalAllowed: @MainActor () -> Bool = { ToolPolicy.isExternalAllowed }
+        var apiKey: @MainActor () -> String = { StockSageMassive.apiKey }
+        var credentialRevision: @MainActor () -> String? = { StockSageMassive.credentialRevision() }
+        var clock: @MainActor () -> Date = { Date() }
+        /// nil uses the real settled-window Massive review fetch.
+        var fetch: (@MainActor (StockSageResearchHistory.Prediction, StockSageResearchHistory.Run, String,
+                     @escaping @MainActor () -> Bool) async -> StockSageResearchHistory.Observation?)?
+    }
+
+    /// ONE caller for both the Saved Research action and a foreground activation. The credential
+    /// and policy are captured once, then re-checked after every await, so a response that arrives
+    /// after the owner revoked access or rotated the key is discarded rather than persisted.
+    /// `history.isChecking` is the single-flight guard; there is no timer or background poller.
+    @MainActor
+    static func checkSavedOutcomes(history: StockSageResearchHistory, store: StockSageStore,
+                                   gates: SavedOutcomeGates = .init()) async {
+        guard !gates.isRunningTests(), !Task.isCancelled, gates.externalAllowed(), !store.isSampleData else { return }
+        let key = gates.apiKey()
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let revision = gates.credentialRevision()
+        let allowed: @MainActor () -> Bool = {
+            !Task.isCancelled && !gates.isRunningTests() && gates.externalAllowed() && !store.isSampleData
+                && gates.apiKey() == key && gates.credentialRevision() == revision
+        }
+        await history.checkActive(clock: gates.clock, allowed: allowed) { prediction, run in
+            if let fetch = gates.fetch { return await fetch(prediction, run, key, allowed) }
+            return await fetchReviewObservation(prediction: prediction, run: run, key: key,
+                allowed: allowed, clock: gates.clock)
+        }
+    }
+
     /// The last date this review may request. A daily-policy run stops at the latest New York
     /// session that has WHOLLY ended, so Massive's adjusted daily aggregate is settled, capped at
     /// the scheduled horizon. A legacy run keeps requesting through its captured target close.

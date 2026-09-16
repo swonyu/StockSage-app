@@ -234,7 +234,7 @@ struct StockSageResearchHistoryView: View {
                         Button {
                             checkRequest += 1
                         } label: {
-                            Label(history.isChecking ? "Checking dated prices…" : "Check due results",
+                            Label(history.isChecking ? "Checking settled sessions…" : "Check active results",
                                   systemImage: "arrow.clockwise")
                                 .frame(minHeight: 44)
                         }
@@ -286,16 +286,8 @@ struct StockSageResearchHistoryView: View {
         #endif
         .task(id: checkRequest) {
             guard checkRequest > 0, accessReason == nil else { return }
-            let key = StockSageMassive.apiKey
-            let revision = StockSageMassive.credentialRevision()
-            let allowed: @MainActor () -> Bool = {
-                !StockSageStore.isRunningTests && ToolPolicy.isExternalAllowed && !store.isSampleData
-                    && StockSageMassive.apiKey == key && StockSageMassive.credentialRevision() == revision
-            }
-            await history.checkActive(allowed: allowed) { prediction, run in
-                await StockSageHorizonResearch.fetchReviewObservation(prediction: prediction, run: run,
-                    key: key, allowed: allowed)
-            }
+            // The same shared caller the foreground activation uses; no separate ownership wiring.
+            await StockSageHorizonResearch.checkSavedOutcomes(history: history, store: store)
         }
     }
 

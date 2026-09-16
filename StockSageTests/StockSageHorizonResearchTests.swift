@@ -903,6 +903,81 @@ import Testing
         #expect(calls == (reason == "unadjusted" ? 1 : 0))
     }
 
+
+    // MARK: - One shared automatic/manual outcome trigger
+
+    @MainActor private func outcomeTriggerStore(sample: Bool) throws -> (StockSageStore, UserDefaults, String) {
+        let suite = "stocksage.outcome.trigger.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        if !sample { store.replaceAll(store.symbols) }
+        #expect(store.isSampleData == sample)
+        return (store, defaults, suite)
+    }
+
+    @Test(arguments: ["allowed", "testHost", "sampleData", "externalDenied", "missingKey",
+                      "cancelled", "revokedKey", "changedRevision"])
+    func sharedOutcomeTriggerOnlyFetchesUnderEveryOwnershipGate(scenario: String) async throws {
+        let (store, defaults, suite) = try outcomeTriggerStore(sample: scenario == "sampleData")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        try #require(history.record(dailyReviewRun()))
+        var key = scenario == "missingKey" ? "" : "synthetic-test-only"
+        var revision: String? = "revision-1"
+        var fetches = 0
+        var gates = R.SavedOutcomeGates()
+        gates.isRunningTests = { scenario == "testHost" }
+        gates.externalAllowed = { scenario != "externalDenied" }
+        gates.apiKey = { key }
+        gates.credentialRevision = { revision }
+        gates.clock = { self.reviewDate("2026-09-17T04:01:00Z") }
+        gates.fetch = { _, _, _, _ in
+            fetches += 1
+            if scenario == "revokedKey" { key = "rotated-synthetic-key" }
+            if scenario == "changedRevision" { revision = "revision-2" }
+            return nil
+        }
+        let task = Task { @MainActor in
+            if scenario == "cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+            await R.checkSavedOutcomes(history: history, store: store, gates: gates)
+        }
+        await task.value
+        let silent = ["testHost", "sampleData", "externalDenied", "missingKey", "cancelled"]
+        #expect(fetches == (silent.contains(scenario) ? 0 : 1), "\(scenario)")
+        // A response that arrives after ownership changed is discarded, not persisted.
+        let stored = history.runs[0].evaluations["ACME"]
+        #expect(stored?.state == (scenario == "allowed" ? .dataUnavailable : nil), "\(scenario)")
+        #expect(!history.isChecking)
+    }
+
+    @Test func oneForegroundActivationCannotOverlapAnInProgressCheck() async throws {
+        let (store, defaults, suite) = try outcomeTriggerStore(sample: false)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        try #require(history.record(dailyReviewRun()))
+        var fetches = 0
+        var held: CheckedContinuation<StockSageResearchHistory.Observation?, Never>?
+        var gates = R.SavedOutcomeGates()
+        gates.isRunningTests = { false }
+        gates.apiKey = { "synthetic-test-only" }
+        gates.credentialRevision = { "revision-1" }
+        gates.clock = { self.reviewDate("2026-09-17T04:01:00Z") }
+        gates.fetch = { _, _, _, _ in
+            fetches += 1
+            return await withCheckedContinuation { held = $0 }
+        }
+        let first = Task { @MainActor in await R.checkSavedOutcomes(history: history, store: store, gates: gates) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while held == nil, ContinuousClock.now < deadline { await Task.yield() }
+        try #require(held != nil && history.isChecking)
+        await R.checkSavedOutcomes(history: history, store: store, gates: gates)
+        #expect(fetches == 1, "isChecking is the single-flight guard for both triggers")
+        let release = held; held = nil
+        release?.resume(returning: nil)
+        await first.value
+        #expect(fetches == 1 && !history.isChecking)
+    }
+
     @Test func badPagesNeverBecomeCompleteCensuses() throws {
         let good = Data(#"{"status":"OK","results":[{"ticker":"BRK.B","name":"Berkshire","market":"stocks","locale":"us","active":true,"type":"CS","currency_name":"usd"}]}"#.utf8)
         #expect(try R.parsePage(good).results.first?.ticker == "BRK.B")

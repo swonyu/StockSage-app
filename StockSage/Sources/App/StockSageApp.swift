@@ -86,6 +86,8 @@ struct StockSageApp: App {
     #endif
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
     @State private var showOnboarding = false
+    /// One bounded outcome check per foreground activation. Not a timer, poller or background task.
+    @State private var researchReviewRequest = 0
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
@@ -155,6 +157,18 @@ struct StockSageApp: App {
                     // this the reopen would silently wait for the next launch).
                     .onChange(of: onboardingDone) {
                         if !onboardingDone { showOnboarding = true }
+                    }
+                    // Saved predictions complete at their first settled target or stop, so the app
+                    // re-checks once whenever it becomes active. StockSageHorizonResearch owns every
+                    // external-access, sample-data, credential and cancellation gate; isChecking is
+                    // the single-flight guard. The app never polls while closed or in the background.
+                    .onChange(of: scenePhase, initial: true) {
+                        if scenePhase == .active { researchReviewRequest &+= 1 }
+                    }
+                    .task(id: researchReviewRequest) {
+                        guard researchReviewRequest > 0 else { return }
+                        await StockSageHorizonResearch.checkSavedOutcomes(
+                            history: .shared, store: .shared)
                     }
                     #if os(iOS)
                     // One lifecycle entry for launch AND return: respect the saved iOS opt-out.
