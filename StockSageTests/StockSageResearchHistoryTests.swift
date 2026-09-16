@@ -154,15 +154,16 @@ struct StockSageResearchHistoryTests {
 
     private func run(id: UUID = UUID(), completed: String = "2026-09-14T21:00:00Z",
                      horizon: History.Horizon = .week, referencePrice: Double? = 200,
-                     policy: History.MeasurementPolicy? = nil) -> History.Run {
+                     policy: History.MeasurementPolicy? = nil, levels: History.Levels? = nil,
+                     outcomePolicy: History.OutcomePolicy? = nil) -> History.Run {
         .init(id: id, startedAt: date(completed).addingTimeInterval(-60), completedAt: date(completed),
               horizon: horizon, predictions: [.init(symbol: "ACME", name: "Acme", action: "Buy",
                 reason: "Dated evidence supports the setup", risk: "Demand may weaken", evidence: ["F1"],
                 facts: ["Original observed facts"], model: "fixture-model", note: "Unvalidated research",
                 referencePrice: referencePrice,
-                referenceDate: referencePrice == nil ? nil : date("2026-09-11T04:00:00Z"), levels: nil)],
+                referenceDate: referencePrice == nil ? nil : date("2026-09-11T04:00:00Z"), levels: levels)],
               coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil),
-              measurementPolicy: policy)
+              measurementPolicy: policy, outcomePolicy: outcomePolicy)
     }
 
     private var fortnightDates: [String] {
@@ -1254,6 +1255,275 @@ extension StockSageResearchHistoryTests {
         #expect(reopened.completedScan(horizon: .fortnight) == nil && reopened.lastError != nil)
         #expect(!reopened.saveCompletedChecks(second, scan: secondScan))
         #expect(try Data(contentsOf: checkpointURL) == corrupted && reopened.runs == [first, source])
+    }
+
+
+    // MARK: - Daily-bar first-hit outcome policy
+
+    private var newYork: Calendar {
+        var value = Calendar(identifier: .gregorian)
+        value.timeZone = TimeZone(identifier: "America/New_York")!
+        return value
+    }
+
+    /// A new-policy run. `stop: nil` captures a prediction with no scenario levels at all.
+    private func dailyRun(horizon: History.Horizon = .week, referencePrice: Double? = 100,
+                          stop: Double? = 90, target: Double = 120,
+                          completed: String = "2026-09-14T21:00:00Z") -> History.Run {
+        run(completed: completed, horizon: horizon, referencePrice: referencePrice,
+            policy: .nextTradingDateSessions,
+            levels: stop.map { History.Levels(entry: 100, stop: $0, target: target,
+                at: date("2026-09-11T04:00:00Z"), basis: "Captured ATR scenario") },
+            outcomePolicy: .dailyBarFirstHit)
+    }
+
+    private var weekSessions: [String] { Array(fortnightDates.prefix(7)) }
+
+    /// One adjusted series: the saved reference bar followed by monitoring sessions.
+    private func dailyObservation(highs: [Double], lows: [Double], opens: [Double]? = nil,
+                                  closes: [Double]? = nil, sessions: [String]? = nil,
+                                  referenceClose: Double? = 100, fetched: String? = nil,
+                                  symbol: String = "ACME") -> History.Observation {
+        let count = highs.count
+        let stamps = Array((sessions ?? fortnightDates).prefix(count)).map { date($0) }
+        let barOpens = opens ?? (0..<count).map { min(max(100, lows[$0]), highs[$0]) }
+        let barCloses = closes ?? barOpens
+        var dates: [Date] = [], o: [Double] = [], h: [Double] = [], l: [Double] = [], c: [Double] = []
+        if let referenceClose {
+            dates.append(date("2026-09-11T04:00:00Z"))
+            o.append(referenceClose); h.append(referenceClose); l.append(referenceClose); c.append(referenceClose)
+        }
+        dates += stamps; o += barOpens; h += highs; l += lows; c += barCloses
+        return .init(history: .init(symbol: symbol, dates: dates, opens: o, highs: h, lows: l, closes: c,
+            volumes: Array(repeating: 100, count: dates.count), priceSource: .massiveDaily),
+            splitAdjusted: true, provider: "Fixture Massive daily",
+            fetchedAt: fetched.map { date($0) } ?? settledMorning(after: stamps.last ?? dates[0]))
+    }
+
+    /// Midnight New York on the day after a session, when that session's daily aggregate is settled.
+    private func settledMorning(after session: Date) -> Date {
+        newYork.date(byAdding: .day, value: 1, to: newYork.startOfDay(for: session))!
+    }
+    private func dailyNow(afterSessions count: Int, sessions: [String]? = nil) -> Date {
+        settledMorning(after: date((sessions ?? fortnightDates)[count - 1])).addingTimeInterval(60)
+    }
+
+    @Test func firstTerminalBarWinsAndSameBarUsesStop() throws {
+        let original = dailyRun()
+        let targetFirst = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 121, 125], lows: [98, 95, 89]),
+            now: date("2026-09-18T04:01:00Z"))
+        #expect(targetFirst.terminalKind == .targetHit)
+        #expect(targetFirst.state == .evaluated && targetFirst.outcomePrice == 120)
+        #expect(targetFirst.terminalAt == date("2026-09-16T04:00:00Z"))
+        #expect(targetFirst.sameBarStopFirst == nil && targetFirst.dailyBars?.count == 2)
+        #expect(targetFirst.adjustedStop == 90 && targetFirst.adjustedTarget == 120 && targetFirst.adjustedEntry == 100)
+        #expect(targetFirst.targetCloseAt == History.targetClose(for: original),
+                "The scheduled horizon close is preserved even when the scenario finishes early")
+        #expect(targetFirst.dailyCloses == nil)
+
+        let sameBar = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 121], lows: [98, 89]),
+            now: date("2026-09-17T04:01:00Z"))
+        #expect(sameBar.terminalKind == .stopHit && sameBar.sameBarStopFirst == true)
+        #expect(sameBar.outcomePrice == 90 && sameBar.terminalAt == date("2026-09-16T04:00:00Z"))
+    }
+
+    @Test func stopBeforeTargetAndGapsUseTheSessionOpen() throws {
+        let original = dailyRun()
+        let stopFirst = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 100, 125], lows: [98, 89, 95]),
+            now: dailyNow(afterSessions: 3))
+        #expect(stopFirst.terminalKind == .stopHit && stopFirst.outcomePrice == 90)
+        #expect(stopFirst.sameBarStopFirst == nil && stopFirst.dailyBars?.count == 2)
+
+        let gapDown = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 88], lows: [98, 84], opens: [100, 85], closes: [100, 86]),
+            now: dailyNow(afterSessions: 2))
+        #expect(gapDown.terminalKind == .stopHit && gapDown.outcomePrice == 85,
+                "A gap through the stop is observed at the session open, not at the captured stop")
+
+        let gapUp = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 132], lows: [98, 128], opens: [100, 130], closes: [100, 131]),
+            now: dailyNow(afterSessions: 2))
+        #expect(gapUp.terminalKind == .targetHit && gapUp.outcomePrice == 130)
+    }
+
+    @Test(arguments: [History.Horizon.week, History.Horizon.fortnight])
+    func noHitStaysActiveUntilTheExactHorizonSessionClose(horizon: History.Horizon) throws {
+        let original = dailyRun(horizon: horizon)
+        let sessions = horizon == .week ? weekSessions : fortnightDates
+        let count = sessions.count
+        let quiet = (0..<count).map { _ in 105.0 }
+        let closes = (0..<count).map { 100 + Double($0) / 10 }
+
+        let early = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: Array(quiet.prefix(count - 1)),
+                lows: Array(repeating: 95, count: count - 1), closes: Array(closes.prefix(count - 1))),
+            now: dailyNow(afterSessions: count - 1))
+        #expect(early.state == .notDue && early.terminalKind == nil,
+                "No hit before the horizon stays active and stores no terminal receipt")
+
+        let finished = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: quiet, lows: Array(repeating: 95, count: count), closes: closes),
+            now: dailyNow(afterSessions: count))
+        #expect(finished.state == .evaluated && finished.terminalKind == .horizonClose)
+        #expect(finished.terminalAt == date(sessions[count - 1]) && finished.dailyBars?.count == count)
+        #expect(finished.outcomePrice == closes[count - 1])
+        #expect(finished.sameBarStopFirst == nil)
+        #expect(finished.terminalAt.map(newYork.startOfDay) ==
+                History.targetClose(for: original).map(newYork.startOfDay))
+    }
+
+    @Test func missingInteriorSessionCannotEstablishFirstHitOrder() throws {
+        let original = dailyRun()
+        let gapped = ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z", "2026-09-18T04:00:00Z"]
+        let active = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 106, 125], lows: [98, 97, 96], sessions: gapped),
+            now: date("2026-09-19T04:01:00Z"))
+        #expect(active.state == .notDue && active.terminalKind == nil,
+                "A hole at 2026-09-17 cannot be closed by substituting the 09-18 bar")
+
+        let atHorizon = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 106, 125], lows: [98, 97, 96], sessions: gapped,
+                fetched: "2026-09-24T04:00:00Z"),
+            now: dailyNow(afterSessions: 7))
+        #expect(atHorizon.state == .dataUnavailable && atHorizon.terminalKind == nil)
+
+        let terminalBeforeTheHole = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 106, 125], lows: [98, 85, 96], sessions: gapped),
+            now: date("2026-09-19T04:01:00Z"))
+        #expect(terminalBeforeTheHole.terminalKind == .stopHit && terminalBeforeTheHole.outcomePrice == 90,
+                "A terminal event strictly before the hole is still the verified first event")
+    }
+
+    @Test func splitAdjustsCapturedLevelsAndAnUnverifiedRatioFailsClosed() throws {
+        let original = dailyRun()
+        // A 2:1 split halves the freshly adjusted reference close; the scenario stays equivalent.
+        let split = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [52, 61], lows: [48, 49], opens: [50, 50], closes: [50, 60],
+                referenceClose: 50),
+            now: dailyNow(afterSessions: 2))
+        #expect(split.terminalKind == .targetHit && split.outcomePrice == 60)
+        #expect(split.adjustedEntry == 50 && split.adjustedStop == 45 && split.adjustedTarget == 60)
+        #expect(original.predictions[0].levels?.target == 120, "The captured scenario stays immutable")
+
+        for broken in ["missingReferenceBar", "zeroReferenceClose"] {
+            let receipt = History.evaluate(original.predictions[0], in: original,
+                observation: dailyObservation(highs: [105, 121], lows: [98, 95],
+                    referenceClose: broken == "missingReferenceBar" ? nil : 0),
+                now: dailyNow(afterSessions: 2))
+            #expect(receipt.state == .dataUnavailable && receipt.terminalKind == nil, "\(broken)")
+        }
+        let withoutSavedReference = dailyRun(referencePrice: nil)
+        #expect(History.evaluate(withoutSavedReference.predictions[0], in: withoutSavedReference,
+            observation: dailyObservation(highs: [105, 121], lows: [98, 95], referenceClose: nil),
+            now: dailyNow(afterSessions: 2)).state == .dataUnavailable)
+    }
+
+    @Test func predictionsWithoutLevelsFinishOnlyAtTheHorizonClose() throws {
+        let original = dailyRun(stop: nil)
+        #expect(original.predictions[0].levels == nil)
+        let early = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 300], lows: [98, 1]),
+            now: dailyNow(afterSessions: 2))
+        #expect(early.state == .notDue && early.terminalKind == nil,
+                "Missing levels cannot classify a first hit, however extreme the bar")
+        let finished = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: Array(repeating: 300, count: 7),
+                lows: Array(repeating: 1, count: 7), opens: Array(repeating: 100, count: 7),
+                closes: Array(repeating: 111, count: 7)),
+            now: dailyNow(afterSessions: 7))
+        #expect(finished.terminalKind == .horizonClose && finished.outcomePrice == 111)
+        #expect(finished.adjustedStop == nil && finished.adjustedTarget == nil && finished.adjustedEntry == nil)
+    }
+
+    @Test(arguments: ["daylight-change", "thanksgiving-and-early-close"])
+    func verifiedSessionCountsSurviveHolidaysEarlyClosesAndDaylightChange(schedule: String) throws {
+        let completed = schedule == "daylight-change" ? "2026-10-28T21:00:00Z" : "2026-11-20T21:00:00Z"
+        let sessions = schedule == "daylight-change"
+            ? ["2026-10-29T04:00:00Z", "2026-10-30T04:00:00Z", "2026-11-02T05:00:00Z", "2026-11-03T05:00:00Z",
+               "2026-11-04T05:00:00Z", "2026-11-05T05:00:00Z", "2026-11-06T05:00:00Z"]
+            : ["2026-11-23T05:00:00Z", "2026-11-24T05:00:00Z", "2026-11-25T05:00:00Z", "2026-11-27T05:00:00Z",
+               "2026-11-30T05:00:00Z", "2026-12-01T05:00:00Z", "2026-12-02T05:00:00Z"]
+        let original = dailyRun(completed: completed)
+        let receipt = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: Array(repeating: 105, count: 7),
+                lows: Array(repeating: 95, count: 7), closes: Array(repeating: 103, count: 7),
+                sessions: sessions),
+            now: dailyNow(afterSessions: 7, sessions: sessions))
+        #expect(receipt.terminalKind == .horizonClose && receipt.outcomePrice == 103)
+        #expect(receipt.dailyBars?.map(\.date) == sessions.map { date($0) },
+                "Exactly seven verified Nasdaq sessions, skipping the holiday and spanning the clock change")
+    }
+
+    @Test func legacyRunsKeepEndpointOnlyReceiptsAndEncoding() throws {
+        let legacy = run()
+        #expect(legacy.outcomePolicy == nil)
+        let receipt = History.evaluate(legacy.predictions[0], in: legacy, observation: observation(),
+            now: date("2026-09-24T13:00:00Z"))
+        #expect(receipt.state == .evaluated && receipt.direction == .rose)
+        #expect(receipt.terminalKind == nil && receipt.terminalAt == nil && receipt.outcomePrice == nil)
+        #expect(receipt.dailyBars == nil && receipt.adjustedStop == nil && receipt.sameBarStopFirst == nil)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let object = try #require(JSONSerialization.jsonObject(with: encoder.encode(receipt)) as? [String: Any])
+        for key in ["terminalKind", "terminalAt", "outcomePrice", "dailyBars", "adjustedEntry",
+                    "adjustedStop", "adjustedTarget", "adjustmentRatio", "sameBarStopFirst"] {
+            #expect(object[key] == nil, "\(key) must stay absent from a legacy endpoint receipt")
+        }
+        let runObject = try #require(JSONSerialization.jsonObject(with: encoder.encode(legacy)) as? [String: Any])
+        #expect(runObject["outcomePolicy"] == nil)
+        #expect(History.snapshot(startedAt: date("2026-09-14T20:59:00Z"), completedAt: date("2026-09-14T21:00:00Z"),
+            horizon: .week, scan: StockSageHorizonResearch.Scan()).outcomePolicy == .dailyBarFirstHit,
+            "Every new snapshot carries the explicit daily-bar policy")
+    }
+
+    @Test func terminalReceiptsValidateByRecomputationAndCannotBeRewritten() throws {
+        let suite = "stocksage.research.firsthit.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let url = directory.appendingPathComponent("history.json")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let store = History(storageURL: url, defaults: defaults)
+        let original = dailyRun()
+        try #require(store.record(original))
+        let hit = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: [105, 121], lows: [98, 95]),
+            now: dailyNow(afterSessions: 2))
+        try #require(hit.terminalKind == .targetHit)
+        try #require(store.recordEvaluation(hit, runID: original.id, symbol: "ACME"))
+
+        let laterStop = History.evaluate(original.predictions[0], in: original,
+            observation: dailyObservation(highs: Array(repeating: 105, count: 7),
+                lows: [98, 95, 80, 95, 95, 95, 95], closes: Array(repeating: 100, count: 7)),
+            now: dailyNow(afterSessions: 7))
+        try #require(laterStop.terminalKind == .stopHit)
+        #expect(store.recordEvaluation(laterStop, runID: original.id, symbol: "ACME"))
+        #expect(store.runs[0].evaluations["ACME"] == hit, "An evaluated terminal receipt is immutable")
+
+        for corrupted in ["control", "kind", "price", "terminalAt", "bars", "adjustedStop",
+                          "adjustedTarget", "sameBar", "ratio", "outcomePolicy"] {
+            var forged = hit
+            switch corrupted {
+            case "kind": forged.terminalKind = .stopHit
+            case "price": forged.outcomePrice = 121
+            case "terminalAt": forged.terminalAt = date("2026-09-15T04:00:00Z")
+            case "bars": forged.dailyBars = forged.dailyBars.map { Array($0.dropLast()) }
+            case "adjustedStop": forged.adjustedStop = 80
+            case "adjustedTarget": forged.adjustedTarget = 104
+            case "sameBar": forged.sameBarStopFirst = true
+            case "ratio": forged.adjustmentRatio = 2
+            default: break
+            }
+            let host = corrupted == "outcomePolicy" ? run(id: original.id) : original
+            let isolated = History(storageURL: nil)
+            try #require(isolated.record(host))
+            #expect(isolated.recordEvaluation(forged, runID: host.id, symbol: "ACME") == (corrupted == "control"),
+                    "\(corrupted)")
+        }
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.runs.first { $0.id == original.id }?.evaluations["ACME"] == hit)
+        #expect(reopened.lastError == nil)
     }
 
 }

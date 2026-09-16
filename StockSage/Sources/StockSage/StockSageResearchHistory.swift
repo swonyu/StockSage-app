@@ -17,6 +17,19 @@ final class StockSageResearchHistory: ObservableObject {
         /// Seven/fourteen whole sessions beginning on the next trading date, never completion's date.
         case nextTradingDateSessions = 1
     }
+    /// Versioned so legacy runs keep their endpoint-only evaluation. Unknown raw values
+    /// throw while decoding rather than silently downgrading to another policy.
+    nonisolated enum OutcomePolicy: Int, Codable, Sendable {
+        /// Settled adjusted daily OHLC bars, completing at the first target or stop event.
+        case dailyBarFirstHit = 2
+    }
+    nonisolated struct DailyBar: Codable, Sendable, Equatable {
+        let date: Date
+        let open: Double
+        let high: Double
+        let low: Double
+        let close: Double
+    }
     nonisolated struct Levels: Codable, Sendable, Equatable {
         let entry: Double
         let stop: Double
@@ -74,6 +87,8 @@ final class StockSageResearchHistory: ObservableObject {
         let originalRunID: UUID?
         /// A new capture of only incomplete checks, retaining completed results from this run.
         let retainedFromRunID: UUID?
+        /// Absent in every run saved before first-hit completion existed; never inferred.
+        let outcomePolicy: OutcomePolicy?
         // Only these subsequent receipts change; the original prediction fields above never do.
         var evaluations: [String: Evaluation] = [:]
 
@@ -81,12 +96,13 @@ final class StockSageResearchHistory: ObservableObject {
              predictions: [Prediction], coverage: Coverage, evaluations: [String: Evaluation] = [:],
              measurementPolicy: MeasurementPolicy? = nil,
              ranking: StockSageResearchRanking.Receipt? = nil, rankingFailure: String? = nil,
-             originalRunID: UUID? = nil, retainedFromRunID: UUID? = nil) {
+             originalRunID: UUID? = nil, retainedFromRunID: UUID? = nil,
+             outcomePolicy: OutcomePolicy? = nil) {
             self.id = id; self.startedAt = startedAt; self.completedAt = completedAt
             self.horizon = horizon; self.predictions = predictions; self.coverage = coverage
             self.evaluations = evaluations; self.measurementPolicy = measurementPolicy
             self.ranking = ranking; self.rankingFailure = rankingFailure; self.originalRunID = originalRunID
-            self.retainedFromRunID = retainedFromRunID
+            self.retainedFromRunID = retainedFromRunID; self.outcomePolicy = outcomePolicy
         }
     }
     nonisolated struct DailyClose: Codable, Sendable, Equatable {
@@ -96,6 +112,8 @@ final class StockSageResearchHistory: ObservableObject {
     nonisolated struct Evaluation: Codable, Sendable, Equatable {
         enum State: String, Codable, Sendable { case notDue, due, dataUnavailable, evaluated }
         enum Direction: String, Codable, Sendable { case rose, fell, flat }
+        /// Unknown stored values throw while decoding; a receipt never degrades into another kind.
+        enum TerminalKind: String, Codable, Sendable { case targetHit, stopHit, horizonClose }
         let state: State
         let checkedAt: Date
         let targetCloseAt: Date?
@@ -111,6 +129,21 @@ final class StockSageResearchHistory: ObservableObject {
         var buyDirectionSupported: Bool? = nil
         /// Complete comparison-date path only; nil means unrecorded or missing sessions.
         var dailyCloses: [DailyClose]? = nil
+        // Daily-bar first-hit receipts only. Absent on every endpoint-policy receipt.
+        var terminalKind: TerminalKind? = nil
+        /// The New York session that produced the terminal event, not the scheduled horizon close.
+        var terminalAt: Date? = nil
+        /// The daily-bar observation price: a gap uses the session open, otherwise the captured level.
+        var outcomePrice: Double? = nil
+        /// Freshly adjusted close on the saved reference date divided by the immutable saved price.
+        var adjustmentRatio: Double? = nil
+        var adjustedEntry: Double? = nil
+        var adjustedStop: Double? = nil
+        var adjustedTarget: Double? = nil
+        /// Every verified session examined through the terminal one; holes are never bridged.
+        var dailyBars: [DailyBar]? = nil
+        /// Present only when one bar reached both levels and the conservative stop-first rule applied.
+        var sameBarStopFirst: Bool? = nil
         let note: String
     }
     nonisolated struct Observation: Sendable {
@@ -178,7 +211,7 @@ final class StockSageResearchHistory: ObservableObject {
                 selection: selection, qualifiedBuyCount: scan.qualificationPolicyVersion == 1
                     ? scan.listings.filter { scan.isEligible($0.ticker) }.count : nil), measurementPolicy: .nextTradingDateSessions,
             ranking: scan.ranking, rankingFailure: scan.rankingFailure, originalRunID: originalRunID,
-            retainedFromRunID: scan.retainedFromRunID)
+            retainedFromRunID: scan.retainedFromRunID, outcomePolicy: .dailyBarFirstHit)
     }
 
     @discardableResult func record(_ run: Run) -> Bool {
@@ -204,7 +237,7 @@ final class StockSageResearchHistory: ObservableObject {
                   evaluation.targetCloseAt == Self.targetClose(for: document.runs[index]),
                   evaluation.calendarBasis == Self.calendarBasis(for: document.runs[index]),
                   evaluation.state != .evaluated || evaluation.comparisonReferenceDate == Self.benchmarkDay(after: document.runs[index].completedAt),
-                  Self.valid(evaluation, run: document.runs[index]) else { throw CocoaError(.fileWriteInvalidFileName) }
+                  Self.valid(evaluation, run: document.runs[index], symbol: symbol) else { throw CocoaError(.fileWriteInvalidFileName) }
             if let old = document.runs[index].evaluations[symbol] {
                 guard evaluation.checkedAt >= old.checkedAt else { throw CocoaError(.fileWriteInvalidFileName) }
                 // A later provider revision or richer path must not rewrite an observed outcome.
@@ -392,19 +425,52 @@ final class StockSageResearchHistory: ObservableObject {
         guard let target = targetClose(for: run) else { return nil }
         return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: target))
     }
+    /// New runs become checkable once the FIRST monitoring session has entirely ended, because a
+    /// terminal target or stop can occur long before the scheduled horizon. Legacy runs keep
+    /// waiting for the whole target date, so their captured schedule is unchanged.
+    nonisolated static func checkAvailableAt(for run: Run) -> Date? {
+        guard run.outcomePolicy == .dailyBarFirstHit else { return reviewAvailableAt(for: run) }
+        guard let benchmark = benchmarkDay(after: run.completedAt) else { return nil }
+        return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: benchmark))
+    }
+    /// The latest whole New York trading date that has entirely ended, capped at the scheduled
+    /// horizon date. nil until the first monitoring session has settled.
+    nonisolated static func settledReviewDate(for run: Run, now: Date) -> Date? {
+        guard validDate(now), let target = targetClose(for: run),
+              let benchmark = benchmarkDay(after: run.completedAt) else { return nil }
+        let calendar = calendar
+        var day = calendar.startOfDay(for: now)
+        var latest: Date?
+        for _ in 0..<10 {
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: day),
+                  let schedule = StockSageMarketHours.nasdaqDay(at: previous) else { return nil }
+            day = previous
+            if schedule.trading { latest = previous; break }
+        }
+        guard let latest else { return nil }
+        let settled = min(latest, calendar.startOfDay(for: target))
+        return settled >= benchmark ? settled : nil
+    }
     nonisolated static func availability(for run: Run, now: Date) -> Evaluation {
         guard valid(run), validDate(now), now >= run.completedAt,
               let target = targetClose(for: run),
-              let availableAt = reviewAvailableAt(for: run) else {
+              let availableAt = checkAvailableAt(for: run) else {
             return Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: nil, calendarBasis: calendarBasis(for: run),
                 note: "The future Nasdaq session calendar or evaluation clock could not be verified.")
         }
+        let firstHit = run.outcomePolicy == .dailyBarFirstHit
         return Evaluation(state: now < availableAt ? .notDue : .due, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
-            note: now < availableAt ? "Waiting until the target New York date ends, so its daily aggregate is complete. " + measurementDescription(for: run)
-                : "Due for a dated price-direction check. No outcome has been observed yet.")
+            note: now < availableAt ? (firstHit
+                    ? "Waiting until the first monitoring New York date ends, so its daily aggregate is complete. " + measurementDescription(for: run)
+                    : "Waiting until the target New York date ends, so its daily aggregate is complete. " + measurementDescription(for: run))
+                : (firstHit ? "Active. Settled daily bars are checked for the first target or stop event; no outcome has been observed yet."
+                    : "Due for a dated price-direction check. No outcome has been observed yet."))
     }
     nonisolated static func evaluate(_ prediction: Prediction, in run: Run,
                                      observation: Observation?, now: Date) -> Evaluation {
+        if run.outcomePolicy == .dailyBarFirstHit {
+            return evaluateFirstHit(prediction, in: run, observation: observation, now: now)
+        }
         let available = availability(for: run, now: now)
         guard available.state == .due, let target = available.targetCloseAt else { return available }
         func unavailable(_ note: String) -> Evaluation {
@@ -468,6 +534,256 @@ final class StockSageResearchHistory: ObservableObject {
             buyDirectionSupported: isBuy && direction != .flat ? direction == .rose : nil, dailyCloses: path,
             note: "Price direction from the next trading day's daily open to the target day's daily close, on the same split-adjusted basis. Daily aggregates may include qualifying extended-hours trades; this is not a guaranteed execution price. Excludes dividends, fees and execution costs; not realized trading profit or a win probability. No market comparison is made."
                 + (path == nil ? " Complete daily-close path unavailable; intervening sessions are missing or unverified." : ""))
+    }
+
+
+    // MARK: - Daily-bar first-hit evaluation (outcome policy 2)
+
+    private nonisolated struct TerminalEvent {
+        let kind: Evaluation.TerminalKind
+        let bar: DailyBar
+        let price: Double
+        let sameBar: Bool
+        let gapped: Bool
+    }
+
+    /// Pure and chronological. The FIRST session that reaches a level ends the scenario; a bar that
+    /// reaches both cannot be ordered from a daily aggregate, so the conservative stop is recorded.
+    /// A gap through a level is observed at the session open, never at the unreachable captured level.
+    private nonisolated static func terminalEvent(bars: [DailyBar], stop: Double?, target: Double?,
+                                                  horizonEnded: Bool) -> TerminalEvent? {
+        if let stop, let target {
+            for bar in bars {
+                let stopHit = bar.low <= stop
+                let targetHit = bar.high >= target
+                if stopHit {
+                    let gapped = bar.open <= stop
+                    return TerminalEvent(kind: .stopHit, bar: bar, price: gapped ? bar.open : stop,
+                                         sameBar: targetHit, gapped: gapped)
+                }
+                if targetHit {
+                    let gapped = bar.open >= target
+                    return TerminalEvent(kind: .targetHit, bar: bar, price: gapped ? bar.open : target,
+                                         sameBar: false, gapped: gapped)
+                }
+            }
+        }
+        guard horizonEnded, let last = bars.last else { return nil }
+        return TerminalEvent(kind: .horizonClose, bar: last, price: last.close, sameBar: false, gapped: false)
+    }
+
+    /// Whole verified trading dates from `start` through `last`, inclusive, from the published
+    /// Nasdaq schedule. Never a weekday guess and never more than one fortnight.
+    private nonisolated static func tradingSessionDates(from start: Date, through through: Date) -> [Date]? {
+        let calendar = calendar
+        guard validDate(start), validDate(through) else { return nil }
+        let first = calendar.startOfDay(for: start)
+        let last = calendar.startOfDay(for: through)
+        guard start == first, first <= last else { return nil }
+        var dates: [Date] = []
+        for offset in 0..<45 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: first), day <= last,
+                  let schedule = StockSageMarketHours.nasdaqDay(at: day) else { return nil }
+            if schedule.trading {
+                guard dates.count < 14 else { return nil }
+                dates.append(day)
+            }
+            if day == last { return dates.first == first && dates.last == last ? dates : nil }
+        }
+        return nil
+    }
+
+    /// Structural verification of ONE adjusted series before any level is compared to it.
+    private nonisolated static func verifiedBars(_ observation: Observation, symbol: String) -> [Date: DailyBar]? {
+        let history = observation.history
+        let count = history.dates.count
+        guard history.symbol == symbol, history.priceSource == .massiveDaily, count > 0,
+              [history.opens.count, history.highs.count, history.lows.count, history.closes.count, history.volumes.count]
+                .allSatisfy({ $0 == count }) else { return nil }
+        let calendar = calendar
+        var bars: [Date: DailyBar] = [:]
+        var priorDay: Date?
+        for index in 0..<count {
+            let stamp = history.dates[index]
+            guard validDate(stamp), stamp <= observation.fetchedAt else { return nil }
+            let day = calendar.startOfDay(for: stamp)
+            guard priorDay.map({ day > $0 }) ?? true,
+                  [history.opens[index], history.highs[index], history.lows[index], history.closes[index]]
+                    .allSatisfy({ $0.isFinite && $0 > 0 }),
+                  history.highs[index] >= max(history.opens[index], history.closes[index]),
+                  history.lows[index] <= min(history.opens[index], history.closes[index]),
+                  history.volumes[index].isFinite, history.volumes[index] >= 0 else { return nil }
+            bars[day] = DailyBar(date: day, open: history.opens[index], high: history.highs[index],
+                                 low: history.lows[index], close: history.closes[index])
+            priorDay = day
+        }
+        return bars
+    }
+
+    private nonisolated static let firstHitDisclosure = "Daily bars cannot establish intraday order or an actual fill. This is a measured research scenario, not an order, an execution price or realized profit."
+
+    private nonisolated static func evaluateFirstHit(_ prediction: Prediction, in run: Run,
+                                                     observation: Observation?, now: Date) -> Evaluation {
+        let available = availability(for: run, now: now)
+        guard available.state == .due, let target = available.targetCloseAt else { return available }
+        let calendar = calendar
+        func receipt(_ state: Evaluation.State, _ note: String) -> Evaluation {
+            Evaluation(state: state, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
+                provider: observation?.provider,
+                fetchedAt: observation.flatMap { validDate($0.fetchedAt) && $0.fetchedAt <= now ? $0.fetchedAt : nil },
+                note: note)
+        }
+        guard run.predictions.contains(prediction), let observation, observation.splitAdjusted,
+              !observation.provider.isEmpty, validDate(observation.fetchedAt), observation.fetchedAt <= now,
+              let benchmark = benchmarkDay(after: run.completedAt),
+              let settled = settledReviewDate(for: run, now: now),
+              let settledAt = calendar.date(byAdding: .day, value: 1, to: settled),
+              observation.fetchedAt >= settledAt,
+              let expected = tradingSessionDates(from: benchmark, through: settled) else {
+            return receipt(.dataUnavailable, "A verified split-adjusted daily window of settled Nasdaq sessions is unavailable.")
+        }
+        guard let bars = verifiedBars(observation, symbol: prediction.symbol) else {
+            return receipt(.dataUnavailable, "Daily bars have a mismatched symbol or source, or are duplicated, unordered or numerically invalid.")
+        }
+        // The captured levels stay immutable. Only this receipt carries the comparison levels,
+        // rebased by the freshly adjusted close on the saved reference date. Mixing a pre-split
+        // saved price with a post-split bar would silently change the scenario, so it fails closed.
+        var ratio: Double?
+        var levels: (entry: Double, stop: Double, target: Double)?
+        if let captured = prediction.levels {
+            guard let referenceDate = prediction.referenceDate, let referencePrice = prediction.referencePrice,
+                  referencePrice.isFinite, referencePrice > 0,
+                  let referenceBar = bars[calendar.startOfDay(for: referenceDate)] else {
+                return receipt(.dataUnavailable, "The saved reference session could not be re-verified on the fresh adjusted basis, so the captured levels cannot be compared.")
+            }
+            let value = referenceBar.close / referencePrice
+            let adjusted = (entry: captured.entry * value, stop: captured.stop * value, target: captured.target * value)
+            guard value.isFinite, value > 0,
+                  [adjusted.entry, adjusted.stop, adjusted.target].allSatisfy({ $0.isFinite && $0 > 0 }),
+                  adjusted.stop < adjusted.entry, adjusted.entry < adjusted.target else {
+                return receipt(.dataUnavailable, "The corporate-action adjustment ratio or the adjusted stop/entry/target ordering could not be verified.")
+            }
+            ratio = value
+            levels = adjusted
+        }
+        // Longest contiguous verified prefix: a hole cannot be bridged by a neighbouring session,
+        // but a terminal event strictly before the hole is still the verified first event.
+        var path: [DailyBar] = []
+        for day in expected {
+            guard let bar = bars[day] else { break }
+            path.append(bar)
+        }
+        let atHorizon = settled == calendar.startOfDay(for: target)
+        let horizonEnded = atHorizon && path.count == expected.count
+        guard let event = terminalEvent(bars: path, stop: levels?.stop, target: levels?.target,
+                                        horizonEnded: horizonEnded) else {
+            guard atHorizon else {
+                return receipt(.notDue, "Active. No verified target or stop event yet; the scenario continues until its next settled session or the scheduled horizon close. "
+                    + measurementDescription(for: run))
+            }
+            return receipt(.dataUnavailable, "A required session between the first monitoring date and the horizon close is missing or unverified; no adjacent bar is substituted.")
+        }
+        guard let terminalIndex = path.firstIndex(where: { $0.date == event.bar.date }) else {
+            return receipt(.dataUnavailable, "The terminal session could not be located in the verified path.")
+        }
+        let examined = Array(path[0...terminalIndex])
+        let baseline = examined[0].open
+        let change = event.price / baseline - 1
+        guard change.isFinite else { return receipt(.dataUnavailable, "The measured outcome return is not finite.") }
+        let direction: Evaluation.Direction = event.price == baseline ? .flat : (event.price > baseline ? .rose : .fell)
+        let isBuy = prediction.action == "Buy" || prediction.action == "Strong Buy"
+        let headline: String
+        switch event.kind {
+        case .targetHit: headline = "Reached the adjusted target."
+        case .stopHit: headline = "Reached the adjusted stop."
+        case .horizonClose: headline = "Neither level was reached; measured at the scheduled \(run.horizon.rawValue)th session close."
+        }
+        var result = Evaluation(state: .evaluated, checkedAt: now, targetCloseAt: target,
+            calendarBasis: calendarBasis(for: run), provider: observation.provider, fetchedAt: observation.fetchedAt,
+            comparisonReferencePrice: baseline, comparisonReferenceDate: benchmark,
+            targetPrice: event.price, priceReturn: change, direction: direction,
+            buyDirectionSupported: isBuy && direction != .flat ? direction == .rose : nil,
+            note: headline + " Measured from the next trading date's daily open on one split-adjusted basis. " + firstHitDisclosure
+                + (event.sameBar ? " The daily bar reached both levels; intraday order is unavailable, so the conservative stop-first rule was applied." : "")
+                + (event.gapped ? " The session gapped through the level, so its daily open is the observed outcome price." : "")
+                + (prediction.levels == nil ? " No scenario levels were captured, so only the horizon close could complete this prediction." : "")
+                + " Excludes dividends, fees and execution costs; no market comparison is made.")
+        result.terminalKind = event.kind
+        result.terminalAt = event.bar.date
+        result.outcomePrice = event.price
+        result.adjustmentRatio = ratio
+        result.adjustedEntry = levels?.entry
+        result.adjustedStop = levels?.stop
+        result.adjustedTarget = levels?.target
+        result.dailyBars = examined
+        result.sameBarStopFirst = event.sameBar ? true : nil
+        return result
+    }
+
+    /// A daily-policy receipt must be reproducible from its OWN stored bars. Nothing here trusts
+    /// the writer: the terminal kind, price, same-bar rule and adjusted levels are recomputed.
+    private nonisolated static func validFirstHit(_ evaluation: Evaluation, run: Run, symbol: String) -> Bool {
+        guard run.outcomePolicy == .dailyBarFirstHit, validDate(evaluation.checkedAt),
+              evaluation.checkedAt >= run.completedAt, !evaluation.calendarBasis.isEmpty,
+              evaluation.dailyCloses == nil else { return false }
+        if let target = evaluation.targetCloseAt {
+            guard validDate(target), target > run.completedAt else { return false }
+        } else if evaluation.state != .dataUnavailable { return false }
+        if let fetched = evaluation.fetchedAt {
+            guard validDate(fetched), fetched <= evaluation.checkedAt else { return false }
+        }
+        guard evaluation.state == .evaluated else {
+            if evaluation.state == .notDue || evaluation.state == .due {
+                guard let availableAt = checkAvailableAt(for: run),
+                      evaluation.state == .notDue ? evaluation.checkedAt < availableAt
+                        : evaluation.checkedAt >= availableAt else { return false }
+            }
+            return evaluation.comparisonReferenceDate == nil && evaluation.comparisonReferencePrice == nil
+                && evaluation.targetPrice == nil && evaluation.priceReturn == nil && evaluation.direction == nil
+                && evaluation.buyDirectionSupported == nil && evaluation.terminalKind == nil
+                && evaluation.terminalAt == nil && evaluation.outcomePrice == nil && evaluation.dailyBars == nil
+                && evaluation.adjustmentRatio == nil && evaluation.adjustedEntry == nil
+                && evaluation.adjustedStop == nil && evaluation.adjustedTarget == nil
+                && evaluation.sameBarStopFirst == nil
+        }
+        guard let target = evaluation.targetCloseAt, let kind = evaluation.terminalKind,
+              let terminalAt = evaluation.terminalAt, let price = evaluation.outcomePrice,
+              let bars = evaluation.dailyBars, let first = bars.first,
+              let fetched = evaluation.fetchedAt, evaluation.provider?.isEmpty == false,
+              let benchmark = benchmarkDay(after: run.completedAt),
+              let expected = tradingSessionDates(from: benchmark, through: terminalAt),
+              bars.map(\.date) == expected, bars.last?.date == terminalAt,
+              terminalAt <= calendar.startOfDay(for: target),
+              let settledAt = calendar.date(byAdding: .day, value: 1, to: terminalAt),
+              fetched >= settledAt, evaluation.checkedAt >= settledAt,
+              evaluation.comparisonReferenceDate == benchmark,
+              evaluation.comparisonReferencePrice == first.open,
+              evaluation.targetPrice == price, price.isFinite, price > 0 else { return false }
+        guard bars.allSatisfy({ bar in
+            [bar.open, bar.high, bar.low, bar.close].allSatisfy { $0.isFinite && $0 > 0 }
+                && bar.high >= max(bar.open, bar.close) && bar.low <= min(bar.open, bar.close)
+        }) else { return false }
+        guard let change = evaluation.priceReturn, change.isFinite, change == price / first.open - 1 else { return false }
+        let direction: Evaluation.Direction = price == first.open ? .flat : (price > first.open ? .rose : .fell)
+        guard evaluation.direction == direction,
+              evaluation.buyDirectionSupported == (direction == .flat ? nil : direction == .rose) else { return false }
+        var stopLevel: Double?, targetLevel: Double?
+        if let captured = run.predictions.first(where: { $0.symbol == symbol })?.levels {
+            guard let ratio = evaluation.adjustmentRatio, ratio.isFinite, ratio > 0,
+                  let entry = evaluation.adjustedEntry, let stop = evaluation.adjustedStop,
+                  let level = evaluation.adjustedTarget,
+                  entry == captured.entry * ratio, stop == captured.stop * ratio,
+                  level == captured.target * ratio, stop < entry, entry < level else { return false }
+            stopLevel = stop; targetLevel = level
+        } else {
+            guard evaluation.adjustmentRatio == nil, evaluation.adjustedEntry == nil,
+                  evaluation.adjustedStop == nil, evaluation.adjustedTarget == nil else { return false }
+        }
+        guard let recomputed = terminalEvent(bars: bars, stop: stopLevel, target: targetLevel,
+                                             horizonEnded: terminalAt == calendar.startOfDay(for: target)),
+              recomputed.kind == kind, recomputed.bar.date == terminalAt, recomputed.price == price,
+              evaluation.sameBarStopFirst == (recomputed.sameBar ? true : nil) else { return false }
+        return true
     }
 
     nonisolated static func measurementDescription(for run: Run) -> String {
@@ -546,10 +862,16 @@ final class StockSageResearchHistory: ObservableObject {
         }
         return run.evaluations.allSatisfy { symbol, evaluation in
             guard run.predictions.contains(where: { $0.symbol == symbol }) else { return false }
-            return valid(evaluation, run: run)
+            return valid(evaluation, run: run, symbol: symbol)
         }
     }
-    private nonisolated static func valid(_ evaluation: Evaluation, run: Run) -> Bool {
+    private nonisolated static func valid(_ evaluation: Evaluation, run: Run, symbol: String) -> Bool {
+        guard run.outcomePolicy == nil else { return validFirstHit(evaluation, run: run, symbol: symbol) }
+        // An endpoint-policy receipt never carries a terminal field; new keys stay absent.
+        guard evaluation.terminalKind == nil, evaluation.terminalAt == nil, evaluation.outcomePrice == nil,
+              evaluation.adjustmentRatio == nil, evaluation.adjustedEntry == nil, evaluation.adjustedStop == nil,
+              evaluation.adjustedTarget == nil, evaluation.dailyBars == nil,
+              evaluation.sameBarStopFirst == nil else { return false }
         // Read old receipts against their captured schedule, not a future calendar revision.
         guard validDate(evaluation.checkedAt), evaluation.checkedAt >= run.completedAt,
               !evaluation.calendarBasis.isEmpty else { return false }
