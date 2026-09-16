@@ -130,6 +130,39 @@ struct StockSageBenzingaTests {
         #expect(try JSONDecoder().decode(B.Snapshot.self, from: JSONEncoder().encode(snapshot)) == snapshot)
     }
 
+    // The owner's purchased products (billing summary supplied 2026-09-16). This list is a
+    // commercial fact, deliberately not derived from `Product.allCases`: deleting a case breaks
+    // compilation here, and dropping one from the packet fails at runtime. Earlier advice to
+    // suppress four of these as "unentitled" was measured before they were bought and is void.
+    private var purchasedProducts: [B.Product] {
+        [.earnings, .ratings, .guidance, .news, .bullsBearsSay, .analystInsights]
+    }
+
+    @Test func everyPurchasedProductReachesTheModelPacket() throws {
+        let pages = try purchasedProducts.map { try page($0) }
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: pages)
+        let projection = try #require(B.projection(snapshot, maximumUTF8Bytes: 40_000))
+        for product in purchasedProducts {
+            #expect(projection.statusLines.contains { $0.hasPrefix(product.label + ": ok") },
+                    "\(product.label) is paid for; the packet must report it as checked")
+            #expect(projection.records.contains { $0.product == product },
+                    "\(product.label) is paid for; its records must reach the model, not be trimmed away")
+        }
+        #expect(projection.omittedRecordCount == 0)
+    }
+
+    @Test func aStarvedBudgetStillNamesEveryPurchasedProductInsteadOfHidingIt() throws {
+        let pages = try purchasedProducts.map { try page($0) }
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: pages)
+        let starved = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000, maximumRecords: 0))
+        #expect(starved.records.isEmpty)
+        for product in purchasedProducts {
+            #expect(starved.statusLines.contains { $0.hasPrefix(product.label + ": ok") },
+                    "\(product.label) answered; trimming its records must not erase the fact that it was checked")
+        }
+        #expect(starved.omittedRecordCount == purchasedProducts.count)
+    }
+
     @Test func emptyMalformedPartialAndBoundsAreDifferent() throws {
         let q = query(.news)
         #expect(B.parse(try body([]), query: q, checkedAt: now, credentialGeneration: nil).status == .answered)
