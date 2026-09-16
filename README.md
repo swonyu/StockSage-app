@@ -28,15 +28,24 @@ the active implementation plan, incoming reviews and historical notes.
   separately and sequentially for each horizon. The rank is not a validated return forecast. No positions are opened.
 - **Saved research:** completed runs preserve original ordered picks, opinions,
   evidence, model and reference prices in `Application Support/StockSage/ResearchHistory/runs.json`.
-  Saved research → Check due results reviews seven or fourteen complete Nasdaq sessions,
-  starting on the next trading date after completion, once the target New York date has ended.
-  Existing saved runs keep their original scheduling policy and observed outcomes.
-  The benchmark uses the next trading date’s daily open and the target date’s daily close
-  from one verified split-adjusted history. Complete daily-close paths add a seventh-session
-  checkpoint and best/worst closes; missing path data stays explicit. Results measure direction,
-  not market outperformance. Flat is distinct from rose/fell.
-  An unfinished horizon is never saved as completed; a completed sibling horizon is retained. Review is manual while
-  the app is open, not a background execution service.
+  New runs carry an explicit daily-bar first-hit outcome policy: monitoring starts on the next
+  trading date after completion and the prediction completes at the **first** settled Nasdaq
+  session that reaches the captured stop or target, otherwise at the exact seventh or fourteenth
+  session close. Outcomes read `Target hit`, `Stop hit`, `Horizon close`, `Active` or
+  `Data unavailable`, each with its terminal session and measured return. The three terminal
+  kinds are reported as separate counts, never as a win rate.
+  Only New York dates that have wholly ended are examined, so each split-adjusted daily
+  aggregate is settled. A session reaching both levels is recorded as a **stop** — daily bars
+  cannot establish intraday order — and a session that gaps through a level is observed at its
+  daily open. Captured levels are rebased onto the fresh adjusted basis using the saved
+  reference date; an unverifiable ratio, a missing interior session or an incomplete bar fails
+  closed rather than substituting an adjacent session. An evaluated receipt is immutable.
+  Existing saved runs keep their original endpoint-only scheduling policy, receipts and bytes.
+  Saved research → **Check active results** runs the check on demand, and the same bounded check
+  runs once when the app becomes active. Nothing is fetched while the app is closed, and no
+  timer, background task, quote subscription or model call is involved. Results measure a
+  research scenario, not orders, fills, realized profit or market outperformance.
+  An unfinished horizon is never saved as completed; a completed sibling horizon is retained.
 - **Legacy paper:** retained account/history/export remain readable. No new same-day
   runs start from the app or resume on launch. Open legacy positions are not monitored
   after relaunch; existing records are not reinterpreted as 7/14-day research.

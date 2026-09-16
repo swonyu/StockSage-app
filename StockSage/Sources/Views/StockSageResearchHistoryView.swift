@@ -32,7 +32,7 @@ struct StockSageResearchHomeSummary: View {
                 Text("Ready for review").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                 #endif
                 if summary.readyPredictions > 0 {
-                    Text("\(summary.readyPredictions) saved \(summary.readyPredictions == 1 ? "prediction is" : "predictions are") active and ready to check.")
+                    Text("\(summary.readyPredictions) saved \(summary.readyPredictions == 1 ? "prediction is" : "predictions are") ready to check.")
                         .font(.headline)
                     ForEach(summary.ready.prefix(3)) { run in
                         Button { selectedRun = run } label: {

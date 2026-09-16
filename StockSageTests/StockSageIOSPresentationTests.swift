@@ -124,15 +124,17 @@ struct StockSageIOSPresentationTests {
         func stamp(_ value: String) throws -> Date { try Date(value, strategy: .iso8601) }
         let reference = try stamp("2026-09-11T04:00:00Z")
 
-        func dailyRun(_ symbol: String, completed: String) throws -> H.Run {
-            .init(id: UUID(), startedAt: try stamp(completed).addingTimeInterval(-60),
+        // The captured reference and levels always precede completion, as a real snapshot does.
+        func dailyRun(_ symbol: String, completed: String, capturedAt: Date? = nil) throws -> H.Run {
+            let captured = capturedAt ?? reference
+            return .init(id: UUID(), startedAt: try stamp(completed).addingTimeInterval(-60),
                 completedAt: try stamp(completed), horizon: .week,
                 predictions: [.init(symbol: symbol, name: "\(symbol) synthetic company", action: "Strong Buy",
                     reason: "Original \(symbol) research opinion, captured before any outcome.",
                     risk: "Synthetic risk: demand and prices can change.", evidence: ["F1"],
                     facts: ["Original synthetic evidence captured before review."], model: "fixture-model",
-                    note: "Synthetic unvalidated research only.", referencePrice: 100, referenceDate: reference,
-                    levels: .init(entry: 100, stop: 90, target: 120, at: reference,
+                    note: "Synthetic unvalidated research only.", referencePrice: 100, referenceDate: captured,
+                    levels: .init(entry: 100, stop: 90, target: 120, at: captured,
                         basis: "Synthetic original daily-price scenario, not a forecast."))],
                 coverage: .init(requested: 2, checked: 2, incomplete: 1, buyCount: 1, selection: nil),
                 measurementPolicy: .nextTradingDateSessions, outcomePolicy: .dailyBarFirstHit)
@@ -186,7 +188,8 @@ struct StockSageIOSPresentationTests {
         try #require(quietReceipt.terminalKind == .horizonClose)
 
         // Completed long enough ago that it is always past its first monitoring session.
-        let active = try dailyRun("ACTV", completed: "2026-01-02T21:00:00Z")
+        let active = try dailyRun("ACTV", completed: "2026-01-02T21:00:00Z",
+            capturedAt: try stamp("2026-01-02T14:30:00Z"))
 
         for (run, receipt) in [(stopped, stopReceipt), (hit, hitReceipt), (quiet, quietReceipt)] {
             try #require(history.record(run))
@@ -200,11 +203,6 @@ struct StockSageIOSPresentationTests {
             let check = try await reveal(in: window, identifier: "research.history.check")
             #expect(check.accessibilityLabel?.contains("Check active results") == true)
             #expect(check.accessibilityTraits.contains(.notEnabled), "Native fixture outcome checks stay disabled")
-            _ = try await reveal(in: window, labelContaining: "1 target hit")
-            _ = try await reveal(in: window, labelContaining: "1 stop hit")
-            _ = try await reveal(in: window, labelContaining: "1 horizon close")
-            try await saveViewport(window, name: "research-terminal-summary", accessibility: accessibility)
-
             let link = try await reveal(in: window, identifier: "research.history.run.\(stopped.id)")
             try #require(link.accessibilityActivate())
             _ = try await reveal(in: window, labelContaining: "Stop hit")
@@ -231,6 +229,19 @@ struct StockSageIOSPresentationTests {
             _ = try await reveal(in: window, labelContaining: "Active")
             #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("Target hit") == true })
             try await saveViewport(window, name: "research-terminal-active-detail", accessibility: accessibility)
+        }
+        // The aggregate counts live on Home, reported as three separate kinds and never as a rate.
+        try await captureWorkspace(section: .briefing, name: "home-terminal-outcome-counts",
+            accessibility: accessibility, researchHistory: history) { _, window in
+            let counts = try await reveal(in: window, identifier: "home.research.outcomes")
+            let label = try #require(counts.accessibilityLabel)
+            #expect(label.contains("1 target hit") && label.contains("1 stop hit")
+                    && label.contains("1 horizon close") && label.contains("3 outcomes recorded"), "\(label)")
+            #expect(!label.lowercased().contains("win rate"))
+            _ = try await reveal(in: window, labelContaining: "Separate counts, not a win rate.")
+            #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("Earlier endpoint-only checks") == true },
+                    "No legacy endpoint receipts exist in this fixture, so that line stays absent")
+            try await saveViewport(window, name: "home-terminal-outcome-counts", accessibility: accessibility)
         }
         #expect(history.runs == originalRuns && history.lastError == nil && !history.isChecking,
                 "Rendering terminal outcomes must not rewrite original research or recorded receipts")
