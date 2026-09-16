@@ -420,6 +420,7 @@ struct StockSageResearchHistoryDetail: View {
                                 outcome(StockSageResearchHistory.availability(for: run, now: Date()), run: run)
                             }
                         }.padding(.vertical, 6)
+                        insiderActivity(prediction)
                         DisclosureGroup("Original evidence and model") {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("Model: \(prediction.model.isEmpty ? "Not recorded" : prediction.model)")
@@ -548,4 +549,27 @@ struct StockSageResearchHistoryDetail: View {
     }
 
     private func price(_ value: Double) -> String { value.formatted(.currency(code: "USD")) }
+
+    /// Deliberately NOT inside the collapsed "Original evidence and model" group: insider evidence
+    /// is core content here, so it stays visible without a tap. The states it renders are distinct
+    /// on purpose — a not-recorded archive and an unchecked source are gaps, not findings, and an
+    /// answered empty query speaks only about the window it queried.
+    @ViewBuilder private func insiderActivity(_ prediction: StockSageResearchHistory.Prediction) -> some View {
+        let state = StockSageInsiderActivityPresentation.state(for: prediction)
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Insider activity", systemImage: "person.text.rectangle")
+                .font(.subheadline.weight(.semibold))
+            Text(state.headline)
+                .font(.callout)
+                .foregroundStyle(state.hasRecordedActivity ? .primary : .secondary)
+            ForEach(Array(state.transactions.enumerated()), id: \.offset) { _, transaction in
+                Text(StockSageInsiderActivityPresentation.row(for: transaction))
+                    .font(.callout)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(state.accessibilityLabel)
+    }
 }

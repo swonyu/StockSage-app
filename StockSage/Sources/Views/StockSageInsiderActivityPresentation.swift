@@ -65,6 +65,59 @@ nonisolated enum StockSageInsiderActivityPresentation: Equatable {
         return false
     }
 
+    /// Spoken form. It keeps every distinction the visible text keeps, and counts each direction
+    /// separately so a sale can never be dropped from the summary a screen reader hears.
+    var accessibilityLabel: String {
+        switch self {
+        case .notRecorded, .notChecked, .noQualifyingRows:
+            return "Insider activity. " + headline
+        case .recorded(let rows, let untyped, let omitted, _):
+            let purchases = rows.filter { $0.direction == .purchase }.count
+            let sales = rows.filter { $0.direction == .sale }.count
+            let counted = [purchases > 0 ? "\(purchases) purchase\(purchases == 1 ? "" : "s")" : nil,
+                           sales > 0 ? "\(sales) sale\(sales == 1 ? "" : "s")" : nil,
+                           untyped > 0 ? "\(untyped) filing\(untyped == 1 ? "" : "s") without typed detail" : nil,
+                           omitted > 0 ? "\(omitted) omitted from the selection" : nil]
+            return "Insider activity. " + counted.compactMap { $0 }.joined(separator: ", ") + "."
+        }
+    }
+
+    /// One filing, stated neutrally. Direction, both clocks, who, how much, and the disclosures the
+    /// filing itself carries — and nothing about why. A Form 4 never states motive, so neither does
+    /// this string. Unreported fields say so rather than being dropped or defaulted to zero.
+    static func row(for transaction: StockSageMassiveEvents.InsiderTransaction) -> String {
+        let direction = transaction.direction == .purchase ? "Purchase" : "Sale"
+        let shares = shareFormatter.string(from: NSNumber(value: transaction.shares))
+            ?? String(transaction.shares)
+        let price = transaction.pricePerShare.flatMap {
+            priceFormatter.string(from: NSNumber(value: $0)).map { "at " + $0 + " per share" }
+        } ?? "price not reported"
+        let parts = [
+            "\(direction) · \(shares) shares \(price)",
+            transaction.ownerName + " · " + (transaction.role ?? "role not reported"),
+            "Traded \(day(transaction.transactionDate)), filed \(day(transaction.filingDate))",
+            transaction.planReported == true ? "Reported under a Rule 10b5-1 plan" : nil,
+            transaction.amendment ? "Amended filing" : nil,
+        ]
+        return parts.compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private static let shareFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+    private static let priceFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        return formatter
+    }()
+    private static func day(_ date: Date) -> String {
+        date.formatted(.iso8601.year().month().day().dateSeparator(.dash))
+    }
+
     var headline: String {
         switch self {
         case .notRecorded:

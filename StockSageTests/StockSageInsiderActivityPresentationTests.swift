@@ -98,6 +98,57 @@ struct StockSageInsiderActivityPresentationTests {
         #expect(state.hasRecordedActivity)
     }
 
+    // A screen reader must hear the same distinctions a sighted reader sees — above all, that an
+    // unchecked source is a data gap rather than a finding.
+    @Test func theAccessibilityLabelKeepsTheSameDistinctionsAsTheVisibleText() {
+        #expect(P.state(for: prediction()).accessibilityLabel
+            .contains("Insider activity was not recorded"))
+        let unchecked = P.state(for: prediction(evidence: observation(outcome: .unavailable))).accessibilityLabel
+        #expect(unchecked.lowercased().contains("gap") && !unchecked.lowercased().contains("no insider"))
+        let empty = P.state(for: prediction(evidence: observation(events: []), coverageState: "answered"))
+        #expect(empty.accessibilityLabel.lowercased().contains("queried window"))
+        let rows = [event(transaction(.purchase)), event(transaction(.sale))]
+        let recorded = P.state(for: prediction(evidence: observation(events: rows), coverageState: "answered"))
+        // Both directions must be audible; a sale must never be dropped from the spoken summary.
+        #expect(recorded.accessibilityLabel.contains("1 purchase") && recorded.accessibilityLabel.contains("1 sale"))
+    }
+
+    // A row states direction, both dates, who and what — and nothing about why.
+    @Test func aTransactionRowStatesDirectionBothDatesAndRoleWithoutInterpretingThem() {
+        let row = P.row(for: transaction(.sale, owner: "J. Officer", role: "CFO", shares: 2_500, price: 12.5))
+        #expect(row.contains("Sale") && row.contains("J. Officer") && row.contains("CFO"))
+        #expect(row.contains("2,500"))
+        // Both clocks are required: a trade date is not a filing date.
+        #expect(row.contains("Traded") && row.contains("filed"))
+        for motive in ["bearish", "bullish", "momentum", "confidence", "signal", "warning", "dumping"] {
+            #expect(!row.lowercased().contains(motive), "A row must not interpret the trade: \(motive)")
+        }
+    }
+
+    // An unreported role is a gap, not an absence of one.
+    @Test func aMissingRoleIsReportedAsNotReportedRatherThanOmitted() {
+        let row = P.row(for: transaction(.purchase, role: nil))
+        #expect(row.contains("Purchase") && row.lowercased().contains("role not reported"))
+    }
+
+    // Amendments and plan disclosures are facts on the filing and must survive to the surface.
+    @Test func amendmentAndPlanDisclosureAreBothCarriedOntoTheRow() {
+        let amended = P.row(for: transaction(.sale, plan: true, amendment: true))
+        #expect(amended.lowercased().contains("amend"))
+        #expect(amended.contains("Rule 10b5-1"))
+        let plain = P.row(for: transaction(.sale, plan: false))
+        #expect(!plain.contains("Rule 10b5-1"), "A plan flag of false is not a plan disclosure")
+        let unreported = P.row(for: transaction(.sale, plan: nil))
+        #expect(!unreported.contains("Rule 10b5-1"))
+    }
+
+    // A missing price must not silently become a notional of zero.
+    @Test func anUnreportedPriceIsNotRenderedAsZero() {
+        let row = P.row(for: transaction(.purchase, price: nil))
+        #expect(!row.contains("$0") && !row.contains("0.00"))
+        #expect(row.lowercased().contains("price not reported"))
+    }
+
     // Plan disclosure is displayed as supplied. Drawing any conclusion from it would be inferring
     // motive, which Form 4 never states.
     @Test func aPlanDisclosureIsCarriedWithoutAnyMotiveLanguage() {
