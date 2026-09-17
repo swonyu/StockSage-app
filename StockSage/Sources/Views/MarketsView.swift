@@ -33,6 +33,10 @@ struct MarketsView: View {
     @AppStorage("marketsCatalystsModelSettingsExpanded") private var catalystModelSettingsExpanded = false
     @AppStorage(AppSettings.Keys.offlineOnly) private var feedOfflineOnly = false
     @AppStorage(AppSettings.Keys.webAccess) private var feedWebAccess = true
+    /// Bumped by AppSettings on every webAccess/offlineOnly change. The live stream's publication
+    /// loop stops itself when policy turns external access off, so the restart key must observe
+    /// policy or that stop is terminal for the session.
+    @AppStorage(AppSettings.Keys.policyRevision) private var policyRevision = ""
     @Environment(\.dynamicTypeSize) private var workspaceTypeSize
 
     @AppStorage("marketsWatchSort") private var sort: MarketSort = .feed
@@ -274,8 +278,12 @@ struct MarketsView: View {
     @AppStorage("stocksage.massive.credentialRevision") private var massiveCredentialRevision = ""
     /// The socket subscribes to the whole market. Membership changes update its local
     /// publication selection; only the toggle or credential revision should restart it.
+    /// Carries the policy revision, not a recomputed copy of the policy predicate: the authoritative
+    /// test is `ToolPolicy.isExternalAllowed`, which folds in more than the two stored flags, so
+    /// duplicating it here could drift. Any policy change bumps the revision, which re-runs the task
+    /// and lets the guard below make the real decision.
     private var streamSubscriptionKey: String {
-        liveStreamEnabled ? massiveCredentialRevision : ""
+        liveStreamEnabled ? massiveCredentialRevision + "|" + policyRevision : ""
     }
 
     /// Auto-refresh while the app is open (B3, 2026-09-06: split from one 285s sweep into a 30s
@@ -481,8 +489,12 @@ struct MarketsView: View {
             // button — stdlib .refreshable, replacing the unwired custom PullToRefresh file.
             .refreshable { await store.refresh() }
             #endif
-            // Refresh-landed tick (iOS haptic; silent no-op on macOS).
-            .sensoryFeedback(.success, trigger: store.lastUpdated)
+            // Refresh-landed tick (iOS haptic; silent no-op on macOS). Keyed to the FULL-REFRESH
+            // clock, NOT lastUpdated: every accepted live tick stamps lastUpdated (applyLiveTicks
+            // -> applyPolledQuotes -> StockSageStore.swift:3147), and the stream publishes at 4 Hz,
+            // so keying the haptic there buzzed the phone several times a second all session and
+            // destroyed the signal that a refresh had actually landed.
+            .sensoryFeedback(.success, trigger: store.lastFullRefreshAt)
             // Catalyst rescan. (The stale "4.75 minutes = 285s" cadence note that used to sit here
             // was deleted 2026-09-12: it described the auto-refresh loop, which now runs on
             // `refreshIntervals`, and this task is the catalyst rescan, which has no timer at all.)
@@ -518,7 +530,10 @@ struct MarketsView: View {
             // One whole-market T.*,Q.* socket. Board changes only select the UI projection.
             .task(id: streamSubscriptionKey) {
                 guard !StockSageStore.isRunningTests else { return }
-                guard liveStreamEnabled else { live.stop(); return }
+                // The stream tears itself down when policy disallows external access and returns
+                // from its publication loop, so re-entering here is the only thing that can bring
+                // it back when access is restored.
+                guard liveStreamEnabled, ToolPolicy.isExternalAllowed else { live.stop(); return }
                 live.start(symbols: store.trackedSymbolsUnion)
             }
             // B3 (owner: "every stock tracking should be live" + thermal brake parity with
