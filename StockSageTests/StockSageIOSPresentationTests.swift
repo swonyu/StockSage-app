@@ -884,6 +884,119 @@ struct StockSageIOSPresentationTests {
         }
     }
 
+    // MARK: Task 6 bullet 5 — insider purchase, insider sale, missing data, rejected output.
+    // The unit tests pin the state machine; this pins that each state actually reaches the screen
+    // and lays out on a phone at normal AND large text.
+    private func insiderTransaction(_ direction: StockSageMassiveEvents.InsiderTransaction.Direction,
+                                    owner: String, role: String?, at: Date,
+                                    plan: Bool? = nil) -> StockSageMassiveEvents.InsiderTransaction {
+        .init(direction: direction, transactionDate: at.addingTimeInterval(-86_400), filingDate: at,
+              ownerName: owner, role: role, shares: 12_500, pricePerShare: 31.75,
+              planReported: plan, amendment: false)
+    }
+
+    private func insiderObservation(_ transactions: [StockSageMassiveEvents.InsiderTransaction],
+                                    symbol: String, at: Date) -> StockSageMassiveEvents.Observation {
+        let events = transactions.enumerated().map { index, row -> StockSageMassiveEvents.Event in
+            var event = StockSageMassiveEvents.Event(id: "\(symbol)-form4-\(index)", symbol: symbol,
+                feed: .insider, date: at, headline: "Form 4 filed",
+                details: ["Synthetic fixture filing."], link: nil)
+            event.insider = row
+            return event
+        }
+        var value = StockSageMassiveEvents.Observation(symbol: symbol, feed: .insider, checkedAt: at,
+                                                      outcome: .answered, event: events.first)
+        value.insiderEvents = events
+        value.insiderOmittedRecordCount = 0
+        return value
+    }
+
+    // `.modelRejected` cannot be fixtured on a saved Prediction and its absence here is the point:
+    // QualityReport.valid requires `action == nil` for that state, while a saved prediction's action
+    // is non-optional and must be Buy or Strong Buy — because a refused answer never becomes a
+    // published prediction. That state lives on the intermediate CompletedCheck; the badge copy for
+    // it is covered by the unit tests instead.
+    //
+    // The other three carry the counts the validator actually demands: verified needs
+    // offeredCount == factCount with no findings, unverified needs at least one finding, and
+    // dataUnavailable needs offeredCount == 0 (hence no citations at all).
+    private func qualityFixture(_ state: StockSageAIAssessment.QualityReport.State) -> StockSageAIAssessment.QualityReport {
+        let unavailable = state == .dataUnavailable
+        return .init(version: StockSageAIAssessment.QualityReport.version, state: state,
+              findings: state == .unverified ? [.uncitedInsiderRecord] : [],
+              citedCount: unavailable ? 0 : 1, offeredCount: unavailable ? 0 : 1,
+              classCounts: unavailable ? [:] : ["technical": 1],
+              insiderPurchases: 0, insiderSales: 0, uncitedInsiderIDs: [],
+              acceptedAction: "Buy", rejectionReason: nil)
+    }
+
+    private func savedPrediction(_ symbol: String, insider: StockSageMassiveEvents.Observation?,
+                                 coverageState: String?, at: Date,
+                                 quality: StockSageAIAssessment.QualityReport?) -> StockSageResearchHistory.Prediction {
+        // A saved prediction is a shortlist entry: the validator accepts only Buy / Strong Buy.
+        var value = StockSageResearchHistory.Prediction(symbol: symbol, name: "\(symbol) synthetic company",
+            action: "Buy", reason: "Synthetic saved opinion.", risk: "Synthetic risk.", evidence: ["F1"],
+            facts: ["F1 synthetic evidence; no live recommendation."], model: "fixture-model",
+            note: "Synthetic unvalidated research only.", referencePrice: 100, referenceDate: at, levels: nil)
+        value.insiderEvidence = insider
+        value.insiderCoverage = coverageState.map {
+            .init(source: StockSageMassiveEvents.Feed.insider.source, state: $0, checkedAt: at)
+        }
+        value.qualityReport = quality
+        return value
+    }
+
+    @Test(arguments: [false, true])
+    func everyInsiderAndQualityStateRendersOnThePhone(accessibility: Bool) async throws {
+        let suite = "stocksage.ios.insider.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let completed = now.addingTimeInterval(-3_600)
+        // Every recorded clock must precede the run's completion: validInsiderEvidence requires
+        // checkedAt <= through, and coverage.checkedAt == evidence.checkedAt exactly.
+        let observed = completed.addingTimeInterval(-120)
+        let run = StockSageResearchHistory.Run(id: UUID(), startedAt: completed.addingTimeInterval(-60),
+            completedAt: completed, horizon: .week, predictions: [
+                savedPrediction("BUYR", insider: insiderObservation([insiderTransaction(.purchase, owner: "P. Buyer", role: "Director", at: observed)], symbol: "BUYR", at: observed),
+                                coverageState: "answered", at: observed, quality: qualityFixture(.verified)),
+                savedPrediction("SELR", insider: insiderObservation([insiderTransaction(.sale, owner: "S. Seller", role: "CFO", at: observed, plan: true)], symbol: "SELR", at: observed),
+                                coverageState: "answered", at: observed, quality: qualityFixture(.unverified)),
+                savedPrediction("GAPS", insider: nil, coverageState: nil, at: observed, quality: nil),
+                {
+                    // dataUnavailable requires offeredCount == 0, so this row cites nothing.
+                    var value = StockSageResearchHistory.Prediction(symbol: "UNAV", name: "UNAV synthetic company",
+                        action: "Buy", reason: "Synthetic saved opinion.", risk: "Synthetic risk.",
+                        evidence: [], facts: [], model: "fixture-model",
+                        note: "Synthetic unvalidated research only.", referencePrice: 100,
+                        referenceDate: observed, levels: nil)
+                    value.insiderCoverage = .init(source: StockSageMassiveEvents.Feed.insider.source,
+                                                  state: "unavailable", checkedAt: observed)
+                    value.qualityReport = qualityFixture(.dataUnavailable)
+                    return value
+                }(),
+            ],
+            // With no ranking the validator requires predictions.count == min(5, buyCount).
+            coverage: .init(requested: 4, checked: 4, incomplete: 0, buyCount: 4, selection: nil))
+        try #require(history.record(run))
+
+        // A bare List has no intrinsic height; give it the same phone viewport captureWorkspace uses.
+        try await capture(StockSageResearchHistoryDetail(history: history, runID: run.id),
+                          name: "insider-quality-states", accessibility: accessibility,
+                          viewportHeight: 812, shellPadding: 0) { _, window in
+            _ = try await reveal(in: window, labelContaining: "P. Buyer")
+            _ = try await reveal(in: window, labelContaining: "S. Seller")
+            // A plan disclosure is displayed as supplied and never interpreted.
+            _ = try await reveal(in: window, labelContaining: "Rule 10b5-1")
+            // Missing data reads as not recorded, never as an absence of insider activity.
+            _ = try await reveal(in: window, labelContaining: "Insider activity was not recorded")
+            _ = try await reveal(in: window, labelContaining: "Quality not assessed")
+            // Unavailable evidence is its own state, distinct from never-assessed, and its copy
+            // describes the EVIDENCE rather than warning about the company.
+            _ = try await reveal(in: window, labelContaining: "Evidence unavailable")
+        }
+    }
+
     private func captureWorkspace(section: MarketSection, name: String, accessibility: Bool,
                                   researchHistory: StockSageResearchHistory? = nil,
                                   inspect: (@MainActor (UIHostingController<AnyView>, UIWindow) async throws -> Void)? = nil) async throws {

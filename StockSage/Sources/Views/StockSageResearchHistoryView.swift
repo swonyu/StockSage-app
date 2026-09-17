@@ -599,8 +599,15 @@ struct StockSageResearchHistoryDetail: View {
     @ViewBuilder private func insiderActivity(_ prediction: StockSageResearchHistory.Prediction) -> some View {
         let state = StockSageInsiderActivityPresentation.state(for: prediction)
         VStack(alignment: .leading, spacing: 6) {
+            // The spoken summary rides on the HEADER, not on a combined element wrapping the whole
+            // section. An explicit label on a `.combine` element REPLACES every child label
+            // (the A11Y-01 contract note on the idea card), which hid every transaction row from
+            // VoiceOver — owner name, role, both dates and the plan disclosure all became
+            // unreadable, leaving only a count. Found by the presentation test, which could not
+            // reveal a filer's name that was plainly visible on screen.
             Label("Insider activity", systemImage: "person.text.rectangle")
                 .font(.subheadline.weight(.semibold))
+                .accessibilityLabel(state.accessibilityLabel)
             Text(state.headline)
                 .font(.callout)
                 .foregroundStyle(state.hasRecordedActivity ? .primary : .secondary)
@@ -611,7 +618,6 @@ struct StockSageResearchHistoryDetail: View {
             }
         }
         .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(state.accessibilityLabel)
+        .accessibilityElement(children: .contain)
     }
 }
