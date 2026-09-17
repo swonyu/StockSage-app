@@ -1,3 +1,24 @@
+## Message from Salman: watchlist wiped after an update — 17 September 2026
+
+Saleh, my StockSage watchlist got wiped after an update. When I tried to re-add a
+stock I had before (MU), the app said "MU is already tracked." Claude checked my Mac:
+
+- "already tracked" is the check from before `11d63c9`, which treated the whole curated
+  universe as tracked. HEAD already fixes it. The copy I was running was my updater's
+  backup `Backups/20260913-001053-StockSageX.app` (built from `e576d70`), not the
+  installed `f17258c`. That part was on my side and is fixed there: my updater now
+  keeps backups as zips.
+- My saved `stocksage_user_symbols` (domain `SA.StockSage`) was only `[AVAV, GNRC]`.
+  The earlier entries are gone and no copy survives (no Time Machine, nothing under
+  `SA.Salehman-AI`). What wiped them is not established.
+- Worth a look: `removeSymbol` (and `addSymbol` before `11d63c9`) saves the whole
+  in-memory `userSymbols` array without re-reading the saved value, so two running
+  copies, or one holding a stale list, can overwrite each other's changes.
+- Claude restored AVAV, GNRC, FLNC, NBIS, CIFR, LITE and MU and relaunched the
+  installed build. No app code was changed.
+
+love salman ❤️ XoXo
+
 ## Qwen-to-Gemma removal, Steps 1-8 of 9 complete — 16 September 2026
 
 Owner directive: "i dont want qwen anymore i have gemma4 31b." A 199-agent audit
