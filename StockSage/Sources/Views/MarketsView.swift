@@ -1142,6 +1142,7 @@ struct MarketsView: View {
     }
 
     @ViewBuilder private var liveStreamIndicator: some View {
+        let diagnostics = live.diagnosticText
         if liveStreamEnabled {
             Button { showFeedDiagnostics.toggle() } label: {
             HStack(spacing: 4) {
@@ -1153,8 +1154,10 @@ struct MarketsView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(live.isStreaming ? DS.Palette.successSoft : .orange)
-            .accessibilityLabel(live.diagnosticText)
-            .help(live.diagnosticText)
+            // Bound once: `diagnosticText` is six String(format:) calls plus a dozen
+            // concatenations, and two modifiers reading it evaluated it twice per render.
+            .accessibilityLabel(diagnostics)
+            .help(diagnostics)
             #if os(macOS)
             // One toolbar item, one instance total — a popover here is fine. On iPhone this
             // view is instantiated per loaded tab (up to 11) sharing one `showFeedDiagnostics`;
@@ -1162,7 +1165,7 @@ struct MarketsView: View {
             // hierarchy" presentation, so that platform hoists a single sheet onto the TabView
             // root instead (see phoneWorkspace) and this button only toggles the flag.
             .popover(isPresented: $showFeedDiagnostics) {
-                Text(live.diagnosticText).font(.caption).padding().frame(maxWidth: 440)
+                Text(diagnostics).font(.caption).padding().frame(maxWidth: 440)
             }
             #endif
         }
@@ -4139,7 +4142,7 @@ struct MarketsView: View {
                         .help(isNew
                               ? "\(sym.market) — newly listed, no prior close to compare against yet; not a real 0% move."
                               : (stale
-                              ? "\(sym.market) — STALE: last quote \((sym.latest?.time).map { $0.formatted(.relative(presentation: .named)) } ?? "unknown"); market likely closed, not a live price."
+                              ? "\(sym.market) — STALE: last quote \(Self.staleQuoteAge(sym.latest)); market likely closed, not a live price."
                               : sym.market))
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel("\(sym.symbol), \(Self.sessionChangeAccessibilitySummary(verifiedChange, isNew: isNew))\(stale ? ", stale quote — market likely closed" : "")")
@@ -4565,7 +4568,7 @@ struct MarketsView: View {
         }
         .help({
             var h = stale
-                ? "STALE: last quote \((sym.latest?.time).map { $0.formatted(.relative(presentation: .named)) } ?? "unknown") — market likely closed, not a live price. \(signal?.reason ?? "")"
+                ? "STALE: last quote \(Self.staleQuoteAge(sym.latest)) — market likely closed, not a live price. \(signal?.reason ?? "")"
                 : (signal?.reason ?? "")
             if isNew { h = "Newly listed — no prior close to compare against yet. " + h }
             return h
@@ -9805,6 +9808,18 @@ struct MarketsView: View {
     /// Price and source are one accepted observation. Old caches/fixtures have no origin:
     /// keep that unknown, never infer Yahoo or Massive from configuration. Cache/sample
     /// remain explicit; a known provider does not imply a fresh or real-time price.
+    /// The observation age shown beside a STALE verdict, dated by the MARKET clock.
+    ///
+    /// `StockSageSymbol.isStale` judges on `latest?.marketTime`; both render sites used
+    /// `latest?.time`, the FETCH clock, so a Friday-close quote pulled two minutes ago announced
+    /// itself as "last quote 2 minutes ago". One shared call so the caption can never drift from
+    /// the verdict again — the same discipline `sourceTagLabel` below already uses.
+    /// No `now` parameter on purpose: `.relative` formats against the current wall clock, so an
+    /// injected clock would be silently ignored and read as determinism this does not have.
+    nonisolated static func staleQuoteAge(_ quote: StockSageQuote?) -> String {
+        quote?.marketTime.map { $0.formatted(.relative(presentation: .named)) } ?? "unknown"
+    }
+
     static func sourceTagLabel(isSampleData: Bool, loadedFromCache: Bool, priceAsOf: Date?, now: Date,
                                priceSource: StockSagePriceSource? = nil) -> String? {
         if isSampleData || priceSource == .sample { return "sample" }

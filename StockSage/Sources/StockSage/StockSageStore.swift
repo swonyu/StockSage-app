@@ -563,9 +563,14 @@ final class StockSageStore: ObservableObject {
             symbolIndex[$0.symbol.uppercased()] != nil || merged.acceptedKeys.contains($0.symbol.uppercased())
         }
         if !added.isEmpty { rebuildSymbolIndex() }
-        ideas = merged.ideas
+        // Equality-guarded like the NBBO merge below (:2717). An accepted tick for a symbol that
+        // is not on the ideas board leaves `ideas` byte-identical, and an unguarded assignment to
+        // an @Published array still fires objectWillChange — which invalidates the whole Markets
+        // body at the publication rate. Comparing is far cheaper than that redraw.
+        if merged.ideas != ideas { ideas = merged.ideas }
         let priced = quotes.filter { merged.acceptedKeys.union(merged.baselineKeys).contains($0.key.uppercased()) }
-        newListings = Self.reconcileNewListings(current: newListings, pricedQuotes: priced)
+        let reconciled = Self.reconcileNewListings(current: newListings, pricedQuotes: priced)
+        if reconciled != newListings { newListings = reconciled }
         if let newest = merged.newestMarketTime {
             quoteAsOf = [quoteAsOf, newest].compactMap { $0 }.max()
         }
