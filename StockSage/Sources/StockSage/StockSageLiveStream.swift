@@ -37,6 +37,19 @@ final class StockSageLiveStream: ObservableObject {
         let price: Double
         let timestamp: Date
         var sequence: Int64? = nil
+        /// Parsed from `pt` and currently read by NOTHING — deliberately left in place rather than
+        /// deleted, because removing it would erase an unresolved question rather than answer it.
+        ///
+        /// The two ingest paths disagree about what "market time" means for the SAME provider and
+        /// the same `.massiveSIP` source. The streamed tick stores the SIP timestamp as marketTime
+        /// (`applyLiveTicks`), while the REST tick path stores the PARTICIPANT timestamp
+        /// (StockSageMassiveTicks.swift:258 `marketTime: trade.participantTime`). Participant time
+        /// is the exchange's own clock and is <= SIP time, so a symbol whose price alternates
+        /// between the two routes has its marketTime flip between two clocks — and marketTime is
+        /// exactly what `acceptsQuote` orders on and what `isStale` judges on.
+        ///
+        /// Wiring this field would change staleness verdicts and tick ordering; deleting it would
+        /// hide the inconsistency. Either is an owner-visible decision, not a cleanup.
         var participantTime: Date? = nil
     }
 

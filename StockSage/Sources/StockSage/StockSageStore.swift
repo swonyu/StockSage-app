@@ -3221,6 +3221,11 @@ final class StockSageStore: ObservableObject {
                 updated,
             ])
         }
+        // A cancelled cycle is not an outage. StockSageQuoteService.fetchQuotes fail-closes to
+        // [:] on Task.isCancelled (five sites), which lands here as an empty board and used to
+        // assert a feed failure that never happened — the app blaming the network for its own
+        // cancellation. Leave the previous state and message untouched instead.
+        guard !Task.isCancelled else { return }
         guard !live.isEmpty else {
             feedError = "Couldn't reach the market feed — showing the last data."
             return
