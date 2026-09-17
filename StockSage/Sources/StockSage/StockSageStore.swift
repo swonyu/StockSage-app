@@ -2725,10 +2725,29 @@ final class StockSageStore: ObservableObject {
 
     /// One already-coalesced UI batch. Full-market retention belongs to FeedIngress;
     /// the existing merge applies only matching rows/ideas in one pass and preserves ordering.
+    /// True when this tick cannot advance the stored row, so the merge may skip it entirely.
+    ///
+    /// Deliberately a STRICT SUBSET of what `acceptsQuote` rejects: the same SIP timestamp AND the
+    /// same trade sequence is the same trade republished, and an equal-timestamp tie is only ever
+    /// broken by a STRICTLY greater sequence, so no skipped tick could have been applied. An
+    /// unknown sequence on either side cannot prove sameness and is never skipped; a non-SIP prior
+    /// is a different ordering regime and is never compared by SIP sequence.
+    ///
+    /// This matters because the whole-market socket republishes the last trade for every selected
+    /// symbol on every publication, so most symbols in a cycle carry a tick already stored.
+    nonisolated static func tickIsRedundant(_ tick: StockSageLiveStream.Tick, prior: StockSageQuote?) -> Bool {
+        guard let prior, prior.priceSource == .massiveSIP,
+              let priorTime = prior.marketTime, priorTime == tick.timestamp,
+              let priorSequence = prior.massiveTradeSequence, let sequence = tick.sequence else { return false }
+        return priorSequence == sequence
+    }
+
     func applyLiveTicks(_ ticks: [String: StockSageLiveStream.Tick]) {
         var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
         for (key, tick) in Self.liveTicksForStore(ticks) {
             let prior = symbolIndex[key].flatMap { symbols[$0].latest }
+            // Skip the republished-last-trade case before doing any per-symbol work.
+            if Self.tickIsRedundant(tick, prior: prior) { continue }
             let carry = prior?.hasSessionBaseline(symbol: key, at: tick.timestamp) == true
             quotes[key] = .init(symbol: key, price: tick.price, previousClose: carry ? prior!.previousPrice : tick.price,
                 marketTime: tick.timestamp, isNewListing: newListings.contains(key),
