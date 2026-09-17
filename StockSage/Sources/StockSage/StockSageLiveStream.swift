@@ -385,7 +385,7 @@ final class StockSageLiveStream: ObservableObject {
             + String(format: "Receive→process %.3fs; receive→publish %.3fs (peak %.3fs). ", m.receiveToProcess, m.receiveToPublish, m.peakReceiveToPublish)
             + "Latest frame SIP→receive \(sip); trades \(trade), quotes \(quote). Upstream age is not proof of consumer backlog. "
             + String(format: "%.0f events/s; %.0f bytes/s (session average). ", Double(m.processedEvents) / max(0.001, m.elapsed), Double(m.receivedBytes) / max(0.001, m.elapsed))
-            + "\(m.coalesced) replacements; \(m.rejected) rejected elements/oversized metadata; \(m.futureClocks) future clocks; \(gapCount) gaps. "
+            + "\(m.coalesced) replacements; \(m.superseded) superseded/duplicate; \(m.rejected) rejected elements/oversized metadata; \(m.futureClocks) future clocks; \(gapCount) gaps. "
             + (lastGap.map { "Last gap: \($0). " } ?? "")
             + "LIVE requires a nonfuture observation ≤10s old; quiet symbols and closed markets need not print. Publication timing excludes compositor/render delay."
     }

@@ -15,6 +15,13 @@ actor StockSageFeedIngress {
     nonisolated struct Metrics: Sendable, Equatable {
         var receivedFrames = 0, receivedBytes = 0, processedEvents = 0
         var coalesced = 0, rejected = 0, futureClocks = 0
+        /// Healthy protocol outcomes: a duplicate or out-of-order trade, or a quote that did not
+        /// supersede the stored one. Counted SEPARATELY from `rejected`, which means the provider
+        /// sent something undecodable. The whole-market socket republishes the last trade for every
+        /// selected symbol on every cycle, so this number is large and climbing when the feed is
+        /// perfectly healthy — folding it into `rejected` made the diagnostics read as a broken
+        /// feed during entirely normal operation.
+        var superseded = 0
         var queuedFrames = 0, queuedBytes = 0, peakFrames = 0, peakBytes = 0
         var tradeSymbols = 0, quoteSymbols = 0
         var elapsed: TimeInterval = 0
@@ -183,7 +190,7 @@ actor StockSageFeedIngress {
                 if let tick {
                     if oldTrades == state.latestTrades.count { metrics.coalesced += 1 }
                     if selected.contains(tick.symbol) { tradeReceived[tick.symbol] = frame.uptime }
-                } else { metrics.rejected += 1 }
+                } else { metrics.superseded += 1 }
             case .quote(let observation):
                 if observation.timestamp > frame.at { metrics.futureClocks += 1 }
                 if state.isAuthorized, observation.timestamp <= frame.at {
@@ -193,7 +200,7 @@ actor StockSageFeedIngress {
                 if oldQuote != observation, state.latestQuotes[observation.symbol] == observation {
                     if oldQuotes == state.latestQuotes.count { metrics.coalesced += 1 }
                     if selected.contains(observation.symbol) { quoteReceived[observation.symbol] = frame.uptime }
-                } else { metrics.rejected += 1 }
+                } else { metrics.superseded += 1 }
             case .status: break
             }
             if state.capacityExceeded {
