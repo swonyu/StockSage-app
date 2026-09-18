@@ -79,6 +79,25 @@ final class StockSageLiveStream: ObservableObject {
             let timestamp = Date(timeIntervalSince1970: milliseconds / 1_000)
             switch row["ev"] as? String {
             case "T":
+                // `c` (trade conditions) is deliberately NOT read here, unlike the quote branch
+                // below which decodes it and gates NBBO display on costConditionVerified.
+                //
+                // DO NOT "fix" that asymmetry by filtering the stream alone. The app-wide display
+                // price is already unfiltered — StockSageMassive.parseTicker takes lastTrade.p with
+                // no condition test, and the streamed tick is ordered against exactly that value —
+                // so condition-filtering one source and not the other would make the two disagree
+                // about the same symbol, which is worse than the gap it closes. The repo's own
+                // ratified allowlist (StockSageMassiveTicks.swift:213-220) also ADMITS Form T and
+                // odd lots as "timely observations even though they do not update official OHLC",
+                // and HANDOFF.md scopes this path as last-trade ordering, not an execution-
+                // eligibility policy. The execution gate is separate and intact: a streamed tick
+                // never sets paperTradeQualified.
+                //
+                // What genuinely remains, at low impact: conditions the allowlist EXCLUDES
+                // (average-price 'W', sold out of sequence, derivatively priced, prior reference
+                // price) can still set a card's price with nothing on screen saying so. Closing
+                // that means filtering BOTH sources against one trade-scoped condition list —
+                // `regularQuoteConditions()` is quote-scoped — not patching this line.
                 guard let price = number(row["p"]), price > 0 else { return nil }
                 let participant = number(row["pt"]).flatMap { $0 > 0 && $0 <= milliseconds ? Date(timeIntervalSince1970: $0 / 1_000) : nil }
                 return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp,
