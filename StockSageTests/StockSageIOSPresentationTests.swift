@@ -997,6 +997,35 @@ struct StockSageIOSPresentationTests {
         }
     }
 
+    // Task 23: the saved-research list renders its filter controls and its runs on a phone.
+    // A fresh simulator has no saved research, so this is the only place the filtered list can be
+    // seen at all — including the explicit "nothing matches" copy, which must never degrade into a
+    // bare empty list that reads as "no saved research".
+    @Test(arguments: [false, true])
+    func savedResearchListShowsFiltersAndRuns(accessibility: Bool) async throws {
+        let suite = "stocksage.ios.filters.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let completed = now.addingTimeInterval(-3_600)
+        let observed = completed.addingTimeInterval(-120)
+        let run = StockSageResearchHistory.Run(id: UUID(), startedAt: completed.addingTimeInterval(-60),
+            completedAt: completed, horizon: .week, predictions: [
+                savedPrediction("BUYR", insider: insiderObservation([insiderTransaction(.purchase, owner: "P. Buyer", role: "Director", at: observed)], symbol: "BUYR", at: observed),
+                                coverageState: "answered", at: observed, quality: qualityFixture(.verified)),
+            ],
+            coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil))
+        try #require(history.record(run))
+
+        try await capture(StockSageResearchHistoryView(store: store, history: history),
+                          name: "saved-research-filters", accessibility: accessibility,
+                          viewportHeight: 812, shellPadding: 0) { _, window in
+            _ = try await reveal(in: window, identifier: "research.history.filters")
+            _ = try await reveal(in: window, identifier: "research.history.run.\(run.id)")
+        }
+    }
+
     private func captureWorkspace(section: MarketSection, name: String, accessibility: Bool,
                                   researchHistory: StockSageResearchHistory? = nil,
                                   inspect: (@MainActor (UIHostingController<AnyView>, UIWindow) async throws -> Void)? = nil) async throws {

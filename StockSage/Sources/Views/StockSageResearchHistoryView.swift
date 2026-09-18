@@ -208,7 +208,47 @@ struct StockSageResearchHistoryView: View {
     @ObservedObject var history: StockSageResearchHistory
     @Environment(\.dismiss) private var dismiss
     @State private var checkRequest = 0
+    @State private var filter = StockSageResearchReviewFilter()
     static let directionOnlyDisclosure = "Price direction only. No market comparison is made; a rise does not establish outperformance, a profitable trade, or predictive skill."
+
+    @ViewBuilder private var filterControls: some View {
+        Section {
+            DisclosureGroup("Filters\(filter.isActive ? " · on" : "")") {
+                Picker("Horizon", selection: $filter.horizon) {
+                    Text("Any").tag(StockSageResearchHistory.Horizon?.none)
+                    ForEach(StockSageResearchHistory.Horizon.allCases, id: \.self) { horizon in
+                        Text(horizon.title).tag(StockSageResearchHistory.Horizon?.some(horizon))
+                    }
+                }
+                Picker("Action", selection: $filter.action) {
+                    Text("Any").tag(StockSageResearchReviewFilter.Action.any)
+                    Text("Buy").tag(StockSageResearchReviewFilter.Action.buy)
+                    Text("Strong Buy").tag(StockSageResearchReviewFilter.Action.strongBuy)
+                }
+                Picker("Evidence checks", selection: $filter.quality) {
+                    Text("Any").tag(StockSageResearchReviewFilter.Quality.any)
+                    Text("Passed").tag(StockSageResearchReviewFilter.Quality.verified)
+                    Text("Flagged").tag(StockSageResearchReviewFilter.Quality.unverified)
+                    Text("Evidence unavailable").tag(StockSageResearchReviewFilter.Quality.evidenceUnavailable)
+                    Text("Not assessed").tag(StockSageResearchReviewFilter.Quality.notAssessed)
+                }
+                // Three options, not two: "not known" is a separate answer from "none found".
+                Picker("Insider activity", selection: $filter.insider) {
+                    Text("Any").tag(StockSageResearchReviewFilter.Insider.any)
+                    Text("Activity recorded").tag(StockSageResearchReviewFilter.Insider.recordedActivity)
+                    Text("No qualifying rows in window").tag(StockSageResearchReviewFilter.Insider.noQualifyingRows)
+                    Text("Not known").tag(StockSageResearchReviewFilter.Insider.notKnown)
+                }
+                Picker("Outcome", selection: $filter.outcome) {
+                    Text("Any").tag(StockSageResearchReviewFilter.Outcome.any)
+                    Text("Active").tag(StockSageResearchReviewFilter.Outcome.active)
+                    Text("Settled").tag(StockSageResearchReviewFilter.Outcome.terminal)
+                }
+                if filter.isActive { Button("Clear filters") { filter = .init() } }
+            }
+            .accessibilityIdentifier("research.history.filters")
+        }
+    }
 
     private var accessReason: String? {
         if StockSageStore.isRunningTests { return "Outcome checks are disabled in test fixtures." }
@@ -260,9 +300,24 @@ struct StockSageResearchHistoryView: View {
                             description: Text("Complete a Research run. Its original top five Buy / Strong Buy results and evidence are saved automatically."))
                     }
                 } else {
+                    filterControls
+                    let visible = history.runs.filter { filter.matches($0) }
+                    if visible.isEmpty {
+                        // Never a bare empty list: say that the filters excluded everything, and
+                        // offer the way back. An empty surface would read as "no saved research".
+                        Section {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("No saved research matches these filters.").font(.headline)
+                                Text("\(history.runs.count) saved \(history.runs.count == 1 ? "run is" : "runs are") hidden. Clearing the filters shows them again; nothing has been deleted.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                Button("Clear filters") { filter = .init() }
+                            }.padding(.vertical, 6)
+                        }
+                    }
                     Section("Completed runs") {
-                        ForEach(history.runs) { run in
+                        ForEach(visible) { run in
                             let reviewed = run.evaluations.values.filter { $0.state == .evaluated }.count
+                            let matching = filter.matchingPredictions(in: run).count
                             NavigationLink {
                                 StockSageResearchHistoryDetail(history: history, runID: run.id)
                             } label: {
@@ -272,6 +327,10 @@ struct StockSageResearchHistoryView: View {
                                         .font(.subheadline).foregroundStyle(.secondary)
                                     Text("\(run.predictions.count) saved \(run.predictions.count == 1 ? "pick" : "picks") · \(reviewed) \(reviewed == 1 ? "outcome" : "outcomes") recorded")
                                         .font(.callout)
+                                    if filter.isActive, matching < run.predictions.count {
+                                        Text("\(matching) of \(run.predictions.count) match the filters")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
                                     Text(Self.status(for: run)).font(.caption).foregroundStyle(.secondary)
                                 }.padding(.vertical, 4)
                             }
