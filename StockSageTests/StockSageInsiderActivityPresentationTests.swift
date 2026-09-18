@@ -88,6 +88,21 @@ struct StockSageInsiderActivityPresentationTests {
         #expect(state.transactions.count == 2 && state.untypedEventCount == 0)
     }
 
+    @Test func staleCoverageKeepsCapturedInsiderRecordsVisibleWithTheirStatus() {
+        // A fetch spanning UTC midnight can finish with answered, now-stale coverage.
+        let rows = [event(transaction(.sale), id: "a"), event(transaction(.purchase), id: "b"),
+                    event(nil, id: "legacy")]
+        let state = P.state(for: prediction(evidence: observation(events: rows, omitted: 2),
+                                            coverageState: "stale"))
+        #expect(state.transactions.map(\.direction) == [.sale, .purchase])
+        #expect(state.untypedEventCount == 1 && state.omittedRecordCount == 2)
+        #expect(state.hasRecordedActivity)
+        #expect(state.headline.lowercased().contains("stale"))
+        #expect(!state.headline.contains("did not complete"))
+        #expect(state.accessibilityLabel.lowercased().contains("stale"))
+        #expect(state.accessibilityLabel.contains("1 purchase") && state.accessibilityLabel.contains("1 sale"))
+    }
+
     // A legacy cache stored the event without typed Form 4 detail. That is still recorded evidence
     // and must not collapse into the empty-window state.
     @Test func aLegacyUntypedInsiderEventIsStillRecordedEvidence() {

@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A100000000000000000000W3 /* StockSageWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */; };
+		A100000000000000000000W4 /* StockSageWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A100000000000000000000W1 /* StockSageWidget.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		A100000000000000000000B1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -23,11 +28,6 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXBuildFile section */
-		A100000000000000000000W3 /* StockSageWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */; };
-		A100000000000000000000W4 /* StockSageWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A100000000000000000000W1 /* StockSageWidget.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-/* End PBXBuildFile section */
-
 /* Begin PBXCopyFilesBuildPhase section */
 		A100000000000000000000W9 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -44,10 +44,20 @@
 
 /* Begin PBXFileReference section */
 		A100000000000000000000C1 /* StockSageX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StockSageX.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A100000000000000000000W1 /* StockSageWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = StockSageWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A100000000000000000000D1 /* StockSageTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockSageTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000W1 /* StockSageWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = StockSageWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StockSageWidgetSnapshot.swift; path = StockSage/Sources/StockSage/StockSageWidgetSnapshot.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A100000000000000000000WG /* Exceptions for "StockSageWidget" folder in "StockSageWidget" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A100000000000000000000WA /* StockSageWidget */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A100000000000000000000E0 /* StockSage/Sources */ = {
@@ -63,18 +73,10 @@
 		A100000000000000000000W5 /* StockSageWidget */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				A100000000000000000000WG /* Exceptions */,
+				A100000000000000000000WG /* Exceptions for "StockSageWidget" folder in "StockSageWidget" target */,
 			);
 			path = StockSageWidget;
 			sourceTree = "<group>";
-		};
-		A100000000000000000000WG /* Exceptions */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-				StockSageWidget.entitlements,
-			);
-			target = A100000000000000000000WA /* StockSageWidget */;
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
@@ -103,12 +105,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		4C572F4D304D41B7005CF717 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000W1 /* StockSageWidget.appex */,
+				A100000000000000000000W5 /* StockSageWidget */,
+				A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		A10000000000000000000090 = {
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000E0 /* StockSage/Sources */,
 				A100000000000000000000E1 /* StockSageTests */,
 				A10000000000000000000091 /* Products */,
+				4C572F4D304D41B7005CF717 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -234,6 +247,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A100000000000000000000W8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000C03 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -248,16 +268,17 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A100000000000000000000W8 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A100000000000000000000W6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000W3 /* StockSageWidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000C02 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -269,14 +290,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A100000000000000000000W6 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A100000000000000000000W3 /* StockSageWidgetSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -297,6 +310,64 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		A100000000000000000000WC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StockSageWidget/StockSageWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StockSageWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageX.Widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A100000000000000000000WD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StockSageWidget/StockSageWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StockSageWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageX.Widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		A10000000000000000000A11 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -440,6 +511,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = StockSage/StockSageX.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -461,7 +533,6 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = StockSage/StockSageX.entitlements;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSageX;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSageX;
 				PRODUCT_MODULE_NAME = StockSage;
@@ -480,6 +551,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = StockSage/StockSageX.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -501,7 +573,6 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = StockSage/StockSageX.entitlements;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSageX;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSageX;
 				PRODUCT_MODULE_NAME = StockSage;
@@ -559,67 +630,18 @@
 			};
 			name = Release;
 		};
-		A100000000000000000000WC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = StockSageWidget/StockSageWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = WY272L3F3N;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = StockSageWidget/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageX.Widget;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
-		A100000000000000000000WD /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = StockSageWidget/StockSageWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = WY272L3F3N;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = StockSageWidget/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageX.Widget;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A100000000000000000000WB /* Build configuration list for PBXNativeTarget "StockSageWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A100000000000000000000WC /* Debug */,
+				A100000000000000000000WD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A10000000000000000000A10 /* Build configuration list for PBXProject "StockSage" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -643,15 +665,6 @@
 			buildConfigurations = (
 				A10000000000000000000D11 /* Debug */,
 				A10000000000000000000D12 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		A100000000000000000000WB /* Build configuration list for PBXNativeTarget "StockSageWidget" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A100000000000000000000WC /* Debug */,
-				A100000000000000000000WD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
