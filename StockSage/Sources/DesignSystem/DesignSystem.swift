@@ -176,31 +176,55 @@ struct PriceFlash: ViewModifier {
         return new > old ? .up : .down
     }
 
+    /// The flash's whole state: which way the price last moved, and the decay timer currently
+    /// running (nil when nothing is flashing).
+    struct FlashState: Equatable {
+        var direction: Direction?
+        var timer: UUID?
+    }
+
+    /// Apply a move. The colour always follows the LATEST direction so it never reports a stale
+    /// one, but a RUNNING timer is deliberately kept rather than restarted.
+    ///
+    /// Restarting it is what made the tint permanent: the stream publishes four times a second, so
+    /// a moving symbol changes price more often than the 600 ms decay, and every change cancelled
+    /// and re-armed the timer. The row stayed lit for as long as the symbol kept trading, which
+    /// makes a flash meaningless — the same way a haptic that fires on every tick stops meaning
+    /// "a refresh landed". One decay per burst instead.
+    ///
+    /// `nonisolated static` and side-effect-free, like `direction(from:to:)` above: testable with
+    /// no view, no `@State` and no clock.
+    nonisolated static func applying(_ incoming: Direction, to state: FlashState,
+                                     newTimer: UUID) -> FlashState {
+        FlashState(direction: incoming, timer: state.timer ?? newTimer)
+    }
+
+    /// The decay landed: clear both so the next burst can arm a fresh timer.
+    nonisolated static func expired() -> FlashState { FlashState() }
+
     let price: Double?
-    @State private var flashDirection: Direction?
-    @State private var flashID: UUID?
+    @State private var flash = FlashState()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        let tint: Color = flashDirection == .up ? DS.Palette.successSoft : DS.Palette.dangerSoft
+        let tint: Color = flash.direction == .up ? DS.Palette.successSoft : DS.Palette.dangerSoft
         content
             .background(
-                tint.opacity(flashDirection != nil ? 0.18 : 0)
-                    .animation(.easeOut(duration: 0.6), value: flashDirection)
+                tint.opacity(flash.direction != nil ? 0.18 : 0)
+                    .animation(.easeOut(duration: 0.6), value: flash.direction)
             )
             .onChange(of: price) { old, new in
                 guard !reduceMotion, let dir = Self.direction(from: old, to: new) else { return }
-                flashDirection = dir
-                flashID = UUID()
+                flash = Self.applying(dir, to: flash, newTimer: UUID())
             }
-            .task(id: flashID) {
-                guard flashID != nil else { return }
+            .task(id: flash.timer) {
+                guard flash.timer != nil else { return }
                 do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
                 guard !Task.isCancelled else { return }
-                flashDirection = nil
+                flash = Self.expired()
             }
             .onChange(of: reduceMotion) { _, reduced in
-                if reduced { flashID = nil; flashDirection = nil }
+                if reduced { flash = Self.expired() }
             }
     }
 }
