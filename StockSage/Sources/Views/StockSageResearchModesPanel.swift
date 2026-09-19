@@ -3,6 +3,8 @@ import SwiftUI
 struct StockSageResearchModesPanel: View {
     @ObservedObject var store: StockSageStore
     @ObservedObject var research = StockSageHorizonResearch.shared
+    @ObservedObject private var sameDay = StockSageSameDayResearch.shared
+    @State private var showsSameDay = false
     enum ResultFilter: String, CaseIterable {
         case all = "All checks"
         case topBuys = "Top 5 buys"
@@ -83,8 +85,18 @@ struct StockSageResearchModesPanel: View {
     }
 
     var body: some View {
-        manual(presentation.horizon)
-            .onAppear { if !StockSageStore.isRunningTests { Presentation.save(presentation.horizon, to: .standard) } }
+        VStack(spacing: 0) {
+            Picker("Research mode", selection: $showsSameDay) {
+                Text("Trading days · Top 5").tag(false)
+                Text("Same-day · one pick").tag(true)
+            }
+            .pickerStyle(.segmented).padding(.horizontal, 20).padding(.vertical, 12)
+            .accessibilityIdentifier("research.mode")
+            .onChange(of: showsSameDay) { _, _ in selected = nil }
+            if showsSameDay { StockSageSameDayResearchPanel(store: store) }
+            else { manual(presentation.horizon).disabled(sameDay.isRunning) }
+        }
+        .onAppear { if !StockSageStore.isRunningTests { Presentation.save(presentation.horizon, to: .standard) } }
     }
 
     private var visibleListings: [StockSageHorizonResearch.Listing] {

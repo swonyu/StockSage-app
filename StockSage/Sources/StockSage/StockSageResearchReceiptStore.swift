@@ -99,6 +99,7 @@ final class StockSageResearchReceiptStore {
         var attempts: [Attempt]
         var persistence: String
         var truncation: String?
+        var sameDay: StockSageSameDayResearch.Receipt? = nil
     }
 
     enum Failure: LocalizedError, Equatable {
@@ -134,8 +135,14 @@ final class StockSageResearchReceiptStore {
     }
 
     func begin(horizon: StockSageHorizonResearch.Horizon, at date: Date = Date()) -> UUID {
+        begin(label: horizon.rawValue, at: date)
+    }
+
+    func beginSameDay(at date: Date) -> UUID { begin(label: "same-day", at: date) }
+
+    private func begin(label: String, at date: Date) -> UUID {
         let id = UUID()
-        scans[id] = Scan(schemaVersion: Self.schemaVersion, dateEncoding: "seconds-since-2001-01-01T00:00:00Z", id: id, horizon: horizon.rawValue,
+        scans[id] = Scan(schemaVersion: Self.schemaVersion, dateEncoding: "seconds-since-2001-01-01T00:00:00Z", id: id, horizon: label,
             sourceVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown-development-build",
             sourceCommit: Bundle.main.object(forInfoDictionaryKey: "StockSageSourceCommit") as? String ?? "unknown-development-build",
             startedAt: date, endedAt: nil, status: "running", selection: nil, attempts: [],
@@ -264,6 +271,32 @@ final class StockSageResearchReceiptStore {
     }
 
     func receipt(scanID: UUID) -> Scan? { scans[scanID] }
+    var latestSameDay: StockSageSameDayResearch.Receipt? { sameDayHistory.first }
+    var sameDayHistory: [StockSageSameDayResearch.Receipt] {
+        scans.values.filter { $0.horizon == "same-day" }.sorted {
+            $0.startedAt == $1.startedAt ? $0.id.uuidString > $1.id.uuidString : $0.startedAt > $1.startedAt
+        }.map { scan in
+            guard var result = scan.sameDay, result.policyVersion == 1, result.id == scan.id,
+                  result.checks.count <= 24,
+                  Set(result.checks.map(\.symbol)).count == result.checks.count else {
+                return .init(id: scan.id, startedAt: scan.startedAt, finishedAt: scan.endedAt,
+                    selection: "No verified shortlist payload was saved.", checks: [], blocker: scan.status)
+            }
+            if result.finishedAt == nil || scan.persistence != "saved" {
+                result.selectedSymbol = nil
+                result.blocker = scan.persistence == "save_failed"
+                    ? "Research receipt could not be saved. " + scan.status : scan.status
+            }
+            return result
+        }
+    }
+    @discardableResult func saveSameDay(_ receipt: StockSageSameDayResearch.Receipt) -> Bool {
+        guard receipt.policyVersion == 1, receipt.checks.count <= 24,
+              scans[receipt.id]?.horizon == "same-day" else { return false }
+        scans[receipt.id]?.sameDay = receipt
+        persistManifest(receipt.id)
+        return !persistenceFailed(scanID: receipt.id)
+    }
     func persistenceFailed(scanID: UUID) -> Bool { failed.contains(scanID) }
 
     private func ensureDirectory() throws {
