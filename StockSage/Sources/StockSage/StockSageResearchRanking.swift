@@ -16,6 +16,12 @@ import Foundation
     /// Receipts written from now on. Version 1/2 receipts keep their original prompt and packet.
     nonisolated static let currentVersion = 3
 
+    /// Prompt/packet versions and qualification policies evolve independently. Keep old
+    /// receipts bound to their original policy while admitting the current packet protocol.
+    nonisolated static func supports(version: Int, strictQualification: Bool) -> Bool {
+        version == 3 || version == (strictQualification ? 2 : 1)
+    }
+
     private nonisolated static func legacyInstructions(horizon: StockSageHorizonResearch.Horizon) -> String {
         """
         Compare the supplied completed stock research for \(horizon.rawValue). Select and order exactly the requested number of symbols by relative research merit for that horizon: the dated supporting evidence, original case, counterevidence, uncertainty and coverage gaps. Buy and Strong Buy are eligibility labels, not ranking tiers; a Buy can rank above a Strong Buy. Do not rank by input order, trading activity alone, or historical returns alone. Captured prices and scenarios are dated assumptions, not live prices or promised returns. Missing coverage is uncertainty, not evidence of safety. Evidence inclusion and citation do not establish truth. This is an unvalidated comparison, not a calibrated probability or profit prediction.

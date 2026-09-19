@@ -303,6 +303,7 @@ final class StockSageStore: ObservableObject {
     @Published private(set) var userSymbols: [String] = []
     @Published private(set) var isAddingSymbol = false
     @Published private(set) var addSymbolError: String?
+    @Published private(set) var watchlistPersistenceError: String?
     private static let userSymbolsKey = "stocksage_user_symbols"
     private static let userMarketLabel = "★ My watchlist"
 
@@ -353,7 +354,8 @@ final class StockSageStore: ObservableObject {
         self.defaults = defaults
         self.heldSymbols = heldSymbols
         self.journalTrades = journalTrades
-        userSymbols = (defaults.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
+        do { userSymbols = try backupSymbols() }
+        catch { watchlistPersistenceError = "Saved watchlist could not be read. It has not been changed." }
         do { priceAlerts = try Self.loadPriceAlerts(from: defaults) }
         catch { priceAlertsPersistenceError = "Saved price alerts could not be read. They were preserved; recover the saved alerts before editing or monitoring." }
         // Absent key ⇒ false ⇒ the opt-in default is unchanged on a first run.
@@ -442,6 +444,7 @@ final class StockSageStore: ObservableObject {
     /// Read the committed collection before any edit. Corruption is not an empty collection.
     private func mutatePriceAlerts(_ change: (inout [PriceAlert]) -> Bool) -> Bool {
         do {
+            try StockSageRecordWriter.require(defaults)
             var records = applyingPendingTriggers(to: try Self.loadPriceAlerts(from: defaults))
             let changed = change(&records)
             let data = try JSONEncoder().encode(records)
@@ -451,12 +454,19 @@ final class StockSageStore: ObservableObject {
             priceAlertsPersistenceError = nil
             return changed
         } catch {
-            priceAlertsPersistenceError = "Price alerts could not be saved. Existing storage was preserved; recover saved alerts before editing or monitoring."
+            priceAlertsPersistenceError = error is StockSageFileLock.Failure ? error.localizedDescription
+                : "Price alerts could not be saved. Existing storage was preserved; recover saved alerts before editing or monitoring."
             return false
         }
     }
 
     func priceAlertsForMonitoring() -> [PriceAlert] {
+        do { try StockSageRecordWriter.require(defaults) }
+        catch {
+            let message = error.localizedDescription
+            if priceAlertsPersistenceError != message { priceAlertsPersistenceError = message }
+            return []
+        }
         do {
             let records = try Self.loadPriceAlerts(from: defaults)
             if !pendingPriceAlertTriggers.isEmpty {
@@ -509,6 +519,8 @@ final class StockSageStore: ObservableObject {
     /// Mark alerts triggered (one-shot). Called by the Monitor after it fires them.
     func markPriceAlertsTriggered(_ ids: [UUID], at when: Date = Date()) {
         guard !ids.isEmpty else { return }
+        do { try StockSageRecordWriter.require(defaults) }
+        catch { priceAlertsPersistenceError = error.localizedDescription; return }
         let set = Set(ids)
         for id in ids { pendingPriceAlertTriggers[id] = when }
         // Delivery already happened: retain its latch even if the disk becomes unreadable.
@@ -777,9 +789,12 @@ final class StockSageStore: ObservableObject {
         func reject(_ reason: String) -> String { addSymbolError = reason; return reason }
         guard !Task.isCancelled else { return reject("Watchlist addition cancelled.") }
         let saved: [String]
-        do { saved = try backupSymbols() }
-        catch { return reject("Saved watchlist could not be read. It has not been changed.") }
-        let validation = Self.validateNewSymbol(raw, alreadyTracked: Set((userSymbols + saved).map { $0.uppercased() }))
+        do {
+            try StockSageRecordWriter.require(defaults)
+            saved = try backupSymbols()
+            watchlistPersistenceError = nil
+        } catch { return reject(recordWatchlistFailure(error)) }
+        let validation = Self.validateNewSymbol(raw, alreadyTracked: Set(saved.map { $0.uppercased() }))
         guard let symbol = validation.symbol else { return reject(validation.error ?? "Enter a ticker.") }
         let known = symbols.first { $0.symbol.uppercased() == symbol }
             ?? StockSageUniverse.catalog.first { $0.symbol == symbol }
@@ -799,7 +814,7 @@ final class StockSageStore: ObservableObject {
             let update = try prepareBackupImport([symbol])
             guard update.added > 0 else { return reject("\(symbol) is already in your watchlist.") }
             update.apply()
-        } catch { return reject("Saved watchlist could not be read. It has not been changed.") }
+        } catch { return reject(recordWatchlistFailure(error)) }
         // Existing rows retain their market label, quote history and provenance.
         if !symbols.contains(where: { $0.symbol.uppercased() == symbol }) {
             symbols.append(known ?? StockSageSymbol(symbol: symbol, market: Self.userMarketLabel))
@@ -816,6 +831,13 @@ final class StockSageStore: ObservableObject {
         return symbols
     }
 
+    @discardableResult private func recordWatchlistFailure(_ error: Error) -> String {
+        let message = error is StockSageFileLock.Failure ? error.localizedDescription
+            : "Saved watchlist could not be read. It has not been changed."
+        watchlistPersistenceError = message
+        return message
+    }
+
     /// Read committed alerts at export time; load's empty fallback must never become a false
     /// successful backup when the saved value is corrupt or has the wrong defaults type.
     func backupPriceAlerts() throws -> [PriceAlert] {
@@ -826,23 +848,25 @@ final class StockSageStore: ObservableObject {
     /// Backup tickers were validated/normalized by the decoder. Restore the preference,
     /// not a quote: no network or invented prices, even when the app is offline.
     func prepareBackupImport(_ incoming: [String]) throws -> (added: Int, apply: () -> Void) {
-        let stored = defaults.object(forKey: Self.userSymbolsKey)
-        guard stored == nil || stored is [String] else { throw CocoaError(.fileReadCorruptFile) }
-        var merged = userSymbols
+        try StockSageRecordWriter.require(defaults)
+        // Only explicit additions may restore a removed ticker. Memory can predate another
+        // store's deletion, so the committed preference is the base for this mutation.
+        var merged = try backupSymbols()
         var known = Set(merged.map { $0.uppercased() })
-        for symbol in (stored as? [String] ?? []) where known.insert(symbol.uppercased()).inserted { merged.append(symbol) }
         let additions = incoming.filter { known.insert($0.uppercased()).inserted }
         merged.append(contentsOf: additions)
         let symbols = merged
         return (additions.count, {
             self.defaults.set(symbols, forKey: Self.userSymbolsKey)
             self.userSymbols = symbols
+            self.watchlistPersistenceError = nil
         })
     }
 
     /// Committed alerts win by immutable one-shot ID; only explicit backup records may be added.
     /// Memory-only IDs may have been deleted/rearmed by another writer, so never resurrect them.
     func preparePriceAlertBackupImport(_ incoming: [PriceAlert]) throws -> (added: Int, apply: () -> Void) {
+        try StockSageRecordWriter.require(defaults)
         let disk = try Self.readPriceAlerts(from: defaults)
         var merged = applyingPendingTriggers(to: disk)
         var ids = Set(merged.map(\.id))
@@ -861,9 +885,14 @@ final class StockSageStore: ObservableObject {
     /// Remove a watchlist entry; curated/held instruments remain tracked.
     func removeSymbol(_ symbol: String) {
         let up = symbol.uppercased()
-        guard userSymbols.contains(where: { $0.uppercased() == up }) else { return }
-        userSymbols.removeAll { $0.uppercased() == up }
-        defaults.set(userSymbols, forKey: Self.userSymbolsKey)
+        do {
+            try StockSageRecordWriter.require(defaults)
+            var saved = try backupSymbols()
+            saved.removeAll { $0.uppercased() == up }
+            defaults.set(saved, forKey: Self.userSymbolsKey)
+            userSymbols = saved
+            watchlistPersistenceError = nil
+        } catch { recordWatchlistFailure(error); return }
         // Removing a watchlist preference must not untrack an actual holding (or a
         // curated name from a legacy/imported watchlist). Otherwise remove its quote/idea rows.
         guard !trackedDefs().contains(where: { $0.symbol.uppercased() == up }) else { return }

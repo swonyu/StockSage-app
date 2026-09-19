@@ -66,6 +66,10 @@ struct StockSageResearchModesPanel: View {
                     Text("Displayed run completed: \(completed.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(completed, at: tick.date))")
                 }
                 if let latest = scan.results.values.map(\.at).max() {
+                    if let earliest = scan.results.values.map(\.at).min(), earliest < latest {
+                        Text("Earliest result: \(earliest.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(earliest, at: tick.date))")
+                        Text("Results have different capture times. Completing this run does not refresh earlier checks.")
+                    }
                     Text("Latest result: \(latest.formatted(date: .abbreviated, time: .standard)) · \(StockSageResearchFreshness.age(latest, at: tick.date))")
                 }
                 if let news = scan.results.values.compactMap(\.newsCheckedAt).max() {
@@ -109,6 +113,13 @@ struct StockSageResearchModesPanel: View {
     var detailPresented: Binding<Bool> {
         Binding(get: { selected.map { symbol in visibleListings.contains { $0.ticker == symbol } } ?? false },
                 set: { if !$0 { selected = nil } })
+    }
+
+    func openRankedDetail(_ symbol: String) {
+        guard research.scans[presentation.horizon]?.listings.contains(where: { $0.ticker == symbol }) == true else { return }
+        presentation.filter = .all
+        search = ""
+        selected = symbol
     }
 
     var selectedDetail: some View {
@@ -167,6 +178,7 @@ struct StockSageResearchModesPanel: View {
         let scan = research.scans[horizon] ?? .init()
         let rows = visibleListings
         let isRunning = research.isRunning(horizon)
+        let remaining = research.remainingListings(horizon).count
         // A blocked preflight can have no request date or listings but still has useful status.
         // Suppress only the untouched model's repeated "Press Run" instruction.
         let isUntouched = !isRunning && scan.at == nil && scan.listings.isEmpty
@@ -179,20 +191,38 @@ struct StockSageResearchModesPanel: View {
                 Button("Retry save", systemImage: "square.and.arrow.down") { research.retrySave(horizon) }
                     .help("Save the same completed research and dates without another model request.")
             }
+            if remaining > 0 {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button("Resume \(remaining) remaining", systemImage: "play.fill") {
+                        if research.resumeRemaining(horizon, store: store) {
+                            selected = nil; search = ""; presentation.filter = .all
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("research.resume")
+                    Text("Original checked results keep their captured dates. Remaining listings receive fresh evidence; the resumed run contains different capture times.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if !research.incompleteListings(horizon).isEmpty {
                 Button("Retry \(research.incompleteListings(horizon).count) incomplete", systemImage: "arrow.clockwise") {
-                    selected = nil; search = ""; presentation.filter = .topBuys
-                    research.retryIncomplete(horizon, store: store)
+                    if research.retryIncomplete(horizon, store: store) {
+                        selected = nil; search = ""; presentation.filter = .topBuys
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("research.retryIncomplete")
                 .help("Refresh only incomplete checks, retain the other opinions, then compare the entire eligible pool again.")
             }
             if research.canRetryTopFive(horizon) {
                 Button("Retry Top 5", systemImage: "arrow.clockwise") {
-                    selected = nil; search = ""; presentation.filter = .topBuys
-                    research.retryTopFive(horizon, store: store)
+                    if research.retryTopFive(horizon, store: store) {
+                        selected = nil; search = ""; presentation.filter = .topBuys
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("research.retryTopFive")
                 .help("Compare the completed checks again using their original evidence. No new stock scan.")
             }
             #if os(macOS)
@@ -246,12 +276,12 @@ struct StockSageResearchModesPanel: View {
             }
             resultFilters
             #else
-            Text("Up to \(StockSageHorizonResearch.topBuyLimit) Buy / Strong Buy")
+            Text(presentation.filter == .topBuys ? "Top 5 buys" : "Research results")
                 .font(.headline).accessibilityAddTraits(.isHeader)
             Text(StockSageHorizonResearch.topBuyRankingNote)
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !scan.topBuys.isEmpty { Self.searchField(search: $presentation.search) }
+            resultFilters
             Text("\(rows.count) shown · select a stock for evidence and scenario price levels")
                 .font(.caption).foregroundStyle(.secondary)
             #endif
@@ -271,7 +301,7 @@ struct StockSageResearchModesPanel: View {
             }
             if !isRunning, let ranked = scan.rankedTopFive(horizon: horizon, now: Date()) {
                 Divider()
-                ScrollView { StockSageTopFiveRankingSection(result: ranked).padding(24) }
+                ScrollView { StockSageTopFiveRankingSection(result: ranked, openDetails: openRankedDetail).padding(24) }
                     .frame(maxHeight: 420)
             }
             Divider()
@@ -296,7 +326,7 @@ struct StockSageResearchModesPanel: View {
             }
             if !isRunning, let ranked = scan.rankedTopFive(horizon: horizon, now: Date()) {
                 Divider()
-                StockSageTopFiveRankingSection(result: ranked).padding(.vertical, 16)
+                StockSageTopFiveRankingSection(result: ranked, openDetails: openRankedDetail).padding(.vertical, 16)
             }
             if rows.isEmpty { Divider() }
             researchFooter(scan).padding(.top, 16)
@@ -355,11 +385,9 @@ struct StockSageResearchModesPanel: View {
             } else if isRunning {
                 ProgressView().controlSize(.small).accessibilityLabel("Research scan in progress")
             }
-            #if os(macOS)
             if presentation.filter != .all {
                 Button("Show all checks") { presentation.filter = .all; search = ""; selected = nil }
             }
-            #endif
         }
     }
 
@@ -395,7 +423,7 @@ struct StockSageResearchModesPanel: View {
                 Text("\(selection.directoryCount) active US directory entries considered. Selection requested \(selection.requestedAt.formatted(date: .abbreviated, time: .shortened)). \(selection.summary)")
             }
             Text("Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open. A new run replaces this horizon’s visible results. No paper positions or real orders are created.")
-            Text("The latest complete checks for each horizon are kept after relaunch. Retry Top 5 compares that original evidence again; it does not refresh prices or news. Retry incomplete refreshes only failed checks before comparing the entire eligible pool. Older saved top-five predictions retain their original review records.")
+            Text("Completed checks are kept after relaunch. Resume checks only the remaining listings from an interrupted run and retains the original results with their captured dates. Retry Top 5 compares the original evidence again; it does not refresh prices or news. Retry incomplete refreshes only failed checks before comparing the entire eligible pool. Older saved top-five predictions retain their original review records.")
             Text("Reference prices are completed split-adjusted daily closes, not current executable quotes. Neither horizon has an independently validated profitable strategy.")
             if let at = scan.at { Text("Run requested \(at.formatted(date: .abbreviated, time: .shortened))") }
             let incomplete = scan.listings.filter { scan.results[$0.ticker] != nil && scan.results[$0.ticker]?.verdict == nil }
@@ -419,16 +447,13 @@ struct StockSageResearchModesPanel: View {
         }.frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
     }
 
-    #if os(macOS)
     private var resultFilters: some View {
-        let field = TextField("Find a symbol or company", text: $presentation.search)
-            .textFieldStyle(.roundedBorder)
-            .accessibilityLabel("Filter research by symbol or company")
-            .help(presentation.filter == .topBuys ? "Search narrows the top five; it never adds lower-ranked results." : "Search the selected checks by symbol or company.")
+        let field = Self.searchField(search: $presentation.search, filter: presentation.filter)
         let picker = Picker("Show", selection: $presentation.filter) {
             ForEach(ResultFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }.pickerStyle(.menu)
             .accessibilityLabel("Research result filter")
+            .accessibilityIdentifier("research.filter")
             .help("Incomplete: checked without a verified opinion. Not checked: includes queued listings.")
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) { field.frame(minWidth: 200); picker.fixedSize() }
@@ -436,6 +461,7 @@ struct StockSageResearchModesPanel: View {
         }.controlSize(.large)
     }
 
+    #if os(macOS)
     private func resultsTable(_ rows: [StockSageHorizonResearch.Listing], scan: StockSageHorizonResearch.Scan,
                               horizon: StockSageHorizonResearch.Horizon) -> some View {
         Table(rows, selection: $presentation.selected) {
@@ -710,14 +736,16 @@ struct StockSageResearchModesPanel: View {
         return research.isRunning(horizon) && !research.activeSymbols.isEmpty ? "Queued" : "Not checked"
     }
 
-    static func searchField(search: Binding<String>) -> some View {
-        TextField("Find in top five", text: search).textFieldStyle(.roundedBorder)
+    static func searchField(search: Binding<String>, filter: ResultFilter = .topBuys) -> some View {
+        TextField(filter == .topBuys ? "Find in top five" : "Find a symbol or company", text: search)
+            .textFieldStyle(.roundedBorder)
             #if os(iOS)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             #endif
-            .accessibilityLabel("Search top five by symbol or company")
-            .help("Search narrows this horizon’s top five; it never adds lower-ranked results.")
+            .accessibilityLabel(filter == .topBuys ? "Search top five by symbol or company" : "Filter research by symbol or company")
+            .accessibilityIdentifier("research.search")
+            .help(filter == .topBuys ? "Search narrows this horizon’s top five; it never adds lower-ranked results." : "Search the selected checks by symbol or company.")
             .controlSize(.large)
     }
 

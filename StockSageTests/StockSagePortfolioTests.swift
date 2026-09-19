@@ -9,6 +9,31 @@ import Foundation
 @MainActor
 struct StockSagePortfolioTests {
 
+    @Test func portfolioMarksExcludeSyntheticInvalidAndFutureObservations() {
+        let now = Date(timeIntervalSince1970: 1_789_812_000)
+        let real = StockSageQuote(price: 100, previousPrice: 99, marketTime: now, priceSource: .massiveSIP)
+        #expect(MarketsView.portfolioMarkPrice(real, isSampleData: false, now: now) == 100)
+        #expect(MarketsView.portfolioMarkPrice(real, isSampleData: true, now: now) == 100,
+                "An accepted real row remains usable while other rows still contain samples")
+        let unknown = StockSageQuote(price: 100, previousPrice: 99, marketTime: now)
+        #expect(MarketsView.portfolioMarkPrice(unknown, isSampleData: true, now: now) == nil)
+        let sample = StockSageQuote(price: 100, previousPrice: 99, marketTime: now, priceSource: .sample)
+        #expect(MarketsView.portfolioMarkPrice(sample, isSampleData: false, now: now) == nil)
+        for price in [0, -1, Double.infinity, Double.nan] {
+            let invalid = StockSageQuote(price: price, previousPrice: 99, marketTime: now, priceSource: .massiveSIP)
+            #expect(MarketsView.portfolioMarkPrice(invalid, isSampleData: false, now: now) == nil)
+        }
+        let future = StockSageQuote(price: 100, previousPrice: 99,
+            marketTime: now.addingTimeInterval(61), priceSource: .massiveSIP)
+        #expect(MarketsView.portfolioMarkPrice(future, isSampleData: false, now: now) == nil)
+        let old = StockSageQuote(price: 98, previousPrice: 99,
+            marketTime: now.addingTimeInterval(-7 * 86_400), priceSource: .massiveSIP)
+        #expect(MarketsView.portfolioMarkPrice(old, isSampleData: false, now: now) == 98,
+                "A last-known real mark remains useful when the UI discloses its date")
+        let undated = StockSageQuote(price: 97, previousPrice: 99, priceSource: .yahoo)
+        #expect(MarketsView.portfolioMarkPrice(undated, isSampleData: false, now: now) == 97)
+    }
+
     private func freshStore(_ tag: String) -> StockSagePortfolio {
         let name = "test.portfolio.\(tag).\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: name)

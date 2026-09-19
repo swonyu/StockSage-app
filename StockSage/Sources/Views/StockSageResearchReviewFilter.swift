@@ -36,11 +36,16 @@ nonisolated struct StockSageResearchReviewFilter: Equatable, Sendable {
     var quality: Quality = .any
     var insider: Insider = .any
     var outcome: Outcome = .any
+    var query = ""
 
     var isActive: Bool { self != Self() }
 
     func matches(_ prediction: StockSageResearchHistory.Prediction,
                  in run: StockSageResearchHistory.Run) -> Bool {
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !search.isEmpty,
+           !prediction.symbol.localizedCaseInsensitiveContains(search),
+           !prediction.name.localizedCaseInsensitiveContains(search) { return false }
         switch action {
         case .any: break
         case .buy: if prediction.action != "Buy" { return false }
@@ -77,9 +82,12 @@ nonisolated struct StockSageResearchReviewFilter: Equatable, Sendable {
         return run.predictions.filter { matches($0, in: run) }
     }
 
-    /// A run survives when it still has something to show. An empty result is reported by the
-    /// caller as an explicit "no saved research matches these filters", never as an empty list.
+    /// Zero-pick runs still contain coverage and comparison failures worth inspecting.
+    /// Only prediction-level filters may exclude them; horizon alone is a run-level filter.
     func matches(_ run: StockSageResearchHistory.Run) -> Bool {
-        !matchingPredictions(in: run).isEmpty
+        guard horizon == nil || horizon == run.horizon else { return false }
+        if action == .any, quality == .any, insider == .any, outcome == .any,
+           query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        return !matchingPredictions(in: run).isEmpty
     }
 }

@@ -6,9 +6,53 @@ import Combine
 // MARK: - User-set price alerts (async race replay + pure rules)
 
 struct StockSagePriceAlertTests {
+    @MainActor @Test(arguments: ["add", "remove", "rearm", "trigger", "import"])
+    func unregisteredWriterCannotMutatePriceAlerts(action: String) throws {
+        let name = "alerts.unregistered-mutation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let alert = PriceAlert(symbol: "AAPL", target: 100, direction: .above)
+        defaults.set(try JSONEncoder().encode([alert]), forKey: "stocksage_price_alerts")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let before = defaults.persistentDomain(forName: name) ?? [:]
+        switch action {
+        case "add": #expect(!store.addPriceAlert(symbol: "MSFT", target: 200, direction: .above))
+        case "remove": store.removePriceAlert(alert.id)
+        case "rearm": store.resetPriceAlert(alert.id)
+        case "trigger": store.markPriceAlertsTriggered([alert.id])
+        default:
+            #expect(throws: StockSageFileLock.Failure.self) {
+                try store.preparePriceAlertBackupImport([PriceAlert(symbol: "MSFT", target: 200, direction: .above)])
+            }
+        }
+        #expect(store.priceAlerts == [alert])
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: name) ?? [:]))
+    }
+
+    @MainActor @Test func unregisteredWriterCannotMonitorOrDeliverAnArmedAlert() async throws {
+        let name = "alerts.unregistered-delivery.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let alert = PriceAlert(symbol: "AAPL", target: 100, direction: .above)
+        defaults.set(try JSONEncoder().encode([alert]), forKey: "stocksage_price_alerts")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let before = defaults.persistentDomain(forName: name) ?? [:]
+        #expect(store.priceAlertsForMonitoring().isEmpty)
+        #expect(store.priceAlertsPersistenceError != nil)
+        var fetched = false, sent = false, marked = false
+        // Supply a captured alert directly: the delivery owner must enforce its own lease,
+        // even if a caller retained a previously armed definition.
+        await StockSageMonitor(defaults: defaults).checkPriceAlerts(currentAlerts: { [alert] }, fetchQuotes: { _ in
+            fetched = true
+            return ["AAPL": .init(symbol: "AAPL", price: 110, previousClose: 100, marketTime: Date())]
+        }, enqueue: { _, _ in sent = true; return true }, markTriggered: { _ in marked = true })
+        #expect(!fetched && !sent && !marked)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: name) ?? [:]))
+    }
+
     @MainActor @Test func everyFailedSavePublishesFeedbackEvenWhenTheMessageIsUnchanged() throws {
         let name = "alerts.repeated-error.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         defaults.set("invalid", forKey: "stocksage_price_alerts")
@@ -24,7 +68,7 @@ struct StockSagePriceAlertTests {
     }
     @MainActor @Test func recoveredStorageUpdatesVisibleAlertsBeforeAnyUserMutation() throws {
         let name = "alerts.read-recovery.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set("invalid", forKey: "stocksage_price_alerts")
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
@@ -35,7 +79,7 @@ struct StockSagePriceAlertTests {
     }
     @MainActor @Test func acceptedDeliverySurvivesCorruptStorageWithoutResending() async throws {
         let name = "alerts.accepted-corrupt.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         #expect(store.addPriceAlert(symbol: "FIRST", target: 100, direction: .above))
@@ -78,7 +122,7 @@ struct StockSagePriceAlertTests {
     @MainActor @Test(arguments: ["add", "remove", "rearm"])
     func corruptStorageRefusesUserEditsWithoutOptimisticChanges(edit: String) throws {
         let name = "alerts.edit-corrupt.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         #expect(store.addPriceAlert(symbol: "AAPL", target: 100, direction: .above))
@@ -96,7 +140,7 @@ struct StockSagePriceAlertTests {
     @MainActor @Test(arguments: ["removed", "muted", "triggered", "edited", "replaced", "rearmed", "cancelled", "unchanged"])
     func changesDuringQuoteFetchInvalidateTheCapturedAlert(change: String) async throws {
         let name = "price-alert.fetch.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let original = PriceAlert(symbol: "TEST", target: 100, direction: .above)
         var live = [original]
@@ -138,7 +182,7 @@ struct StockSagePriceAlertTests {
     @MainActor @Test(arguments: ["removed", "muted", "triggered", "edited", "rearmed", "cancelled", "unchanged"])
     func changesDuringFirstEnqueueProtectTheRestOfTheBatch(change: String) async throws {
         let name = "price-alert.batch.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let first = PriceAlert(symbol: "FIRST", target: 100, direction: .above)
         let second = PriceAlert(symbol: "SECOND", target: 100, direction: .above)
@@ -192,7 +236,7 @@ struct StockSagePriceAlertTests {
     @MainActor @Test(arguments: ["failed", "rearmed"])
     func lateEnqueueResultOnlyConsumesItsOriginalArm(change: String) async throws {
         let name = "price-alert.completion.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         var live = [PriceAlert(symbol: "TEST", target: 100, direction: .above)]
         let originalID = live[0].id

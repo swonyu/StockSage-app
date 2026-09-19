@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import Foundation
 import SwiftUI
 import Testing
@@ -98,6 +99,11 @@ struct StockSageIOSPresentationTests {
             presentation: Binding(get: { presentation }, set: { presentation = $0; presentationChanges += 1 }))
         let suffix = horizon == .week ? "" : "-fortnight"
         try await capture(panel.defaultAppStorage(defaults), name: "research-results\(suffix)", accessibility: accessibility) { _, window in
+            #expect(nativeElements(window).contains {
+                nativeIdentifier($0) == "research.filter" && $0.accessibilityTraits.contains(.button)
+                    && $0.accessibilityLabel?.contains("Research result filter") == true
+            },
+                    "iPhone must offer the existing All checks, opinion and incomplete filters")
             let rows = nativeElements(window).compactMap(nativeIdentifier).filter { $0.hasPrefix("research.result.") }
             #expect(Set(rows) == Set(["RKLB", "AAPL", "MSFT", "NVDA", "AMD"].map { "research.result.\($0)" }),
                     "The native main list must show only the top five, excluding the sixth Buy, Sell and incomplete check")
@@ -108,6 +114,47 @@ struct StockSageIOSPresentationTests {
                           name: "research-detail\(suffix)", accessibility: accessibility)
         #expect(presentationChanges == 0 && presentation.selected == nil && presentation.search.isEmpty
                 && presentation.horizon == horizon)
+        if horizon == .week {
+            let model = PhoneResearchPresentationModel(horizon: horizon)
+            let interactive = PhoneResearchPresentationFixture(model: model, store: store, research: research)
+                .defaultAppStorage(defaults)
+            try await capture(interactive, name: "research-filter-actions", accessibility: accessibility,
+                              viewportHeight: 812) { _, window in
+                for filter in [StockSageResearchModesPanel.ResultFilter.all, .incomplete] {
+                    let picker = try await reveal(in: window, identifier: "research.filter")
+                    try #require(picker.accessibilityActivate(), "The native research filter must open")
+                    let owner = try #require(picker as? UIButton)
+                    let choice = try await element(in: window, label: filter.rawValue)
+                    try await activateMenuChoice(filter.rawValue, rendered: choice, owner: owner)
+                    try await waitUntil("The selected research filter must update") { model.presentation.filter == filter }
+                    if filter == .all {
+                        _ = try await reveal(in: window, identifier: "research.result.ORCL")
+                        #expect(model.presentation.selected == nil,
+                                "Showing All checks must expose the original Sell without opening or changing it")
+                    }
+                }
+                let incomplete = try await reveal(in: window, identifier: "research.result.FAIL")
+                let rows = nativeElements(window).compactMap(nativeIdentifier).filter { $0.hasPrefix("research.result.") }
+                #expect(Set(rows) == ["research.result.FAIL"], "Incomplete must exclude the completed opinions")
+                try #require(incomplete.accessibilityActivate(), "The incomplete row must open its captured explanation")
+                try await waitUntil("The native row must select the incomplete check") { model.presentation.selected == "FAIL" }
+                _ = try await reveal(in: window, labelContaining: "No verified opinion. Synthetic incomplete result.")
+                let close = try await element(in: window, label: "Close details")
+                if !close.accessibilityActivate() {
+                    let control = try #require(close as? UIControl, "Close details must expose the rendered native toolbar control")
+                    try #require(control.isEnabled && control.window === window)
+                    control.sendActions(for: .touchUpInside)
+                }
+                try await waitUntil("Closing evidence must dismiss the sheet and return to the same incomplete filter") {
+                    func presented(_ controller: UIViewController) -> Bool {
+                        controller.presentedViewController != nil || controller.children.contains(where: presented)
+                    }
+                    return model.presentation.selected == nil
+                        && (window.rootViewController.map { !presented($0) } ?? false)
+                }
+                #expect(model.presentation.filter == .incomplete && model.presentation.search.isEmpty)
+            }
+        }
         #expect(research.running == nil && analyses == listings.count && research.scans[horizon]?.at == captured.at)
         #expect(research.scans[horizon]?.selection == receipt && research.scans[horizon]?.results.count == listings.count)
         #expect(store.userSymbols.isEmpty, "Rendering cannot change the isolated watchlist")
@@ -1373,6 +1420,22 @@ struct StockSageIOSPresentationTests {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         try #require(condition(), Comment(rawValue: message), sourceLocation: sourceLocation)
+    }
+}
+
+@MainActor private final class PhoneResearchPresentationModel: ObservableObject {
+    @Published var presentation: StockSageResearchModesPanel.Presentation
+    init(horizon: StockSageHorizonResearch.Horizon) { presentation = .init(horizon: horizon) }
+}
+
+@MainActor private struct PhoneResearchPresentationFixture: View {
+    @ObservedObject var model: PhoneResearchPresentationModel
+    let store: StockSageStore
+    let research: StockSageHorizonResearch
+    var body: some View {
+        ScrollView {
+            StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct StockSageResearchHomeSummary: View {
     @ObservedObject var store: StockSageStore
@@ -307,7 +308,7 @@ struct StockSageResearchHistoryView: View {
                         // offer the way back. An empty surface would read as "no saved research".
                         Section {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("No saved research matches these filters.").font(.headline)
+                                Text("No saved research matches this search or these filters.").font(.headline)
                                 Text("\(history.runs.count) saved \(history.runs.count == 1 ? "run is" : "runs are") hidden. Clearing the filters shows them again; nothing has been deleted.")
                                     .font(.callout).foregroundStyle(.secondary)
                                 Button("Clear filters") { filter = .init() }
@@ -340,6 +341,7 @@ struct StockSageResearchHistoryView: View {
                 }
             }
             .navigationTitle("Saved research")
+            .searchable(text: $filter.query, prompt: "Saved symbol or company")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
@@ -401,7 +403,7 @@ struct StockSageResearchHistoryView: View {
         guard let date = StockSageResearchHistory.checkAvailableAt(for: run) else { return availability.note }
         let dateLabel = date.formatted(date: .abbreviated, time: .shortened)
         if run.outcomePolicy == .dailyBarFirstHit {
-            return availability.state == .notDue ? "Monitoring starts after \(dateLabel)" : "Checked on settled sessions since \(dateLabel)"
+            return availability.state == .notDue ? "Monitoring starts after \(dateLabel)" : "Settled-session checks available since \(dateLabel)"
         }
         return availability.state == .notDue ? "Review available after \(dateLabel)" : "Review available since \(dateLabel)"
     }
@@ -410,6 +412,9 @@ struct StockSageResearchHistoryView: View {
 struct StockSageResearchHistoryDetail: View {
     @ObservedObject var history: StockSageResearchHistory
     let runID: UUID
+    @State private var exportDocument: StockSageResearchReportDocument?
+    @State private var showExporter = false
+    @State private var exportError: String?
 
     var body: some View {
         if let run = history.runs.first(where: { $0.id == runID }) {
@@ -453,6 +458,17 @@ struct StockSageResearchHistoryDetail: View {
                         }
                         Text("Saved opinions and their ordering are unvalidated research, not forecasts.")
                             .font(.caption).foregroundStyle(.secondary)
+                        Button {
+                            do {
+                                exportDocument = try .init(data: StockSageResearchExport.data(for: run))
+                                exportError = nil
+                                showExporter = true
+                            } catch { exportError = "Research could not be exported: \(error.localizedDescription)" }
+                        } label: { Label("Export saved research", systemImage: "square.and.arrow.up") }
+                        .accessibilityIdentifier("research.history.export")
+                        Text("JSON includes this saved shortlist, evidence, coverage and review progress; it is not a complete scan or live research.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let exportError { Text(exportError).font(.callout).foregroundStyle(.orange) }
                     }.padding(.vertical, 6)
                 }
                 if run.predictions.isEmpty {
@@ -478,6 +494,14 @@ struct StockSageResearchHistoryDetail: View {
                             } else {
                                 outcome(StockSageResearchHistory.availability(for: run, now: Date()), run: run)
                             }
+                            if let progress = run.reviewProgress?[prediction.symbol] {
+                                Text("Last checked \(progress.checkedAt.formatted(date: .abbreviated, time: .shortened)).")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                if let through = progress.verifiedThrough {
+                                    Text("Settled sessions last verified through \(StockSageResearchHistoryView.sessionDateLabel(through)).")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }.padding(.vertical, 6)
                         qualityBadge(prediction)
                         insiderActivity(prediction)
@@ -501,6 +525,13 @@ struct StockSageResearchHistoryDetail: View {
                 if let error = history.lastError { Text(error).foregroundStyle(.orange) }
             }
             .navigationTitle(run.horizon.title)
+            .fileExporter(isPresented: $showExporter, document: exportDocument, contentType: .json,
+                          defaultFilename: "StockSage-\(run.horizon.rawValue)-\(run.id.uuidString)") { result in
+                if case .failure(let error) = result,
+                   (error as? CocoaError)?.code != .userCancelled {
+                    exportError = "Research could not be exported: \(error.localizedDescription)"
+                }
+            }
         } else {
             ContentUnavailableView("Research unavailable", systemImage: "doc.text.magnifyingglass")
         }
@@ -678,5 +709,18 @@ struct StockSageResearchHistoryDetail: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct StockSageResearchReportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    let data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
+        self.data = data
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }

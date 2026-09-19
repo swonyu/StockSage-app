@@ -295,6 +295,113 @@ struct StockSageChatTests {
         #expect(chat.turns.isEmpty && chat.pending == nil && chat.draft.isEmpty)
     }
 
+    @Test func realHoldingRejectsSampleValuationAndRemovalCanBeCancelled() async throws {
+        let suite = "stocksage.portfolio.native.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        try #require(portfolio.add(symbol: "AAPL", shares: 2, costBasis: 100))
+        let original = portfolio.positions
+        let store = StockSageStore(defaults: defaults, heldSymbols: { ["AAPL"] }, journalTrades: { [] })
+        await store.seedQAIdeas(previousScanEntries: [:])
+        try #require(store.isSampleData && store.latestPrice("AAPL") != nil)
+        let live = StockSageLiveStream(), ai = StockSageAIAssessments()
+        let journal = StockSageJournalStore(defaults: defaults)
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let monitor = StockSageMonitor(defaults: defaults)
+        let velocity = StockSageVelocityHistoryStore(defaults: defaults)
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let chat = StockSageChatSession(historyURL: nil)
+        let view = MarketsView(chatSession: chat, qaSection: .portfolio, store: store,
+            aiAssessments: ai, portfolio: portfolio, journal: journal, paperStore: paper,
+            live: live, velocityHistory: velocity, monitor: monitor, researchHistory: history)
+            .defaultAppStorage(defaults)
+        _ = try await capture(view, name: "stocksage-holding-sample-removal",
+                              viewport: CGSize(width: 1000, height: 800)) { root in
+            #expect(nativeAccessibilityText(in: root).contains("— no price"),
+                    "A real holding must not acquire a value or profit from a sample quote")
+            let remove = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityLabel?() == "Remove AAPL"
+            })
+            try #require(remove.accessibilityPerformPress?() == true)
+            #expect(portfolio.positions == original, "Pressing trash must not delete before confirmation")
+            #expect(try portfolio.backupRecords() == original)
+            let window = try #require(root.window)
+            // AppKit can expose the SwiftUI action proxy before its confirmation sheet
+            // has attached. Let the native presentation finish before choosing an action.
+            try await Task.sleep(for: .milliseconds(250))
+            let pid = ProcessInfo.processInfo.processIdentifier
+            let accessibilityReady = await Task.detached {
+                let application = AXUIElementCreateApplication(pid)
+                AXUIElementSetMessagingTimeout(application, 1)
+                var windows: CFTypeRef?
+                return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows).rawValue
+            }.value
+            try #require(accessibilityReady == AXError.success.rawValue)
+            var cancel: AnyObject?
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while cancel == nil, ContinuousClock.now < deadline {
+                let presentations = window.sheets + (window.childWindows ?? [])
+                let elements = presentations.flatMap { nativeAccessibilityElements(in: $0) }
+                    + nativeAccessibilityElements(in: window)
+                // Prefer the attached AppKit button over the declarative action proxy.
+                let nativeButton = elements.compactMap { $0 as? NSButton }.first {
+                    $0.title == "Cancel" && $0.isEnabled && $0.window?.isVisible == true
+                }
+                if let nativeButton { cancel = nativeButton }
+                else {
+                    cancel = elements.first {
+                        $0.accessibilityRole?() == .button
+                            && $0.isAccessibilityEnabled?() == true
+                            && $0.accessibilityFrame?().isEmpty == false
+                            && ($0.accessibilityIdentifier?() == "portfolio.cancelRemove"
+                                || $0.accessibilityLabel?() == "Cancel")
+                    }
+                }
+                if cancel == nil { try await Task.sleep(for: .milliseconds(10)) }
+            }
+            for surface in [window] + window.sheets + (window.childWindows ?? []) {
+                print("NATIVE_CONFIRM_WINDOW type=\(type(of: surface)) number=\(surface.windowNumber) visible=\(surface.isVisible) key=\(surface.isKeyWindow) sheet=\(surface.sheetParent != nil) attached=\(surface.attachedSheet != nil) frame=\(surface.frame)")
+                for element in nativeAccessibilityElements(in: surface) where
+                    element.accessibilityIdentifier?() == "portfolio.cancelRemove"
+                        || element.accessibilityLabel?() == "Cancel" || (element as? NSButton)?.title == "Cancel" {
+                    printNativeAction(element, context: "cancel candidate")
+                }
+            }
+            if cancel == nil { printNativeActions(in: window, context: "missing portfolio cancel button") }
+            let action = try #require(cancel, "The native confirmation must offer Cancel")
+            printNativeAction(action, context: "chosen cancel")
+            // The confirmation identifier can belong to a non-actionable SwiftUI wrapper.
+            // Dispatch through its real native button, never the portfolio's mutation API.
+            if let button = action as? NSButton {
+                try #require(button.isEnabled && button.window != nil)
+                button.performClick(nil)
+            } else if let cell = action as? NSButtonCell {
+                try #require(cell.isEnabled && cell.controlView?.window != nil)
+                cell.performClick(nil)
+            } else {
+                let pressed = action.accessibilityPerformPress?() == true
+                if !pressed { printNativeActions(in: window, context: "portfolio confirmation") }
+                try #require(pressed)
+            }
+            let dismissedBy = ContinuousClock.now.advanced(by: .seconds(3))
+            while nativeAccessibilityElements(in: window).contains(where: {
+                $0.accessibilityRole?() == .button && $0.accessibilityIdentifier?() == "portfolio.confirmRemove"
+            }), ContinuousClock.now < dismissedBy { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(!nativeAccessibilityElements(in: window).contains {
+                $0.accessibilityRole?() == .button && $0.accessibilityIdentifier?() == "portfolio.confirmRemove"
+            }, "Cancel must dismiss the native confirmation")
+            let saved = try portfolio.backupRecords()
+            #expect(portfolio.positions == original && saved == original,
+                    "Cancel must preserve the lot and its original identity on disk")
+        }
+        #expect(!live.isStreaming && !monitor.isRunning && !store.isRefreshing)
+        #expect(chat.turns.isEmpty && journal.trades.isEmpty && paper.trades.isEmpty && history.runs.isEmpty)
+    }
+
     @Test(arguments: [900, 1300])
     func chatModelSettingsButtonRevealsActualCatalystsControls(width: Int) async throws {
         try #require(StockSageStore.isRunningTests)
@@ -396,6 +503,125 @@ struct StockSageChatTests {
             .background(DS.Palette.bgTop).environment(\.colorScheme, .dark)
         let size = try await capture(view, name: "stocksage-research-progress-\(width)-\(checked)")
         #expect(size.width == CGFloat(width) && size.height > 90)
+    }
+
+    @Test func rankedUnqualifiedBuyIdentifiesTheOriginalOpinion() async throws {
+        typealias T = StockSageTopFiveRanking
+        let row = T.Ranked(rank: 1, symbol: "SAIL", action: "Buy", status: .notQualified,
+            components: .init(horizonFit: 2, technicalConfluence: 5, catalystQuality: 0,
+                liquidity: 4, evidenceFreshness: 5, insiderRelevance: 0, counterevidence: -2,
+                hardPenalties: -10), insiderSignals: [],
+            failedGates: ["No qualifying public catalyst."], hardPenaltyReasons: [])
+        let result = T.Result(version: 1, horizon: "1–7 trading days", ranked: [row],
+                              concentrationGuardApplied: false)
+        _ = try await capture(StockSageTopFiveRankingSection(result: result).padding(16),
+            name: "stocksage-ranked-original-opinion", viewport: CGSize(width: 700, height: 360)) { root in
+            let text = nativeAccessibilityText(in: root)
+            #expect(text.contains("Model opinion: Buy"),
+                    "An unqualified original Buy must identify its source, separate from eligibility")
+            #expect(text.contains("Not qualified"))
+            #expect(!text.contains("never shown as Buy or Strong Buy"),
+                    "The introduction must not contradict the preserved original opinion")
+        }
+        #expect(result.ranked[0].action == "Buy" && result.ranked[0].status == .notQualified)
+    }
+
+    @Test func rankedNavigationOpensCapturedDetailAndBlockedRetryPreservesTheView() async throws {
+        typealias R = StockSageHorizonResearch
+        let suite = "stocksage.research.actions.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        await store.seedQAIdeas()
+        try #require(store.isSampleData)
+        let research = R()
+        let at = Date(timeIntervalSince1970: 1_789_477_200)
+        let listings = ["SAIL", "FAIL"].map {
+            R.Listing(ticker: $0, name: "\($0) synthetic", market: "stocks", locale: "us", active: true,
+                      type: "CS", currency_name: "usd", primary_exchange: "XNAS")
+        }
+        let receipt = StockSageResearchQualification.Receipt(version: 1, symbol: "SAIL", horizon: R.Horizon.week.rawValue,
+            capturedAt: at, evidenceAsOf: at, barDate: nil, criticalCaptureReady: false,
+            measurements: .init(completedBars: nil, close: nil, sma20: nil, horizonReturnPercent: nil,
+                volumeRatio: nil, atr14: nil, stopLow: nil, targetHigh: nil),
+            earnings: .init(relation: "unknown", outcome: "unavailable", date: nil, confirmed: nil,
+                checkedAt: nil, recordedAt: nil), candidateCatalysts: [], citedQualifyingKeys: [],
+            originalAction: "Buy", scenario: nil, reasons: ["No qualifying public catalyst."])
+        var analyses = 0
+        let started = research.start(.week, allowed: { true }, universe: { .init(listings) },
+            rank: { _, _ in .failure(.modelFailure) }, analyze: { item in
+                analyses += 1
+                if item.ticker == "FAIL" { return .init(note: "Synthetic incomplete check.", at: at) }
+                return .init(verdict: .init(action: .buy, reason: "Original SAIL captured interpretation.",
+                    risk: "Synthetic risk.", evidence: []), note: "Captured SAIL research only.", at: at,
+                    model: "fixture", qualification: receipt)
+            })
+        try #require(started)
+        defer { research.stop() }
+        func waitFor(_ ready: @MainActor () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready())
+        }
+        try await waitFor { research.running == nil }
+        try #require(analyses == 2 && research.scans[.week]?.rankedTopFive(horizon: .week, now: at)?.ranked.first?.symbol == "SAIL")
+        let model = ResearchPresentationModel()
+        model.presentation.filter = .incomplete
+        model.presentation.search = "FAIL"
+        model.presentation.selected = "FAIL"
+        let view = ResearchPresentationFixture(model: model, store: store, research: research, showsDetail: true)
+            .defaultAppStorage(defaults)
+        _ = try await capture(view, name: "stocksage-research-native-actions", viewport: CGSize(width: 900, height: 800)) { root in
+            let retry = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityIdentifier?() == "research.retryIncomplete"
+            })
+            try #require(retry.accessibilityPerformPress?() == true)
+            try await waitFor { research.scans[.week]?.status.contains("retry did not start") == true }
+            #expect(model.presentation.selected == "FAIL" && model.presentation.search == "FAIL"
+                    && model.presentation.filter == .incomplete,
+                    "A blocked retry must keep the current evidence and filters open")
+            func scrollViews(in view: NSView) -> [NSScrollView] {
+                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+            }
+            let scroll = try #require(scrollViews(in: root).first { scroll in
+                guard let document = scroll.documentView else { return false }
+                return nativeAccessibilityText(in: document).contains("Top 5 · deterministic ranking")
+            })
+            let document = try #require(scroll.documentView)
+            var ranked: AnyObject?
+            for _ in 0..<12 {
+                ranked = nativeAccessibilityElements(in: document).first {
+                    $0.accessibilityRole?() == .button
+                        && ($0.accessibilityIdentifier?() == "research.topfive.open.SAIL"
+                            || ($0.accessibilityLabel?() ?? "").hasPrefix("Rank 1, SAIL,"))
+                }
+                if let ranked, let screenFrame = ranked.accessibilityFrame?(), let window = root.window {
+                    let inWindow = window.convertFromScreen(screenFrame)
+                    let inDocument = document.convert(inWindow, from: nil)
+                    document.scrollToVisible(inDocument.insetBy(dx: 0, dy: -4))
+                    break
+                }
+                let clip = scroll.contentView
+                let next = clip.bounds.minY + (document.isFlipped ? 40 : -40)
+                clip.scroll(to: NSPoint(x: clip.bounds.minX,
+                    y: max(document.bounds.minY, min(document.bounds.maxY - clip.bounds.height, next))))
+                scroll.reflectScrolledClipView(clip)
+                root.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            if ranked == nil { printNativeActions(in: document, context: "ranked research") }
+            let rankedButton = try #require(ranked, "Reveal the ranked stock's native detail button")
+            try await Task.sleep(for: .milliseconds(50))
+            try #require(rankedButton.accessibilityPerformPress?() == true)
+            try await waitFor {
+                model.presentation.selected == "SAIL" && model.presentation.filter == .all
+                    && model.presentation.search.isEmpty
+                    && nativeAccessibilityText(in: root).contains("Original SAIL captured interpretation.")
+            }
+            #expect(nativeAccessibilityText(in: root).contains("No qualifying public catalyst."))
+            #expect(nativeAccessibilityText(in: root).contains("Not qualified for Top 5"))
+        }
+        #expect(research.running == nil && analyses == 2 && research.scans[.week]?.results["SAIL"]?.at == at)
     }
 
     @Test(arguments: [360, 760])
@@ -1476,6 +1702,28 @@ struct StockSageChatTests {
         return elements
     }
 
+    private func nativeAccessibilityText(in root: Any) -> String {
+        nativeAccessibilityElements(in: root).flatMap { element -> [String] in
+            let selector = NSSelectorFromString("accessibilityValue")
+            let value = (element as? NSObject).flatMap { object -> String? in
+                guard object.responds(to: selector) else { return nil }
+                return object.perform(selector)?.takeUnretainedValue() as? String
+            }
+            return [element.accessibilityLabel?(), value].compactMap { $0 }
+        }.joined(separator: "\n")
+    }
+
+    private func printNativeActions(in root: Any, context: String) {
+        for element in nativeAccessibilityElements(in: root).prefix(100) {
+            printNativeAction(element, context: context)
+        }
+    }
+
+    private func printNativeAction(_ element: AnyObject, context: String) {
+        let window = (element as? NSView)?.window ?? (element.accessibilityWindow?() as? NSWindow)
+        print("NATIVE_ACTION \(context) type=\(type(of: element)) role=\(String(describing: element.accessibilityRole?())) id=\(element.accessibilityIdentifier?() ?? "") label=\(element.accessibilityLabel?() ?? "") enabled=\(String(describing: element.isAccessibilityEnabled?())) frame=\(String(describing: element.accessibilityFrame?())) window=\(window?.windowNumber ?? -1) visible=\(window?.isVisible ?? false) sheet=\(window?.sheetParent != nil)")
+    }
+
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil,
                          usesIntrinsicSizing: Bool = false, inspect: ((NSView) async throws -> Void)? = nil) async throws -> CGSize {
         let previousAppearance = NSApp.appearance
@@ -2207,8 +2455,16 @@ struct StockSageChatTests {
     @ObservedObject var model: ResearchPresentationModel
     let store: StockSageStore
     let research: StockSageHorizonResearch
+    var showsDetail = false
     var body: some View {
-        StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
+        let panel = StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
+        HStack(spacing: 0) {
+            panel
+            if showsDetail && panel.detailPresented.wrappedValue {
+                Divider()
+                panel.selectedDetail.frame(width: 320)
+            }
+        }
             .onAppear { model.appearances += 1 }
             .frame(width: 900, height: 800)
     }

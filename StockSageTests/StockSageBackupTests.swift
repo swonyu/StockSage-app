@@ -7,10 +7,40 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @MainActor @Test(arguments: ["journal", "portfolio"])
+    func conflictingRecordIDsRejectTheWholeRestore(collection: String) throws {
+        let name = "stocksage-backup-record-conflict-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let originalTrade = fixtureTrade(), originalPosition = fixturePosition()
+        var conflictingTrade = originalTrade
+        conflictingTrade.exitPrice = 170
+        var conflictingPosition = originalPosition
+        conflictingPosition.shares = 20
+        let data = try StockSageBackup.export(
+            trades: collection == "journal" ? [originalTrade, conflictingTrade] : [originalTrade],
+            positions: collection == "portfolio" ? [originalPosition, conflictingPosition] : [originalPosition],
+            userSymbols: ["NVDA"], priceAlerts: [fixturePriceAlert()])
+        let before = defaults.persistentDomain(forName: name) ?? [:]
+
+        switch StockSageBackup.restore(from: data, journal: journal, portfolio: portfolio, store: store) {
+        case .success: Issue.record("Conflicting \(collection) identities must reject the entire backup")
+        case .failure(let error):
+            #expect(error.localizedDescription.contains(collection))
+            #expect(error.localizedDescription.localizedCaseInsensitiveContains("conflict"))
+        }
+        #expect(journal.trades.isEmpty && portfolio.positions.isEmpty && store.userSymbols.isEmpty
+            && store.priceAlerts.isEmpty)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: name) ?? [:]))
+    }
+
     @MainActor @Test(arguments: [false, true], [false, true])
     func normalAlertMutationPreservesUnreadableCommittedStorage(wrongType: Bool, afterLoad: Bool) throws {
         let name = "alerts.corrupt.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let corrupt: Any = wrongType ? "unreadable alerts" : Data("[{".utf8)
         if !afterLoad { defaults.set(corrupt, forKey: "stocksage_price_alerts") }

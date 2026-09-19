@@ -7,6 +7,7 @@ import SwiftUI
 /// signal. Self-contained so it can be dropped into any completed-run surface with one call site.
 struct StockSageTopFiveRankingSection: View {
     let result: StockSageTopFiveRanking.Result
+    var openDetails: ((String) -> Void)? = nil
 
     private func priceLabel(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(1))) }
 
@@ -17,7 +18,7 @@ struct StockSageTopFiveRankingSection: View {
                 Spacer()
                 Text("\(result.ranked.count) ranked").font(.caption).foregroundStyle(.secondary)
             }
-            Text("A fixed, explainable score — never a model call, never a probability. A row that failed the strict screen shows its real action and exact failed gates; it is never shown as Buy or Strong Buy.")
+            Text("A fixed, explainable score, not a probability. Model opinions are shown unchanged. Ranked rows can fail the strict screen; only rows marked Qualified passed every required gate. Open a stock to review its captured evidence.")
                 .font(.caption).foregroundStyle(.secondary)
             if result.concentrationGuardApplied {
                 Text("Sector/catalyst concentration guard applied: no more than \(StockSageTopFiveRanking.maximumPerConcentrationKey) of these five share one concentration key without a material score advantage.")
@@ -32,15 +33,38 @@ struct StockSageTopFiveRankingSection: View {
 
     @ViewBuilder private func row(for row: StockSageTopFiveRanking.Ranked) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
-            HStack {
-                Text("#\(row.rank)").font(.title3.weight(.semibold)).monospacedDigit()
-                Text(row.symbol).font(.headline)
-                Text(row.action).font(.callout).foregroundStyle(row.status == .qualified ? DS.Palette.successSoft : .secondary)
-                Spacer()
-                Text(row.status == .qualified ? "Qualified" : "Not qualified")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(row.status == .qualified ? DS.Palette.successSoft : DS.Palette.accentText)
-                Text(priceLabel(row.components.total)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            let opinion = Text("Model opinion: \(row.action)").font(.callout).foregroundStyle(.secondary)
+            let status = Text(row.status == .qualified ? "Qualified" : "Not qualified")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(row.status == .qualified ? DS.Palette.successSoft : DS.Palette.accentText)
+            let score = Text("Score \(priceLabel(row.components.total))")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            let header = VStack(alignment: .leading, spacing: DS.Space.xs) {
+                HStack {
+                    Text("#\(row.rank)").font(.title3.weight(.semibold)).monospacedDigit()
+                    Text(row.symbol).font(.headline)
+                    Spacer()
+                    if openDetails != nil {
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        opinion.fixedSize(); Spacer(minLength: DS.Space.sm)
+                        status.fixedSize(); score.fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: DS.Space.xs) { opinion; status; score }
+                }
+            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+            if let openDetails {
+                Button { openDetails(row.symbol) } label: { header }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Rank \(row.rank), \(row.symbol), Model opinion: \(row.action), \(row.status == .qualified ? "Qualified" : "Not qualified"), score \(priceLabel(row.components.total))")
+                    .accessibilityHint("Open captured research, evidence and failed gates")
+                    .accessibilityIdentifier("research.topfive.open.\(row.symbol)")
+            } else {
+                header
             }
             // Every named component, always visible — this is the "explainable" part.
             Text("Horizon fit \(priceLabel(row.components.horizonFit)) · Technical \(priceLabel(row.components.technicalConfluence)) · Catalyst \(priceLabel(row.components.catalystQuality)) · Liquidity \(priceLabel(row.components.liquidity)) · Freshness \(priceLabel(row.components.evidenceFreshness)) · Insider \(priceLabel(row.components.insiderRelevance)) · Counterevidence \(priceLabel(row.components.counterevidence))")

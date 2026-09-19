@@ -5,6 +5,85 @@ import Testing
 @Suite("Personal watchlist", .serialized)
 @MainActor
 struct StockSageWatchlistTests {
+    @Test func staleRemovalPreservesAnotherWritersAddition() async throws {
+        let name = "stocksage-watchlist-remove-stale-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        let stale = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let writer = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(await writer.addSymbol("RKLB") == nil)
+
+        stale.removeSymbol("AAPL")
+
+        #expect(stale.userSymbols == ["RKLB"])
+        #expect(defaults.stringArray(forKey: "stocksage_user_symbols") == ["RKLB"])
+    }
+
+    @Test(arguments: [false, true])
+    func staleAddOrImportDoesNotResurrectDeletedSymbols(importing: Bool) async throws {
+        let name = "stocksage-watchlist-add-stale-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["AAPL", "MSFT"], forKey: "stocksage_user_symbols")
+        let stale = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        StockSageStore(defaults: defaults, heldSymbols: { [] }).removeSymbol("AAPL")
+
+        if importing { try stale.prepareBackupImport(["RKLB"]).apply() }
+        else { #expect(await stale.addSymbol("RKLB") == nil) }
+
+        #expect(stale.userSymbols == ["MSFT", "RKLB"])
+        #expect(defaults.stringArray(forKey: "stocksage_user_symbols") == ["MSFT", "RKLB"])
+    }
+
+    @Test func explicitReadditionUsesCommittedMembershipRatherThanStaleMemory() async throws {
+        let name = "stocksage-watchlist-readd-stale-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        let stale = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        StockSageStore(defaults: defaults, heldSymbols: { [] }).removeSymbol("AAPL")
+
+        #expect(await stale.addSymbol("AAPL") == nil)
+        #expect(defaults.stringArray(forKey: "stocksage_user_symbols") == ["AAPL"])
+    }
+
+    @Test(arguments: [false, true])
+    func removalPreservesStorageThatBecameUnreadable(wrongType: Bool) throws {
+        let name = "stocksage-watchlist-remove-corrupt-\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let corrupt: Any = wrongType ? 42 : Data("unreadable".utf8)
+        defaults.set(corrupt, forKey: "stocksage_user_symbols")
+        let before = defaults.persistentDomain(forName: name) ?? [:]
+
+        store.removeSymbol("AAPL")
+
+        #expect(store.userSymbols == ["AAPL"])
+        #expect(store.watchlistPersistenceError != nil)
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: name) ?? [:]))
+    }
+
+    @Test(arguments: ["add", "remove", "import"])
+    func unregisteredWriterCannotChangeTheWatchlist(action: String) async throws {
+        let name = "stocksage-watchlist-unregistered-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(["AAPL"], forKey: "stocksage_user_symbols")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let before = defaults.persistentDomain(forName: name) ?? [:]
+        switch action {
+        case "add": #expect(await store.addSymbol("RKLB") != nil)
+        case "remove": store.removeSymbol("AAPL")
+        default:
+            #expect(throws: StockSageFileLock.Failure.self) { try store.prepareBackupImport(["RKLB"]) }
+        }
+        #expect(store.userSymbols == ["AAPL"])
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: name) ?? [:]))
+    }
+
     @Test func catalogTickerCanBeSavedAndReloadedWithoutReplacingItsMarketRow() async throws {
         let name = "stocksage-watchlist-\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
@@ -59,6 +138,7 @@ struct StockSageWatchlistTests {
         #expect(await store.addSymbol("RKLB") != nil)
         #expect(defaults.integer(forKey: "stocksage_user_symbols") == 42)
         #expect(store.userSymbols.isEmpty && store.symbols.isEmpty)
+        #expect(store.watchlistPersistenceError != nil)
     }
 
     @Test(arguments: ["add rklb to watchlist", "Please add $RKLB to my watchlist.",

@@ -48,7 +48,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let basis: String
     }
     nonisolated struct Result: Sendable {
-        enum ValidationOutcome: String, Sendable { case validated, rejected, unknown }
+        enum ValidationOutcome: String, Codable, Sendable { case validated, rejected, unknown }
         var verdict: StockSageAIAssessment.Verdict?
         var levels: Levels?
         var facts: [String] = []
@@ -100,6 +100,9 @@ final class StockSageHorizonResearch: ObservableObject {
         var changes: [String: String] = [:]
         var completedAt: Date? = nil
         var previousCompletedAt: Date? = nil
+        var isInterrupted = false
+        /// Digest only; never an endpoint, credential or model setting value.
+        var resumeConfigurationID: String? = nil
 
         func isEligible(_ symbol: String) -> Bool {
             guard let result = results[symbol], result.verdict?.action == .buy || result.verdict?.action == .strongBuy else { return false }
@@ -173,9 +176,14 @@ final class StockSageHorizonResearch: ObservableObject {
                     persistCompletedRun(horizon)
                 }
             }
+            if let interrupted = history?.interruptedScan(horizon: horizon) {
+                scans[horizon] = interrupted
+                completedRuns.removeValue(forKey: horizon)
+                retainCompleteInterruptedChecks(horizon)
+            }
         }
     }
-    enum ScanFailure: Error { case modelUnavailable(String), checkpointUnavailable }
+    enum ScanFailure: Error { case modelUnavailable(String), checkpointUnavailable, interruptedCheckpointUnavailable }
     private static let session = URLSession(configuration: .ephemeral, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
 
     // Vendor contract: massive.com/docs/rest/stocks/tickers/all-tickers, checked 2026-09-09.
@@ -438,23 +446,38 @@ final class StockSageHorizonResearch: ObservableObject {
         parallelism: @escaping @MainActor () -> Int = { 1 },
         concurrentGathering: Bool = false,
         qualificationPolicyVersion: Int? = nil,
+        configurationID: String? = nil,
+        resuming: Scan? = nil,
         receiptStore: StockSageResearchReceiptStore? = nil, receiptAnalyzer: MultiReceiptAnalyzer? = nil,
         makeAnalysis: @escaping @MainActor (Listing) async -> Analysis) -> Bool {
         guard task == nil, allowed(), !horizons.isEmpty, Set(horizons).count == horizons.count,
               qualificationPolicyVersion == nil || qualificationPolicyVersion == 1 else { return false }
+        if let resuming {
+            guard horizons.count == 1, resuming.isInterrupted, resuming.at != nil,
+                  resuming.resumeConfigurationID == configurationID,
+                  resuming.qualificationPolicyVersion == qualificationPolicyVersion else { return false }
+        }
         let previous = scans
-        let startedAt = Date()
+        let requestedAt = Date()
+        let startedAt = resuming?.at ?? requestedAt
         let receiptIDs = Dictionary(uniqueKeysWithValues: horizons.compactMap { horizon in
             receiptStore.map { (horizon, $0.begin(horizon: horizon, at: startedAt)) }
         })
         running = horizons[0]; runningHorizons = horizons
         for horizon in horizons {
-            scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) NASDAQ common stocks by dated trading activity…", at: startedAt,
+            if var retained = resuming {
+                retained.isInterrupted = false; retained.lastAttemptAt = requestedAt
+                retained.status = "Resuming remaining listings. Original checks keep their dates; remaining checks use fresh evidence…"
+                scans[horizon] = retained
+            } else {
+                scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) NASDAQ common stocks by dated trading activity…", at: startedAt,
                 qualificationPolicyVersion: qualificationPolicyVersion, requestedAt: startedAt, lastAttemptAt: startedAt,
-                previousCompletedAt: previous[horizon]?.completedAt)
+                previousCompletedAt: previous[horizon]?.completedAt, resumeConfigurationID: configurationID)
+            }
         }
         task = Task {
             var didStart = false
+            var progressSaveFailed = false
             var completed: Set<Horizon> = []
             var receiptAttempts: [Horizon: [String: UUID]] = [:]
             @MainActor func finish(_ horizon: Horizon, count: Int) async throws {
@@ -468,7 +491,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     outcome = await rank(captured, horizon)
                     guard valid() else { throw CancellationError() }
                 } else { outcome = .failure(.unavailable) }
-                finishComparison(outcome, horizon: horizon, earliestRankingAt: startedAt,
+                finishComparison(outcome, horizon: horizon, earliestRankingAt: requestedAt,
                     id: completedRuns[horizon]?.id ?? UUID())
                 completed.insert(horizon)
                 runningHorizons.removeAll { $0 == horizon }; running = runningHorizons.first
@@ -485,7 +508,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 }
                 activeSymbols.removeAll(); running = nil; runningHorizons = []; task = nil
             }
-            let valid: @MainActor @Sendable () -> Bool = { !Task.isCancelled && allowed() }
+            let valid: @MainActor @Sendable () -> Bool = { !Task.isCancelled && allowed() && !progressSaveFailed }
             do {
                 let selection = try await universe()
                 guard valid() else { throw CancellationError() }
@@ -493,14 +516,20 @@ final class StockSageHorizonResearch: ObservableObject {
                 guard Set(directory.map(\.ticker)).count == directory.count, directory.count <= 50_000 else { throw URLError(.cannotParseResponse) }
                 didStart = true
                 let names = Array(directory.prefix(Self.scanLimit))
+                guard resuming == nil || resuming?.listings == names else { throw URLError(.cannotParseResponse) }
                 for horizon in horizons {
                     scans[horizon]?.listings = names
                     scans[horizon]?.selection = selection.receipt
+                    if let history, let scan = scans[horizon], !history.saveInterruptedChecks(scan, horizon: horizon) {
+                        progressSaveFailed = true
+                        throw ScanFailure.interruptedCheckpointUnavailable
+                    }
                     if let receiptStore, let receiptID = receiptIDs[horizon] {
                         let ids = receiptStore.registerSelection(selection.receipt, listings: names, for: receiptID)
                         receiptAttempts[horizon] = Dictionary(uniqueKeysWithValues: zip(names.map(\.ticker), ids))
                     }
                 }
+                let pendingNames = names.filter { item in horizons.contains { scans[$0]?.results[item.ticker] == nil } }
                 let updateProgress: @MainActor @Sendable () -> Void = {
                     guard valid() else { return }
                     for horizon in horizons {
@@ -512,15 +541,15 @@ final class StockSageHorizonResearch: ObservableObject {
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     var occupied = 0, next = 0
                     let gatherLimit = concurrentGathering ? 2 : 1
-                    while next < names.count {
-                        while occupied + min(gatherLimit, min(min(8, max(1, parallelism())), names.count - next))
+                    while next < pendingNames.count {
+                        while occupied + min(gatherLimit, min(min(8, max(1, parallelism())), pendingNames.count - next))
                             > min(8, max(1, parallelism())) {
                             try await group.next()
                             occupied -= 1
                         }
                         guard valid() else { throw CancellationError() }
-                        let count = min(gatherLimit, min(min(8, max(1, parallelism())), names.count - next))
-                        let items = Array(names[next..<(next + count)])
+                        let count = min(gatherLimit, min(min(8, max(1, parallelism())), pendingNames.count - next))
+                        let items = Array(pendingNames[next..<(next + count)])
                         for item in items { activeSymbols.insert(item.ticker) }
                         updateProgress()
                         let analyses = await Self.prepareAnalyses(items[0], second: items.count == 2 ? items[1] : nil,
@@ -532,6 +561,7 @@ final class StockSageHorizonResearch: ObservableObject {
                                 defer { self.activeSymbols.remove(item.ticker); updateProgress() }
                                 for horizon in horizons {
                                     guard valid() else { throw CancellationError() }
+                                    guard self.scans[horizon]?.results[item.ticker] == nil else { continue }
                                     let attemptID = attemptIDs[horizon], receiptID = receiptIDs[horizon]
                                     if let receiptStore, let attemptID, let receiptID {
                                         receiptStore.beginAttempt(attemptID, scanID: receiptID)
@@ -550,6 +580,10 @@ final class StockSageHorizonResearch: ObservableObject {
                                     guard valid() else { throw CancellationError() }
                                     self.scans[horizon]?.results[item.ticker] = result
                                     self.scans[horizon]?.changes[item.ticker] = StockSageResearchFreshness.change(from: previous[horizon]?.results[item.ticker], to: result)
+                                    if let history = self.history, let scan = self.scans[horizon], !history.saveInterruptedChecks(scan, horizon: horizon) {
+                                        progressSaveFailed = true
+                                        throw ScanFailure.interruptedCheckpointUnavailable
+                                    }
                                     updateProgress()
                                 }
                             }
@@ -569,17 +603,21 @@ final class StockSageHorizonResearch: ObservableObject {
                 for horizon in horizons {
                     if let history, let pending = completedRuns[horizon], let scan = scans[horizon],
                        !history.saveCompletedChecks(pending, scan: scan) { throw ScanFailure.checkpointUnavailable }
+                    if let history { _ = history.clearInterruptedChecks(horizon: horizon, startedAt: startedAt) }
                 }
                 for horizon in horizons { try await finish(horizon, count: names.count) }
             } catch {
                 for horizon in horizons where !completed.contains(horizon) {
                     scans[horizon]?.isComparing = false
+                    if didStart { scans[horizon]?.isInterrupted = true }
                     if !didStart, let old = previous[horizon] {
                         scans[horizon] = old
-                        scans[horizon]?.lastAttemptAt = startedAt
+                        scans[horizon]?.lastAttemptAt = requestedAt
                         scans[horizon]?.retainsEarlierResults = true
                     }
-                    if !valid() {
+                    if progressSaveFailed {
+                        scans[horizon]?.status = "Research progress could not be saved. No further checks started; existing checkpoint bytes are preserved. Keep the app open and resolve storage access before resuming."
+                    } else if !valid() {
                         let reason = Task.isCancelled ? "Stop requested" : (interruptionReason() ?? "Model settings or access changed")
                         let count = scans[horizon]?.results.count ?? 0
                         let allChecked = didStart && count > 0 && count == scans[horizon]?.listings.count
@@ -588,7 +626,8 @@ final class StockSageHorizonResearch: ObservableObject {
                             : allChecked ? "All \(count) checks retained; top five comparison was not completed."
                             : "\(count) completed results retained; remaining listings were not checked."
                         if allChecked { scans[horizon]?.rankingFailure = "Comparison stopped before completion. All checks remain available." }
-                        scans[horizon]?.status = "Scan stopped · \(reason). \(retained) Run again when ready."
+                        let nextStep = didStart && !allChecked ? "Resume remaining checks when ready." : "Retry comparison or Run again when ready."
+                        scans[horizon]?.status = "Scan stopped · \(reason). \(retained) \(nextStep)"
                     } else if case ScanFailure.checkpointUnavailable = error {
                         scans[horizon]?.needsSaving = true
                         scans[horizon]?.status = "All checks finished, but could not be saved for recovery. Comparison has not started. Keep the app open and use Retry save after resolving storage access."
@@ -602,6 +641,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     if !didStart, previous[horizon] != nil {
                         scans[horizon]?.status += " Earlier scan data retained; no new listings checked."
                     }
+                    if didStart { retainCompleteInterruptedChecks(horizon) }
                 }
             }
         }
@@ -614,7 +654,8 @@ final class StockSageHorizonResearch: ObservableObject {
         switch outcome {
         case .success(let receipt):
             let eligible = Set(scan.listings.filter { scan.isEligible($0.ticker) }.map(\.ticker))
-            if StockSageResearchRanking.valid(receipt), receipt.version == (scan.qualificationPolicyVersion == nil ? 1 : 2),
+            if StockSageResearchRanking.valid(receipt), StockSageResearchRanking.supports(version: receipt.version,
+                strictQualification: scan.qualificationPolicyVersion == 1),
                Set(receipt.candidateSymbols) == eligible,
                receipt.horizon == horizon.rawValue, receipt.at >= earliestRankingAt, receipt.at <= Date() {
                 scan.ranking = receipt; scan.rankingFailure = nil
@@ -643,7 +684,49 @@ final class StockSageHorizonResearch: ObservableObject {
             : " Research could not be saved for review. \(recordError ?? "Check storage access.")"
         if !retained { scan.status += " \(checkpointError ?? "Full checks could not be saved for recovery.") Keep the app open." }
         if scan.needsSaving { scan.status += " Use Retry save after resolving storage access." }
+        if retained { _ = history.clearInterruptedChecks(horizon: horizon, startedAt: run.startedAt) }
         scans[horizon] = scan
+    }
+
+    /// A fully checked horizon can outlive interruption of its sibling horizon. Preserve
+    /// those checks for comparison retry, without publishing any incomplete prediction.
+    private func retainCompleteInterruptedChecks(_ horizon: Horizon) {
+        guard var scan = scans[horizon], scan.isInterrupted, let began = scan.at,
+              !scan.listings.isEmpty, Set(scan.listings.map(\.ticker)) == Set(scan.results.keys) else { return }
+        scan.isInterrupted = false
+        if completedRuns[horizon]?.startedAt == began { scans[horizon] = scan; return }
+        scan.ranking = nil; scan.rankingFailure = "All checks retained; Top 5 comparison remains unfinished."
+        scan.completedAt = Date()
+        scan.status = "All checks retained with their original dates. Retry Top 5 when ready."
+        let run = StockSageResearchHistory.snapshot(startedAt: began, completedAt: scan.completedAt!, horizon: horizon, scan: scan)
+        completedRuns[horizon] = run; scans[horizon] = scan
+        persistCompletedRun(horizon)
+    }
+
+    func remainingListings(_ horizon: Horizon) -> [Listing] {
+        guard task == nil, let scan = scans[horizon], scan.isInterrupted, scan.at != nil else { return [] }
+        return scan.listings.filter { scan.results[$0.ticker] == nil }
+    }
+
+    @discardableResult func resumeRemaining(_ horizon: Horizon, configurationID: String? = nil,
+        allowed: @escaping @MainActor () -> Bool,
+        parallelism: @escaping @MainActor () -> Int = { 1 },
+        concurrentGathering: Bool = false,
+        makeAnalysis: @escaping @MainActor (Listing) async -> Analysis,
+        rank: (@MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>)? = nil) -> Bool {
+        guard !remainingListings(horizon).isEmpty, let original = scans[horizon] else { return false }
+        guard original.resumeConfigurationID == configurationID else {
+            scans[horizon]?.status = "The model configuration changed. Resume did not start; original evidence retained. Restore the original settings or start a new Run."
+            return false
+        }
+        guard allowed() else {
+            scans[horizon]?.status = "Research access is unavailable. Resume did not start; original evidence retained."
+            return false
+        }
+        return start([horizon], allowed: allowed, universe: { .init(original.listings, receipt: original.selection) },
+            rank: rank, parallelism: parallelism, concurrentGathering: concurrentGathering,
+            qualificationPolicyVersion: original.qualificationPolicyVersion, configurationID: configurationID,
+            resuming: original, makeAnalysis: makeAnalysis)
     }
 
     func retrySave(_ horizon: Horizon) {
@@ -685,18 +768,28 @@ final class StockSageHorizonResearch: ObservableObject {
         return true
     }
 
-    func retryTopFive(_ horizon: Horizon, store: StockSageStore) {
-        guard canRetryTopFive(horizon) else { return }
-        guard let config = StockSageAIAssessments.configuration, ToolPolicy.isExternalAllowed, !store.isSampleData else {
-            scans[horizon]?.status = "Enable web access and the local model in Settings to retry Top 5. Original checks retained."
-            return
+    private func retryAccessBlocker(store: StockSageStore, needsMarketData: Bool) -> String? {
+        if StockSageLocalModelServer.isShuttingDown { return "StockSage is closing." }
+        if !ToolPolicy.isExternalAllowed { return "Web access is disabled. Enable it in Settings." }
+        if store.isSampleData { return "Leave sample data before retrying research." }
+        if StockSageAIAssessments.configuration == nil { return "The explanation model is not configured. Finish setup in Catalysts → Explanation model." }
+        if needsMarketData && !StockSageMassive.isConfigured { return "Massive is not configured. Add market data access in Settings." }
+        return nil
+    }
+
+    @discardableResult func retryTopFive(_ horizon: Horizon, store: StockSageStore) -> Bool {
+        guard canRetryTopFive(horizon) else { return false }
+        if let blocker = retryAccessBlocker(store: store, needsMarketData: false) {
+            scans[horizon]?.status = blocker + " Top 5 retry did not start; original checks retained."
+            return false
         }
+        guard let config = StockSageAIAssessments.configuration else { return false }
         let revision = StockSageLocalModelServer.settingsRevision()
         let allowed: @MainActor () -> Bool = {
             !StockSageLocalModelServer.isShuttingDown && ToolPolicy.isExternalAllowed && !store.isSampleData
                 && StockSageAIAssessments.configuration == config && StockSageLocalModelServer.settingsRevision() == revision
         }
-        retryTopFive(horizon, allowed: allowed) { scan, horizon in
+        return retryTopFive(horizon, allowed: allowed) { scan, horizon in
             let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
             guard probe.reachable, probe.hasModel else { return .failure(.modelFailure) }
             return await StockSageResearchRanking.rank(scan: scan, horizon: horizon, config: config,
@@ -790,9 +883,13 @@ final class StockSageHorizonResearch: ObservableObject {
         return true
     }
 
-    func retryIncomplete(_ horizon: Horizon, store: StockSageStore) {
-        guard !incompleteListings(horizon).isEmpty, let config = StockSageAIAssessments.configuration,
-              StockSageMassive.isConfigured, ToolPolicy.isExternalAllowed, !store.isSampleData else { return }
+    @discardableResult func retryIncomplete(_ horizon: Horizon, store: StockSageStore) -> Bool {
+        guard !incompleteListings(horizon).isEmpty else { return false }
+        if let blocker = retryAccessBlocker(store: store, needsMarketData: true) {
+            scans[horizon]?.status = blocker + " Incomplete-check retry did not start; original checks retained."
+            return false
+        }
+        guard let config = StockSageAIAssessments.configuration else { return false }
         let key = StockSageMassive.apiKey
         let credentials = StockSageMassive.credentialRevision()
         let revision = StockSageLocalModelServer.settingsRevision()
@@ -805,7 +902,7 @@ final class StockSageHorizonResearch: ObservableObject {
         var isOllama = false
         var prepared = false
         var modelReady = true
-        retryIncomplete(horizon, allowed: { allowed() && modelReady }, parallelism: { capacity },
+        return retryIncomplete(horizon, allowed: { allowed() && modelReady }, parallelism: { capacity },
             concurrentGathering: config.isRunPodGemma, makeAnalysis: { item in
             if !prepared {
                 let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
@@ -832,7 +929,20 @@ final class StockSageHorizonResearch: ObservableObject {
     func start(_ horizon: Horizon, store: StockSageStore) { start([horizon], store: store) }
 
     func start(_ horizons: [Horizon], store: StockSageStore) {
-        guard task == nil, !horizons.isEmpty else { return }
+        _ = launch(horizons, store: store)
+    }
+
+    @discardableResult func resumeRemaining(_ horizon: Horizon, store: StockSageStore) -> Bool {
+        guard !remainingListings(horizon).isEmpty, let original = scans[horizon] else { return false }
+        if let blocker = retryAccessBlocker(store: store, needsMarketData: true) {
+            scans[horizon]?.status = blocker + " Resume did not start; original evidence retained."
+            return false
+        }
+        return launch([horizon], store: store, resuming: original)
+    }
+
+    private func launch(_ horizons: [Horizon], store: StockSageStore, resuming: Scan? = nil) -> Bool {
+        guard task == nil, !horizons.isEmpty else { return false }
         guard let config = StockSageAIAssessments.configuration, StockSageMassive.isConfigured,
               ToolPolicy.isExternalAllowed, !store.isSampleData else {
             let attemptedAt = Date()
@@ -844,11 +954,18 @@ final class StockSageHorizonResearch: ObservableObject {
                 scans[horizon]?.status = "Enable web access, Massive and the local model in Settings. No scan started."
                     + (retained ? " Earlier scan data retained; no new listings checked." : "")
             }
-            return
+            return false
         }
         let key = StockSageMassive.apiKey
         let credentialRevision = StockSageMassive.credentialRevision()
         let revision = StockSageLocalModelServer.settingsRevision()
+        let identity = StockSageResearchHistory.configurationIdentity(config)
+        if let resuming, resuming.resumeConfigurationID != identity {
+            for horizon in horizons {
+                scans[horizon]?.status = "The model configuration changed. Resume did not start; original evidence retained. Start a new Run to research with the current configuration."
+            }
+            return false
+        }
         let interruptionReason: @MainActor () -> String? = {
             if StockSageLocalModelServer.isShuttingDown { return "StockSage is closing" }
             if !ToolPolicy.isExternalAllowed { return "Web access was disabled" }
@@ -862,13 +979,15 @@ final class StockSageHorizonResearch: ObservableObject {
         var selection: StockSageResearchUniverse.Receipt?
         var parallelism = 1
         var refreshCapacityAfterLoad = false
-        _ = start(horizons, allowed: allowed, interruptionReason: interruptionReason, universe: {
+        return start(horizons, allowed: allowed, interruptionReason: interruptionReason, universe: {
             let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
             guard probe.reachable, probe.hasModel else { throw ScanFailure.modelUnavailable(probe.detail) }
             isOllama = probe.isOllama
             parallelism = probe.researchParallelism
             refreshCapacityAfterLoad = parallelism == 1
-            let result = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed)
+            let result: StockSageResearchUniverse.Selection
+            if let resuming { result = .init(resuming.listings, receipt: resuming.selection) }
+            else { result = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed) }
             selection = result.receipt
             return result
         }, rank: { scan, horizon in
@@ -876,7 +995,8 @@ final class StockSageHorizonResearch: ObservableObject {
                 isOllama: isOllama, allowed: allowed, progress: { status in
                     self.scans[horizon]?.status = status
                 })
-        }, parallelism: { parallelism }, concurrentGathering: config.isRunPodGemma, qualificationPolicyVersion: 1, makeAnalysis: { item in
+        }, parallelism: { parallelism }, concurrentGathering: config.isRunPodGemma, qualificationPolicyVersion: 1,
+            configurationID: identity, resuming: resuming, makeAnalysis: { item in
             let gathered = await Self.gather(item, store: store, key: key, allowed: allowed,
                 selectionFact: selection?.detail(for: item.ticker))
             let analyze = Self.preparedAnalysis(gathered, config: config, isOllama: isOllama, allowed: allowed, qualify: true)

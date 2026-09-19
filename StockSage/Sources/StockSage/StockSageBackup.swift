@@ -11,8 +11,8 @@ import Foundation
 //
 // HONESTY FLOOR: merge missing record IDs only; existing records win, never guess or
 // overwrite quantities/costs. The two file pickers share the same application path.
-// ponytail: four UserDefaults writes are not crash-atomic or cross-process locked;
-// a transactional store is needed for that stronger guarantee.
+// ponytail: the writer lease excludes other current app copies, but these four
+// UserDefaults writes are not crash-atomic; that requires a transactional store.
 enum StockSageBackup {
 
     // MARK: Payload
@@ -35,6 +35,7 @@ enum StockSageBackup {
         case invalidPosition(index: Int)
         case invalidSymbol(index: Int, reason: String)
         case invalidPriceAlert(index: Int, reason: String)
+        case conflictingRecordID(collection: String, index: Int)
         case restoreFailed(String)
 
         var errorDescription: String? {
@@ -55,6 +56,8 @@ enum StockSageBackup {
                 return "Invalid watchlist entry \(index): \(reason) Nothing was restored."
             case .invalidPriceAlert(let index, let reason):
                 return "Invalid price alert \(index): \(reason) Nothing was restored."
+            case .conflictingRecordID(let collection, let index):
+                return "Invalid \(collection) record \(index): its ID conflicts with an earlier record. Nothing was restored."
             case .restoreFailed(let reason):
                 return "Couldn't prepare the saved records: \(reason) Nothing was restored."
             }
@@ -145,6 +148,9 @@ enum StockSageBackup {
                     skipped: payload.trades.count + payload.positions.count + payload.userSymbols.count
                         + alertCount - trades.added - positions.added - symbols.added - alertsAdded))
             } catch let error as BackupError {
+                if case .sourceReadFailed = error {
+                    return .failure(.restoreFailed(error.localizedDescription))
+                }
                 return .failure(error)
             } catch {
                 return .failure(.restoreFailed(error.localizedDescription))
@@ -171,6 +177,7 @@ enum StockSageBackup {
             guard payload.schemaVersion == currentSchemaVersion else {
                 return .failure(.unsupportedSchemaVersion(found: payload.schemaVersion, supported: currentSchemaVersion))
             }
+            var seenTrades: [UUID: TradeRecord] = [:]
             for (index, trade) in payload.trades.enumerated() {
                 if let error = trade.ownerJournalError { return .failure(.invalidJournalRecord(index: index + 1, reason: error)) }
                 guard !trade.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -180,12 +187,21 @@ enum StockSageBackup {
                       trade.conviction.map({ $0.isFinite && (0...1).contains($0) }) ?? true else {
                     return .failure(.invalidJournalRecord(index: index + 1, reason: "Invalid ticker, price, size or conviction."))
                 }
+                if let prior = seenTrades[trade.id], prior != trade {
+                    return .failure(.conflictingRecordID(collection: "journal", index: index + 1))
+                }
+                seenTrades[trade.id] = trade
             }
+            var seenPositions: [UUID: PortfolioPosition] = [:]
             for (index, position) in payload.positions.enumerated() {
                 guard !position.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       position.shares > 0, position.shares.isFinite,
                       position.costBasis >= 0, position.costBasis.isFinite,
                       position.totalCost.isFinite else { return .failure(.invalidPosition(index: index + 1)) }
+                if let prior = seenPositions[position.id], prior != position {
+                    return .failure(.conflictingRecordID(collection: "portfolio", index: index + 1))
+                }
+                seenPositions[position.id] = position
             }
             for (index, raw) in payload.userSymbols.enumerated() {
                 let validated = StockSageStore.validateNewSymbol(raw, alreadyTracked: [])

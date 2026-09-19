@@ -7,7 +7,7 @@ struct StockSageRemovalDuringScanTests {
     @Test(arguments: ["full-before", "retry-before", "full-after", "retry-after", "only-removed", "holding", "unchanged"])
     func removalWinsAcrossPublishedChunksAndCancellation(mode: String) async throws {
         let name = "scan.removal.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(["TESTGONE", "TESTKEEP"], forKey: "stocksage_user_symbols")
         let store = StockSageStore(defaults: defaults, heldSymbols: { mode == "holding" ? ["TESTGONE"] : [] })

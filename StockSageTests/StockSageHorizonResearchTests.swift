@@ -4,6 +4,171 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
+    @Test(arguments: [false, true])
+    func currentRankingReceiptPublishesAndRestoresAcrossQualificationPolicies(strict: Bool) async throws {
+        let history = StockSageResearchHistory()
+        let research = R(history: history)
+        let config = StockSageLocalModelServer.Config(baseURL: URL(string: "http://127.0.0.1:1234")!,
+                                                     model: "offline-ranking-fixture")
+        let started = research.start([.week], allowed: { true }, universe: { .init([listing("AAA")]) },
+            rank: { scan, horizon in
+                await StockSageResearchRanking.rank(scan: scan, horizon: horizon, config: config,
+                    isOllama: false, allowed: { true }, modelTransport: { _ in
+                        Issue.record("An empty eligible pool must not make a model request")
+                        throw URLError(.badServerResponse)
+                    })
+            }, qualificationPolicyVersion: strict ? 1 : nil, makeAnalysis: { _ in
+                { _ in .init(note: "Unavailable synthetic check") }
+            })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil)
+        let scan = try #require(research.scans[.week])
+        #expect(scan.ranking?.version == StockSageResearchRanking.currentVersion)
+        #expect(scan.rankingFailure == nil)
+        #expect(history.runs.first?.ranking?.version == StockSageResearchRanking.currentVersion)
+        #expect(R(history: history).scans[.week]?.ranking == scan.ranking)
+    }
+
+    @Test func interruptedChecksSurviveRelaunchWithoutBecomingPredictions() async throws {
+        let suite = "stocksage.research.interrupted.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let research = R(history: history)
+        let names = [listing("AAA"), listing("BBB")]
+        var waiting: CheckedContinuation<Void, Never>?
+        defer { research.stop(); waiting?.resume() }
+        let started = research.start(.week, allowed: { true }, universe: { .init(names) }, analyze: { item in
+            if item.ticker == "BBB" { await withCheckedContinuation { waiting = $0 } }
+            return .init(verdict: .init(action: .hold, reason: "Original case", risk: "Original risk", evidence: ["F1"]),
+                         facts: ["Original evidence \(item.ticker)"], note: "Captured once", model: "fixture")
+        })
+        try #require(started)
+        for _ in 0..<100 where waiting == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(waiting != nil)
+        let original = try #require(research.scans[.week]?.results["AAA"])
+        let began = research.scans[.week]?.at
+        research.stop(); waiting?.resume(); waiting = nil
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        let reopened = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let restored = R(history: reopened)
+        let interrupted = try #require(restored.scans[.week])
+        #expect(interrupted.listings == names && interrupted.at == began)
+        #expect(interrupted.results["AAA"]?.facts == original.facts && interrupted.results["AAA"]?.at == original.at)
+        #expect(interrupted.results["BBB"] == nil && interrupted.ranking == nil && interrupted.topBuys.isEmpty)
+        #expect(reopened.runs.isEmpty, "Interrupted progress must never masquerade as completed predictions")
+        #expect(restored.remainingListings(.week).map(\.ticker) == ["BBB"])
+        var visited: [String] = []
+        let resumed = restored.resumeRemaining(.week, allowed: { true }, makeAnalysis: { item in
+            visited.append(item.ticker)
+            return { _ in
+                .init(verdict: .init(action: .hold, reason: "Fresh case", risk: "Fresh risk", evidence: ["F1"]),
+                      facts: ["Fresh evidence \(item.ticker)"], note: "Fresh capture", model: "fixture")
+            }
+        })
+        try #require(resumed)
+        for _ in 0..<100 where restored.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(visited == ["BBB"] && restored.remainingListings(.week).isEmpty)
+        #expect(restored.scans[.week]?.at == began && restored.scans[.week]?.listings == names)
+        #expect(restored.scans[.week]?.results["AAA"]?.facts == original.facts)
+        #expect(restored.scans[.week]?.results["AAA"]?.at == original.at)
+        #expect(reopened.runs.count == 1 && reopened.runs[0].coverage.checked == 2)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("interrupted-7.json").path))
+        let completed = try #require(R(history: StockSageResearchHistory(storageURL: url, defaults: defaults)).scans[.week])
+        #expect(completed.results["AAA"]?.at == original.at && completed.results["BBB"]?.facts == ["Fresh evidence BBB"])
+    }
+
+    @Test(arguments: [false, true])
+    func resumeRejectsChangedConfigurationOrRevokedAccessWithoutPublishingLateChecks(changeDuringRun: Bool) async throws {
+        let history = StockSageResearchHistory()
+        var scan = R.Scan()
+        scan.at = Date().addingTimeInterval(-2); scan.listings = [listing("AAA"), listing("BBB")]
+        scan.resumeConfigurationID = String(repeating: "a", count: 64)
+        scan.results["AAA"] = .init(note: "Original unavailable check", at: Date().addingTimeInterval(-1))
+        try #require(history.saveInterruptedChecks(scan, horizon: .week))
+        let research = R(history: history)
+        var allowed = true, calls = 0
+        var held: CheckedContinuation<Void, Never>?
+        defer { research.stop(); held?.resume() }
+        let resumed = research.resumeRemaining(.week,
+            configurationID: String(repeating: changeDuringRun ? "a" : "b", count: 64), allowed: { allowed },
+            makeAnalysis: { _ in
+                calls += 1
+                return { _ in
+                    await withCheckedContinuation { held = $0 }
+                    return .init(note: "Late check must not publish")
+                }
+            })
+        if changeDuringRun {
+            try #require(resumed)
+            for _ in 0..<100 where held == nil { try await Task.sleep(for: .milliseconds(5)) }
+            try #require(held != nil)
+            allowed = false; held?.resume(); held = nil
+            for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(calls == 1)
+        } else {
+            #expect(!resumed && calls == 0)
+            #expect(research.scans[.week]?.status.contains("configuration changed") == true)
+        }
+        #expect(research.scans[.week]?.results["BBB"] == nil && history.runs.isEmpty)
+        let recovered = try #require(R(history: history).scans[.week])
+        #expect(recovered.results["AAA"]?.at == scan.results["AAA"]?.at && recovered.results["BBB"] == nil)
+    }
+
+    @Test func corruptInterruptedCheckpointStopsBeforeNewEvidenceAndPreservesBytes() async throws {
+        let suite = "stocksage.research.interrupted-corrupt.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let checkpoint = directory.appendingPathComponent("interrupted-7.json")
+        let original = Data("unreadable original interrupted evidence".utf8)
+        try original.write(to: checkpoint)
+        let history = StockSageResearchHistory(storageURL: directory.appendingPathComponent("history.json"), defaults: defaults)
+        let research = R(history: history)
+        var captures = 0
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAA")]) }, analyze: { _ in
+            captures += 1; return .init(note: "Must not capture")
+        })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(captures == 0 && history.runs.isEmpty)
+        #expect(research.scans[.week]?.status.contains("progress could not be saved") == true)
+        #expect(try Data(contentsOf: checkpoint) == original)
+    }
+
+    @Test func finalProgressSaveFailureKeepsCompleteChecksRecoverableAndPreservesCorruptBytes() async throws {
+        let suite = "stocksage.research.final-progress-failure.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let checkpoint = directory.appendingPathComponent("interrupted-7.json")
+        let corrupt = Data("interrupted checkpoint became unreadable during the final check".utf8)
+        let history = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let research = R(history: history)
+        var captures = 0
+        let started = research.start(.week, allowed: { true }, universe: { .init([listing("AAA")]) }, analyze: { _ in
+            captures += 1
+            do { try corrupt.write(to: checkpoint) } catch { Issue.record("Could not inject bounded fixture corruption: \(error)") }
+            return .init(verdict: .init(action: .buy, reason: "Case", risk: "Risk", evidence: ["F1"]),
+                         facts: ["Retained final evidence"], note: "Final original check", model: "fixture")
+        })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(captures == 1 && research.scans[.week]?.results.count == 1)
+        #expect(research.canRetryTopFive(.week) || research.scans[.week]?.needsSaving == true,
+                "A complete in-memory result must always retain a comparison or storage recovery action")
+        #expect(research.scans[.week]?.topBuys.isEmpty == true)
+        #expect(history.runs.allSatisfy { $0.predictions.isEmpty })
+        let retained = try #require(history.completedScan(horizon: .week))
+        #expect(retained.scan.results["AAA"]?.facts == ["Retained final evidence"])
+        #expect(try Data(contentsOf: checkpoint) == corrupt)
+    }
+
     @Test func retryOnlyFourIncompleteKeepsOther496AndComparesEveryUpdatedBuy() async throws {
         let history = StockSageResearchHistory()
         let research = R(history: history)
@@ -1593,7 +1758,8 @@ import Testing
                 prepared.append(item.ticker)
                 return { horizon in
                     if horizon == .fortnight { await withCheckedContinuation { waiting[item.ticker] = $0 } }
-                    return .init(verdict: .init(action: .hold, reason: "Case", risk: "Risk", evidence: []), note: item.ticker)
+                    return .init(verdict: .init(action: .hold, reason: "Case", risk: "Risk", evidence: ["F1"]),
+                                 facts: ["Captured fixture evidence"], note: item.ticker, model: "fixture")
                 }
             })
         #expect(started)
