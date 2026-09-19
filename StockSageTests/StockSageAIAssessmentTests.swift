@@ -1391,12 +1391,27 @@ struct StockSageAIAssessmentTests {
         for horizon in StockSageHorizonResearch.Horizon.allCases {
             let text = horizon.instructions
             #expect(text.contains(horizon.rawValue))
-            #expect(text.contains("Longer historical windows are background evidence, not a holding horizon."))
-            #expect(text.contains("A catalyst must have a dated source"))
+            #expect(text.contains("No plans beyond 14 trading days"))
+            #expect(text.contains("longer history is background, not a holding horizon"))
+            #expect(text.contains("Catalysts need dated sources and event timing within this horizon"))
+            #expect(text.contains("Undated, past or distant events are context"))
+            #expect(text.contains("recent publication does not change event timing"))
+            #expect(text.contains("Manual only; no scheduled picks or automatic trading"))
             #expect(text.contains("Do not propose intraday or same-session day-trading strategies"))
+            #expect(text.contains("earnings holding-window check is authoritative"))
+            #expect(text.contains("no relative earnings dates, durations, month parts or event probabilities"))
+            #expect(text.contains("unknown dates prove neither timing nor absence of risk"))
+            #expect(text.contains("Projected dates are not announcements; past results are not the next report"))
+            #expect(text.contains("Never omit an insider record because it conflicts with your action."))
+            #expect(text.contains("report a purchase as a purchase and a sale as a sale"))
+            #expect(text.contains("Do not infer motive"))
+            #expect(horizon.assessmentInstructions(qualify: false) == text)
+            let qualified = horizon.assessmentInstructions(qualify: true)
+            #expect(qualified.hasPrefix(text))
+            #expect(qualified.contains("no critical unresolved data gap"))
+            #expect(qualified.contains("Never invent catalysts or override the app's authoritative measured screen"))
         }
-        // The shared focus statement names BOTH horizons on purpose; what must differ is the
-        // horizon this assessment is actually for.
+        // Each assessment names only its requested holding horizon; Chat has a separate overview.
         let week = StockSageHorizonResearch.Horizon.week.instructions
         let fortnight = StockSageHorizonResearch.Horizon.fortnight.instructions
         #expect(week != fortnight)

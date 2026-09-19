@@ -18,14 +18,18 @@ final class StockSageHorizonResearch: ObservableObject {
         """
         var instructions: String {
             StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
-                with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Daily technical rules are unvalidated background.")
-                + "\nManual multi-session research only; no scheduled picks or automatic trading. No plans beyond 14 trading days; longer historical windows are background evidence. Do not propose intraday or same-session day-trading strategies. "
+                with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. Trading days, not calendar days; daily rules are unvalidated background.")
+                + "\nManual only; no scheduled picks or automatic trading. No plans beyond 14 trading days; longer history is background, not a holding horizon. Do not propose intraday or same-session day-trading strategies. "
                 + (self == .week
-                    ? "Prioritize current price/volume confirmation, dated near-term developments and overnight risk. A long-term story or past return alone is not an entry case."
-                    : "Assess persistence, follow-through, intervening events and a fading case. A brief price spike alone does not establish persistence; consider overnight risk.")
-                + "\nGive the strongest supported setup in reason and a concrete invalidation or missing evidence in risk. Cite both. Do not invent entry/exit levels or returns. Past dollar volume and gaps do not establish executable liquidity or guaranteed stop fills."
-                + "\nA catalyst needs a dated source and plausible event timing within this horizon. Undated, past or distant milestones are context. Recent publication does not move the underlying event into this window."
-                + "\nUse the app-calculated earnings holding-window check as authoritative for timing. Do not calculate or state relative earnings dates, durations, month parts, or event probabilities in reason/risk. An outside-window date cannot be an in-window catalyst; unknown dates cannot establish either timing or absence of risk. Projected dates are not announcements. Historical earnings results are separate from the next report."
+                    ? "Prioritize price/volume confirmation, dated near-term developments and overnight risk. Past returns or a long-term story alone cannot justify entry."
+                    : "Assess persistence, follow-through, intervening events, fading setups and overnight risk. A brief price spike alone does not establish persistence.")
+                + "\nCite the strongest supported setup in reason and concrete invalidation or missing evidence in risk. Do not invent entry/exit levels. Past volume/gaps cannot prove executable liquidity or guaranteed stop fills."
+                + "\nCatalysts need dated sources and event timing within this horizon. Undated, past or distant events are context; recent publication does not change event timing."
+                + "\nThe app's earnings holding-window check is authoritative. In reason/risk, no relative earnings dates, durations, month parts or event probabilities. Outside-window dates are not catalysts; unknown dates prove neither timing nor absence of risk. Projected dates are not announcements; past results are not the next report."
+        }
+
+        func assessmentInstructions(qualify: Bool) -> String {
+            instructions + (qualify ? "\nBuy / Strong Buy needs a cited recent catalyst, positive price/volume confirmation, defensible historical-range stop/target and no critical unresolved data gap. Never invent catalysts or override the app's authoritative measured screen. Consider Hold otherwise." : "")
         }
     }
     nonisolated struct Listing: Codable, Identifiable, Sendable, Equatable {
@@ -1452,7 +1456,7 @@ final class StockSageHorizonResearch: ObservableObject {
         if let qualification {
             mandatory.append(.init(key: "research.qualification.v1", text: qualification.fact, required: true, availability: .available))
         }
-        let system = horizon.instructions + (qualify ? "\nBe selective. Buy / Strong Buy needs a cited recent catalyst, positive price/volume confirmation, a defensible historical-range stop/target and no critical unresolved data gap. The app's strict screen is authoritative for its measured criteria. Public insider purchases and sales remain evidence; preserve their source meaning. Hold is appropriate when the buying case is insufficient. Do not invent a catalyst or change the measured screen to justify Buy." : "")
+        let system = horizon.assessmentInstructions(qualify: qualify)
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optional.map(\.text),
             mandatory: mandatory.map(\.text), system: { _ in system },
             optionalKeys: optional.map(\.key), outputTokens: config.reservedOutputTokens(for: outputTokens)) else {

@@ -132,8 +132,8 @@ struct StockSageModelHarnessTests {
     // count -- it sends `config.reservedOutputTokens(for:)`, which DOUBLES any initial value in
     // 1...512 once `requiresStrictOutput` is true. After Step 7 the strict Gemma profile is the
     // DEFAULT path, so this guard must model that doubling, not the pre-doubling raw value, or a
-    // caller could pass this test while failing on every real request. Also adds the previously
-    // uncovered `qualify` binding caller (outputTokens: 384, StockSageHorizonResearch.swift).
+    // caller could pass this test while trimming evidence on real requests. Qualified research
+    // must include its production suffix for BOTH horizons and the larger 384-token retry.
     @Test func everyEvidenceHeavyCallerFitsItsDeclaredWindow() {
         let research = S.researchContextTokens
         let strictConfig = try! #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
@@ -146,21 +146,52 @@ struct StockSageModelHarnessTests {
              StockSageHorizonResearch.researchOutputTokens, research),
             ("horizon-fortnight", StockSageHorizonResearch.Horizon.fortnight.instructions,
              StockSageHorizonResearch.researchOutputTokens, research),
-            ("horizon-qualify", StockSageHorizonResearch.Horizon.week.instructions, 384, research),
             ("same-day", StockSageSameDayResearch.instructions, StockSageHorizonResearch.researchOutputTokens, research),
             ("narrator", StockSageCatalystNarrator.instructions, 170, research),
-        ]
+        ] + StockSageHorizonResearch.Horizon.allCases.flatMap { horizon in
+            [StockSageHorizonResearch.researchOutputTokens, 384].map { output in
+                ("qualified-\(horizon.rawValue)-\(output)", horizon.assessmentInstructions(qualify: true), output, research)
+            }
+        }
         for caller in callers {
             let reserved = strictConfig.reservedOutputTokens(for: caller.outputTokens)
             let allowance = S.maximumUserBytes(system: caller.system, outputTokens: reserved,
                                                contextTokens: caller.context)
             // Each of these callers caps its compiled facts at 12,000 UTF-8 bytes. If the
-            // allowance drops below that, the caller starts failing on every real request.
+            // allowance drops below that, a full packet requires disclosed evidence omissions.
             // Measured, not guessed: print the actual headroom above the 12,000-byte floor.
             print("[everyEvidenceHeavyCallerFitsItsDeclaredWindow] \(caller.name): raw=\(caller.outputTokens) reserved=\(reserved) allowance=\(allowance) headroom=\(allowance - 12_000)")
             #expect(allowance >= 12_000,
                     "\(caller.name) allows only \(allowance) bytes (reserved output \(reserved), doubled from \(caller.outputTokens)) but compiles up to 12,000")
         }
+    }
+
+    @Test(arguments: StockSageHorizonResearch.Horizon.allCases, [StockSageHorizonResearch.researchOutputTokens, 384])
+    func qualifiedResearchFitsFullTwelveKilobyteEvidence(horizon: StockSageHorizonResearch.Horizon,
+                                                        outputTokens: Int) throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        let reserved = config.reservedOutputTokens(for: outputTokens)
+        let system = horizon.assessmentInstructions(qualify: true)
+        let mandatory = [
+            "Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management.",
+            "Earnings holding-window check: unknown; next report date unavailable.",
+            "Strict screen: no critical unresolved data gap is allowed for Buy / Strong Buy.",
+        ]
+        var optional = (1...40).map { "Evidence record \($0): " + String(repeating: "e", count: 240) }
+        let padding = 12_000 - StockSageAIAssessment.prompt(facts: optional + mandatory).utf8.count
+        try #require(padding > 0)
+        optional[optional.count - 1] += String(repeating: "e", count: padding)
+        let fullPrompt = StockSageAIAssessment.prompt(facts: optional + mandatory)
+        #expect(fullPrompt.utf8.count == 12_000, "the fixture includes numbering and mandatory facts")
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: optional, mandatory: mandatory, system: { _ in system },
+            outputTokens: reserved, contextTokens: S.researchContextTokens))
+        #expect(fitted.isComplete)
+        #expect(fitted.omitted == 0)
+        #expect(fitted.facts == optional + mandatory)
+        #expect(fitted.user == fullPrompt)
+        #expect(S.promptFits(system: fitted.system, user: fitted.user,
+                             outputTokens: reserved, contextTokens: S.researchContextTokens))
     }
 
     // Chat's own prompt budget must stay strictly inside the seam's, or every Chat turn

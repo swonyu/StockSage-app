@@ -341,7 +341,7 @@ struct StockSageHorizonAnalyzeTests {
         let strictAnalysis = Research.preparedAnalysis(gathered, config: config, isOllama: true,
             allowed: { true }, modelTransport: { request in
                 let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
-                #expect(body.contains("Strict qualification v1") && body.contains("Be selective"))
+                #expect(body.contains("Strict qualification v1") && body.contains("no critical unresolved data gap"))
                 return Self.ok(Self.verdictPayload(action: "Buy"), request)
             }, evidenceIsCurrent: { _ in true }, qualify: true)
         let strict = await strictAnalysis(.fortnight)
@@ -793,7 +793,8 @@ struct StockSageHorizonAnalyzeTests {
             let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
             let messages = try #require(body["messages"] as? [[String: String]])
             let system = try #require(messages.first(where: { $0["role"] == "system" })?["content"])
-            #expect(system.contains("multi-session"), "The repair must retain the holding-horizon constraint")
+            #expect(system.contains("for a \(Research.Horizon.week.rawValue) holding horizon"),
+                    "The repair must retain the requested holding horizon")
             #expect(system.contains("same-session day-trading"))
             #expect(system.contains("beyond 14 trading days"))
             if calls == 1 {
@@ -875,10 +876,10 @@ struct StockSageHorizonAnalyzeTests {
             throw URLError(.cancelled) // Observe the real dispatch without a model or provider request.
         })
         #expect(sentSystem.contains("for a \(horizon.rawValue) holding horizon"))
-        #expect(sentSystem.contains("multi-session"))
+        #expect(sentSystem.contains("Manual only; no scheduled picks or automatic trading"))
         #expect(sentSystem.contains("Do not propose intraday or same-session day-trading strategies"))
         #expect(sentSystem.contains("beyond 14 trading days"))
-        #expect(sentSystem.contains("historical windows are background evidence"))
+        #expect(sentSystem.contains("longer history is background, not a holding horizon"))
         #expect(sentUser.contains(horizon.rawValue))
         #expect(sentUser.localizedCaseInsensitiveContains("Research only"))
     }
