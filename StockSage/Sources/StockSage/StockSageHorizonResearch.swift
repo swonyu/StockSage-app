@@ -563,7 +563,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     while next < pendingNames.count {
                         var count: Int
                         while true {
-                            let capacity = min(16, max(1, parallelism()))
+                            let capacity = min(24, max(1, parallelism()))
                             count = min(gatherLimit, min(capacity, pendingNames.count - next))
                             if occupied + count <= capacity { break }
                             try await group.next()
@@ -577,7 +577,7 @@ final class StockSageHorizonResearch: ObservableObject {
                             makeAnalysis: makeAnalysis)
                         guard valid() else { throw CancellationError() }
                         for (item, analyze) in zip(items, analyses) {
-                            while occupied >= min(16, max(1, parallelism())) {
+                            while occupied >= min(24, max(1, parallelism())) {
                                 try await group.next()
                                 occupied -= 1
                             }
@@ -870,7 +870,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     while next < missing.count {
                         var count: Int
                         while true {
-                            let capacity = min(16, max(1, parallelism()))
+                            let capacity = min(24, max(1, parallelism()))
                             count = min(gatherLimit, min(capacity, missing.count - next))
                             if occupied + count <= capacity { break }
                             if let result = try await group.next() { try accept(result) }
@@ -883,7 +883,7 @@ final class StockSageHorizonResearch: ObservableObject {
                             makeAnalysis: makeAnalysis)
                         guard valid() else { throw CancellationError() }
                         for (item, analyze) in zip(items, analyses) {
-                            while occupied >= min(16, max(1, parallelism())) {
+                            while occupied >= min(24, max(1, parallelism())) {
                                 if let result = try await group.next() { try accept(result) }
                                 occupied -= 1
                             }

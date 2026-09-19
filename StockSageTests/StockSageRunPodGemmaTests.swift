@@ -48,7 +48,7 @@ import Testing
         #expect(!unloaded && unloadCalls == 0, "Quitting never calls LM Studio or remote model lifecycle endpoints")
     }
 
-    @Test(arguments: [1, 2, 4, 8, 16])
+    @Test(arguments: [1, 2, 4, 8, 16, 24])
     func readinessUsesOnlyRemoteModelAndActualSlotProperties(slots: Int) async throws {
         var paths: [String] = []
         let probe = await S.probe(config, externalAllowed: { true }, transport: { request in

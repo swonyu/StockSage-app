@@ -1660,10 +1660,10 @@ import Testing
         #expect(r.scans[horizon]?.status.contains("500 listings checked once") == true)
     }
 
-    @Test(arguments: ["initial", "resume", "retry"])
-    func sixteenWorkersRetainBackpressureAndOriginalChecks(mode: String) async throws {
+    @Test(arguments: ["initial", "resume", "retry"], [16, 24])
+    func verifiedWorkersRetainBackpressureAndOriginalChecks(mode: String, capacity: Int) async throws {
         let history = StockSageResearchHistory()
-        let names = (0..<18).map { listing("S\($0)") }
+        let names = (0..<(capacity + 2)).map { listing("S\($0)") }
         let originalAt = Date().addingTimeInterval(-20)
         if mode == "resume" {
             var interrupted = R.Scan()
@@ -1703,19 +1703,21 @@ import Testing
         }
         let started: Bool
         if mode == "resume" {
-            started = r.resumeRemaining(.week, allowed: { true }, parallelism: { 16 }, concurrentGathering: true,
+            started = r.resumeRemaining(.week, allowed: { true }, parallelism: { capacity }, concurrentGathering: true,
                 makeAnalysis: makeAnalysis, rank: rank)
         } else if mode == "retry" {
-            started = r.retryIncomplete(.week, allowed: { true }, parallelism: { 16 }, concurrentGathering: true,
+            started = r.retryIncomplete(.week, allowed: { true }, parallelism: { capacity }, concurrentGathering: true,
                 makeAnalysis: makeAnalysis, rank: rank)
         } else {
             started = r.start([.week], allowed: { true }, universe: { .init(names) }, rank: rank,
-                parallelism: { 16 }, concurrentGathering: true, makeAnalysis: makeAnalysis)
+                parallelism: { capacity }, concurrentGathering: true, makeAnalysis: makeAnalysis)
         }
         try #require(started)
-        for _ in 0..<500 where waiting.count < 16 { try await Task.sleep(for: .milliseconds(2)) }
-        try #require(waiting.count == 16 && peak == 16)
-        #expect(prepared.count == 16 && comparisons == 0, "The seventeenth stock must wait for a whole worker slot")
+        for _ in 0..<500 where waiting.count < capacity { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(waiting.count == capacity && peak == capacity)
+        let firstPending = mode == "initial" ? capacity : capacity + 1
+        #expect(prepared.count == capacity && !prepared.contains("S\(firstPending)") && comparisons == 0,
+            "Worker \(capacity + 1) must wait for a whole serving slot")
         if mode != "initial" { #expect(!prepared.contains("S0")) }
         for _ in 0..<500 where r.running != nil {
             let ready = Array(waiting.values); waiting.removeAll()
@@ -1723,15 +1725,15 @@ import Testing
             try await Task.sleep(for: .milliseconds(2))
         }
         try #require(r.running == nil)
-        #expect(comparisons == 1 && peak == 16 && r.scans[.week]?.listings == names)
-        #expect(prepared.count == (mode == "initial" ? 18 : 17) && Set(prepared).count == prepared.count)
+        #expect(comparisons == 1 && peak == capacity && r.scans[.week]?.listings == names)
+        #expect(prepared.count == (mode == "initial" ? capacity + 2 : capacity + 1) && Set(prepared).count == prepared.count)
         if let original {
             #expect(r.scans[.week]?.results["S0"]?.facts == original.facts)
             #expect(r.scans[.week]?.results["S0"]?.at == original.at)
         }
     }
 
-    @Test(arguments: [8, 16], [false, true])
+    @Test(arguments: [8, 16, 24], [false, true])
     func loweredCapacityWhileGatheringBlocksNewWorkerDispatch(initialCapacity: Int, retry: Bool) async throws {
         let r = R()
         let names = (0...initialCapacity).map { listing("S\($0)") }
@@ -1794,7 +1796,7 @@ import Testing
         #expect(r.running == nil && r.activeSymbols.isEmpty && !compared)
     }
 
-    @Test(arguments: [false, true], [8, 16])
+    @Test(arguments: [false, true], [8, 16, 24])
     func twoCloudGathersFeedVerifiedModelSlotsWithoutChangingLocalScheduling(cloud: Bool, capacity: Int) async throws {
         let r = R()
         let names = (0..<(capacity + 2)).map { listing("S\($0)") }
@@ -1912,12 +1914,12 @@ import Testing
         #expect(r.running == nil && r.scans[.week]?.results.isEmpty == true && !compared)
     }
 
-    @Test(arguments: [Int.min, -1, 0, 1, 2, 4, 8, 16, 64, Int.max])
+    @Test(arguments: [Int.min, -1, 0, 1, 2, 4, 8, 16, 24, 64, Int.max])
     func parallelChecksKeepOrderIdentityAndFinishBeforeRanking(capacity: Int) async throws {
         let history = StockSageResearchHistory(storageURL: nil)
         let r = R(history: history)
         defer { r.stop() }
-        let names = (0..<20).map { listing("S\($0)") }
+        let names = (0..<25).map { listing("S\($0)") }
         var prepared: [String] = [], calls: [String] = [], finished: [String] = []
         var active = 0, peak = 0, comparisons = 0
         let started = r.start(R.Horizon.allCases, allowed: { true }, universe: { .init(names) },
@@ -1942,7 +1944,7 @@ import Testing
         #expect(started)
         for _ in 0..<500 where r.running != nil { try await Task.sleep(for: .milliseconds(2)) }
         try #require(r.running == nil)
-        #expect(peak == min(16, max(1, capacity)))
+        #expect(peak == min(24, max(1, capacity)))
         #expect(prepared == names.map(\.ticker) && calls.count == names.count * 2 && Set(calls).count == names.count * 2)
         #expect(comparisons == 2 && history.runs.count == 2 && r.activeSymbols.isEmpty)
         if capacity > 1 { #expect(finished.first != "S0") }
@@ -1955,7 +1957,7 @@ import Testing
         }
     }
 
-    @Test(arguments: [8, 16]) func capacityDiscoveredAfterFirstModelRequestAppliesToRemainingStocks(discovered: Int) async throws {
+    @Test(arguments: [8, 16, 24]) func capacityDiscoveredAfterFirstModelRequestAppliesToRemainingStocks(discovered: Int) async throws {
         let r = R()
         var capacity = 1, active = 0, peak = 0
         var prepared: [String] = []
@@ -1986,7 +1988,7 @@ import Testing
         #expect(r.running == nil && r.scans[.week]?.results.count == 1)
     }
 
-    @Test(arguments: [true, false], [8, 16])
+    @Test(arguments: [true, false], [8, 16, 24])
     func parallelStopRetainsCompletedHorizonsAndOwnsAllChildren(cancel: Bool, capacity: Int) async throws {
         let history = StockSageResearchHistory(storageURL: nil)
         let r = R(history: history)
