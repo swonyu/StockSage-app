@@ -557,13 +557,19 @@ final class StockSageStore: ObservableObject {
     /// `lastUpdated` — it only updates observed rows, so the board never over-claims that
     /// the WHOLE snapshot is live.
     @discardableResult
-    func mergeLiveQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote]) -> Bool {
+    func mergeLiveQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote],
+                         including requested: [StockSageSymbol] = []) -> Bool {
         guard !quotes.isEmpty else { return false }
         // Holdings can enter the feed before a full refresh creates their price row.
-        // Stage only current user-tracked members; the existing merger validates their
-        // first observation, including clock/source ordering against any existing idea.
+        // A stopped board sweep may also price a missing curated row. Stage definitions only;
+        // the shared merger validates every first observation and existing idea's clock.
         let missing = Set(quotes.keys.map { $0.uppercased() }).subtracting(symbolIndex.keys)
-        let added = missing.isEmpty ? [] : Self.composeTrackedDefs(base: [],
+        let personal = Set(userSymbols.map { $0.uppercased() }).union(offBoardHoldingSymbols)
+        let definitions = requested.filter {
+            missing.contains($0.symbol.uppercased())
+                && ($0.market != Self.userMarketLabel || personal.contains($0.symbol.uppercased()))
+        }.map { StockSageSymbol(id: $0.id, symbol: $0.symbol.uppercased(), market: $0.market) }
+        let added = missing.isEmpty ? [] : Self.composeTrackedDefs(base: definitions,
             userSymbols: userSymbols.map { $0.uppercased() }.filter { missing.contains($0) },
             offBoardHoldings: offBoardHoldingSymbols.map { $0.uppercased() }.filter { missing.contains($0) })
         var stagedIndex = symbolIndex
@@ -658,9 +664,10 @@ final class StockSageStore: ObservableObject {
     nonisolated static let infraFXSymbols = ["USDSAR=X"]
 
     /// Best-effort infra FX refresh (1 request; failure keeps the last known rate).
-    private func refreshInfraFX() async {
+    private func refreshInfraFX(allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) async {
+        guard !Task.isCancelled, allowed() else { return }
         let quotes = await StockSageQuoteService.fetchQuotes(for: Self.infraFXSymbols)
-        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
+        guard !Task.isCancelled, allowed() else { return }
         let merged = Self.mergedInfraFX(infraFX, incoming: quotes, now: Date())
         if merged != infraFX { infraFX = merged }
     }
@@ -3011,7 +3018,9 @@ final class StockSageStore: ObservableObject {
         return Array(candidates.prefix(cap).map(\.symbol))
     }
 
-    private func healStaleQuotes(scopedTo scope: Set<String>) async {
+    private func healStaleQuotes(scopedTo scope: Set<String>,
+                                 allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) async {
+        guard !Task.isCancelled, allowed() else { return }
         let now = Date()
         let tradingSymbols = symbols.filter { Self.marketIsTrading(symbol: $0.symbol, at: now) }
         let staleSymbols = Self.healCandidates(
@@ -3019,7 +3028,7 @@ final class StockSageStore: ObservableObject {
         )
         guard !staleSymbols.isEmpty else { return }
         let recovered = await StockSageQuoteService.fetchQuotes(for: staleSymbols)
-        guard !recovered.isEmpty else { return }
+        guard !Task.isCancelled, allowed(), !recovered.isEmpty else { return }
         for (sym, q) in recovered {
             let key = sym.uppercased()
             let before = symbols.first { $0.symbol.uppercased() == key }?.latest?.marketTime
@@ -3207,9 +3216,20 @@ final class StockSageStore: ObservableObject {
     }
 
     func refresh(scope: TrackedScope = .full) async {
-        guard !isRefreshing else { return }
-        if let reason = ToolPolicy.webToolsDisabledReason() {
-            feedError = reason
+        let isCurrent = StockSageMassive.Access().capture().isCurrent
+        await refresh(universe: trackedDefs(scope: scope), allowed: isCurrent,
+            fetchQuotes: { await StockSageQuoteService.fetchQuoteBatch(for: $0) },
+            refreshFX: { await self.refreshInfraFX(allowed: isCurrent) },
+            heal: { await self.healStaleQuotes(scopedTo: $0, allowed: isCurrent) })
+    }
+
+    /// The production refresh boundary, with provider work replaceable by isolated fixtures.
+    func refresh(universe: [StockSageSymbol], allowed: () -> Bool,
+                 fetchQuotes: ([String]) async -> StockSageQuoteService.QuoteBatch,
+                 refreshFX: () async -> Void, heal: (Set<String>) async -> Void) async {
+        guard !isRefreshing, !Task.isCancelled else { return }
+        if !allowed() {
+            feedError = ToolPolicy.webToolsDisabledReason() ?? "Quote refresh unavailable."
             return
         }
 
@@ -3217,10 +3237,16 @@ final class StockSageStore: ObservableObject {
         // Held for the WHOLE cycle (review 2026-07-28 Q3): releasing it before the merge/heal/
         // commit below let a second refresh() interleave with this one's writes.
         defer { isRefreshing = false }
-        feedError = nil
-        let universe = trackedDefs(scope: scope)
-        let quotes = await StockSageQuoteService.fetchQuotes(for: universe.map(\.symbol))
-        await refreshInfraFX()   // SAR rate for .SR conversions (infra — FX left the universe 2026-07-16)
+        let batch = await fetchQuotes(universe.map(\.symbol))
+        guard !Task.isCancelled, allowed(), batch.stop != .invalidated else { return }
+        if batch.stop == .yahooThrottled {
+            if mergeLiveQuotes(batch.quotes, including: universe) { lastUpdated = Date() }
+            feedError = "Partial market data — Yahoo limited quote requests. Accepted quotes were updated; previous prices were kept for the rest."
+            return
+        }
+        let quotes = batch.quotes
+        await refreshFX()   // SAR rate for .SR conversions (infra — FX left the universe 2026-07-16)
+        guard !Task.isCancelled, allowed() else { return }
 
         // Merge each curated symbol (keeps the friendly market label) with its
         // live quote; drop any the feed couldn't price.
@@ -3254,7 +3280,7 @@ final class StockSageStore: ObservableObject {
         // [:] on Task.isCancelled (five sites), which lands here as an empty board and used to
         // assert a feed failure that never happened — the app blaming the network for its own
         // cancellation. Leave the previous state and message untouched instead.
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, allowed() else { return }
         guard !live.isEmpty else {
             feedError = "Couldn't reach the market feed — showing the last data."
             return
@@ -3265,7 +3291,7 @@ final class StockSageStore: ObservableObject {
         // bails instead of silently truncating the board with feedError left nil), keep it.
         let coverage = Double(live.count) / Double(max(universe.count, 1))
         if Self.coverageGuardShouldBail(coverage: coverage, hasExistingSymbols: !symbols.isEmpty) {
-            feedError = "Partial market data this refresh — keeping the last full snapshot."
+            feedError = "Partial market data this refresh — keeping the previous snapshot."
             return
         }
         // Preserve user-added tickers this refresh's pre-await snapshot may have
@@ -3343,7 +3369,9 @@ final class StockSageStore: ObservableObject {
         // STALE SELF-HEAL (owner directive 2026-07-27: "fix all stale stocks"): any row still
         // MATERIALLY stale after this refresh (beyond the weekend-tolerant freshness window) is
         // exactly what a throttled/partial sweep left behind — retry those alone, once.
-        await healStaleQuotes(scopedTo: scopedKeys)
+        await heal(scopedKeys)
+        guard !Task.isCancelled, allowed() else { return }
+        feedError = nil
         lastUpdated = Date()
         lastFullRefreshAt = Date()
         // Newest MARKET time across the priced quotes — the banner uses this (not fetch time) to

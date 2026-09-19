@@ -102,8 +102,21 @@ struct StockSageBreadthCoverageTests {
                 box.revoke()
                 return Self.bars(sym, closes: [1, 2, 3])
             })
-        #expect(box.count > 0, "premise: some fetches really did run before the revocation")
+        #expect(box.count == 1, "Paced workers must recheck access after sleeping, before dispatch")
         #expect(out.isEmpty, "a partial map is indistinguishable from 'those names had no bars'")
+    }
+
+    @Test func cancellationPreservesBarsAlreadyCollectedByTheHistoryWatchdog() async {
+        let task = Task {
+            await Q.fetchHistories(for: ["AAPL", "MSFT"], range: "1y", concurrency: 1,
+                onProgress: { count in if count == 1 { withUnsafeCurrentTask { $0?.cancel() } } },
+                allowed: { true }, fetch: { symbol, _ in
+                    guard !Task.isCancelled else { return nil }
+                    return Self.bars(symbol, closes: [1, 2, 3])
+                })
+        }
+        let result = await task.value
+        #expect(Set(result.keys) == ["AAPL"], "Cancellation retains completed bars; access invalidation does not")
     }
 
     @Test func aPermissionDenialAtEntryFetchesNothingAtAll() async {

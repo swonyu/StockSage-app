@@ -66,6 +66,60 @@ enum StockSageMassive {
     nonisolated static let host = "https://api.massive.com"
     nonisolated static let snapshotPath = "/v2/snapshot/locale/us/markets/stocks/tickers"
 
+    /// Offline request-boundary injection; production reads the current persisted access state.
+    nonisolated struct Access: Sendable {
+        var key: @Sendable () -> String = { StockSageMassive.apiKey }
+        var credentialRevision: @Sendable () -> String? = { StockSageMassive.credentialRevision() }
+        var policyRevision: @Sendable () -> String? = { AppSettings.policyRevision() }
+        var allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }
+
+        /// A whole request cycle belongs to one access generation, even after A→B→A.
+        func capture() -> (key: String, isCurrent: @Sendable () -> Bool) {
+            let capturedKey = key()
+            let capturedCredential = credentialRevision()
+            let capturedPolicy = policyRevision()
+            return (capturedKey, {
+                !Task.isCancelled && self.allowed() && self.key() == capturedKey &&
+                    self.credentialRevision() == capturedCredential && self.policyRevision() == capturedPolicy
+            })
+        }
+    }
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    nonisolated static let snapshotMaximumBytes = 2_000_000
+    nonisolated static let historyMaximumBytes = 16_000_000
+    nonisolated static let marketMaximumBytes = 50_000_000
+
+    /// Credentials and responses stay outside shared caches, cookies, and redirect handling.
+    nonisolated static let restSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForResource = 30
+        return URLSession(configuration: configuration, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+    }()
+
+    nonisolated static func restTransport(_ request: URLRequest, maximumBytes: Int,
+                                         session: URLSession = restSession) async throws -> (Data, URLResponse) {
+        try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumBytes)
+    }
+
+    /// Validate injected responses too; final URL identity cannot substitute another resource.
+    private nonisolated static func response(for request: URLRequest, maximumBytes: Int,
+                                             transport: Transport?) async throws -> (Data, HTTPURLResponse) {
+        let (data, response): (Data, URLResponse)
+        if let transport { (data, response) = try await transport(request) }
+        else { (data, response) = try await restTransport(request, maximumBytes: maximumBytes) }
+        guard let http = response as? HTTPURLResponse, http.url == request.url else {
+            throw URLError(.badServerResponse)
+        }
+        guard data.count <= maximumBytes, response.expectedContentLength <= Int64(maximumBytes) else {
+            throw URLError(.dataLengthExceedsMaximum)
+        }
+        return (data, http)
+    }
+
     /// Settings field first (trimmed), then the `MASSIVE_API_KEY` environment variable; "" when neither
     /// is set. Read on every call so a key typed into Settings takes effect without a restart.
     nonisolated static var apiKey: String {
@@ -216,20 +270,20 @@ enum StockSageMassive {
     /// Batched fetch: one request per chunk of `maxTickersPerRequest`. A chunk that fails (non-200,
     /// transport error, unparseable) contributes nothing, so its symbols are absent from the result and
     /// the caller's per-symbol Yahoo fallback picks them up — nothing is dropped silently.
-    static func fetchSnapshots(for symbols: [String]) async -> [String: StockSageQuoteService.LiveQuote] {
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled, !symbols.isEmpty else { return [:] }
-        let key = apiKey
-        guard !key.isEmpty else { return [:] }
+    static func fetchSnapshots(for symbols: [String], access: Access = .init(), transport: Transport? = nil) async -> [String: StockSageQuoteService.LiveQuote] {
+        guard access.allowed(), !Task.isCancelled, !symbols.isEmpty else { return [:] }
+        let captured = access.capture()
+        guard !captured.key.isEmpty, captured.isCurrent() else { return [:] }
         var out: [String: StockSageQuoteService.LiveQuote] = [:]
         for chunk in chunks(symbols) {
-            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
-            guard let req = request(for: chunk, key: key),
-                  let (data, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200 else { continue }
-            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
+            guard captured.isCurrent() else { return [:] }
+            guard let req = request(for: chunk, key: captured.key) else { continue }
+            let result = try? await response(for: req, maximumBytes: snapshotMaximumBytes, transport: transport)
+            guard captured.isCurrent() else { return [:] }
+            guard let (data, resp) = result, resp.statusCode == 200 else { continue }
             out.merge(parseSnapshot(data, requestedSymbols: chunk)) { _, new in new }
         }
-        return ToolPolicy.isExternalAllowed && !Task.isCancelled ? out : [:]
+        return captured.isCurrent() ? out : [:]
     }
 
     // MARK: - Explicit full-market discovery (not an empty watchlist request)
@@ -256,7 +310,7 @@ enum StockSageMassive {
     }
 
     static func parseMarketSnapshot(_ data: Data) -> MarketSnapshot? {
-        guard data.count <= 50_000_000,
+        guard data.count <= marketMaximumBytes,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK", let rows = root["tickers"] as? [[String: Any]],
               rows.count <= 50_000 else { return nil }
@@ -279,12 +333,12 @@ enum StockSageMassive {
         return MarketSnapshot(returnedCount: rows.count, rows: parsed.values.sorted { $0.quote.symbol < $1.quote.symbol })
     }
 
-    static func fetchMarketSnapshot() async -> MarketSnapshot? {
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              let request = marketRequest(key: apiKey),
-              let (data, response) = try? await URLSession.shared.data(for: request),
-              !Task.isCancelled, ToolPolicy.isExternalAllowed,
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+    static func fetchMarketSnapshot(access: Access = .init(), transport: Transport? = nil) async -> MarketSnapshot? {
+        guard access.allowed(), !Task.isCancelled else { return nil }
+        let captured = access.capture()
+        guard captured.isCurrent(), let request = marketRequest(key: captured.key) else { return nil }
+        let result = try? await response(for: request, maximumBytes: marketMaximumBytes, transport: transport)
+        guard captured.isCurrent(), let (data, response) = result, response.statusCode == 200 else { return nil }
         return parseMarketSnapshot(data)
     }
 
@@ -374,23 +428,25 @@ enum StockSageMassive {
 
     /// Massive first for supported US daily requests; nil leaves the existing Yahoo fallback
     /// completely in charge of indexes, non-US symbols, monthly bars, no-key runs, and failures.
-    static func fetchHistory(symbol: String, range: String, interval: String) async -> StockSagePriceHistory? {
-        guard !Task.isCancelled, ToolPolicy.isExternalAllowed, interval == "1d",
+    static func fetchHistory(symbol: String, range: String, interval: String,
+        access: Access = .init(), transport: Transport? = nil) async -> StockSagePriceHistory? {
+        guard !Task.isCancelled, access.allowed(), interval == "1d",
               let dates = historyDates(for: range) else { return nil }
-        let key = apiKey
-        guard let req = historyRequest(symbol: symbol, from: dates.from, to: dates.to, key: key) else { return nil }
-        return await fetchHistory(symbol: symbol, request: req, allowed: { ToolPolicy.isExternalAllowed },
-                                  transport: { try await URLSession.shared.data(for: $0) })
+        let captured = access.capture()
+        guard captured.isCurrent(),
+              let req = historyRequest(symbol: symbol, from: dates.from, to: dates.to, key: captured.key) else { return nil }
+        return await fetchHistory(symbol: symbol, request: req, allowed: captured.isCurrent, transport: transport)
     }
 
     /// The production daily-history transport boundary, with no credential lookup in injected calls.
     static func fetchHistory(symbol: String, request: URLRequest,
         allowed: @Sendable () -> Bool,
-        transport: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+        transport: Transport? = nil
     ) async -> StockSagePriceHistory? {
-        guard !Task.isCancelled, allowed(), let (data, response) = try? await transport(request),
-              !Task.isCancelled, allowed(),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        guard !Task.isCancelled, allowed() else { return nil }
+        let result = try? await response(for: request, maximumBytes: historyMaximumBytes, transport: transport)
+        guard !Task.isCancelled, allowed(), let (data, response) = result,
+              response.statusCode == 200 else { return nil }
         return parseHistory(data, symbol: symbol)
     }
 
@@ -399,13 +455,23 @@ enum StockSageMassive {
     /// snapshot page's plan-access table.
     static func probe() async -> String {
         if let reason = ToolPolicy.webToolsDisabledReason() { return reason }
-        let key = apiKey
-        guard !key.isEmpty else { return "No key set — enter your \(keyEnvName) above." }
-        guard let req = request(for: ["AAPL"], key: key) else { return "Could not build the request." }
-        guard let (data, resp) = try? await URLSession.shared.data(for: req) else {
+        return await probe(access: .init())
+    }
+
+    static func probe(access: Access, transport: Transport? = nil) async -> String {
+        let interrupted = "Connection check cancelled or settings changed. Try again."
+        guard !Task.isCancelled else { return interrupted }
+        guard access.allowed() else { return "Web access is disabled." }
+        let captured = access.capture()
+        guard captured.isCurrent() else { return interrupted }
+        guard !captured.key.isEmpty else { return "No key set — enter your \(keyEnvName) above." }
+        guard let req = request(for: ["AAPL"], key: captured.key) else { return "Could not build the request." }
+        let result = try? await response(for: req, maximumBytes: snapshotMaximumBytes, transport: transport)
+        guard captured.isCurrent() else { return interrupted }
+        guard let (data, resp) = result else {
             return "No response — check the network."
         }
-        switch (resp as? HTTPURLResponse)?.statusCode ?? 0 {
+        switch resp.statusCode {
         case 200:
             return parseSnapshot(data, requestedSymbols: ["AAPL"]).count == 1
                 ? "Connected — HTTP 200, AAPL snapshot parsed."

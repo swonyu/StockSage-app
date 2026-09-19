@@ -29,7 +29,7 @@ enum StockSageQuoteService {
     /// A single live observation: the current market price and the prior session's
     /// close (the signal engine's % change is computed against this close, so a
     /// move here is a real one-day move, not a tick).
-    struct LiveQuote: Sendable, Equatable {
+    nonisolated struct LiveQuote: Sendable, Equatable {
         let symbol: String
         let price: Double
         let previousClose: Double
@@ -74,95 +74,123 @@ enum StockSageQuoteService {
 
     // MARK: Public fetch
 
-    /// Fetch live quotes for many symbols concurrently (bounded fan-out so we
-    /// don't open 46 sockets at once). Returns a map keyed by the **requested**
-    /// symbol, uppercased — symbols the feed couldn't price are simply absent, so
-    /// callers should treat a missing key as "no live data for this one" rather
-    /// than an error. No-ops (returns `[:]`) when external access is disabled.
+    nonisolated enum QuoteStop: Sendable, Equatable { case finished, yahooThrottled, invalidated }
+    nonisolated struct QuoteBatch: Sendable {
+        var quotes: [String: LiveQuote]
+        var stop: QuoteStop = .finished
+    }
+
+    /// Missing symbols remain absent; callers that show sweep status use fetchQuoteBatch.
     static func fetchQuotes(for symbols: [String], concurrency: Int = 6) async -> [String: LiveQuote] {
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
-        guard !symbols.isEmpty else { return [:] }
+        await fetchQuoteBatch(for: symbols, concurrency: concurrency).quotes
+    }
 
-        // M1 routing: Massive snapshot for every covered symbol FIRST (chunked, one request per
-        // chunk), then the per-symbol chain for the rest plus any symbol the snapshot did not
-        // return — a failed/absent chunk falls through, it never drops a symbol. `partition`
-        // sends everything per-symbol when no key is present.
-        let route = StockSageMassive.partition(symbols, keyPresent: StockSageMassive.isConfigured)
-        var out: [String: LiveQuote] = await StockSageMassive.fetchSnapshots(for: route.snapshot)
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
+    static func fetchQuoteBatch(for symbols: [String], concurrency: Int = 6) async -> QuoteBatch {
+        let access = StockSageMassive.Access().capture()
+        return await fetchQuoteBatch(for: symbols, concurrency: concurrency,
+            keyPresent: !access.key.isEmpty, allowed: access.isCurrent,
+            massive: { await StockSageMassive.fetchSnapshots(for: $0, access: .init(allowed: access.isCurrent)) },
+            transport: { try await yahooTransport($0) })
+    }
+
+    /// The production routing loop; injected I/O keeps regression checks offline.
+    nonisolated static func fetchQuoteBatch(for symbols: [String], concurrency: Int = 6,
+        keyPresent: Bool, allowed: @escaping @Sendable () -> Bool,
+        massive: @Sendable ([String]) async -> [String: LiveQuote],
+        transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse),
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async -> QuoteBatch {
+        guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+        guard !symbols.isEmpty else { return .init(quotes: [:]) }
+        let route = StockSageMassive.partition(symbols, keyPresent: keyPresent)
+        var out = await massive(route.snapshot)
+        guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
         let remaining = route.perSymbol + route.snapshot.filter { out[$0.uppercased()] == nil }
-        guard !remaining.isEmpty else { return out }
-
-        // Process in fixed-size chunks; each chunk is a TaskGroup that resolves
-        // before the next starts — caps concurrency without a semaphore.
-        let chunks = stride(from: 0, to: remaining.count, by: max(1, concurrency)).map {
-            Array(remaining[$0 ..< min($0 + concurrency, remaining.count)])
-        }
-        for chunk in chunks {
-            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
-            let results: [LiveQuote] = await withTaskGroup(of: LiveQuote?.self) { group in
+        let width = max(1, concurrency)
+        for start in stride(from: 0, to: remaining.count, by: width) {
+            guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+            let chunk = Array(remaining[start..<min(start + width, remaining.count)])
+            let results = await withTaskGroup(of: (quote: LiveQuote?, throttled: Bool).self) { group in
                 for symbol in chunk {
-                    group.addTask { await fetchOne(symbol) }
+                    group.addTask {
+                        guard let request = quoteRequest(symbol) else { return (nil, false) }
+                        let response = await yahooResponse(for: request, allowed: allowed,
+                            transport: transport, sleep: sleep, retryThrottles: false)
+                        if case .throttled = response { return (nil, true) }
+                        guard case .data(let data) = response,
+                              let parsed = parseChart(data, requestedSymbol: symbol) else { return (nil, false) }
+                        let quote = LiveQuote(symbol: symbol, price: parsed.price, previousClose: parsed.previousClose,
+                            marketTime: parsed.marketTime, isNewListing: parsed.isNewListing,
+                            priceSource: parsed.priceSource, previousCloseSource: parsed.previousCloseSource,
+                            previousCloseQuoteTime: parsed.previousCloseQuoteTime)
+                        return (quote, false)
+                    }
                 }
-                var acc: [LiveQuote] = []
-                for await q in group where q != nil { acc.append(q!) }
-                return acc
+                var quotes: [LiveQuote] = []
+                var throttled = false
+                for await result in group {
+                    if result.throttled { throttled = true; group.cancelAll() }
+                    if let quote = result.quote { quotes.append(quote) }
+                }
+                return (quotes: quotes, throttled: throttled)
             }
-            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return [:] }
-            for q in results { out[q.symbol.uppercased()] = q }
+            guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+            for quote in results.quotes { out[quote.symbol.uppercased()] = quote }
+            // ponytail: stop this sweep only; share Retry-After state if concurrent sweeps keep throttling.
+            if results.throttled { return .init(quotes: out, stop: .yahooThrottled) }
         }
-        return ToolPolicy.isExternalAllowed && !Task.isCancelled ? out : [:]
+        return .init(quotes: out)
     }
 
-    // MARK: One symbol
-
-    /// Keyless Yahoo fallback. Reached only for symbols the Massive snapshot path in
-    /// `fetchQuotes` did not serve — non-US names, no Massive key, or a snapshot chunk that failed.
-    private static func fetchOne(_ symbol: String) async -> LiveQuote? {
-        // `^` (index marker) and other reserved chars must be percent-encoded.
-        // Use .urlHostAllowed (stricter than .urlPathAllowed) so a symbol containing
-        // '/' (e.g. a hypothetical BRK/B) doesn't silently rewrite the request path
-        // segment — same set StockSageEarnings uses for the identical job (F38 2026-07-02).
-        // No symbol in the curated universe contains '/', so live behavior is unchanged.
+    nonisolated private static func quoteRequest(_ symbol: String) -> URLRequest? {
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
-        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=1d&interval=1d") else {
-            return nil
-        }
-        // See StockSageMassive: a cached 200 would replay a stale quote as live.
-        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
-        req.setValue(ua, forHTTPHeaderField: "User-Agent")
-        guard let data = await get(req), let parsed = parseChart(data, requestedSymbol: symbol) else { return nil }
-        // Preserve the symbol we *asked* for so it maps back to the curated market
-        // label (Yahoo echoes its own canonical symbol, which can differ in case). Carry
-        // marketTime through — dropping it silently disabled ALL downstream staleness/banner
-        // honesty (quoteAsOf, per-row isStale) since fetchQuotes is built on fetchOne.
-        return LiveQuote(symbol: symbol, price: parsed.price, previousClose: parsed.previousClose,
-                         marketTime: parsed.marketTime, isNewListing: parsed.isNewListing,
-                         priceSource: parsed.priceSource, previousCloseSource: parsed.previousCloseSource,
-                         previousCloseQuoteTime: parsed.previousCloseQuoteTime)
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=1d&interval=1d") else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
+        request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        return request
     }
 
-    /// GET a request, returning the 200 body. On a 429/503 (Yahoo's keyless endpoint
-    /// rate-limits under load — the dominant failure mode as the universe grows), a genuine
-    /// EXPONENTIAL backoff (1s, then 2s) between up to 3 attempts total — same shape as
-    /// `StockSageEarnings.get` (major fix 2026-09-06: a single fixed ~1.5s retry isn't enough
-    /// headroom for the sustained throttle STANDING RULES already documents on this Mac's IP).
-    /// Any other status / transport error → nil.
-    private nonisolated static func get(_ req: URLRequest) async -> Data? {
+    nonisolated enum YahooResponse: Sendable { case data(Data), throttled, unavailable }
+    nonisolated static let maximumYahooBytes = 2_000_000
+
+    nonisolated static let yahooSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        return URLSession(configuration: configuration, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+    }()
+
+    nonisolated static func yahooTransport(_ request: URLRequest, session: URLSession = yahooSession) async throws -> (Data, URLResponse) {
+        try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumYahooBytes)
+    }
+
+    nonisolated static func yahooResponse(for request: URLRequest,
+        allowed: @Sendable () -> Bool,
+        transport: @Sendable (URLRequest) async throws -> (Data, URLResponse),
+        sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        retryThrottles: Bool = true
+    ) async -> YahooResponse {
         for attempt in 0..<3 {
-            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return nil }
-            guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return nil }
-            guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return nil }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if code == 200 { return data }
-            if (code == 429 || code == 503), attempt < 2 {
-                let seconds = pow(2.0, Double(attempt))   // 1, 2 (attempt 0, 1) — 3rd attempt never sleeps again
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard allowed(), !Task.isCancelled else { return .unavailable }
+            guard let (data, response) = try? await transport(request) else { return .unavailable }
+            guard allowed(), !Task.isCancelled, let http = response as? HTTPURLResponse,
+                  response.url == request.url, data.count <= maximumYahooBytes,
+                  response.expectedContentLength <= Int64(maximumYahooBytes) else { return .unavailable }
+            if http.statusCode == 200 { return .data(data) }
+            if http.statusCode == 429 || http.statusCode == 503 {
+                guard retryThrottles, attempt < 2 else { return .throttled }
+                do { try await sleep(.seconds(1 << attempt)) }
+                catch { return .unavailable }
                 continue
             }
-            return nil
+            return .unavailable
         }
-        return nil
+        return .unavailable
     }
 
     // MARK: Parsing (pure — unit-tested without the network)
@@ -173,7 +201,7 @@ enum StockSageQuoteService {
     /// with a `chartPreviousClose` fallback (indices often carry only the latter).
     /// A non-positive or non-finite previousClose is treated exactly like a MISSING
     /// one (falls back to `price`, sets `isNewListing`) — never fabricated as a real 0%.
-    static func parseChart(_ data: Data, requestedSymbol: String? = nil) -> LiveQuote? {
+    nonisolated static func parseChart(_ data: Data, requestedSymbol: String? = nil) -> LiveQuote? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let chart = root["chart"] as? [String: Any],
               let results = chart["result"] as? [[String: Any]],
@@ -203,10 +231,18 @@ enum StockSageQuoteService {
 
     /// Fetch ~1 year of daily OHLC bars for one symbol — enough for the 200-day
     /// trend and every indicator. `nil` on failure / when external access is off.
-    nonisolated static func fetchHistory(_ symbol: String, range: String = "1y", interval: String = "1d") async -> StockSagePriceHistory? {
-        await fetchHistory(symbol, range: range, interval: interval, allowed: { ToolPolicy.isExternalAllowed },
-            massive: { await StockSageMassive.fetchHistory(symbol: $0, range: $1, interval: $2) },
-            yahoo: { await get($0) })
+    nonisolated static func fetchHistory(_ symbol: String, range: String = "1y", interval: String = "1d",
+        access: StockSageMassive.Access = .init()) async -> StockSagePriceHistory? {
+        let captured = access.capture()
+        let scopedAccess = StockSageMassive.Access(key: access.key, credentialRevision: access.credentialRevision,
+            policyRevision: access.policyRevision, allowed: captured.isCurrent)
+        return await fetchHistory(symbol, range: range, interval: interval, allowed: captured.isCurrent,
+            massive: { await StockSageMassive.fetchHistory(symbol: $0, range: $1, interval: $2, access: scopedAccess) },
+            yahoo: { request in
+                guard case .data(let data) = await yahooResponse(for: request, allowed: captured.isCurrent,
+                    transport: { try await yahooTransport($0) }) else { return nil }
+                return data
+            })
     }
 
     /// Same provider routing as the public call; inject only external operations and permission.
@@ -256,9 +292,16 @@ enum StockSageQuoteService {
     /// whole scan. Cancellation is handled at the consumers instead.
     nonisolated static func fetchHistories(for symbols: [String], range: String = "1y", concurrency: Int = 6,
                                onProgress: ((Int) async -> Void)? = nil) async -> [String: StockSagePriceHistory] {
-        await fetchHistories(for: symbols, range: range, concurrency: concurrency, onProgress: onProgress,
-            allowed: { ToolPolicy.isExternalAllowed },
-            fetch: { await fetchHistory($0, range: $1) })
+        let access = StockSageMassive.Access()
+        let key = access.key(), credential = access.credentialRevision(), policy = access.policyRevision()
+        // Preserve this fan-out's partial-on-cancel contract, but never mix access generations.
+        // Access.capture().isCurrent also rejects cancellation, so it is intentionally not used here.
+        let isCurrent: @Sendable () -> Bool = { access.allowed() && access.key() == key
+            && access.credentialRevision() == credential && access.policyRevision() == policy }
+        let scopedAccess = StockSageMassive.Access(key: access.key, credentialRevision: access.credentialRevision,
+            policyRevision: access.policyRevision, allowed: isCurrent)
+        return await fetchHistories(for: symbols, range: range, concurrency: concurrency, onProgress: onProgress,
+            allowed: isCurrent, fetch: { await fetchHistory($0, range: $1, access: scopedAccess) })
     }
 
     /// Same fan-out as the public call; inject only external operations and permission (mirrors
@@ -266,7 +309,7 @@ enum StockSageQuoteService {
     /// mutating the `ToolPolicy` process globals).
     nonisolated static func fetchHistories(for symbols: [String], range: String, concurrency: Int,
                                onProgress: ((Int) async -> Void)?,
-                               allowed: @Sendable () -> Bool,
+                               allowed: @escaping @Sendable () -> Bool,
                                fetch: @escaping @Sendable (String, String) async -> StockSagePriceHistory?
     ) async -> [String: StockSagePriceHistory] {
         guard allowed(), !symbols.isEmpty else { return [:] }
@@ -281,6 +324,7 @@ enum StockSageQuoteService {
                 for (slot, symbol) in chunk.enumerated() {
                     group.addTask {
                         if slot > 0 { try? await Task.sleep(for: historyPacingInterval * slot) }
+                        guard allowed() else { return nil }
                         return await fetch(symbol, range)
                     }
                 }

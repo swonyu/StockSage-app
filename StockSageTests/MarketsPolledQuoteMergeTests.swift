@@ -18,6 +18,121 @@ import Foundation
 // on the board but its quote is price == 0 (the exact `price > 0` boundary) and must be skipped
 // exactly like GOOG.
 struct MarketsPolledQuoteMergeTests {
+    @Test @MainActor func throttledRefreshRetainsEveryPriorRowWithoutClaimingAFullRefresh() async throws {
+        let suite = "stocksage.quote-throttle.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let original = refreshFixtureRows()
+        store.replaceAll(original)
+        let incoming = Dictionary(uniqueKeysWithValues: original.prefix(8).map {
+            ($0.symbol, StockSageQuoteService.LiveQuote(symbol: $0.symbol, price: 120,
+                previousClose: 99, marketTime: Date().addingTimeInterval(-2), priceSource: .massiveSIP))
+        })
+        var fxCalls = 0, healCalls = 0
+
+        await store.refresh(universe: original, allowed: { true }, fetchQuotes: { requested in
+            #expect(requested == original.map(\.symbol))
+            return .init(quotes: incoming, stop: .yahooThrottled)
+        }, refreshFX: { fxCalls += 1 }, heal: { _ in healCalls += 1 })
+
+        #expect(store.symbols.map(\.symbol) == original.map(\.symbol),
+                "Even 80% coverage cannot remove the unrequested tail of a throttled sweep")
+        #expect(store.latestPrice(original[0].symbol) == 120)
+        #expect(store.symbol(named: original[9].symbol) == original[9])
+        #expect(store.feedError?.localizedCaseInsensitiveContains("Yahoo") == true)
+        #expect(store.feedError?.localizedCaseInsensitiveContains("partial") == true)
+        #expect(store.lastFullRefreshAt == nil && !store.isRefreshing)
+        #expect(fxCalls == 0 && healCalls == 0,
+                "A stopped provider sweep must not restart Yahoo through FX or stale-quote healing")
+    }
+
+    @Test(arguments: ["fx", "invalidated", "cancelled", "heal", "heal-cancelled"]) @MainActor
+    func interruptedRefreshPreservesTheBoardAndPreviousFeedError(point: String) async throws {
+        let suite = "stocksage.quote-invalidation.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let original = refreshFixtureRows()
+        store.replaceAll(original)
+        await store.refresh(universe: original, allowed: { false }, fetchQuotes: { _ in
+            Issue.record("Denied refresh must not fetch"); return .init(quotes: [:])
+        }, refreshFX: {}, heal: { _ in })
+        let previousError = try #require(store.feedError)
+        var allowed = true
+        var fxCalls = 0, healCalls = 0
+        let incoming = Dictionary(uniqueKeysWithValues: original.map {
+            ($0.symbol, StockSageQuoteService.LiveQuote(symbol: $0.symbol, price: 120,
+                previousClose: 99, marketTime: Date().addingTimeInterval(-2), priceSource: .massiveSIP))
+        })
+        let task = Task { @MainActor in
+            await store.refresh(universe: original, allowed: { allowed }, fetchQuotes: { _ in
+                if point == "cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+                return .init(quotes: incoming, stop: point == "invalidated" ? .invalidated : .finished)
+            }, refreshFX: {
+                fxCalls += 1
+                if point == "fx" { allowed = false }
+            }, heal: { _ in
+                healCalls += 1
+                if point == "heal" { allowed = false }
+                if point == "heal-cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+            })
+        }
+        await task.value
+
+        let afterPublication = point.hasPrefix("heal")
+        if afterPublication {
+            #expect(store.latestPrice(original[0].symbol) == 120,
+                    "Rows accepted before invalidation may remain without a completed-refresh claim")
+        } else { #expect(store.symbols == original) }
+        #expect(store.feedError == previousError,
+                "Cancellation or invalidation is not a market-feed outage or a successful refresh")
+        #expect(store.lastUpdated == nil && store.lastFullRefreshAt == nil && !store.isRefreshing)
+        #expect(healCalls == (afterPublication ? 1 : 0))
+        #expect(fxCalls == (point == "fx" || afterPublication ? 1 : 0))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func throttledRefreshPricesMissingCuratedRowsThroughNormalAcceptance(hasPriorRow: Bool) async throws {
+        let suite = "stocksage.quote-throttle-missing.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let universe = refreshFixtureRows()
+        let now = Date()
+        let prior = StockSageSymbol(symbol: universe[0].symbol, market: "NASDAQ", quotes: [
+            StockSageQuote(price: 130, previousPrice: 99, marketTime: now, priceSource: .massiveSIP)])
+        if hasPriorRow { store.replaceAll([prior]) }
+        func quote(_ index: Int, price: Double = 120, source: StockSagePriceSource = .massiveSIP,
+                   at: Date? = nil) -> StockSageQuoteService.LiveQuote {
+            .init(symbol: universe[index].symbol, price: price, previousClose: 99,
+                  marketTime: at ?? now.addingTimeInterval(-2), priceSource: source)
+        }
+        let values = [quote(0), quote(1), quote(2, price: 0), quote(3, source: .sample),
+                      quote(4, at: now.addingTimeInterval(3_600))]
+        var incoming = Dictionary(uniqueKeysWithValues: values.map { ($0.symbol, $0) })
+        incoming["UNREQUESTED"] = .init(symbol: "UNREQUESTED", price: 12, previousClose: 11,
+                                         marketTime: now, priceSource: .massiveSIP)
+        await store.refresh(universe: universe, allowed: { true }, fetchQuotes: { _ in
+            .init(quotes: incoming, stop: .yahooThrottled)
+        }, refreshFX: { Issue.record("Throttled refresh must not fetch FX") },
+           heal: { _ in Issue.record("Throttled refresh must not heal") })
+
+        #expect(Set(store.symbols.map(\.symbol)) == Set(universe.prefix(2).map(\.symbol)))
+        #expect(store.latestPrice(universe[0].symbol) == (hasPriorRow ? 130 : 120))
+        #expect(store.latestQuote(universe[1].symbol)?.priceSource == .massiveSIP)
+        if hasPriorRow { #expect(store.symbol(named: prior.symbol) == prior) }
+        #expect(store.lastFullRefreshAt == nil && store.feedError != nil)
+    }
+
+    @MainActor private func refreshFixtureRows() -> [StockSageSymbol] {
+        let at = Date().addingTimeInterval(-60)
+        return (0..<10).map { index in
+            StockSageSymbol(symbol: "TEST\(index)", market: "NASDAQ", quotes: [
+                StockSageQuote(price: 100, previousPrice: 99, marketTime: at, priceSource: .massiveSIP)])
+        }
+    }
+
     @Test func demoClockCannotBlockRealPricesOrContaminateScanAndHeader() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let market = now.addingTimeInterval(-2 * 86_400)
