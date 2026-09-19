@@ -7,10 +7,12 @@ struct StockSageSameDayResearchPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Same-day · one pick").font(.title2.bold()).accessibilityAddTraits(.isHeader)
-                Text("Run a fresh check during the regular US session. One app-ranked, Gemma-qualified candidate, only when its evidence and observed scenario pass.")
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Same-day · one pick").font(.title2.bold()).accessibilityAddTraits(.isHeader)
+                    Text("A fresh, manual check during the regular US session. One app-ranked, Gemma-qualified candidate when its evidence and observed scenario pass.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 HStack {
                     Button("Run same-day research", systemImage: "play.fill") { research.start(store: store) }
                         .buttonStyle(.borderedProminent)
@@ -22,15 +24,19 @@ struct StockSageSameDayResearchPanel: View {
                     }
                 }
                 if horizons.running != nil { Text("Finish or stop the current Top 5 run before starting same-day research.").font(.caption) }
-                Text(research.status).textSelection(.enabled)
+                Text(research.status).font(.callout).textSelection(.enabled)
                 if let receipt = research.receipt {
-                    Text(receipt.selection).font(.caption).foregroundStyle(.secondary)
-                    Text("Requested \(receipt.startedAt.formatted(date: .abbreviated, time: .standard))")
-                        .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(receipt.selection)
+                        Text("Requested \(receipt.startedAt.formatted(date: .abbreviated, time: .standard))")
+                    }.font(.caption).foregroundStyle(.secondary)
                     if let check = receipt.checks.first(where: { $0.symbol == receipt.selectedSymbol }), let plan = check.scenario {
                         TimelineView(.periodic(from: .now, by: 1)) { tick in
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("\(check.symbol) · \(check.name)").font(.title2.bold())
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(check.symbol).font(.title2.bold())
+                                    if check.name != check.symbol { Text(check.name).font(.callout).foregroundStyle(.secondary) }
+                                }
                                 Text(!research.isRunning && !research.restored && StockSageSameDayResearch.current(receipt, at: tick.date)
                                     ? "Passed at the recorded quote time · research only"
                                     : "Dated research · current entry is not verified. Run again for a fresh check.")
@@ -41,6 +47,8 @@ struct StockSageSameDayResearchPanel: View {
                                     level("Target reference", plan.target)
                                 }
                                 .accessibilityIdentifier("research.sameDay.levels")
+                                .padding(.vertical, 4)
+                                Divider()
                                 Text("Frozen \(plan.at.formatted(date: .abbreviated, time: .standard)) · completed minutes through \(plan.barsAsOf.formatted(date: .omitted, time: .standard))")
                                     .font(.caption)
                                 if let quote = check.verifiedQuote {
@@ -56,7 +64,7 @@ struct StockSageSameDayResearchPanel: View {
                                 Text("Observed reference levels, not guaranteed execution or future prices. No order is created.").font(.caption)
                             }
                             .padding().frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                            .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: 12))
                         }
                     }
                     if let blocker = receipt.blocker { Label(blocker, systemImage: "info.circle").foregroundStyle(.secondary) }
@@ -94,8 +102,15 @@ struct StockSageSameDayResearchPanel: View {
     }
 
     private func level(_ label: String, _ value: Double) -> some View {
-        Text("\(label): \(value.formatted(.currency(code: "USD").precision(.fractionLength(2...4))))")
-            .font(.title3.weight(.semibold)).monospacedDigit().textSelection(.enabled)
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Text(value.formatted(.currency(code: "USD").precision(.fractionLength(2...4))))
+                .font(.title3.weight(.semibold)).monospacedDigit()
+        }
+        .frame(maxWidth: 440, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .textSelection(.enabled)
     }
 
     private func evidence(_ receipt: StockSageSameDayResearch.Receipt) -> some View {

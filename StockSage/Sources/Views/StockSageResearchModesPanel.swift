@@ -85,16 +85,24 @@ struct StockSageResearchModesPanel: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Research mode", selection: $showsSameDay) {
-                Text("Trading days · Top 5").tag(false)
-                Text("Same-day · one pick").tag(true)
+        Group {
+            if showsSameDay {
+                VStack(spacing: 0) {
+                    modeControls.padding(.horizontal, 20).padding(.vertical, 12)
+                    Divider()
+                    StockSageSameDayResearchPanel(store: store)
+                }
+            } else {
+                manual(presentation.horizon)
             }
-            .pickerStyle(.segmented).padding(.horizontal, 20).padding(.vertical, 12)
-            .accessibilityIdentifier("research.mode")
-            .onChange(of: showsSameDay) { _, _ in selected = nil }
-            if showsSameDay { StockSageSameDayResearchPanel(store: store) }
-            else { manual(presentation.horizon).disabled(sameDay.isRunning) }
+        }
+        .onChange(of: showsSameDay) { _, _ in selected = nil }
+        .onChange(of: presentation.horizon) { _, horizon in
+            selected = nil; search = ""
+            #if os(macOS)
+            presentation.filter = .all
+            #endif
+            if !StockSageStore.isRunningTests { Presentation.save(horizon, to: .standard) }
         }
         .onAppear { if !StockSageStore.isRunningTests { Presentation.save(presentation.horizon, to: .standard) } }
     }
@@ -150,39 +158,58 @@ struct StockSageResearchModesPanel: View {
         }
     }
 
-    private var horizonControls: some View {
+    private var modeControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             Group {
                 #if os(iOS)
                 if dynamicTypeSize.isAccessibilitySize {
-                    horizonPicker.pickerStyle(.menu)
+                    modePicker.pickerStyle(.menu)
                         .frame(minHeight: 44)
                 } else {
-                    horizonPicker.pickerStyle(.segmented).labelsHidden()
+                    modePicker.pickerStyle(.segmented).labelsHidden()
                 }
                 #else
-                horizonPicker.pickerStyle(.segmented).labelsHidden()
+                modePicker.pickerStyle(.segmented).labelsHidden()
                 #endif
             }
+            #if os(macOS)
+            .controlSize(.small)
+            #else
             .controlSize(.large)
-            .onChange(of: presentation.horizon) { _, horizon in
-                selected = nil; search = ""
-                #if os(macOS)
-                presentation.filter = .all
-                #endif
-                if !StockSageStore.isRunningTests { Presentation.save(horizon, to: .standard) }
-            }
-            if let running = research.running, !research.isRunning(presentation.horizon) {
+            #endif
+            #if os(iOS)
+            Text("1–7 and 7–14 trading days · Top 5 each")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            #endif
+            if let running = research.running, showsSameDay || !research.isRunning(presentation.horizon) {
                 Self.runningScanControls(running: running,
-                    show: { presentation.horizon = running }, stop: { research.stop() })
+                    show: { presentation.horizon = running; showsSameDay = false }, stop: { research.stop() })
             }
         }
     }
 
-    private var horizonPicker: some View {
-        Picker("Research horizon", selection: $presentation.horizon) {
-            ForEach(StockSageHorizonResearch.Horizon.allCases) { value in Text(value.rawValue).tag(value) }
+    private var modePicker: some View {
+        Picker("Research mode", selection: Binding<StockSageHorizonResearch.Horizon?>(
+            get: { showsSameDay ? nil : presentation.horizon },
+            set: { value in showsSameDay = value == nil; if let value { presentation.horizon = value } }
+        )) {
+            #if os(macOS)
+            Text("Same-day · 1 pick").tag(StockSageHorizonResearch.Horizon?.none)
+            #else
+            Text("Same-day").tag(StockSageHorizonResearch.Horizon?.none)
+            #endif
+            ForEach(StockSageHorizonResearch.Horizon.allCases) { value in
+                #if os(macOS)
+                Text(value.rawValue).tag(Optional(value))
+                #else
+                Text(value == .week ? "1–7 days" : "7–14 days")
+                    .accessibilityLabel(value.rawValue + " · Top 5").tag(Optional(value))
+                #endif
+            }
         }
+        .accessibilityIdentifier("research.mode")
+        .help("Same-day research selects one candidate. Each trading-day horizon shows its own Top 5. Every run is manual.")
     }
 
 
@@ -196,9 +223,10 @@ struct StockSageResearchModesPanel: View {
         let isUntouched = !isRunning && scan.at == nil && scan.listings.isEmpty
             && scan.results.isEmpty && scan.selection == nil
             && scan.status == StockSageHorizonResearch.Scan().status
-        let controls = VStack(alignment: .leading, spacing: 16) {
+        let controls = VStack(alignment: .leading, spacing: 12) {
             Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: isRunning ? horizon : research.running,
                 run: { if research.start(horizon, store: store) { selected = nil } }, stop: { research.stop() })
+                .disabled(sameDay.isRunning)
             if scan.needsSaving && research.running == nil {
                 Button("Retry save", systemImage: "square.and.arrow.down") { research.retrySave(horizon) }
                     .help("Save the same completed research and dates without another model request.")
@@ -211,6 +239,7 @@ struct StockSageResearchModesPanel: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(sameDay.isRunning)
                     .accessibilityIdentifier("research.resume")
                     Text("Original checked results keep their captured dates. Remaining listings receive fresh evidence; the resumed run contains different capture times.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -224,6 +253,7 @@ struct StockSageResearchModesPanel: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(sameDay.isRunning)
                 .accessibilityIdentifier("research.retryIncomplete")
                 .help("Refresh only incomplete checks, retain the other opinions, then compare the entire eligible pool again.")
             }
@@ -234,28 +264,19 @@ struct StockSageResearchModesPanel: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(sameDay.isRunning)
                 .accessibilityIdentifier("research.retryTopFive")
                 .help("Compare the completed checks again using their original evidence. No new stock scan.")
             }
             #if os(macOS)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 16) {
-                    horizonControls.fixedSize(horizontal: true, vertical: false)
-                    Spacer(minLength: 0)
-                    bothHorizonsButton
-                    StockSageResearchHistoryButton(store: store)
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    horizonControls
-                    HStack(spacing: 12) {
-                        bothHorizonsButton
-                        StockSageResearchHistoryButton(store: store)
-                    }
-                }
+            modeControls
+            HStack(spacing: 12) {
+                bothHorizonsButton
+                StockSageResearchHistoryButton(store: store)
             }
             #else
             bothHorizonsButton
-            horizonControls
+            modeControls
             StockSageResearchHistoryButton(store: store)
             #endif
             #if os(macOS)
@@ -353,7 +374,7 @@ struct StockSageResearchModesPanel: View {
         Button("Research both horizons", systemImage: "rectangle.split.2x1") {
             if research.start(StockSageHorizonResearch.Horizon.allCases, store: store) { selected = nil }
         }
-        .disabled(research.running != nil)
+        .disabled(research.running != nil || sameDay.isRunning)
         .help("Gather evidence once per stock, then run a separate AI assessment for each horizon. Both completed runs are saved. No orders.")
     }
 
@@ -628,10 +649,10 @@ struct StockSageResearchModesPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             adaptiveActionRow {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Market research").font(.largeTitle.weight(.semibold))
+                    Text("Market research").font(.title2.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
                     #if os(macOS)
-                    Text("Research only · up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks · one-time scan")
+                    Text("Top 5 per horizon · up to \(StockSageHorizonResearch.scanLimit) NASDAQ stocks · manual research")
                         .font(.caption).foregroundStyle(.secondary)
                     #else
                     Text("Up to \(StockSageHorizonResearch.topBuyLimit) Buy / Strong Buy per horizon")
