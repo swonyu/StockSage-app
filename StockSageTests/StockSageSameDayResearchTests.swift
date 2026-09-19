@@ -28,6 +28,22 @@ import AppKit
         return value.qualifyingCosts(regularConditions: [701])
     }
 
+    @Test func manualSameDayRunBlocksProductionTopFiveStart() async throws {
+        let suite = "stocksage.same-day-exclusion." + UUID().uuidString
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        #expect(store.isSampleData, "The fixture must prevent provider access even if the exclusion guard regresses")
+        let horizon = StockSageHorizonResearch()
+        await S.shared.run(selection: .init([listing("AAPL")]), capacity: { 1 }, allowed: { true }, clock: { now },
+            analyze: { item, _, _ in
+                #expect(!horizon.start(.week, store: store))
+                #expect(horizon.scans[.week]?.status.localizedCaseInsensitiveContains("same-day") == true)
+                return .init(symbol: item.ticker, name: item.name, at: now, note: "Not qualified")
+            }, refreshQuote: { _ in Issue.record("Unqualified fixture must not request a quote"); return nil })
+        #expect(!S.shared.isRunning)
+    }
+
     @Test func regularSessionHonorsEntryCutoffEarlyCloseAndCalendarCoverage() throws {
         #expect(S.session(at: now) != nil)
         for text in ["2026-09-19T15:00:00Z", "2026-09-18T13:00:00Z", "2026-11-27T17:55:00Z", "2027-01-04T15:00:00Z"] {
