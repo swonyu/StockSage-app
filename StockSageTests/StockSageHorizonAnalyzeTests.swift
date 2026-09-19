@@ -346,7 +346,8 @@ struct StockSageHorizonAnalyzeTests {
             }, evidenceIsCurrent: { _ in true }, qualify: true)
         let strict = await strictAnalysis(.fortnight)
         let qualified = try #require(strict.qualification)
-        #expect(strict.verdict?.action == .buy && strict.levels != nil && !qualified.isQualified)
+        #expect(strict.verdict?.action == .buy && strict.levels == nil && !qualified.isQualified,
+            "A failed strict screen must not substitute generic ATR entry/exit levels")
         #expect(strict.evidenceReceipt?.requiredKeys.contains("research.qualification.v1") == true)
         #expect(StockSageResearchQualification.valid(qualified, symbol: "ACME", horizon: Research.Horizon.fortnight.rawValue,
             at: strict.at, citedKeys: strict.evidenceReceipt?.citedKeys ?? []))
@@ -639,12 +640,12 @@ struct StockSageHorizonAnalyzeTests {
                 opens: opens, highs: opens, lows: closes, closes: closes, volumes: volumes, priceSource: .massiveDaily)
         }
         let ordinary = Research.historicalFacts(history(closes: [100,100,100], opens: [100,200,50], volumes: [10,10,10]))
-        #expect(ordinary.contains { $0.contains("1000.0 USD") })
-        #expect(ordinary.contains { $0.contains("mean absolute 75.0%") && $0.contains("largest absolute 100.0%") })
+        #expect(ordinary.contains { $0.text.contains("1000.0 USD") && $0.key == "history.dollarVolume" && $0.factClass == .market })
+        #expect(ordinary.contains { $0.text.contains("mean absolute 75.0%") && $0.text.contains("largest absolute 100.0%") && $0.key == "history.overnightGaps" && $0.factClass == .risk })
         let overflow = Research.historicalFacts(history(closes: [100,100,100], opens: [100,200,50], volumes: [.greatestFiniteMagnitude,10,10]))
-        #expect(overflow.count == 1 && overflow[0].hasPrefix("Historical open-to-prior-close gaps"))
+        #expect(overflow.count == 1 && overflow[0].key == "history.overnightGaps" && overflow[0].factClass == .risk)
         let gapOverflow = Research.historicalFacts(history(closes: [.leastNonzeroMagnitude,100,100], opens: [100,.greatestFiniteMagnitude,50], volumes: [10,10,10]))
-        #expect(gapOverflow.count == 1 && gapOverflow[0].hasPrefix("Historical average daily dollar volume"))
+        #expect(gapOverflow.count == 1 && gapOverflow[0].key == "history.dollarVolume" && gapOverflow[0].factClass == .market)
     }
 
     @Test func independentEarningsAndSECChecksKeepDatesAndDoNotClaimDocumentContents() async throws {
@@ -721,6 +722,12 @@ struct StockSageHorizonAnalyzeTests {
         #expect(facts.contains("SEC submissions metadata"))
         #expect(facts.contains("Historical average daily dollar volume"))
         #expect(facts.contains("Historical open-to-prior-close gaps"))
+        #expect(result.evidenceReceipt?.requiredKeys.contains("history.dollarVolume") == true)
+        #expect(result.evidenceReceipt?.requiredKeys.contains("history.overnightGaps") == true)
+        let liquidity = try #require(result.facts.firstIndex { $0.hasPrefix("Historical average daily dollar volume") })
+        let gaps = try #require(result.facts.firstIndex { $0.hasPrefix("Historical open-to-prior-close gaps") })
+        #expect(result.factClasses[liquidity] == .market)
+        #expect(result.factClasses[gaps] == .risk)
         #expect(facts.contains("Full filings were not retrieved"))
     }
 

@@ -14,12 +14,18 @@ final class StockSageHorizonResearch: ObservableObject {
         case week = "1–7 trading days", fortnight = "7–14 trading days"
         var id: String { rawValue }
         static let focusInstructions = """
-        StockSage focuses on \(Horizon.week.rawValue) and \(Horizon.fortnight.rawValue), as multi-session holding horizons. Do not propose intraday or same-session day-trading strategies, or long-term plans beyond 14 trading days. Longer historical windows are background evidence, not a holding horizon. If asked for an out-of-scope strategy, explain this focus and offer one of the supported horizons instead. Rankings are unvalidated research, not predictions of future returns.
+        StockSage offers a manual Same-day pick and separate \(Horizon.week.rawValue) and \(Horizon.fortnight.rawValue) Top 5 research. Same-day picks require the dedicated workflow's current intraday evidence; general Chat or daily background cannot establish a same-day entry. Multi-session research may involve overnight gaps. Do not propose long-term plans beyond 14 trading days. Longer historical windows are background evidence, not a holding horizon. All research starts manually; do not promise scheduled picks or automatic trading. Rankings are unvalidated research, not predictions of future returns.
         """
         var instructions: String {
             Self.focusInstructions + "\n" + StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
                 with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Consider overnight gaps and missing future catalysts. The daily technical rules are background, not independently validated for this horizon.")
+                + "\nThis is a multi-session assessment. Do not propose intraday or same-session day-trading strategies. "
+                + (self == .week
+                    ? "Prioritize the setup that can matter over the next few completed sessions: current price/volume confirmation, a dated near-term development and overnight risk. A long-term business story or past return alone is not an entry case."
+                    : "Assess whether the supplied setup can persist across the longer holding window, weighing follow-through, intervening events and the risk that the original case fades. A brief price spike alone does not establish persistence.")
+                + "\nUse reason for the strongest supported setup and risk for a concrete condition that could invalidate it; if the supplied facts do not establish that condition, state the missing evidence. Cite the offered facts supporting both sentences. Do not invent entry triggers, exit levels or a holding-period return. Historical dollar volume and gaps describe past observations, not an executable spread, depth or guaranteed stop fill."
                 + "\nA catalyst must have a dated source and plausible timing inside this horizon; an undated or already-passed item is context, not a catalyst."
+                + " A recent publication does not establish when its underlying event will occur. Distinguish the announcement's present information from a future milestone; do not move a distant milestone into this holding window."
                 + "\nUse the app-calculated earnings holding-window check as authoritative for timing. Do not calculate or state relative earnings dates, durations, month parts, or event probabilities in reason/risk. An outside-window date cannot be an in-window catalyst; unknown dates cannot establish either timing or absence of risk. Projected dates are not announcements. Historical earnings results are separate from the next report."
         }
     }
@@ -1265,9 +1271,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 }
             }
             && !newsAnswered && !earningsAnswered && !filingsAnswered && !companyAnswered
-        for (index, text) in historicalFacts(history).enumerated() {
-            appendExtra("history.liquidityAndGaps.\(index)", text, required: false)
-        }
+        extra.append(contentsOf: historicalFacts(history))
         if let selectionFact { appendExtra("universe.selection", selectionFact) }
         // Keep independent forward earnings and SEC statuses mandatory, even when records are trimmed.
         let packet = context.evidencePacket(maximumUTF8Bytes: 12_000)
@@ -1282,23 +1286,29 @@ final class StockSageHorizonResearch: ObservableObject {
             nextEarnings: instrument.isETF ? nil : earnings))
     }
 
-    nonisolated static func historicalFacts(_ history: StockSagePriceHistory) -> [String] {
+    nonisolated static func historicalFacts(_ history: StockSagePriceHistory) -> [StockSageAIAssessment.EvidenceFact] {
         let n = min(20, history.count)
         guard n > 1, history.dates.count == history.count, history.volumes.count == history.count,
               history.opens.count == history.count else { return [] }
         let start = history.count - n
         let dollars = (start..<history.count).map { history.closes[$0] * history.volumes[$0] }
         let average = dollars.reduce(0) { $0 + $1 / Double(n) }
-        var facts: [String] = []
+        var facts: [StockSageAIAssessment.EvidenceFact] = []
         let dates = "\(history.dates[start].ISO8601Format()) through \(history.dates.last!.ISO8601Format())"
         if dollars.allSatisfy({ $0.isFinite && $0 >= 0 }), average.isFinite {
-            facts.append("Historical average daily dollar volume: \(average) USD over \(n) bars, \(dates), estimated as close × volume. Not a spread, order-size capacity or fill guarantee.")
+            facts.append(.init(key: "history.dollarVolume",
+                text: "Historical average daily dollar volume: \(average) USD over \(n) bars, \(dates), estimated as close × volume. Not a spread, order-size capacity or fill guarantee.",
+                required: true, availability: .available, factClass: .market,
+                source: history.priceSource?.label ?? "Captured daily history", observedAt: history.dates.last))
         }
         let gaps = ((start + 1)..<history.count).map { (history.opens[$0] / history.closes[$0 - 1] - 1) * 100 }
         if gaps.allSatisfy(\.isFinite), let largest = gaps.map({ abs($0) }).max() {
             let mean = gaps.reduce(0) { $0 + abs($1) / Double(gaps.count) }
             if mean.isFinite {
-                facts.append("Historical open-to-prior-close gaps: mean absolute \(mean)%, largest absolute \(largest)%, \(gaps.count) adjacent-bar observations, \(dates). Daily aggregates may include extended hours; not a future gap probability or stop-fill estimate.")
+                facts.append(.init(key: "history.overnightGaps",
+                    text: "Historical open-to-prior-close gaps: mean absolute \(mean)%, largest absolute \(largest)%, \(gaps.count) adjacent-bar observations, \(dates). Daily aggregates may include extended hours; not a future gap probability or stop-fill estimate.",
+                    required: true, availability: .available, factClass: .risk,
+                    source: history.priceSource?.label ?? "Captured daily history", observedAt: history.dates.last))
             }
         }
         return facts
@@ -1489,7 +1499,7 @@ final class StockSageHorizonResearch: ObservableObject {
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
             prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict, packet: packet)
         let qualified = qualification?.receipt(verdict: verdict, citedKeys: evidenceReceipt?.citedKeys ?? [], offeredKeys: offered.map(\.key))
-        return .init(verdict: verdict, levels: qualified?.levels ?? levels(history: history, action: verdict.action, at: Date()),
+        return .init(verdict: verdict, levels: qualify ? qualified?.levels : levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated model research · \(horizon.rawValue). No order created." + trimmedNote,
             at: capture.at, model: config.model, validationOutcome: .validated,
             referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified,
