@@ -3619,6 +3619,30 @@ Next research milestone: larger predeclared multi-archive walk-forward experimen
 with point-in-time/calendar/actual-cost controls; then Kronos/Chronos comparisons
 and prospective paper evaluation. This delivery does NOT add those models to the
 app or certify broker execution. Do not optimize this already-seen test day.
+## Codex — 2026-09-08 23:41 +03 — waiting-period verification
+
+- Standalone feature branch advanced to **2467069** in private `Salman-bot/tradier-lab`. Added a cached offline installed-wheel verifier; final evidence passes **167 tests and eight loopback API assertions**, with two dependency warnings and zero failed/skipped tests. Private report: `/Users/salman/Workspace/Codespace/tradier-lab/reports/verification-233c0280-d392-4b9c-a9fd-af7306e232e9/report.json`. Missing-uv negative check correctly exits 1/FAIL. Source/revision/wheel hashes and private logs are retained.
+- Focused review plus six pre-fix failing/post-fix passing interruption cases found/fixed cancellation uncertainty disappearing from public responses after restart/OPEN. API/CLI now expose an unconfirmed outcome and broker-review action. No schema change or automatic cancellation retry; crash delivery ambiguity stays explicit. This is standalone tool work only.
+- Safari inspection confirmed Tradier application Verified/document receipt, while expanded instructions still require account-open email confirmation. Account opening/API access and G1 external acceptance remain unconfirmed. Keep broker credentials out of chat. No VPS, real orders or StockSage integration; no main merge. The original four brief files are preserved, and this checkout still has planning/handoff changes only.
+- User asks always to verify and test; heartbeat now carries that instruction and the installed-wheel command. Use fresh evidence after relevant changes, handle concrete failures/gaps, and avoid speculative additions or unchanged repeat loops while access is missing. Same deadline 2026-09-09 21:48 +03. One focused Terra worker completed; no test server left running, no paid API/infrastructure charge, actual Codex dollars unknown. Read standalone HANDOFF.md for the next gate.
+
+## Codex — 2026-09-08 23:01 +03 — offline broker acceptance
+
+- Standalone safety/recovery continuation pushed as **ef08135** to private `Salman-bot/tradier-lab`, `codex/phase-1-standalone`. The local tool's docs/OFFLINE_ACCEPTANCE.md maps D01–D20 evidence/dispositions. **161 offline tests PASS**, zero failed/skipped, two dependency warnings; the explicit offline loopback smoke passes eight assertions and stops its server.
+- Added active account/group/completeness and clock/calendar gates, rate-reset tests, bounded stream failure handling, separate-process crash/recovery and SQLite FULL cases, protected restore/schema validation and private rotating logs. Independent schema review found a recovery-trigger risk; the fix rejects altered objects/constraints before recovery. No known critical defect remains in the scoped offline checks; this does not claim bug-free or real broker acceptance.
+- Fresh sandbox/live presence-only doctor checks confirm no account/token/API key configured. **G1 external, G2 and G3 remain BLOCKED on broker onboarding/access**. No account, order, host purchase or integration occurred. No source/test/project file in this StockSage checkout changed. The original four user brief files remain untracked and unchanged.
+- Current next step is owner signup and local credential configuration, then required real S01–S04 and L01–L03. Do not keep expanding the offline application or rerunning unchanged tests while access is absent. Honor later IBKR/Tradier steering. One VPS up to $20/month is authorized after G1; never merge main without separate final permission.
+- good-spender continuation: $4 API-equivalent raw planning allowance, actual Codex dollars UNKNOWN; 26.30 minutes against a 25-minute estimate. Two existing workers reused, all completed; three unique workers total across this task. Report's agent actual3 reflects the thread scope. Context snapshot196,175/256,000, headroom59,825. No paid model API calls. Heartbeat continues meaningful progress checks until 2026-09-09 21:48 +03; quiet while this access blocker is unchanged.
+
+## Codex — 2026-09-08 22:32 +03 — independent trading tool checkpoint
+
+- Latest owner rule: commits, pushes and tests allowed; **never merge main without separate final permission**. Earlier historical merge authorizations below do not authorize this task's merge. One VPS up to $20/month total is approved after G1, within $200/month overall. No real orders authorized.
+- Planning commit `8ab7e2f` is on `codex/tradier-plan-only`. Independent tool implementation `d1666285437d5a73a55673b1908ac4e47392640d` is pushed to private [Salman-bot/tradier-lab](https://github.com/Salman-bot/tradier-lab), branch `codex/phase-1-standalone`; GitHub privacy and SHA verified. Local root `/Users/salman/Workspace/Codespace/tradier-lab`. No app integration/source/test/project changes.
+- Standalone CLI, local hidden-input setup, authenticated loopback offline/sandbox API, durable paper coordinator and separate production read-only observer exist. **101 synthetic tests pass**, zero failed/skipped, two dependency warnings. Earlier real loopback offline HTTP smoke passed six assertions and stopped. No authenticated broker request, account signup, fill, live observation or VPS deployment occurred.
+- G1/G2/G3 remain BLOCKED. Full deterministic fault/coverage gaps are listed in standalone `docs/VALIDATION.md`; actual sandbox lifecycle and 30-minute production observation require approved access. G2 then requires two complete regular market sessions. Never infer external acceptance from test counts.
+- Owner asked about IBKR; standalone `docs/BROKER_DECISION.md` records the official auth/gateway comparison. Tradier was brief-based, no switch has been requested and no account has been created. Follow later owner steering.
+- Hourly heartbeat `tradier-api-implementation-follow-up` remains active with latest spend/no-main rules until 2026-09-09 21:48 +03. Three workers completed. good-spender report closed the active run at 46.50 minutes; task Codex dollars unknown, no paid model API calls. Resume via standalone HANDOFF.md; keep this application untouched until G2. At deadline save final status and pause the heartbeat.
+
 ## Main integration and publication gate — 2026-09-08 13:36 +03
 
 Owner explicitly requested "merge everything to main and fix issues and push to
@@ -3663,6 +3687,14 @@ This is a source integration, not a new app installation or full live-service
 acceptance. The installed80df123 app was left running; Qwen stays OFF. The native
 helper failure and remaining Chat/window-size visual checks below remain open.
 No broker orders, model startup, credential changes, or native-control retries.
+
+## Codex — 2026-09-08 21:58 +03 — Tradier standalone planning and continuation
+
+- Fetched/pulled main safely at fc455ccf67415a9e45493a6471e4c6d28da52f00; created `codex/tradier-plan-only`. Added PLAN.md, ROADMAP.md, TEST_MATRIX.md and docs/SOURCES.md. All four original supplied brief/roadmap files remain unchanged and untracked. No application source/test/project change.
+- G0 document review, relative-link/fence/whitespace checks and application-diff check passed. Public official broker/library/hosting docs checked; no authenticated broker request, order, signup, funding or VPS purchase. Historical app tests were not rerun.
+- Later owner messages supersede PLAN_ONLY: implement and progress when gates pass, keep reporting for 24 hours. Tradier Lite selected; owner has no approved brokerage/API account yet and is willing to sign up. One VPS up to $20/month total approved within overall $200/month. Commits, pushes and tests authorized; **never merge to main without separate owner permission as final step**. Real orders remain unapproved.
+- Next: create independent `/Users/salman/Workspace/Codespace/tradier-lab` (checked absent), build/test Phase 1 offline core then private API/CLI, and save evidence. G1 remains blocked on actual sandbox/live access; G2 requires G1 plus two complete regular-market sessions; StockStage integration deferred until G2 and target confirmation.
+- Hourly heartbeat `tradier-api-implementation-follow-up` active until 2026-09-09 21:48 +03; save final report and pause it at deadline. good-spender monitor activated from `/tmp/stocksage-tradier-plan-monitor` to avoid writing harness settings into StockSage. No paid model APIs; one bounded Luna requirements-review worker completed.
 
 ## Desktop installation, route acceptance and Journal-tab copy — 2026-09-08 03:06 +03
 
