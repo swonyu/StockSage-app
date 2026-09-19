@@ -3082,6 +3082,147 @@ First cycle18:46:18–18:46:30UTC completed with an evidence-referenced ORCL Hol
 saved account has10K cash, zero trades and zero pending requests.
 See `agent-docs/QWEN_RESEARCH_PAPER_2026-09-08.md` for operation,
 policy, limitations and exact account/artifact paths. No push.
+## Combined integration verified — 2026-09-08 23:44 +03
+
+Installation owner task01a0822f-6195-7f81-b4dc-6a0402fcaa4b completed the combined
+app in commit d13ab2b on `codex/qwen-chat-context`, clean worktree at
+`/Users/saleh/StockSage-wt/qwen-context`. Independently compared: Form4 parser/tests
+match377a447 and all eight R3 Swift/test files (including MarketsView) match
+c6c65b7 byte-for-byte. Inspected its final gate logs:1848 macOS tests in56.356s
+and1845 iPhone tests in65.856s, both TEST SUCCEEDED. These are that task's fresh
+combined runs, not additional reruns here. Artifacts:
+`/private/tmp/stocksage-ibkr-ready-20260908/{macos-final,ios-final}.log`.
+
+Independently verified installedPID79003, strict/deep codesign and debug dylibSHA:
+86dffdb335fa559264c6f980c167199ff538e2716fa6e494a25748be5e840afa.
+The integration task reports its native paper flag/ledger lease active and14
+offline relay checks passed; Qwen61562 unchanged. The IBKR relay remains OFF:
+the owner's free-trial login is diagnostic-only; approved-account paper access
+and actual broker acceptance remain pending. No real-order readiness is claimed.
+
+KEEP THE INSTALL HOLD. Future app builds must preserve d13ab2b's combined Qwen
+paper/chat changes and274aee4's paper relay; coverage-only output omits them.
+Do not reinstall this branch's staged artifact. Coordinate future integration
+with that existing task. This entry records evidence only: no source merge,
+model/settings changes, app replacement, new test run or push from this task.
+
+## Copied-plan freshness fixed; installation handed off — 2026-09-08 23:38 +03
+
+Owner approved R3 at23:15: one shared rule for copied order plans. Missing,
+future, nonfinite or older-than60second quote timestamps yield "Draft only —
+refresh price" instead of entry/stop/target/size ticket text. Exactly60seconds
+passes this check only, not all risk/broker checks. Sample data is draft-only.
+Today, detail, ranked and allocation exports use the same pure status helper;
+ranked/allocation checks are per row. Existing copy risk-block reasons remain.
+Native Share uses a String proxy that checks at transfer time; Save checks after
+the modal panel closes. Expired shared/saved text becomes draft status. External
+clipboard strings cannot be revoked later. Research summaries are labelled as
+research, while on-screen Qwen analysis, badges, sizing/ranking and journal/CSV
+data remain unchanged. No automatic orders, repricing or new dependencies.
+Spec/plan: `docs/superpowers/specs/2026-09-08-plan-freshness-design.md`.
+
+Actual red run:21 tests,22 issues, exit65. The earlier method-filter command
+selected ZERO tests and is not counted as a pass. Focused six-suite regression
+passed100 tests. Final unchanged Swift source passed1840 macOS tests in56.534s
+and1837 iPhone17Pro(gate) tests in55.592s, exit0, serial, using the established
+CalibrationPersistRunTests/LiveUniverseVerificationTests/
+StrategyBaselineMeasurementTests exclusions. Boundaries cover nil, future,
+NaN/infinite, exactly60seconds,60.001seconds, mixed rows, sample and delayed
+share/save data. Logs/xcresults:
+`/private/tmp/stocksage-plan-freshness-20260908.XPKRvp/`.
+Self-review traced all scoped clipboard/share consumers; diff check passed.
+
+INSTALL HOLD: task01a0822f-6195-7f81-b4dc-6a0402fcaa4b is preparing the owner's
+combined Qwen/paper build in `/Users/saleh/StockSage-wt/qwen-context`. It reported
+that the Form4 installation omitted its earlier6536e6b changes. Do not replace
+`/Applications/StockSageX.app` with this coverage-only artifact. Send this isolated
+commit and results to that task; the combined source needs independent gates.
+Private staged Mac artifact (not installed):
+`/private/tmp/stocksage-plan-freshness-20260908.XPKRvp/verified-mac/StockSageX.app`.
+Strict deep codesign passed; checksum-aware dry-run comparison matched the tested
+product. Staged debug dylibSHA256:
+d6c2e2ad390bd9a0179f279eea7d748ab0b2ccaac8d61571b9417f6b2aeb7f03.
+Installed app58089 and Qwen61562 were left untouched. No native visual acceptance,
+live-API certification, model-quality improvement or integrated-build pass claimed.
+Other worktrees preserved; explicit local commit only, no merge/push/new agents.
+
+46 research tests freshly passed in2.522s; frozen sources/recipe unchanged, SHA
+46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+The finite tick returned waiting/no actions, next signal Sep9 at18:10 Riyadh.
+Day1 remains6 captured/12 missed batches with no backfill or early promotion;
+four sessions remain. Existing15-minute heartbeat retains :10/:25/:40/:55.
+R1/R4–R7 and the four feature proposals remain separate and approval-gated.
+
+## Form 4 isolation fixed and installed — 2026-09-08 23:09 +03
+
+Owner's "continue" at23:01 approved the parser-first R2 slice and aligning the
+existing15-minute heartbeat. Shared parser now reads fields inside each Table I
+transaction: absent price/date cannot shift a later trade's values; missing
+code/invalid shares skip only that row. Derivative contracts are not share rows.
+Missing A/D retains the existing code-derived fallback. Prices/amounts must be
+finite; shares must fit the Int conversion used by catalyst citations. The UI's
+net dollar amount is nil when any surfaced trade is unpriced, rather than a
+misleading partial subtotal. No caller, model, freshness or trading-gate changes.
+Design/plan:`docs/superpowers/specs/2026-09-08-form4-parser.md`.
+
+Actual-parser red regression: six missing-field cases,15 issues, exit65. Then
+focused14-test suite passed; final source adds the zero/share-bound test and
+passes1835 macOS tests and1832 iPhone17Pro(gate) tests, exit0, serial, with the
+established CalibrationPersistRunTests/LiveUniverseVerificationTests/
+StrategyBaselineMeasurementTests exclusions. Full suites include15 insider tests.
+Logs/xcresults:`/private/tmp/stocksage-form4-20260908.tqHZxS/`.
+Self-review traced both MarketsView and catalyst citation consumers; diff check
+passed. Parser remains limited to the existing unprefixed SEC element format.
+
+Normal quit confirmed oldPID46019 exited. Tested bundle staged, installed and
+reopened asPID58089; strict deep codesign verification passed and checksum-aware
+dry-run comparison found no differences. Debug dylibSHA256:
+ff45c5e89da2074a6ea9dafc998dc8dd120a8d4a7d1aee13f3460ec178c3608e.
+Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-before-form4-20260908-2310.app`.
+Qwen61562 remains on. No native visual acceptance or live-API certification is
+claimed. Other worktrees preserved; no merge/push or new agents/tasks.
+
+Day1 prospective outcomes scored once after close at20:02UTC, exit0. Six of18
+batches captured,12 missed. Of2160 model/symbol/delay records:590 scored,
+130 late,1440 missing forecasts. Scored counts:230 at1min,360 at6min; common
+six-candidate panel90 symbol/delay events (30 at1min,60 at6min). Missing/late
+records stay in the denominator; no backfill or early model promotion. These are
+forecast errors, NOT fills or portfolio returns; four sessions remain. Private
+scores:`.research/prospective/20260908-five-session-v1/outcomes-2026-09-08/scores.json`.
+46 research tests freshly passed in2.320s; frozen source files unchanged and
+recipeSHA remains46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+Existing heartbeat successfully updated/verified ACTIVE at :10/:25/:40/:55,
+same15-minute frequency. This improves alignment, not sleep/busy-time guarantees.
+Both review peers remain idle. R1/R3–R7 and the four feature proposals are NOT
+implemented; new behavioral designs still require approval.
+
+## Three-session review consolidated — 2026-09-08 21:35 +03
+
+Owner-authorized three-session local review completed at source7e6e7aa. Report:
+`agent-docs/FULL_REVIEW_2026-09-08.md`. Both read-only reviewers are idle; this
+task remains the only shared-worktree writer. Findings include Form4 optional-field
+misalignment, unknown-age copied plans, date-misaligned/indefinitely cached
+correlation evidence, and the compiled legacy EODHD credential fallback (value
+not printed). Reviewer overclaims were corrected: the owner's saved MLX settings
+work; blindly wiring current precheck data into the gate is unsafe; credential
+validity/misuse is unverified, not an established universal outage.
+
+Fresh checks:exact local model ID found by /v1/models; tiny synthetic JSON
+generation returned status ok/finish_reason stop/six tokens; existing server
+arguments disable thinking and retain concurrency1. No stock-quality benchmark,
+new Xcode gate, visual acceptance or live broker/API certification claimed.
+No app/source/model settings changed. Focused parser-fix design approval was
+requested; do not implement new behavior until the owner answers. The report
+covers proposals for all four requested areas, not four shipped features.
+
+Prospective18:10UTC batch:all six candidates eligible at both delays.18:25UTC
+slot missed because the next heartbeat arrived18:33; this new miss is not
+attributed to sleep without evidence. Current14-slot totals:six captured/eight
+missed. Misses remain in denominator; no backfill. Existing15-minute heartbeat
+has no fixed clock-minute alignment. Scheduling alignment needs owner direction;
+no cadence, scheduler, frozen recipe/source or sleep setting changed. Qwen61562
+and StockSage99055 remain on. This is documentation-only; no merge or push.
 
 ## Sleep interrupted prospective timing — 2026-09-08 19:41 +03
 
