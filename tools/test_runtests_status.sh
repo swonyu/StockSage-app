@@ -18,13 +18,14 @@ cat > "$probe_dir/bin/xcrun" <<'STUB'
 printf '{"result":"Passed","passedTests":%s,"failedTests":0,"skippedTests":0}\n' "$PROBE_PASSED"
 STUB
 chmod +x "$probe_dir/bin/xcodebuild" "$probe_dir/bin/xcrun"
-for scenario in success failure empty build layout table publication constraints; do
+for scenario in success failure empty build layout hosting table publication constraints; do
     expected=0; native_exit=0; passed=1; log=''; args=(--filter StockSageQuoteCacheTests --no-parallel)
     case "$scenario" in
         failure) expected=65; native_exit=65 ;;
         empty) expected=1; passed=0 ;;
         build) args=(--build-only) ;;
         layout) expected=1; log="It's not legal to call -layoutSubtreeIfNeeded on a view which is already being laid out." ;;
+        hosting) expected=1; log='NSHostingView is being laid out reentrantly while rendering its SwiftUI content.' ;;
         table) expected=1; log='WARNING: Application performed a reentrant operation in its NSTableView delegate.' ;;
         publication) expected=1; log='Publishing changes from within view updates is not allowed.' ;;
         constraints) expected=1; log='Unable to simultaneously satisfy constraints.' ;;
@@ -47,7 +48,7 @@ for scenario in success failure empty build layout table publication constraints
     fi
     grep -q -- '-skip-testing:StockSageTests/LiveUniverseVerificationTests' "$probe_dir/args"
 done
-test "$(find "$probe_dir" -maxdepth 1 -type d -name 'stocksage-tests.*' | wc -l | tr -d ' ')" -eq 8
+test "$(find "$probe_dir" -maxdepth 1 -type d -name 'stocksage-tests.*' | wc -l | tr -d ' ')" -eq 9
 result=0
 bash "$repo/tools/runtests.sh" "$repo" --filter '.*' >/dev/null 2>&1 || result=$?
 test "$result" -eq 2

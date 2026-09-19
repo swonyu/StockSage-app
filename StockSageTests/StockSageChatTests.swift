@@ -733,6 +733,7 @@ struct StockSageChatTests {
         }
         try await waitFor { research.running == nil }
         try #require(analyses == 2 && research.scans[.week]?.rankedTopFive(horizon: .week, now: at)?.ranked.first?.symbol == "SAIL")
+        let originalScan = try #require(research.scans[.week])
         let model = ResearchPresentationModel()
         model.presentation.filter = .incomplete
         model.presentation.search = "FAIL"
@@ -748,6 +749,39 @@ struct StockSageChatTests {
             #expect(model.presentation.selected == "FAIL" && model.presentation.search == "FAIL"
                     && model.presentation.filter == .incomplete,
                     "A blocked retry must keep the current evidence and filters open")
+            let expectedBlocker = StockSageLocalModelServer.isShuttingDown ? "StockSage is closing."
+                : (!ToolPolicy.isExternalAllowed ? "Web access is disabled. Enable it in Settings."
+                    : "Leave sample data before running research.")
+            for label in ["Run \(R.Horizon.week.rawValue) research scan", "Research both horizons"] {
+                // Each rejected action starts from the same open evidence and active filters.
+                model.presentation.selected = "FAIL"
+                try await waitFor { nativeAccessibilityText(in: root).contains("News check time unavailable for this result") }
+                let run = try #require(nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityRole?() == .button && $0.accessibilityLabel?() == label
+                }, "Find the actual \(label) button")
+                let attemptedBefore = research.scans[.week]?.lastAttemptAt
+                try #require(run.accessibilityPerformPress?() == true, "Start through the native \(label) action")
+                try await waitFor {
+                    research.scans[.week]?.lastAttemptAt != attemptedBefore
+                        && research.scans[.week]?.status.contains("No scan started.") == true
+                }
+                let after = try #require(research.scans[.week])
+                try await waitFor { nativeAccessibilityText(in: root).contains("Scan status: \(after.status)") }
+                #expect(model.presentation.selected == "FAIL" && model.presentation.search == "FAIL"
+                        && model.presentation.filter == .incomplete,
+                        "Rejected \(label) must preserve the current detail, search and filter")
+                #expect(nativeAccessibilityText(in: root).contains("News check time unavailable for this result"),
+                        "Rejected \(label) must keep the captured detail rendered")
+                #expect(after.status.hasPrefix(expectedBlocker) && nativeAccessibilityText(in: root).contains(expectedBlocker),
+                        "Rejected \(label) must display the specific preflight blocker")
+                #expect(research.running == nil && analyses == 2 && after.at == originalScan.at
+                        && after.completedAt == originalScan.completedAt && after.listings == originalScan.listings
+                        && after.results.count == originalScan.results.count && after.topBuys == originalScan.topBuys
+                        && after.results["SAIL"]?.at == at && after.results["FAIL"]?.at == at
+                        && after.results["SAIL"]?.verdict?.reason == "Original SAIL captured interpretation."
+                        && after.results["FAIL"]?.note == "Synthetic incomplete check.",
+                        "Rejected \(label) must retain the original scan and evidence without another analysis")
+            }
             @MainActor func scrollViews(in view: NSView) -> [NSScrollView] {
                 if let scroll = view as? NSScrollView { return [scroll] }
                 return view.subviews.flatMap { scrollViews(in: $0) }

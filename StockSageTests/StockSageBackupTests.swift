@@ -7,6 +7,123 @@ import Foundation
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
 
+    @MainActor @Test(arguments: [false, true])
+    func fullBackupPreservesFractionalDatesThroughRestoreAndReload(reviveDeletedIDs: Bool) throws {
+        let sourceName = "backup-fractional-source-\(UUID())"
+        let destinationName = "backup-fractional-destination-\(UUID())"
+        let source = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: sourceName))
+        let destination = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: destinationName))
+        defer {
+            source.removePersistentDomain(forName: sourceName)
+            destination.removePersistentDomain(forName: destinationName)
+        }
+        let opened = Date(timeIntervalSince1970: 1_700_000_000.1234567)
+        let closed = Date(timeIntervalSince1970: 1_700_500_000.7654321)
+        let triggered = Date(timeIntervalSince1970: 1_700_600_000.2345678)
+        let trade = TradeRecord(symbol: "AAPL", side: .long, entry: 150, stop: 145,
+            target: 165, shares: 10, openedAt: opened, exitPrice: 160, closedAt: closed)
+        let sourceJournal = StockSageJournalStore(defaults: source)
+        let sourcePortfolio = StockSagePortfolio(userDefaults: source)
+        let sourceStore = StockSageStore(defaults: source, heldSymbols: { [] })
+        #expect(sourceJournal.add(trade))
+        #expect(sourcePortfolio.add(symbol: "AAPL", shares: 10, costBasis: 150))
+        #expect(sourceStore.addPriceAlert(symbol: "AAPL", target: 160, direction: .above))
+        let alertID = try #require(sourceStore.priceAlerts.first?.id)
+        sourceStore.markPriceAlertsTriggered([alertID], at: triggered)
+        let expectedAlerts = sourceStore.priceAlerts
+        let data = try StockSageBackup.export(journal: sourceJournal,
+            portfolio: sourcePortfolio, store: sourceStore)
+        let decoded = try StockSageBackup.restore(from: data).get()
+        #expect(decoded.trades == [trade], "JSON recovery must retain the exact recorded open and close times")
+        #expect(decoded.priceAlerts == expectedAlerts, "JSON recovery must retain the exact accepted alert time")
+
+        let journal = StockSageJournalStore(defaults: destination)
+        let portfolio = StockSagePortfolio(userDefaults: destination)
+        let store = StockSageStore(defaults: destination, heldSymbols: { [] })
+        let markers = StockSageRecordDeletions(defaults: destination, recordKey: "stocksage.journal.v1")
+        if reviveDeletedIDs {
+            #expect(journal.add(trade))
+            journal.remove(trade.id)
+            #expect(markers.contains(trade.id))
+        }
+        let summary = try StockSageBackup.restore(from: data,
+            journal: journal, portfolio: portfolio, store: store).get()
+        #expect(summary.trades == 1 && summary.positions == 1 && summary.priceAlerts == 1)
+        #expect(!markers.contains(trade.id))
+        #expect(journal.trades == [trade] && store.priceAlerts == expectedAlerts)
+        let reloadedTrade = try #require(StockSageJournalStore(defaults: destination).trades.first)
+        #expect(reloadedTrade.openedAt == opened && reloadedTrade.closedAt == closed)
+        let reloadedStore = StockSageStore(defaults: destination, heldSymbols: { [] })
+        #expect(reloadedStore.priceAlerts == expectedAlerts)
+        #expect(reloadedStore.priceAlerts.first?.triggeredAt == triggered)
+        #expect(StockSagePortfolio(userDefaults: destination).positions == sourcePortfolio.positions)
+    }
+
+    @MainActor @Test(arguments: ["omitted", "null", "present"])
+    func schemaOneBackupStillRestoresAndRemainsIdempotent(alertField: String) throws {
+        let exported = Date(timeIntervalSince1970: 1_700_700_000)
+        let alert = fixturePriceAlert()
+        let legacy = StockSageBackup.BackupPayload(schemaVersion: 1, exportedAt: exported,
+            trades: [fixtureTrade()], positions: [fixturePosition()], userSymbols: ["NVDA"],
+            priceAlerts: alertField == "present" ? [alert] : nil)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var json = try #require(JSONSerialization.jsonObject(with: encoder.encode(legacy)) as? [String: Any])
+        if alertField == "null" { json["priceAlerts"] = NSNull() }
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try StockSageBackup.restore(from: data).get()
+        #expect(decoded.schemaVersion == 1 && decoded.exportedAt == exported)
+        #expect(decoded.trades == legacy.trades && decoded.positions == legacy.positions)
+        #expect(decoded.priceAlerts == legacy.priceAlerts)
+
+        let name = "backup-legacy-dates-\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let restored = try StockSageBackup.restore(from: data,
+            journal: journal, portfolio: portfolio, store: store).get()
+        #expect(restored.trades == 1 && restored.positions == 1 && restored.symbols == 1)
+        #expect(restored.priceAlerts == (alertField == "present" ? 1 : 0))
+        #expect(StockSageJournalStore(defaults: defaults).trades == legacy.trades)
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == legacy.positions)
+        let reloaded = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(reloaded.userSymbols == ["NVDA"] && reloaded.priceAlerts == (legacy.priceAlerts ?? []))
+        let repeated = try StockSageBackup.restore(from: data,
+            journal: journal, portfolio: portfolio, store: store).get()
+        #expect(repeated.trades == 0 && repeated.positions == 0 && repeated.symbols == 0 && repeated.priceAlerts == 0)
+        #expect(repeated.skipped == (alertField == "present" ? 4 : 3))
+    }
+
+    @Test func schemaTwoDatesUseTheDocumentedFoundationEpoch() throws {
+        let trade = fixtureTrade(), alert = fixturePriceAlert()
+        let data = try StockSageBackup.export(trades: [trade], positions: [], userSymbols: [], priceAlerts: [alert])
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["schemaVersion"] as? Int == 2)
+        let trades = try #require(json["trades"] as? [[String: Any]])
+        let alerts = try #require(json["priceAlerts"] as? [[String: Any]])
+        #expect(trades.first?["openedAt"] as? Double == trade.openedAt.timeIntervalSinceReferenceDate)
+        #expect(trades.first?["closedAt"] as? Double == trade.closedAt?.timeIntervalSinceReferenceDate)
+        #expect(alerts.first?["triggeredAt"] as? Double == alert.triggeredAt?.timeIntervalSinceReferenceDate)
+        let payload = try JSONDecoder().decode(StockSageBackup.BackupPayload.self, from: data)
+        #expect(json["exportedAt"] as? Double == payload.exportedAt.timeIntervalSinceReferenceDate)
+        #expect(payload.trades == [trade] && payload.priceAlerts == [alert])
+    }
+
+    @Test(arguments: [1, 2])
+    func backupDatesMustMatchTheirSchema(version: Int) {
+        let date = version == 1 ? "0" : "\"2026-01-01T00:00:00Z\""
+        let json = """
+        {"schemaVersion":\(version),"exportedAt":\(date),"trades":[],"positions":[],"userSymbols":[]}
+        """
+        switch StockSageBackup.restore(from: Data(json.utf8)) {
+        case .success: Issue.record("A backup must not silently reinterpret the other schema's date encoding")
+        case .failure(let error):
+            guard case .decodeFailed = error else { Issue.record("Expected invalid date encoding, got \(error)"); return }
+        }
+    }
+
     @MainActor @Test(arguments: ["portfolio-add", "portfolio-remove", "portfolio-clear", "journal-add", "journal-close", "journal-remove",
         "watchlist-add", "watchlist-remove", "alert-add", "alert-remove", "alert-rearm", "alert-trigger"])
     func committedEditsPublishAndWarnWhenDirectoryDurabilityIsUnconfirmed(action: String) async throws {
@@ -563,7 +680,7 @@ struct StockSageBackupTests {
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
         let before = defaults.persistentDomain(forName: suite) ?? [:]
         let data = try StockSageBackup.export(journal: journal, portfolio: portfolio, store: store)
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let decoder = JSONDecoder()
         let payload = try decoder.decode(StockSageBackup.BackupPayload.self, from: data)
         #expect(payload.trades == [invalid]) // export is recovery, not restore validation/repair
         #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
@@ -968,7 +1085,7 @@ struct StockSageBackupTests {
         json.removeValue(forKey: "priceAlerts")
         if let priceAlerts {
             let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
+            encoder.dateEncodingStrategy = .deferredToDate
             json["priceAlerts"] = try JSONSerialization.jsonObject(with: encoder.encode(priceAlerts))
         }
         return try JSONSerialization.data(withJSONObject: json)

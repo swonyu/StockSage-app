@@ -50,6 +50,7 @@ with open(sys.argv[2], errors="replace") as source:
 # These native warnings are not included in xcresult's runtimeWarnings summary.
 diagnostics = [message for message in (
     "It's not legal to call -layoutSubtreeIfNeeded",
+    "NSHostingView is being laid out reentrantly",
     "Application performed a reentrant operation in its NSTableView delegate",
     "Publishing changes from within view updates",
     "Unable to simultaneously satisfy constraints",

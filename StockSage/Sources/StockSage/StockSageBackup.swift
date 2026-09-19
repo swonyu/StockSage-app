@@ -18,7 +18,7 @@ enum StockSageBackup {
     // MARK: Payload
 
     struct BackupPayload: Codable, Sendable {
-        var schemaVersion: Int = 1
+        var schemaVersion: Int = 2
         var exportedAt: Date
         var trades: [TradeRecord]
         var positions: [PortfolioPosition]
@@ -46,7 +46,7 @@ enum StockSageBackup {
             case .sourceReadFailed(let collection):
                 return "Couldn't read the saved \(collection). Existing data was preserved."
             case .unsupportedSchemaVersion(let found, let supported):
-                return "This backup file is schema version \(found); this app reads version \(supported). It may be from a newer or older version of StockSage."
+                return "This backup file is schema version \(found); this app reads versions 1 through \(supported). It may be from a newer or older version of StockSage."
             case .decodeFailed(let reason):
                 return "Couldn't read this backup file — it may be corrupt or not a StockSage backup. (\(reason))"
             case .invalidJournalRecord(let index, let reason):
@@ -67,9 +67,9 @@ enum StockSageBackup {
         }
     }
 
-    /// Current schema version this build writes and reads. Bump when `BackupPayload`'s
-    /// shape changes in a way older readers can't handle.
-    static let currentSchemaVersion = 1
+    /// Schema 2 preserves Date's exact seconds since 2001-01-01T00:00:00Z.
+    /// Schema 1's ISO-8601 dates remain readable at their original second precision.
+    static let currentSchemaVersion = 2
 
     // MARK: Export
 
@@ -95,7 +95,7 @@ enum StockSageBackup {
         try data.write(to: url, options: .atomic)
     }
 
-    /// Builds a pretty-printed, ISO-8601-dated JSON snapshot of everything passed in.
+    /// Builds a pretty-printed JSON snapshot with lossless Foundation Date values.
     /// Pure value encoder for fixtures and recovery, including retained invalid closures.
     /// Native full-backup actions use the store-taking overload to check committed sources.
     static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String],
@@ -110,7 +110,7 @@ enum StockSageBackup {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .deferredToDate
         do { return try encoder.encode(payload) }
         catch { throw BackupError.encodeFailed }
     }
@@ -163,22 +163,19 @@ enum StockSageBackup {
     /// Decode/validate only, with watchlist normalization. Use the store-taking overload
     /// to apply all four collections; this overload never writes any state.
     static func restore(from data: Data) -> Result<BackupPayload, BackupError> {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         // Schema version is checked from the raw JSON first (via a minimal probe struct
         // that only cares about that one field), so a version mismatch reports as
         // `unsupportedSchemaVersion` even for a future shape whose other fields wouldn't
         // otherwise decode under this build's BackupPayload.
         struct SchemaProbe: Decodable { let schemaVersion: Int }
-        if let probe = try? JSONDecoder().decode(SchemaProbe.self, from: data),
-           probe.schemaVersion != currentSchemaVersion {
-            return .failure(.unsupportedSchemaVersion(found: probe.schemaVersion, supported: currentSchemaVersion))
-        }
         do {
-            var payload = try decoder.decode(BackupPayload.self, from: data)
-            guard payload.schemaVersion == currentSchemaVersion else {
-                return .failure(.unsupportedSchemaVersion(found: payload.schemaVersion, supported: currentSchemaVersion))
+            let version = try JSONDecoder().decode(SchemaProbe.self, from: data).schemaVersion
+            guard (1...currentSchemaVersion).contains(version) else {
+                return .failure(.unsupportedSchemaVersion(found: version, supported: currentSchemaVersion))
             }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = version == 1 ? .iso8601 : .deferredToDate
+            var payload = try decoder.decode(BackupPayload.self, from: data)
             var seenTrades: [UUID: TradeRecord] = [:]
             for (index, trade) in payload.trades.enumerated() {
                 if let error = trade.ownerJournalError { return .failure(.invalidJournalRecord(index: index + 1, reason: error)) }

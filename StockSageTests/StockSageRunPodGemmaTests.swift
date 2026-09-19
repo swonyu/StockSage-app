@@ -48,7 +48,7 @@ import Testing
         #expect(!unloaded && unloadCalls == 0, "Quitting never calls LM Studio or remote model lifecycle endpoints")
     }
 
-    @Test(arguments: [1, 2, 4, 8])
+    @Test(arguments: [1, 2, 4, 8, 16])
     func readinessUsesOnlyRemoteModelAndActualSlotProperties(slots: Int) async throws {
         var paths: [String] = []
         let probe = await S.probe(config, externalAllowed: { true }, transport: { request in
@@ -62,7 +62,7 @@ import Testing
     }
 
     @Test func unknownCapacityStaysSerialAndUnverifiedContextNeverBecomesReady() async throws {
-        for slots in [NSNull(), true, 0, 3, 16, 2.5, "4"] as [Any] {
+        for slots in [NSNull(), true, 0, 3, 32, 2.5, "4"] as [Any] {
             let probe = await S.probe(config, externalAllowed: { true }, transport: { request in
                 try response(request, request.url?.path == "/v1/models" ? inventory : properties(slots: slots))
             })

@@ -186,7 +186,7 @@ struct StockSageResearchModesPanel: View {
             && scan.status == StockSageHorizonResearch.Scan().status
         let controls = VStack(alignment: .leading, spacing: 16) {
             Self.manualControls(horizon: horizon, hasRun: scan.at != nil, running: isRunning ? horizon : research.running,
-                run: { selected = nil; research.start(horizon, store: store) }, stop: { research.stop() })
+                run: { if research.start(horizon, store: store) { selected = nil } }, stop: { research.stop() })
             if scan.needsSaving && research.running == nil {
                 Button("Retry save", systemImage: "square.and.arrow.down") { research.retrySave(horizon) }
                     .help("Save the same completed research and dates without another model request.")
@@ -339,7 +339,7 @@ struct StockSageResearchModesPanel: View {
 
     private var bothHorizonsButton: some View {
         Button("Research both horizons", systemImage: "rectangle.split.2x1") {
-            selected = nil; research.start(StockSageHorizonResearch.Horizon.allCases, store: store)
+            if research.start(StockSageHorizonResearch.Horizon.allCases, store: store) { selected = nil }
         }
         .disabled(research.running != nil)
         .help("Gather evidence once per stock, then run a separate AI assessment for each horizon. Both completed runs are saved. No orders.")

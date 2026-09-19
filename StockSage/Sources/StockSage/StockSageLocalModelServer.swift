@@ -28,7 +28,7 @@ enum StockSageLocalModelServer {
     /// Facts go only to the configured endpoint, never to a redirect target; no shared cookies.
     private static func inferenceSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpMaximumConnectionsPerHost = 8
+        configuration.httpMaximumConnectionsPerHost = 16
         return URLSession(configuration: configuration, delegate: NoRedirect(), delegateQueue: nil)
     }
     private static var session = inferenceSession()
@@ -508,7 +508,7 @@ enum StockSageLocalModelServer {
               let settings = properties["default_generation_settings"] as? [String: Any],
               let context = tokenCount(settings["n_ctx"]), (researchContextTokens..<1_048_576).contains(context) else { return nil }
         let slots = tokenCount(properties["total_slots"]) ?? 1
-        return (context, [1, 2, 4, 8].contains(slots) ? slots : 1)
+        return (context, [1, 2, 4, 8, 16].contains(slots) ? slots : 1)
     }
 
     /// Normal Mac quit unloads only the selected local model, never the server or weight files.
