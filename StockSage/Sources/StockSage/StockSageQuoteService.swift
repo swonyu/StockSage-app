@@ -90,7 +90,7 @@ enum StockSageQuoteService {
         return await fetchQuoteBatch(for: symbols, concurrency: concurrency,
             keyPresent: !access.key.isEmpty, allowed: access.isCurrent,
             massive: { await StockSageMassive.fetchSnapshots(for: $0, access: .init(allowed: access.isCurrent)) },
-            transport: { try await yahooTransport($0) })
+            transport: { try await yahooTransport($0) }, cooldown: yahooCooldown)
     }
 
     /// The production routing loop; injected I/O keeps regression checks offline.
@@ -98,6 +98,7 @@ enum StockSageQuoteService {
         keyPresent: Bool, allowed: @escaping @Sendable () -> Bool,
         massive: @Sendable ([String]) async -> [String: LiveQuote],
         transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse),
+        cooldown: YahooCooldown? = nil,
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) async -> QuoteBatch {
         guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
@@ -115,7 +116,7 @@ enum StockSageQuoteService {
                     group.addTask {
                         guard let request = quoteRequest(symbol) else { return (nil, false) }
                         let response = await yahooResponse(for: request, allowed: allowed,
-                            transport: transport, sleep: sleep, retryThrottles: false)
+                            transport: transport, sleep: sleep, retryThrottles: false, cooldown: cooldown)
                         if case .throttled = response { return (nil, true) }
                         guard case .data(let data) = response,
                               let parsed = parseChart(data, requestedSymbol: symbol) else { return (nil, false) }
@@ -136,7 +137,6 @@ enum StockSageQuoteService {
             }
             guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
             for quote in results.quotes { out[quote.symbol.uppercased()] = quote }
-            // ponytail: stop this sweep only; share Retry-After state if concurrent sweeps keep throttling.
             if results.throttled { return .init(quotes: out, stop: .yahooThrottled) }
         }
         return .init(quotes: out)
@@ -151,6 +151,37 @@ enum StockSageQuoteService {
     }
 
     nonisolated enum YahooResponse: Sendable { case data(Data), throttled, unavailable }
+    // The deadline is lock-protected. Foundation documents UserDefaults as thread-safe:
+    // https://developer.apple.com/documentation/foundation/userdefaults#Thread-Safety
+    nonisolated final class YahooCooldown: @unchecked Sendable {
+        private let lock = NSLock()
+        private var until: Date?
+        private let defaults: UserDefaults?
+        private static let key = "stocksage.yahoo.retryAfter"
+
+        init(defaults: UserDefaults? = nil) {
+            let seconds = defaults?.double(forKey: Self.key) ?? 0
+            until = seconds.isFinite && seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+            self.defaults = defaults
+        }
+        func permits(at now: Date = Date()) -> Bool {
+            guard now.timeIntervalSince1970.isFinite else { return false }
+            return lock.withLock { until.map { now >= $0 } ?? true }
+        }
+        func observe(_ response: HTTPURLResponse, now: Date = Date()) {
+            guard response.statusCode == 429 || response.statusCode == 503,
+                  now.timeIntervalSince1970.isFinite else { return }
+            let delay = StockSageBenzingaClient.retryDelay(response.value(forHTTPHeaderField: "Retry-After"),
+                now: now, maximumDelay: .greatestFiniteMagnitude)
+            let until = now.addingTimeInterval(max(1, delay))
+            guard until.timeIntervalSince1970.isFinite else { return }
+            lock.withLock {
+                self.until = max(self.until ?? until, until)
+                defaults?.set(self.until!.timeIntervalSince1970, forKey: Self.key)
+            }
+        }
+    }
+    nonisolated static let yahooCooldown = YahooCooldown(defaults: .standard)
     nonisolated static let maximumYahooBytes = 2_000_000
 
     nonisolated static let yahooSession: URLSession = {
@@ -173,16 +204,20 @@ enum StockSageQuoteService {
         allowed: @Sendable () -> Bool,
         transport: @Sendable (URLRequest) async throws -> (Data, URLResponse),
         sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        retryThrottles: Bool = true
+        retryThrottles: Bool = true, cooldown: YahooCooldown? = nil,
+        now: @Sendable () -> Date = Date.init
     ) async -> YahooResponse {
         for attempt in 0..<3 {
             guard allowed(), !Task.isCancelled else { return .unavailable }
+            if let cooldown, !cooldown.permits(at: now()) { return .throttled }
             guard let (data, response) = try? await transport(request) else { return .unavailable }
             guard allowed(), !Task.isCancelled, let http = response as? HTTPURLResponse,
                   response.url == request.url, data.count <= maximumYahooBytes,
                   response.expectedContentLength <= Int64(maximumYahooBytes) else { return .unavailable }
             if http.statusCode == 200 { return .data(data) }
             if http.statusCode == 429 || http.statusCode == 503 {
+                cooldown?.observe(http, now: now())
+                if cooldown != nil { return .throttled }
                 guard retryThrottles, attempt < 2 else { return .throttled }
                 do { try await sleep(.seconds(1 << attempt)) }
                 catch { return .unavailable }
@@ -240,7 +275,7 @@ enum StockSageQuoteService {
             massive: { await StockSageMassive.fetchHistory(symbol: $0, range: $1, interval: $2, access: scopedAccess) },
             yahoo: { request in
                 guard case .data(let data) = await yahooResponse(for: request, allowed: captured.isCurrent,
-                    transport: { try await yahooTransport($0) }) else { return nil }
+                    transport: { try await yahooTransport($0) }, cooldown: yahooCooldown) else { return nil }
                 return data
             })
     }

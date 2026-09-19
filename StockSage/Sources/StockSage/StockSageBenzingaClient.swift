@@ -472,16 +472,16 @@ import Foundation
         return request
     }
 
-    nonisolated static func retryDelay(_ value: String?, now: Date) -> TimeInterval {
+    nonisolated static func retryDelay(_ value: String?, now: Date, maximumDelay: TimeInterval = 300) -> TimeInterval {
         guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return 30 }
-        if let seconds = Double(text) { return seconds.isFinite && seconds >= 0 ? min(seconds, 300) : 30 }
+        if let seconds = Double(text) { return seconds.isFinite && seconds >= 0 ? min(seconds, maximumDelay) : 30 }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
         formatter.isLenient = false
         guard let date = formatter.date(from: text) else { return 30 }
-        return min(300, max(0, date.timeIntervalSince(now)))
+        return min(maximumDelay, max(0, date.timeIntervalSince(now)))
     }
 
     func snapshot(symbol: String) async -> StockSageBenzinga.Snapshot {

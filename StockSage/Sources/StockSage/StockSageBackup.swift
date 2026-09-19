@@ -11,8 +11,8 @@ import Foundation
 //
 // HONESTY FLOOR: merge missing record IDs only; existing records win, never guess or
 // overwrite quantities/costs. The two file pickers share the same application path.
-// ponytail: the writer lease excludes other current app copies, but these four
-// UserDefaults writes are not crash-atomic; that requires a transactional store.
+// A successful restore commits all four collections and record-deletion markers as
+// one atomic image; subsequent reads/edits use that image instead of legacy preferences.
 enum StockSageBackup {
 
     // MARK: Payload
@@ -37,6 +37,7 @@ enum StockSageBackup {
         case invalidPriceAlert(index: Int, reason: String)
         case conflictingRecordID(collection: String, index: Int)
         case restoreFailed(String)
+        case restoreDurabilityUnconfirmed
 
         var errorDescription: String? {
             switch self {
@@ -60,6 +61,8 @@ enum StockSageBackup {
                 return "Invalid \(collection) record \(index): its ID conflicts with an earlier record. Nothing was restored."
             case .restoreFailed(let reason):
                 return "Couldn't prepare the saved records: \(reason) Nothing was restored."
+            case .restoreDurabilityUnconfirmed:
+                return StockSageRecordStorage.Failure.durabilityUnconfirmed.localizedDescription
             }
         }
     }
@@ -71,7 +74,7 @@ enum StockSageBackup {
     // MARK: Export
 
     /// Read committed sources at the action, including after a native save panel returns.
-    /// These sequential defaults reads are not a cross-process transactional snapshot.
+    /// Restored profiles read the leased atomic image; legacy profiles retain their preferences.
     @MainActor static func save(to url: URL, journal: StockSageJournalStore,
                                 portfolio: StockSagePortfolio, store: StockSageStore) throws {
         let data = try export(journal: journal, portfolio: portfolio, store: store)
@@ -135,14 +138,13 @@ enum StockSageBackup {
                 let trades = try journal.prepareBackupImport(payload.trades)
                 let positions = try portfolio.prepareBackupImport(payload.positions)
                 let symbols = try store.prepareBackupImport(payload.userSymbols)
-                let alerts = try payload.priceAlerts.map { try store.preparePriceAlertBackupImport($0) }
-                // All decoding, reconciliation and encoding succeeded; no await between writes.
-                try trades.apply()
-                try positions.apply()
-                symbols.apply()
-                alerts?.apply()
+                // Old backups omit alerts; retain their committed records and refresh stale memory.
+                let alerts = try store.preparePriceAlertBackupImport(payload.priceAlerts ?? [])
+                // Validation/preparation is complete before the one durable commit and publication.
+                let warning = try StockSageRecordStorage.commit([trades, positions, symbols, alerts])
+                if warning != nil { return .failure(.restoreDurabilityUnconfirmed) }
                 let alertCount = payload.priceAlerts?.count ?? 0
-                let alertsAdded = alerts?.added ?? 0
+                let alertsAdded = alerts.added
                 return .success(RestoreSummary(trades: trades.added, positions: positions.added,
                     symbols: symbols.added, priceAlerts: alertsAdded,
                     skipped: payload.trades.count + payload.positions.count + payload.userSymbols.count

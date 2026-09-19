@@ -184,6 +184,8 @@ final class StockSageResearchHistory: ObservableObject {
     private var readable = true
     private var completedMemory: [Horizon: CompletedCheckpoint] = [:]
     private var interruptedMemory: [Horizon: InterruptedCheckpoint] = [:]
+    private var archiveIndexMemory = FullChecksIndex()
+    private var archiveMemory: [UUID: Data] = [:]
 
     /// nil is deliberately memory-only. Test hosts cannot resolve the owner's production file.
     init(storageURL: URL? = nil, defaults: UserDefaults = .standard) {
@@ -886,7 +888,7 @@ final class StockSageResearchHistory: ObservableObject {
     private nonisolated static func validDate(_ date: Date) -> Bool {
         date.timeIntervalSince1970.isFinite && (0..<253_402_300_800).contains(date.timeIntervalSince1970)
     }
-    private nonisolated static func valid(_ run: Run) -> Bool {
+    nonisolated static func valid(_ run: Run) -> Bool {
         guard validDate(run.startedAt), validDate(run.completedAt), run.startedAt <= run.completedAt,
               run.predictions.count <= 5, Set(run.predictions.map(\.symbol)).count == run.predictions.count,
               run.coverage.requested >= 0, run.coverage.checked == run.coverage.requested,
@@ -1011,7 +1013,7 @@ final class StockSageResearchHistory: ObservableObject {
     }
 }
 
-// ponytail: retain only the latest complete checks per horizon; versioned run archives if older full scans are needed.
+// Latest checkpoints support recovery; bounded per-run archives support exact historical inspection.
 extension StockSageResearchHistory {
     nonisolated static let maximumCompletedChecksBytes = 16_777_216
 
@@ -1465,6 +1467,222 @@ extension StockSageResearchHistory {
         storageURL?.deletingLastPathComponent().appendingPathComponent("completed-\(horizon.rawValue).json")
     }
 
+    nonisolated static let maximumFullCheckArchives = 20
+    nonisolated static let maximumFullCheckArchiveBytes = 134_217_728
+    private nonisolated static let maximumArchiveIndexBytes = 4_194_304
+    nonisolated static let fullChecksRetentionPolicy = "Original full checks: newest 20 runs within 128 MiB, at most 16 MiB per run. Older full-check archives expire; saved shortlists and outcomes remain."
+
+    nonisolated enum FullChecksState: String, Codable, Sendable {
+        case available, legacyCheckpoint, missing, expired, corrupt
+    }
+    nonisolated struct FullChecksAvailability: Sendable {
+        let runID: UUID
+        let state: FullChecksState
+        let checks: CompletedChecks?
+        fileprivate init(runID: UUID, state: FullChecksState, checks: CompletedChecks? = nil) {
+            self.runID = runID; self.state = state; self.checks = checks
+        }
+        var message: String {
+            switch state {
+            case .available: "Original full checks retained for this run."
+            case .legacyCheckpoint: "Original full checks available from this run's exact recovery checkpoint. No per-run archive was recorded."
+            case .missing: "Original full checks were not archived for this run. Only its saved shortlist and receipts are available; missing evidence is never reconstructed."
+            case .expired: "This run's full-check archive expired under the retention policy. Its saved shortlist and outcomes remain."
+            case .corrupt: "This run's full checks could not be verified. Existing bytes are preserved; no other scan is substituted."
+            }
+        }
+    }
+    nonisolated struct FullChecksEntry: Codable {
+        let runID: UUID
+        var completedAt: Date
+        let byteCount: Int
+        let digest: String
+        var expired = false
+    }
+    private struct FullChecksIndex: Codable {
+        var version = 1
+        var entries: [FullChecksEntry] = []
+    }
+    private struct FullChecksFile: Codable {
+        var version = 1
+        let runID: UUID
+        let checks: CompletedChecks
+    }
+
+    /// Newest-first selection obeys both limits; the original capture is never truncated.
+    nonisolated static func retainedFullCheckIDs(_ entries: [FullChecksEntry]) -> Set<UUID> {
+        var kept: Set<UUID> = [], size = 0
+        for entry in entries.filter({ !$0.expired }).sorted(by: {
+            $0.completedAt == $1.completedAt ? $0.runID.uuidString < $1.runID.uuidString : $0.completedAt > $1.completedAt
+        }) {
+            guard kept.count < maximumFullCheckArchives,
+                  entry.byteCount > 0, entry.byteCount <= maximumFullCheckArchiveBytes - size else { break }
+            kept.insert(entry.runID); size += entry.byteCount
+        }
+        return kept
+    }
+
+    private var fullChecksDirectory: URL? {
+        storageURL?.deletingLastPathComponent().appendingPathComponent("full-checks", isDirectory: true)
+    }
+    private func fullChecksURL(_ id: UUID) -> URL? {
+        fullChecksDirectory?.appendingPathComponent(id.uuidString + ".json")
+    }
+    private func archivePathExists(_ url: URL) -> Bool {
+        // attributes also sees a dangling symlink; it must not masquerade as a missing archive.
+        (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
+    }
+    private func boundedArchiveBytes(_ url: URL, maximum: Int) throws -> Data {
+        guard StockSageRecordWriter.mayRead(defaults) else { throw CocoaError(.fileReadNoPermission) }
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber, size.int64Value <= Int64(maximum) else {
+            throw CocoaError(.fileReadTooLarge)
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= maximum else { throw CocoaError(.fileReadTooLarge) }
+        return data
+    }
+    private func readFullChecksIndex() throws -> FullChecksIndex {
+        guard readable else { throw CocoaError(.fileReadCorruptFile) }
+        let index: FullChecksIndex
+        if let url = fullChecksDirectory?.appendingPathComponent("index.json") {
+            guard StockSageRecordWriter.mayRead(defaults) else { throw CocoaError(.fileReadNoPermission) }
+            guard archivePathExists(url) else { return FullChecksIndex() }
+            index = try JSONDecoder().decode(FullChecksIndex.self,
+                from: boundedArchiveBytes(url, maximum: Self.maximumArchiveIndexBytes))
+        } else { index = archiveIndexMemory }
+        let active = index.entries.filter { !$0.expired }
+        guard index.version == 1, Set(index.entries.map(\.runID)).count == index.entries.count,
+              index.entries.allSatisfy({ Self.validDate($0.completedAt) && (1...Self.maximumCompletedChecksBytes).contains($0.byteCount)
+                && $0.digest.count == 64 && $0.digest.allSatisfy({ "0123456789abcdef".contains($0) }) }),
+              active.count <= Self.maximumFullCheckArchives,
+              active.reduce(0, { $0 + $1.byteCount }) <= Self.maximumFullCheckArchiveBytes else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return index
+    }
+    private nonisolated static func archiveDigest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+    private func checkedArchiveBytes(_ entry: FullChecksEntry) throws -> Data {
+        let data: Data
+        if let url = fullChecksURL(entry.runID) {
+            data = try boundedArchiveBytes(url, maximum: Self.maximumCompletedChecksBytes)
+        } else {
+            guard let stored = archiveMemory[entry.runID] else { throw CocoaError(.fileReadNoSuchFile) }
+            data = stored
+        }
+        guard data.count == entry.byteCount, Self.archiveDigest(data) == entry.digest else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return data
+    }
+
+    /// Separate from the mutable ranking receipt: a run ID can never acquire different check bytes.
+    private func retainFullChecks(_ checkpoint: CompletedCheckpoint) throws {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(FullChecksFile(runID: checkpoint.run.id, checks: checkpoint.completedChecks))
+        guard bytes.count <= Self.maximumCompletedChecksBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+        let digest = Self.archiveDigest(bytes)
+        let indexURL = fullChecksDirectory?.appendingPathComponent("index.json")
+        var lease: StockSageFileLock?
+        if let indexURL {
+            try StockSageRecordWriter.require(defaults)
+            lease = try StockSageFileLock(url: indexURL.appendingPathExtension("lock"))
+        }
+        defer { withExtendedLifetime(lease) {} }
+        var index = try readFullChecksIndex()
+        if let position = index.entries.firstIndex(where: { $0.runID == checkpoint.run.id }) {
+            let existing = index.entries[position]
+            guard existing.digest == digest, existing.byteCount == bytes.count else { throw CocoaError(.fileWriteInvalidFileName) }
+            if existing.expired { return } // Retrying an old receipt cannot undo retention.
+            guard try checkedArchiveBytes(existing) == bytes else { throw CocoaError(.fileReadCorruptFile) }
+            index.entries[position].completedAt = max(existing.completedAt, checkpoint.run.completedAt)
+        } else {
+            // An interrupted index write may leave this exact file; any differing bytes are preserved.
+            if let url = fullChecksURL(checkpoint.run.id), archivePathExists(url) {
+                guard try boundedArchiveBytes(url, maximum: Self.maximumCompletedChecksBytes) == bytes else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+            }
+            index.entries.append(.init(runID: checkpoint.run.id, completedAt: checkpoint.run.completedAt,
+                byteCount: bytes.count, digest: digest))
+        }
+        let retained = Self.retainedFullCheckIDs(index.entries)
+        for position in index.entries.indices where !retained.contains(index.entries[position].runID) {
+            index.entries[position].expired = true
+        }
+        // Verify every deletion candidate first. Corrupt or foreign bytes never become cleanup work.
+        for entry in index.entries where entry.expired {
+            if let url = fullChecksURL(entry.runID), archivePathExists(url) {
+                _ = try checkedArchiveBytes(entry)
+            }
+        }
+        let indexBytes = try encoder.encode(index)
+        guard indexBytes.count <= Self.maximumArchiveIndexBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+        if let indexURL, let url = fullChecksURL(checkpoint.run.id) {
+            if retained.contains(checkpoint.run.id), !archivePathExists(url) {
+                // A failed atomic index write can leave one staged payload. Bound those bytes too,
+                // without deleting unindexed files or silently adopting another run's evidence.
+                let files = try FileManager.default.contentsOfDirectory(at: indexURL.deletingLastPathComponent(),
+                    includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" && UUID(uuidString: $0.deletingPathExtension().lastPathComponent) != nil }
+                var storedBytes = 0
+                for file in files {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                    guard attributes[.type] as? FileAttributeType == .typeRegular,
+                          let size = attributes[.size] as? NSNumber,
+                          (0...Self.maximumCompletedChecksBytes).contains(size.intValue) else { throw CocoaError(.fileReadCorruptFile) }
+                    storedBytes += size.intValue
+                }
+                guard files.count < Self.maximumFullCheckArchives + 1,
+                      storedBytes + bytes.count <= Self.maximumFullCheckArchiveBytes + Self.maximumCompletedChecksBytes else {
+                    throw CocoaError(.fileWriteOutOfSpace)
+                }
+                try bytes.write(to: url, options: [.atomic, .completeFileProtection])
+            }
+            try indexBytes.write(to: indexURL, options: [.atomic, .completeFileProtection])
+            // Index marks expiration before payload removal; a failed removal is retried on the next save.
+            for entry in index.entries where entry.expired {
+                if let expiredURL = fullChecksURL(entry.runID), archivePathExists(expiredURL) {
+                    try FileManager.default.removeItem(at: expiredURL)
+                }
+            }
+        } else {
+            if retained.contains(checkpoint.run.id) { archiveMemory[checkpoint.run.id] = bytes }
+            archiveIndexMemory = index
+            archiveMemory = archiveMemory.filter { retained.contains($0.key) }
+        }
+    }
+
+    func fullChecks(runID: UUID) -> FullChecksAvailability {
+        do {
+            guard readable else { throw CocoaError(.fileReadNoPermission) }
+            let current = storageURL == nil ? runs : try read().runs
+            guard let run = current.first(where: { $0.id == runID }) else { return .init(runID: runID, state: .missing) }
+            let index = try readFullChecksIndex()
+            if let entry = index.entries.first(where: { $0.runID == runID }) {
+                guard !entry.expired else { return .init(runID: runID, state: .expired) }
+                let file = try JSONDecoder().decode(FullChecksFile.self, from: checkedArchiveBytes(entry))
+                guard file.version == 1, file.runID == runID,
+                      let start = Self.retainedCaptureStart(run, in: current),
+                      Self.checksMatch(file.checks, run: run, capturedSince: run.retainedFromRunID == nil ? nil : start) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                return .init(runID: runID, state: .available, checks: file.checks)
+            }
+            if let url = checkpointURL(run.horizon), archivePathExists(url) {
+                _ = try boundedArchiveBytes(url, maximum: Self.maximumCompletedChecksBytes)
+            }
+            if let legacy = try readCheckpoint(run.horizon), legacy.run.id == runID,
+               let start = Self.retainedCaptureStart(run, in: current),
+               Self.checksMatch(legacy.completedChecks, run: run, capturedSince: run.retainedFromRunID == nil ? nil : start) {
+                return .init(runID: runID, state: .legacyCheckpoint, checks: legacy.completedChecks)
+            }
+            return .init(runID: runID, state: .missing)
+        } catch { return .init(runID: runID, state: .corrupt) }
+    }
+
     /// Progress is deliberately a separate file/type: it is never a completed prediction Run.
     nonisolated struct InterruptedCheckpoint: Codable, Equatable, Sendable {
         let version: Int
@@ -1715,14 +1933,20 @@ extension StockSageResearchHistory {
                 let lease = try StockSageFileLock(url: url.appendingPathExtension("lock"))
                 defer { withExtendedLifetime(lease) {} }
                 // An unreadable existing checkpoint is preserved. Do not overwrite it silently.
-                let checkpoint = try replacement(readCheckpoint(run.horizon))
+                let previous = try readCheckpoint(run.horizon)
+                let checkpoint = try replacement(previous)
                 let bytes = try JSONEncoder().encode(checkpoint)
                 guard bytes.count <= Self.maximumCompletedChecksBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+                if let previous { try retainFullChecks(previous) }
+                try retainFullChecks(checkpoint)
                 try bytes.write(to: url, options: [.atomic, .completeFileProtection])
             } else {
-                let checkpoint = try replacement(readCheckpoint(run.horizon))
+                let previous = try readCheckpoint(run.horizon)
+                let checkpoint = try replacement(previous)
                 let bytes = try JSONEncoder().encode(checkpoint)
                 guard bytes.count <= Self.maximumCompletedChecksBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+                if let previous { try retainFullChecks(previous) }
+                try retainFullChecks(checkpoint)
                 completedMemory[run.horizon] = checkpoint
             }
             lastError = nil
@@ -1749,12 +1973,14 @@ extension StockSageResearchHistory {
         }
     }
 
-    /// Only the latest checks for each horizon are retained; never substitute another run.
+    /// Exact original checks for this saved run; another run is never a substitute.
     func completedScan(runID: UUID) -> (run: Run, scan: StockSageHorizonResearch.Scan)? {
         guard let run = runs.first(where: { $0.id == runID }),
-              let completed = completedScan(horizon: run.horizon == .week ? .week : .fortnight),
-              completed.run.id == runID else { return nil }
-        return completed
+              let checks = fullChecks(runID: runID).checks,
+              let start = Self.retainedCaptureStart(run, in: runs),
+              let scan = Self.restoreChecks(checks, matching: run,
+                capturedSince: run.retainedFromRunID == nil ? nil : start) else { return nil }
+        return (run, scan)
     }
 
     /// Check under the existing history file lock on record(), and for every Run on read().

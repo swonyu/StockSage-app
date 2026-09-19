@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-import Combine
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -15,14 +14,25 @@ import UIKit
     override var canBecomeKey: Bool { false }
 }
 
-@MainActor private final class SidebarSelectionModel: ObservableObject {
-    @Published var section: MarketSection = .chat
+@MainActor private final class SidebarSelectionModel {
+    var binding: Binding<MarketSection>?
+    var transitions: [MarketSection] = []
+    var section: MarketSection {
+        get { binding?.wrappedValue ?? .chat }
+        set { binding?.wrappedValue = newValue }
+    }
 }
 
 @MainActor private struct SidebarSelectionFixture: View {
-    @ObservedObject var model: SidebarSelectionModel
+    let model: SidebarSelectionModel
+    // Match MarketsView's actual route ownership. A separate @Published fixture model
+    // is not part of the production sidebar's native selection transaction.
+    @State private var section: MarketSection = .chat
     var body: some View {
-        StockSageDesktopNavigation(selection: $model.section).frame(width: 220, height: 700)
+        StockSageDesktopNavigation(selection: $section).frame(width: 220, height: 700)
+            .onAppear { model.binding = $section }
+            .onChange(of: section) { _, value in model.transitions.append(value) }
+            .onDisappear { model.binding = nil }
     }
 }
 #endif
@@ -147,7 +157,7 @@ struct MarketSectionNavigationTests {
             while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
             try #require(ready())
         }
-        try await waitFor { table(in: host.view)?.selectedRowIndexes.count == 1 }
+        try await waitFor { model.binding != nil && table(in: host.view)?.selectedRowIndexes.count == 1 }
         let sidebar = try #require(table(in: host.view))
         #expect(sidebar.numberOfRows >= MarketSection.allCases.count, "Every destination needs a native row")
         let chatRow = sidebar.selectedRow
@@ -162,6 +172,9 @@ struct MarketSectionNavigationTests {
         sidebar.selectRowIndexes(IndexSet(integer: briefingRow), byExtendingSelection: false)
         try await waitFor { model.section == .briefing }
         #expect(sidebar.selectedRow == briefingRow)
+        try await waitFor { model.transitions.count >= 4 }
+        #expect(model.transitions == [.briefing, .paper, .chat, .briefing],
+                "Native route transitions must stay ordered and occur once per selection")
         #expect(!window.isKeyWindow, "The offscreen host must never become an application window")
     }
 
@@ -179,7 +192,7 @@ struct MarketSectionNavigationTests {
             while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
             try #require(ready())
         }
-        try await waitFor { host.view.window != nil && host.view.frame.width > 0 }
+        try await waitFor { model.binding != nil && host.view.window != nil && host.view.frame.width > 0 }
         // Original mapping: ⌘1 = Watchlist … ⌘9 = Home, independent of the visible sidebar order.
         for (digit, code, section) in [("1", UInt16(18), MarketSection.watchlist), ("9", UInt16(25), .briefing), ("8", UInt16(28), .chat)] {
             let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import CryptoKit
 @testable import StockSage
 
 @Suite("Saved research predictions", .serialized)
@@ -9,7 +10,7 @@ struct StockSageResearchHistoryTests {
 
     private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
 
-    private func qualifiedResult(_ symbol: String, at: Date, qualified: Bool) -> StockSageHorizonResearch.Result {
+    func qualifiedResult(_ symbol: String, at: Date, qualified: Bool) -> StockSageHorizonResearch.Result {
         typealias R = StockSageHorizonResearch
         var dates: [Date] = [], day = at.addingTimeInterval(-86_400)
         while dates.count < 70 {
@@ -852,6 +853,144 @@ struct StockSageResearchHistoryTests {
 }
 
 extension StockSageResearchHistoryTests {
+    @Test func archiveRetentionExpiresPayloadsWithoutRemovingSavedRuns() throws {
+        let (history, url, defaults, suite) = try fileStore("archive-retention")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        var saved: [History.Run] = []
+        for index in 0...History.maximumFullCheckArchives {
+            let (run, scan) = checkpointFixture(count: 2, start: date("2026-09-15T07:00:00Z").addingTimeInterval(Double(index) * 3600))
+            try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+            saved.append(run)
+        }
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.runs.count == saved.count)
+        #expect(reopened.fullChecks(runID: saved[0].id).state == .expired)
+        #expect(reopened.completedScan(runID: saved[0].id) == nil)
+        #expect(reopened.fullChecks(runID: saved[1].id).state == .available)
+        #expect(reopened.fullChecks(runID: saved.last!.id).state == .available)
+        let directory = url.deletingLastPathComponent().appendingPathComponent("full-checks")
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(saved[0].id.uuidString + ".json").path))
+        let payloads = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) != nil }
+        #expect(payloads.count == History.maximumFullCheckArchives)
+        let report = try JSONDecoder().decode(StockSageResearchExport.Report.self,
+            from: StockSageResearchExport.data(for: saved[0], fullChecks: reopened.fullChecks(runID: saved[0].id)))
+        #expect(report.fullChecks == nil && report.fullChecksState == .expired && report.run == saved[0])
+    }
+
+    @Test func fullCheckArchiveSelectionEnforcesTheTotalByteBudget() {
+        let entries = (0..<12).map { index in
+            History.FullChecksEntry(runID: UUID(), completedAt: Date(timeIntervalSince1970: Double(index)),
+                byteCount: History.maximumCompletedChecksBytes, digest: String(repeating: "0", count: 64))
+        }
+        let kept = History.retainedFullCheckIDs(entries)
+        #expect(kept == Set(entries.suffix(8).map(\.runID)))
+        #expect(entries.filter { kept.contains($0.runID) }.reduce(0, { $0 + $1.byteCount }) == History.maximumFullCheckArchiveBytes)
+    }
+
+    @Test(arguments: ["payload", "index", "oversizedIndex", "foreignRun", "symlink"])
+    func fullCheckArchiveCorruptionNeverSubstitutesAnotherCapture(mode: String) throws {
+        let (history, url, defaults, suite) = try fileStore("archive-corrupt-" + mode)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (first, scan) = checkpointFixture(count: 8)
+        try #require(history.saveCompletedChecks(first, scan: scan) && history.record(first))
+        let (second, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        try #require(history.saveCompletedChecks(second, scan: replacement) && history.record(second))
+        let directory = url.deletingLastPathComponent().appendingPathComponent("full-checks")
+        let payload = directory.appendingPathComponent(first.id.uuidString + ".json")
+        let indexURL = directory.appendingPathComponent("index.json")
+        var unchangedURL = payload
+        switch mode {
+        case "index": unchangedURL = indexURL; try Data("Original corrupt index".utf8).write(to: indexURL)
+        case "oversizedIndex": unchangedURL = indexURL; try Data(repeating: 32, count: 4_194_305).write(to: indexURL)
+        case "foreignRun":
+            let other = try Data(contentsOf: directory.appendingPathComponent(second.id.uuidString + ".json"))
+            try other.write(to: payload)
+            var index = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: indexURL)) as? [String: Any])
+            var entries = try #require(index["entries"] as? [[String: Any]])
+            let position = try #require(entries.firstIndex(where: { ($0["runID"] as? String) == first.id.uuidString }))
+            entries[position]["digest"] = SHA256.hash(data: other).map { String(format: "%02x", $0) }.joined()
+            entries[position]["byteCount"] = other.count
+            index["entries"] = entries
+            try JSONSerialization.data(withJSONObject: index).write(to: indexURL)
+        case "symlink":
+            unchangedURL = url.deletingLastPathComponent().appendingPathComponent("foreign.json")
+            try Data("Private fixture bytes must not be read as an archive or deleted".utf8).write(to: unchangedURL)
+            try FileManager.default.removeItem(at: payload)
+            try FileManager.default.createSymbolicLink(at: payload, withDestinationURL: unchangedURL)
+        default: try Data("Original corrupt archive bytes".utf8).write(to: payload)
+        }
+        let untouched = try Data(contentsOf: unchangedURL)
+        let reopened = History(storageURL: url, defaults: defaults)
+        let unavailable = reopened.fullChecks(runID: first.id)
+        #expect(unavailable.state == .corrupt && unavailable.checks == nil)
+        #expect(reopened.completedScan(runID: first.id) == nil)
+        #expect(reopened.runs.first(where: { $0.id == first.id }) == first)
+        let report = try JSONDecoder().decode(StockSageResearchExport.Report.self,
+            from: StockSageResearchExport.data(for: first, fullChecks: unavailable))
+        #expect(report.fullChecks == nil && report.fullChecksState == .corrupt)
+        #expect(try Data(contentsOf: unchangedURL) == untouched)
+    }
+
+    @Test func legacyFullCheckAvailabilityAndExportRemainExactOrMissing() throws {
+        let (history, url, defaults, suite) = try fileStore("archive-legacy")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (original, scan) = checkpointFixture(count: 8)
+        try #require(history.record(original))
+        #expect(history.fullChecks(runID: original.id).state == .missing)
+        try #require(history.saveCompletedChecks(original, scan: scan))
+        let retained = history.fullChecks(runID: original.id)
+        let data = try StockSageResearchExport.data(for: original, fullChecks: retained)
+        let exported = try JSONDecoder().decode(StockSageResearchExport.Report.self, from: data)
+        #expect(exported.schemaVersion == 2 && exported.fullChecksState == .available)
+        #expect(exported.fullChecks == retained.checks && exported.run == original)
+        let (other, _) = checkpointFixture(count: 2, start: original.completedAt.addingTimeInterval(60))
+        #expect(throws: (any Error).self) { try StockSageResearchExport.data(for: other, fullChecks: retained) }
+        try FileManager.default.removeItem(at: url.deletingLastPathComponent().appendingPathComponent("full-checks"))
+        let reopened = History(storageURL: url, defaults: defaults)
+        let legacy = reopened.fullChecks(runID: original.id)
+        #expect(legacy.state == .legacyCheckpoint && legacy.checks == retained.checks)
+        #expect(reopened.fullChecks(runID: UUID()).state == .missing)
+    }
+
+    @Test func archiveSaveDoesNotOverwriteUnreadableIndexOrExistingCheckpoint() throws {
+        let (history, url, defaults, suite) = try fileStore("archive-preserve")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (first, scan) = checkpointFixture(count: 8)
+        try #require(history.saveCompletedChecks(first, scan: scan) && history.record(first))
+        let checkpoint = url.deletingLastPathComponent().appendingPathComponent("completed-14.json")
+        let oldCheckpoint = try Data(contentsOf: checkpoint)
+        let index = url.deletingLastPathComponent().appendingPathComponent("full-checks/index.json")
+        let invalid = Data("Unrecoverable original index".utf8)
+        try invalid.write(to: index)
+        let (later, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        #expect(!history.saveCompletedChecks(later, scan: replacement))
+        #expect(try Data(contentsOf: index) == invalid)
+        #expect(try Data(contentsOf: checkpoint) == oldCheckpoint)
+    }
+
+    @Test func earlierFullChecksRemainExactAfterLaterRunAndRelaunch() throws {
+        let (history, url, defaults, suite) = try fileStore("archived-full-checks")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (first, original) = checkpointFixture(count: 90)
+        try #require(history.saveCompletedChecks(first, scan: original) && history.record(first))
+        let (later, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        try #require(history.saveCompletedChecks(later, scan: replacement) && history.record(later))
+
+        let reopened = History(storageURL: url, defaults: defaults)
+        let restored = try #require(reopened.completedScan(runID: first.id))
+        #expect(restored.run == first)
+        #expect(History.captureChecks(scan: restored.scan, horizon: .fortnight,
+            startedAt: first.startedAt, completedAt: first.completedAt) ==
+            History.captureChecks(scan: original, horizon: .fortnight,
+                startedAt: first.startedAt, completedAt: first.completedAt))
+        #expect(restored.scan.results["S083"]?.verdict?.action == .hold)
+        #expect(restored.scan.results["S089"]?.verdict == nil)
+        #expect(restored.scan.results["S089"]?.facts == original.results["S089"]?.facts)
+        #expect(reopened.completedScan(horizon: .fortnight)?.run.id == later.id)
+        #expect(reopened.completedScan(runID: UUID()) == nil)
+    }
+
     /// Explicit, offline recovery receipt. Never discovers or writes the owner's app directory.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_RECOVERY_DIR"] != nil))
     func validateSuppliedRecoveryCheckpoint() throws {
@@ -2020,7 +2159,8 @@ extension StockSageResearchHistoryTests {
         #expect(saved.insiderEvidence?.insiderEvents == [event] && saved.insiderEvidence?.insiderOmittedRecordCount == 0)
         #expect(saved.hasRecordedInsiderEvidence && saved.insiderCoverage?.state == "answered")
         #expect(saved.factClasses == [.insider, .coverageGap])
-        #expect(reopened.completedScan(runID: first.id) == nil, "Never substitute the newer scan's checks")
+        #expect(reopened.completedScan(runID: first.id)?.scan.results[symbol]?.insiderEvidence == scan.results[symbol]?.insiderEvidence,
+                "Earlier full checks retain their own original insider evidence")
         #expect(reopened.completedScan(runID: second.id)?.run.id == second.id)
         #expect(reopened.completedScan(runID: UUID()) == nil)
     }

@@ -87,6 +87,17 @@ struct StockSageQuote: Sendable, Equatable, Identifiable {
         return baseline == marketTime
     }
 
+    /// Saved holding valuations can display dated/undated real observations, never sample prices.
+    nonisolated func usableHoldingPrice(isSampleData: Bool, now: Date) -> Double? {
+        guard priceSource != .sample, !isSampleData || priceSource != nil,
+              price.isFinite, price > 0, now.timeIntervalSince1970.isFinite else { return nil }
+        if let marketTime {
+            let age = now.timeIntervalSince(marketTime)
+            guard age.isFinite, age >= -60 else { return nil }
+        }
+        return price
+    }
+
     /// Percent change vs the previous price. Guards divide-by-zero (a brand-new
     /// symbol with no prior price reports 0% rather than NaN/inf).
     var changePercent: Double {

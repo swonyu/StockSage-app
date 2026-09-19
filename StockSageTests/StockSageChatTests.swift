@@ -174,8 +174,25 @@ struct StockSageChatTests {
         }.defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
         let viewport = CGSize(width: 760, height: 680)
         let size = try await capture(view, name: "stocksage-audit-mac-saved-research-\(page)", viewport: viewport) { root in
-            func scrollViews(in view: NSView) -> [NSScrollView] {
-                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+            if let window = root.window, let chrome = window.contentView?.superview {
+                @MainActor func titleGeometry(_ view: NSView) {
+                    let typeName = String(describing: type(of: view))
+                    if typeName.contains("ToolbarTitle") || view is NSSearchField {
+                        print("NATIVE_TOOLBAR page=\(page) type=\(typeName) frame=\(view.frame) fitting=\(view.fittingSize) window=\(window.frame.size) title=\(window.title)")
+                    }
+                    for child in view.subviews { titleGeometry(child) }
+                }
+                titleGeometry(chrome)
+            }
+            if page != "detail" {
+                let hasEvaluationEntry = nativeAccessibilityElements(in: root).contains {
+                    $0.accessibilityIdentifier?() == "research.history.evaluation"
+                }
+                #expect(hasEvaluationEntry, "Saved research must expose the separate prospective comparison workflow")
+            }
+            @MainActor func scrollViews(in view: NSView) -> [NSScrollView] {
+                if let scroll = view as? NSScrollView { return [scroll] }
+                return view.subviews.flatMap { scrollViews(in: $0) }
             }
             let scroll = try #require(scrollViews(in: root)
                 .filter { !$0.isHidden && $0.visibleRect.height > 100 }
@@ -243,9 +260,15 @@ struct StockSageChatTests {
             .defaultAppStorage(defaults)
             .environment(\.colorScheme, .dark)
             .preferredColorScheme(.dark)
-        let size = try await capture(view, name: "stocksage-audit-mac-\(page)-\(width)", viewport: viewport) { root in
-            func scrollViews(in view: NSView) -> [NSScrollView] {
-                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+        let size = try await capture(view, name: "stocksage-audit-mac-\(page)-\(width)", viewport: viewport, usesCompactToolbar: true) { root in
+            let window = try #require(root.window)
+            #expect(nativeAccessibilityElements(in: window).contains {
+                $0.accessibilityRole?() == .button &&
+                    ($0.accessibilityLabel?() == "Refresh live quotes" || $0.accessibilityTitle?() == "Refresh live quotes")
+            }, "The native window must retain the actual SwiftUI toolbar items")
+            @MainActor func scrollViews(in view: NSView) -> [NSScrollView] {
+                if let scroll = view as? NSScrollView { return [scroll] }
+                return view.subviews.flatMap { scrollViews(in: $0) }
             }
             let scroll = try #require(scrollViews(in: root)
                 .filter { !$0.isHidden && $0.visibleRect.height > 100 }
@@ -268,7 +291,7 @@ struct StockSageChatTests {
         }
         #expect(size == viewport, "Mounting a page must not force the requested window wider or taller")
         if page == "home" {
-            _ = try await capture(view, name: "stocksage-audit-mac-home-open-research-\(width)", viewport: viewport) { root in
+            _ = try await capture(view, name: "stocksage-audit-mac-home-open-research-\(width)", viewport: viewport, usesCompactToolbar: true) { root in
                 let button = try #require(nativeAccessibilityElements(in: root).first {
                     $0.accessibilityIdentifier?() == "home.research.14"
                 })
@@ -296,31 +319,8 @@ struct StockSageChatTests {
     }
 
     @Test func realHoldingRejectsSampleValuationAndRemovalCanBeCancelled() async throws {
-        let suite = "stocksage.portfolio.native.\(UUID().uuidString)"
-        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(false, forKey: "stocksage.liveStream")
-        defaults.set(false, forKey: "stocksage.autoRefresh")
-        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
-        let portfolio = StockSagePortfolio(userDefaults: defaults)
-        try #require(portfolio.add(symbol: "AAPL", shares: 2, costBasis: 100))
-        let original = portfolio.positions
-        let store = StockSageStore(defaults: defaults, heldSymbols: { ["AAPL"] }, journalTrades: { [] })
-        await store.seedQAIdeas(previousScanEntries: [:])
-        try #require(store.isSampleData && store.latestPrice("AAPL") != nil)
-        let live = StockSageLiveStream(), ai = StockSageAIAssessments()
-        let journal = StockSageJournalStore(defaults: defaults)
-        let paper = StockSagePaperTradeStore(defaults: defaults)
-        let monitor = StockSageMonitor(defaults: defaults)
-        let velocity = StockSageVelocityHistoryStore(defaults: defaults)
-        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
-        let chat = StockSageChatSession(historyURL: nil)
-        let view = MarketsView(chatSession: chat, qaSection: .portfolio, store: store,
-            aiAssessments: ai, portfolio: portfolio, journal: journal, paperStore: paper,
-            live: live, velocityHistory: velocity, monitor: monitor, researchHistory: history)
-            .defaultAppStorage(defaults)
-        _ = try await capture(view, name: "stocksage-holding-sample-removal",
-                              viewport: CGSize(width: 1000, height: 800)) { root in
+        try await withPortfolioWorkspace(name: "stocksage-holding-sample-removal") { portfolio, _, root in
+            let original = portfolio.positions
             #expect(nativeAccessibilityText(in: root).contains("— no price"),
                     "A real holding must not acquire a value or profit from a sample quote")
             let remove = try #require(nativeAccessibilityElements(in: root).first {
@@ -398,8 +398,176 @@ struct StockSageChatTests {
             #expect(portfolio.positions == original && saved == original,
                     "Cancel must preserve the lot and its original identity on disk")
         }
+    }
+
+    @Test func holdingFormSupportsNativeKeyboardEntryWithoutInventingCostBasis() async throws {
+        try await withPortfolioWorkspace(name: "stocksage-holding-keyboard") { portfolio, _, root in
+            let original = portfolio.positions
+            let window = try #require(root.window)
+            @MainActor func fields(in view: NSView) -> [NSTextField] {
+                if let field = view as? NSTextField { return [field] }
+                return view.subviews.flatMap { fields(in: $0) }
+            }
+            @MainActor func field(_ placeholder: String) throws -> NSTextField {
+                try #require(fields(in: root).first { $0.isEditable && $0.placeholderString == placeholder })
+            }
+            @MainActor func waitFor(_ ready: @MainActor () -> Bool) async throws {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+                try #require(ready())
+            }
+            @MainActor func enter(_ text: String, in field: NSTextField) throws {
+                let editor = try #require(field.currentEditor() as? NSTextView)
+                try #require(window.firstResponder === editor)
+                editor.insertText(text, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            }
+            @MainActor func pressReturn() throws {
+                let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+                window.sendEvent(event)
+            }
+            var symbol = try field("Symbol"), shares = try field("Shares"), cost = try field("Cost per share")
+            try #require(window.makeFirstResponder(symbol))
+            try await waitFor { symbol.currentEditor() != nil }
+            try enter("NVDA", in: symbol)
+            try pressReturn()
+            try await waitFor { shares.currentEditor() != nil }
+            try enter("3.5", in: shares)
+            try pressReturn()
+            try await waitFor { cost.currentEditor() != nil }
+            try pressReturn()
+            #expect(portfolio.positions == original, "Submitting a blank cost must never fabricate a zero-cost lot")
+            try enter("125.25", in: cost)
+            @MainActor func selectPage(_ title: String) throws {
+                @MainActor func controls(in view: NSView) -> [NSSegmentedControl] {
+                    if let control = view as? NSSegmentedControl { return [control] }
+                    return view.subviews.flatMap { controls(in: $0) }
+                }
+                let candidate = controls(in: root).first { control in
+                    (0..<control.segmentCount).contains { control.label(forSegment: $0) == "Holdings" }
+                }
+                let tabs = try #require(candidate)
+                let matchingIndex = (0..<tabs.segmentCount).first { tabs.label(forSegment: $0) == title }
+                let index = try #require(matchingIndex)
+                tabs.selectedSegment = index
+                let dispatched = tabs.sendAction(tabs.action, to: tabs.target)
+                try #require(dispatched, "Use the native portfolio picker's installed action")
+            }
+            try selectPage("Journal")
+            try await waitFor { !fields(in: root).contains { $0.placeholderString == "Cost per share" } }
+            try selectPage("Holdings")
+            try await waitFor { fields(in: root).contains { $0.placeholderString == "Cost per share" } }
+            symbol = try field("Symbol"); shares = try field("Shares"); cost = try field("Cost per share")
+            #expect(symbol.stringValue == "NVDA" && shares.stringValue == "3.5" && cost.stringValue == "125.25",
+                    "Leaving Holdings and returning must preserve an unfinished lot")
+            #expect(portfolio.positions == original, "Changing pages cannot submit the holding draft")
+            try #require(window.makeFirstResponder(cost))
+            try await waitFor { cost.currentEditor() != nil }
+            try pressReturn()
+            try await waitFor { portfolio.positions.count == original.count + 1 }
+            let added = try #require(portfolio.positions.first { $0.symbol == "NVDA" })
+            #expect(added.shares == 3.5 && added.costBasis == 125.25)
+            #expect(portfolio.positions.first { $0.id == original[0].id } == original[0])
+            #expect(try portfolio.backupRecords() == portfolio.positions)
+            try await waitFor { symbol.currentEditor() != nil }
+            #expect(symbol.stringValue.isEmpty && shares.stringValue.isEmpty && cost.stringValue.isEmpty,
+                    "Successful keyboard submission clears the draft and returns focus to Symbol")
+        }
+    }
+
+    private func withPortfolioWorkspace(name: String,
+        inspect: @escaping @MainActor (StockSagePortfolio, StockSageStore, NSView) async throws -> Void) async throws {
+        let suite = "stocksage.portfolio.native.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        try #require(portfolio.add(symbol: "AAPL", shares: 2, costBasis: 100))
+        let store = StockSageStore(defaults: defaults, heldSymbols: { portfolio.positions.map(\.symbol) }, journalTrades: { [] })
+        await store.seedQAIdeas(previousScanEntries: [:])
+        try #require(store.isSampleData && store.latestPrice("AAPL") != nil)
+        let live = StockSageLiveStream(), ai = StockSageAIAssessments()
+        let journal = StockSageJournalStore(defaults: defaults)
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let monitor = StockSageMonitor(defaults: defaults)
+        let velocity = StockSageVelocityHistoryStore(defaults: defaults)
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let chat = StockSageChatSession(historyURL: nil)
+        let view = MarketsView(chatSession: chat, qaSection: .portfolio, store: store,
+            aiAssessments: ai, portfolio: portfolio, journal: journal, paperStore: paper,
+            live: live, velocityHistory: velocity, monitor: monitor, researchHistory: history)
+            .defaultAppStorage(defaults)
+        _ = try await capture(view, name: name,
+                              viewport: CGSize(width: 1000, height: 800), usesCompactToolbar: true) { root in
+            try await inspect(portfolio, store, root)
+        }
         #expect(!live.isStreaming && !monitor.isRunning && !store.isRefreshing)
         #expect(chat.turns.isEmpty && journal.trades.isEmpty && paper.trades.isEmpty && history.runs.isEmpty)
+    }
+
+    @Test(arguments: [1e308, -1e308])
+    func evaluationDistinguishesUnformattableReturnsFromMissingMeasurements(extremeReturn: Double) async throws {
+        var summary = StockSageResearchEvaluation.HorizonSummary(horizon: .week)
+        summary.selectedWindows = 1; summary.measuredWindows = 1
+        summary.expectedPredictions = 5; summary.measuredPredictions = 5
+        summary.meanNetReturn = extremeReturn
+        summary.meanBenchmarkNetReturn = 0.025
+        let view = StockSageResearchEvaluationView.HorizonSummaryCard(summary: summary).padding()
+        _ = try await capture(view, name: "stocksage-evaluation-percent-boundary-\(extremeReturn.sign == .minus ? "negative" : "positive")",
+                              viewport: CGSize(width: 760, height: 600)) { root in
+            let text = nativeAccessibilityText(in: root)
+            #expect(text.contains("Out of display range"), "A finite measured return must not display infinity after scaling to percent")
+            #expect(text.contains("+2.50%") && text.contains("Not measured"), "Ordinary and missing measurements retain distinct native labels")
+            #expect(!text.lowercased().contains("inf%") && !text.lowercased().contains("nan%"))
+            #expect(text.contains("1 of 1 selected windows measured") && text.contains("5 of 5 selected picks measured"))
+        }
+    }
+
+    @Test func frozenEvaluationRequiresExplicitCostAndUsesNativeStart() async throws {
+        let suite = "stocksage.mac.evaluation.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let evaluation = StockSageResearchEvaluation(defaults: defaults)
+        let config = StockSageLocalModelServer.Config(baseURL: URL(string: "http://127.0.0.1:18080")!,
+            model: StockSageLocalModelServer.gemmaModel)
+        let view = StockSageResearchEvaluationView(store: store, history: history, evaluation: evaluation,
+            configuration: { config }).defaultAppStorage(defaults)
+        _ = try await capture(view, name: "stocksage-prospective-evaluation", viewport: CGSize(width: 760, height: 800)) { root in
+            @MainActor func elements() -> [AnyObject] { nativeAccessibilityElements(in: root) }
+            let start = try #require(elements().first { $0.accessibilityIdentifier?() == "research.evaluation.start" })
+            #expect(start.isAccessibilityEnabled?() == false,
+                    "A study cannot silently assume a trading cost; the user must enter it")
+            #expect(evaluation.studies.isEmpty && !evaluation.isChecking && !store.isRefreshing)
+            let cost = try #require(elements().compactMap { $0 as? NSTextField }.first {
+                $0.isEditable && $0.placeholderString == "Required, e.g. 25"
+            })
+            let window = try #require(root.window)
+            let focused = window.makeFirstResponder(cost)
+            try #require(focused)
+            let editor = try #require(cost.currentEditor() as? NSTextView)
+            editor.insertText("25", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            window.makeFirstResponder(nil)
+            let readyBy = ContinuousClock.now.advanced(by: .seconds(3))
+            while start.isAccessibilityEnabled?() != true, ContinuousClock.now < readyBy {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let pressed = start.accessibilityPerformPress?() == true
+            try #require(pressed, "Start through the actual native button")
+            let frozenBy = ContinuousClock.now.advanced(by: .seconds(3))
+            while evaluation.studies.isEmpty, ContinuousClock.now < frozenBy {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let study = try #require(evaluation.studies.first)
+            #expect(evaluation.studies.count == 1 && study.contract.roundTripCostBPS == 25)
+            #expect(study.contract.model == config.model && study.contract.benchmark == "SPY")
+            #expect(!evaluation.isChecking && !store.isRefreshing && history.runs.isEmpty,
+                    "Freezing a contract must neither request prices nor create a research result")
+        }
     }
 
     @Test(arguments: [900, 1300])
@@ -434,7 +602,7 @@ struct StockSageChatTests {
             store: store, aiAssessments: ai, portfolio: portfolio, journal: journal,
             paperStore: paper, live: live, velocityHistory: velocity, monitor: monitor)
             .defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
-        let size = try await capture(view, name: "stocksage-audit-mac-model-settings-\(width)", viewport: viewport) { root in
+        let size = try await capture(view, name: "stocksage-audit-mac-model-settings-\(width)", viewport: viewport, usesCompactToolbar: true) { root in
             let button = try #require(nativeAccessibilityElements(in: root).first {
                 $0.accessibilityRole?() == .button &&
                     ($0.accessibilityLabel?() == "Model settings" || $0.accessibilityTitle?() == "Model settings")
@@ -580,8 +748,9 @@ struct StockSageChatTests {
             #expect(model.presentation.selected == "FAIL" && model.presentation.search == "FAIL"
                     && model.presentation.filter == .incomplete,
                     "A blocked retry must keep the current evidence and filters open")
-            func scrollViews(in view: NSView) -> [NSScrollView] {
-                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+            @MainActor func scrollViews(in view: NSView) -> [NSScrollView] {
+                if let scroll = view as? NSScrollView { return [scroll] }
+                return view.subviews.flatMap { scrollViews(in: $0) }
             }
             let scroll = try #require(scrollViews(in: root).first { scroll in
                 guard let document = scroll.documentView else { return false }
@@ -1043,7 +1212,7 @@ struct StockSageChatTests {
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         let size = try await capture(workspace, name: "stocksage-native-workspace-inspector-\(width)-\(state)",
-                                     viewport: CGSize(width: width, height: 700), usesIntrinsicSizing: isRunning) { root in
+                                     viewport: CGSize(width: width, height: 700), usesIntrinsicSizing: isRunning, usesCompactToolbar: true) { root in
             if isRunning {
                 let window = try #require(root.window)
                 let viewport = window.convertToScreen(window.contentLayoutRect)
@@ -1057,8 +1226,9 @@ struct StockSageChatTests {
                 let sidebar = try #require(elements.first { $0.accessibilityIdentifier?() == "desktop.nav.\(MarketSection.briefing.rawValue)" })
                 #expect(viewport.contains(try #require(sidebar.accessibilityFrame?())), "A running scan must not move the sidebar offscreen")
                 let progress = try #require(elements.first { $0.accessibilityLabel?() == progressLabel })
-                func scrollViews(in view: NSView) -> [NSScrollView] {
-                    (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+                @MainActor func scrollViews(in view: NSView) -> [NSScrollView] {
+                    if let scroll = view as? NSScrollView { return [scroll] }
+                    return view.subviews.flatMap { scrollViews(in: $0) }
                 }
                 let controls = try #require(scrollViews(in: root).first { scroll in
                     guard let document = scroll.documentView else { return false }
@@ -1067,8 +1237,9 @@ struct StockSageChatTests {
                 let visible = window.convertToScreen(controls.contentView.convert(controls.contentView.bounds, to: nil))
                 #expect(visible.contains(try #require(progress.accessibilityFrame?())), "Overall research progress must fit without scrolling the controls")
             }
-            func tables(in view: NSView) -> [NSTableView] {
-                (view as? NSTableView).map { [$0] } ?? view.subviews.flatMap { tables(in: $0) }
+            @MainActor func tables(in view: NSView) -> [NSTableView] {
+                if let table = view as? NSTableView { return [table] }
+                return view.subviews.flatMap { tables(in: $0) }
             }
             let table = try #require(tables(in: root).first { $0.numberOfColumns >= 3 })
             #expect(table.numberOfRows == 4, "All checks must include completed and queued rows")
@@ -1725,7 +1896,8 @@ struct StockSageChatTests {
     }
 
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil,
-                         usesIntrinsicSizing: Bool = false, inspect: ((NSView) async throws -> Void)? = nil) async throws -> CGSize {
+                         usesIntrinsicSizing: Bool = false, usesCompactToolbar: Bool = false,
+                         inspect: (@MainActor (NSView) async throws -> Void)? = nil) async throws -> CGSize {
         let previousAppearance = NSApp.appearance
         let previousApplication = NSWorkspace.shared.frontmostApplication
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -1739,17 +1911,30 @@ struct StockSageChatTests {
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
         // A split-view workspace is viewport-sized, not an intrinsic-size leaf. Do not let its
         // transient mount measurements replace the fixture window's explicit dimensions.
-        if viewport != nil && !usesIntrinsicSizing { disableIntrinsicSizing(host) }
+        if let viewport, !usesIntrinsicSizing {
+            disableIntrinsicSizing(host)
+            // NavigationStack installs its native toolbar during attachment. Give its
+            // content the real viewport first, so it cannot negotiate a zero-width title.
+            host.view.frame = NSRect(origin: .zero, size: viewport)
+        }
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000,
             width: viewport?.width ?? 500, height: viewport?.height ?? 700),
             styleMask: viewport == nil ? [.titled] : [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = name
         window.allowsFixtureFocus = viewport != nil
-        window.fixtureContentHeight = viewport?.height
+        if let viewport {
+            // Native constraints fix only the viewport height while SwiftUI negotiates
+            // inspector width. Never re-enter frame conversion from a setFrame override.
+            window.contentMinSize.height = viewport.height
+            window.contentMaxSize.height = viewport.height
+        }
         // The app declares .preferredColorScheme(.dark) on its window; give the offscreen host the
         // same AppKit appearance so system controls and label colours match what ships.
         window.appearance = NSAppearance(named: .darkAqua)
+        // Match the shipping main WindowGroup; sheet/component fixtures keep their
+        // own default chrome. SwiftUI installs every real toolbar item itself.
+        if usesCompactToolbar { window.toolbarStyle = .unifiedCompact }
         window.contentViewController = host
         if let viewport { window.setContentSize(viewport) }
         if let viewport, let screen = NSScreen.main {
@@ -1766,15 +1951,14 @@ struct StockSageChatTests {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !appeared, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         try #require(appeared)
-        host.view.layoutSubtreeIfNeeded()
         if let viewport {
-            // Let the native titlebar/inspector negotiate before a user-style resize.
+            // Let AppKit finish mounting before resizing. Forcing intermediate layouts
+            // can recursively re-enter the native split view's existing layout transaction.
             try await Task.sleep(for: .milliseconds(100))
-            host.view.layoutSubtreeIfNeeded()
             window.setContentSize(viewport)
             try await Task.sleep(for: .milliseconds(100))
-            host.view.layoutSubtreeIfNeeded()
         }
+        host.view.layoutSubtreeIfNeeded()
         if inspect != nil {
             // Query only this isolated host through the public AX client path. SwiftUI
             // otherwise omits virtual controls from in-process getters. Yield the main
@@ -2472,21 +2656,6 @@ struct StockSageChatTests {
 
 @MainActor private final class ChatTranscriptFixtureWindow: NSWindow {
     var allowsFixtureFocus = false
-    var fixtureContentHeight: CGFloat?
-
-    // This fixture tests a fixed content viewport, like a user-sized application window.
-    // SwiftUI's hosted inspector negotiates width; it cannot enlarge the test's height
-    // until all content fits. Keep the real native layout/scrolling inside that viewport.
-    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
-        var proposed = frameRect
-        if let fixtureContentHeight {
-            let height = self.frameRect(forContentRect: NSRect(x: 0, y: 0,
-                width: frameRect.width, height: fixtureContentHeight)).height
-            proposed.origin.y = frameRect.maxY - height
-            proposed.size.height = height
-        }
-        if proposed != frame { super.setFrame(proposed, display: flag) }
-    }
     override var canBecomeMain: Bool { allowsFixtureFocus }
     override var canBecomeKey: Bool { allowsFixtureFocus }
 }
