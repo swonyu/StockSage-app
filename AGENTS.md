@@ -28,3 +28,35 @@
 - Concurrent worktrees exist. Inspect current git state and HANDOFF.md; preserve
   unrelated edits (especially project.pbxproj). No push for this implementation;
   never push to Salman-bot. Do not infer task completion from old notifications.
+
+## Gemma / model integration
+
+Full contract: `agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE_2026-09-20.md` (revision B, pinned
+to `main@74d6a81`). Read it before touching `StockSageLocalModelServer`,
+`StockSageAIAssessment`, `StockSageSameDayResearch`, `StockSageHorizonResearch`,
+`StockSageResearchQualification`, `StockSageTopFiveRanking`, `StockSageResearchRanking` or
+`StockSageResearchHistory`. It supersedes the 2026-09-20 PDF of the same name, which contains
+nine statements this source contradicts (see its §0.3 errata).
+
+Non-negotiable, even if you read nothing else:
+
+- Gemma is a **pretrained interpreter**. No training, fine-tuning, LoRA or adapter code may be
+  added to any model path. `StockSageConvictionCalibration`'s gradient/Hessian is a logistic
+  calibration over saved outcomes, not model training — do not "fix" it.
+- **All** numeric entry/stop/target references are computed by app code. The model never
+  produces a price, level, probability or score. `reason`/`risk` are prose with no numerals.
+- Output schema is exactly four keys (`action`, `reason`, `risk`, `evidence`),
+  `additionalProperties: false`, six allowed actions. Do not add a key.
+- A model "Strong Buy" is an **eligibility label, not a signal**. `StockSageResearchQualification`
+  v1 and the `StockSageTopFiveRanking` overlay are rigid arithmetic. Do not introduce
+  probabilistic or LLM-derived scoring into either.
+- Output budget 192 → one restart at 384. `reservedOutputTokens(for:)` doubles **only** when the
+  initial budget is in `1...512`; any larger initial value silently disables the retry.
+- Do **not** start sending `top_p` or a seed. Prompt version 1 is frozen against a measured
+  corpus; new sampling parameters move the distribution off that baseline. They are unpinned on
+  purpose and recorded as nil.
+- Compile gate `tools/gate.sh . all`; tests `tools/runtests.sh . --filter ExactSuite` (serial —
+  parallel runs produce false failures). SourceKit diagnostics in this repo are systematically
+  false; do not act on them.
+- Never start a research run, load a model, spend RunPod compute, or reach a broker without an
+  explicit owner request **each time**.
