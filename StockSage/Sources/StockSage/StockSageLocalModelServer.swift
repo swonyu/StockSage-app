@@ -704,7 +704,14 @@ enum StockSageLocalModelServer {
     nonisolated enum Finish: String, Codable, Sendable { case absent, unknown, malformed, stop, tokenLimit, toolCall, filtered }
     nonisolated enum FailureCategory: String, Codable, Sendable {
         case invalidConfig, unavailable, modelMissing, unsupportedModel, nonHTTP, http, malformedJSON, responseShape, missingContent, emptyContent
-        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge, contextBudget, incompleteOutput
+        case timeout, cancelled, network, obsoleteRequest, policyDenied, responseTooLarge, contextBudget, incompleteOutput, degenerateOutput
+    }
+    /// A bounded, deterministic reason for rejecting an obviously cyclic model answer. This is
+    /// deliberately narrower than word-frequency filtering: repeated legitimate terms in a
+    /// sentence or a list remain valid unless a contiguous token sequence dominates the answer.
+    nonisolated enum DegenerateReason: String, Codable, Sendable {
+        case repeatedTokenSequence
+        case repeatedCharacterRun
     }
     nonisolated struct Diagnostic: Codable, Sendable, Equatable {
         var category: FailureCategory? = nil
@@ -716,6 +723,7 @@ enum StockSageLocalModelServer {
         var promptTokens: Int? = nil
         var completionTokens: Int? = nil
         var malformedUsage = false
+        var degenerateReason: DegenerateReason? = nil
         var outputLimitRetries = 0
         /// Why this attempt was a repeat, from a closed vocabulary — currently only "outputLimit",
         /// a same-evidence restart after a confirmed truncation. nil on a first attempt. The count
@@ -734,7 +742,7 @@ enum StockSageLocalModelServer {
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries) retryReason=\(retryReason ?? "none")"
+            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) degenerate=\(degenerateReason?.rawValue ?? "none") elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries) retryReason=\(retryReason ?? "none")"
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -870,6 +878,7 @@ enum StockSageLocalModelServer {
         case .responseTooLarge:                 return .tooLarge
         case .contextBudget:                    return .contextBudget
         case .incompleteOutput:                 return .unfinished
+        case .degenerateOutput:                 return .unreadable
         case .emptyContent, .missingContent:    return .emptyAnswer
         case .malformedJSON, .responseShape:    return .unreadable
         case .none:                             return .unknown
@@ -900,6 +909,54 @@ enum StockSageLocalModelServer {
         case .toolCall: return "The model requested a tool call instead of completing its answer."
         case .unknown, .malformed: return "The model did not report a valid completion state."
         }
+    }
+
+    /// Detect only a strongly dominant contiguous cycle or character run in a bounded prefix of
+    /// model text. Token cycles are limited to unstructured whole-answer output: a JSON-object
+    /// prefix can contain a legitimate repeated F-reference tail, so only the character-run guard
+    /// applies there.
+    ///
+    /// This is intentionally conservative. A single repeated word is considered degenerate only
+    /// after eight repetitions; longer cycles need five repetitions and at least 75% of the
+    /// inspected answer. The strict research schema is the only caller that enables this check,
+    /// so conversational partial-output semantics are unchanged.
+    nonisolated static func degenerateOutputReason(in text: String) -> DegenerateReason? {
+        let bounded = String(decoding: text.utf8.prefix(8_192), as: UTF8.self)
+        let scalars = Array(bounded.unicodeScalars)
+        if scalars.count >= 48 {
+            var run = 1
+            for index in 1..<scalars.count {
+                run = scalars[index] == scalars[index - 1] ? run + 1 : 1
+                if run >= 48 { return .repeatedCharacterRun }
+            }
+        }
+        guard !bounded.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") else { return nil }
+        let tokens = bounded.split { !$0.isLetter && !$0.isNumber }
+        guard tokens.count >= 16 else { return nil }
+        let maxCycleLength = min(8, tokens.count / 4)
+        let maxStart = min(64, tokens.count - 16)
+        for cycleLength in 1...maxCycleLength {
+            let minimumRepeats = cycleLength == 1 ? 8 : 5
+            let minimumRegion = max(16, cycleLength * minimumRepeats)
+            guard minimumRegion <= tokens.count else { continue }
+            for start in 0...maxStart {
+                guard start + minimumRegion <= tokens.count else { continue }
+                let sequence = Array(tokens[start..<(start + cycleLength)])
+                var repeats = 1
+                while start + (repeats + 1) * cycleLength <= tokens.count {
+                    let next = Array(tokens[(start + repeats * cycleLength)..<(start + (repeats + 1) * cycleLength)])
+                    guard next == sequence else { break }
+                    repeats += 1
+                }
+                let repeatedTokens = repeats * cycleLength
+                let remainingTokens = tokens.count - start
+                if repeats >= minimumRepeats, repeatedTokens >= 16,
+                   Double(repeatedTokens) / Double(remainingTokens) >= 0.75 {
+                    return .repeatedTokenSequence
+                }
+            }
+        }
+        return nil
     }
 
     private nonisolated static func tokenCount(_ value: Any?) -> Int? {
@@ -1157,6 +1214,16 @@ enum StockSageLocalModelServer {
                                                                 httpStatus: http.statusCode,
                                                                 concurrentRequests: concurrent,
                                                                 elapsedMilliseconds: elapsedMilliseconds())))
+                    }
+                    // Reject a clearly cyclic schema response before spending the length retry.
+                    // Schema-free Chat retains its partial-output contract.
+                    if c.requiresStrictOutput, jsonSchema != nil,
+                       let reason = degenerateOutputReason(in: reply.text) {
+                        var diagnostic = reply.diagnostic
+                        diagnostic.category = .degenerateOutput
+                        diagnostic.degenerateReason = reason
+                        diagnostic.httpStatus = http.statusCode
+                        return await failed(.init(diagnostic: diagnostic))
                     }
                     // One same-evidence restart for a confirmed output limit, never a continuation
                     // stitched onto an unfinished verdict. Reserve the extra output before sending;

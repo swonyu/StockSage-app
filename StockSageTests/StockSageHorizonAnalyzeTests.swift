@@ -1057,4 +1057,73 @@ struct StockSageHorizonAnalyzeTests {
         #expect(result.note.localizedCaseInsensitiveContains("no order"))
         #expect(result.note.localizedCaseInsensitiveContains("unvalidated"))
     }
+
+    @Test func coverageMapsLastHorizonCitationToItsExactOfferedSlot() async throws {
+        let result = await run(model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            let user = try #require(messages.last?["content"])
+            let last = try #require(user.split(separator: "\n").last { $0.hasPrefix("F") })
+            let reference = String(try #require(last.split(separator: ":").first))
+            let verdict = try JSONSerialization.data(withJSONObject: ["evidence": [reference], "action": "Hold",
+                "reason": "Mixed evidence", "risk": "Uncertain outlook"])
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["message": ["content": String(decoding: verdict, as: UTF8.self)], "done_reason": "stop"]), request)
+        })
+        #expect(result.verdict != nil)
+        let coverage = try #require(result.evidenceReceipt)
+        #expect(coverage.symbol == "ACME")
+        #expect(coverage.offeredKeys.count == result.facts.count)
+        #expect(coverage.citedKeys == ["nextEarnings.window"])
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("nextEarnings"))
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("news.status"))
+    }
+
+    @Test func oversizedMandatorySourceStatePreventsModelDispatch() async {
+        // Deliberately malformed oversized input at an injected boundary; no external client runs.
+        let attempts = Array(repeating: StockSageNewsService.Attempt(provider: .massive, checkedAt: Date(),
+            status: .notChecked(.notRequested)), count: 250)
+        var calls = 0
+        let result = await run(news: { _ in .init(attempts: attempts) }, model: { request in
+            calls += 1
+            return Self.ok(Self.verdictPayload(), request)
+        })
+        #expect(calls == 0 && result.verdict == nil)
+        #expect(result.note.contains("mandatory horizon or source-status fact") || result.note.contains("Evidence exceeded the age limit"))
+    }
+
+    // MARK: The path runs, and what it sends is bounded
+
+    @Test(arguments: ["ETF", "CS"])
+    func productionPathPreservesProviderIdentityAndChecksApplicability(_ type: String) async throws {
+        let listing = Research.Listing(ticker: "ACME", name: "Fixture", market: "stocks", locale: "us",
+                                       active: true, type: type, currency_name: "usd", primary_exchange: "XNYS")
+        var sentUser = ""
+        let result = await run(listing: listing, model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            sentUser = messages.last?["content"] ?? ""
+            let draft = #"{"evidence":["F1"],"action":"Hold","reason":"Analyst consensus is mixed","risk":"Market risk"}"#
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
+                "message": ["content": draft], "done_reason": "stop"]), request)
+        })
+        #expect(sentUser.contains("provider type " + type))
+        #expect(sentUser.components(separatedBy: "Instrument identity from Massive").count == 2)
+        #expect(result.referenceClose != nil)
+        if type == "ETF" {
+            #expect(result.verdict == nil)
+            #expect(result.validationFailure == "instrumentApplicability")
+        } else { #expect(result.verdict != nil) }
+    }
+
+    @Test func anInvalidNumericClaimIsMarkedRejectedWithTheValidatorReason() async throws {
+        let invalid = try! JSONSerialization.data(withJSONObject: [
+            "model": StockSageModelHarnessTests.ollamaFixtureModel,
+            "message": ["content": #"{"evidence":["F1"],"action":"Hold","reason":"Expected profit 999%","risk":"The setup can reverse."}"#],
+            "done_reason": "stop",
+        ])
+        let result = await run(model: { Self.ok(invalid, $0) })
+        #expect(result.verdict == nil)
+        #expect(result.validationOutcome == .rejected)
+        #expect(result.validationFailure == StockSageAIAssessment.ValidationFailure.foreignNumber.rawValue)
+    }
 }

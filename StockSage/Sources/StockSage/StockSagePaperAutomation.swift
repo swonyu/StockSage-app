@@ -34,6 +34,8 @@ final class StockSagePaperAutomation: ObservableObject {
         let evidence: [String]
         let model: String
         var plan: EntryPlan? = nil
+        /// Optional for receipts created before source-coverage accounting.
+        var evidenceCoverage: StockSageAIAssessment.EvidenceCoverage? = nil
     }
 
     nonisolated struct EntryPlan: Codable, Sendable, Equatable {
@@ -126,9 +128,11 @@ final class StockSagePaperAutomation: ObservableObject {
         }
 
         mutating func note(symbol: String = "", action: String, reason: String, at: Date,
-                           risk: String = "", facts: [String] = [], evidence: [String] = [], model: String = "", plan: EntryPlan? = nil) {
+                           risk: String = "", facts: [String] = [], evidence: [String] = [], model: String = "", plan: EntryPlan? = nil,
+                           evidenceCoverage: StockSageAIAssessment.EvidenceCoverage? = nil) {
             decisions.append(.init(id: UUID(), at: at, symbol: symbol, action: action,
-                reason: reason, risk: risk, facts: facts, evidence: evidence, model: model, plan: plan))
+                reason: reason, risk: risk, facts: facts, evidence: evidence, model: model, plan: plan,
+                evidenceCoverage: evidenceCoverage))
         }
 
         mutating func activateSameDay(at now: Date) {
@@ -359,6 +363,12 @@ final class StockSagePaperAutomation: ObservableObject {
                                       maximumAge: TimeInterval = StockSageLiveStream.maximumLiveAge) -> Bool {
         quote.paperTradeQualified && fresh(quote, at: now, maximumAge: maximumAge)
     }
+    /// Zero-based indices of dated observations; excludes the leading caveat and following daily facts.
+    nonisolated static func intradayObservationIndices(precedingFactCount: Int, intradayFactCount: Int) -> Range<Int> {
+        let start = precedingFactCount + 1
+        return start..<(start + max(0, intradayFactCount - 1))
+    }
+
     nonisolated static func hasIntradayEvidence(_ evidence: [String], factIndices: Range<Int>) -> Bool {
         let intraday = Set(factIndices.map { "F\($0 + 1)" })
         return !intraday.isDisjoint(with: evidence)
@@ -399,7 +409,7 @@ final class StockSagePaperAutomation: ObservableObject {
     /// read the current ledger only AFTER awaiting the qualified observation.
     static func decisionBook(symbol: String, verdict: StockSageAIAssessment.Verdict,
         facts: [String], model: String, researchQuote: StockSageQuoteService.LiveQuote,
-        holdingID: UUID?, citesIntraday: Bool, at fixedTime: Date? = nil,
+        holdingID: UUID?, citesIntraday: Bool, evidenceCoverage: StockSageAIAssessment.EvidenceCoverage? = nil, at fixedTime: Date? = nil,
         allowed: @MainActor () -> Bool, contextFresh: @MainActor (Date) -> Bool,
         currentBook: @MainActor () -> Book,
         commit: @MainActor (Book) -> Bool = { _ in true },
@@ -432,7 +442,8 @@ final class StockSagePaperAutomation: ObservableObject {
             if levels.valid { preview = levels }
         }
         next.note(symbol: symbol, action: verdict.action.rawValue, reason: verdict.reason, at: decisionAt,
-                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: model, plan: preview)
+                  risk: verdict.risk, facts: facts, evidence: verdict.evidence, model: model, plan: preview,
+                  evidenceCoverage: evidenceCoverage)
         guard actionable else { return commit(next) ? next : nil } // Hold/Avoid is an opinion, not a skipped order.
         if !cited {
             revalidationFailure = "Buy opinion did not cite an actual intraday observation; daily background alone cannot open a same-day position."
@@ -873,7 +884,10 @@ final class StockSagePaperAutomation: ObservableObject {
         // real allowance under the 4k target is ~1.9 kB, so the old constant meant the seam
         // rejected the entire research turn instead of returning a shorter, honest one.
         // Execution facts (position, settled cash, session clock) are MANDATORY and never dropped.
-        let allFacts = context.facts(maximumUTF8Bytes: 12_000)
+        let packet = context.evidencePacket(maximumUTF8Bytes: 12_000)
+        let compiledFacts = packet.facts
+        let optionalEvidence = compiledFacts.filter { !$0.required }
+        let requiredEvidence = compiledFacts.filter(\.required)
         // Skip the intraday caveat/summary: new entries must cite an actual dated observation.
         // The instruction names the intraday facts by F-number, so it is rebuilt for whatever
         // optional count actually fits.
@@ -886,7 +900,7 @@ final class StockSagePaperAutomation: ObservableObject {
         // disjoint from any evidence, so it returns false and `decisionBook` refuses the entry).
         // Say that plainly rather than emitting "cite at least one of: ." with an empty list.
         func entryInstruction(_ keptCount: Int) -> String {
-            let indices = (keptCount + 1)..<(keptCount + intraday.facts.count)
+            let indices = Self.intradayObservationIndices(precedingFactCount: keptCount + requiredEvidence.count, intradayFactCount: intraday.facts.count)
             guard !indices.isEmpty else {
                 return "\nNo dated intraday observation is available for this symbol, only a"
                     + " summary caveat. Buy and Strong Buy are therefore not available this cycle;"
@@ -897,15 +911,21 @@ final class StockSagePaperAutomation: ObservableObject {
                 + ". Daily background alone is not a same-day entry case."
         }
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(
-                optional: allFacts, mandatory: executionFacts,
+                optional: optionalEvidence.map(\.text), mandatory: requiredEvidence.map(\.text) + executionFacts,
                 system: { Self.researchInstructions + entryInstruction($0) },
+                optionalKeys: optionalEvidence.map(\.key),
                 outputTokens: config.reservedOutputTokens(for: Self.researchOutputTokens)) else {
             recordFailure("Research evidence could not be reduced to the model's context budget without dropping a mandatory execution fact. No paper order. Scheduled exits remain active.",
                           symbol: symbol, at: Date(), facts: partialFacts); return
         }
         let facts = fitted.facts
-        let keptOptional = facts.count - executionFacts.count
-        let intradayIndices = (keptOptional + 1)..<(keptOptional + intraday.facts.count)
+        let executionKeys = intraday.facts.indices.map { $0 == 0 ? "execution.intraday.summary" : "execution.intraday.observation.\($0)" }
+            + ["execution.daily", "execution.position", "execution.cash", "execution.session"]
+        let executionEvidence = zip(executionKeys, executionFacts).map {
+            StockSageAIAssessment.EvidenceFact(key: $0.0, text: $0.1, required: true, availability: .available)
+        }
+        let keptOptional = fitted.optionalKept
+        let intradayIndices = Self.intradayObservationIndices(precedingFactCount: keptOptional + requiredEvidence.count, intradayFactCount: intraday.facts.count)
         guard context.canAssess(at: Date()),
               intraday.fresh(at: Date()), Self.fresh(quote, at: Date(), maximumAge: Self.researchMaximumAge) else {
             recordFailure("Research context exceeded its freshness or size limit.", symbol: symbol, at: Date(), facts: partialFacts); return
@@ -914,7 +934,7 @@ final class StockSagePaperAutomation: ObservableObject {
             // Disclosed, never silent: the record shows the answer was formed on partial evidence.
             var trimmed = book
             trimmed.note(symbol: symbol, action: "Evidence trimmed",
-                         reason: "\(fitted.omitted) of \(allFacts.count) optional evidence records were omitted to fit the model context budget; all execution facts were kept. Any opinion recorded next was formed without them.",
+                         reason: "\(fitted.omitted) of \(optionalEvidence.count) optional evidence records were omitted to fit the model context budget; all required source and execution facts were kept. Any opinion recorded next was formed without them.",
                          at: Date(), facts: facts)
             _ = save(trimmed)
         }
@@ -942,6 +962,8 @@ final class StockSagePaperAutomation: ObservableObject {
         _ = await Self.decisionBook(symbol: symbol, verdict: verdict, facts: facts,
             model: config.model, researchQuote: quote, holdingID: held?.id,
             citesIntraday: Self.hasIntradayEvidence(verdict.evidence, factIndices: intradayIndices),
+            evidenceCoverage: context.coverage(offered: Array(optionalEvidence.prefix(fitted.optionalKept)) + requiredEvidence + executionEvidence,
+                                              omittedKeys: fitted.omittedKeys, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict),
             allowed: {
                 evidenceActive()
                     && Self.mayResearch(symbol, marketSymbols: marketSymbols, heldSymbols: Set(self.book.open.map(\.symbol)))

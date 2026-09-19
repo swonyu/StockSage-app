@@ -16,9 +16,12 @@ import Foundation
         let allowed: Bool
         let policyRevision: String?
         let epoch: String
+        var companyName: String? = nil
+        var bypassCache: Bool
     }
     private enum RequestKey: Hashable {
         case page(B.Query)
+        case freshPage(UUID)
         // Nearby moving windows share only after exact interval/cutoff checks below.
         case newsWindow(String, String)
         case fallback(URL)
@@ -130,7 +133,7 @@ import Foundation
            capture.policyRevision == policyRevision {
             return capture
         }
-        let next = Capture(key: key, revision: revision, allowed: allowed, policyRevision: policyRevision, epoch: UUID().uuidString)
+        let next = Capture(key: key, revision: revision, allowed: allowed, policyRevision: policyRevision, epoch: UUID().uuidString, bypassCache: false)
         capture = next
         cache.removeAll()
         authenticationRejections.removeAll()
@@ -172,8 +175,10 @@ import Foundation
     }
 
     func page(for query: StockSageBenzinga.Query,
-              recheckAuthorization: Bool = false) async -> StockSageBenzinga.Page {
-        let original = synchronize()
+              recheckAuthorization: Bool = false, bypassCache: Bool = false, companyName: String? = nil) async -> StockSageBenzinga.Page {
+        var original = synchronize()
+        original.companyName = companyName.map { String($0.prefix(200)) }
+        let bypassCache = bypassCache || original.companyName != nil
         if Task.isCancelled { return unavailable(query, original, .cancelled) }
         if !original.allowed { return unavailable(query, original, .policyDenied) }
         if original.key.isEmpty { return unavailable(query, original, .missingCredential) }
@@ -185,7 +190,7 @@ import Foundation
             let age = now().timeIntervalSince(cached.page.checkedAt)
             let denial = cached.page.status == .unavailable(.unauthorized)
                 || cached.page.status == .unavailable(.entitlement)
-            if age >= 0, age < query.product.cacheTTL,
+            if !bypassCache, age >= 0, age < query.product.cacheTTL,
                compatible(cached.page.query, query), !(recheckAuthorization && denial) {
                 access &+= 1; cached.access = access; cache[key] = cached
                 return revalidate(cached.page, for: query)
@@ -210,7 +215,10 @@ import Foundation
         if let failure = priorAuthenticationFailure(query) { return unavailable(query, original, failure) }
         // An earlier caller's wider/different window cannot supply this caller's result.
         let flightKey: RequestKey
-        if let existing = flights[key], let prior = existing.query, !compatible(prior, query) {
+        if bypassCache {
+            // A manual fresh run must not attach to a request admitted before that run.
+            flightKey = .freshPage(UUID())
+        } else if let existing = flights[key], let prior = existing.query, !compatible(prior, query) {
             flightKey = .page(query)
         } else { flightKey = key }
         let result = await wait(key: flightKey, query: query, request: request, capture: original)
@@ -329,7 +337,7 @@ import Foundation
                         let page: B.Page
                         if http.statusCode == 200 {
                             page = B.parse(data, query: query, checkedAt: self.now(),
-                                           credentialGeneration: job.capture.epoch)
+                                           credentialGeneration: job.capture.epoch, companyName: job.capture.companyName)
                         } else {
                             let failure: B.Failure = http.statusCode == 401 ? .unauthorized
                                 : (http.statusCode == 402 || http.statusCode == 403) ? .entitlement : .http(http.statusCode)
@@ -376,6 +384,8 @@ import Foundation
     }
 
     private func remember(_ page: B.Page, key: RequestKey) {
+        // One-shot fresh flights must not fill the shared cache with unaddressable UUID keys.
+        if case .freshPage = key { return }
         access &+= 1
         cache[key] = CacheEntry(page: page, access: access)
         // At most 501 entries here: a linear oldest-access lookup avoids another index.
@@ -479,8 +489,10 @@ import Foundation
     }
 
     /// Caller time bounds source selection only. Local checked/captured times use the injected clock.
-    func snapshot(for symbol: String, now bounds: Date = Date()) async -> StockSageBenzinga.Snapshot {
-        let original = synchronize()
+    func snapshot(for symbol: String, now bounds: Date = Date(), fresh: Bool = false, companyName: String? = nil) async -> StockSageBenzinga.Snapshot {
+        var original = synchronize()
+        original.bypassCache = fresh
+        original.companyName = companyName.map { String($0.prefix(200)) }
         let symbol = symbol.uppercased()
         let formatter = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
         let baseQueries = B.Product.allCases.filter { $0 != .analysts && $0 != .firms }.map { product in
@@ -534,7 +546,7 @@ import Foundation
     private func capturedPage(_ query: B.Query, capture: Capture) async -> B.Page {
         if Task.isCancelled { return unavailable(query, capture, .cancelled) }
         if let failure = receiptFailure(capture) { return unavailable(query, capture, failure) }
-        let page = await page(for: query)
+        let page = await page(for: query, bypassCache: capture.bypassCache, companyName: capture.companyName)
         if Task.isCancelled { return unavailable(query, capture, .cancelled) }
         if let failure = receiptFailure(capture) { return unavailable(query, capture, failure) }
         return page

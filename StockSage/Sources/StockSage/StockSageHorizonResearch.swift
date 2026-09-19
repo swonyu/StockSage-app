@@ -48,12 +48,15 @@ final class StockSageHorizonResearch: ObservableObject {
         let basis: String
     }
     nonisolated struct Result: Sendable {
+        enum ValidationOutcome: String, Sendable { case validated, rejected, unknown }
         var verdict: StockSageAIAssessment.Verdict?
         var levels: Levels?
         var facts: [String] = []
         var note: String
         var at: Date = Date()
         var model: String = ""
+        var validationOutcome: ValidationOutcome = .unknown
+        var validationFailure: String? = nil
         var referenceClose: (value: Double, at: Date)? = nil
         var coverage: [EvidenceCoverage] = []
         var evidenceReceipt: StockSageAIAssessment.EvidenceCoverage? = nil
@@ -74,6 +77,9 @@ final class StockSageHorizonResearch: ObservableObject {
         /// Complete provider record: filing identities/links, typed transactions and omissions.
         var insiderEvidence: StockSageMassiveEvents.Observation? = nil
         var hasRecordedInsiderTransactions = true
+        var newsCheckedAt: Date? = nil
+        var newestNewsAt: Date? = nil
+        var newsCheckSummary: String? = nil
     }
     struct Scan {
         var listings: [Listing] = []
@@ -87,6 +93,13 @@ final class StockSageHorizonResearch: ObservableObject {
         var isComparing = false
         var needsSaving = false
         var qualificationPolicyVersion: Int? = nil
+        var requestedAt: Date? = nil
+        var lastAttemptAt: Date? = nil
+        var attemptFinishedAt: Date? = nil
+        var retainsEarlierResults = false
+        var changes: [String: String] = [:]
+        var completedAt: Date? = nil
+        var previousCompletedAt: Date? = nil
 
         func isEligible(_ symbol: String) -> Bool {
             guard let result = results[symbol], result.verdict?.action == .buy || result.verdict?.action == .strongBuy else { return false }
@@ -151,7 +164,10 @@ final class StockSageHorizonResearch: ObservableObject {
         self.history = history
         for horizon in Horizon.allCases {
             if let restored = history?.completedScan(horizon: horizon) {
-                scans[horizon] = restored.scan
+                var restoredScan = restored.scan
+                restoredScan.completedAt = restored.run.completedAt
+                restoredScan.requestedAt = restored.run.startedAt
+                scans[horizon] = restoredScan
                 completedRuns[horizon] = restored.run
                 if let history, !history.runs.contains(where: { $0.id == restored.run.id }) {
                     persistCompletedRun(horizon)
@@ -370,13 +386,24 @@ final class StockSageHorizonResearch: ObservableObject {
             basis: "\(StockSageAdvisor.stopMultiple(forVol: vol))× daily ATR stop; target = twice the entry-to-stop distance. Existing rules, not horizon-optimized or a forecast. Re-price before considering a trade; overnight gaps can pass the stop.")
     }
 
+    typealias ReceiptObserver = @Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void
+    typealias ReceiptAnalyzer = @MainActor (Listing, UUID, @escaping ReceiptObserver) async -> Result
+    typealias MultiReceiptAnalyzer = @MainActor (Listing, Horizon, UUID, @escaping ReceiptObserver) async -> Result
+
     func start(_ horizon: Horizon, allowed: @escaping @MainActor () -> Bool,
         interruptionReason: @escaping @MainActor () -> String? = { nil },
         universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
         rank: (@MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>)? = nil,
-        analyze: @escaping @MainActor (Listing) async -> Result) -> Bool {
-        start([horizon], allowed: allowed, interruptionReason: interruptionReason, universe: universe, rank: rank,
-              analyze: { item, _ in await analyze(item) })
+        analyze: @escaping @MainActor (Listing) async -> Result,
+        receiptStore: StockSageResearchReceiptStore? = nil, receiptAnalyzer: ReceiptAnalyzer? = nil) -> Bool {
+        let capturedAnalyzer: MultiReceiptAnalyzer?
+        if let receiptAnalyzer {
+            capturedAnalyzer = { item, _, id, observer in await receiptAnalyzer(item, id, observer) }
+        } else {
+            capturedAnalyzer = nil
+        }
+        return start([horizon], allowed: allowed, interruptionReason: interruptionReason, universe: universe, rank: rank,
+              analyze: { item, _ in await analyze(item) }, receiptStore: receiptStore, receiptAnalyzer: capturedAnalyzer)
     }
 
     typealias Analysis = @MainActor @Sendable (Horizon) async -> Result
@@ -396,9 +423,10 @@ final class StockSageHorizonResearch: ObservableObject {
         universe: @escaping @MainActor () async throws -> StockSageResearchUniverse.Selection,
         rank: (@MainActor (Scan, Horizon) async -> Swift.Result<StockSageResearchRanking.Receipt, StockSageResearchRanking.Failure>)? = nil,
         parallelism: @escaping @MainActor () -> Int = { 1 },
-        analyze: @escaping @MainActor (Listing, Horizon) async -> Result) -> Bool {
+        analyze: @escaping @MainActor (Listing, Horizon) async -> Result,
+        receiptStore: StockSageResearchReceiptStore? = nil, receiptAnalyzer: MultiReceiptAnalyzer? = nil) -> Bool {
         start(horizons, allowed: allowed, interruptionReason: interruptionReason, universe: universe,
-            rank: rank, parallelism: parallelism, makeAnalysis: { item in
+            rank: rank, parallelism: parallelism, receiptStore: receiptStore, receiptAnalyzer: receiptAnalyzer, makeAnalysis: { item in
                 { horizon in await analyze(item, horizon) }
             })
     }
@@ -410,18 +438,25 @@ final class StockSageHorizonResearch: ObservableObject {
         parallelism: @escaping @MainActor () -> Int = { 1 },
         concurrentGathering: Bool = false,
         qualificationPolicyVersion: Int? = nil,
+        receiptStore: StockSageResearchReceiptStore? = nil, receiptAnalyzer: MultiReceiptAnalyzer? = nil,
         makeAnalysis: @escaping @MainActor (Listing) async -> Analysis) -> Bool {
         guard task == nil, allowed(), !horizons.isEmpty, Set(horizons).count == horizons.count,
               qualificationPolicyVersion == nil || qualificationPolicyVersion == 1 else { return false }
         let previous = scans
         let startedAt = Date()
+        let receiptIDs = Dictionary(uniqueKeysWithValues: horizons.compactMap { horizon in
+            receiptStore.map { (horizon, $0.begin(horizon: horizon, at: startedAt)) }
+        })
         running = horizons[0]; runningHorizons = horizons
         for horizon in horizons {
-            scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) NASDAQ common stocks by dated trading activity…", at: startedAt, qualificationPolicyVersion: qualificationPolicyVersion)
+            scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) NASDAQ common stocks by dated trading activity…", at: startedAt,
+                qualificationPolicyVersion: qualificationPolicyVersion, requestedAt: startedAt, lastAttemptAt: startedAt,
+                previousCompletedAt: previous[horizon]?.completedAt)
         }
         task = Task {
             var didStart = false
             var completed: Set<Horizon> = []
+            var receiptAttempts: [Horizon: [String: UUID]] = [:]
             @MainActor func finish(_ horizon: Horizon, count: Int) async throws {
                 guard !completed.contains(horizon), let captured = scans[horizon] else { return }
                 guard valid() else { throw CancellationError() }
@@ -438,7 +473,18 @@ final class StockSageHorizonResearch: ObservableObject {
                 completed.insert(horizon)
                 runningHorizons.removeAll { $0 == horizon }; running = runningHorizons.first
             }
-            defer { activeSymbols.removeAll(); running = nil; runningHorizons = []; task = nil }
+            defer {
+                for horizon in horizons {
+                    scans[horizon]?.attemptFinishedAt = Date()
+                    if let receiptStore, let receiptID = receiptIDs[horizon] {
+                        receiptStore.finish(scanID: receiptID, status: scans[horizon]?.status ?? "finished")
+                        if receiptStore.persistenceFailed(scanID: receiptID) {
+                            scans[horizon]?.status += " Receipt persistence failed; durable manifest coverage is unavailable."
+                        }
+                    }
+                }
+                activeSymbols.removeAll(); running = nil; runningHorizons = []; task = nil
+            }
             let valid: @MainActor @Sendable () -> Bool = { !Task.isCancelled && allowed() }
             do {
                 let selection = try await universe()
@@ -450,6 +496,10 @@ final class StockSageHorizonResearch: ObservableObject {
                 for horizon in horizons {
                     scans[horizon]?.listings = names
                     scans[horizon]?.selection = selection.receipt
+                    if let receiptStore, let receiptID = receiptIDs[horizon] {
+                        let ids = receiptStore.registerSelection(selection.receipt, listings: names, for: receiptID)
+                        receiptAttempts[horizon] = Dictionary(uniqueKeysWithValues: zip(names.map(\.ticker), ids))
+                    }
                 }
                 let updateProgress: @MainActor @Sendable () -> Void = {
                     guard valid() else { return }
@@ -477,13 +527,29 @@ final class StockSageHorizonResearch: ObservableObject {
                             makeAnalysis: makeAnalysis)
                         guard valid() else { throw CancellationError() }
                         for (item, analyze) in zip(items, analyses) {
+                            let attemptIDs = receiptAttempts.compactMapValues { $0[item.ticker] }
                             group.addTask { @MainActor @Sendable in
                                 defer { self.activeSymbols.remove(item.ticker); updateProgress() }
                                 for horizon in horizons {
                                     guard valid() else { throw CancellationError() }
-                                    let result = await analyze(horizon)
+                                    let attemptID = attemptIDs[horizon], receiptID = receiptIDs[horizon]
+                                    if let receiptStore, let attemptID, let receiptID {
+                                        receiptStore.beginAttempt(attemptID, scanID: receiptID)
+                                    }
+                                    let result: Result
+                                    if let receiptAnalyzer, let receiptStore, let attemptID, let receiptID {
+                                        result = await receiptAnalyzer(item, horizon, attemptID) { event in
+                                            await receiptStore.capture(event, for: attemptID, scanID: receiptID)
+                                        }
+                                    } else { result = await analyze(horizon) }
+                                    if let receiptStore, let attemptID, let receiptID {
+                                        receiptStore.finishAttempt(valid() ? result : Result(note: "Analysis interrupted before publication."),
+                                            attemptID: attemptID, scanID: receiptID,
+                                            status: !valid() ? "interrupted" : result.verdict == nil ? "rejected" : "accepted")
+                                    }
                                     guard valid() else { throw CancellationError() }
                                     self.scans[horizon]?.results[item.ticker] = result
+                                    self.scans[horizon]?.changes[item.ticker] = StockSageResearchFreshness.change(from: previous[horizon]?.results[item.ticker], to: result)
                                     updateProgress()
                                 }
                             }
@@ -494,6 +560,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 }
                 // Both completed horizons are durable before the first model comparison starts.
                 for horizon in horizons {
+                    scans[horizon]?.completedAt = Date()
                     scans[horizon]?.rankingFailure = "Top five comparison has not completed. Retry using these saved checks."
                     guard let scan = scans[horizon] else { continue }
                     let pending = StockSageResearchHistory.snapshot(startedAt: startedAt, completedAt: Date(), horizon: horizon, scan: scan)
@@ -507,7 +574,11 @@ final class StockSageHorizonResearch: ObservableObject {
             } catch {
                 for horizon in horizons where !completed.contains(horizon) {
                     scans[horizon]?.isComparing = false
-                    if !didStart, let old = previous[horizon] { scans[horizon] = old }
+                    if !didStart, let old = previous[horizon] {
+                        scans[horizon] = old
+                        scans[horizon]?.lastAttemptAt = startedAt
+                        scans[horizon]?.retainsEarlierResults = true
+                    }
                     if !valid() {
                         let reason = Task.isCancelled ? "Stop requested" : (interruptionReason() ?? "Model settings or access changed")
                         let count = scans[horizon]?.results.count ?? 0
@@ -555,6 +626,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let run = StockSageResearchHistory.snapshot(id: id, startedAt: startedAt, completedAt: Date(),
             horizon: horizon, scan: scan, originalRunID: originalRunID)
         completedRuns[horizon] = run
+        scan.completedAt = run.completedAt
         scans[horizon] = scan
         persistCompletedRun(horizon)
     }
@@ -763,7 +835,15 @@ final class StockSageHorizonResearch: ObservableObject {
         guard task == nil, !horizons.isEmpty else { return }
         guard let config = StockSageAIAssessments.configuration, StockSageMassive.isConfigured,
               ToolPolicy.isExternalAllowed, !store.isSampleData else {
-            for horizon in horizons { scans[horizon, default: Scan()].status = "Enable web access, Massive and the local model in Settings. No scan started." }
+            let attemptedAt = Date()
+            for horizon in horizons {
+                let retained = !(scans[horizon]?.results.isEmpty ?? true)
+                scans[horizon, default: Scan()].lastAttemptAt = attemptedAt
+                scans[horizon]?.attemptFinishedAt = attemptedAt
+                scans[horizon]?.retainsEarlierResults = retained
+                scans[horizon]?.status = "Enable web access, Massive and the local model in Settings. No scan started."
+                    + (retained ? " Earlier scan data retained; no new listings checked." : "")
+            }
             return
         }
         let key = StockSageMassive.apiKey
@@ -903,13 +983,14 @@ final class StockSageHorizonResearch: ObservableObject {
         let ideas = await StockSageStore.buildIdeas(defs: [.init(symbol: item.ticker, market: "US · \(item.primary_exchange ?? "exchange unconfirmed")")], histories: [item.ticker: history])
         guard active(), let idea = ideas.first else { return failed("Analysis interrupted or unsupported history.") }
         let began = Date()
-        let benzinga = await (benzingaSnapshot ?? { await StockSageBenzingaClient.shared.snapshot(for: $0, now: $1) })(item.ticker, began)
+        let instrument = StockSageResearchInstrument(symbol: item.ticker, name: item.name, providerType: item.type)
+        let benzinga = await (benzingaSnapshot ?? { await StockSageBenzingaClient.shared.snapshot(for: $0, now: $1, fresh: true, companyName: item.name) })(item.ticker, began)
         func evidenceAllowed() -> Bool {
             active() && (evidenceIsCurrent?(benzinga) ?? StockSageBenzingaClient.shared.isCurrent(benzinga))
         }
         guard evidenceAllowed() else { return failed("Analysis interrupted.") }
         let newsPage = benzinga.pages.first { $0.query.product == .news }
-        let news = await (newsObservation ?? { await StockSageNewsService.observation(for: $0, limit: 3, now: $1, benzingaPage: $2) })(item.ticker, began, newsPage)
+        let news = await (newsObservation ?? { await StockSageNewsService.observation(for: $0, limit: 3, now: $1, benzingaPage: $2, companyName: item.name) })(item.ticker, began, newsPage)
         guard evidenceAllowed() else { return failed("Analysis interrupted.") }
 
         // This research-local query retains its own provider semantics and credential gate;
@@ -941,7 +1022,9 @@ final class StockSageHorizonResearch: ObservableObject {
             extra.append(.init(key: key, text: text, required: required, availability: availability))
         }
         var earningsAnswered = false
-        switch earnings.outcome {
+        if instrument.isETF {
+            appendExtra("nextEarnings", "Corporate earnings: not applicable to the provider-confirmed ETF; corporate earnings records withheld.", availability: .notApplicable)
+        } else { switch earnings.outcome {
         case .answered(let row):
             let validCheck = earningsCheckedAt.map { (0...300).contains(capturedAt.timeIntervalSince($0)) } == true
             let todayUTC = floor(earningsAt.timeIntervalSince1970 / 86_400) * 86_400
@@ -963,6 +1046,7 @@ final class StockSageHorizonResearch: ObservableObject {
             } else { origin = "access, cancellation or request availability" }
             appendExtra("nextEarnings", "Next earnings: not requested (\(origin)); decision recorded \(earnings.recordedAt.ISO8601Format()). Missing is not no earnings risk.", availability: .unknown)
         }
+        }
         let filingsFresh = (0...300).contains(capturedAt.timeIntervalSince(filings.checkedAt))
         let filingsAnswered = filingsFresh && filings.outcome == .answered
         coverage.append(.init(source: "SEC submissions metadata", state: !filingsFresh ? .stale : filingsAnswered ? .answered : .unavailable, checkedAt: filings.checkedAt))
@@ -980,7 +1064,7 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         let context = StockSageAIAssessment.Context(idea: idea, earnings: nil,
             company: company, at: capturedAt,
-            newsObservation: news, quotedInUSD: true, benzinga: benzinga)
+            newsObservation: news, quotedInUSD: true, benzinga: benzinga, instrument: instrument)
         for product in StockSageBenzinga.Product.allCases where product != .news {
             let pages = benzinga.pages.filter { $0.query.product == product }
             let state: EvidenceCoverage.State
@@ -1032,7 +1116,7 @@ final class StockSageHorizonResearch: ObservableObject {
         return .captured(.init(history: history, context: context, facts: evidence.map(\.text),
             coverage: coverage, at: began, blockedByThrottle: blocked,
             evidencePacket: .init(facts: evidence, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount),
-            nextEarnings: earnings))
+            nextEarnings: instrument.isETF ? nil : earnings))
     }
 
     nonisolated static func historicalFacts(_ history: StockSagePriceHistory) -> [String] {
@@ -1145,6 +1229,9 @@ final class StockSageHorizonResearch: ObservableObject {
         var evidenceReceipt: StockSageAIAssessment.EvidenceCoverage?
         var inferenceProfile: StockSageAIAssessment.InferenceProfile?
         var qualityReport: StockSageAIAssessment.QualityReport?
+        var validationOutcome: Result.ValidationOutcome = .unknown
+        var validationFailure: String?
+        let news = context.newsObservation
         var offeredClasses: [StockSageAIAssessment.FactClass] = []
         let insiderEvidence = context.company[.insider].flatMap {
             $0.symbol == context.idea.symbol.uppercased() && $0.feed == .insider ? $0 : nil
@@ -1156,11 +1243,13 @@ final class StockSageHorizonResearch: ObservableObject {
         }
         func result(_ note: String, facts: [String] = []) -> Result {
             .init(facts: facts, note: note, at: capture.at, model: config.model,
+                validationOutcome: validationOutcome, validationFailure: validationFailure,
                 referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt,
                 insiderTransactions: transactions, factClasses: offeredClasses,
                 inferenceProfile: inferenceProfile, qualityReport: qualityReport
                     ?? StockSageAIAssessment.quality(nil, offered: [], symbol: context.idea.symbol),
-                insiderEvidence: insiderEvidence)
+                insiderEvidence: insiderEvidence, newsCheckedAt: news?.latestCheckAt,
+                newestNewsAt: news?.items.map(\.date).max(), newsCheckSummary: news?.summary)
         }
         guard [researchOutputTokens, 384].contains(outputTokens) else { return result("Unsupported research output budget; no opinion.") }
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
@@ -1183,8 +1272,10 @@ final class StockSageHorizonResearch: ObservableObject {
         var mandatory = packet.facts.filter(\.required) + horizonFacts.enumerated().map {
             StockSageAIAssessment.EvidenceFact(key: "horizon.\($0.offset)", text: $0.element,
                                              required: true, availability: .available)
-        } + [.init(key: "nextEarnings.window", text: earningsWindow.fact, required: true,
-                   availability: earningsWindow.relation == .unknown ? .unknown : .available)]
+        } + [.init(key: "nextEarnings.window", text: context.instrument?.isETF == true
+                    ? "Earnings holding-window check: not applicable to the provider-confirmed ETF." : earningsWindow.fact,
+                   required: true, availability: context.instrument?.isETF == true ? .notApplicable
+                    : earningsWindow.relation == .unknown ? .unknown : .available)]
         if let qualification {
             mandatory.append(.init(key: "research.qualification.v1", text: qualification.fact, required: true, availability: .available))
         }
@@ -1219,23 +1310,32 @@ final class StockSageHorizonResearch: ObservableObject {
             return result("No verified opinion. " + StockSageAIAssessments.failureSummary(response, facts: facts, leadCount: 0) + trimmedNote, facts: facts)
         }
         let verdict: StockSageAIAssessment.Verdict
-        switch StockSageAIAssessment.validate(completion.text, facts: facts, earningsWindow: earningsWindow) {
+        switch StockSageAIAssessment.validate(completion.text, facts: facts,
+            earningsWindow: context.instrument?.isETF == true ? nil : earningsWindow) {
         case .success(let accepted): verdict = accepted
         case .failure(let failure):
+            validationOutcome = .rejected; validationFailure = failure.rawValue
             qualityReport = StockSageAIAssessment.quality(nil, offered: offered, symbol: context.idea.symbol, failure: failure)
             return result("No verified opinion. " + failure.explanation(model: completion.model) + trimmedNote, facts: facts)
+        }
+        guard context.instrument?.allows(verdict) != false else {
+            validationOutcome = .rejected; validationFailure = "instrumentApplicability"
+            qualityReport = StockSageAIAssessment.quality(nil, offered: offered, symbol: context.idea.symbol, failure: .instrumentApplicability)
+            return result("No verified opinion. The ETF answer used excluded corporate earnings or analyst-target language." + trimmedNote, facts: facts)
         }
         evidenceReceipt = context.coverage(offered: offered, omittedKeys: fitted.omittedKeys,
             prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount, verdict: verdict, packet: packet)
         let qualified = qualification?.receipt(verdict: verdict, citedKeys: evidenceReceipt?.citedKeys ?? [], offeredKeys: offered.map(\.key))
         return .init(verdict: verdict, levels: qualified?.levels ?? levels(history: history, action: verdict.action, at: Date()),
             facts: facts, note: "Unvalidated model research · \(horizon.rawValue). No order created." + trimmedNote,
-            at: capture.at, model: config.model, referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified,
+            at: capture.at, model: config.model, validationOutcome: .validated,
+            referenceClose: referenceClose, coverage: capture.coverage, evidenceReceipt: evidenceReceipt, qualification: qualified,
             insiderTransactions: transactions,
             // `offered` is positionally identical to `fitted.facts`: optional kept records first
             // (dropped only from the end), then mandatory records. F-numbering therefore matches.
             factClasses: offeredClasses, inferenceProfile: inferenceProfile,
             qualityReport: StockSageAIAssessment.quality(verdict, offered: offered, symbol: context.idea.symbol),
-            insiderEvidence: insiderEvidence)
+            insiderEvidence: insiderEvidence, newsCheckedAt: news?.latestCheckAt,
+            newestNewsAt: news?.items.map(\.date).max(), newsCheckSummary: news?.summary)
     }
 }

@@ -62,10 +62,44 @@ struct StockSageBenzingaTests {
         return value
     }
     private func page(_ product: B.Product, rows: [[String: Any]]? = nil,
-                      subject: String? = nil, generation: String? = "epoch") throws -> B.Page {
+                      subject: String? = nil, generation: String? = "epoch",
+                      companyName: String? = nil) throws -> B.Page {
         let subject = subject ?? (product == .analysts ? "AnalystA" : product == .firms ? "FirmA" : "AAPL")
         return B.parse(try body(rows ?? [row(product)]), query: query(product, subject: subject),
-                       checkedAt: now, credentialGeneration: generation)
+                       checkedAt: now, credentialGeneration: generation, companyName: companyName)
+    }
+
+    @Test func etfProjectionWithholdsCorporateRecordsWithoutCallingThemBudgetTrimming() throws {
+        let pages = try [B.Product.earnings, .consensusRatings, .news].map { try page($0) }
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: pages)
+        let before = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000))
+        #expect(before.records.contains { $0.product == .earnings })
+        #expect(before.records.contains { $0.product == .consensusRatings })
+        let identity = StockSageResearchInstrument(symbol: "AAPL", name: "Synthetic ETF", providerType: "ETF")
+        let filtered = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000,
+                                                excludingProducts: identity.excludedProducts))
+        #expect(filtered.records.allSatisfy { $0.product == .news })
+        #expect(filtered.records.count == 1)
+        #expect(filtered.inapplicableRecordCount == 2)
+        #expect(filtered.trimmedRecordCount == 0)
+        #expect(filtered.text.contains("not applicable to supplied instrument"))
+        #expect(snapshot.pages.count == 3, "Raw captured evidence remains available for receipts")
+        let original = B.Projection(statusLines: [], records: [], omittedRecordCount: 0)
+        let data = try JSONEncoder().encode(original)
+        #expect(!String(decoding: data, as: UTF8.self).contains("inapplicableRecordCount"))
+        #expect(try JSONDecoder().decode(B.Projection.self, from: data) == original)
+    }
+
+    @Test func emptyBodyTeaserRevisionsCannotCollapseIntoOneFingerprint() throws {
+        var first = row(.news)
+        first["body"] = ""
+        first["teaser"] = "AAPL revenue rose 12%."
+        var second = first
+        second["teaser"] = "AAPL revenue fell -12%."
+        let captured = try page(.news, rows: [first, second])
+        #expect(captured.records.count == 2)
+        #expect(Set(captured.records.compactMap(\.contentFingerprint)).count == 2)
+        #expect(StockSageNewsService.benzingaAttempt(captured, symbol: "AAPL", now: now).items.count == 2)
     }
 
     @Test func requestsUseNineExactContractsWithoutCredentialURLs() throws {
@@ -186,9 +220,22 @@ struct StockSageBenzingaTests {
         let parsed = try page(.news, rows: [first, first, second])
         try #require(parsed.records.count == 2)
         #expect(Set(parsed.records.map(\.id)).count == 2)
+        #expect(parsed.records.compactMap(\.contentFingerprint).count == 2
+                && parsed.records[0].contentFingerprint != parsed.records[1].contentFingerprint)
         #expect(Set(parsed.records.map(\.vendorID)) == ["123"])
         #expect(parsed.records.allSatisfy { ($0.excerpt?.count ?? 0) <= 400 })
         #expect(parsed.records[0].excerpt == parsed.records[1].excerpt)
+    }
+
+    @Test func newsSelectsRawCompanyPassageBeforeRecordExcerptCap() throws {
+        var value = row(.news)
+        value["company_name"] = "Acme Holdings"
+        value["body"] = String(repeating: "Background context. ", count: 80)
+            + "<div>Acme Holdings reported revenue of 12.5% and $1,250.50.</div>"
+        let record = try #require(try page(.news, rows: [value], companyName: "Acme Holdings").records.first)
+        #expect(record.excerpt?.contains("Acme Holdings reported revenue of 12.5% and $1,250.50.") == true)
+        #expect(record.excerpt?.contains("Background") == false)
+        #expect(record.excerpt?.contains("<div>") == false)
     }
 
     @Test func newsKeepsHeadlineOnlyAndExactPublicationBoundary() throws {
@@ -351,6 +398,101 @@ struct StockSageBenzingaTests {
         #expect(try page(.consensusRatings, rows: [inverted]).records.isEmpty)
         inverted["high_price_target"] = 150
         #expect(try page(.consensusRatings, rows: [inverted]).records.count == 1)
+    }
+
+    @Test func ratingAnalystEvidenceKeepsActionDateCurrencyAndNamedOriginalBasisTargets() throws {
+        let record = try #require(try page(.ratings).records.first)
+        let evidence = try #require(record.analystEvidence)
+        #expect(evidence.action == "upgrades" && evidence.consensus == nil)
+        #expect(evidence.date == "2026-09-10" && evidence.currency == "USD")
+        #expect(evidence.targets == [
+            .init(field: .ratingCurrent, amount: Decimal(110)),
+            .init(field: .ratingPrevious, amount: Decimal(100))
+        ])
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: [try page(.ratings)])
+        let text = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000)).text
+        #expect(text.contains("Analyst provenance: same provider record; action upgrades; provider date 2026-09-10; target currency USD; target fields rating original-basis current target; rating original-basis previous target."))
+        #expect(text.components(separatedBy: record.id).count == 2)
+        #expect(!record.sourceText.contains("amount "))
+    }
+
+    @Test func insightAnalystEvidenceKeepsMissingCurrencyMissingRatherThanBorrowingIt() throws {
+        var row = row(.analystInsights)
+        row["rating_action"] = "maintains"
+        row["price_target"] = 95
+        row.removeValue(forKey: "currency")
+        let record = try #require(try page(.analystInsights, rows: [row]).records.first)
+        let evidence = try #require(record.analystEvidence)
+        #expect(evidence.action == "maintains" && evidence.consensus == nil)
+        #expect(evidence.date == "2026-09-10" && evidence.currency == nil)
+        #expect(evidence.targets == [.init(field: .insight, amount: Decimal(95))])
+        #expect(record.sourceText.contains("Analyst target; currency unknown: 95.0"))
+        #expect(record.sourceText.contains("target currency not supplied; target fields insight target."))
+    }
+
+    @Test func consensusAnalystEvidenceKeepsConsensusAndUnknownDateCurrencySeparate() throws {
+        var row = row(.consensusRatings)
+        row["low_price_target"] = 90
+        row["high_price_target"] = 150
+        let record = try #require(try page(.consensusRatings, rows: [row]).records.first)
+        let evidence = try #require(record.analystEvidence)
+        #expect(evidence.action == nil && evidence.consensus == "buy")
+        #expect(evidence.date == nil && evidence.currency == nil)
+        #expect(evidence.targets == [
+            .init(field: .consensus, amount: Decimal(123)),
+            .init(field: .low, amount: Decimal(90)),
+            .init(field: .high, amount: Decimal(150))
+        ])
+        #expect(record.sourceText.contains("source time unknown"))
+        #expect(record.sourceText.contains("Analyst provenance: same provider record; consensus buy; target currency not supplied; target fields consensus target; consensus low target; consensus high target."))
+    }
+
+    @Test func targetProvenanceUsesEachExactRecordAndNamedFieldEvenForEqualAmounts() throws {
+        var first = row(.ratings), second = row(.ratings)
+        second["benzinga_id"] = "event2"
+        second["price_target"] = 110
+        second["previous_price_target"] = 110
+        let records = try page(.ratings, rows: [first, second]).records
+        #expect(records.count == 2 && records[0].id != records[1].id)
+        #expect(records.allSatisfy { $0.analystEvidence?.targets.contains(.init(field: .ratingCurrent, amount: Decimal(110))) == true })
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch",
+                                  pages: [try page(.ratings, rows: [first, second])])
+        let text = try #require(B.projection(snapshot, maximumUTF8Bytes: 12_000)).text
+        for record in records {
+            #expect(text.components(separatedBy: record.id).count == 2)
+            #expect(text.contains("[\(record.id)] " + record.sourceText))
+            #expect(record.sourceText.contains("same provider record"))
+            #expect(record.sourceText.contains("target fields rating original-basis current target; rating original-basis previous target."))
+        }
+    }
+
+    @Test func analystEvidencePreservesNonIntegerTargetDecimalAcrossCaptureAndCodableRoundTrip() throws {
+        let target = try #require(Decimal(string: "123.456789123456789", locale: Locale(identifier: "en_US_POSIX")))
+        var row = row(.consensusRatings)
+        row["consensus_price_target"] = NSDecimalNumber(decimal: target)
+        let record = try #require(try page(.consensusRatings, rows: [row]).records.first)
+        #expect(record.analystEvidence?.targets.first == .init(field: .consensus, amount: target))
+        let restored = try JSONDecoder().decode(B.Record.self, from: JSONEncoder().encode(record))
+        #expect(restored.analystEvidence?.targets.first == .init(field: .consensus, amount: target))
+    }
+
+    @Test func typedAnalystEvidencePreservesExistingTargetGuardsAndOlderCapturesDecode() throws {
+        var invalid = row(.ratings)
+        invalid["price_target"] = 0
+        #expect(try page(.ratings, rows: [invalid]).records.isEmpty)
+        invalid = row(.analystInsights)
+        invalid["price_target"] = -1
+        #expect(try page(.analystInsights, rows: [invalid]).records.isEmpty)
+
+        let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: [try page(.ratings)])
+        var encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        var pages = try #require(encoded["pages"] as? [[String: Any]])
+        var records = try #require(pages[0]["records"] as? [[String: Any]])
+        records[0].removeValue(forKey: "analystEvidence")
+        pages[0]["records"] = records
+        encoded["pages"] = pages
+        let restored = try JSONDecoder().decode(B.Snapshot.self, from: JSONSerialization.data(withJSONObject: encoded))
+        #expect(restored.pages[0].records[0].analystEvidence == nil)
     }
 
 
