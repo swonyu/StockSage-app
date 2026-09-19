@@ -17,15 +17,14 @@ final class StockSageHorizonResearch: ObservableObject {
         StockSage offers a manual Same-day pick and separate \(Horizon.week.rawValue) and \(Horizon.fortnight.rawValue) Top 5 research. Same-day picks require the dedicated workflow's current intraday evidence; general Chat or daily background cannot establish a same-day entry. Multi-session research may involve overnight gaps. Do not propose long-term plans beyond 14 trading days. Longer historical windows are background evidence, not a holding horizon. All research starts manually; do not promise scheduled picks or automatic trading. Rankings are unvalidated research, not predictions of future returns.
         """
         var instructions: String {
-            Self.focusInstructions + "\n" + StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
-                with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Consider overnight gaps and missing future catalysts. The daily technical rules are background, not independently validated for this horizon.")
-                + "\nThis is a multi-session assessment. Do not propose intraday or same-session day-trading strategies. "
+            StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
+                with: "Assess the supplied stock for a \(rawValue) holding horizon, research only. These are trading days, not calendar days. Daily technical rules are unvalidated background.")
+                + "\nManual multi-session research only; no scheduled picks or automatic trading. No plans beyond 14 trading days; longer historical windows are background evidence. Do not propose intraday or same-session day-trading strategies. "
                 + (self == .week
-                    ? "Prioritize the setup that can matter over the next few completed sessions: current price/volume confirmation, a dated near-term development and overnight risk. A long-term business story or past return alone is not an entry case."
-                    : "Assess whether the supplied setup can persist across the longer holding window, weighing follow-through, intervening events and the risk that the original case fades. A brief price spike alone does not establish persistence.")
-                + "\nUse reason for the strongest supported setup and risk for a concrete condition that could invalidate it; if the supplied facts do not establish that condition, state the missing evidence. Cite the offered facts supporting both sentences. Do not invent entry triggers, exit levels or a holding-period return. Historical dollar volume and gaps describe past observations, not an executable spread, depth or guaranteed stop fill."
-                + "\nA catalyst must have a dated source and plausible timing inside this horizon; an undated or already-passed item is context, not a catalyst."
-                + " A recent publication does not establish when its underlying event will occur. Distinguish the announcement's present information from a future milestone; do not move a distant milestone into this holding window."
+                    ? "Prioritize current price/volume confirmation, dated near-term developments and overnight risk. A long-term story or past return alone is not an entry case."
+                    : "Assess persistence, follow-through, intervening events and a fading case. A brief price spike alone does not establish persistence; consider overnight risk.")
+                + "\nGive the strongest supported setup in reason and a concrete invalidation or missing evidence in risk. Cite both. Do not invent entry/exit levels or returns. Past dollar volume and gaps do not establish executable liquidity or guaranteed stop fills."
+                + "\nA catalyst needs a dated source and plausible event timing within this horizon. Undated, past or distant milestones are context. Recent publication does not move the underlying event into this window."
                 + "\nUse the app-calculated earnings holding-window check as authoritative for timing. Do not calculate or state relative earnings dates, durations, month parts, or event probabilities in reason/risk. An outside-window date cannot be an in-window catalyst; unknown dates cannot establish either timing or absence of risk. Projected dates are not announcements. Historical earnings results are separate from the next report."
         }
     }

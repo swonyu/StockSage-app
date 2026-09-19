@@ -147,6 +147,7 @@ struct StockSageModelHarnessTests {
             ("horizon-fortnight", StockSageHorizonResearch.Horizon.fortnight.instructions,
              StockSageHorizonResearch.researchOutputTokens, research),
             ("horizon-qualify", StockSageHorizonResearch.Horizon.week.instructions, 384, research),
+            ("same-day", StockSageSameDayResearch.instructions, StockSageHorizonResearch.researchOutputTokens, research),
             ("narrator", StockSageCatalystNarrator.instructions, 170, research),
         ]
         for caller in callers {
