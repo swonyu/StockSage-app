@@ -290,9 +290,9 @@ struct StockSageResearchModesPanel: View {
         // The window owns the inspector. The table owns its scrolling, with no enclosing card.
         return VStack(alignment: .leading, spacing: 0) {
             ScrollView { controls.padding(24) }
-                .frame(height: scan.listings.isEmpty ? 220 : (isRunning ? 360 : 340))
+                .frame(height: scan.listings.isEmpty ? 220 : (isRunning ? 340 : 320))
             Divider()
-            if !scan.listings.isEmpty { resultsHeader.padding(.horizontal, 24).padding(.vertical, 12) }
+            if !scan.listings.isEmpty { resultsHeader.padding(.horizontal, 24).padding(.vertical, 8) }
             if rows.isEmpty {
                 emptyResults(scan, isRunning: isRunning)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -464,39 +464,40 @@ struct StockSageResearchModesPanel: View {
     #if os(macOS)
     private func resultsTable(_ rows: [StockSageHorizonResearch.Listing], scan: StockSageHorizonResearch.Scan,
                               horizon: StockSageHorizonResearch.Horizon) -> some View {
-        Table(rows, selection: $presentation.selected) {
-            TableColumn("Stock") { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.ticker).fontWeight(.semibold)
-                    Text(item.name).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-                }.help("\(item.name) · \(item.type ?? "instrument type unconfirmed")\n\(scan.selection?.detail(for: item.ticker) ?? "Selection activity not recorded.")")
-            }.width(min: 80, ideal: 160, max: 300)
-            TableColumn("Opinion") { item in
-                Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
-                    .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.successSoft : .secondary)
-                    .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
-            }.width(min: 90, ideal: 120, max: 200)
-            TableColumn("Evidence") { item in
-                Text(Self.coverageSummary(scan.results[item.ticker]?.coverage ?? []))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .help(scan.results[item.ticker]?.coverage.map(\.detail).joined(separator: "\n") ?? "Coverage not captured")
-            }.width(min: 95, ideal: 130, max: 180)
-            TableColumn("Daily close") { item in
-                Text(Self.price(scan.results[item.ticker]?.referenceClose?.value)).monospacedDigit()
-                    .accessibilityLabel(scan.results[item.ticker]?.referenceClose.map { "Daily close reference \(Self.price($0.value)), \($0.at.formatted(date: .abbreviated, time: .omitted))" } ?? "Daily close reference not available")
-            }.width(min: 72, ideal: 92, max: 110)
-            TableColumn("Stop") { item in
-                Text(Self.price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
-                    .accessibilityLabel("Scenario stop \(Self.price(scan.results[item.ticker]?.levels?.stop))")
-                    .help(scan.results[item.ticker]?.levels?.basis ?? "No calculated scenario. Select the stock for the evidence and reason.")
-            }.width(min: 65, ideal: 85, max: 110)
-            TableColumn("Target") { item in
-                Text(Self.price(scan.results[item.ticker]?.levels?.target)).monospacedDigit()
-                    .accessibilityLabel("Scenario target \(Self.price(scan.results[item.ticker]?.levels?.target))")
-                    .help(scan.results[item.ticker]?.levels?.basis ?? "No calculated scenario. Select the stock for the evidence and reason.")
-            }.width(min: 65, ideal: 85, max: 110)
-        }.tableStyle(.inset(alternatesRowBackgrounds: true))
-            .environment(\.defaultMinListRowHeight, 48)
+        StockSageResearchTable(rows: rows, selection: $presentation.selected) { item, column in
+            AnyView(resultCell(item, column: column, scan: scan, horizon: horizon))
+        }
+    }
+
+    @ViewBuilder private func resultCell(_ item: StockSageHorizonResearch.Listing, column: Int,
+                                        scan: StockSageHorizonResearch.Scan,
+                                        horizon: StockSageHorizonResearch.Horizon) -> some View {
+        switch column {
+        case 0:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.ticker).fontWeight(.semibold)
+                Text(item.name).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+            }.help("\(item.name) · \(item.type ?? "instrument type unconfirmed")\n\(scan.selection?.detail(for: item.ticker) ?? "Selection activity not recorded.")")
+        case 1:
+            Text(Self.resultLabel(item.ticker, research: research, scan: scan, horizon: horizon))
+                .foregroundStyle(Self.isBuy(scan.results[item.ticker]?.verdict?.action) ? DS.Palette.successSoft : .secondary)
+                .help(scan.results[item.ticker]?.note ?? "This listing has not been checked.")
+        case 2:
+            Text(Self.coverageSummary(scan.results[item.ticker]?.coverage ?? []))
+                .font(.caption).foregroundStyle(.secondary)
+                .help(scan.results[item.ticker]?.coverage.map(\.detail).joined(separator: "\n") ?? "Coverage not captured")
+        case 3:
+            Text(Self.price(scan.results[item.ticker]?.referenceClose?.value)).monospacedDigit()
+                .accessibilityLabel(scan.results[item.ticker]?.referenceClose.map { "Daily close reference \(Self.price($0.value)), \($0.at.formatted(date: .abbreviated, time: .omitted))" } ?? "Daily close reference not available")
+        case 4:
+            Text(Self.price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
+                .accessibilityLabel("Scenario stop \(Self.price(scan.results[item.ticker]?.levels?.stop))")
+                .help(scan.results[item.ticker]?.levels?.basis ?? "No calculated scenario. Select the stock for the evidence and reason.")
+        default:
+            Text(Self.price(scan.results[item.ticker]?.levels?.target)).monospacedDigit()
+                .accessibilityLabel("Scenario target \(Self.price(scan.results[item.ticker]?.levels?.target))")
+                .help(scan.results[item.ticker]?.levels?.basis ?? "No calculated scenario. Select the stock for the evidence and reason.")
+        }
     }
     #else
     private func phoneResults(_ rows: [StockSageHorizonResearch.Listing], scan: StockSageHorizonResearch.Scan,

@@ -1112,6 +1112,16 @@ struct StockSageChatTests {
         // isolated reruns confirmed the production logic itself was correct (2026-09-10).
         func settle() async throws { for _ in 0..<15 { try await Task.sleep(for: .milliseconds(20)) } }
         try await waitFor { model.appearances == 1 }
+        func table(in view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap { table(in: $0) }.first
+        }
+        let nativeTable = try #require(table(in: host.view))
+        #expect(nativeTable.numberOfRows == 7)
+        #expect(!nativeTable.usesAutomaticRowHeights)
+        nativeTable.tableColumns[0].width = 203
+        #expect(window.makeFirstResponder(nativeTable))
+        #expect(host.view.bounds.size == CGSize(width: 900, height: 800))
         #expect(model.presentation.selected == nil && model.presentation.horizon == .week)
 
         // A search that still matches keeps the selection (spec: clear only when filtered OUT).
@@ -1119,15 +1129,23 @@ struct StockSageChatTests {
         model.presentation.search = "AAP"
         try await settle()
         #expect(model.presentation.selected == "AAPL", "A matching search must not close the detail")
+        #expect(nativeTable.selectedRow == 0)
+        #expect(table(in: host.view) === nativeTable && window.firstResponder === nativeTable)
+        #expect(abs(nativeTable.tableColumns[0].width - 203) < 1)
 
         // Filtered out by search → cleared.
         model.presentation.search = "MSF"
-        try await waitFor { model.presentation.selected == nil }
+        try await waitFor { model.presentation.selected == nil && nativeTable.numberOfRows == 1 }
 
         // A newly arrived Strong Buy moves the fifth Buy out of the shortlist.
         model.presentation.search = ""
+        try await waitFor { nativeTable.numberOfRows == 7 }
         try await settle()
-        model.presentation.selected = "META"
+        #expect(table(in: host.view) === nativeTable && window.firstResponder === nativeTable)
+        #expect(abs(nativeTable.tableColumns[0].width - 203) < 1)
+        #expect(nativeTable.selectedRow == -1)
+        #expect(host.view.bounds.size == CGSize(width: 900, height: 800))
+        nativeTable.selectRowIndexes(IndexSet(integer: 4), byExtendingSelection: false)
         try await settle()
         #expect(model.presentation.selected == "META")
         let release = held; held = nil; release?.resume()
@@ -1152,6 +1170,64 @@ struct StockSageChatTests {
         #expect(research.running == nil && research.scans[.fortnight] == nil && research.scans[.week]?.at == requestedAt,
                 "Rendering and selection changes must never start, stop or replace a scan")
         #expect(!window.isKeyWindow)
+    }
+
+    @Test func researchTableRetainsBrowsingStateWhileResultsArrive() async throws {
+        let model = ResearchTableProbe()
+        let host = NSHostingController(rootView: ResearchTableFixture(model: model))
+        disableIntrinsicSizing(host)
+        host.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 900, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
+        func settle() async throws { try await Task.sleep(for: .milliseconds(300)) }
+        func table(in view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap { table(in: $0) }.first
+        }
+        try await settle()
+        try await warmNativeAccessibility()
+        let native = try #require(table(in: host.view))
+        #expect(native.numberOfRows == 40 && !native.usesAutomaticRowHeights)
+        native.tableColumns[0].width = 203
+        native.selectRowIndexes(IndexSet(integer: 20), byExtendingSelection: false)
+        try await settle()
+        #expect(model.selected == "T20")
+        native.scrollRowToVisible(20)
+        try #require(window.makeFirstResponder(native))
+        let clip = try #require(native.enclosingScrollView?.contentView)
+        let origin = clip.bounds.origin
+        #expect(origin.y > 0)
+
+        model.rows.append(ResearchTableProbe.listing(40))
+        model.revision = 1
+        try await settle()
+        #expect(table(in: host.view) === native && native.numberOfRows == 41)
+        #expect(native.selectedRow == 20 && model.selected == "T20")
+        #expect(window.firstResponder === native)
+        #expect(abs(native.tableColumns[0].width - 203) < 1)
+        #expect(abs(clip.bounds.origin.y - origin.y) < 1)
+        let cell = try #require(native.view(atColumn: 0, row: 20, makeIfNecessary: false))
+        #expect(nativeAccessibilityText(in: cell).contains("T20 revision 1"))
+
+        native.moveColumn(0, toColumn: 2)
+        model.revision = 2
+        try await settle()
+        #expect(table(in: host.view) === native && window.firstResponder === native)
+        #expect(abs(clip.bounds.origin.y - origin.y) < 1)
+        let updated = try #require(native.view(atColumn: 2, row: 20, makeIfNecessary: false))
+        #expect(native.tableColumns[2].identifier.rawValue == "0")
+        #expect(nativeAccessibilityText(in: updated).contains("T20 revision 2 column 0"))
+        let down = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125))
+        window.sendEvent(down)
+        try await settle()
+        #expect(model.selected == "T21" && native.selectedRow == 21,
+                "Native keyboard navigation must still update the selected ticker after incoming results")
     }
 
     @Test(arguments: [900, 1200], ["running", "comparing", "results", "inspector"])
@@ -1303,9 +1379,12 @@ struct StockSageChatTests {
         var appeared = false
         let host = NSHostingController(rootView: panel.selectedDetail.frame(width: 400, height: 400)
             .onAppear { appeared = true })
+        disableIntrinsicSizing(host)
+        host.view.frame = NSRect(x: 0, y: 0, width: 400, height: 400)
         let window = ChatTranscriptFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 400),
-            styleMask: [.titled], backing: .buffered, defer: false)
+            styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.toolbarStyle = .unifiedCompact
         window.contentViewController = host
         window.orderBack(nil)
         defer { window.orderOut(nil); window.contentViewController = nil; window.close() }
@@ -1323,6 +1402,7 @@ struct StockSageChatTests {
         for _ in 0..<15 { try await Task.sleep(for: .milliseconds(20)) }
         #expect(research.scans[.week]?.results["AAPL"] != nil && presentation.selected == "AAPL")
         #expect(panel.detailPresented.wrappedValue, "All checks includes Hold; Top 5 includes the accepted Buy")
+        #expect(window.toolbar?.items.isEmpty == false, "The real detail toolbar must remain installed")
         #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 
@@ -1934,7 +2014,12 @@ struct StockSageChatTests {
         window.appearance = NSAppearance(named: .darkAqua)
         // Match the shipping main WindowGroup; sheet/component fixtures keep their
         // own default chrome. SwiftUI installs every real toolbar item itself.
-        if usesCompactToolbar { window.toolbarStyle = .unifiedCompact }
+        if usesCompactToolbar {
+            // WindowGroup uses full-size content: toolbar installation then changes
+            // the safe area instead of growing the window inside a hosting layout.
+            window.styleMask.insert(.fullSizeContentView)
+            window.toolbarStyle = .unifiedCompact
+        }
         window.contentViewController = host
         if let viewport { window.setContentSize(viewport) }
         if let viewport, let screen = NSScreen.main {
@@ -1963,16 +2048,7 @@ struct StockSageChatTests {
             // Query only this isolated host through the public AX client path. SwiftUI
             // otherwise omits virtual controls from in-process getters. Yield the main
             // actor while AppKit services the query; never prompt or modify AX settings.
-            let pid = ProcessInfo.processInfo.processIdentifier
-            let code = await Task.detached {
-                let application = AXUIElementCreateApplication(pid)
-                let timeout = AXUIElementSetMessagingTimeout(application, 1)
-                guard timeout == .success else { return timeout.rawValue }
-                var value: CFTypeRef?
-                return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value).rawValue
-            }.value
-            try #require(code == AXError.success.rawValue,
-                "The native AX query must succeed before testing virtual SwiftUI controls")
+            try await warmNativeAccessibility()
         }
         var inspectionError: (any Error)?
         do { try await inspect?(host.view) } catch { inspectionError = error }
@@ -1994,6 +2070,19 @@ struct StockSageChatTests {
             .appendingPathComponent("\(name).png"), options: .atomic)
         if let inspectionError { throw inspectionError }
         return host.view.bounds.size
+    }
+
+    private func warmNativeAccessibility() async throws {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let code = await Task.detached {
+            let application = AXUIElementCreateApplication(pid)
+            let timeout = AXUIElementSetMessagingTimeout(application, 1)
+            guard timeout == .success else { return timeout.rawValue }
+            var value: CFTypeRef?
+            return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value).rawValue
+        }.value
+        try #require(code == AXError.success.rawValue,
+            "The native AX query must succeed before testing virtual SwiftUI controls")
     }
 
     private func disableIntrinsicSizing<Content: View>(_ host: NSHostingController<Content>) {
@@ -2627,6 +2716,25 @@ struct StockSageChatTests {
         } other: {
             Text("Other workspace").onAppear { probe.otherAppearances += 1 }
         }
+    }
+}
+
+@MainActor private final class ResearchTableProbe: ObservableObject {
+    static func listing(_ index: Int) -> StockSageHorizonResearch.Listing {
+        .init(ticker: "T\(index)", name: "Synthetic \(index)", market: "stocks", locale: "us", active: true,
+              type: "CS", currency_name: "usd", primary_exchange: "XNAS")
+    }
+    @Published var rows = (0..<40).map { ResearchTableProbe.listing($0) }
+    @Published var selected: String?
+    @Published var revision = 0
+}
+
+@MainActor private struct ResearchTableFixture: View {
+    @ObservedObject var model: ResearchTableProbe
+    var body: some View {
+        StockSageResearchTable(rows: model.rows, selection: $model.selected) { item, column in
+            AnyView(Text("\(item.ticker) revision \(model.revision) column \(column)"))
+        }.frame(width: 900, height: 400)
     }
 }
 
