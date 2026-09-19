@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// On-demand SIP tape and bounded paper-price fallback. Never called by the board sweep.
 /// https://massive.com/docs/rest/stocks/trades-quotes/trades: price, decimal_size/size,
@@ -210,6 +211,39 @@ enum StockSageMassiveTicks {
         return try parseRegularQuoteConditions(await data(for: request))
     }
 
+    nonisolated static func researchQuote(_ page: Page, symbol: String,
+        regularConditions: Set<Int64>, at now: Date) -> StockSageNBBO? {
+        guard page.rejected == 0, let timestamp = page.quotes.map(\.timestamp).max() else { return nil }
+        var tied: [StockSageNBBO] = []
+        for quote in page.quotes where quote.timestamp == timestamp {
+            if !tied.contains(quote) { tied.append(quote) }
+        }
+        guard tied.allSatisfy({ $0.matches(symbol) }), var latest = tied.first else { return nil }
+        if tied.count > 1 {
+            // Conflicting payloads need explicit sequence ordering; page order proves nothing.
+            let sequences = tied.compactMap(\.sequence)
+            guard sequences.count == tied.count, sequences.allSatisfy({ $0 >= 0 }),
+                  Set(sequences).count == tied.count else { return nil }
+            latest = tied.max(by: { $0.sequence! < $1.sequence! })!
+        }
+        let quote = latest.qualifyingCosts(regularConditions: regularConditions)
+        // Never search backwards for an older usable side after a withdrawal or condition change.
+        return quote.costConditionVerified && quote.spreadBps(at: now) != nil ? quote : nil
+    }
+
+    /// One current quote page. A partial older tape is irrelevant to the latest observation.
+    static func freshResearchNBBO(symbol: String, regularConditions: Set<Int64>) async -> StockSageNBBO? {
+        let now = Date(), from = Date().addingTimeInterval(-10)
+        guard !regularConditions.isEmpty, let request = request(kind: .quotes, symbol: symbol,
+            from: from, to: now, key: StockSageMassive.apiKey) else { return nil }
+        do {
+            let bytes = try await data(for: request)
+            guard !Task.isCancelled, bytes.count <= 1_000_000 else { return nil }
+            return researchQuote(try parse(bytes, kind: .quotes, symbol: symbol, from: from, to: now),
+                symbol: symbol, regularConditions: regularConditions, at: Date())
+        } catch { return nil }
+    }
+
     /// Conservative simulation eligibility, resolved by reference names, never guessed numeric IDs.
     /// Form T and odd lots can be timely observations even though they do not update official OHLC.
     nonisolated static func parsePaperTradeConditions(_ data: Data) throws -> Set<Int64> {
@@ -288,17 +322,33 @@ enum StockSageMassiveTicks {
     }
 
     /// Dated intraday evidence, never fed into the daily indicator engine as if it were days.
+    nonisolated struct Minute: Codable, Sendable, Equatable {
+        let at: Date
+        let open: Double
+        let high: Double
+        let low: Double
+        let close: Double
+        let volume: Double
+    }
     nonisolated struct Intraday: Sendable {
         let facts: [String]
         let asOf: Date
         var maximumAge: TimeInterval = 180
+        var bars: [Minute] = []
+        var verifiedMinutes = false
+        var missingMinutes: Int {
+            guard let first = bars.first, let last = bars.last else { return 0 }
+            let seconds = last.at.timeIntervalSince(first.at)
+            guard (0...12_000).contains(seconds) else { return 0 }
+            return max(0, Int(seconds / 60) + 1 - bars.count)
+        }
         func fresh(at now: Date) -> Bool { (0...maximumAge).contains(now.timeIntervalSince(asOf)) }
     }
     nonisolated static func parseIntradayFacts(_ data: Data, symbol: String, from: Date, now: Date) -> Intraday? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK", root["ticker"] as? String == symbol,
               root["next_url"] == nil, let rows = root["results"] as? [[String: Any]], rows.count <= 200 else { return nil }
-        var bars: [(at: Date, open: Double, high: Double, low: Double, close: Double, volume: Double)] = []
+        var bars: [Minute] = []
         var seen: Set<Int64> = []
         for row in rows {
             guard let ms = StockSageMassive.int64(row["t"]), ms > 0, ms % 60_000 == 0,
@@ -310,14 +360,18 @@ enum StockSageMassiveTicks {
                   let v = StockSageMassive.finite(row["v"]), v >= 0 else { return nil }
             let at = Date(timeIntervalSince1970: Double(ms) / 1_000)
             guard at >= from, at.addingTimeInterval(60) <= now else { continue }
-            bars.append((at, o, h, l, c, v))
+            bars.append(.init(at: at, open: o, high: h, low: l, close: c, volume: v))
         }
         bars.sort { $0.at < $1.at }
         guard bars.count >= 2, let first = bars.first, let last = bars.last,
               (0...180).contains(now.timeIntervalSince(last.at.addingTimeInterval(60))) else { return nil }
         let facts = ["Intraday evidence: \(bars.count) completed one-minute Massive bars from \(first.at.ISO8601Format()) through \(last.at.addingTimeInterval(60).ISO8601Format()). Missing minutes are not filled; no claim of continuous liquidity."]
             + bars.suffix(5).map { "Completed minute starting \($0.at.ISO8601Format()): open \($0.open), high \($0.high), low \($0.low), close \($0.close) USD; volume \($0.volume) shares." }
-        return Intraday(facts: facts, asOf: last.at.addingTimeInterval(60))
+        let adjusted = (root["adjusted"] as? NSNumber).map {
+            CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue
+        } == true
+        return Intraday(facts: facts, asOf: last.at.addingTimeInterval(60), bars: bars,
+            verifiedMinutes: adjusted && StockSageMassive.int64(root["resultsCount"]) == Int64(rows.count))
     }
 
     static func intradayFacts(symbol: String, from: Date, now: Date) async -> Intraday? {

@@ -8,6 +8,26 @@ struct StockSageResearchReceiptStoreTests {
     typealias ReceiptStore = StockSageResearchReceiptStore
     typealias Server = StockSageLocalModelServer
 
+    @Test func newestInterruptedSameDayAttemptCannotRestoreAnOlderPick() throws {
+        for hasPayload in [false, true] {
+            let folder = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = ReceiptStore(directory: folder), now = Date()
+            let old = store.beginSameDay(at: now.addingTimeInterval(-60))
+            _ = store.saveSameDay(.init(id: old, startedAt: now.addingTimeInterval(-60), finishedAt: now.addingTimeInterval(-30),
+                selection: "Old completed shortlist", checks: [], selectedSymbol: "AAPL"))
+            store.finish(scanID: old, status: "Completed", at: now.addingTimeInterval(-30))
+            let interrupted = store.beginSameDay(at: now)
+            if hasPayload {
+                _ = store.saveSameDay(.init(id: interrupted, startedAt: now,
+                    selection: "New unfinished shortlist", checks: []))
+            }
+            let restored = try #require(ReceiptStore(directory: folder).latestSameDay)
+            #expect(restored.id == interrupted && restored.selectedSymbol == nil)
+            #expect(restored.blocker?.contains("interrupted") == true)
+        }
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("stocksage-receipts-" + UUID().uuidString, isDirectory: true)
