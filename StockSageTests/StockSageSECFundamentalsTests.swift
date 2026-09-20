@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import StockSage
 
 @MainActor
@@ -180,17 +181,76 @@ struct StockSageSECFundamentalsTests {
         #expect(output.calculated.allSatisfy { $0.value == nil })
     }
 
-    @Test func oversizedPayloadAndHTTPFailureRemainExplicitlyUnavailable() async {
+    @Test func oversizedPayloadRemainsExplicitlyUnavailable() {
         let large = Data(repeating: 32, count: StockSageDisclosureService.maximumResponseBytes + 1)
         let parsed = S.parse(large, cik: cik, now: now)
         #expect(parsed.calculated.allSatisfy { $0.value == nil })
         #expect(parsed.sources.first?.status == "unavailable")
+    }
+
+    @Test(arguments: ["http403", "http429", "timeout", "size-error", "url-cancelled",
+                      "task-cancelled", "transport-error", "oversized-data", "wrong-url",
+                      "non-http", "access-revoked"])
+    func collectionFailureReportsSpecificSafeReason(_ failure: String) async throws {
+        let expectedDetails = [
+            "http403": "SEC returned HTTP 403.",
+            "http429": "SEC returned HTTP 429.",
+            "timeout": "The SEC request timed out.",
+            "size-error": "The SEC response exceeded the 4 MiB safety limit.",
+            "url-cancelled": "The SEC request was cancelled.",
+            "task-cancelled": "The SEC request was cancelled.",
+            "transport-error": "The SEC request failed before a usable response was received.",
+            "oversized-data": "The SEC response exceeded the 4 MiB safety limit.",
+            "wrong-url": "The SEC response did not match the requested URL or HTTP format.",
+            "non-http": "The SEC response did not match the requested URL or HTTP format.",
+            "access-revoked": "External access was disabled before the SEC request completed."
+        ]
+        let detail = try #require(expectedDetails[failure])
+        let expected = "SEC annual fundamentals unavailable: " + detail
+        let sensitive = "fixture_token=DO_NOT_PUBLISH_PRIVATE_RESPONSE"
+        var facts = appleFacts()
+        facts["sensitive_test_marker"] = sensitive
+        let body = try JSONSerialization.data(withJSONObject: facts)
+        let permitted = Mutex(true)
+        let calls = Mutex(0)
         let response = await S.collect(for: "AAPL", expectedCIK: cik, transport: { request in
-            (Data(), HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!)
-        }, allowed: { true }, now: now)
+            calls.withLock { $0 += 1 }
+            switch failure {
+            case "timeout": throw URLError(.timedOut)
+            case "size-error": throw URLError(.dataLengthExceedsMaximum)
+            case "url-cancelled": throw URLError(.cancelled)
+            case "task-cancelled": throw CancellationError()
+            case "transport-error":
+                throw NSError(domain: "FixtureTransport", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: sensitive])
+            case "access-revoked": permitted.withLock { $0 = false }
+            default: break
+            }
+            if failure == "non-http" {
+                return (body, URLResponse(url: request.url!, mimeType: "application/json",
+                    expectedContentLength: body.count, textEncodingName: "utf-8"))
+            }
+            var returned = body
+            if failure == "oversized-data" {
+                returned.append(Data(repeating: 32,
+                    count: StockSageDisclosureService.maximumResponseBytes + 1 - returned.count))
+            }
+            let url = failure == "wrong-url" ? URL(string: "https://unrelated.example/\(sensitive)")! : request.url!
+            let status = failure == "http403" ? 403 : (failure == "http429" ? 429 : 200)
+            return (returned, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        }, allowed: { permitted.withLock { $0 } }, now: now)
+        #expect(calls.withLock { $0 } == 1)
+        #expect(response.calculated.count == 2)
         #expect(response.calculated.allSatisfy { $0.value == nil })
+        #expect(response.calculated.allSatisfy { $0.note == expected })
+        #expect(response.sources.count == 1)
         #expect(response.sources.first?.status == "unavailable")
-        #expect(response.notes.contains { $0.contains("request failed") })
+        #expect(response.sources.first?.note == expected)
+        #expect(response.notes == [expected])
+        let saved = String(decoding: try JSONEncoder().encode(response), as: UTF8.self)
+        #expect(!saved.contains(sensitive))
+        #expect(!saved.contains("FixtureTransport"))
+        #expect(!saved.contains("unrelated.example"))
     }
 
     @Test func collectionUsesExpectedCIKAndTheBoundedSECTransport() async throws {

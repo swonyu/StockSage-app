@@ -35,18 +35,58 @@ enum StockSageDisclosureService {
         try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumResponseBytes)
     }
 
-    /// Shared by both SEC consumers, including every Form 4 index/document hop.
-    nonisolated static func get(_ url: URL, transport: Transport = Self.transport,
-        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Data? {
-        guard !Task.isCancelled, allowed(), validURL(url) else { return nil }
+    nonisolated enum RequestFailure: Error, Sendable {
+        case cancelled, accessDisabled, invalidURL, invalidResponse, http(Int), timeout, oversized, transport
+
+        var message: String {
+            switch self {
+            case .cancelled: "The SEC request was cancelled."
+            case .accessDisabled: "External access was disabled before the SEC request completed."
+            case .invalidURL: "The SEC request URL was not permitted."
+            case .invalidResponse: "The SEC response did not match the requested URL or HTTP format."
+            case .http(let status): "SEC returned HTTP \(status)."
+            case .timeout: "The SEC request timed out."
+            case .oversized: "The SEC response exceeded the 4 MiB safety limit."
+            case .transport: "The SEC request failed before a usable response was received."
+            }
+        }
+    }
+
+    /// Fixed failure categories only; never retain raw errors or rejected response bodies.
+    nonisolated static func fetch(_ url: URL, transport: Transport = Self.transport,
+        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Result<Data, RequestFailure> {
+        guard !Task.isCancelled else { return .failure(.cancelled) }
+        guard allowed() else { return .failure(.accessDisabled) }
+        guard validURL(url) else { return .failure(.invalidURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         request.setValue(ua, forHTTPHeaderField: "User-Agent")
-        guard let (data, response) = try? await transport(request),
-              !Task.isCancelled, allowed(), data.count <= maximumResponseBytes,
-              let http = response as? HTTPURLResponse, http.statusCode == 200,
-              http.url == url else { return nil }
-        return data
+        do {
+            let (data, response) = try await transport(request)
+            guard !Task.isCancelled else { return .failure(.cancelled) }
+            guard allowed() else { return .failure(.accessDisabled) }
+            guard data.count <= maximumResponseBytes else { return .failure(.oversized) }
+            guard let http = response as? HTTPURLResponse, http.url == url else { return .failure(.invalidResponse) }
+            guard http.statusCode == 200 else { return .failure(.http(http.statusCode)) }
+            return .success(data)
+        } catch {
+            if Task.isCancelled || error is CancellationError { return .failure(.cancelled) }
+            guard allowed() else { return .failure(.accessDisabled) }
+            switch (error as? URLError)?.code {
+            case .cancelled: return .failure(.cancelled)
+            case .timedOut: return .failure(.timeout)
+            case .dataLengthExceedsMaximum: return .failure(.oversized)
+            default: return .failure(.transport)
+            }
+        }
+    }
+
+    /// Compatibility wrapper for SEC consumers that only need an available body.
+    nonisolated static func get(_ url: URL, transport: Transport = Self.transport,
+        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Data? {
+        let result = await fetch(url, transport: transport, allowed: allowed)
+        guard !Task.isCancelled, allowed() else { return nil }
+        return try? result.get()
     }
 
     nonisolated private static func validURL(_ url: URL) -> Bool {

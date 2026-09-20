@@ -23,11 +23,16 @@ nonisolated enum StockSageSECFundamentals {
             return unavailable("No verified issuer CIK is available for the SEC annual calculation.")
         }
         let url = companyFactsURL(cik)
-        guard let data = await StockSageDisclosureService.get(url, transport: transport, allowed: allowed),
-              !Task.isCancelled, allowed() else {
-            return unavailable("SEC annual fundamentals unavailable: access changed, request failed, or the response exceeded the shared 4 MiB safety limit.", url: url.absoluteString)
+        let result = await StockSageDisclosureService.fetch(url, transport: transport, allowed: allowed)
+        func failed(_ failure: StockSageDisclosureService.RequestFailure) -> Snapshot {
+            unavailable("SEC annual fundamentals unavailable: " + failure.message, url: url.absoluteString)
         }
-        return parse(data, cik: cik, now: now)
+        guard !Task.isCancelled else { return failed(.cancelled) }
+        guard allowed() else { return failed(.accessDisabled) }
+        switch result {
+        case .success(let data): return parse(data, cik: cik, now: now)
+        case .failure(let failure): return failed(failure)
+        }
     }
 
     /// Company Facts contains only standard-taxonomy, entity-wide facts, but can
