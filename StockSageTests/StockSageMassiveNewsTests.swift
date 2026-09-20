@@ -41,6 +41,21 @@ struct StockSageMassiveNewsTests {
         #expect(NS.massiveRequest(symbol: "AAPL", key: "", now: now) == nil)
     }
 
+    @Test("credential query parameters never reach news links or model citations")
+    func credentialQueryLinksAreRemovedWhileEvidenceAndOrdinaryQueriesRemain() throws {
+        for parameter in ["token", "api_token", "apiKey", "API_KEY", "key", "authorization", "access_token", "%61piKey"] {
+            let unsafe = "https://example.com/story?utm_source=news&\(parameter)=synthetic-secret"
+            #expect(NS.safeLink(unsafe) == nil)
+            var row = article
+            row["article_url"] = unsafe
+            let item = try #require(NS.parseMassiveNews(try payload([row]), symbol: "AAPL", now: now).first)
+            #expect(item.title == "Capacity update" && item.link == nil)
+            #expect(!N.sourceLine(number: 1, source: .init(news: item)).contains("synthetic-secret"))
+        }
+        let ordinary = "https://example.com/story?id=42&utm_source=news#details"
+        #expect(NS.safeLink(ordinary)?.absoluteString == ordinary)
+    }
+
     @Test("publisher, article and only the requested ticker's insight reach the real citation mapping")
     func fixtureAndCitation() throws {
         let data = try payload([article])

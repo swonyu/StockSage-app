@@ -276,7 +276,7 @@ struct StockSageResearchModesPanel: View {
             } else {
                 #if os(macOS)
                 // The primary ranked five stays above the optional full evidence table.
-                // The table keeps its own bounded scroll range for up to 500 checks.
+                // The table keeps its own bounded scroll range for up to 1,500 checks.
                 resultsTable(rows, scan: scan, horizon: horizon).frame(height: 360)
                 #else
                 phoneResults(rows, scan: scan, horizon: horizon)
@@ -372,7 +372,7 @@ struct StockSageResearchModesPanel: View {
     private func coverageDetails(_ scan: StockSageHorizonResearch.Scan) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Text("All checks preserve the scan’s original activity order. Strict comparison picks are selected separately after every listing has been checked.")
-            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. This is an activity-based popularity proxy, not social sentiment or the S&P 500. Only NASDAQ-listed common stocks with confirmed USD currency; no ETFs, other listing types or OTC securities. Missing observations are not filled alphabetically. Available model workers research this selected list concurrently.")
+            Text("The scan universe is selected by observed traded dollars (volume × VWAP) from Massive’s dated US market summary, highest activity first. The pool combines Nasdaq-listed common stocks with S&P 500 reported constituents on supported US listing exchanges, capped at 1,500 unique tickers. S&P membership is retrieved for each manual run from datasets/DataHub, sourced from Wikipedia; it has no official effective date. Each run retains that source, retrieval time and hash. Only active US-listed common stocks with confirmed USD currency qualify; no ETFs, other listing types or OTC securities. Missing observations are not filled alphabetically. Available model workers research this selected list concurrently.")
             Text(StockSageHorizonResearch.topBuyRankingNote)
             if let ranking = scan.ranking {
                 Text("\(ranking.candidateSymbols.count) eligible candidates compared in \(ranking.rounds.count) rounds. \(ranking.method).")
@@ -621,7 +621,7 @@ struct StockSageResearchModesPanel: View {
                     Text(horizon.rawValue).font(.title2.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
                     #if os(macOS)
-                    Text("Top 5 per horizon · up to \(StockSageHorizonResearch.scanLimit) NASDAQ stocks · manual research")
+                    Text("Top 5 per horizon · up to \(StockSageHorizonResearch.scanLimit) Nasdaq + S&P 500 stocks · manual research")
                         .font(.caption).foregroundStyle(.secondary)
                     #else
                     Text("Top 5 ranked stocks · qualification shown separately")
@@ -646,7 +646,7 @@ struct StockSageResearchModesPanel: View {
                 }
             }
             #if os(iOS)
-            Text("One-time research across up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks. Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open.")
+            Text("One-time research across up to \(StockSageHorizonResearch.scanLimit) unique Nasdaq + S&P 500 common stocks. Completed runs are saved for 7- or 14-trading-day review. Active scans finish while the app is open.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             #endif

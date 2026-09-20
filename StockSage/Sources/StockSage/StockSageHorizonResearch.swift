@@ -5,7 +5,7 @@ import Combine
 @MainActor
 final class StockSageHorizonResearch: ObservableObject {
     static let shared = StockSageHorizonResearch(history: .shared)
-    nonisolated static let scanLimit = 500
+    nonisolated static let scanLimit = 1_500
     nonisolated static let topBuyLimit = 5
     nonisolated static let topBuyRankingNote = "After all checks, the model compares every eligible Buy / Strong Buy for this horizon. Cases and risks stay whole; cited evidence may be shortened to fit. Large pools use multiple comparison rounds. See Coverage for limits. This is unvalidated model judgment, not a prediction of returns."
     /// Shared by the fit() budget and the dispatched output limit; see PaperAutomation.
@@ -41,6 +41,7 @@ final class StockSageHorizonResearch: ObservableObject {
         let type: String?
         let currency_name: String?
         let primary_exchange: String?
+        var sp500Membership: StockSageSP500Constituents.Membership? = nil
         var id: String { ticker }
     }
     nonisolated struct Page: Decodable, Sendable {
@@ -93,7 +94,7 @@ final class StockSageHorizonResearch: ObservableObject {
     struct Scan {
         var listings: [Listing] = []
         var results: [String: Result] = [:]
-        var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) NASDAQ common stocks once."
+        var status = "Press Run to research up to \(StockSageHorizonResearch.scanLimit) unique Nasdaq + S&P 500 common stocks once."
         var at: Date?
         var selection: StockSageResearchUniverse.Receipt?
         var ranking: StockSageResearchRanking.Receipt?
@@ -358,7 +359,9 @@ final class StockSageHorizonResearch: ObservableObject {
             guard allowed() else { throw CancellationError() }
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
             let page = try parsePage(data)
-            for item in page.results where item.active && item.market == "stocks" && item.locale == "us" {
+            for var item in page.results where item.active && item.market == "stocks" && item.locale == "us" {
+                // Membership is attached only after checking the separate constituent response.
+                item.sp500Membership = nil
                 if let existing = listings[item.ticker], existing != item { throw URLError(.cannotParseResponse) }
                 listings[item.ticker] = item
             }
@@ -494,7 +497,7 @@ final class StockSageHorizonResearch: ObservableObject {
                 retained.status = "Resuming remaining listings. Original checks keep their dates; remaining checks use fresh evidence…"
                 scans[horizon] = retained
             } else {
-                scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) NASDAQ common stocks by dated trading activity…", at: startedAt,
+                scans[horizon] = Scan(status: "Selecting up to \(Self.scanLimit) unique Nasdaq + S&P 500 common stocks by dated trading activity…", at: startedAt,
                 qualificationPolicyVersion: qualificationPolicyVersion, requestedAt: startedAt, lastAttemptAt: startedAt,
                 previousCompletedAt: previous[horizon]?.completedAt, resumeConfigurationID: configurationID)
             }
@@ -1039,7 +1042,7 @@ final class StockSageHorizonResearch: ObservableObject {
             refreshCapacityAfterLoad = parallelism == 1
             let result: StockSageResearchUniverse.Selection
             if let resuming { result = .init(resuming.listings, receipt: resuming.selection) }
-            else { result = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed) }
+            else { result = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed, includeSP500: true) }
             selection = result.receipt
             return result
         }, rank: { scan, horizon in

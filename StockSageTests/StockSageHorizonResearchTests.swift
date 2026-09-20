@@ -1674,7 +1674,7 @@ import Testing
         #expect(scan.status.contains("Scan stopped") && !scan.status.contains("Earlier"))
     }
     @Test(arguments: R.Horizon.allCases)
-    func manualRunCapsDirectoryAt500BeforeResearch(_ horizon: R.Horizon) async throws {
+    func manualRunCapsDirectoryAt1500BeforeResearch(_ horizon: R.Horizon) async throws {
         let r = R()
         let names = (0..<13_000).map { listing(String(format: "S%05d", $0)) }
         var seen: [String] = []
@@ -1685,11 +1685,11 @@ import Testing
         #expect(started)
         for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         #expect(r.running == nil)
-        #expect(seen.count == 500 && Set(seen).count == 500)
-        #expect(Array(seen.prefix(500)) == names.prefix(500).map(\.ticker))
-        #expect(r.scans[horizon]?.listings.count == 500)
-        #expect(r.scans[horizon]?.results.count == 500)
-        #expect(r.scans[horizon]?.status.contains("500 listings checked once") == true)
+        #expect(seen.count == 1500 && Set(seen).count == 1500)
+        #expect(Array(seen.prefix(1500)) == names.prefix(1500).map(\.ticker))
+        #expect(r.scans[horizon]?.listings.count == 1500)
+        #expect(r.scans[horizon]?.results.count == 1500)
+        #expect(r.scans[horizon]?.status.contains("1500 listings checked once") == true)
     }
 
     @Test(arguments: ["initial", "resume", "retry"], [16, 24])

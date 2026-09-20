@@ -72,6 +72,7 @@ final class StockSageResearchHistory: ObservableObject {
         let partialSession: Bool
         let fallback: Bool
         let dollarVolume: [String: Double]
+        var sp500: StockSageSP500Constituents.Provenance? = nil
     }
     nonisolated struct Coverage: Codable, Sendable, Equatable {
         let requested: Int
@@ -225,7 +226,7 @@ final class StockSageResearchHistory: ObservableObject {
         let selection = scan.selection.map {
             SelectionReceipt(session: $0.session, requestedAt: $0.requestedAt, returnedCount: $0.returnedCount,
                 eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
-                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume)
+                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500)
         }
         return Run(id: id, startedAt: startedAt, completedAt: completedAt,
             horizon: horizon == .week ? .week : .fortnight, predictions: predictions,
@@ -971,6 +972,7 @@ final class StockSageResearchHistory: ObservableObject {
         }
         if let selection = run.coverage.selection {
             guard validDate(selection.requestedAt), selection.requestedAt <= run.completedAt,
+                  selection.sp500.map({ $0.valid(through: selection.requestedAt) }) ?? true,
                   selection.returnedCount >= 0, selection.eligibleCount >= 0, selection.directoryCount >= 0,
                   selection.dollarVolume.values.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return false }
         }
@@ -1042,7 +1044,7 @@ final class StockSageResearchHistory: ObservableObject {
 
 // Latest checkpoints support recovery; bounded per-run archives support exact historical inspection.
 extension StockSageResearchHistory {
-    nonisolated static let maximumCompletedChecksBytes = 16_777_216
+    nonisolated static let maximumCompletedChecksBytes = 48 * 1_024 * 1_024
 
     nonisolated struct CompletedCheck: Codable, Equatable, Sendable {
         struct Verdict: Codable, Equatable, Sendable {
@@ -1269,7 +1271,7 @@ extension StockSageResearchHistory {
         scan.selection = run.coverage.selection.map {
             .init(session: $0.session, requestedAt: $0.requestedAt, returnedCount: $0.returnedCount,
                 eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount, partialSession: $0.partialSession,
-                fallback: $0.fallback, dollarVolume: $0.dollarVolume)
+                fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500)
         }
         scan.status = "Completed checks restored from saved research; original evidence and dates retained."
         return scan
@@ -1284,9 +1286,7 @@ extension StockSageResearchHistory {
               let bytes = try? JSONEncoder().encode(archive), bytes.count <= maximumCompletedChecksBytes else { return false }
         return archive.checks.allSatisfy { check in
             let listing = check.listing
-            guard StockSageHorizonResearch.validTicker(listing.ticker), !listing.name.isEmpty,
-                  listing.active, listing.market == "stocks", listing.locale == "us", listing.type == "CS",
-                  listing.primary_exchange == "XNAS", listing.currency_name?.lowercased() == "usd",
+            guard StockSageResearchUniverse.eligibleListing(listing, through: check.at),
                   validDate(check.at), check.at >= earliest, check.at <= completedAt,
                   check.result != nil, check.facts.count <= 10_000, check.coverage.count <= 64,
                   check.coverage.allSatisfy({ !$0.source.isEmpty && ($0.checkedAt.map { validDate($0) && $0 <= completedAt } ?? true) }) else { return false }
@@ -1408,6 +1408,9 @@ extension StockSageResearchHistory {
         if strict, run.coverage.qualifiedBuyCount != eligible.count { return false }
         let bySymbol = Dictionary(uniqueKeysWithValues: archive.checks.map { ($0.listing.ticker, $0) })
         if let selection = run.coverage.selection, Set(selection.dollarVolume.keys) != Set(bySymbol.keys) { return false }
+        guard archive.checks.allSatisfy({ check in
+            check.listing.sp500Membership.map { $0.provenance == run.coverage.selection?.sp500 } ?? true
+        }) else { return false }
         if let ranking = run.ranking,
            Set(ranking.candidateSymbols) != Set(eligible.map { $0.listing.ticker }) { return false }
         if let visible = run.deterministicRanking {
@@ -1502,7 +1505,7 @@ extension StockSageResearchHistory {
     }
 
     private nonisolated static let maximumArchiveIndexBytes = 4_194_304
-    nonisolated static let fullChecksRetentionPolicy = "Original full checks are retained without automatic expiration. Each archived capture is limited to 16 MiB; storage failures preserve existing evidence."
+    nonisolated static let fullChecksRetentionPolicy = "Original full checks are retained without automatic expiration. Each archived capture is limited to 48 MiB; storage failures preserve existing evidence."
 
     nonisolated enum FullChecksState: String, Codable, Sendable {
         case available, legacyCheckpoint, missing, expired, corrupt
@@ -1718,10 +1721,8 @@ extension StockSageResearchHistory {
               archive.checks.count <= symbols.count,
               checkpoint.configurationID.map({ $0.count == 64 && $0.allSatisfy({ "0123456789abcdef".contains($0) }) }) ?? true,
               checkpoint.listings.allSatisfy({ listing in
-                  StockSageHorizonResearch.validTicker(listing.ticker) && !listing.name.isEmpty
-                    && listing.active && listing.market == "stocks" && listing.locale == "us"
-                    && listing.type == "CS" && listing.primary_exchange == "XNAS"
-                    && listing.currency_name?.lowercased() == "usd"
+                  StockSageResearchUniverse.eligibleListing(listing, through: checkpoint.updatedAt)
+                    && (listing.sp500Membership.map { $0.provenance == checkpoint.selection?.sp500 } ?? true)
               }) else { return false }
         let bySymbol = Dictionary(uniqueKeysWithValues: checkpoint.listings.map { ($0.ticker, $0) })
         let capturedSymbols = Set(archive.checks.map(\.listing.ticker))
@@ -1729,6 +1730,7 @@ extension StockSageResearchHistory {
               archive.checks.map(\.listing.ticker) == symbols.filter(capturedSymbols.contains) else { return false }
         if let selection = checkpoint.selection {
             guard validDate(selection.requestedAt), selection.requestedAt <= checkpoint.updatedAt,
+                  selection.sp500.map({ $0.valid(through: selection.requestedAt) }) ?? true,
                   selection.returnedCount >= 0, selection.eligibleCount >= symbols.count,
                   selection.directoryCount >= symbols.count,
                   Set(selection.dollarVolume.keys) == Set(symbols),
@@ -1769,7 +1771,7 @@ extension StockSageResearchHistory {
                 qualificationPolicyVersion: scan.qualificationPolicyVersion)
             let selection = scan.selection.map { SelectionReceipt(session: $0.session, requestedAt: $0.requestedAt,
                 returnedCount: $0.returnedCount, eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
-                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume) }
+                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500) }
             let checkpoint = InterruptedCheckpoint(version: 1, updatedAt: Date(), listings: scan.listings,
                 selection: selection, completedChecks: archive, configurationID: scan.resumeConfigurationID)
             guard Self.validInterrupted(checkpoint) else { throw CocoaError(.fileWriteInvalidFileName) }
@@ -1820,7 +1822,7 @@ extension StockSageResearchHistory {
             scan.resumeConfigurationID = checkpoint.configurationID; scan.isInterrupted = true
             scan.selection = checkpoint.selection.map { .init(session: $0.session, requestedAt: $0.requestedAt,
                 returnedCount: $0.returnedCount, eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
-                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume) }
+                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500) }
             scan.status = "Interrupted research restored · \(scan.results.count)/\(scan.listings.count) checked. Original evidence and dates retained; resume remaining listings when ready."
             return scan
         } catch {

@@ -13,6 +13,7 @@ final class StockSageResearchReceiptStore {
     nonisolated static let maxPayloadUTF8 = 24_000
     nonisolated static let maxFacts = 96
     nonisolated static let maxCompletedScans = 30
+    nonisolated static let maxManifestBytes = 3_000_000
     nonisolated static let maxCallBytes = 600_000
     nonisolated static let maxFactsBytes = 1_200_000
 
@@ -24,6 +25,7 @@ final class StockSageResearchReceiptStore {
         let directoryCount: Int?
         let partialSession: Bool?
         let fallback: Bool?
+        var sp500: StockSageSP500Constituents.Provenance? = nil
     }
 
     nonisolated struct ModelCall: Codable, Sendable, Equatable {
@@ -158,7 +160,7 @@ final class StockSageResearchReceiptStore {
             listings.count <= Self.maxAttempts else { return [] }
         scan.selection = Selection(session: value.map { bounded($0.session, 256) }, requestedAt: value?.requestedAt,
             returnedCount: value?.returnedCount, eligibleCount: value?.eligibleCount,
-            directoryCount: value?.directoryCount, partialSession: value?.partialSession, fallback: value?.fallback)
+            directoryCount: value?.directoryCount, partialSession: value?.partialSession, fallback: value?.fallback, sp500: value?.sp500)
         scan.attempts = listings.enumerated().map { index, item in
             Attempt(id: UUID(), listingID: bounded(item.id, 256), index: index,
                 symbol: bounded(sanitize(item.ticker) ?? "", 128),
@@ -325,7 +327,7 @@ final class StockSageResearchReceiptStore {
             }
             try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
             let data = try JSONEncoder.receipt.encode(scan)
-            guard data.count <= 1_000_000 else { throw Failure.writeFailed }
+            guard data.count <= Self.maxManifestBytes else { throw Failure.writeFailed }
             let path = dir.appendingPathComponent("manifest.json")
             let tmp = dir.appendingPathComponent("manifest.json.tmp")
             try data.write(to: tmp, options: [.atomic, .completeFileProtection])
@@ -369,7 +371,7 @@ final class StockSageResearchReceiptStore {
         guard let dirs = try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return }
         for dir in dirs {
             guard let id = scanID(from: dir), let manifest = boundedManifestURL(dir),
-                let data = try? Data(contentsOf: manifest), data.count <= 1_000_000,
+                let data = try? Data(contentsOf: manifest), data.count <= Self.maxManifestBytes,
                 let scan = try? JSONDecoder.receipt.decode(Scan.self, from: data),
                 scan.id == id, scan.schemaVersion == Self.schemaVersion,
                 scan.attempts.count <= Self.maxAttempts,
@@ -474,7 +476,7 @@ final class StockSageResearchReceiptStore {
 
     private func boundedManifestURL(_ dir: URL) -> URL? {
         let url = dir.appendingPathComponent("manifest.json")
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]), values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size <= 1_000_000 else { return nil }
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]), values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size <= Self.maxManifestBytes else { return nil }
         return url
     }
 

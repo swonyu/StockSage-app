@@ -109,7 +109,7 @@ import Combine
                 await failedRun(failure, initial: initial); return
             }
             do {
-                let selection = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed)
+                let selection = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed, limit: 500)
                 let regular = try await StockSageMassiveTicks.regularQuoteConditions()
                 guard allowed() else { await failedRun("Research interrupted before collection.", initial: initial); return }
                 await self.run(selection: selection, initial: initial, capacity: { min(24, probe.researchParallelism) }, allowed: allowed,

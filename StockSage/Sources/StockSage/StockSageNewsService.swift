@@ -459,7 +459,11 @@ enum StockSageNewsService {
     nonisolated static func safeLink(_ raw: Any?) -> URL? {
         guard let text = raw as? String, text.utf8.count <= 2_048,
               let url = URL(string: text), url.scheme?.lowercased() == "https",
-              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil else { return nil }
+              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil,
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              !(parts.queryItems ?? []).contains(where: {
+                  ["token", "api_token", "apikey", "api_key", "key", "authorization", "access_token"].contains($0.name.lowercased())
+              }) else { return nil }
         return url
     }
 

@@ -145,7 +145,7 @@ enum StockSageJournalCSVImport {
     /// RFC-4180 row splitter: handles quoted fields containing commas, doubled quotes, and
     /// embedded newlines (CR, LF, CRLF) — a naive `.split(separator: "\n")` would break a
     /// multi-line quoted note into multiple fake rows.
-    private static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String], error: String?)] {
+    nonisolated static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String], error: String?)] {
         var rows: [(line: Int, fields: [String], error: String?)] = []
         var fields: [String] = []
         var field = ""
