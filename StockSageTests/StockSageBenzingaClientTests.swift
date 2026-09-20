@@ -810,6 +810,7 @@ struct StockSageBenzingaClientTests {
     }
 }
 
+// Restates URLProtocol's inherited conformance. No mutable instance state; counters use Mutex.
 private nonisolated final class BenzingaBodyProtocol: URLProtocol, @unchecked Sendable {
     static let started = Mutex(0), stopped = Mutex(0)
     override class func canInit(with request: URLRequest) -> Bool { true }

@@ -1,8 +1,8 @@
 import Foundation
 
 /// Shared lock for any test that reads-under-assertion or mutates the process-global
-/// `StockSageAdvisor.turnOfMonthEnabled` (a `nonisolated(unsafe) static var` with no
-/// injection seam).
+/// `StockSageAdvisor.turnOfMonthEnabled`. Its mutex makes each access safe; this
+/// test lock protects the entire save/mutate/assert/restore transaction.
 ///
 /// **Why:** Swift Testing parallelizes tests ACROSS suites by default;
 /// `@Suite(.serialized)` only serializes within one suite. `StockSageTomGateTests`

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // MARK: - Conviction → win-probability calibration
 //
@@ -137,7 +138,11 @@ struct StockSageConvictionCalibration: Sendable, Equatable, Codable {
     /// still renders every identity as "assumed", never "measured" (F02). The nil-calibration prior
     /// in winProbEstimate is the single source both paths route through (F46). Set false to restore
     /// the byte-identical pre-iter7 Platt/isotonic seam (regression-locked by flagOffIsByteIdenticalToCurrent).
-    nonisolated(unsafe) static var candidateSelectorEnabled = true
+    nonisolated private static let candidateSelectorFlag = Mutex(true)
+    nonisolated static var candidateSelectorEnabled: Bool {
+        get { candidateSelectorFlag.withLock { $0 } }
+        set { candidateSelectorFlag.withLock { $0 = newValue } }
+    }
 
     /// Low-level ordered-outcome seam; does not certify timing. Production uses observations or
     /// fromJournal, which retain prediction/label times. nil when the sample is below the floor.

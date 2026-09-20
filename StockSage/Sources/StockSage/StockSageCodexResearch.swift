@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Synchronization
 #if os(macOS)
 import Darwin
 #endif
@@ -55,6 +56,7 @@ import Darwin
     private static let disabledCodeHostNotice = "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
     private static var processes: [UUID: Process] = [:]
     private static var generation = UUID()
+    private static var isShuttingDown = false
     private static var busy = false
     private static let maximumStream = 262_144
     private static let maximumFinal = 8_192
@@ -134,9 +136,11 @@ import Darwin
 
     static func complete(system: String, user: String, schema: Data, deadline: Date,
         allowed: @escaping @MainActor () -> Bool, executor: Executor? = nil) async -> Result<Completion, Failure> {
-        guard !busy else { return .failure(.init(message: "A Codex research assessment is already running.", audit: nil)) }
+        guard !busy, !processes.values.contains(where: { $0.isRunning }) else {
+            return .failure(.init(message: "A Codex research assessment is already running.", audit: nil))
+        }
         let token = generation, began = ContinuousClock.now
-        func active() -> Bool { !Task.isCancelled && generation == token && allowed() && deadline.timeIntervalSinceNow > 0 }
+        func active() -> Bool { !isShuttingDown && !Task.isCancelled && generation == token && allowed() && deadline.timeIntervalSinceNow > 0 }
         guard active(), deadline.timeIntervalSince1970.isFinite, !system.isEmpty, !user.isEmpty,
               system.utf8.count <= 32_768, user.utf8.count <= 65_536, schema.count <= 32_768,
               (try? object(schema)) != nil else {
@@ -248,7 +252,7 @@ import Darwin
             return .success(.init(text: text, audit: audit("completed", reported: reported, usage: completed[0]["usage"] as? [String: Any] ?? [:])))
         } catch {
             let reason: String
-            switch error as? Rejection {
+            switch error is CancellationError ? Rejection.interrupted : error as? Rejection {
             case .auth: reason = "Codex requires an existing ChatGPT subscription sign-in. No API-key fallback was used."
             case .isolation: reason = "Codex research isolation could not be verified. No opinion was accepted."
             case .model: reason = "Codex did not verify the requested GPT-6 Astra Ultra model contract."
@@ -261,9 +265,33 @@ import Darwin
         }
     }
 
-    static func stopAll() {
+    @discardableResult static func stopAll() -> Task<Bool, Never> {
         generation = UUID()
-        for process in processes.values where process.isRunning { process.terminate() }
+        processes = processes.filter { $0.value.isRunning }
+        return stop(Array(processes.values))
+    }
+
+    static func beginShutdown() -> Task<Bool, Never> {
+        isShuttingDown = true
+        return stopAll()
+    }
+
+    static func cancelShutdown() { isShuttingDown = false }
+
+    /// Invalidate and signal synchronously; only the captured children belong to this stop.
+    /// The returned task does not inherit cancellation and is joined before app termination.
+    private static func stop(_ owned: [Process]) -> Task<Bool, Never> {
+        for process in owned where process.isRunning { process.terminate() }
+        return Task { @MainActor in
+            guard owned.contains(where: { $0.isRunning }) else { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+            for process in owned where process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+            while owned.contains(where: { $0.isRunning }), ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return !owned.contains(where: { $0.isRunning })
+        }
     }
 
     private static func boundedFile(_ file: URL, maximum: Int) throws -> Data {
@@ -278,24 +306,22 @@ import Darwin
     }
 
     /// Pipe callbacks only collect bounded bytes. They never log CLI output or touch UI state.
-    private nonisolated final class Buffer: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-        private var overflow = false
-        private var ended = false
+    private nonisolated final class Buffer: Sendable {
+        private let state = Mutex((data: Data(), overflow: false, ended: false))
         private let maximum: Int
         init(_ maximum: Int) { self.maximum = maximum }
         func append(_ bytes: Data) {
-            lock.lock(); defer { lock.unlock() }
-            if bytes.isEmpty { ended = true }
-            if bytes.count > maximum - data.count { overflow = true }
-            data.append(bytes.prefix(maximum - data.count))
+            state.withLock { state in
+                if bytes.isEmpty { state.ended = true }
+                if bytes.count > maximum - state.data.count { state.overflow = true }
+                state.data.append(bytes.prefix(maximum - state.data.count))
+            }
         }
-        func snapshot() -> (Data, Bool, Bool) { lock.lock(); defer { lock.unlock() }; return (data, overflow, ended) }
+        func snapshot() -> (Data, Bool, Bool) { state.withLock { ($0.data, $0.overflow, $0.ended) } }
     }
 
     static func run(_ invocation: Invocation, allowed: @escaping @MainActor () -> Bool) async throws -> ProcessOutput {
-        guard allowed(), !Task.isCancelled, invocation.deadline > Date() else { throw Rejection.interrupted }
+        guard !isShuttingDown, allowed(), !Task.isCancelled, invocation.deadline > Date() else { throw Rejection.interrupted }
         let process = Process(), input = Pipe(), output = Pipe(), errors = Pipe()
         let out = Buffer(maximumStream), err = Buffer(32_768), id = UUID()
         process.executableURL = invocation.executable; process.arguments = invocation.arguments
@@ -304,7 +330,8 @@ import Darwin
         output.fileHandleForReading.readabilityHandler = { out.append($0.availableData) }
         errors.fileHandleForReading.readabilityHandler = { err.append($0.availableData) }
         defer {
-            processes.removeValue(forKey: id)
+            // Keep a child that outlasted the cleanup bound visible to the next shutdown.
+            if !process.isRunning { processes.removeValue(forKey: id) }
             output.fileHandleForReading.readabilityHandler = nil; errors.fileHandleForReading.readabilityHandler = nil
             for handle in [input.fileHandleForWriting, output.fileHandleForReading, errors.fileHandleForReading] { try? handle.close() }
         }
@@ -315,7 +342,7 @@ import Darwin
         var pendingInput = Data(), written = 0, inputClosed = false
         let descriptor = input.fileHandleForWriting.fileDescriptor
         guard fcntl(descriptor, F_SETFL, O_NONBLOCK) != -1, fcntl(descriptor, F_SETNOSIGPIPE, 1) != -1 else {
-            if process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
+            _ = await stop([process]).value
             throw Rejection.unavailable
         }
         func send(_ value: [String: Any]) throws {
@@ -366,16 +393,7 @@ import Darwin
                 try await Task.sleep(for: .milliseconds(20))
             }
         } catch {
-            if process.isRunning {
-                process.terminate()
-                // This short cleanup wait must still run when the parent Task is cancelled.
-                await Task.detached { try? await Task.sleep(for: .milliseconds(100)) }.value
-                if process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
-                let cleanupDeadline = Date().addingTimeInterval(1)
-                while process.isRunning, Date() < cleanupDeadline {
-                    await Task.detached { try? await Task.sleep(for: .milliseconds(10)) }.value
-                }
-            }
+            _ = await stop([process]).value
             throw error
         }
     }

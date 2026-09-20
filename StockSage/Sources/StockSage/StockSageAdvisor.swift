@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // MARK: - TradeAdvice
 //
@@ -86,7 +87,11 @@ enum StockSageAdvisor {
     /// If revived, consider a LOCAL TASI/sector benchmark rather than the S&P (this app is
     /// Saudi-first). A `var` (not `let`) so a test can temporarily flip it on to prove the
     /// term still works when re-enabled, then reset it; default OFF is the shipped behavior.
-    nonisolated(unsafe) static var relativeStrengthEnabled = false
+    nonisolated private static let relativeStrengthFlag = Mutex(false)
+    nonisolated static var relativeStrengthEnabled: Bool {
+        get { relativeStrengthFlag.withLock { $0 } }
+        set { relativeStrengthFlag.withLock { $0 = newValue } }
+    }
 
         /// Turn-of-month (TOM) ranking tilt — ACTIVATED 2026-07-09 by explicit owner direction
         /// ("WIRE ACTIVATE"), after the same-day research chain (probe → sweep → max-t → holdout →
@@ -105,7 +110,11 @@ enum StockSageAdvisor {
         /// `rankByEV` + `bestOpportunity` (velocity surfaces exempt). There is intentionally still NO
         /// TOM branch in `advise(...)`: conviction, stop, target, and sizing are untouched. Flipping
         /// this default is an owner decision (state pinned by StockSageTomGateTests).
-        nonisolated(unsafe) static var turnOfMonthEnabled = true
+    nonisolated private static let turnOfMonthFlag = Mutex(true)
+    nonisolated static var turnOfMonthEnabled: Bool {
+        get { turnOfMonthFlag.withLock { $0 } }
+        set { turnOfMonthFlag.withLock { $0 = newValue } }
+    }
 
     nonisolated static let caveat = "Rules-based & educational — not a guarantee or financial advice. Markets are uncertain; size small and honor your stop."
 

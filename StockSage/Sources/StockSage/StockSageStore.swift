@@ -1923,10 +1923,8 @@ final class StockSageStore: ObservableObject {
     /// capture ran. Gating here, at the single read choke point, makes both irrelevant: even if
     /// Trigger B's Task completes mid-capture and mutates `backtestConvictionCalibration`, this
     /// getter never surfaces it while suppressed — no separate gate on Trigger B itself is needed.
-    /// `nonisolated(unsafe)` mirrors `StockSageConvictionCalibration.candidateSelectorEnabled`'s
-    /// existing seam: one process-wide flag, flipped only by the `--qa` capture entry path
-    /// (`QASnapshots.checkAndRun`) around `captureAll()`, restored right after.
-    nonisolated(unsafe) static var qaSuppressPersistedCalibration = false
+    /// The legacy capture override shares the store's MainActor isolation.
+    static var qaSuppressPersistedCalibration = false
 
     /// EFFECTIVE conviction calibration the whole app sizes/ranks on: the owner's OWN realized edge
     /// (their journal) when it has enough closed conviction-trades, ELSE the sample-backtest fit, ELSE
