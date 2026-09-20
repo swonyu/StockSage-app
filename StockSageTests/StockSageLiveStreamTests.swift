@@ -9,6 +9,15 @@ struct StockSageLiveStreamTests {
     typealias L = StockSageLiveStream
     typealias ExchangeContinuation = CheckedContinuation<[Int64: StockSageMassiveTicks.Exchange], Never>
 
+    @Test func latestTradeSizeRemainsAPrintNotAnInventedVolumeTotal() {
+        for (raw, expected): (String, Double?) in [("250", 250), ("true", nil), ("-3", nil), ("null", nil)] {
+            let events = L.events(in: "[{\"ev\":\"T\",\"sym\":\"MICRO\",\"p\":10,\"t\":1789910000000,\"s\":\(raw)}]")
+            guard case .trade(let print) = events.first else { Issue.record("Valid trade must remain visible"); continue }
+            #expect(print.size == expected)
+            #expect(print.price == 10)
+        }
+    }
+
     @MainActor @Test("diagnostics notify once per second, with immediate failure changes and recovery")
     func diagnosticsNotificationsKeepLatestReportWithoutInvalidatingEverySnapshot() {
         let live = L()

@@ -1395,6 +1395,13 @@ struct MarketsView: View {
         case .briefing:        desktopHome
         case .research:        researchPanel(Self.resolvedSection(.research).researchHorizon ?? .week)
         case .sameDay:         StockSageSameDayResearchPanel(store: store)
+        case .microcap:        StockSageSameDayResearchPanel(store: store, research: .microcap)
+        case .screener:
+            #if os(macOS)
+            StockSageStockScreenerView(store: store)
+            #else
+            Text("The stock screener is available on your Mac.")
+            #endif
         case .weekResearch:    researchPanel(.week)
         case .fortnightResearch: researchPanel(.fortnight)
         case .library:         libraryList
@@ -9991,7 +9998,7 @@ struct MarketsView: View {
 /// Sections shown inside the single Markets tab.
 enum MarketSection: String, CaseIterable, Identifiable {
     case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, chat, briefing, research, paper
-    case sameDay, weekResearch, fortnightResearch, library
+    case sameDay, weekResearch, fortnightResearch, library, microcap, screener
     var id: String { rawValue }
     static let phoneSections: [Self] = [.sameDay, .weekResearch, .fortnightResearch, .library]
     static let recordSections: [Self] = [.briefing, .watchlist, .portfolio, .chat, .alerts]
@@ -10048,6 +10055,8 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .chat:      return "Chat"
         case .research:  return "Research"
         case .paper:     return "Legacy paper history"
+        case .microcap: return "Micro cap"
+        case .screener: return "Stock screener"
         case .sameDay: return "Same-day pick"
         case .weekResearch: return "1–7 trading days"
         case .fortnightResearch: return "7–14 trading days"
@@ -10069,6 +10078,8 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .chat:      return "bubble.left.and.bubble.right.fill"
         case .research:  return "doc.text.magnifyingglass"
         case .paper:     return "arrow.left.arrow.right"
+        case .microcap: return "waveform.path"
+        case .screener: return "line.3.horizontal.decrease.circle"
         case .sameDay: return "sun.max"
         case .weekResearch: return "chart.xyaxis.line"
         case .fortnightResearch: return "calendar"

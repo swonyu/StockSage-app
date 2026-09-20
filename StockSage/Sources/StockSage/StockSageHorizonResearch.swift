@@ -19,7 +19,7 @@ final class StockSageHorizonResearch: ObservableObject {
         case week = "1–7 trading days", fortnight = "7–14 trading days"
         var id: String { rawValue }
         static let focusInstructions = """
-        StockSage offers a manual Same-day pick and separate \(Horizon.week.rawValue) and \(Horizon.fortnight.rawValue) Top 5 research. Same-day picks require the dedicated workflow's current intraday evidence; general Chat or daily background cannot establish a same-day entry. Multi-session research may involve overnight gaps. Do not propose long-term plans beyond 14 trading days. Longer historical windows are background evidence, not a holding horizon. All research starts manually; do not promise scheduled picks or automatic trading. Rankings are unvalidated research, not predictions of future returns.
+        StockSage offers a manual Same-day pick and separate \(Horizon.week.rawValue) and \(Horizon.fortnight.rawValue) Top 5 research. Same-day picks require the dedicated workflow's current intraday evidence; general Chat or daily background cannot establish a same-day entry. Multi-session research may involve overnight gaps. Do not propose long-term plans beyond 14 trading days. Longer historical windows are background evidence, not a holding horizon. Same-day and both multi-session Gemma modes start manually. The separate Mac Micro cap watcher may request Astra when a fresh setup qualifies and send a paired Telegram alert while the app is open and awake; it does not place orders. Do not promise scheduled picks or automatic trading. Rankings are unvalidated research, not predictions of future returns.
         """
         var instructions: String {
             StockSageAIAssessment.instructions.replacingOccurrences(of: "Assess the supplied stock for the next trading week.",
@@ -965,6 +965,7 @@ final class StockSageHorizonResearch: ObservableObject {
     }
 
     private func researchAccessBlocker(store: StockSageStore, needsMarketData: Bool) -> String? {
+        if StockSageSameDayResearch.microcap.isRunning { return "Micro cap research is running. Finish or stop it before starting Top 5 research." }
         if StockSageSameDayResearch.shared.isRunning { return "Same-day research is running. Finish or stop it before starting Top 5 research." }
         if StockSageLocalModelServer.isShuttingDown { return "StockSage is closing." }
         if !ToolPolicy.isExternalAllowed { return "Web access is disabled. Enable it in Settings." }

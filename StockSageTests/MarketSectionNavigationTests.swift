@@ -48,7 +48,7 @@ struct MarketSectionNavigationTests {
     @Test func primaryNavigationMatchesTheThreeManualTradingGoals() {
         let routes = ["sameDay", "weekResearch", "fortnightResearch", "library"]
         #expect(MarketSection.phoneSections.map(\.rawValue) == routes)
-        #expect(StockSageDesktop.sections == [.sameDay, .weekResearch, .fortnightResearch, .watchlist, .all, .library])
+        #expect(StockSageDesktop.sections == [.sameDay, .microcap, .weekResearch, .fortnightResearch, .watchlist, .all, .screener, .library])
     }
 
     @Test func researchAndLegacyPaperKeepDistinctRawDestinations() {
@@ -60,7 +60,7 @@ struct MarketSectionNavigationTests {
         #expect(MarketSection.phoneSections == [.sameDay, .weekResearch, .fortnightResearch, .library])
         let support = MarketSection.recordSections + MarketSection.contextSections
         #expect(Set(support).count == support.count)
-        #expect(Set(support + MarketSection.phoneSections) == Set(MarketSection.allCases.filter { $0 != .research }))
+        #expect(Set(support + MarketSection.phoneSections) == Set(MarketSection.allCases.filter { $0 != .research && $0 != .microcap && $0 != .screener }))
         #expect(Array(MarketSection.allCases.prefix(11)) == [
             .watchlist, .ideas, .catalysts, .all, .heatmap, .portfolio, .alerts, .chat, .briefing, .research, .paper
         ], "Old raw routes and command-digit positions must remain compatible")
@@ -117,9 +117,9 @@ struct MarketSectionNavigationTests {
     }
 
     @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
-        #expect(StockSageDesktop.sections == [.sameDay, .weekResearch, .fortnightResearch, .watchlist, .all, .library])
+        #expect(StockSageDesktop.sections == [.sameDay, .microcap, .weekResearch, .fortnightResearch, .watchlist, .all, .screener, .library])
         #expect(StockSageDesktop.sections == StockSageDesktop.groups.flatMap(\.sections))
-        #expect(StockSageDesktop.groups.first?.sections == [.sameDay, .weekResearch, .fortnightResearch])
+        #expect(StockSageDesktop.groups.first?.sections == [.sameDay, .microcap, .weekResearch, .fortnightResearch])
         #expect(StockSageDesktop.help(for: .watchlist) == "Watchlist · ⌘1")
         #expect(StockSageDesktop.help(for: .briefing) == "Saved research · ⌘9")
         #expect(StockSageDesktop.help(for: .research) == "Research", "Legacy appended routes carry no digit")

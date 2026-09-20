@@ -13,6 +13,8 @@ import AppKit
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !StockSageStore.isRunningTests else { return .terminateNow }
         guard !quitting else { return .terminateLater }
+        StockSageMicrocapMonitor.shared.stop()
+        StockSageCodexResearch.stopAll()
         guard let config = StockSageLocalModelStartup.shared.quitConfig(defaults: .standard) else {
             return .terminateNow
         }

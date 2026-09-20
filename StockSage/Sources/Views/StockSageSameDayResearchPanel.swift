@@ -5,29 +5,41 @@ struct StockSageSameDayResearchPanel: View {
     @ObservedObject var research = StockSageSameDayResearch.shared
     @ObservedObject var horizons = StockSageHorizonResearch.shared
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var identifier: String { research.isMicrocap ? "research.microcap" : "research.sameDay" }
+
+    init(store: StockSageStore, research: StockSageSameDayResearch = .shared) {
+        self.store = store
+        self.research = research
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.xl) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Same-day · one pick", systemImage: "scope")
+                    Label(research.isMicrocap ? "Micro cap · same-day setups" : "Same-day · one pick", systemImage: research.isMicrocap ? "waveform.path" : "scope")
                         .font(.system(.title2, design: .rounded, weight: .semibold))
                         .accessibilityAddTraits(.isHeader)
-                    Text("A fresh, manual check during the regular US session. One app-ranked, Gemma-qualified candidate when its evidence and observed scenario pass.")
+                    Text(research.isMicrocap ? "Watch Nasdaq micro caps during the regular US session. Fresh qualifying setups go to Astra through your Codex subscription; a qualified pick can reach your phone." : "A fresh, manual check during the regular US session. One app-ranked, Gemma-qualified candidate when its evidence and observed scenario pass.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
+                #if os(macOS)
+                if research.isMicrocap { StockSageMicrocapActivityView(store: store, research: research) }
+                #endif
                 let actions = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
                     : AnyLayout(HStackLayout(spacing: 12))
                 actions {
-                    Button("Run same-day research", systemImage: "play.fill") { research.start(store: store) }
+                    Button(research.isMicrocap ? "Run one Micro cap check" : "Run same-day research", systemImage: "play.fill") { research.start(store: store) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .disabled(research.isRunning || horizons.running != nil)
-                        .accessibilityIdentifier("research.sameDay.run")
+                        .accessibilityIdentifier(identifier + ".run")
                     if research.isRunning {
-                        Button("Stop", systemImage: "stop.fill") { research.stop() }
-                            .accessibilityIdentifier("research.sameDay.stop")
+                        Button("Stop", systemImage: "stop.fill") {
+                            if research.isMicrocap { StockSageMicrocapMonitor.shared.stop() }
+                            else { research.stop() }
+                        }
+                            .accessibilityIdentifier(identifier + ".stop")
                     }
                 }
                 if horizons.running != nil { Text("Finish or stop the current Top 5 run before starting same-day research.").font(.caption) }
@@ -37,10 +49,10 @@ struct StockSageSameDayResearchPanel: View {
                            research.restored || !StockSageSameDayResearch.current(receipt, at: tick.date) {
                             Label("Dated pick · Run again before considering a new entry", systemImage: "clock.badge.exclamationmark")
                                 .font(.headline).foregroundStyle(DS.Palette.warningSoft)
-                                .accessibilityIdentifier("research.sameDay.dated")
+                                .accessibilityIdentifier(identifier + ".dated")
                         }
                         Text(research.status).font(.callout).textSelection(.enabled)
-                            .accessibilityIdentifier("research.sameDay.status")
+                            .accessibilityIdentifier(identifier + ".status")
                     }
                     .padding(DS.Space.md)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -70,7 +82,7 @@ struct StockSageSameDayResearchPanel: View {
                                     level("Stop-loss reference", plan.stop, tint: DS.Palette.dangerSoft)
                                     level("Target reference", plan.target, tint: DS.Palette.successSoft)
                                 }
-                                .accessibilityIdentifier("research.sameDay.levels")
+                                .accessibilityIdentifier(identifier + ".levels")
                                 .padding(.vertical, 4)
                                 Divider()
                                 Text("Frozen \(plan.at.formatted(date: .abbreviated, time: .standard)) · completed minutes through \(plan.barsAsOf.formatted(date: .omitted, time: .standard))")
@@ -85,6 +97,9 @@ struct StockSageSameDayResearchPanel: View {
                                 }
                                 Text(check.reason ?? "").font(.body)
                                 Text("Invalidation / risk: " + (check.risk ?? "Unrecorded")).foregroundStyle(.secondary)
+                                if research.isMicrocap, let fundamentals = check.fundamentals {
+                                    StockSageFundamentalsView(snapshot: fundamentals)
+                                }
                                 Text("Observed reference levels, not guaranteed execution or future prices. No order is created.").font(.caption)
                             }
                             .padding(DS.Space.lg).frame(maxWidth: .infinity, alignment: .leading)
@@ -119,7 +134,7 @@ struct StockSageSameDayResearchPanel: View {
                             }
                         }
                     }
-                    .accessibilityIdentifier("research.sameDay.history")
+                    .accessibilityIdentifier(identifier + ".history")
                 }
                 Text(StockSageSameDayResearch.policy).font(.caption).foregroundStyle(.secondary)
             }
@@ -155,8 +170,18 @@ struct StockSageSameDayResearchPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("\(check.symbol) · \(check.action ?? "No opinion")").font(.headline)
                     Text(check.note).font(.callout)
+                    if let audit = check.codexAudit {
+                        Text("Codex · \(audit.requestedModel) · \(audit.requestedEffort) · \(audit.terminalStatus)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let raw = check.rawModelOutput {
+                        DisclosureGroup("Original Astra response") { Text(raw).font(.caption.monospaced()).textSelection(.enabled) }
+                    }
                     if let reason = check.reason { Text("Case: " + reason) }
                     if let risk = check.risk { Text("Risk: " + risk) }
+                    if receipt.mode == .microcap, let fundamentals = check.fundamentals {
+                        StockSageFundamentalsView(snapshot: fundamentals)
+                    }
                     if let packet = check.packet {
                         ForEach(Array(packet.facts.enumerated()), id: \.offset) { index, fact in
                             Text("F\(index + 1)\(check.evidence.contains("F\(index + 1)") ? " · cited" : ""): \(fact.text)")
@@ -169,5 +194,85 @@ struct StockSageSameDayResearchPanel: View {
                 }.padding(.vertical, 8)
             }
         }
+    }
+}
+
+/// The same saved business evidence is visible in screening and historical research.
+struct StockSageFundamentalsView: View {
+    let snapshot: StockSageFundamentals.Snapshot
+    @State private var expanded: Bool
+
+    init(snapshot: StockSageFundamentals.Snapshot, initiallyExpanded: Bool = false) {
+        self.snapshot = snapshot
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: DS.Space.md) {
+                Text("Collected \(snapshot.retrievedAt.formatted(date: .abbreviated, time: .standard)). Each metric retains its own financial period; these figures do not establish a same-day entry.")
+                    .font(.caption).foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), alignment: .top)], alignment: .leading, spacing: DS.Space.sm) {
+                    ForEach(snapshot.metrics, id: \.key) { metric in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(metric.label).font(.subheadline.weight(.semibold))
+                            Text(metric.displayValue).font(.title3.weight(.semibold)).monospacedDigit()
+                                .foregroundStyle(metric.value == nil ? DS.Palette.textSecondary : DS.Palette.textPrimary)
+                            Text(metric.period).font(.caption).foregroundStyle(.secondary)
+                            if !metric.note.isEmpty { Text(metric.note).font(.caption) }
+                            DisclosureGroup("Formula and sources") {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(metric.origin).font(.caption.weight(.semibold))
+                                    Text(metric.formula).font(.caption)
+                                    if let url = publicURL(metric.sourceURL) { Link("Source", destination: url).font(.caption) }
+                                    ForEach(Array(metric.inputs.enumerated()), id: \.offset) { _, input in
+                                        Text("\(input.name): \(input.value.formatted()) \(input.unit) · \(input.period)")
+                                            .font(.caption).textSelection(.enabled)
+                                    }
+                                }.padding(.top, 4)
+                            }.font(.caption)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(DS.Space.md)
+                        .background(DS.Bezel.cardFill, in: .rect(cornerRadius: DS.Radius.small))
+                        .accessibilityElement(children: .contain)
+                    }
+                }
+                ForEach(Array((snapshot.flags + snapshot.notes).enumerated()), id: \.offset) { _, note in
+                    Text(note).font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+                DisclosureGroup("Collection coverage and statement inputs") {
+                    VStack(alignment: .leading, spacing: DS.Space.sm) {
+                        ForEach(Array(snapshot.sources.enumerated()), id: \.offset) { _, source in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("\(source.name) · \(source.status) · \(source.recordCount) records").font(.caption.weight(.semibold))
+                                if !source.note.isEmpty { Text(source.note).font(.caption) }
+                                if let url = publicURL(source.url) { Link("Provider source", destination: url).font(.caption) }
+                            }
+                        }
+                        ForEach(Array(snapshot.statements.enumerated()), id: \.offset) { _, statement in
+                            DisclosureGroup("\(statement.kind) · \(statement.timeframe) · \(statement.periodEnd)") {
+                                Text("Filed \(statement.filingDate). Units: \(statement.unit).").font(.caption)
+                                ForEach(statement.amounts.keys.sorted(), id: \.self) { key in
+                                    Text("\(key): \(statement.amounts[key]!.formatted())").font(.caption).textSelection(.enabled)
+                                }
+                            }.font(.caption)
+                        }
+                    }.padding(.top, DS.Space.sm)
+                }.font(.caption)
+            }.padding(.top, DS.Space.sm)
+        } label: {
+            Label("Company quality · \(snapshot.symbol)", systemImage: "building.2.crop.circle")
+                .font(.subheadline.weight(.semibold))
+        }
+        .accessibilityIdentifier("research.companyQuality")
+    }
+
+    private func publicURL(_ text: String) -> URL? {
+        guard let url = URL(string: text), url.scheme == "https", url.user == nil, url.password == nil,
+              ["massive.com", "www.massive.com", "api.massive.com", "www.sec.gov", "data.sec.gov"].contains(url.host?.lowercased() ?? ""),
+              !(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name.lowercased() == "apikey" } ?? false) else { return nil }
+        return url
     }
 }

@@ -1,9 +1,15 @@
 import Foundation
 import Combine
 
-/// Manual same-session research. No account, order or automation dependency.
+/// Same-session research. Micro cap uses caller-controlled setup admission; no broker dependency.
 @MainActor final class StockSageSameDayResearch: ObservableObject {
+    nonisolated enum Mode: String, Codable, Sendable { case sameDay = "same-day", microcap }
     static let shared = StockSageSameDayResearch(receiptStore: productionReceipts())
+    static let microcap = StockSageSameDayResearch(receiptStore: productionReceipts(mode: .microcap), mode: .microcap)
+    let mode: Mode
+    var isMicrocap: Bool { mode == .microcap }
+    var analyst: String { isMicrocap ? "Astra" : "Gemma" }
+    var title: String { isMicrocap ? "Micro cap" : "Same-day" }
     nonisolated static let policy = "Unvalidated screen v1: 30 completed regular-session minutes, latest five consecutive with volume; spread at most 25 bps; observed target room after spread at least twice observed downside after spread. App ranking: reward/risk, narrower spread, activity, ticker. No order or fill guarantee."
     typealias Observer = @Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void
     typealias Analysis = @MainActor @Sendable (StockSageHorizonResearch.Listing, Double, Observer?) async -> Check
@@ -30,6 +36,10 @@ import Combine
         var qualified = false
         var verifiedQuote: Quote?
         var capturedQuote: Quote?
+        var codexAudit: StockSageCodexResearch.Audit? = nil
+        var rawModelOutput: String? = nil
+        var setupID: String? = nil
+        var fundamentals: StockSageFundamentals.Snapshot? = nil
     }
     nonisolated struct Receipt: Codable, Sendable, Equatable {
         var policyVersion = 1
@@ -40,6 +50,8 @@ import Combine
         var checks: [Check]
         var selectedSymbol: String?
         var blocker: String?
+        var mode: Mode? = nil
+        var microcapScreen: StockSageMicrocapScreen.Result? = nil
     }
     @Published private(set) var receipt: Receipt?
     @Published private(set) var savedReceipts: [Receipt] = []
@@ -49,22 +61,31 @@ import Combine
     private let receiptStore: StockSageResearchReceiptStore?
     private var task: Task<Void, Never>?
     private var generation = UUID()
-    init(receiptStore: StockSageResearchReceiptStore? = nil) {
+    init(receiptStore: StockSageResearchReceiptStore? = nil, mode: Mode = .sameDay) {
+        self.mode = mode
         self.receiptStore = receiptStore
         savedReceipts = receiptStore?.sameDayHistory ?? []
         receipt = savedReceipts.first
         restored = receipt != nil
+        if mode == .microcap { status = "Set up Telegram and enable watching, or run a manual Micro cap check. Uses GPT-6 Astra through your Codex subscription." }
     }
-    private static func productionReceipts() -> StockSageResearchReceiptStore? {
+    private static func productionReceipts(mode: Mode = .sameDay) -> StockSageResearchReceiptStore? {
         guard !StockSageStore.isRunningTests, (try? StockSageRecordWriter.require(.standard)) != nil else { return nil }
         return StockSageResearchReceiptStore(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("StockSage/SameDayResearch", isDirectory: true))
+            .appendingPathComponent(mode == .microcap ? "StockSage/MicrocapResearch" : "StockSage/SameDayResearch", isDirectory: true), sameDayLabel: mode.rawValue)
     }
 
-    func stop() { generation = UUID(); task?.cancel() }
+    func stop() {
+        generation = UUID(); task?.cancel()
+        #if os(macOS)
+        if isMicrocap { StockSageCodexResearch.stopAll() }
+        #endif
+    }
 
-    @discardableResult func start(store: StockSageStore) -> Bool {
-        guard !isRunning, StockSageHorizonResearch.shared.running == nil else { return false }
+    @discardableResult func start(store: StockSageStore, admitSetup: ((String) -> Bool)? = nil) -> Bool {
+        guard !isRunning, StockSageHorizonResearch.shared.running == nil,
+              !(isMicrocap ? Self.shared.isRunning : Self.microcap.isRunning) else { return false }
+        if isMicrocap { return startMicrocap(store: store, admitSetup: admitSetup) }
         guard let window = Self.session(at: Date()), Date() >= window.open.addingTimeInterval(1800) else {
             status = "Same-day research requires a verified regular session, thirty completed minutes and more than five minutes until close. Earlier saved research remains dated history."; return false
         }
@@ -124,6 +145,68 @@ import Combine
         return true
     }
 
+    private func startMicrocap(store: StockSageStore, admitSetup: ((String) -> Bool)?) -> Bool {
+        #if os(macOS)
+        let requested = Date()
+        guard let window = Self.session(at: requested), requested >= window.open.addingTimeInterval(1800) else {
+            status = "Micro cap watches verified regular US sessions after thirty completed minutes and stops new entries five minutes before close."; return false
+        }
+        guard ToolPolicy.isExternalAllowed, !store.isSampleData else {
+            status = "Micro cap requires current public market access; sample data cannot trigger research."; return false
+        }
+        if let reason = StockSageMassive.credentialAccessBlocker() { status = reason; return false }
+        guard let receiptStore, (try? StockSageRecordWriter.require(.standard)) != nil else {
+            status = "Micro cap cannot start because its research record cannot be saved."; return false
+        }
+        let id = receiptStore.beginSameDay(at: requested)
+        var initial = Receipt(id: id, startedAt: requested,
+            selection: "Classifying Nasdaq common shares before the bounded Micro cap screen.", checks: [])
+        initial.mode = .microcap
+        guard receiptStore.saveSameDay(initial) else { status = Self.receiptFailure; return false }
+        let access = StockSageMassive.Access().capture(), run = UUID()
+        generation = run; isRunning = true; restored = false; receipt = initial
+        status = "Screening dated market cap and float; Astra uses your Codex subscription only after a setup qualifies…"
+        let allowed: @MainActor @Sendable () -> Bool = { [weak self] in
+            self?.generation == run && !Task.isCancelled && access.isCurrent()
+                && !store.isSampleData && !receiptStore.persistenceFailed(scanID: id)
+        }
+        task = Task { [self] in
+            defer { isRunning = false; task = nil }
+            let selection = await StockSageMicrocapScreen.select(key: access.key, allowed: allowed)
+            initial.microcapScreen = selection.receipt
+            initial.selection = "\(selection.receipt.rows.count) reference rows; \(selection.receipt.detailedCount) detailed screens; \(selection.listings.count) passed candidates. \(selection.receipt.unassessedCount) candidates beyond the detail limit remain unassessed."
+            receipt = initial
+            guard receiptStore.saveSameDay(initial) else { reportReceiptFailure(scanID: id); return }
+            StockSageLiveStream.shared.microcapSymbols = Set(selection.receipt.rows.filter {
+                $0.marketCap.map { (50_000_000...300_000_000).contains($0) } == true
+            }.map(\.symbol))
+            guard allowed() else { await failedRun("Micro cap interrupted after screening; captured checks remain saved.", initial: initial); return }
+            if let blocker = selection.receipt.blocker {
+                await failedRun(blocker, initial: initial); return
+            }
+            guard !selection.listings.isEmpty else {
+                await failedRun("No candidate passed the dated microcap screen. All classifications and exclusions are saved.", initial: initial); return
+            }
+            do {
+                let regular = try await StockSageMassiveTicks.regularQuoteConditions()
+                guard allowed() else { await failedRun("Market access changed before assessment.", initial: initial); return }
+                await self.run(selection: .init(selection.listings), initial: initial, capacity: { 1 }, allowed: allowed,
+                    analyze: { item, _, observer in
+                        await Self.assess(item, activity: selection.activity[item.ticker] ?? 0,
+                            store: store, key: access.key, config: nil, regular: regular, allowed: allowed,
+                            observer: observer, microcap: selection.receipt, admitSetup: admitSetup,
+                            fundamentalsAccess: .init(key: { access.key }, allowed: access.isCurrent))
+                    }, refreshQuote: { symbol in
+                        await StockSageMassiveTicks.freshResearchNBBO(symbol: symbol, regularConditions: regular)
+                    })
+            } catch { await failedRun("Eligible quote conditions are unavailable. Micro cap cannot publish a pick.", initial: initial) }
+        }
+        return true
+        #else
+        status = "Micro cap with Codex is available on macOS."; return false
+        #endif
+    }
+
     nonisolated static func preparationFailure(_ probe: StockSageLocalModelServer.Probe,
                                                isAllowed: Bool) -> String? {
         guard isAllowed else { return "Gemma preparation was interrupted. No replacement model or pick." }
@@ -148,7 +231,8 @@ import Combine
 
     private func failedRun(_ reason: String, initial: Receipt) async {
         let now = Date(), id = initial.id
-        let value = Receipt(id: id, startedAt: initial.startedAt, finishedAt: now, selection: "No shortlist completed.", checks: [], blocker: reason)
+        var value = initial
+        value.finishedAt = now; value.blocker = reason; value.selectedSymbol = nil
         _ = receiptStore?.saveSameDay(value)
         receiptStore?.finish(scanID: id, status: reason, at: now)
         receipt = value; status = reason; restored = false
@@ -166,6 +250,8 @@ import Combine
         var result = Receipt(id: id, startedAt: started,
             selection: "\(listings.count) of \(selection.receipt?.eligibleCount ?? selection.listings.count) eligible activity-selected listings shortlisted. " + (selection.receipt?.summary ?? "Selection activity receipt unavailable."),
             checks: listings.map { .init(symbol: $0.ticker, name: $0.name, at: started, note: "Not started") })
+        result.mode = mode; result.microcapScreen = initial?.microcapScreen
+        if isMicrocap, let screen = result.microcapScreen { result.selection = "\(screen.rows.count) reference rows; \(screen.detailedCount) detailed screens; \(listings.count) passed candidates. \(screen.unassessedCount) eligible candidates beyond the detail limit remain unassessed." }
         func active() -> Bool {
             !Task.isCancelled && allowed() && receiptStore?.persistenceFailed(scanID: id) != true
                 && clock() >= started && Self.session(at: clock()) != nil
@@ -177,7 +263,7 @@ import Combine
             if receiptStore?.persistenceFailed(scanID: id) == true {
                 result.selectedSymbol = nil; result.blocker = Self.receiptFailure
             }
-            receipt = result; status = result.blocker ?? "App-ranked Gemma-qualified pick: \(result.selectedSymbol ?? "none")"
+            receipt = result; status = result.blocker ?? "App-ranked \(analyst)-qualified pick: \(result.selectedSymbol ?? "none")"
             savedReceipts = receiptStore?.sameDayHistory ?? []
         }
         guard active() else { finish("Research interrupted or outside the verified same-day entry session."); return }
@@ -219,7 +305,7 @@ import Combine
                 _ = receiptStore?.saveSameDay(result)
                 receipt = result
                 if receiptStore?.persistenceFailed(scanID: id) == true { reportReceiptFailure(scanID: id) }
-                else { status = "Same-day research · \(completed)/\(listings.count) checks completed" }
+                else { status = "\(title) research · \(completed)/\(listings.count) checks completed" }
                 if !active() { group.cancelAll() }
             }
         }
@@ -263,14 +349,25 @@ import Combine
     Use completed intraday observations for this same-day setup; daily technical rules are background, never intraday confirmation. Buy or Strong Buy requires citing an actual completed-minute observation AND a public news or filing record published today. A recent publication alone does not establish that its event happens today or that price will rise. In reason explain the observed entry setup; in risk explain what would invalidate it. The app supplies frozen numeric entry, stop and target references separately: do not invent or alter them. No overnight thesis, orders, position management or guarantee. Hold or Avoid is appropriate when the same-day case is insufficient.
     """
 
+    nonisolated static let microcapInstructions = instructions + """
+
+    Use the supplied dated business-quality evidence as context for this same-day trade. Distinguish provider-reported ratios from app-calculated ratios, their formulas, financial periods, filing dates and unavailable inputs. A low valuation multiple or high accounting return does not establish an intraday entry. Negative earnings, equity or capital can make ratios not meaningful. Do not infer insider ownership from free float or insider trades. Do not call earnings normalized, recurring or comparable across sectors unless explicit supplied evidence establishes it. Reported one-off items and commodity-cycle exposure require context; do not invent adjustments or sector peer rankings. Social-media anecdotes are methodology references, not verified company evidence or proof of returns. Keep the same-day horizon and all supplied qualification requirements.
+    """
+
     private static func assess(_ item: StockSageHorizonResearch.Listing, activity: Double,
-        store: StockSageStore, key: String, config: StockSageLocalModelServer.Config,
-        regular: Set<Int64>, allowed: @escaping @MainActor @Sendable () -> Bool, observer: Observer?) async -> Check {
+        store: StockSageStore, key: String, config: StockSageLocalModelServer.Config?,
+        regular: Set<Int64>, allowed: @escaping @MainActor @Sendable () -> Bool, observer: Observer?,
+        microcap: StockSageMicrocapScreen.Result? = nil, admitSetup: ((String) -> Bool)? = nil,
+        fundamentalsAccess: StockSageMassive.Access = .init()) async -> Check {
         var result = Check(symbol: item.ticker, name: item.name, at: Date(), note: "Not assessed")
-        result.activity = activity; result.model = config.model
+        result.activity = activity; result.model = microcap == nil ? (config?.model ?? "") : "gpt-6-astra"
         func failed(_ reason: String) -> Check { result.note = reason; result.qualified = false; return result }
         guard allowed(), Self.session(at: Date()) != nil else { return failed("Research interrupted or entry session ended.") }
-        let gathered = await StockSageHorizonResearch.gather(item, store: store, key: key, allowed: allowed)
+        async let background = StockSageHorizonResearch.gather(item, store: store, key: key, allowed: allowed)
+        async let business: StockSageFundamentals.Snapshot? = microcap == nil ? nil
+            : StockSageFundamentals.collect(symbol: item.ticker, asOf: Date(), access: fundamentalsAccess)
+        let (gathered, fundamentals) = await (background, business)
+        result.fundamentals = fundamentals
         guard allowed() else { return failed("Research interrupted after background collection.") }
         guard case .captured(let capture) = gathered else {
             if case .failed(let failure) = gathered { return failed(failure.note) }
@@ -287,30 +384,45 @@ import Combine
             return failed("Completed minute coverage, current eligible bid/ask, or observed stop/target failed the same-day screen. Trade-only fallback cannot qualify.")
         }
         return await assessCaptured(capture, item: item, activity: activity, intraday: intraday, quote: quote,
-            config: config, allowed: allowed, observer: observer)
+            config: config, allowed: allowed, observer: observer, microcap: microcap, admitSetup: admitSetup,
+            fundamentals: fundamentals)
     }
 
     /// The same production prompt/validator path, with a clock and transport seam for offline replay.
     static func assessCaptured(_ capture: StockSageHorizonResearch.Capture,
         item: StockSageHorizonResearch.Listing, activity: Double, intraday: StockSageMassiveTicks.Intraday,
-        quote: StockSageNBBO, config: StockSageLocalModelServer.Config,
+        quote: StockSageNBBO, config: StockSageLocalModelServer.Config?,
         allowed: @escaping @MainActor () -> Bool, observer: Observer? = nil,
         clock: @escaping @MainActor () -> Date = Date.init,
-        modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Check {
+        modelTransport: ((URLRequest) async throws -> (Data, URLResponse))? = nil,
+        microcap: StockSageMicrocapScreen.Result? = nil, admitSetup: ((String) -> Bool)? = nil,
+        fundamentals: StockSageFundamentals.Snapshot? = nil,
+        codexAssessment: ((String, String, Data) async -> Result<StockSageCodexResearch.Completion, StockSageCodexResearch.Failure>)? = nil) async -> Check {
         var result = Check(symbol: item.ticker, name: item.name, at: clock(), note: "Not assessed")
-        result.activity = activity; result.model = config.model
+        result.activity = activity; result.model = microcap == nil ? (config?.model ?? "") : "gpt-6-astra"
+        result.fundamentals = microcap == nil ? nil : fundamentals
         func failed(_ reason: String) -> Check { result.note = reason; result.qualified = false; return result }
-        guard allowed(), config.requiresStrictOutput, config.model == StockSageLocalModelServer.gemmaModel,
+        let microcapValid = microcap.map { screen in
+            screen.policyVersion == StockSageMicrocapScreen.policyVersion && screen.blocker == nil
+                && screen.facts(for: item.ticker).count == 4
+                && (0...180).contains(clock().timeIntervalSince(screen.cutoff))
+                && screen.rows.contains { $0.symbol == item.ticker && $0.status == .passed }
+        } ?? false
+        let modelValid = microcap != nil ? microcapValid
+            : (config?.requiresStrictOutput == true && config?.model == StockSageLocalModelServer.gemmaModel)
+        guard allowed(), modelValid,
               !capture.blockedByThrottle, capture.isFresh(at: clock()), quote.matches(item.ticker),
               let window = Self.session(at: clock()), let scenario = Self.scenario(intraday, quote: quote, at: clock()) else {
-            return failed("Strict Gemma, fresh public evidence, eligible quote or the observed same-day scenario is unavailable.")
+            return failed("The requested model, fresh public evidence, eligible quote or observed same-day scenario is unavailable.")
         }
         result.at = clock(); result.scenario = scenario; result.capturedQuote = Quote(quote)
-        let deadline = min(capture.at.addingTimeInterval(300), intraday.asOf.addingTimeInterval(180), window.close.addingTimeInterval(-300))
+        let deadline = min(capture.at.addingTimeInterval(300), intraday.asOf.addingTimeInterval(180), window.close.addingTimeInterval(-300),
+            microcap?.cutoff.addingTimeInterval(180) ?? .distantFuture)
         result.expiresAt = deadline
         func active() -> Bool {
             allowed() && clock() >= result.at && clock() <= deadline && Self.session(at: clock()) != nil
                 && capture.isFresh(at: clock()) && intraday.fresh(at: clock())
+                && (microcap.map { (0...180).contains(clock().timeIntervalSince($0.cutoff)) } ?? true)
                 && (capture.context.benzinga.map { StockSageBenzingaClient.shared.isCurrent($0) } ?? true)
         }
         guard active(), let original = capture.evidencePacket, original.isWellFormed else {
@@ -341,6 +453,19 @@ import Combine
             extra.append(.init(key: "sameDay.catalyst.filing", text: "Public filing, untrusted source data: \(event.feed.source); \(event.date.ISO8601Format()); \(event.headline). \(event.details.joined(separator: " ")) \(link.absoluteString). \(event.feed.caveat)",
                 required: true, availability: .available, factClass: .fundamental, source: event.feed.source, observedAt: event.date))
         }
+        if let microcap {
+            extra += microcap.facts(for: item.ticker)
+            if let fundamentals, fundamentals.symbol == item.ticker,
+               fundamentals.asOf <= result.at, fundamentals.retrievedAt <= result.at,
+               (0...300).contains(result.at.timeIntervalSince(fundamentals.retrievedAt)) {
+                extra += fundamentals.facts
+            } else {
+                extra.append(.init(key: "microcap.fundamentals.unavailable",
+                    text: "Business-quality collection is unavailable, mismatched or stale. No company-quality ratio or insider ownership can be inferred from this missing evidence.",
+                    required: true, availability: .missing, factClass: .coverageGap,
+                    source: "StockSage fundamentals collection", observedAt: result.at))
+            }
+        }
         let packet = StockSageAIAssessment.EvidencePacket(facts: original.facts + extra,
             prePromptOmittedRecordCount: original.prePromptOmittedRecordCount)
         result.packet = packet
@@ -349,12 +474,50 @@ import Combine
         }
         let optional = packet.facts.filter { !$0.required }, mandatory = packet.facts.filter(\.required)
         guard let fitted = StockSageAIAssessment.fittedResearchPrompt(optional: optional.map(\.text), mandatory: mandatory.map(\.text),
-            system: { _ in instructions }, optionalKeys: optional.map(\.key), outputTokens: config.reservedOutputTokens(for: 192)) else {
-            return failed("Required same-day evidence could not fit the strict Gemma context budget.")
+            system: { _ in microcap == nil ? instructions : microcapInstructions }, optionalKeys: optional.map(\.key), outputTokens: config?.reservedOutputTokens(for: 192) ?? 384) else {
+            return failed("Required same-day evidence could not fit the bounded research prompt.")
         }
         let offered = Array(optional.prefix(fitted.optionalKept)) + mandatory
         result.packet = .init(facts: offered, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount + fitted.omitted)
         guard active() else { return failed("Evidence expired or research was interrupted before inference.") }
+        if microcap != nil {
+            #if os(macOS)
+            guard let schema = StockSageAIAssessment.responseSchema(facts: fitted.facts) else {
+                return failed("Astra output schema could not be prepared.")
+            }
+            let setupID = StockSageMicrocapMonitor.setupID(symbol: item.ticker, facts: offered, at: result.at)
+            guard admitSetup?(setupID) ?? true else {
+                return failed("No new Astra request was admitted. Check saved setup history and watching status.")
+            }
+            result.setupID = setupID
+            let response: Result<StockSageCodexResearch.Completion, StockSageCodexResearch.Failure>
+            if let codexAssessment { response = await codexAssessment(fitted.system, fitted.user, schema) }
+            else { response = await StockSageCodexResearch.complete(system: fitted.system, user: fitted.user,
+                schema: schema, deadline: deadline, allowed: active) }
+            switch response {
+            case .failure(let failure): result.codexAudit = failure.audit; return failed(failure.message)
+            case .success(let completion):
+                result.codexAudit = completion.audit; result.rawModelOutput = completion.text
+                guard active() else { return failed("Evidence expired or watching stopped during Astra assessment. The original response is retained.") }
+                guard completion.audit.requestedModel == StockSageCodexResearch.model,
+                      completion.audit.requestedEffort == "ultra", completion.audit.terminalStatus == "completed",
+                      completion.audit.reportedModel.map({ $0 == StockSageCodexResearch.model }) ?? true,
+                      case .success(let verdict) = StockSageAIAssessment.validate(completion.text, facts: fitted.facts) else {
+                    return failed("Astra output failed native model, schema or evidence validation; the original response is retained.")
+                }
+                result.action = verdict.action.rawValue; result.reason = verdict.reason; result.risk = verdict.risk; result.evidence = verdict.evidence
+                result.quality = StockSageAIAssessment.quality(verdict, offered: offered, symbol: item.ticker)
+                result.qualified = Self.qualifies(verdict, facts: offered, at: clock())
+                result.note = result.qualified ? "Astra opinion passed the unvalidated Micro cap and same-day screen."
+                    : "Astra opinion did not pass the same-day action and citation gates."
+                if !fitted.isComplete { result.note += " \(fitted.omitted) optional records omitted; mandatory records retained." }
+                return result
+            }
+            #else
+            return failed("Codex Micro cap assessment requires macOS.")
+            #endif
+        }
+        guard let config else { return failed("The strict Gemma configuration is unavailable.") }
         let response = await StockSageAIAssessment.complete(config, isOllama: false, system: fitted.system, user: fitted.user,
             facts: fitted.facts, maxTokens: 192, attemptObserver: observer, stillValid: active, transport: modelTransport)
         guard active() else { return failed("Evidence expired or research was interrupted during inference.") }

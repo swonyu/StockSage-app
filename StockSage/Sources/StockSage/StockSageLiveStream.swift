@@ -15,6 +15,11 @@ final class StockSageLiveStream: ObservableObject {
     private(set) var lastGap: String?
     private var diagnosticsNotificationUptime: TimeInterval?
     private var delivered: [String: Tick] = [:]
+    var microcapSymbols: Set<String> = []
+    func latestTrade(for symbol: String) -> Tick? {
+        guard let key = Self.stockSymbol(symbol) else { return nil }
+        return delivered[key]
+    }
     var subscribed: Set<String> {
         guard isStreaming else { return [] }
         let now = Date()
@@ -43,6 +48,7 @@ final class StockSageLiveStream: ObservableObject {
         /// Preserve the exchange event clock separately from SIP ordering.
         var participantTime: Date? = nil
         var conditions: [Int64]? = nil
+        var size: Double? = nil
     }
 
     nonisolated enum Event: Sendable, Equatable {
@@ -77,7 +83,8 @@ final class StockSageLiveStream: ObservableObject {
                 let conditions = rawConditions?.compactMap { integer($0) }
                 return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp,
                     sequence: integer(row["q"]), participantTime: participant,
-                    conditions: conditions?.count == rawConditions?.count ? conditions : nil))
+                    conditions: conditions?.count == rawConditions?.count ? conditions : nil,
+                    size: number(row["s"]).flatMap { $0 > 0 ? $0 : nil }))
             case "Q":
                 guard let bid = number(row["bp"]), bid >= 0, let ask = number(row["ap"]), ask >= 0,
                       let bidSize = number(row["bs"]), bidSize >= 0,
@@ -216,7 +223,7 @@ final class StockSageLiveStream: ObservableObject {
                 })
                 if let ingress = current.ingress {
                     let store = StockSageStore.shared
-                    let selected = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol))
+                    let selected = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols)
                     let all = selected.sorted()
                     let selection = StockSageStore.rotatedSweepSlice(all: all, cursor: self.publicationCursor,
                                                                    limit: ingress.limits.publicationSymbols)
@@ -228,7 +235,7 @@ final class StockSageLiveStream: ObservableObject {
                         displayConditions: policy.conditions, displayConditionGeneration: policy.generation)
                     guard !Task.isCancelled, self.connection === current, current.ingress === ingress else { continue }
                     guard ToolPolicy.isExternalAllowed, current.isCurrent else { self.stop(); return }
-                    guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)) else {
+                    guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols) else {
                         self.publicationCursor = 0 // A selection changed while the worker was capturing.
                         continue
                     }

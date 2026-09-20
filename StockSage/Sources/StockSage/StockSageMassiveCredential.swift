@@ -23,10 +23,10 @@ nonisolated enum StockSageMassiveCredential {
         let write: (String?) throws -> Void
     }
 
-    private static var query: [String: Any] {
+    private static func query(service: String, account: String) -> [String: Any] {
         var result: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "SA.StockSage.Massive",
-         kSecAttrAccount as String: "api-key"]
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: account]
         #if !os(macOS)
         result[kSecUseDataProtectionKeychain as String] = true
         result[kSecAttrSynchronizable as String] = false
@@ -37,7 +37,12 @@ nonisolated enum StockSageMassiveCredential {
     }
 
     static var keychain: Storage {
-        Storage(read: {
+        keychain(service: "SA.StockSage.Massive", account: "api-key")
+    }
+
+    static func keychain(service: String, account: String) -> Storage {
+        let query = query(service: service, account: account)
+        return Storage(read: {
             var q = query
             q[kSecReturnData as String] = true
             q[kSecMatchLimit as String] = kSecMatchLimitOne

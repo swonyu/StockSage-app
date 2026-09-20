@@ -12,6 +12,14 @@ import AppKit
     typealias T = StockSageMassiveTicks
     let now = ISO8601DateFormatter().date(from: "2026-09-18T15:00:30Z")!
 
+    @Test func microcapHasOwnMacDestinationWithoutReplacingExistingResearch() {
+        let routes = StockSageDesktop.sections.map(\.rawValue)
+        #expect(routes.contains("microcap"))
+        #expect(Set(routes).count == routes.count)
+        #expect(["sameDay", "weekResearch", "fortnightResearch", "watchlist", "all"].allSatisfy(routes.contains))
+        #expect(!MarketSection.phoneSections.map(\.rawValue).contains("microcap"))
+    }
+
     func bars(gap: Bool = false) -> T.Intraday {
         let end = now.addingTimeInterval(-30)
         let values = (0..<60).filter { !gap || $0 != 58 }.map { index in
@@ -267,6 +275,7 @@ import AppKit
                         let messages = try #require(object["messages"] as? [[String: String]])
                         let system = try #require(messages.first(where: { $0["role"] == "system" })?["content"])
                         #expect(system.contains("remainder of today's regular trading session"))
+                        #expect(!system.contains("business-quality evidence"), "The measured Gemma prompt must stay unchanged")
                         #expect(!system.contains("Assess the supplied stock for the next trading week."))
                         let prompt = try #require(messages.first(where: { $0["role"] == "user" })?["content"])
                         #expect(!prompt.contains("Settled paper cash") && !prompt.contains("Currently held"))
@@ -297,13 +306,86 @@ import AppKit
         }
     }
 
+
+    @Test func microcapReceiptsCannotMixWithSameDayAndRetainFullScreen() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let receipts = StockSageResearchReceiptStore(directory: folder, maxCompletedBytes: 0, sameDayLabel: "microcap")
+        let id = receipts.beginSameDay(at: now)
+        var receipt = S.Receipt(id: id, startedAt: now, finishedAt: now, selection: "All rows preserved", checks: [])
+        #expect(!receipts.saveSameDay(receipt), "Legacy same-day payload cannot enter Micro cap storage")
+        receipt.mode = .microcap
+        let rows = (0..<1500).map { StockSageMicrocapScreen.Row(symbol: "M\($0)", name: "Fixture", status: .unavailable, note: "Missing float", observedAt: now) }
+        receipt.microcapScreen = .init(policyVersion: StockSageMicrocapScreen.policyVersion, startedAt: now, cutoff: now, finishedAt: now, directoryCount: 1500, detailedCount: 0, unassessedCount: 0, rows: rows, blocker: "Missing float")
+        #expect(receipts.saveSameDay(receipt))
+        receipts.finish(scanID: id, status: "Completed", at: now)
+        #expect(StockSageResearchReceiptStore(directory: folder, sameDayLabel: "microcap").latestSameDay == receipt)
+        #expect(StockSageResearchReceiptStore(directory: folder).sameDayHistory.isEmpty)
+    }
+
+    @Test func microcapAstraKeepsOriginalOutputAndScreenExpiryBlocksFinalPick() async throws {
+        let latest = try #require(StockSageMarketHours.latestCompletedDailySession(at: now))
+        let dates = (0..<30).map { latest.addingTimeInterval(Double($0 - 29) * 86400) }
+        let history = StockSagePriceHistory(symbol: "AAPL", dates: dates, opens: Array(repeating: 100, count: 30), highs: Array(repeating: 104, count: 30), lows: Array(repeating: 99, count: 30), closes: Array(repeating: 100, count: 30), volumes: Array(repeating: 1000, count: 30), priceSource: .massiveDaily)
+        let advice = TradeAdvice(action: .hold, conviction: 0, regime: .range, rationale: ["Daily background"], stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: "Unvalidated")
+        let idea = StockSageIdea(symbol: "AAPL", market: "US", price: 100, advice: advice, spark: [100], generatedAt: now, priceAsOf: latest, priceSource: .massiveDaily)
+        let news = StockSageNewsService.NewsItem(date: now.addingTimeInterval(-600), title: "Contract progress", snippet: "The company reported progress; effects remain uncertain.", link: URL(string: "https://example.com/public-report"), sentiment: nil, source: "Synthetic public provider")
+        let context = StockSageAIAssessment.Context(idea: idea, earnings: nil, company: [:], news: [news], at: now, quotedInUSD: true)
+        let packet = context.evidencePacket()
+        let capture = StockSageHorizonResearch.Capture(history: history, context: context, facts: packet.facts.map(\.text), coverage: [], at: now, blockedByThrottle: false, evidencePacket: packet)
+        var row = StockSageMicrocapScreen.Row(symbol: "AAPL", name: "Fixture micro cap", status: .passed, note: "Synthetic classification only", observedAt: now.addingTimeInterval(-180))
+        row.marketCap = 100_000_000; row.marketCapRequestedDate = "2026-09-18"; row.referenceRetrievedAt = now
+        row.freeFloat = 10_000_000; row.floatEffectiveDate = now.addingTimeInterval(-86400)
+        row.openingGap = 0.15; row.relativeVolume = 6; row.volume = 600; row.baselineVolume = 100
+        row.momentum = 0.02; row.annualizedVolatility = 0.5
+        let screen = StockSageMicrocapScreen.Result(policyVersion: StockSageMicrocapScreen.policyVersion, startedAt: now.addingTimeInterval(-200), cutoff: now.addingTimeInterval(-170), finishedAt: now, directoryCount: 1, detailedCount: 1, unassessedCount: 0, rows: [row], blocker: nil)
+        let denied = await S.assessCaptured(capture, item: listing("AAPL"), activity: 1000, intraday: bars(), quote: quote(), config: nil, allowed: { true }, clock: { now }, microcap: screen, admitSetup: { _ in false }, codexAssessment: { _, _, _ in
+            Issue.record("Denied setup must not consume Codex usage")
+            return .failure(.init(message: "Unexpected call", audit: nil))
+        })
+        #expect(denied.setupID == nil && denied.codexAudit == nil && !denied.qualified)
+        var calls = 0
+        let fundamentals = StockSageFundamentals.Snapshot(symbol: "AAPL", asOf: now, retrievedAt: now,
+            providerRatios: [.init(key: "price_to_earnings", label: "P/E", value: 12, unit: "multiple",
+                origin: "Synthetic provider fixture", formula: "Provider price / trailing earnings per share",
+                period: "2026-09-18 daily snapshot", sourceURL: "https://massive.com/docs/rest/stocks/fundamentals/ratios",
+                inputs: [], note: "Fixture only; not real company data.")])
+        let result = await S.assessCaptured(capture, item: listing("AAPL"), activity: 1000, intraday: bars(), quote: quote(), config: nil, allowed: { true }, clock: { now }, modelTransport: { _ in
+            Issue.record("Micro cap must not call Gemma"); throw URLError(.cancelled)
+        }, microcap: screen, fundamentals: fundamentals, codexAssessment: { system, prompt, schema in
+            calls += 1
+            #expect(system.contains("remainder of today's regular trading session"))
+            #expect(system.contains("business-quality evidence") && system.contains("Do not infer insider ownership"))
+            #expect(prompt.contains("P/E") && prompt.contains("12"))
+            let lines = prompt.components(separatedBy: "\n")
+            let minute = lines.first { $0.contains("Completed minute starting") }?.components(separatedBy: ": ").first ?? "invalid"
+            let catalyst = lines.first { $0.contains("Public news, untrusted source data") }?.components(separatedBy: ": ").first ?? "invalid"
+            let output = "{\"action\":\"Buy\",\"reason\":\"The observed setup has public support.\",\"risk\":\"A reversal would invalidate the setup.\",\"evidence\":[\"\(minute)\",\"\(catalyst)\"]}"
+            return .success(.init(text: output, audit: .init(requestedModel: "gpt-6-astra", requestedEffort: "ultra", reportedModel: nil, cliVersion: "fixture", terminalStatus: "completed", systemSHA256: "fixture", userSHA256: "fixture", schemaSHA256: "fixture", inputTokens: nil, outputTokens: nil, elapsedMilliseconds: 1)))
+        })
+        #expect(calls == 1 && result.qualified, "\(result.note)")
+        #expect(result.expiresAt == now.addingTimeInterval(10))
+        #expect(result.profile == nil && result.codexAudit != nil && result.rawModelOutput != nil)
+        #expect(result.fundamentals == fundamentals)
+        let savedResult = try JSONDecoder().decode(S.Check.self, from: JSONEncoder().encode(result))
+        #expect(savedResult.fundamentals == fundamentals, "Save exact financial inputs with the opinion for later review")
+        let engine = S(mode: .microcap)
+        var clock = now
+        await engine.run(selection: .init([listing("AAPL")]), capacity: { 1 }, allowed: { true }, clock: { clock }, analyze: { _, _, _ in result }, refreshQuote: { _ in
+            clock = now.addingTimeInterval(11)
+            return quote(age: -11)
+        })
+        #expect(engine.receipt?.selectedSymbol == nil)
+        #expect(engine.receipt?.checks.first?.rawModelOutput == result.rawModelOutput)
+    }
+
     #if os(macOS)
-    @Test func populatedDatedCardRendersAtPhoneAndMacWidths() async throws {
+    @Test(arguments: [false, true]) func populatedDatedCardRendersAtPhoneAndMacWidths(microcap: Bool) async throws {
         let suite = "stocksage.same-day-render." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
-        let engine = S(), candidate = try check("AAPL")
+        let engine = S(mode: microcap ? .microcap : .sameDay), candidate = try check("AAPL")
         await engine.run(selection: .init([listing("AAPL")]), capacity: { 1 }, allowed: { true }, clock: { now },
             analyze: { _, _, _ in candidate }, refreshQuote: { _ in quote() })
         #expect(engine.receipt?.selectedSymbol == "AAPL")
@@ -332,7 +414,7 @@ import AppKit
                 host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
             }
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
-            let path = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-same-day-card-\(Int(width)).png")
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-\(microcap ? "microcap" : "same-day")-card-\(Int(width)).png")
             try png.write(to: path, options: .atomic)
             print("SAME_DAY_RENDER \(path.path)")
         }
