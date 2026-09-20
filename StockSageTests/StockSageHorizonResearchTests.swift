@@ -1196,6 +1196,73 @@ import Testing
         return formatter.string(from: date)
     }
 
+    @Test(arguments: ["valid", "unadjusted", "revoked", "incomplete", "notDue"])
+    func allOpinionPriceFetchKeepsSettledWindowAndRejectsUnusableResponses(scenario: String) async throws {
+        let run = dailyReviewRun()
+        let check = StockSageResearchHistory.CompletedCheck(listing: listing("ACME"), result: .init(
+            verdict: scenario == "incomplete" ? nil : .init(action: .hold, reason: "Wait for evidence", risk: "Volatility", evidence: ["F1"]),
+            facts: ["Dated fixture"], note: "Original opinion", at: run.completedAt.addingTimeInterval(-1), model: "fixture-model",
+            referenceClose: (100, reviewDate("2026-09-11T04:00:00Z"))))
+        let now = reviewDate(scenario == "notDue" ? "2026-09-15T16:00:00Z" : "2026-09-18T04:01:00Z")
+        var allowed = true, calls = 0
+        let observation = await R.fetchOpinionReviewObservation(check: check, run: run, key: "synthetic-test-only",
+            allowed: { allowed }, clock: { now }, transport: { request in
+                calls += 1
+                #expect(request.url?.path == "/v2/aggs/ticker/ACME/range/1/day/2026-09-11/2026-09-17")
+                var payload = dailyReviewPayload(run, sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z", "2026-09-17T04:00:00Z"])
+                if scenario == "unadjusted" { payload["adjusted"] = false }
+                if scenario == "revoked" { allowed = false }
+                return (try JSONSerialization.data(withJSONObject: payload),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(calls == (["incomplete", "notDue"].contains(scenario) ? 0 : 1))
+        #expect((observation != nil) == (scenario == "valid"))
+        #expect(check.verdict?.action == (scenario == "incomplete" ? nil : "Hold"))
+    }
+
+    @Test(arguments: ["allowed", "testHost", "sampleData", "externalDenied", "missingKey", "revokedKey", "changedPolicy", "cancelled"])
+    func allOpinionReviewUsesTheSameOwnershipGates(scenario: String) async throws {
+        let (store, defaults, suite) = try outcomeTriggerStore(sample: scenario == "sampleData")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let completed = reviewDate("2026-09-14T21:00:00Z")
+        var scan = R.Scan()
+        scan.at = completed.addingTimeInterval(-60)
+        scan.listings = [listing("ACME")]
+        scan.results["ACME"] = .init(verdict: .init(action: .hold, reason: "Wait for evidence", risk: "Volatility", evidence: ["F1"]),
+            facts: ["Dated fixture"], note: "Original neutral opinion", at: completed.addingTimeInterval(-1), model: "fixture-model")
+        scan.rankingFailure = "No qualified buys"
+        scan.freezeTopFive(horizon: .week, at: completed)
+        let run = StockSageResearchHistory.snapshot(startedAt: scan.at!, completedAt: completed, horizon: .week, scan: scan)
+        try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+        #expect(run.predictions.isEmpty)
+        var key = scenario == "missingKey" ? "" : "synthetic-test-only"
+        var policy = "first-policy"
+        var fetches = 0
+        var gates = R.SavedOutcomeGates()
+        gates.isRunningTests = { scenario == "testHost" }
+        gates.externalAllowed = { scenario != "externalDenied" }
+        gates.apiKey = { key }
+        gates.credentialRevision = { "fixture-generation" }
+        gates.policyRevision = { policy }
+        gates.clock = { self.reviewDate("2026-10-05T13:00:00Z") }
+        gates.fetchOpinion = { check, _, _, _ in
+            fetches += 1
+            #expect(check.verdict?.action == "Hold")
+            if scenario == "revokedKey" { key = "rotated-synthetic-key" }
+            if scenario == "changedPolicy" { policy = "second-policy" }
+            return nil
+        }
+        let task = Task { @MainActor in
+            if scenario == "cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+            await R.checkSavedOutcomes(history: history, store: store, includeAllOpinions: true, gates: gates)
+        }
+        await task.value
+        #expect(fetches == (["allowed", "revokedKey", "changedPolicy"].contains(scenario) ? 1 : 0))
+        #expect(history.opinionOutcomes(runID: run.id)?.count == (scenario == "allowed" ? 1 : 0))
+        #expect(history.runs[0].predictions.isEmpty && history.runs[0].evaluations.isEmpty && !history.isChecking)
+    }
+
     /// One adjusted series: the saved reference bar followed by settled monitoring sessions.
     private func dailyReviewPayload(_ run: StockSageResearchHistory.Run, sessions: [String],
                                     lastHigh: Double = 105) -> [String: Any] {

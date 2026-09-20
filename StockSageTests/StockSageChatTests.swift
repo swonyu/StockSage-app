@@ -1887,7 +1887,8 @@ struct StockSageChatTests {
             }
             if !isChecking {
                 for row in 0..<4 {
-                    for (column, label) in [(4, "Scenario stop \(row == 0 ? "$95.00" : "—")"),
+                    for (column, label) in [(3, "Buy entry reference \(row == 0 ? "$100.00" : "—")"),
+                                            (4, "Scenario stop \(row == 0 ? "$95.00" : "—")"),
                                             (5, "Scenario target \(row == 0 ? "$110.00" : "—")")] {
                         let cell = try #require(table.view(atColumn: column, row: row, makeIfNecessary: true))
                         let values = nativeAccessibilityElements(in: cell).compactMap { element -> String? in
@@ -1910,6 +1911,112 @@ struct StockSageChatTests {
         #expect(model.workspaceSelection == .research)
         #expect((research.running != nil) == isRunning, "Rendering must not start or stop a scan")
         #expect(research.scans[.week]?.selection == receipt, "Rendering must preserve the selection source and date")
+    }
+
+    @Test func researchInspectorAccessibilityReplacesPreviousSelection() async throws {
+        typealias R = StockSageHorizonResearch
+        let suite = "stocksage.detail.selection.ax.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let research = R()
+        let capturedAt = Date()
+        let started = research.start(.fortnight, allowed: { true }, universe: {
+            .init(["SYNA", "SYNB"].map {
+                .init(ticker: $0, name: $0 == "SYNA" ? "Synthetic Alpha Company" : "Synthetic Beta Company",
+                      market: "stocks", locale: "us", active: true, type: "CS",
+                      currency_name: "usd", primary_exchange: "XNAS")
+            })
+        }, rank: { scan, horizon in
+            .success(.fixture(scan: scan, symbols: [], horizon: horizon))
+        }, analyze: { item in
+            let first = item.ticker == "SYNA"
+            return .init(verdict: .init(action: .buy,
+                reason: first ? "Alpha expansion is a synthetic interpretation." : "Beta demand is a separate synthetic interpretation.",
+                risk: first ? "Alpha execution remains uncertain." : "Beta funding remains uncertain.", evidence: ["F1"]),
+                levels: .init(entry: first ? 31 : 71, stop: first ? 29 : 65,
+                              target: first ? 35 : 83, at: capturedAt,
+                              basis: "Synthetic scenario only; not a live quote."),
+                facts: [first ? "Synthetic Alpha evidence." : "Synthetic Beta evidence."],
+                note: "AX selection fixture detail; no provider or model request.", at: capturedAt,
+                model: "fixture", referenceClose: (first ? 31 : 71, capturedAt))
+        })
+        try #require(started)
+        defer { research.stop() }
+        func waitFor(_ ready: @MainActor () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready())
+        }
+        try await waitFor { research.running == nil }
+        try #require(research.scans[.fortnight]?.results.count == 2)
+        let model = ResearchPresentationModel()
+        model.presentation.horizon = .fortnight
+        model.presentation.filter = .all
+        model.workspaceSelection = .fortnightResearch
+        let workspace = ResearchWorkspacePresentationFixture(model: model, store: store, research: research)
+            .defaultAppStorage(defaults)
+        _ = try await capture(workspace, name: "stocksage-inspector-successive-selection-ax",
+                              viewport: CGSize(width: 1301, height: 841), usesCompactToolbar: true) { root in
+            @MainActor func tables(in view: NSView) -> [NSTableView] {
+                if let table = view as? NSTableView { return [table] }
+                return view.subviews.flatMap { tables(in: $0) }
+            }
+            @MainActor func scrolls(in view: NSView) -> [NSScrollView] {
+                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrolls(in: $0) }
+            }
+            let table = try #require(tables(in: root).first { $0.numberOfColumns == 6 })
+            #expect(table.numberOfRows == 2 && model.presentation.selected == nil)
+            let window = try #require(root.window)
+            let host = try #require(window.contentViewController)
+            table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            try await waitFor { model.presentation.selected == "SYNA" }
+            var inspector: NSScrollView?
+            try await waitFor {
+                inspector = scrolls(in: root).first { scroll in
+                    guard let document = scroll.documentView else { return false }
+                    return nativeAccessibilityText(in: document, excludingResearchTableDescendants: true)
+                        .contains("AX selection fixture detail")
+                }
+                return inspector != nil
+            }
+            let retainedInspector = try #require(inspector)
+            let document = try #require(retainedInspector.documentView)
+            // Re-query native AX children each time; retain no prior AX proxy array.
+            // Scope to the inspector so the other stock's table row is not a false failure.
+            @MainActor func text() -> String { nativeAccessibilityText(in: document, excludingResearchTableDescendants: true) }
+            for index in [0, 1, 0] {
+                let first = index == 0
+                let symbol = first ? "SYNA" : "SYNB"
+                let reason = first ? "Alpha expansion is a synthetic interpretation." : "Beta demand is a separate synthetic interpretation."
+                let risk = first ? "Alpha execution remains uncertain." : "Beta funding remains uncertain."
+                let previousReason = first ? "Beta demand is a separate synthetic interpretation." : "Alpha expansion is a synthetic interpretation."
+                let previousRisk = first ? "Beta funding remains uncertain." : "Alpha execution remains uncertain."
+                table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+                try await waitFor { model.presentation.selected == symbol }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                while !text().contains(reason), ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                root.layoutSubtreeIfNeeded()
+                let current = text()
+                #expect(current.contains(first ? "Synthetic Alpha Company" : "Synthetic Beta Company"))
+                #expect(current.contains(reason) && current.contains(risk), "AX must describe the selected stock")
+                #expect(!current.contains(previousReason) && !current.contains(previousRisk),
+                        "AX must discard the previous stock's interpretation and risk")
+                for level in first ? ["$31.00", "$29.00", "$35.00"] : ["$71.00", "$65.00", "$83.00"] {
+                    #expect(current.contains(level), "Selected stock's entry, stop and target must reach AX")
+                }
+                for oldLevel in first ? ["$71.00", "$65.00", "$83.00"] : ["$31.00", "$29.00", "$35.00"] {
+                    #expect(!current.contains(oldLevel), "Previous stock's levels must not survive in inspector AX")
+                }
+                #expect(window.contentViewController === host && root.window === window)
+                #expect(retainedInspector.documentView === document && scrolls(in: root).contains { $0 === retainedInspector },
+                        "Successive selection must update the same inspector host")
+                #expect(tables(in: root).contains { $0 === table } && table.selectedRow == index)
+            }
+        }
+        #expect(research.running == nil && research.scans[.fortnight]?.results.count == 2)
     }
 
     @Test(arguments: [StockSageResearchModesPanel.ResultFilter.all, .topBuys])

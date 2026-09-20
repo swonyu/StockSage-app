@@ -151,6 +151,63 @@ import Testing
             == JSONSerialization.data(withJSONObject: bodies[1], options: .sortedKeys))
     }
 
+    @Test(arguments: ["valid", "metadata-timeout", "short-context", "invalid-context", "http-failure", "malformed-json", "network-failure"])
+    func postResponseCapacityFailurePreservesCompletedReply(scenario: String) async throws {
+        var instant = ContinuousClock.now
+        var paths: [String] = []
+        let reply: [String: Any] = ["model": S.gemmaModel, "choices": [[
+            "message": ["content": "Complete fixture answer."], "finish_reason": "stop"]],
+            "usage": ["prompt_tokens": 5123, "completion_tokens": 91, "total_tokens": 5214]]
+        let replyBytes = try JSONSerialization.data(withJSONObject: reply).count
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "retained evidence",
+            maxTokens: 192, contextTokens: 24576, timeout: 60, externalAllowed: { true }, transport: { request in
+                paths.append(request.url!.path)
+                if request.httpMethod == "POST" { return try response(request, reply) }
+                #expect(request.httpMethod == "GET" && request.url?.path == "/props")
+                if scenario == "metadata-timeout" { instant = instant.advanced(by: .milliseconds(2600)) }
+                if scenario == "network-failure" { throw URLError(.cannotConnectToHost) }
+                if scenario == "malformed-json" {
+                    return (Data("invalid metadata".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                }
+                let context: Any = scenario == "short-context" ? 16384 : scenario == "invalid-context" ? true : 24576
+                return try response(request, properties(context: context), status: scenario == "http-failure" ? 404 : 200)
+            }, clock: { instant })
+        #expect(paths == ["/v1/chat/completions", "/props"], "Metadata rejection must never repeat inference")
+        let diagnostic: S.Diagnostic
+        switch result {
+        case .success(let completion):
+            #expect(scenario == "valid", "A failed capacity check must never publish the model answer")
+            diagnostic = completion.diagnostic
+        case .failure(let failure):
+            #expect(scenario != "valid")
+            #expect(failure.diagnostic.category == .contextBudget, "The original capacity guard remains authoritative")
+            diagnostic = failure.diagnostic
+        }
+        #expect(diagnostic.httpStatus == 200 && diagnostic.finish == .stop)
+        #expect(diagnostic.promptTokens == 5123 && diagnostic.completionTokens == 91)
+        #expect(diagnostic.bodyBytes == replyBytes && diagnostic.outputLimitRetries == 0)
+        let probe = try #require(diagnostic.capacityProbe)
+        let expectedFailure: S.FailureCategory? = switch scenario {
+        case "metadata-timeout": .timeout
+        case "short-context", "invalid-context": .contextBudget
+        case "http-failure": .http
+        case "malformed-json": .malformedJSON
+        case "network-failure": .network
+        default: nil
+        }
+        #expect(probe.failureCategory == expectedFailure)
+        #expect(probe.elapsedMilliseconds == (scenario == "metadata-timeout" ? 2600 : 0))
+        #expect(probe.httpStatus == (scenario == "metadata-timeout" || scenario == "network-failure" ? nil : scenario == "http-failure" ? 404 : 200))
+        #expect(probe.observedContextTokens == (scenario == "valid" ? 24576 : scenario == "short-context" ? 16384 : nil))
+        #expect(diagnostic.summary.contains("capacityCheck=\(expectedFailure?.rawValue ?? "verified")"))
+        let encoded = try JSONEncoder().encode(diagnostic)
+        #expect(try JSONDecoder().decode(S.Diagnostic.self, from: encoded) == diagnostic)
+        var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "capacityProbe")
+        let restored = try JSONDecoder().decode(S.Diagnostic.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(restored.capacityProbe == nil && restored.finish == .stop && restored.promptTokens == 5123)
+    }
+
     @Test(arguments: ["missing-model", "wrong-model", "model-suffix", "missing-finish", "tool-call", "repeated-length", "short-context", "sleeping", "missing-props", "policy-changed", "policy-during-props"])
     func strictFailuresNeverPublishOrFallBackToTheMac(scenario: String) async throws {
         var allowed = true, paths: [String] = []

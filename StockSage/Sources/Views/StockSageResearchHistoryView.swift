@@ -72,12 +72,12 @@ struct StockSageResearchHomeSummary: View {
                         .font(.callout).monospacedDigit()
                         .accessibilityIdentifier("home.research.legacy.outcomes")
                 }
-                Text("Separate counts, not a win rate. Saved predictions can overlap, so these are not independent trades, and still-active or unavailable predictions are excluded.")
+                Text("These counts cover the strict comparison picks. They are not a win rate: saved predictions can overlap, and still-active or unavailable predictions are excluded.")
                     .font(.caption).foregroundStyle(.secondary)
                 #if os(iOS)
                 StockSageResearchHistoryButton(store: store, history: history)
                 #endif
-                Text("Open Saved research and choose Check active results to review settled sessions. Opening the app does not fetch or change outcomes.")
+                Text("Open Saved research to review all saved opinions or just the strict comparison picks. Opening the app does not fetch or change outcomes.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             #if os(macOS)
@@ -212,6 +212,8 @@ struct StockSageResearchHistoryView: View {
     @ObservedObject var history: StockSageResearchHistory
     @Environment(\.dismiss) private var dismiss
     @State private var checkRequest = 0
+    @State private var checkAllOpinions = false
+    @State private var interruptedArchives: [StockSageResearchHistory.InterruptedArchive]?
     @State private var showEvaluation = false
     @State private var filter = StockSageResearchReviewFilter()
     static let directionOnlyDisclosure = "Price direction only. No market comparison is made; a rise does not establish outperformance, a profitable trade, or predictive skill."
@@ -268,9 +270,9 @@ struct StockSageResearchHistoryView: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Saved picks, dated outcomes", systemImage: "clock.arrow.circlepath")
+                        Label("Every opinion, preserved", systemImage: "clock.arrow.circlepath")
                             .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
-                        Text("Original picks stay unchanged. New runs complete at the first settled session that reaches the captured stop or target, otherwise at the exact 7th or 14th session close.")
+                        Text("Original opinions and evidence stay unchanged. Review every accepted opinion against later prices, including stocks outside the Top 5. Failed and incomplete checks remain in their original run.")
                             .font(.callout)
                             .fixedSize(horizontal: false, vertical: true)
                         DisclosureGroup("How outcome checks work") {
@@ -286,9 +288,23 @@ struct StockSageResearchHistoryView: View {
                             Text(reason).font(.callout).foregroundStyle(.secondary)
                         }
                         Button {
+                            checkAllOpinions = true
                             checkRequest += 1
                         } label: {
-                            Label(history.isChecking ? "Checking settled sessions…" : "Check active results",
+                            Label(history.isChecking ? "Checking settled sessions…" : "Review all saved opinions",
+                                  systemImage: "chart.xyaxis.line")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(history.isChecking || accessReason != nil || history.runs.isEmpty)
+                        .accessibilityIdentifier("research.history.checkAllOpinions")
+                        Text("Each press reviews up to \(StockSageResearchHistory.maximumChecksPerRequest) due opinions and continues with the least recently checked next time. No scheduled checks. Open a completed run to inspect each result.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button {
+                            checkAllOpinions = false
+                            checkRequest += 1
+                        } label: {
+                            Label("Review strict comparison picks",
                                   systemImage: "arrow.clockwise")
                                 .frame(minHeight: 44)
                         }
@@ -367,6 +383,22 @@ struct StockSageResearchHistoryView: View {
                         }
                     }
                 }
+                if let interruptedArchives, !interruptedArchives.isEmpty {
+                    Section("Earlier interrupted captures") {
+                        ForEach(interruptedArchives) { archive in
+                            NavigationLink {
+                                StockSageInterruptedResearchDetail(history: history, archive: archive)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(archive.horizon.title).font(.headline)
+                                    Text(archive.startedAt.formatted(date: .abbreviated, time: .shortened))
+                                    Text("\(archive.checkedCount) of \(archive.selectedCount) checks preserved · incomplete capture")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }.padding(.vertical, 6)
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("Saved research")
             .searchable(text: $filter.query, prompt: "Saved symbol or company")
@@ -385,8 +417,10 @@ struct StockSageResearchHistoryView: View {
         .task(id: checkRequest) {
             guard checkRequest > 0, accessReason == nil else { return }
             // Explicit outcome review; opening or foregrounding never starts this request.
-            await StockSageHorizonResearch.checkSavedOutcomes(history: history, store: store)
+            await StockSageHorizonResearch.checkSavedOutcomes(history: history, store: store,
+                includeAllOpinions: checkAllOpinions)
         }
+        .task { interruptedArchives = history.interruptedArchives() }
     }
 
     static func sessionDateLabel(_ date: Date, locale: Locale = .current) -> String {
@@ -450,6 +484,8 @@ struct StockSageResearchHistoryDetail: View {
     @State private var showExporter = false
     @State private var exportError: String?
     @State private var fullChecks: StockSageResearchHistory.FullChecksAvailability?
+    @State private var opinionOutcomes: [String: StockSageResearchHistory.OpinionOutcome]?
+    @State private var checkQuery = ""
 
     var body: some View {
         if let run = history.runs.first(where: { $0.id == runID }) {
@@ -498,7 +534,10 @@ struct StockSageResearchHistoryDetail: View {
                             do {
                                 let original = history.fullChecks(runID: run.id)
                                 fullChecks = original
-                                exportDocument = try .init(data: StockSageResearchExport.data(for: run, fullChecks: original))
+                                let outcomes = history.opinionOutcomes(runID: run.id)
+                                if original.checks != nil, outcomes == nil { throw CocoaError(.fileReadCorruptFile) }
+                                exportDocument = try .init(data: StockSageResearchExport.data(for: run,
+                                    fullChecks: original, opinionOutcomes: outcomes))
                                 exportError = nil
                                 showExporter = true
                             } catch { exportError = "Research could not be exported: \(error.localizedDescription)" }
@@ -508,7 +547,7 @@ struct StockSageResearchHistoryDetail: View {
                         }
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier("research.history.export")
-                        Text("JSON includes the saved shortlist and review progress, plus original full checks when available. Missing or expired checks are explicitly identified. This is dated research, not live recommendations.")
+                        Text("JSON includes original full checks, the saved shortlist and subsequent opinion outcomes when available. Missing records are explicitly identified. This is dated research, not live recommendations.")
                             .font(.caption).foregroundStyle(.secondary)
                         if let exportError { Text(exportError).font(.callout).foregroundStyle(.orange) }
                     }.padding(.vertical, 6)
@@ -524,7 +563,7 @@ struct StockSageResearchHistoryDetail: View {
                         Text("This older run did not record its deterministic Top 5. Its original checks and strict comparison remain unchanged.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    Text("Ranked rows can fail qualification. Outcome checks below belong only to the separate strict comparison shortlist.")
+                    Text("Ranked rows can fail qualification. Full-list price reviews below remain separate from the strict comparison shortlist.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Original full checks") {
@@ -532,9 +571,31 @@ struct StockSageResearchHistoryDetail: View {
                         Text(fullChecks.message).font(.callout)
                             .foregroundStyle(fullChecks.state == .corrupt ? Color.orange : .secondary)
                         if let checks = fullChecks.checks {
+                            let accepted = checks.checks.filter { $0.verdict != nil }.count
+                            Text("\(checks.checks.count) saved checks · \(accepted) accepted opinions")
+                                .font(.callout).monospacedDigit()
+                            if let opinionOutcomes {
+                                Text("\(opinionOutcomes.values.filter { $0.horizonReturn.state == .evaluated }.count) full-horizon returns recorded")
+                                    .font(.callout).monospacedDigit()
+                            } else {
+                                Text("Saved outcome records are unavailable. Original research is preserved.")
+                                    .font(.callout).foregroundStyle(.orange)
+                            }
+                            Text("Price movement is measured from the next trading-date open after this run completed. Hold and Avoid receive no directional win label. Captured long scenarios, where available, are shown separately.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            TextField("Find a saved symbol or company", text: $checkQuery)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("research.history.checkSearch")
+                            let query = checkQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let visibleChecks = checks.checks.filter {
+                                query.isEmpty || $0.listing.ticker.localizedCaseInsensitiveContains(query)
+                                    || $0.listing.name.localizedCaseInsensitiveContains(query)
+                            }
+                            if visibleChecks.isEmpty { Text("No original checks match this search.").foregroundStyle(.secondary) }
                             DisclosureGroup("Inspect all \(checks.checks.count) original checks") {
-                                ForEach(checks.checks, id: \.listing.ticker) { check in
+                                ForEach(visibleChecks, id: \.listing.ticker) { check in
                                     DisclosureGroup("\(check.listing.ticker) · \(check.verdict?.action ?? "Incomplete opinion")") {
+                                        opinionReview(check, run: run)
                                         StockSageResearchModesPanel.resultDetail(check.listing, result: check.result)
                                             .padding(.vertical, 8)
                                     }
@@ -607,7 +668,10 @@ struct StockSageResearchHistoryDetail: View {
                 if let error = history.lastError { Text(error).foregroundStyle(.orange) }
             }
             .navigationTitle(run.horizon.title)
-            .task(id: history.runs.map(\.id)) { fullChecks = history.fullChecks(runID: runID) }
+            .task(id: history.opinionReviewRevision) {
+                fullChecks = history.fullChecks(runID: runID)
+                opinionOutcomes = history.opinionOutcomes(runID: runID)
+            }
             .fileExporter(isPresented: $showExporter, document: exportDocument, contentType: .json,
                           defaultFilename: "StockSage-\(run.horizon.rawValue)-\(run.id.uuidString)") { result in
                 if case .failure(let error) = result,
@@ -620,8 +684,28 @@ struct StockSageResearchHistoryDetail: View {
         }
     }
 
+    @ViewBuilder private func opinionReview(_ check: StockSageResearchHistory.CompletedCheck,
+                                           run: StockSageResearchHistory.Run) -> some View {
+        if check.verdict == nil {
+            Text("No accepted opinion to score. The original failure and evidence remain below.")
+                .font(.callout).foregroundStyle(.secondary)
+        } else if let receipt = opinionOutcomes?[check.listing.ticker] {
+            Text("Full-horizon price movement").font(.headline)
+            outcome(receipt.horizonReturn, run: run, showBuySupport: false)
+            if let scenario = receipt.scenario {
+                Text("Captured long scenario · qualification is separate").font(.headline)
+                outcome(scenario, run: run, showBuySupport: false)
+            }
+            Text("Last reviewed \(receipt.checkedAt.formatted(date: .abbreviated, time: .shortened)).")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text(opinionOutcomes == nil ? "Saved outcome records are unavailable. Original research is preserved." : "No price review recorded yet. Use Review all saved opinions in Saved research when settled sessions are available.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
     @ViewBuilder private func outcome(_ evaluation: StockSageResearchHistory.Evaluation,
-                                     run: StockSageResearchHistory.Run) -> some View {
+                                     run: StockSageResearchHistory.Run, showBuySupport: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let kind = evaluation.terminalKind, let change = evaluation.priceReturn {
                 Text("\(StockSageResearchHistoryView.terminalLabel(kind)) · \(change.formatted(.percent.precision(.fractionLength(2))))")
@@ -673,9 +757,11 @@ struct StockSageResearchHistoryDetail: View {
                 Text(direction == .flat ? "Flat · unchanged" :
                     "\(direction == .rose ? "Rose" : "Fell") · \(change.formatted(.percent.precision(.fractionLength(2))))")
                     .font(.title3.weight(.semibold))
-                Text(direction == .flat ? "No directional support" :
-                    (evaluation.buyDirectionSupported == true ? "Buy direction supported" : "Buy direction not supported"))
-                    .font(.callout)
+                if showBuySupport {
+                    Text(direction == .flat ? "No directional support" :
+                        (evaluation.buyDirectionSupported == true ? "Buy direction supported" : "Buy direction not supported"))
+                        .font(.callout)
+                }
                 Text(StockSageResearchHistoryView.directionOnlyDisclosure)
                     .font(.caption).foregroundStyle(.secondary)
                 if let baseline = evaluation.comparisonReferencePrice, let target = evaluation.targetPrice {
@@ -804,6 +890,60 @@ struct StockSageResearchHistoryDetail: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct StockSageInterruptedResearchDetail: View {
+    @ObservedObject var history: StockSageResearchHistory
+    let archive: StockSageResearchHistory.InterruptedArchive
+    @State private var checkpoint: StockSageResearchHistory.InterruptedCheckpoint?
+    @State private var document: StockSageResearchReportDocument?
+    @State private var showExporter = false
+    @State private var error: String?
+    @State private var query = ""
+
+    var body: some View {
+        List {
+            Section("Preserved interrupted capture") {
+                Text("Started \(archive.startedAt.formatted(date: .abbreviated, time: .shortened))")
+                Text("\(archive.checkedCount) of \(archive.selectedCount) checks preserved. This is not a completed run; its outcome review is unavailable.")
+                    .foregroundStyle(.secondary)
+                Button("Export original capture") {
+                    if let data = history.interruptedArchiveData(id: archive.id) {
+                        document = .init(data: data)
+                        showExporter = true
+                    } else { error = "The original capture could not be read. No records were replaced." }
+                }
+                .disabled(checkpoint == nil)
+                .accessibilityIdentifier("research.history.interrupted.export")
+                if let error { Text(error).foregroundStyle(.orange) }
+            }
+            if let checkpoint {
+                Section("Original checks") {
+                    TextField("Find a symbol or company", text: $query).textFieldStyle(.roundedBorder)
+                    let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ForEach(checkpoint.completedChecks.checks.filter {
+                        search.isEmpty || $0.listing.ticker.localizedCaseInsensitiveContains(search)
+                            || $0.listing.name.localizedCaseInsensitiveContains(search)
+                    }, id: \.listing.ticker) { check in
+                        DisclosureGroup("\(check.listing.ticker) · \(check.verdict?.action ?? "Incomplete opinion")") {
+                            StockSageResearchModesPanel.resultDetail(check.listing, result: check.result)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(archive.horizon.title)
+        .task(id: archive.id) {
+            checkpoint = history.interruptedArchive(id: archive.id)
+            if checkpoint == nil { error = "This archived capture is unavailable or failed integrity checks." }
+        }
+        .fileExporter(isPresented: $showExporter, document: document, contentType: .json,
+                      defaultFilename: "StockSage-interrupted-\(archive.id)") { result in
+            if case .failure(let failure) = result, (failure as? CocoaError)?.code != .userCancelled {
+                error = "Export failed: \(failure.localizedDescription)"
+            }
+        }
     }
 }
 

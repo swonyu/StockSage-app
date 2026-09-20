@@ -10,12 +10,24 @@ nonisolated enum StockSageResearchExport {
         var fullChecksState: StockSageResearchHistory.FullChecksState? = nil
         var fullChecks: StockSageResearchHistory.CompletedChecks? = nil
         var fullChecksRetentionPolicy: String? = nil
+        var opinionOutcomes: [String: StockSageResearchHistory.OpinionOutcome]? = nil
     }
 
     static func data(for run: StockSageResearchHistory.Run,
                      fullChecks: StockSageResearchHistory.FullChecksAvailability? = nil,
+                     opinionOutcomes: [String: StockSageResearchHistory.OpinionOutcome]? = nil,
                      at date: Date = Date()) throws -> Data {
         guard fullChecks == nil || fullChecks?.runID == run.id else { throw CocoaError(.fileWriteInvalidFileName) }
+        if let opinionOutcomes {
+            guard let originals = fullChecks?.checks,
+                  Set(originals.checks.map(\.listing.ticker)).count == originals.checks.count else {
+                throw CocoaError(.fileWriteInvalidFileName)
+            }
+            let checks = Dictionary(uniqueKeysWithValues: originals.checks.map { ($0.listing.ticker, $0) })
+            guard opinionOutcomes.allSatisfy({ symbol, receipt in
+                checks[symbol].map { StockSageResearchHistory.validOpinionOutcome(receipt, check: $0, run: run) } == true
+            }) else { throw CocoaError(.fileWriteInvalidFileName) }
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // Keep Foundation's lossless Date representation, also used by the saved run.
@@ -30,6 +42,10 @@ nonisolated enum StockSageResearchExport {
             report.fullChecksState = fullChecks.state
             report.fullChecks = fullChecks.checks
             report.fullChecksRetentionPolicy = StockSageResearchHistory.fullChecksRetentionPolicy
+        }
+        if let opinionOutcomes {
+            report.schemaVersion = 3
+            report.opinionOutcomes = opinionOutcomes
         }
         return try encoder.encode(report)
     }

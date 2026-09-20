@@ -500,8 +500,21 @@ struct StockSageResearchModesPanel: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .help(scan.results[item.ticker]?.coverage.map(\.detail).joined(separator: "\n") ?? "Coverage not captured")
         case 3:
-            Text(Self.price(scan.results[item.ticker]?.referenceClose?.value)).monospacedDigit()
-                .accessibilityLabel(scan.results[item.ticker]?.referenceClose.map { "Daily close reference \(Self.price($0.value)), \($0.at.formatted(date: .abbreviated, time: .omitted))" } ?? "Daily close reference not available")
+            let result = scan.results[item.ticker]
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Entry \(Self.price(result?.levels?.entry))").monospacedDigit().lineLimit(1)
+                    .accessibilityLabel("Buy entry reference \(Self.price(result?.levels?.entry))")
+                if let close = result?.referenceClose {
+                    Text("Close \(Self.price(close.value)) · \(close.at.formatted(.dateTime.month(.abbreviated).day()))")
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityLabel("Daily close reference \(Self.price(close.value)), \(close.at.formatted(date: .abbreviated, time: .omitted))")
+                } else {
+                    Text("Close —").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("Daily close reference not available")
+                }
+            }.help(result?.levels.map {
+                "Buy entry reference from \($0.at.formatted(date: .abbreviated, time: .omitted)); a captured scenario, not a live quote or executable order. \($0.basis)"
+            } ?? "No valid buy-entry scenario is available. The dated daily close is a separate reference; select the stock for the evidence and reason.")
         case 4:
             Text(Self.price(scan.results[item.ticker]?.levels?.stop)).monospacedDigit()
                 .accessibilityLabel("Scenario stop \(Self.price(scan.results[item.ticker]?.levels?.stop))")
@@ -569,6 +582,9 @@ struct StockSageResearchModesPanel: View {
                         Text(activity).font(.caption).foregroundStyle(.secondary)
                     }
                     Self.resultDetail(item, result: scan.results[selected], change: scan.changes[selected])
+                        #if os(macOS)
+                        .id("\(presentation.horizon.rawValue)-\(selected)")
+                        #endif
                 }.padding(20)
             }
             #if os(macOS)
@@ -894,10 +910,18 @@ struct StockSageResearchModesPanel: View {
                 }
                 if let levels = result.levels {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 12) {
+                        #if os(macOS)
+                        GridRow { Text("Buy entry reference"); Text(price(levels.entry)).monospacedDigit() }
+                        #endif
                         GridRow { Text("Scenario stop"); Text(price(levels.stop)).monospacedDigit() }
                         GridRow { Text("Scenario target"); Text(price(levels.target)).monospacedDigit() }
                     }.font(.callout)
+                    #if os(macOS)
+                    Text("Price references dated \(levels.at.formatted(date: .abbreviated, time: .omitted)). Scenarios, not executable orders or forecasts.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    #else
                     Text("Scenarios, not executable orders or forecasts.").font(.caption).foregroundStyle(.secondary)
+                    #endif
                     Text(levels.basis).font(.caption).foregroundStyle(.secondary)
                 } else if isBuy(result.verdict?.action) {
                     Text("No valid entry/stop/target scenario could be calculated. Do not treat this opinion as an order plan.")

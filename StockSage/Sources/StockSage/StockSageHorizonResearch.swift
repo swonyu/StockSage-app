@@ -341,14 +341,17 @@ final class StockSageHorizonResearch: ObservableObject {
         /// nil uses the real settled-window Massive review fetch.
         var fetch: (@MainActor (StockSageResearchHistory.Prediction, StockSageResearchHistory.Run, String,
                      @escaping @MainActor () -> Bool) async -> StockSageResearchHistory.Observation?)?
+        var fetchOpinion: (@MainActor (StockSageResearchHistory.CompletedCheck, StockSageResearchHistory.Run, String,
+                     @escaping @MainActor () -> Bool) async -> StockSageResearchHistory.Observation?)?
     }
 
-    /// ONE caller for both the Saved Research action and a foreground activation. The credential
+    /// Explicit Saved Research actions only. The credential
     /// and policy are captured once, then re-checked after every await, so a response that arrives
     /// after the owner revoked access or rotated the key is discarded rather than persisted.
     /// `history.isChecking` is the single-flight guard; there is no timer or background poller.
     @MainActor
     static func checkSavedOutcomes(history: StockSageResearchHistory, store: StockSageStore,
+                                   includeAllOpinions: Bool = false,
                                    gates: SavedOutcomeGates = .init()) async {
         guard !gates.isRunningTests(), !Task.isCancelled, gates.externalAllowed(), !store.isSampleData else { return }
         let key = gates.apiKey()
@@ -359,6 +362,14 @@ final class StockSageHorizonResearch: ObservableObject {
             !Task.isCancelled && !gates.isRunningTests() && gates.externalAllowed() && !store.isSampleData
                 && gates.apiKey() == key && gates.credentialRevision() == revision
                 && gates.policyRevision() == policyRevision
+        }
+        if includeAllOpinions {
+            await history.checkAllOpinions(clock: gates.clock, allowed: allowed) { check, run in
+                if let fetch = gates.fetchOpinion { return await fetch(check, run, key, allowed) }
+                return await fetchOpinionReviewObservation(check: check, run: run, key: key,
+                    allowed: allowed, clock: gates.clock)
+            }
+            return
         }
         await history.checkActive(clock: gates.clock, allowed: allowed) { prediction, run in
             if let fetch = gates.fetch { return await fetch(prediction, run, key, allowed) }
@@ -396,10 +407,41 @@ final class StockSageHorizonResearch: ObservableObject {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
         guard let settledAt = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end)) else { return nil }
+        return await fetchReviewObservation(symbol: prediction.symbol, start: start, end: end,
+            requestedAt: requestedAt, minimumFetchedAt: firstHit ? settledAt : end,
+            key: key, allowed: allowed, clock: clock, transport: transport)
+    }
+
+    /// One settled adjusted series serves both the full-horizon return and any captured scenario.
+    /// The caller obtains this check from its immutable run archive; no shortlist membership is required.
+    static func fetchOpinionReviewObservation(check: StockSageResearchHistory.CompletedCheck,
+        run: StockSageResearchHistory.Run, key: String,
+        allowed: @escaping @MainActor () -> Bool, clock: @MainActor () -> Date = { Date() },
+        transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> StockSageResearchHistory.Observation? {
+        guard !Task.isCancelled, allowed(), check.verdict?.value != nil else { return nil }
+        let requestedAt = clock()
+        guard StockSageResearchHistory.availability(for: run, now: requestedAt).state == .due,
+              check.at.timeIntervalSince1970.isFinite, check.at <= run.completedAt,
+              let end = StockSageResearchHistory.settledReviewDate(for: run, now: requestedAt),
+              let benchmark = StockSageResearchHistory.benchmarkDay(after: run.completedAt) else { return nil }
+        let start = min(check.referenceClose?.at ?? benchmark, benchmark)
+        guard start.timeIntervalSince1970.isFinite, start > Date(timeIntervalSince1970: 0), start <= end else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        guard let settledAt = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: end)) else { return nil }
+        return await fetchReviewObservation(symbol: check.listing.ticker, start: start, end: end,
+            requestedAt: requestedAt, minimumFetchedAt: settledAt,
+            key: key, allowed: allowed, clock: clock, transport: transport)
+    }
+
+    private static func fetchReviewObservation(symbol: String, start: Date, end: Date,
+        requestedAt: Date, minimumFetchedAt: Date, key: String,
+        allowed: @escaping @MainActor () -> Bool, clock: @MainActor () -> Date,
+        transport: ((URLRequest) async throws -> (Data, URLResponse))?) async -> StockSageResearchHistory.Observation? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
         formatter.timeZone = TimeZone(identifier: "America/New_York")!
-        guard let request = dailyHistoryRequest(symbol: prediction.symbol,
+        guard let request = dailyHistoryRequest(symbol: symbol,
             from: formatter.string(from: start), to: formatter.string(from: end), key: key) else { return nil }
         do {
             let data: Data
@@ -407,10 +449,10 @@ final class StockSageHorizonResearch: ObservableObject {
             if let transport { (data, response) = try await transport(request) }
             else { (data, response) = try await StockSageHTTP.data(for: request, session: session, maximumBytes: 2_000_000) }
             guard !Task.isCancelled, allowed(), (response as? HTTPURLResponse)?.statusCode == 200,
-                  let history = parseResearchHistory(data, symbol: prediction.symbol) else { return nil }
+                  let history = parseResearchHistory(data, symbol: symbol) else { return nil }
             let fetchedAt = clock()
             guard fetchedAt.timeIntervalSince1970.isFinite, fetchedAt >= requestedAt,
-                  fetchedAt >= (firstHit ? settledAt : end) else { return nil }
+                  fetchedAt >= minimumFetchedAt else { return nil }
             return .init(history: history, splitAdjusted: true,
                 provider: "Massive split-adjusted daily aggregates", fetchedAt: fetchedAt)
         } catch { return nil }
