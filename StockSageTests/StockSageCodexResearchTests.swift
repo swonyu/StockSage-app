@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import CryptoKit
+import Darwin
 import Testing
 @testable import StockSage
 
@@ -213,6 +214,64 @@ import Testing
         #expect(output.status == 0 && output.stdout == input && output.stderr.isEmpty)
     }
 
+    @Test func taskCancellationIsReportedAsInterruption() async {
+        let result = await C.complete(system: system, user: user, schema: schema,
+            deadline: Date().addingTimeInterval(3), allowed: { true }, executor: { call in
+                if let output = try metadata(call) { return output }
+                throw CancellationError()
+            })
+        guard case .failure(let failure) = result else { Issue.record("Cancelled work cannot complete"); return }
+        #expect(failure.message == "Codex research was cancelled or its request deadline expired.")
+        #expect(failure.audit?.terminalStatus == "rejected")
+    }
+
+    @Test(arguments: [0, 262_144, 262_145])
+    func nativeStdoutCapAndEOFArePreserved(count: Int) async throws {
+        let input = Data(repeating: 65, count: count)
+        do {
+            let output = try await C.run(.init(executable: URL(fileURLWithPath: "/bin/cat"), arguments: [],
+                environment: [:], directory: FileManager.default.temporaryDirectory, input: input,
+                deadline: Date().addingTimeInterval(3)), allowed: { true })
+            #expect(count <= 262_144 && output.status == 0 && output.stdout == input && output.stderr.isEmpty)
+        } catch { #expect(count > 262_144) }
+    }
+
+    @Test(arguments: [32_768, 32_769])
+    func nativeStderrCapIsIndependentOfStdout(count: Int) async throws {
+        let input = Data(repeating: 65, count: count)
+        do {
+            let output = try await C.run(.init(executable: URL(fileURLWithPath: "/usr/bin/tee"), arguments: ["/dev/stderr"],
+                environment: [:], directory: FileManager.default.temporaryDirectory, input: input,
+                deadline: Date().addingTimeInterval(3)), allowed: { true })
+            #expect(count <= 32_768 && output.status == 0 && output.stdout == input && output.stderr == input)
+        } catch { #expect(count > 32_768) }
+    }
+
+    @Test func quitStopsAChildThatIgnoresTermination() async throws {
+        let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        // Fixed local fixture only: install SIG_IGN, announce readiness, then replace the shell.
+        let invocation = C.Invocation(executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "trap '' TERM; printf '%s' \"$$\" > \"$1\"; exec /bin/sleep 30", "fixture", pidFile.path],
+            environment: [:], directory: FileManager.default.temporaryDirectory, input: Data(),
+            deadline: Date().addingTimeInterval(3))
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { _ = try? await C.run(invocation, allowed: { true }) }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            var pid: Int32?
+            while pid == nil, ContinuousClock.now < deadline {
+                if let text = try? String(contentsOf: pidFile, encoding: .utf8) { pid = Int32(text) }
+                if pid == nil { try? await Task.sleep(for: .milliseconds(10)) }
+            }
+            if let pid {
+                #expect(await C.stopAll().value)
+                #expect(Darwin.kill(pid, 0) == -1 && errno == ESRCH,
+                    "Quit must finish owned-child teardown before the app can exit")
+            } else { Issue.record("Synthetic child did not announce readiness") }
+            group.cancelAll()
+        }
+    }
+
     @Test(arguments: ["overflow", "deadline", "cancellation", "quit"])
     func nativeOwnedProcessIsBoundedAndStopped(scenario: String) async {
         let start = Date()
@@ -226,10 +285,32 @@ import Testing
         }
         if scenario == "cancellation" || scenario == "quit" {
             try? await Task.sleep(for: .milliseconds(100))
-            if scenario == "quit" { C.stopAll() } else { worker.cancel() }
+            if scenario == "quit" { #expect(await C.stopAll().value) } else { worker.cancel() }
         }
         #expect(await worker.value == false)
         #expect(Date().timeIntervalSince(start) < 2, "An owned synthetic child must not outlive cancellation or its bound")
+    }
+
+    @Test func shutdownBlocksNativeLaunchUntilCancelled() async throws {
+        defer { C.cancelShutdown() }
+        #expect(await C.beginShutdown().value)
+        let invocation = C.Invocation(executable: URL(fileURLWithPath: "/usr/bin/true"), arguments: [],
+            environment: [:], directory: FileManager.default.temporaryDirectory, input: Data(),
+            deadline: Date().addingTimeInterval(3))
+        do {
+            _ = try await C.run(invocation, allowed: { true })
+            Issue.record("Shutdown must close admission before an owned process starts")
+        } catch {}
+        var calls = 0
+        let blocked = await C.complete(system: system, user: user, schema: schema,
+            deadline: Date().addingTimeInterval(3), allowed: { true }, executor: { _ in
+                calls += 1
+                return .init(status: 0)
+            })
+        guard case .failure = blocked else { Issue.record("Shutdown cannot accept an assessment"); return }
+        #expect(calls == 0)
+        C.cancelShutdown()
+        #expect(try await C.run(invocation, allowed: { true }).status == 0)
     }
 }
 #endif

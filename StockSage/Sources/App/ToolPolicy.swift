@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Controls whether external/non-local tools are allowed.
 /// Reads the existing Web access preference; Offline Mode always takes precedence.
@@ -11,7 +12,11 @@ enum ToolPolicy {
 
     /// Mutable override. `nil` (the default) means "read from user settings".
     /// Set to a concrete case to force-pin the policy regardless of settings.
-    nonisolated(unsafe) static var override: ToolPolicy? = nil
+    nonisolated private static let policyOverride = Mutex<ToolPolicy?>(nil)
+    nonisolated static var override: ToolPolicy? {
+        get { policyOverride.withLock { $0 } }
+        set { policyOverride.withLock { $0 = newValue } }
+    }
 
     /// The policy in effect right now. Computed from `override` if set,
     /// otherwise from the user's web-access toggle in Settings.

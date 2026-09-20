@@ -15,12 +15,24 @@ import AppKit
         guard !quitting else { return .terminateLater }
         StockSageMicrocapMonitor.shared.stop()
         StockSageMicrocapMonitor.largecap.stop()
-        StockSageCodexResearch.stopAll()
-        guard let config = StockSageLocalModelStartup.shared.quitConfig(defaults: .standard) else {
-            return .terminateNow
-        }
+        let codexCleanup = StockSageCodexResearch.beginShutdown()
+        let config = StockSageLocalModelStartup.shared.quitConfig(defaults: .standard)
         quitting = true
         Task {
+            guard await codexCleanup.value else {
+                let alert = NSAlert()
+                alert.messageText = "Research process could not be stopped"
+                alert.informativeText = "StockSage is staying open because an owned research process is still running. Try quitting again."
+                alert.addButton(withTitle: "Keep StockSage Open")
+                alert.runModal()
+                StockSageCodexResearch.cancelShutdown(); quitting = false
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            guard let config else {
+                sender.reply(toApplicationShouldTerminate: true)
+                return
+            }
             let wasBusy = await StockSageLocalModelServer.beginShutdown()
             let unloaded: Bool
             if config.supportsLocalUnload {
@@ -36,7 +48,10 @@ import AppKit
                 alert.addButton(withTitle: "Keep StockSage Open")
                 shouldQuit = alert.runModal() == .alertFirstButtonReturn
             }
-            if !shouldQuit { StockSageLocalModelServer.cancelShutdown(); quitting = false }
+            if !shouldQuit {
+                StockSageCodexResearch.cancelShutdown()
+                StockSageLocalModelServer.cancelShutdown(); quitting = false
+            }
             sender.reply(toApplicationShouldTerminate: shouldQuit)
         }
         return .terminateLater

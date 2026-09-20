@@ -599,6 +599,7 @@ struct StockSageMassiveTests {
 }
 
 /// Real URLSession bytes, served entirely in process without credentials or a provider call.
+/// Restates URLProtocol's inherited conformance; adds no stored state or asynchronous callbacks.
 private nonisolated final class MassiveBodyProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

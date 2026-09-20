@@ -1115,9 +1115,11 @@ enum StockSageLocalModelServer {
         guard timeout.isFinite, timeout > 0 else {
             return .failure(.init(diagnostic: .init(category: .invalidConfig)))
         }
-        let started = DispatchTime.now()
+        let started = SuspendingClock.now
         func elapsedMilliseconds() -> Int {
-            Int((DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds) / 1_000_000)
+            // Match uptime timing: diagnostics exclude system sleep; deadlines remain continuous.
+            let elapsed = started.duration(to: .now).components
+            return Int(elapsed.seconds) * 1_000 + Int(elapsed.attoseconds / 1_000_000_000_000_000)
         }
         // Counted for the whole transport, and released on EVERY exit path including a thrown
         // cancellation, so an abandoned request can never inflate the observed concurrency.

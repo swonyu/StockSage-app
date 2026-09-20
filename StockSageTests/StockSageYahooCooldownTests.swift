@@ -79,4 +79,28 @@ struct StockSageYahooCooldownTests {
         #expect(!restarted.permits(at: at.addingTimeInterval(interval - 1)))
         #expect(restarted.permits(at: at.addingTimeInterval(interval)))
     }
+
+    @Test func concurrentResponsesPersistTheLongestDeadline() async throws {
+        let name = "stocksage-yahoo-concurrent-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let gate = Q.YahooCooldown(defaults: defaults)
+        let at = Date(timeIntervalSince1970: 1_790_000_000)
+        let url = try #require(URL(string: "https://example.invalid/quote"))
+        await withTaskGroup(of: Void.self) { group in
+            for seconds in 1...64 {
+                group.addTask {
+                    let response = HTTPURLResponse(url: url, statusCode: 429, httpVersion: nil,
+                        headerFields: ["Retry-After": String(seconds)])!
+                    gate.observe(response, now: at)
+                    #expect(!gate.permits(at: at))
+                }
+            }
+        }
+        let restarted = Q.YahooCooldown(defaults: defaults)
+        for observed in [gate, restarted] {
+            #expect(!observed.permits(at: at.addingTimeInterval(63)))
+            #expect(observed.permits(at: at.addingTimeInterval(64)))
+        }
+    }
 }

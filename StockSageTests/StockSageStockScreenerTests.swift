@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import StockSage
 
@@ -213,18 +214,16 @@ import Testing
         }
     }
 
-    nonisolated private final class ChangingKey: @unchecked Sendable {
-        private let lock = NSLock()
-        private var reads = 0
-        private var replaceAt: Int?
+    nonisolated private final class ChangingKey: Sendable {
+        private let state = Mutex((reads: 0, replaceAt: Int?.none))
         func arm(replaceOnRead: Int) {
-            lock.lock(); defer { lock.unlock() }
-            reads = 0; replaceAt = replaceOnRead
+            state.withLock { $0 = (0, replaceOnRead) }
         }
         func read() -> String {
-            lock.lock(); defer { lock.unlock() }
-            reads += 1
-            return replaceAt.map { reads >= $0 } == true ? "fixture-B" : "fixture-A"
+            state.withLock { state in
+                state.reads += 1
+                return state.replaceAt.map { state.reads >= $0 } == true ? "fixture-B" : "fixture-A"
+            }
         }
     }
 
@@ -233,11 +232,10 @@ import Testing
         func increment() { value += 1 }
     }
 
-    nonisolated private final class Revision: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = "one"
-        func get() -> String { lock.lock(); defer { lock.unlock() }; return value }
-        func replace() { lock.lock(); defer { lock.unlock() }; value = "two" }
+    nonisolated private final class Revision: Sendable {
+        private let value = Mutex("one")
+        func get() -> String { value.withLock { $0 } }
+        func replace() { value.withLock { $0 = "two" } }
     }
 
     private actor Gate {

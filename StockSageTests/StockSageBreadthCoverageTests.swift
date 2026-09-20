@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StockSage
 
 // BATCH 7.1 + 7.2 (2026-09-12) — breadth must not report a market-wide fact from a thin sample,
@@ -148,11 +149,9 @@ struct StockSageBreadthCoverageTests {
 /// `@Sendable () -> Bool` and cannot await.
 /// `nonisolated` is required: SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor would otherwise isolate
 /// every member to the main actor, and `allowed` is called from inside the fan-out's task group.
-private nonisolated final class Counter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _count = 0
-    private var _allowed = true
-    var count: Int { lock.lock(); defer { lock.unlock() }; return _count }
-    var allowed: Bool { lock.lock(); defer { lock.unlock() }; return _allowed }
-    func revoke() { lock.lock(); _count += 1; _allowed = false; lock.unlock() }
+private nonisolated final class Counter: Sendable {
+    private let state = Mutex((count: 0, allowed: true))
+    var count: Int { state.withLock { $0.count } }
+    var allowed: Bool { state.withLock { $0.allowed } }
+    func revoke() { state.withLock { $0.count += 1; $0.allowed = false } }
 }

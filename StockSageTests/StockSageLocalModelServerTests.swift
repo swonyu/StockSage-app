@@ -1001,6 +1001,7 @@ private actor ModelAttemptGate {
 }
 
 /// URLProtocol provides actual URLSession bytes without network, credentials or a server.
+/// Restates URLProtocol's inherited conformance; adds no stored state or asynchronous callbacks.
 private nonisolated final class ModelBodyProtocol: URLProtocol, @unchecked Sendable {
     nonisolated override class func canInit(with request: URLRequest) -> Bool { true }
     nonisolated override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
