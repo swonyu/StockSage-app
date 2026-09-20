@@ -20,13 +20,45 @@ import AppKit
     @ObservationIgnored private var loadMayBePending = false
     var pendingConfig: S.Config? { worker != nil || loadMayBePending ? activeConfig : nil }
 
-    static func startupConfig(_ defaults: UserDefaults = .standard) -> S.Config? {
+    private static func selectedLocalConfig(_ defaults: UserDefaults) -> S.Config? {
         let backend = StockSageCatalystNarrator.selectedBackend(defaults.string(forKey: S.backendKey))
-        guard defaults.bool(forKey: enabledKey), backend == .auto || backend == .localServerOnly,
+        guard backend == .auto || backend == .localServerOnly,
               let config = S.config(url: defaults.string(forKey: S.urlKey) ?? S.defaultURL,
                                     model: defaults.string(forKey: S.modelKey) ?? S.defaultModel),
+              config.supportsLocalUnload else { return nil }
+        return config
+    }
+
+    /// Uncertain submissions retain their original server; successful default use must also
+    /// remain eligible for the same local-only cleanup as an explicitly saved configuration.
+    func quitConfig(defaults: UserDefaults = .standard) -> S.Config? {
+        pendingConfig ?? Self.selectedLocalConfig(defaults)
+    }
+
+    static func startupConfig(_ defaults: UserDefaults = .standard) -> S.Config? {
+        guard defaults.bool(forKey: enabledKey), let config = selectedLocalConfig(defaults),
               config.isLMStudioGemma else { return nil }
         return config
+    }
+
+    /// Explicit recovery prepares the selected local model only. It neither enables launch
+    /// loading nor replays the research/chat action that failed.
+    @discardableResult func retryFromSavedSettings(defaults: UserDefaults = .standard,
+                                                   transport: Transport? = nil) async -> S.Probe? {
+        guard !S.isShuttingDown, !Task.isCancelled,
+              let config = Self.selectedLocalConfig(defaults), config.isLMStudioGemma else { return nil }
+        let revision = S.settingsRevision(defaults)
+        #if os(macOS)
+        if transport == nil, !StockSageStore.isRunningTests {
+            let options = NSWorkspace.OpenConfiguration()
+            options.activates = false
+            _ = try? await NSWorkspace.shared.openApplication(
+                at: URL(fileURLWithPath: "/Applications/LM Studio.app"), configuration: options)
+        }
+        #endif
+        return await ensureLoaded(config, stillValid: {
+            S.settingsRevision(defaults) == revision && Self.selectedLocalConfig(defaults) == config
+        }, transport: transport)
     }
 
     func startFromSavedSettings() {

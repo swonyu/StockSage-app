@@ -92,7 +92,7 @@ struct StockSageJournalCSVImportTests {
         #expect(StockSageInput.percent("1e1") == nil)
     }
 
-    @MainActor @Test func inBatchDuplicatesDoNotCreateDuplicateJournalRecords() throws {
+    @MainActor @Test func differentInBatchExecutionsArePreservedAndRepeatedImportIsIdempotent() throws {
         let suite = "stocksage-csv-duplicates-\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -102,13 +102,13 @@ struct StockSageJournalCSVImportTests {
             "aapl,Long,100,90,,1,1970-01-01T00:00:45Z,,,,same minute\n" +
             "AAPL,Long,100,90,,1,1970-01-01T00:01:00Z,,,,next minute"
         let preview = StockSageJournalCSVImport.preview(csv)
-        #expect(preview.imported == 2 && preview.skipped == 1)
+        #expect(preview.imported == 3 && preview.skipped == 0)
         #expect(preview.errors.map(\.line) == [2]) // a rejected row must not reserve its dedup key
         let journal = StockSageJournalStore(defaults: defaults)
         let result = journal.importNew(preview.trades)
-        #expect(result.added == 2 && result.rejected == 0)
+        #expect(result.added == 3 && result.rejected == 0)
         let reloaded = StockSageJournalStore(defaults: defaults)
-        #expect(reloaded.trades.count == 2)
+        #expect(reloaded.trades.count == 3)
         let repeatPreview = StockSageJournalCSVImport.preview(csv, existing: reloaded.trades)
         #expect(repeatPreview.imported == 0 && repeatPreview.skipped == 3)
         #expect(repeatPreview.errors.map(\.line) == [2]) // invalid is not an intentional duplicate skip
@@ -288,21 +288,38 @@ struct StockSageJournalCSVImportTests {
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv, existing: [existing])
         #expect(parsed.isEmpty)
         #expect(errors.count == 1)
-        #expect(errors[0].reason.contains("duplicate"))
+        #expect(errors[0].reason == StockSageJournalCSVImport.duplicateReason)
     }
 
-    @Test func duplicateMatchIsToTheMinuteNotToTheSecond() throws {
+    @Test func distinctExecutionsInTheSameMinuteArePreserved() throws {
         let existingOpened = Date(timeIntervalSince1970: 0)
         let existing = TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: nil,
                                    shares: 10, openedAt: existingOpened)
-        // 45 seconds later — same MINUTE — should still be flagged a duplicate.
+        // An execution 45 seconds later is a distinct exported record.
         let sameMinute = Date(timeIntervalSince1970: 45)
         let csv = try StockSageJournalCSV.csv([TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90,
                                                         target: nil, shares: 10, openedAt: sameMinute)])
         let (parsed, errors) = StockSageJournalCSVImport.parse(csv, existing: [existing])
-        #expect(parsed.isEmpty)
-        #expect(errors.count == 1)
-        #expect(errors[0].reason.contains("duplicate"))
+        #expect(parsed.count == 1 && parsed[0].openedAt == sameMinute)
+        #expect(errors.isEmpty)
+    }
+
+    @Test func csvPreservesAccountingDifferencesAndIdenticalRowMultiplicity() throws {
+        let opened = Date(timeIntervalSince1970: 5)
+        let win = TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 95, target: nil,
+            shares: 10, openedAt: opened, exitPrice: 110,
+            closedAt: opened.addingTimeInterval(3600), note: "first execution")
+        let loss = TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 90, target: nil,
+            shares: 10, openedAt: opened.addingTimeInterval(40), exitPrice: 90,
+            closedAt: opened.addingTimeInterval(7200), note: "second execution")
+        let csv = try StockSageJournalCSV.csv([win, loss, win])
+        let first = StockSageJournalCSVImport.preview(csv)
+        #expect(first.imported == 3 && first.skipped == 0 && first.errors.isEmpty)
+        #expect(first.trades.compactMap(\.realizedProfit) == [100, -100, 100])
+        let repeated = StockSageJournalCSVImport.preview(csv, existing: first.trades)
+        #expect(repeated.imported == 0 && repeated.skipped == 3 && repeated.errors.isEmpty)
+        let missingCopy = StockSageJournalCSVImport.preview(csv, existing: [win, loss])
+        #expect(missingCopy.imported == 1 && missingCopy.skipped == 2)
     }
 
     @Test func differentTradeIsNotFlaggedAsDuplicate() throws {
@@ -335,7 +352,7 @@ struct StockSageJournalCSVImportTests {
 
     // The partition itself: one duplicate (intentional skip) + one malformed row (failure)
     // must land in DISJOINT counts. Hand-derived: MSFT matches `existing`'s dupe key
-    // (symbol/side/entry/shares/openedAt-to-the-minute) → skipped == 1; the abc-entry row
+    // (all exported accounting fields and second-resolution dates) → skipped == 1; the abc-entry row
     // fails parsing → errors == 1 (and its reason is NOT the duplicate reason); AAPL imports.
     @Test func previewSeparatesDuplicatesFromFailures() {
         let existing = TradeRecord(symbol: "MSFT", side: .long, entry: 100, stop: 90,

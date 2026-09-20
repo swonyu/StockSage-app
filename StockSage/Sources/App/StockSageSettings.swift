@@ -1,6 +1,7 @@
 import SwiftUI
 #if os(macOS)
 import ServiceManagement
+import AppKit
 #endif
 
 // MARK: - Settings scene: launch-at-login and monitor autostart
@@ -20,6 +21,7 @@ struct StockSageSettingsView: View {
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
 
     @State private var loginItemOn = false
+    @State private var loginItemRequiresApproval = false
     @State private var loginItemError: String?
 
     init(settings: AppSettings = .shared) { self.settings = settings }
@@ -27,23 +29,31 @@ struct StockSageSettingsView: View {
     var body: some View {
         Form {
             Self.networkControls(webAccess: $settings.webAccess, offlineOnly: $settings.offlineOnly)
-            Section("General") {
+            Section("Startup") {
                 #if os(macOS)
                 Toggle("Launch StockSage at login", isOn: Binding(
                     get: { loginItemOn },
                     set: { setLoginItem($0) }
                 ))
+                if loginItemRequiresApproval {
+                    Text("Launch at login is waiting for approval in System Settings.")
+                        .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                }
                 if let loginItemError {
                     Text(loginItemError)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(DS.Palette.dangerSoft)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 #endif
 
-                Toggle("Start the market monitor on launch", isOn: $monitorAutostart)
-                Text("Polls prices in the background as soon as StockSage opens.")
-                    .font(.system(size: 11))
+                Toggle("Check saved price alerts on launch", isOn: $monitorAutostart)
+                Text("Checks only your saved price levels while StockSage is open. Research always requires an explicit action.")
+                    .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Getting started") {
@@ -52,9 +62,10 @@ struct StockSageSettingsView: View {
                 // backlog #2, 2026-07-16). The main window re-presents live via
                 // StockSageApp's onChange; a closed window shows it on next open.
                 Button("Show the welcome checklist again") { onboardingDone = false }
-                Text("Reopens the research and paper-trading walkthrough, including the Salehman AI import, in the main window.")
-                    .font(.system(size: 11))
+                Text("Reopens the manual research and records walkthrough in the main window.")
+                    .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
@@ -63,10 +74,12 @@ struct StockSageSettingsView: View {
                 Text("Data sources")
             }
 
-            Section {
-                Text("Market data uses your configured providers. Local model serving is configured in Catalysts → Explanation model. These settings do not start a model server.")
-                    .font(.system(size: 11))
+            Section("Explanation model") {
+                Text("Configure your model in Library → Events & model setup → Explanation model. Opening Settings does not start a model server.")
+                    .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.modelGuidance")
             }
         }
         .formStyle(.grouped)
@@ -74,12 +87,17 @@ struct StockSageSettingsView: View {
         .navigationTitle("StockSage settings")
         #if os(macOS)
         .onAppear { refreshLoginItemStatus() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshLoginItemStatus()
+        }
         #endif
     }
 
     #if os(macOS)
     private func refreshLoginItemStatus() {
-        loginItemOn = SMAppService.mainApp.status == .enabled
+        let status = SMAppService.mainApp.status
+        loginItemOn = status == .enabled
+        loginItemRequiresApproval = status == .requiresApproval
     }
 
     private func setLoginItem(_ enabled: Bool) {

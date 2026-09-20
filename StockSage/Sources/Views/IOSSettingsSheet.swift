@@ -1,6 +1,6 @@
 import SwiftUI
 
-// iOS Settings: gear top-right next to refresh. Research horizons are selected in Research;
+// iOS Settings: gear top-right next to refresh. Trading windows have their own primary tabs;
 // this sheet controls data, allocation and notification preferences. macOS keeps its
 // native Settings scene (StockSageSettingsView) — this file compiles empty there.
 
@@ -25,36 +25,36 @@ enum StockSageLiveDataFooter {
 
     static func text(liveStream: Bool, autoRefresh: Bool, monitorEnabled: Bool,
                      intervals: (streamGap: Int, full: Int)) -> String {
-        let lead = liveStream
-            ? "US names stream trade-by-trade while the app is open — prices move on their own. Saudi names have no stream (the data vendor carries no Saudi exchange), so they rely on polling."
-            : "Streaming off — every price comes from polling."
-        let sweep = "A rotating sweep tops up to \(StockSageStore.streamGapMaxPerSweep) tracked names every \(intervals.streamGap)s, and the whole board refreshes every \(intervals.full / 60) minutes."
-        if autoRefresh { return lead + " " + sweep }
-        if monitorEnabled {
-            return lead + " Auto-refresh is off, but Strong-signal monitoring (the Markets alerts row) still polls every \(monitorPollSeconds / 60) minutes."
+        let lead = (liveStream
+            ? "US names stream qualified trade prices while the app is open — prices move on their own. Non-streaming names rely on polling."
+            : "Streaming off — prices come from polling.")
+            + " Quotes also refresh when StockSage opens and when newly tracked names need a price."
+        let alerts = monitorEnabled
+            ? " Saved price alerts are checked normally every \(monitorPollSeconds / 60) minutes while the app is active, or every \(monitorPollSeconds * 2 / 60) minutes under thermal pressure; control this in Library → Alerts → Price-alert monitoring."
+            : " Price-alert monitoring is off."
+        if autoRefresh {
+            return lead + " A rotating sweep tops up to \(StockSageStore.streamGapMaxPerSweep) tracked names every \(intervals.streamGap)s, and the whole board refreshes every \(intervals.full / 60) minutes." + alerts
         }
-        // Both polling paths off. Only NOW is a manual-only claim true — and only for the names
-        // that are not streaming.
-        return lead + (liveStream
-            ? " Auto-refresh and Strong-signal monitoring are both off: nothing polls, so non-streaming names update only when you pull to refresh or tap the refresh button."
-            : " Auto-refresh and Strong-signal monitoring are both off — prices update only when you pull to refresh or tap the refresh button.")
+        return lead + " Periodic market refresh is off. Pull to refresh or tap Refresh for an extra update." + alerts
+
     }
 }
 
 #if os(iOS)
 struct StockSageIOSSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var settings = AppSettings.shared
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ObservedObject private var settings: AppSettings
     @AppStorage("stocksage.autoRefresh") private var autoRefresh = true
     @AppStorage("stocksage.liveStream") private var liveStream = true
-    @AppStorage(StockSageNotifyPrefs.strongSignalsKey) private var notifyStrong = true
-    @AppStorage(StockSageNotifyPrefs.ideaAlertsKey) private var notifyIdeas = true
     @AppStorage(StockSageNotifyPrefs.priceAlertsKey) private var notifyPrice = true
     @AppStorage("stocksage.allocStrategy") private var allocStrategy = "greedyKnapsack"
     /// Mirrors `StockSageMonitor.foregroundMonitoringEnabled`'s key — the writer is the Markets
     /// alerts row ("Strong-signal monitoring", MarketsView.swift:1234), NOT this sheet's
     /// "Strong Buy / Sell signals" toggle, which only gates pushes and stops no poll.
     @AppStorage("stocksage.monitor.iosEnabled") private var monitorEnabled = true
+
+    init(settings: AppSettings = .shared) { self.settings = settings }
 
     var body: some View {
         NavigationStack {
@@ -81,11 +81,21 @@ struct StockSageIOSSettingsSheet: View {
                 .listRowBackground(DS.Bezel.cardFill)
 
                 Section {
-                    Picker("Deploy-capital allocation", selection: $allocStrategy) {
+                    let allocation = Picker("Deploy-capital allocation", selection: $allocStrategy) {
                         Text("Concentrated").tag("greedyKnapsack")
                         Text("Balanced").tag("uniformScale")
                     }
-                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("settings.ios.allocation")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Deploy-capital allocation").font(.subheadline.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true).accessibilityHidden(true)
+                        if typeSize.isAccessibilitySize {
+                            allocation.pickerStyle(.menu).labelsHidden()
+                                .frame(minHeight: 44, alignment: .leading)
+                        } else {
+                            allocation.pickerStyle(.segmented)
+                        }
+                    }.padding(.vertical, 4)
                 } header: {
                     Text("Allocation")
                 } footer: {
@@ -96,9 +106,8 @@ struct StockSageIOSSettingsSheet: View {
                 .listRowBackground(DS.Bezel.cardFill)
 
                 Section {
-                    Toggle("Strong Buy / Sell signals", isOn: $notifyStrong)
-                    Toggle("Idea stop & target crossings", isOn: $notifyIdeas)
                     Toggle("My price alerts", isOn: $notifyPrice)
+                        .accessibilityIdentifier("settings.ios.priceAlerts")
                 } header: {
                     Text("Notifications")
                 } footer: {
@@ -113,6 +122,7 @@ struct StockSageIOSSettingsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("settings.ios.done")
                 }
             }
         }

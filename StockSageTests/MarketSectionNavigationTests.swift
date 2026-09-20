@@ -18,7 +18,7 @@ import UIKit
     var binding: Binding<MarketSection>?
     var transitions: [MarketSection] = []
     var section: MarketSection {
-        get { binding?.wrappedValue ?? .chat }
+        get { binding?.wrappedValue ?? .sameDay }
         set { binding?.wrappedValue = newValue }
     }
 }
@@ -27,9 +27,10 @@ import UIKit
     let model: SidebarSelectionModel
     // Match MarketsView's actual route ownership. A separate @Published fixture model
     // is not part of the production sidebar's native selection transaction.
-    @State private var section: MarketSection = .chat
+    @State private var section: MarketSection = .sameDay
     var body: some View {
-        StockSageDesktopNavigation(selection: $section).frame(width: 220, height: 700)
+        StockSageDesktopNavigation(selection: Binding(get: { section.primaryDestination },
+            set: { section = $0.resolved(legacyHorizon: .week) })).frame(width: 220, height: 700)
             .onAppear { model.binding = $section }
             .onChange(of: section) { _, value in model.transitions.append(value) }
             .onDisappear { model.binding = nil }
@@ -44,33 +45,52 @@ import UIKit
 @Suite("Section navigation")
 struct MarketSectionNavigationTests {
 
+    @Test func primaryNavigationMatchesTheThreeManualTradingGoals() {
+        let routes = ["sameDay", "weekResearch", "fortnightResearch", "library"]
+        #expect(MarketSection.phoneSections.map(\.rawValue) == routes)
+        #expect(StockSageDesktop.sections == [.sameDay, .weekResearch, .fortnightResearch, .watchlist, .all, .library])
+    }
+
     @Test func researchAndLegacyPaperKeepDistinctRawDestinations() {
         #expect(MarketSection(rawValue: "research") != nil)
         #expect(MarketSection(rawValue: "paper") != nil)
     }
 
-    @Test func phoneTabsPutTheFourPrimaryWorkspacesFirstAndKeepEveryRoute() {
-        #expect(Array(MarketSection.phoneSections.prefix(4)) == [.briefing, .research, .watchlist, .chat])
-        #expect(Set(MarketSection.phoneSections) == Set(MarketSection.allCases))
-        #expect(MarketSection.phoneSections.count == MarketSection.allCases.count)
-        #expect(Array(MarketSection.allCases.suffix(2)) == [.research, .paper], "New routes append after the original nine")
-        #expect(MarketSection.allCases.count == 11)
-        #expect(MarketSection.research.title == "Research" && MarketSection.paper.title == "Legacy paper history")
-        #expect(MarketSection.research.workspaceTitle == "Research" && MarketSection.paper.workspaceTitle == "Legacy paper history")
-        #expect(MarketSection.briefing.workspaceTitle == "Home" && MarketSection.all.workspaceTitle == "Markets")
-        for section in [MarketSection.research, .paper] {
+    @Test func primaryAndLibraryRoutesPreserveLegacyDestinations() {
+        #expect(MarketSection.phoneSections == [.sameDay, .weekResearch, .fortnightResearch, .library])
+        let support = MarketSection.recordSections + MarketSection.contextSections
+        #expect(Set(support).count == support.count)
+        #expect(Set(support + MarketSection.phoneSections) == Set(MarketSection.allCases.filter { $0 != .research }))
+        #expect(Array(MarketSection.allCases.prefix(11)) == [
+            .watchlist, .ideas, .catalysts, .all, .heatmap, .portfolio, .alerts, .chat, .briefing, .research, .paper
+        ], "Old raw routes and command-digit positions must remain compatible")
+        for route in MarketSection.allCases {
+            for horizon in StockSageHorizonResearch.Horizon.allCases {
+                let resolved = route.resolved(legacyHorizon: horizon)
+                #if os(macOS)
+                let primary = StockSageDesktop.sections
+                #else
+                let primary = MarketSection.phoneSections
+                #endif
+                #expect(primary.contains(resolved.primaryDestination))
+                #expect(resolved.libraryPath == (primary.contains(resolved) ? [] : [resolved]))
+                if route == .research { #expect(resolved.researchHorizon == horizon) }
+            }
             #if os(macOS)
-            #expect(NSImage(systemSymbolName: section.icon, accessibilityDescription: nil) != nil, "\(section.icon) must be a real SF Symbol")
-            #expect(StockSageDesktop.icon(for: section) == section.icon)
+            #expect(NSImage(systemSymbolName: route.icon, accessibilityDescription: nil) != nil)
             #else
-            #expect(UIImage(systemName: section.icon) != nil, "\(section.icon) must be a real SF Symbol")
+            #expect(UIImage(systemName: route.icon) != nil)
             #endif
         }
+        #expect(MarketSection.sameDay.researchHorizon == nil)
+        #expect(MarketSection.weekResearch.researchHorizon == .week)
+        #expect(MarketSection.fortnightResearch.researchHorizon == .fortnight)
+        #expect(MarketSection.briefing.workspaceTitle == "Saved research")
     }
 
     #if os(macOS)
     @Test @MainActor func sidebarUsesNativeSelectionList() async throws {
-        let host = NSHostingController(rootView: StockSageDesktopNavigation(selection: .constant(.chat))
+        let host = NSHostingController(rootView: StockSageDesktopNavigation(selection: .constant(.sameDay))
             .frame(width: 220, height: 700))
         let window = NavigationFixtureWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 220, height: 700),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -97,21 +117,12 @@ struct MarketSectionNavigationTests {
     }
 
     @Test @MainActor func desktopDestinationsKeepEveryExistingRoute() {
-        #expect(Set(StockSageDesktop.sections) == Set(MarketSection.allCases))
-        #expect(StockSageDesktop.sections.count == MarketSection.allCases.count)
-        #expect(StockSageDesktop.sections == [
-            .briefing, .research, .watchlist, .chat, .ideas, .all, .catalysts, .heatmap, .portfolio, .paper, .alerts
-        ])
-        #expect(StockSageDesktop.sections == StockSageDesktop.groups.flatMap(\.sections),
-                "The rendered groups are the only source of sidebar order")
-        #expect(StockSageDesktop.groups.first?.sections == [.briefing, .research, .watchlist, .chat])
-        let records = StockSageDesktop.groups.first { $0.title == "Your records" }
-        #expect(records?.sections == [.portfolio, .paper, .alerts],
-                "Legacy paper history remains accessible with the records, outside the main research workflow")
+        #expect(StockSageDesktop.sections == [.sameDay, .weekResearch, .fortnightResearch, .watchlist, .all, .library])
+        #expect(StockSageDesktop.sections == StockSageDesktop.groups.flatMap(\.sections))
+        #expect(StockSageDesktop.groups.first?.sections == [.sameDay, .weekResearch, .fortnightResearch])
         #expect(StockSageDesktop.help(for: .watchlist) == "Watchlist · ⌘1")
-        #expect(StockSageDesktop.help(for: .briefing) == "Home · ⌘9")
-        #expect(StockSageDesktop.help(for: .research) == "Research", "Appended routes carry no digit")
-        #expect(StockSageDesktop.title(for: .briefing) == "Home")
+        #expect(StockSageDesktop.help(for: .briefing) == "Saved research · ⌘9")
+        #expect(StockSageDesktop.help(for: .research) == "Research", "Legacy appended routes carry no digit")
         #expect(StockSageDesktop.title(for: .all) == "Markets")
         let shortcuts: [(MarketSection, Int)] = [
             (.watchlist, 1), (.ideas, 2), (.catalysts, 3), (.all, 4), (.heatmap, 5),
@@ -159,22 +170,34 @@ struct MarketSectionNavigationTests {
         }
         try await waitFor { model.binding != nil && table(in: host.view)?.selectedRowIndexes.count == 1 }
         let sidebar = try #require(table(in: host.view))
-        #expect(sidebar.numberOfRows >= MarketSection.allCases.count, "Every destination needs a native row")
-        let chatRow = sidebar.selectedRow
-        model.section = .briefing
-        try await waitFor { sidebar.selectedRowIndexes.count == 1 && sidebar.selectedRow != chatRow }
-        let briefingRow = sidebar.selectedRow
-        model.section = .paper
-        try await waitFor { sidebar.selectedRowIndexes.count == 1 && ![chatRow, briefingRow].contains(sidebar.selectedRow) }
-        // Native selection must write back through the List binding; rows were learned above, never guessed.
-        sidebar.selectRowIndexes(IndexSet(integer: chatRow), byExtendingSelection: false)
-        try await waitFor { model.section == .chat }
-        sidebar.selectRowIndexes(IndexSet(integer: briefingRow), byExtendingSelection: false)
-        try await waitFor { model.section == .briefing }
-        #expect(sidebar.selectedRow == briefingRow)
-        try await waitFor { model.transitions.count >= 4 }
-        #expect(model.transitions == [.briefing, .paper, .chat, .briefing],
-                "Native route transitions must stay ordered and occur once per selection")
+        #expect(sidebar.numberOfRows >= StockSageDesktop.sections.count, "Every primary destination needs a native row")
+        let sameDayRow = sidebar.selectedRow
+        model.section = .weekResearch
+        try await waitFor { sidebar.selectedRowIndexes.count == 1 && sidebar.selectedRow != sameDayRow }
+        let weekRow = sidebar.selectedRow
+        model.section = .library
+        try await waitFor { sidebar.selectedRowIndexes.count == 1 && ![sameDayRow, weekRow].contains(sidebar.selectedRow) }
+        let libraryRow = sidebar.selectedRow
+        model.section = .chat
+        try await waitFor { model.section == .chat && model.transitions.last == .chat && sidebar.selectedRow == libraryRow }
+        sidebar.selectRowIndexes(IndexSet(integer: sameDayRow), byExtendingSelection: false)
+        try await waitFor { model.section == .sameDay }
+        sidebar.selectRowIndexes(IndexSet(integer: weekRow), byExtendingSelection: false)
+        try await waitFor { model.section == .weekResearch }
+        #expect(sidebar.selectedRow == weekRow)
+        try await waitFor { model.transitions.count >= 5 }
+        #expect(model.transitions == [.weekResearch, .library, .chat, .sameDay, .weekResearch])
+        var visitedRows = [sameDayRow, weekRow, libraryRow]
+        for destination in [MarketSection.watchlist, .all] {
+            model.section = destination
+            try await waitFor { sidebar.selectedRowIndexes.count == 1 && !visitedRows.contains(sidebar.selectedRow) }
+            let destinationRow = sidebar.selectedRow
+            visitedRows.append(destinationRow)
+            model.section = .library
+            try await waitFor { sidebar.selectedRow == libraryRow }
+            sidebar.selectRowIndexes(IndexSet(integer: destinationRow), byExtendingSelection: false)
+            try await waitFor { model.section == destination }
+        }
         #expect(!window.isKeyWindow, "The offscreen host must never become an application window")
     }
 

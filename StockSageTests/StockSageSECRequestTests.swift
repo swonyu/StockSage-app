@@ -287,3 +287,29 @@ struct StockSageSECRequestTests {
         #expect(returned.withLock { $0.called && $0.refused })
     }
 }
+
+
+extension StockSageSECRequestTests {
+    @Test func form4FetchKeepsOriginalPublicProvenanceAndFractionalQuantity() async throws {
+        let checked = Date(timeIntervalSince1970: 1_800_000_000)
+        let result = await StockSageInsider.recentActivity(for: "TEST", lookup: { _ in "0000000123" }, transport: { req in
+            let body: String
+            if req.url!.path.contains("submissions") {
+                body = #"{"filings":{"recent":{"form":["4"],"accessionNumber":["0000000123-26-000001"],"filingDate":["2026-09-08"]}}}"#
+            } else if req.url!.path.hasSuffix("index.json") {
+                body = #"{"directory":{"item":[{"name":"doc4.xml"}]}}"#
+            } else {
+                body = "<ownershipDocument><issuerTradingSymbol>TEST</issuerTradingSymbol><rptOwnerName>Fixture Owner</rptOwnerName><isDirector>true</isDirector><aff10b5One>1</aff10b5One><nonDerivativeTransaction><transactionCode>P</transactionCode><transactionDate><value>2026-09-04</value></transactionDate><transactionShares><value>0.125</value></transactionShares><transactionPricePerShare><value>20</value></transactionPricePerShare></nonDerivativeTransaction></ownershipDocument>"
+            }
+            return Self.response(req, Data(body.utf8))
+        }, allowed: { true }, now: checked)
+        let summary = try #require(result), row = try #require(summary.discretionary.first)
+        #expect(summary.checkedAt == checked && summary.reviewedFilings == 1 && summary.availableFilings == 1)
+        #expect(row.shares == 0.125 && summary.netBuyValue == 2.5)
+        #expect(row.accession == "0000000123-26-000001")
+        #expect(row.documentURL?.absoluteString == "https://www.sec.gov/Archives/edgar/data/123/000000012326000001/doc4.xml")
+        #expect(row.filingDate != row.date)
+        #expect(row.evidenceDescription.contains("2026-09-04") && row.evidenceDescription.contains("2026-09-08"))
+        #expect(row.reportedRoles == ["director"] && row.planDisclosure.contains("reported"))
+    }
+}

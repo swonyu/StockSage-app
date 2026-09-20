@@ -4,7 +4,7 @@ import Combine
 /// Transient detail selection/evidence: no singleton store or disk access on construction.
 @MainActor final class IdeaDetailEvidence: ObservableObject {
     typealias InsiderFetch = @MainActor @Sendable (String) async -> StockSageInsider.Summary?
-    typealias FilingsFetch = @MainActor @Sendable (String) async -> [StockSageDisclosureService.Filing]
+    typealias FilingsFetch = @MainActor @Sendable (String) async -> StockSageDisclosureService.FilingsObservation
     typealias QuoteFetch = @MainActor @Sendable (String) async -> StockSageQuoteService.LiveQuote?
     typealias QuotePublish = @MainActor @Sendable (StockSageQuoteService.LiveQuote) -> StockSageIdea?
     typealias BenzingaFetch = @MainActor @Sendable (String) async -> StockSageBenzinga.Snapshot?
@@ -17,7 +17,7 @@ import Combine
             selectionEpoch = generation
             symbol = selection?.symbol
             insiderSummary = nil
-            disclosures = []
+            filingsObservation = nil
             benzinga = nil
             benzingaLoading = false
             insiderLoading = false
@@ -27,7 +27,8 @@ import Combine
     @Published private(set) var selectionEpoch = UUID()
     @Published private(set) var insiderSummary: StockSageInsider.Summary?
     @Published private(set) var insiderLoading = false
-    @Published private(set) var disclosures: [StockSageDisclosureService.Filing] = []
+    @Published private(set) var filingsObservation: StockSageDisclosureService.FilingsObservation?
+    var disclosures: [StockSageDisclosureService.Filing] { filingsObservation?.filings ?? [] }
     @Published private(set) var disclosuresLoading = false
     @Published private(set) var symbol: String?
     @Published private(set) var benzinga: StockSageBenzinga.Snapshot?
@@ -42,7 +43,7 @@ import Combine
 
     init(fetchInsider: @escaping InsiderFetch = { await StockSageInsider.recentActivity(for: $0) },
          fetchFilings: @escaping FilingsFetch = {
-             await StockSageDisclosureService.recentFilings(for: $0, forms: ["8-K"], limit: 5)
+             await StockSageDisclosureService.recentFilingsObservation(for: $0, forms: ["8-K"], limit: 5)
          }, fetchQuote: @escaping QuoteFetch = { await StockSageQuoteService.fetchQuotes(for: [$0])[$0.uppercased()] },
          isAllowed: @escaping @MainActor @Sendable () -> Bool = { ToolPolicy.webToolsDisabledReason() == nil },
          fetchBenzinga: @escaping BenzingaFetch = { _ in nil },
@@ -69,7 +70,7 @@ import Combine
         disclosuresLoading = true
         let filings = await fetchFilings(symbol)
         guard isCurrent() else { return }
-        disclosures = filings
+        filingsObservation = filings
         disclosuresLoading = false
     }
 
@@ -99,7 +100,7 @@ import Combine
         generation = request
         symbol = idea.symbol
         insiderSummary = nil
-        disclosures = []
+        filingsObservation = nil
         benzinga = nil
         benzingaLoading = false
         insiderLoading = false

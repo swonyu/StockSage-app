@@ -33,7 +33,7 @@ struct StockSagePaperAutomationPanel: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("New same-day runs are disabled. After relaunch, legacy open positions are not monitored and no paper exits are attempted. Recorded balances, positions and history are retained.")
+                    Text("New legacy paper runs are disabled. After relaunch, legacy open positions are not monitored and no paper exits are attempted. Recorded balances, positions and history are retained.")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
                     #if os(macOS)
@@ -84,7 +84,7 @@ struct StockSagePaperAutomationPanel: View {
                 #else
                 .font(.largeTitle.bold())
                 #endif
-            Text("Recorded same-day simulation. Current research uses 1–7 or 7–14 trading days.")
+            Text("Recorded simulation. Manual research offers one same-day pick and Top 5 for 1–7 or 7–14 trading days.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             #if !os(macOS)
@@ -463,7 +463,7 @@ struct StockSagePaperAutomationPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Settled spending capacity").font(.callout).foregroundStyle(.secondary)
                     Text(book.buyingCash(at: at), format: .currency(code: "USD"))
-                        .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                        .font(.title2.weight(.medium)).monospacedDigit()
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .accessibilityElement(children: .combine)
@@ -471,7 +471,7 @@ struct StockSagePaperAutomationPanel: View {
                     Text("Estimated paper equity").font(.callout).foregroundStyle(.secondary)
                     if let equity = book.equity(quotes: quotes, at: at) {
                         Text(equity, format: .currency(code: "USD"))
-                            .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                            .font(.title2.weight(.medium)).monospacedDigit()
                         Text("Change from $10,000: \((equity - 10_000).formatted(.currency(code: "USD")))")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
@@ -483,14 +483,14 @@ struct StockSagePaperAutomationPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Total paper cash").font(.callout).foregroundStyle(.secondary)
                     Text(book.cash, format: .currency(code: "USD"))
-                        .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                        .font(.title2.weight(.medium)).monospacedDigit()
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .accessibilityElement(children: .combine)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Unsettled proceeds").font(.callout).foregroundStyle(.secondary)
                     Text(book.unsettledProceeds(at: at), format: .currency(code: "USD"))
-                        .font(.system(size: 26, weight: .medium)).monospacedDigit()
+                        .font(.title2.weight(.medium)).monospacedDigit()
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .accessibilityElement(children: .combine)

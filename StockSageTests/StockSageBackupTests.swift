@@ -1,11 +1,52 @@
 import Testing
 import Foundation
+import CoreTransferable
+import UniformTypeIdentifiers
 @testable import StockSage
 
 /// Hand-built fixtures — a small, fully-specified trade + position + symbol set, not
 /// anything derived from the code under test. Round-trip proves export→restore preserves
 /// every field; the error-path tests prove restore is all-or-nothing (never partial).
 struct StockSageBackupTests {
+
+    @Test func sharedBackupDeclaresJSONTypeAndFilename() {
+        let document = StockSageBackup.JSONExport(data: Data())
+        #expect(StockSageBackup.JSONExport.exportedContentTypes() == [.json])
+        #expect(document.suggestedFilename == "stocksage-backup.json")
+    }
+
+    @MainActor @Test func sharedJSONFilePreservesBytesAndRestoresEveryCollection() async throws {
+        let suite = "backup-shared-json-\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let trade = fixtureTrade(), position = fixturePosition(), alert = fixturePriceAlert()
+        let bytes = try StockSageBackup.export(trades: [trade], positions: [position],
+            userSymbols: ["NVDA"], priceAlerts: [alert])
+        let document = StockSageBackup.JSONExport(data: bytes)
+        let transferred = try await document.exported(as: .json)
+        #expect(transferred == bytes)
+        let url = try await document.export(to: directory, contentType: .json)
+        #expect(url.lastPathComponent == "stocksage-backup.json")
+        #expect(UTType(filenameExtension: url.pathExtension) == .json)
+        let saved = try Data(contentsOf: url)
+        #expect(saved == bytes)
+
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let summary = try StockSageBackup.restore(from: saved,
+            journal: journal, portfolio: portfolio, store: store).get()
+        #expect(summary.trades == 1 && summary.positions == 1 && summary.symbols == 1 && summary.priceAlerts == 1)
+        #expect(StockSageJournalStore(defaults: defaults).trades == [trade])
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == [position])
+        let reopened = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(reopened.userSymbols == ["NVDA"] && reopened.priceAlerts == [alert])
+    }
 
     @MainActor @Test(arguments: [false, true])
     func fullBackupPreservesFractionalDatesThroughRestoreAndReload(reviveDeletedIDs: Bool) throws {
@@ -328,6 +369,79 @@ struct StockSageBackupTests {
         #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: suite) ?? [:]))
         if directory { #expect(try FileManager.default.contentsOfDirectory(atPath: image.path).isEmpty) }
         else { #expect(try Data(contentsOf: image) == corrupt) }
+    }
+
+    @MainActor @Test(arguments: [false, true])
+    func missingActivatedImageNeverResurrectsLegacyRecords(freshProfile: Bool) throws {
+        let suite = "missing-activated-records-\(UUID())"
+        let original = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let freshSuite = "missing-activated-records-reopen-\(UUID())"
+        let reopened = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: freshSuite))
+        defer {
+            original.removePersistentDomain(forName: suite)
+            reopened.removePersistentDomain(forName: freshSuite)
+        }
+        original.set(try JSONEncoder().encode([fixtureTrade()]), forKey: "stocksage.journal.v1")
+        original.set(try JSONEncoder().encode([fixturePosition()]), forKey: "stocksage_portfolio_v1")
+        original.set(["NVDA"], forKey: "stocksage_user_symbols")
+        let journal = StockSageJournalStore(defaults: original)
+        let portfolio = StockSagePortfolio(userDefaults: original)
+        let store = StockSageStore(defaults: original, heldSymbols: { [] })
+        _ = try StockSageBackup.restore(from: backupData(priceAlerts: []),
+            journal: journal, portfolio: portfolio, store: store).get()
+        journal.remove(fixtureTrade().id)
+        portfolio.remove(fixturePosition().id)
+        #expect(portfolio.add(symbol: "MSFT", shares: 2, costBasis: 50))
+        #expect(original.bool(forKey: StockSageRecordStorage.activationKey))
+        let image = try StockSageRecordStorage.fileURL(defaults: original)
+        let saved = try Data(contentsOf: image)
+        let defaults: UserDefaults
+        if freshProfile {
+            // Recover only the persisted preferences into a fresh profile path. No process
+            // cache has observed this path; the actual committed activation marker must suffice.
+            reopened.setPersistentDomain(original.persistentDomain(forName: suite) ?? [:], forName: freshSuite)
+            defaults = reopened
+        } else {
+            try FileManager.default.moveItem(at: image, to: image.appendingPathExtension("recovery"))
+            defaults = original
+            #expect(throws: (any Error).self) {
+                try StockSageBackup.export(journal: journal, portfolio: portfolio, store: store)
+            }
+        }
+        let before = defaults.persistentDomain(forName: freshProfile ? freshSuite : suite) ?? [:]
+        let newJournal = StockSageJournalStore(defaults: defaults)
+        let newPortfolio = StockSagePortfolio(userDefaults: defaults)
+        let newStore = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        #expect(!newJournal.hasLoadedRecords && newJournal.lastError != nil && newJournal.trades.isEmpty)
+        #expect(!newPortfolio.hasLoadedRecords && newPortfolio.lastError != nil && newPortfolio.positions.isEmpty)
+        #expect(newStore.userSymbols.isEmpty && newStore.watchlistPersistenceError != nil)
+        #expect(throws: (any Error).self) {
+            try StockSageBackup.export(journal: newJournal, portfolio: newPortfolio, store: newStore)
+        }
+        #expect(!newPortfolio.add(symbol: "NEW", shares: 1, costBasis: 10))
+        newJournal.remove(fixtureTrade().id)
+        newStore.removeSymbol("NVDA")
+        #expect(NSDictionary(dictionary: before).isEqual(to: defaults.persistentDomain(forName: freshProfile ? freshSuite : suite) ?? [:]))
+        if freshProfile { #expect(try Data(contentsOf: image) == saved) }
+        else { #expect(try Data(contentsOf: image.appendingPathExtension("recovery")) == saved) }
+    }
+
+    @MainActor @Test func observingPreMarkerImageRecordsActivationWithoutChangingLegacyValues() throws {
+        let suite = "record-activation-source-\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let copySuite = "record-activation-legacy-image-\(UUID())"
+        let copy = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: copySuite))
+        defer { defaults.removePersistentDomain(forName: suite); copy.removePersistentDomain(forName: copySuite) }
+        try StockSageRecordStorage.update([.init(key: "stocksage_user_symbols", value: .strings(["NEW"]))],
+            defaults: defaults, activate: true)
+        let sourceURL = try StockSageRecordStorage.fileURL(defaults: defaults)
+        let copiedURL = try StockSageRecordStorage.fileURL(defaults: copy)
+        try FileManager.default.copyItem(at: sourceURL, to: copiedURL)
+        copy.set(["OLD"], forKey: "stocksage_user_symbols")
+        #expect(copy.object(forKey: StockSageRecordStorage.activationKey) == nil)
+        #expect(try StockSageRecordStorage.object(forKey: "stocksage_user_symbols", defaults: copy) as? [String] == ["NEW"])
+        #expect(copy.bool(forKey: StockSageRecordStorage.activationKey))
+        #expect(copy.stringArray(forKey: "stocksage_user_symbols") == ["OLD"])
     }
 
     @MainActor @Test func ordinaryEditsAfterRestoreStayInTheCommittedImage() throws {

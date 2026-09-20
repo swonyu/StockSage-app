@@ -31,10 +31,13 @@ struct RewardRisk: Sendable, Equatable {
 
 enum StockSageRewardRisk {
     nonisolated static func assess(entry: Double, stop: Double, target: Double) -> RewardRisk? {
+        guard [entry, stop, target].allSatisfy({ $0.isFinite && $0 > 0 }),
+              (stop < entry && entry < target) || (target < entry && entry < stop) else { return nil }
         let risk = abs(entry - stop)
         let reward = abs(target - entry)
         guard risk > 0, reward > 0 else { return nil }
         let ratio = reward / risk
+        guard ratio.isFinite, ratio > 0 else { return nil }
         let quality: RewardRisk.Quality = ratio >= 2.5 ? .strong : (ratio >= 1.5 ? .fair : .poor)
         return RewardRisk(ratio: ratio, quality: quality, breakevenWinRate: 1 / (1 + ratio))
     }

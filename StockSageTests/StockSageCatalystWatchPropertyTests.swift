@@ -27,9 +27,9 @@ struct StockSageCatalystWatchPropertyTests {
     enum ExtremeCase: CaseIterable { case nilExtreme, neither, atHigh63, atLowNoSpan, atHighMomentum }
     enum RegimeCase: CaseIterable { case none, bull, ranging, bear, crisis }
     enum SeasonCase: CaseIterable { case none, reliableStrong, reliableWeak, thinSample, reliableNegative }
-    /// `earningsCheckedAt` axis (A3): never asked / asked in the past / asked right now — only
-    /// changes output when every other slot is empty (the `.none` primary), so it is orthogonal
-    /// to `expectedKinds` but drives the dated-vs-undated shape of the `.none` item itself.
+    /// `earningsCheckedAt` axis (A3): never asked / asked in the past / asked right now.
+    /// An answered-empty fallback is dated by its check; a lapsed positive schedule keeps
+    /// that check only in its explanation and remains undated. Neither changes `expectedKinds`.
     enum CheckedAtCase: CaseIterable { case never, past, now }
     static let actions: [TradeAdvice.Action] = [.strongBuy, .buy, .hold, .avoid, .reduce, .sell]
     static let rrs: [Double?] = [2.0, nil]
@@ -196,15 +196,23 @@ struct StockSageCatalystWatchPropertyTests {
     func structuralInvariants() {
         var checked = 0
         for c in Self.allCases {
-            let b = W.brief(for: idea(c), inputs: inputs(c))
+            let ins = inputs(c)
+            let b = W.brief(for: idea(c), inputs: ins)
             let chk = checkedAt(c.checkedAt)
+            let lapsedSchedule = c.earnings == .past3d
             checked += 1
             #expect(b.all.count == b.secondary.count + 1)
             #expect(Set(b.all.map(\.kind)).count == b.all.count, "duplicate kind in \(c)")
             #expect(Set(b.all.map(\.id)).count == b.all.count, "duplicate id in \(c)")
             if b.primary.kind == .none {
                 #expect(b.secondary.isEmpty)
-                if let chk {
+                if lapsedSchedule {
+                    #expect(b.primary.date == nil)
+                    #expect(b.primary.source == ins.catalystSource)
+                    #expect(b.primary.headline.contains("Previous schedule passed"))
+                    #expect(!b.primary.why.joined().contains("none returned"))
+                    #expect(b.primary.why.joined().contains("The earlier positive result is not an answered-empty calendar check."))
+                } else if let chk {
                     #expect(b.primary.why == ["Next earnings date requested from yahoo calendarEvents — none returned"])
                     #expect(b.primary.date == chk)
                     #expect(b.primary.source == "yahoo calendarEvents (no date returned)")
@@ -217,7 +225,7 @@ struct StockSageCatalystWatchPropertyTests {
             }
             for item in b.all {
                 #expect(item.symbol == "SWEEP")
-                let expectDate = item.kind == .earnings || (item.kind == .none && chk != nil)
+                let expectDate = item.kind == .earnings || (item.kind == .none && chk != nil && !lapsedSchedule)
                 #expect((item.date != nil) == expectDate, "date on an unexpected item in \(c)")
                 #expect(!item.headline.isEmpty && !item.watch.isEmpty && !item.why.isEmpty && !item.source.isEmpty)
                 #expect(item.why.count <= 3)
@@ -278,7 +286,10 @@ struct StockSageCatalystWatchPropertyTests {
                     #expect(item.headline.contains("(n=") && item.headline.contains("tendency"))
                 case .none:
                     #expect(item.weight == .low && item.caveat == nil)
-                    if let chk = ins.earningsCheckedAt {
+                    if c.earnings == .past3d {
+                        #expect(item.source == ins.catalystSource && item.date == nil)
+                        #expect(!item.source.contains("no date returned"))
+                    } else if let chk = ins.earningsCheckedAt {
                         #expect(item.source == "yahoo calendarEvents (no date returned)" && item.date == chk)
                     } else {
                         #expect(item.source == "—" && item.date == nil)

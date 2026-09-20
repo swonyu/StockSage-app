@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StockSage
 
 @Suite("Massive bounded tape")
@@ -276,5 +277,102 @@ struct StockSageMassiveTicksTests {
         #expect(StockSageMassive.int64(1e3) == 1000)
         #expect(StockSageMassive.int64("9007199254740993") == 9_007_199_254_740_993)
         #expect(StockSageMassive.parseTicker(["lastTrade": ["p": true]], requestedSymbol: "AAPL") == nil)
+    }
+}
+
+
+extension StockSageMassiveTicksTests {
+    @Test @MainActor func tapeDropsAllPagesWhenAccessChangesAndBoundsInjectedResponses() async {
+        for mode in ["credential", "policy", "oversize", "redirect"] {
+            let revision = Mutex("one"), calls = Mutex(0)
+            let access = StockSageMassive.Access(key: { "fixture" },
+                credentialRevision: { revision.withLock { $0 } },
+                policyRevision: { revision.withLock { $0 } }, allowed: { true })
+            let result = await T.fetch(symbol: "AAPL", from: from, to: to, access: access, transport: { request in
+                let call = calls.withLock { $0 += 1; return $0 }
+                if call == 2 && (mode == "credential" || mode == "policy") { revision.withLock { $0 = "two" } }
+                var data = Data(#"{"status":"OK","results":[{"price":100,"size":1,"sip_timestamp":1517562000000000000}],"next_url":"https://api.massive.com/v3/trades/AAPL?cursor=two"}"#.utf8)
+                if mode == "oversize" { data = Data(repeating: 32, count: T.maximumBytes + 1) }
+                let url = mode == "redirect" ? URL(string: "https://example.invalid/other")! : request.url!
+                return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+            #expect(result.trades.isEmpty && result.quotes.isEmpty)
+            #expect(!result.notices.isEmpty)
+            if mode == "credential" || mode == "policy" { #expect(calls.withLock { $0 } == 2) }
+        }
+    }
+
+    @Test func displayConditionsUseTradeConsolidatedPriceRules() throws {
+        let bytes = Data(#"{"status":"OK","results":[{"id":901,"asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":true}}},{"id":902,"asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":false}}},{"id":903,"asset_class":"stocks","data_types":["quote"],"update_rules":{"consolidated":{"updates_open_close":true}}}]}"#.utf8)
+        let allowed = try T.parseDisplayTradeConditions(bytes)
+        #expect(allowed == [901])
+        #expect(T.qualifiesDisplayTrade(conditions: [901], allowed: allowed, sip: to, participant: to.addingTimeInterval(-1)))
+        for codes: [Int64]? in [nil, [], [901,902], [999]] {
+            #expect(!T.qualifiesDisplayTrade(conditions: codes, allowed: allowed, sip: to, participant: to))
+        }
+        #expect(!T.qualifiesDisplayTrade(conditions: [901], allowed: allowed, sip: to, participant: to.addingTimeInterval(-121)))
+        #expect(!T.qualifiesDisplayTrade(conditions: [901], allowed: allowed, sip: to, participant: to.addingTimeInterval(1)))
+    }
+}
+
+
+extension StockSageMassiveTicksTests {
+    @Test @MainActor func streamRestartCannotRenewAnOlderSharedReferenceWithoutTransport() async throws {
+        let savedExchanges = T.exchangeCache, savedTrades = T.tradeReferenceCache
+        let live = StockSageLiveStream()
+        defer {
+            T.exchangeCache = savedExchanges; T.tradeReferenceCache = savedTrades
+            live.stop(clearNBBO: {})
+        }
+        let restartedAt = Date(), fetchedAt = restartedAt.addingTimeInterval(-23 * 3_600)
+        let exchanges: [Int64: T.Exchange] = [1: .init(id: 1, mic: "XNAS", acronym: "OLD")]
+        let bytes = Data(#"{"status":"OK","results":[{"id":901,"asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":true}}}]}"#.utf8)
+        T.exchangeCache = (fetchedAt, exchanges, { true })
+        T.tradeReferenceCache = (fetchedAt, bytes, { true })
+        // An empty injected key prevents transport. Shared cache consumers can still read
+        // these explicitly seeded, current fixture records until their original expiry.
+        let access = StockSageMassive.Access(key: { "" }, credentialRevision: { nil },
+            policyRevision: { nil }, allowed: { true })
+        #expect(try await T.exchanges(now: restartedAt, access: access) == exchanges)
+        #expect(try await T.displayTradeConditions(access: access) == [901])
+        await live.refreshReferences(now: fetchedAt, stillValid: { true },
+            displayConditions: { [901] }, conditions: { [] }, exchangeList: { exchanges })?.value
+        live.stop(clearNBBO: {})
+        await live.refreshReferences(now: restartedAt, stillValid: { true },
+            displayConditions: { try await T.displayTradeConditions(access: access, bypassCache: true) },
+            conditions: { [] },
+            exchangeList: { try await T.exchanges(now: restartedAt, access: access, bypassCache: true) })?.value
+        #expect(live.displayTradePolicy(at: restartedAt).conditions.isEmpty)
+        #expect(live.exchangeReference(at: restartedAt).isEmpty,
+                "Restart must not stamp a 23-hour-old shared reference with a new 24-hour lifetime")
+        #expect(T.exchangeCache?.at == fetchedAt && T.tradeReferenceCache?.at == fetchedAt)
+        #expect(try await T.exchanges(now: restartedAt, access: access) == exchanges,
+                "Other consumers retain the shared cache and its original age")
+    }
+
+    @Test(arguments: ["exchanges", "quoteConditions", "displayConditions", "paperQuote", "nbbo", "intraday"],
+          ["credentialRoundTrip", "policyRoundTrip", "oversize", "redirect"])
+    @MainActor func allTickRequestConsumersRejectObsoleteOrUnboundedResponses(endpoint: String, mode: String) async {
+        let revision = Mutex("one"), calls = Mutex(0)
+        let access = StockSageMassive.Access(key: { "fixture" },
+            credentialRevision: { revision.withLock { $0 } },
+            policyRevision: { revision.withLock { $0 } }, allowed: { true })
+        let wire: StockSageMassive.Transport = { request in
+            calls.withLock { $0 += 1 }
+            if mode.hasSuffix("RoundTrip") { revision.withLock { $0 = "two" } }
+            let bytes = mode == "oversize" ? Data(repeating: 32, count: T.maximumBytes + 1)
+                : Data(#"{"status":"OK","results":[]}"#.utf8)
+            let url = mode == "redirect" ? URL(string: "https://example.invalid/changed")! : request.url!
+            return (bytes, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        switch endpoint {
+        case "exchanges": #expect((try? await T.exchanges(access: access, transport: wire)) == nil)
+        case "quoteConditions": #expect((try? await T.regularQuoteConditions(access: access, transport: wire)) == nil)
+        case "displayConditions": #expect((try? await T.displayTradeConditions(access: access, transport: wire)) == nil)
+        case "paperQuote": #expect(await T.freshPaperQuote(symbol: "AAPL", access: access, transport: wire) == nil)
+        case "nbbo": #expect(await T.freshResearchNBBO(symbol: "AAPL", regularConditions: [701], access: access, transport: wire) == nil)
+        default: #expect(await T.intradayFacts(symbol: "AAPL", from: from, now: to, access: access, transport: wire) == nil)
+        }
+        #expect(calls.withLock { $0 } == 1 || (endpoint == "intraday" && !mode.hasSuffix("RoundTrip") && calls.withLock { $0 } == 2))
     }
 }

@@ -1,9 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// Optional bounded horizon manifests for explicit capture/replay callers. Production research
-/// keeps its existing Diagnostics and ResearchHistory stores; no second default writer is enabled.
-/// Manifests stay small; model calls are separate atomic files.
+/// Bounded horizon diagnostic manifests and durable same-day product history.
+/// Same-day receipts are the only saved source for their checks/evidence and never expire
+/// automatically. Individual manifests/calls remain bounded inputs and separate atomic files.
 @MainActor
 final class StockSageResearchReceiptStore {
     nonisolated static let schemaVersion = 2
@@ -434,7 +434,8 @@ final class StockSageResearchReceiptStore {
     private func prune() {
         guard let dirs = try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey]) else { return }
         let sorted = dirs.compactMap { dir -> (URL, UUID, Date, Int)? in
-            guard let id = scanID(from: dir), !active.contains(id), let scan = scans[id], scan.endedAt != nil else { return nil }
+            guard let id = scanID(from: dir), !active.contains(id), let scan = scans[id],
+                  scan.horizon != "same-day", scan.endedAt != nil else { return nil }
             return (dir, id, scan.endedAt ?? scan.startedAt, storedBytes(in: dir))
         }.sorted { $0.2 == $1.2 ? $0.1.uuidString > $1.1.uuidString : $0.2 > $1.2 }
         var retainedBytes = 0

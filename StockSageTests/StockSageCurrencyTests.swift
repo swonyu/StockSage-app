@@ -7,6 +7,14 @@ import Foundation
 struct StockSageCurrencyTests {
     typealias CC = StockSageCurrency
 
+    @Test func rawQuoteUnitsRemainDistinctFromHoldingValuation() {
+        for (symbol, label) in [("AAPL", "USD"), ("LLOY.L", "GBP minor units (100 = 1 GBP)"),
+            ("sol.jo", "ZAR minor units (100 = 1 ZAR)"), ("EURGBP=X", "GBP"),
+            ("2222.SR", "SAR"), ("UNKNOWN.ZZ", "quote currency unconfirmed")] {
+            #expect(CC.quoteUnitLabel(forSymbol: symbol) == label)
+        }
+    }
+
     @Test func fxSelectionKeepsTheAcceptedRateAndClockTogether() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let old = StockSageQuote(price: 1, previousPrice: 1, time: now,
@@ -259,6 +267,17 @@ struct StockSageCurrencyTests {
         #expect(String(format: "%.2f", 0.104) == "0.10")
         #expect(String(format: "%.2f", 0.099) == "0.10")
         #expect(StockSageCurrency.adaptivePrice(0.104) != StockSageCurrency.adaptivePrice(0.099))
+    }
+
+    @Test func researchPriceGroupingPreservesPrecisionAndUngroupedText() {
+        #expect(CC.adaptivePrice(12345.67, grouped: true) == "12,345.67")
+        #expect(CC.adaptivePrice(12345.67) == "12345.67")
+        #expect(CC.adaptivePrice(-1234.5, grouped: true) == "-1,234.50")
+        #expect(CC.adaptivePrice(0, grouped: true) == "0.00")
+        #expect(CC.adaptivePrice(1, grouped: true) == "1.00")
+        #expect(CC.adaptivePrice(0.104, grouped: true) == "0.1040")
+        #expect(CC.adaptivePrice(0.099, grouped: true) == "0.0990")
+        #expect(CC.adaptivePrice(0.0099, grouped: true) == "0.009900")
     }
 
     @Test func adaptivePriceTierBoundaries() {

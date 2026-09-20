@@ -1,5 +1,9 @@
 # StockSage owner context
 
+- Current owner direction, 20 September 2026: focus on **macOS only**. iOS and
+  WidgetKit development/verification are on hold. Preserve their existing work;
+  do not run further iOS builds, tests or release actions until the owner resumes them.
+
 - Owner confirmed 2026-09-06: already subscribes to **Massive Advanced** and has
   bought additional Massive products. Do not recommend repurchasing Advanced.
   History identifies Benzinga Earnings as selected and Analyst Ratings +
@@ -31,12 +35,17 @@
 
 ## Gemma / model integration
 
-Full contract: `agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE_2026-09-20.md` (revision B, pinned
-to `main@74d6a81`). Read it before touching `StockSageLocalModelServer`,
-`StockSageAIAssessment`, `StockSageSameDayResearch`, `StockSageHorizonResearch`,
-`StockSageResearchQualification`, `StockSageTopFiveRanking`, `StockSageResearchRanking` or
-`StockSageResearchHistory`. It supersedes the 2026-09-20 PDF of the same name, which contains
-nine statements this source contradicts (see its §0.3 errata).
+Historical source reference: `agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE_2026-09-20.md`
+(revision B, pinned to `main@74d6a81`). Read it alongside the living guide and current source
+before touching `StockSageLocalModelServer`, `StockSageAIAssessment`, `StockSageSameDayResearch`,
+`StockSageHorizonResearch`, `StockSageResearchQualification`, `StockSageTopFiveRanking`,
+`StockSageResearchRanking` or `StockSageResearchHistory`.
+
+The dated guide predates the integration repairs. Its §0.3 E1–E9 describe the older source
+snapshot, not the repaired behavior or errors in the living guide/PDF. It does not supersede
+the living guide or the owner's PDF. For current behavior and verification status, use
+`agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md`, current source and matching receipts.
+Historical claims do not override newer owner instructions or reviewed integration changes.
 
 Non-negotiable, even if you read nothing else:
 
@@ -60,3 +69,14 @@ Non-negotiable, even if you read nothing else:
   false; do not act on them.
 - Never start a research run, load a model, spend RunPod compute, or reach a broker without an
   explicit owner request **each time**.
+
+## Living Gemma guide — owner directive, 2026-09-20
+
+After each completed StockSage change or verification milestone, update affected
+sections and the revision/status in `agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md`
+and regenerate the owner's exact PDF path recorded under “Maintaining the owner's
+PDF” in that guide. Preserve the previous PDF and verify the replacement. Separate
+implemented, tested, installed, and pending work; do not claim unrun checks or live
+model/provider readiness. This is part of the active work, not a scheduled task.
+Do not resend the PDF without an explicit request. The dated guide is a separate
+historical source snapshot, not the editable source for this living PDF.

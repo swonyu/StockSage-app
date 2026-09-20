@@ -144,6 +144,87 @@ import AppKit
         #expect(engine.receipt?.checks.count == 2, "Not-started checks must remain visible")
     }
 
+    @Test(arguments: [0, 512_000_000])
+    func sameDayProductHistorySurvivesCountAndByteLimitsAndReopening(budget: Int) throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let receipts = StockSageResearchReceiptStore(directory: folder, maxCompletedBytes: budget)
+        let candidate = try check("AAPL")
+        var saved: [S.Receipt] = []
+        for index in 0...StockSageResearchReceiptStore.maxCompletedScans {
+            let at = now.addingTimeInterval(Double(index))
+            let id = receipts.beginSameDay(at: at)
+            let receipt = S.Receipt(id: id, startedAt: at, finishedAt: at,
+                selection: "Preserved fixture", checks: [candidate],
+                selectedSymbol: index.isMultiple(of: 2) ? "AAPL" : nil,
+                blocker: index.isMultiple(of: 2) ? nil : "No qualifying pick")
+            #expect(receipts.saveSameDay(receipt))
+            receipts.finish(scanID: id, status: receipt.blocker ?? "Completed", at: at)
+            saved.append(receipt)
+        }
+        #expect(receipts.sameDayHistory == Array(saved.reversed()))
+        let reopened = StockSageResearchReceiptStore(directory: folder, maxCompletedBytes: budget)
+        #expect(reopened.sameDayHistory == Array(saved.reversed()))
+        #expect(reopened.sameDayHistory.last?.checks.first?.scenario == candidate.scenario)
+    }
+
+    @Test(arguments: ["selection", "attempt", "observer", "check"])
+    func receiptFailureStopsFurtherAnalysisAndQuotePublication(phase: String) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let receipts = StockSageResearchReceiptStore(directory: folder)
+        let id = receipts.beginSameDay(at: now)
+        let initial = S.Receipt(id: id, startedAt: now, selection: "Preparing", checks: [])
+        #expect(receipts.saveSameDay(initial))
+        let directory = folder.appendingPathComponent("scan-" + id.uuidString)
+        @MainActor func breakWrites() throws {
+            try FileManager.default.removeItem(at: directory)
+            try Data("Fixture blocks further writes".utf8).write(to: directory)
+        }
+        if phase == "selection" { try breakWrites() }
+        let engine = S(receiptStore: receipts), candidate = try check("AAPL")
+        var analyzed: [String] = []
+        await engine.run(selection: .init([listing("AAPL"), listing("MSFT")]), initial: initial,
+            capacity: {
+                if phase == "attempt" {
+                    do { try breakWrites() } catch { Issue.record("Fixture failed to interrupt attempt writes: \(error)") }
+                }
+                return 1
+            }, allowed: { true }, clock: { now }, analyze: { item, _, observer in
+                analyzed.append(item.ticker)
+                do { try breakWrites() } catch { Issue.record("Fixture failed to interrupt writes: \(error)") }
+                if phase == "observer" {
+                    await observer?(.init(callID: UUID(), ordinal: 1, phase: "initial", stage: .started,
+                        startedAt: now, endedAt: nil, transportStarted: false, requestedModel: "fixture",
+                        returnedModel: nil, isOllama: false, outputLimit: 192, contextTokens: 16_384,
+                        temperature: 0.2, system: "fixture", systemBytes: 7, systemTruncated: false,
+                        user: "fixture", userBytes: 7, userTruncated: false, schema: nil, schemaBytes: nil,
+                        schemaTruncated: false, responseBody: nil, responseBodyBytes: nil,
+                        responseBodyTruncated: false, httpStatus: nil, diagnostic: nil))
+                    #expect(engine.status.contains("could not be saved"), "Observer failure must be visible before analysis returns")
+                }
+                return candidate
+            }, refreshQuote: { _ in Issue.record("A failed durable receipt must stop final quote work"); return nil })
+        #expect(analyzed == (["selection", "attempt"].contains(phase) ? [] : ["AAPL"]))
+        #expect(receipts.persistenceFailed(scanID: id))
+        #expect(engine.receipt?.selectedSymbol == nil)
+        #expect(engine.status.contains("could not be saved"))
+        #expect(engine.receipt?.checks.count == 2)
+        if phase == "check" { #expect(engine.receipt?.checks.first == candidate) }
+    }
+
+    @Test func preparationFailuresKeepTheirSpecificActionableReason() {
+        typealias Server = StockSageLocalModelServer
+        for detail in ["Check the private connection and GPU server.", "Correct the served model identity.",
+                       "Serving context must be at least 16K."] {
+            let probe = Server.Probe(reachable: false, isOllama: false, models: [], hasModel: false, detail: detail)
+            #expect(S.preparationFailure(probe, isAllowed: true)?.contains(detail) == true)
+            #expect(S.preparationFailure(probe, isAllowed: false)?.contains("interrupted") == true)
+        }
+        let ready = Server.Probe(reachable: true, isOllama: false, models: [], hasModel: true, detail: "Ready")
+        #expect(S.preparationFailure(ready, isAllowed: true) == nil)
+    }
+
     @Test func capturedAssessmentUsesActualStrictGemmaPromptAndNativeCitationValidation() async throws {
         typealias Server = StockSageLocalModelServer
         let config = try #require(Server.config(url: "http://127.0.0.1:1234", model: Server.gemmaModel))
@@ -156,7 +237,9 @@ import AppKit
             stopPrice: nil, targetPrice: nil, suggestedWeight: 0, caveat: "Unvalidated")
         let idea = StockSageIdea(symbol: "AAPL", market: "US", price: 100, advice: advice, spark: [100],
             generatedAt: now, priceAsOf: latest, priceSource: .massiveDaily)
-        for variant in 0...2 {
+        // The final cases retain valid minute/news citations but invent probability or deny
+        // earnings risk despite the fixture's missing earnings observation.
+        for variant in 0...4 {
             let news = StockSageNewsService.NewsItem(date: now.addingTimeInterval(variant == 2 ? -86400 : -600),
                 title: "Contract progress", snippet: "The company reported contract progress; price effects remain uncertain.",
                 link: URL(string: "https://example.com/public-report"), sentiment: nil, source: "Synthetic public provider")
@@ -190,8 +273,10 @@ import AppKit
                         let lines = prompt.components(separatedBy: "\n")
                         let minute = try #require(lines.first(where: { $0.contains("Completed minute starting") })?.components(separatedBy: ": ").first)
                         let catalyst = try #require(lines.first(where: { $0.contains("Public news, untrusted source data") })?.components(separatedBy: ": ").first)
-                        let verdict: [String: Any] = ["action": "Buy", "reason": "The observed setup has public support.",
-                            "risk": "A reversal would invalidate the setup.", "evidence": variant == 1 ? [catalyst] : [minute, catalyst]]
+                        let verdict: [String: Any] = ["action": "Buy",
+                            "reason": variant == 3 ? "The setup has a high probability of further upside." : "The observed setup has public support.",
+                            "risk": variant == 4 ? "Earnings risk is absent." : "A reversal would invalidate the setup.",
+                            "evidence": variant == 1 ? [catalyst] : [minute, catalyst]]
                         let text = String(decoding: try JSONSerialization.data(withJSONObject: verdict), as: UTF8.self)
                         body = try JSONSerialization.data(withJSONObject: ["model": Server.gemmaModel,
                             "choices": [["message": ["content": text], "finish_reason": "stop"]]])
@@ -200,6 +285,9 @@ import AppKit
                 })
             #expect(posts == (variant == 2 ? 0 : 1))
             #expect(result.qualified == (variant == 0), "\(variant): \(result.note)")
+            if variant >= 3 {
+                #expect(result.action == nil, "An unsupported claim must not become an accepted Same Day opinion: \(variant)")
+            }
             if variant == 0 {
                 #expect(result.profile?.model == Server.gemmaModel)
                 let reference = try #require(result.packet?.facts.first(where: { $0.key == "sameDay.targetReference" }))
@@ -220,6 +308,9 @@ import AppKit
             analyze: { _, _, _ in candidate }, refreshQuote: { _ in quote() })
         #expect(engine.receipt?.selectedSymbol == "AAPL")
         #expect(!S.current(try #require(engine.receipt), at: now.addingTimeInterval(86400)))
+        let completedStatus = engine.status
+        #expect(!engine.start(store: store), "The offline fixture must fail preflight without discarding the dated pick")
+        #expect(engine.status != completedStatus && engine.receipt?.selectedSymbol == "AAPL")
         for width in [393.0, 1100.0] {
             let height = width < 500 ? 852.0 : 1000.0
             let view = StockSageSameDayResearchPanel(store: store, research: engine)

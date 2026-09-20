@@ -709,6 +709,9 @@ enum StockSageBenzinga {
             analystEvidence = AnalystEvidence(action: nil, consensus: consensus, date: nil,
                                                currency: nil, targets: targets)
         }
+        if [.earnings, .guidance, .ratings].contains(product) {
+            excerpt = try text(row, "notes", limit: 400)
+        }
         if product == .news {
             let body = try raw(row, "body") ?? ""
             let fullContent = StockSageNewsService.normalizedNewsText(body).isEmpty

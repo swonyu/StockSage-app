@@ -1,4 +1,7 @@
 import Foundation
+#if os(macOS)
+import Darwin
+#endif
 
 /// Private export snapshots only. Never a trusted-price source, network client, or training corpus.
 enum StockSageResearchLeads {
@@ -9,12 +12,90 @@ enum StockSageResearchLeads {
         let source: String
         let text: String
     }
-    nonisolated struct Document: Decodable, Sendable {
+    nonisolated struct Document: Codable, Sendable {
         let schema: Int
         let importedAt: Date
         let timezone: String
         let messages: [Message]
     }
+
+    #if os(macOS)
+    private static let maximumBytes = 5_000_000
+
+    /// Bounded reads reject links and non-files; only a genuinely missing file is an empty inbox.
+    private static func bytes(at url: URL) throws -> Data? {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return nil }
+            throw CocoaError(.fileReadNoPermission)
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size >= 0, info.st_size <= maximumBytes else { throw CocoaError(.fileReadCorruptFile) }
+        let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+        guard data.count <= maximumBytes else { throw CocoaError(.fileReadCorruptFile) }
+        return data
+    }
+
+    private static func decode(_ data: Data) throws -> Document {
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let document = try decoder.decode(Document.self, from: data)
+        guard document.schema == 1, document.messages.count <= 10_000,
+              document.timezone.count <= 300 else { throw CocoaError(.fileReadCorruptFile) }
+        return document
+    }
+
+    static func read(at url: URL) throws -> Document? {
+        try bytes(at: url).map { try decode($0) }
+    }
+
+    @discardableResult
+    static func append(text: String, source: String, date: Date, to url: URL,
+                       now: Date = Date()) throws -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = label.isEmpty ? "Pasted WhatsApp" : label
+        guard (1...2_500).contains(text.count), source.count <= 300,
+              now.timeIntervalSince1970.isFinite, date.timeIntervalSince1970.isFinite,
+              date <= now else { throw CocoaError(.coderInvalidValue) }
+        let directory = url.deletingLastPathComponent()
+        let lease = try StockSageFileLock(url: url.appendingPathExtension("lock"))
+        return try withExtendedLifetime(lease) {
+            let data = try bytes(at: url)
+            let document = try data.map { try decode($0) }
+            guard document.map({ $0.importedAt <= now }) ?? true else { throw CocoaError(.fileReadCorruptFile) }
+            if document?.messages.contains(where: {
+                $0.text == text && $0.source == source && $0.date.ISO8601Format() == date.ISO8601Format()
+            }) == true { return false }
+            guard (document?.messages.count ?? 0) < 10_000 else { throw CocoaError(.fileWriteOutOfSpace) }
+
+            // Keep unknown export and per-message provenance fields intact when appending.
+            var object: [String: Any]
+            if let data {
+                guard let original = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                object = original
+            } else {
+                object = ["schema": 1, "timezone": TimeZone.current.identifier, "messages": [[String: Any]]()]
+            }
+            var messages = object["messages"] as? [[String: Any]] ?? []
+            messages.append(["id": UUID().uuidString, "date": date.ISO8601Format(),
+                             "source": source, "text": text, "dateSource": "user-provided"])
+            object["messages"] = messages
+            object["importedAt"] = now.ISO8601Format()
+            let output = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            guard output.count <= maximumBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+            var excluded = directory; var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try excluded.setResourceValues(values)
+            try output.write(to: url, options: [.atomic, .completeFileProtection])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return true
+        }
+    }
+    #endif
     nonisolated struct Snapshot: Sendable {
         let importedAt: Date
         let timezone: String
@@ -53,10 +134,14 @@ enum StockSageResearchLeads {
     static func load(symbol: String, now: Date = Date()) -> Snapshot? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         let url = base.appendingPathComponent("StockSageResearch/whatsapp.json")
+        #if os(macOS)
+        guard let document = try? read(at: url) else { return nil }
+        #else
         guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 5_000_000,
               let data = try? Data(contentsOf: url), data.count <= 5_000_000 else { return nil }
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         guard let document = try? decoder.decode(Document.self, from: data) else { return nil }
+        #endif
         return select(document, symbol: symbol, now: now)
     }
 }

@@ -468,10 +468,15 @@ enum StockSageLocalModelServer {
                 detail: "RunPod · Gemma 4 31B ready · \(capacity.context / 1024)K context · \(capacity.parallel) research workers.",
                 researchParallelism: capacity.parallel, servingContext: capacity.context)
         }
-        if c.isLMStudioGemma,
-           let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport),
-           let native = managedInventory(inventory, modelKey: c.model) {
-            return denied() ? stopped : native
+        if c.isLMStudioGemma {
+            let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport)
+            guard !denied() else { return stopped }
+            guard let inventory, var native = managedInventory(inventory, modelKey: c.model) else {
+                return Probe(reachable: inventory != nil, isOllama: false, models: [], hasModel: false,
+                    detail: "Gemma could not be verified in LM Studio. Check that its server is running and Gemma 4 31B QAT Q4_0 is available.")
+            }
+            native.servingContext = verifiedContext(inventory, model: c.model)
+            return native
         }
         guard !denied() else { return stopped }
         if let tags = await fetchJSONObject(c.baseURL.appendingPathComponent("api/tags"), transport: transport),
@@ -626,7 +631,15 @@ enum StockSageLocalModelServer {
             return await StockSageLocalModelStartup.shared.ensureLoaded(c, stillValid: stillValid, transport: transport)
         }
         #endif
-        return await probe(c, stillValid: stillValid, transport: transport)
+        let result = await probe(c, stillValid: stillValid, transport: transport)
+        // Passive discovery can establish that weights exist without a ready serving instance.
+        // Non-Mac callers cannot load that instance and must stop before inference.
+        if c.isLMStudioGemma, result.hasModel,
+           (result.servingContext ?? 0) < researchContextTokens {
+            return Probe(reachable: result.reachable, isOllama: false, models: result.models, hasModel: false,
+                detail: "Gemma is downloaded but serving readiness is unverified. Check that LM Studio has one canonical Gemma instance with at least 16K context and one worker.")
+        }
+        return result
     }
 
     /// The model maximum is not the serving instance's actual window. Ambiguous instances

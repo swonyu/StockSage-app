@@ -71,8 +71,58 @@ struct StockSageLocalModelServerTests {
             #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
             return StockSageManagedModelLifecycleTests.response(request, json)
         })
-        #expect(calls == 1 && observed == probe)
+        #expect(calls == 1 && observed.hasModel == probe.hasModel && observed.models == probe.models)
+        #expect(observed.servingContext == (scenario == "valid" ? 16_384 : nil))
     }
+
+    @Test(arguments: ["unreachable", "malformed", "wrong-shape"])
+    @MainActor func managedGemmaProbeCannotFallBackToAnUnverifiedAlias(scenario: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        var paths: [String] = []
+        let probe = await S.probe(config, transport: { request in
+            paths.append(try #require(request.url?.path))
+            #expect(request.httpMethod == "GET")
+            if request.url?.path == "/api/v1/models" {
+                if scenario == "unreachable" { throw URLError(.cannotConnectToHost) }
+                return StockSageManagedModelLifecycleTests.response(request,
+                    scenario == "malformed" ? "not JSON" : #"{"models":[{"key":"unverified"}]}"#)
+            }
+            return StockSageManagedModelLifecycleTests.response(request,
+                #"{"models":[{"name":"\#(S.gemmaModel)"}],"data":[{"id":"\#(S.gemmaModel)"}]}"#)
+        })
+        #expect(paths == ["/api/v1/models"])
+        #expect(!probe.hasModel && !probe.isOllama && probe.servingContext == nil)
+        #expect(probe.detail.contains("LM Studio"))
+    }
+
+    #if os(iOS)
+    @Test(arguments: ["ready", "unloaded", "short-context", "ambiguous"])
+    @MainActor func passiveGemmaPreparationRequiresVerifiedServingCapacity(scenario: String) async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        var inventory = Self.gemmaInventory(context: scenario == "short-context" ? 8192 : 16_384)
+        var rows = try #require(inventory["models"] as? [[String: Any]])
+        if scenario == "unloaded" { rows[0]["loaded_instances"] = [[String: Any]]() }
+        if scenario == "ambiguous" {
+            let instances = try #require(rows[0]["loaded_instances"] as? [[String: Any]])
+            rows[0]["loaded_instances"] = instances + instances
+        }
+        inventory["models"] = rows
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: inventory), as: UTF8.self)
+        var requests = 0
+        let prepared = await S.prepare(config, transport: { request in
+            requests += 1
+            #expect(request.httpMethod == "GET" && request.url?.path == "/api/v1/models")
+            return StockSageManagedModelLifecycleTests.response(request, json)
+        })
+        #expect(requests == 1)
+        #expect(prepared.hasModel == (scenario == "ready"))
+        if scenario == "ready" {
+            #expect(min(StockSageChat.contextTokens, prepared.servingContext ?? StockSageChat.contextTokens) == 16_384)
+        } else {
+            #expect(prepared.detail.contains("16K"))
+        }
+    }
+    #endif
 
     @Test(arguments: ["valid", "missing-finish", "missing-model", "wrong-model", "short-context", "ambiguous-context"])
     @MainActor func gemmaCompletionRequiresConfirmedIdentityFinishAndServingContext(scenario: String) async throws {

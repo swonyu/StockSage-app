@@ -143,7 +143,7 @@ final class StockSageStore: ObservableObject {
 
     @Published private(set) var journalSplits: [String: StockSageMassiveSplits.Snapshot] = [:]
     private var journalSplitGeneration = UUID()
-    private var journalSplitAttempts: [String: (since: Date, at: Date)] = [:]
+    private var journalSplitAttempts: [String: (since: Date, at: Date, credentialRevision: String?, policyRevision: String?)] = [:]
 
     /// One serial sweep for open positions only. The view's native task cancellation plus
     /// generation guard prevents an obsolete sweep publishing after an edit/removal.
@@ -151,23 +151,28 @@ final class StockSageStore: ObservableObject {
         let generation = UUID()
         journalSplitGeneration = generation
         let now = Date()
+        let access = StockSageMassive.Access()
+        let captured = access.capture()
+        let credentialRevision = access.credentialRevision()
+        let policyRevision = access.policyRevision()
         let requests = Dictionary(trades.filter { $0.isOpen && StockSageMassive.covers($0.symbol) }
             .map { ($0.symbol.uppercased(), $0.openedAt) }, uniquingKeysWith: min)
         let retained = journalSplits.filter { requests[$0.key] != nil }
         if retained != journalSplits { journalSplits = retained }
         journalSplitAttempts = journalSplitAttempts.filter { requests[$0.key] != nil }
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
+        guard captured.isCurrent(), ToolPolicy.isExternalAllowed, !Task.isCancelled else { return }
         for symbol in requests.keys.sorted() {
-            guard generation == journalSplitGeneration, !Task.isCancelled, let since = requests[symbol] else { return }
+            guard generation == journalSplitGeneration, captured.isCurrent(), !Task.isCancelled, let since = requests[symbol] else { return }
             if journalSplits[symbol]?.covers(since: since, now: now) == true { continue }
             // Failure is NOT a no-split answer. Bound transient retries without blocking an
             // earlier newly logged position whose wider date range has not been requested.
             if let attempt = journalSplitAttempts[symbol], attempt.since <= since,
+               attempt.credentialRevision == credentialRevision, attempt.policyRevision == policyRevision,
                now.timeIntervalSince(attempt.at) >= 0, now.timeIntervalSince(attempt.at) < 60 { continue }
-            let snapshot = await StockSageMassiveSplits.fetch(symbol: symbol, since: since, now: now)
-            guard generation == journalSplitGeneration, !Task.isCancelled else { return }
+            let snapshot = await StockSageMassiveSplits.fetch(symbol: symbol, since: since, now: now, access: access)
+            guard generation == journalSplitGeneration, captured.isCurrent(), !Task.isCancelled else { return }
             if let snapshot { journalSplits[symbol] = snapshot }
-            else { journalSplitAttempts[symbol] = (since, Date()) }
+            else { journalSplitAttempts[symbol] = (since, Date(), credentialRevision, policyRevision) }
         }
     }
 
@@ -385,24 +390,9 @@ final class StockSageStore: ObservableObject {
             backtestConvictionCalibration = snap.usableCalibration
             persistedCalibrationSnapshot = snap
         }
-        // Pre-purge snapshots remain stored for audit, but cannot drive sizing. The existing
-        // offline trigger below refits them under the time-aware policy when histories suffice.
-        // Decision 3, Trigger B: no persisted fit, or the persisted data is >7d stale — refit
-        // offline from whatever price history is already on disk (zero new network). No-op when
-        // there's no cache yet or the pooled sample is too thin (autoFitCalibration's guard).
-        // F2 (adversarial review): never fire under the test runner — a background Task reading
-        // the real on-disk HistoryCache and writing real UserDefaults would make unit-test runs
-        // racy/flaky and pollute the shared defaults domain other tests share (StockSageStore is
-        // a singleton; every test file that touches `.shared` would inherit this side effect).
-        if !Self.isRunningTests, Self.shouldAutoFit(snapshot: persistedCalibrationSnapshot, now: Date()) {
-            Task {
-                let cache = await Task.detached { StockSageHistoryCache.load() }.value
-                guard let cache else { return }
-                let hist = cache.priceHistories()
-                await self.autoFitCalibration(histories: hist, benchmark: hist["^GSPC"],
-                                              source: "cache-offline-1y", dataAsOf: cache.savedAt)
-            }
-        }
+        // Keep the saved fit for audit. Backtests and calibration now require
+        // their explicit controls; opening the app never refits saved research.
+
     }
 
     // MARK: - Test-environment gate (F2, calibration runtime activation adversarial review)
@@ -1180,15 +1170,7 @@ final class StockSageStore: ObservableObject {
         // Same for seasonality — the TOM rank tilt must not depend on which sheets were opened.
         Task { await refreshSeasonalityForTopIdeas() }
         ideasUpdated = Date()
-        // Decision 3, Trigger A: refit the offline calibration from this scan's OWN fetched
-        // histories + benchmark — zero new network. Runs only on a full scan-end commit
-        // (deliberately not in the cancel path above or in retryFailedIdeas — a partial scan is
-        // not scan-end); no-op when the pooled sample is too thin (autoFitCalibration's guard).
-        // F2: never fire under the test runner — same rationale as Trigger B's gate in `init`.
-        if !Self.isRunningTests {
-            Task { await autoFitCalibration(histories: accumulatedHistories, benchmark: benchmark,
-                                            source: "scan-offline-1y", dataAsOf: Date()) }
-        }
+
     }
 
     /// Cancel an in-flight ideas scan (backlog #12). The outer refreshIdeas defer clears the spinner.
@@ -3077,15 +3059,22 @@ final class StockSageStore: ObservableObject {
     private var lastStreamGapAt: Date?
 
     func refreshStreamGap() async {
-        guard ToolPolicy.webToolsDisabledReason() == nil else { return }
+        let access = StockSageMassive.Access().capture()
+        await refreshStreamGap(candidates: trackedDefs(scope: .streamGap).map(\.symbol),
+            allowed: access.isCurrent, fetch: { await StockSageQuoteService.fetchQuotes(for: $0) })
+    }
+
+    func refreshStreamGap(candidates all: [String], allowed: () -> Bool,
+                          fetch: ([String]) async -> [String: StockSageQuoteService.LiveQuote]) async {
+        guard allowed(), !Task.isCancelled else { return }
         let now = Date()
         guard Self.shouldSweepStreamGap(lastAt: lastStreamGapAt, now: now) else { return }
-        let all = trackedDefs(scope: .streamGap).map(\.symbol)
         guard !all.isEmpty else { return }
         lastStreamGapAt = now
         let (candidates, nextCursor) = Self.rotatedSweepSlice(all: all, cursor: streamGapCursor, limit: Self.streamGapMaxPerSweep)
         streamGapCursor = nextCursor
-        let quotes = await StockSageQuoteService.fetchQuotes(for: candidates)
+        let quotes = await fetch(candidates)
+        guard allowed(), !Task.isCancelled else { return }
         applyPolledQuotes(quotes)
     }
 

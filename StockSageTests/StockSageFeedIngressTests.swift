@@ -106,7 +106,7 @@ struct StockSageFeedIngressTests {
         let ingress = I(), live = L()
         defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
         let refresh = live.refreshReferences(now: now,
-            stillValid: { true }, conditions: { [801] }, exchangeList: { [:] })
+            stillValid: { true }, displayConditions: { [0] }, conditions: { [801] }, exchangeList: { [:] })
         let reference = try #require(refresh)
         await reference.value
         #expect(ingress.offer(auth, at: now))
@@ -114,8 +114,8 @@ struct StockSageFeedIngressTests {
         let rows = [
             #"{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"c":801,"t":1699999989000}"#,
             #"{"ev":"Q","sym":"MSFT","bp":199,"ap":201,"bs":100,"as":100,"c":801,"t":1700000000000}"#,
-            #"{"ev":"T","sym":"AAPL","p":100,"t":1699999989000}"#,
-            #"{"ev":"T","sym":"MSFT","p":200,"t":1700000000000}"#
+            #"{"ev":"T","sym":"AAPL","p":100,"t":1699999989000,"pt":1699999988999,"c":[0]}"#,
+            #"{"ev":"T","sym":"MSFT","p":200,"t":1700000000000,"pt":1699999999999,"c":[0]}"#
         ]
         let ordered = reverse ? Array(rows.reversed()) : rows
         #expect(ingress.offer(Data(("[" + ordered.joined(separator: ",") + "]").utf8), at: now))
@@ -148,15 +148,15 @@ struct StockSageFeedIngressTests {
             [1: .init(id: 1, mic: "XNAS", acronym: "NASDAQ")]
         }
         let initial = live.refreshReferences(now: now, stillValid: { true },
-            conditions: load, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: load, exchangeList: exchanges)
         let first = try #require(initial)
         await first.value
         let early = live.refreshReferences(now: now.addingTimeInterval(86_399), stillValid: { true },
-            conditions: load, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: load, exchangeList: exchanges)
         #expect(early == nil)
         let expired = now.addingTimeInterval(86_400)
         let second = live.refreshReferences(now: expired, stillValid: { true },
-            conditions: load, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: load, exchangeList: exchanges)
         #expect(second != nil, "Expired references must refresh without restarting the feed")
         await second?.value
         #expect(requests == 2)
@@ -186,15 +186,15 @@ struct StockSageFeedIngressTests {
                 return [801]
             }
             let initial = live.refreshReferences(now: now, stillValid: { true },
-                conditions: load, exchangeList: { [:] })
+                displayConditions: { [0] }, conditions: load, exchangeList: { [:] })
             let first = try #require(initial)
             await first.value
             let early = live.refreshReferences(now: now.addingTimeInterval(59), stillValid: { true },
-                conditions: load, exchangeList: { [:] })
+                displayConditions: { [0] }, conditions: load, exchangeList: { [:] })
             #expect(early == nil)
             let retryAt = now.addingTimeInterval(60)
             let retry = live.refreshReferences(now: retryAt, stillValid: { true },
-                conditions: load, exchangeList: { [:] })
+                displayConditions: { [0] }, conditions: load, exchangeList: { [:] })
             #expect(retry != nil, "Unavailable or empty references must remain retryable")
             await retry?.value
             #expect(requests == 2)
@@ -220,13 +220,13 @@ struct StockSageFeedIngressTests {
             ready.continuation.finish()
         }
         var oldExchangeCalls = 0
-        let first = live.refreshReferences(now: now, stillValid: { true }, conditions: {
+        let first = live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [0] }, conditions: {
             await withCheckedContinuation { oldResume = $0; ready.continuation.yield() }
         }, exchangeList: { oldExchangeCalls += 1; return [:] })
         let firstTask = try #require(first)
         _ = await starts.next()
         live.stop(clearNBBO: {})
-        let next = live.refreshReferences(now: now, stillValid: { true }, conditions: {
+        let next = live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [0] }, conditions: {
             await withCheckedContinuation { nextResume = $0; ready.continuation.yield() }
         }, exchangeList: { [1: .init(id: 1, mic: "XNAS", acronym: "TEST")] })
         let nextTask = try #require(next)
@@ -236,7 +236,7 @@ struct StockSageFeedIngressTests {
         #expect(oldExchangeCalls == 0 && live.exchanges.isEmpty)
         var duplicateCalls = 0
         let duplicate = live.refreshReferences(now: now.addingTimeInterval(120), stillValid: { true },
-            conditions: { duplicateCalls += 1; return [801] }, exchangeList: { [:] })
+            displayConditions: { [0] }, conditions: { duplicateCalls += 1; return [801] }, exchangeList: { [:] })
         #expect(duplicate == nil, "An old completion must not clear the replacement's in-flight guard")
         nextResume?.resume(returning: [999]); nextResume = nil
         await nextTask.value
@@ -257,17 +257,17 @@ struct StockSageFeedIngressTests {
         let load: @MainActor () async throws -> Set<Int64> = {
             conditionsCalls += 1; allowed = false; return [801]
         }
-        let denied = live.refreshReferences(now: now, stillValid: { allowed }, conditions: load,
+        let denied = live.refreshReferences(now: now, stillValid: { allowed }, displayConditions: { [0] }, conditions: load,
             exchangeList: { exchangeCalls += 1; return [:] })
         #expect(denied == nil && conditionsCalls == 0)
         allowed = true
-        let revoked = live.refreshReferences(now: now, stillValid: { allowed }, conditions: load,
+        let revoked = live.refreshReferences(now: now, stillValid: { allowed }, displayConditions: { [0] }, conditions: load,
             exchangeList: { exchangeCalls += 1; return [:] })
         await revoked?.value
         #expect(conditionsCalls == 1 && exchangeCalls == 0)
         allowed = true
         let recovered = live.refreshReferences(now: now.addingTimeInterval(60), stillValid: { allowed },
-            conditions: { [801] }, exchangeList: { exchangeCalls += 1; return [:] })
+            displayConditions: { [0] }, conditions: { [801] }, exchangeList: { exchangeCalls += 1; return [:] })
         #expect(recovered != nil, "Revoked access cannot stamp a successful reference")
         await recovered?.value
         #expect(exchangeCalls == 1)
@@ -317,9 +317,11 @@ struct StockSageFeedIngressTests {
         let ingress = I()
         ingress.offer(auth, at: now)
         _ = try await drained(ingress, symbols: ["AAPL"])
-        ingress.offer(Data(#"[{"ev":"T","sym":"AAPL","p":100,"t":1700000000000},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"t":1700000000000}]"#.utf8), at: now)
+        ingress.offer(Data(#"[{"ev":"T","sym":"AAPL","p":100,"t":1700000000000,"pt":1699999999999,"c":[0]},{"ev":"Q","sym":"AAPL","bp":99,"ap":101,"bs":100,"as":100,"t":1700000000000}]"#.utf8), at: now)
         let captured = try await drained(ingress, symbols: ["AAPL"])
         let live = L()
+        await live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [0] },
+            conditions: { [] }, exchangeList: { [:] })?.value
         let published = live.publish(captured, from: ingress, now: now) { ticks, quotes, _ in
             #expect(ticks["AAPL"]?.price == 100 && quotes["AAPL"]?.bid == 99)
             usleep(10_000) // Deterministic store-merge work belongs inside the timing boundary.
@@ -448,7 +450,7 @@ struct StockSageFeedIngressTests {
         let ingress = I(), live = L()
         defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
         let task = live.refreshReferences(now: now, stillValid: { true },
-            conditions: { [801] }, exchangeList: { [:] })
+            displayConditions: { [0] }, conditions: { [801] }, exchangeList: { [:] })
         await task?.value
         let all = ((0..<4095).map { "A\($0)" } + ["MSFT", "TSLA"]).sorted()
         let first = StockSageStore.rotatedSweepSlice(all: all, cursor: 0, limit: ingress.limits.publicationSymbols)
@@ -492,7 +494,7 @@ struct StockSageFeedIngressTests {
         let ingress = I(), live = L()
         defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
         let task = live.refreshReferences(now: now, stillValid: { true },
-            conditions: { [801] }, exchangeList: { [:] })
+            displayConditions: { [0] }, conditions: { [801] }, exchangeList: { [:] })
         let reference = try #require(task)
         await reference.value
         // Unchanged, aging, missing, changed, withdrawn, condition-ineligible.
@@ -574,7 +576,7 @@ struct StockSageFeedIngressTests {
         defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
         let referencesAt = scenario == "reference-expiry" ? now.addingTimeInterval(-86_399) : now
         let task = live.refreshReferences(now: referencesAt, stillValid: { true },
-            conditions: { [801] }, exchangeList: { [:] })
+            displayConditions: { [0] }, conditions: { [801] }, exchangeList: { [:] })
         await task?.value
         #expect(ingress.offer(auth, at: now))
         _ = try await drained(ingress, symbols: ["AAPL"])
@@ -631,7 +633,7 @@ struct StockSageFeedIngressTests {
         let ingress = I(), live = L()
         defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
         let task = live.refreshReferences(now: now, stillValid: { true },
-            conditions: { [801] }, exchangeList: { [:] })
+            displayConditions: { [0] }, conditions: { [801] }, exchangeList: { [:] })
         await task?.value
         let all = (0..<ingress.limits.symbols).map { "S\($0)" }.sorted()
         #expect(ingress.offer(auth, at: now))
@@ -830,5 +832,88 @@ struct StockSageFeedIngressTests {
         #expect(snapshot.trades["S19999"]?.price == 104)
         print("FEED_REPLAY events=\(accepted) seconds=\(elapsed) events_per_second=\(Double(accepted)/elapsed) peak_receive_process_s=\(snapshot.metrics.peakReceiveToProcess) peak_receive_publish_s=\(maxPublish) peak_frames=\(snapshot.metrics.peakFrames) peak_bytes=\(snapshot.metrics.peakBytes) symbols=\(snapshot.metrics.tradeSymbols + snapshot.metrics.quoteSymbols) process_peak_rss_bytes=\(rssAfter.ru_maxrss) peak_rss_increase_bytes=\(rssAfter.ru_maxrss-rssBefore.ru_maxrss)")
         ingress.invalidate()
+    }
+}
+
+
+extension StockSageFeedIngressTests {
+    @Test @MainActor func rawTradeConditionsSurviveButSpecialPricesNeverPublish() async throws {
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        await live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [901] },
+            conditions: { [] }, exchangeList: { [:] })?.value
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress)
+        let symbols = ["NORMAL", "AVERAGE", "UNKNOWN", "MISSING", "LATE", "FUTURE"]
+        let policy = live.displayTradePolicy(at: now)
+        #expect(policy.generation != nil)
+        _ = await ingress.snapshot(symbols: symbols, now: now,
+            displayConditions: policy.conditions, displayConditionGeneration: policy.generation)
+        let rows = [
+            #"{"ev":"T","sym":"NORMAL","p":100,"t":1700000000000,"pt":1699999999999,"c":[901]}"#,
+            #"{"ev":"T","sym":"AVERAGE","p":101,"t":1700000000000,"pt":1699999999999,"c":[901,902]}"#,
+            #"{"ev":"T","sym":"UNKNOWN","p":102,"t":1700000000000,"c":[999]}"#,
+            #"{"ev":"T","sym":"MISSING","p":103,"t":1700000000000}"#,
+            #"{"ev":"T","sym":"LATE","p":104,"t":1700000000000,"pt":1699999880000,"c":[901]}"#,
+            #"{"ev":"T","sym":"FUTURE","p":105,"t":1700000000000,"pt":1700000000001,"c":[901]}"#
+        ]
+        #expect(ingress.offer(Data(("[" + rows.joined(separator: ",") + "]").utf8), at: now))
+        let snapshot = try await drained(ingress, symbols: symbols)
+        #expect(snapshot.trades.count == 6, "Retain raw trades for ordering and diagnostics")
+        #expect(snapshot.trades["AVERAGE"]?.conditions == [901,902])
+        #expect(snapshot.displayConditionGeneration == policy.generation)
+        #expect(Set(snapshot.displayTrades.keys) == ["NORMAL"])
+        let published = live.publish(snapshot, from: ingress, now: now) { ticks, _, _ in
+            #expect(Set(ticks.keys) == ["NORMAL"])
+            #expect(ticks["NORMAL"]?.timestamp == now, "SIP ordering clock remains unchanged")
+        }
+        #expect(published)
+    }
+}
+
+
+extension StockSageFeedIngressTests {
+    @Test @MainActor func qualifiedTradeSurvivesSameSymbolSpecialTradeCoalescingAndPolicyInvalidation() async throws {
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        await live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [901] },
+            conditions: { [] }, exchangeList: { [:] })?.value
+        #expect(ingress.offer(auth, at: now))
+        _ = try await drained(ingress)
+        let policy = live.displayTradePolicy(at: now)
+        _ = await ingress.snapshot(symbols: ["AAPL"], now: now,
+            displayConditions: policy.conditions, displayConditionGeneration: policy.generation)
+        var last: I.Snapshot?
+        for step in 0..<3 {
+            let ms = Int64(1_700_000_000_000) + Int64(step * 1_000)
+            let at = now.addingTimeInterval(Double(step))
+            let frame = "[{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":\(100 + step),\"t\":\(ms),\"pt\":\(ms - 1),\"q\":\(step * 2 + 1),\"c\":[901]},{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":999,\"t\":\(ms),\"pt\":\(ms - 1),\"q\":\(step * 2 + 2),\"c\":[902]}]"
+            #expect(ingress.offer(Data(frame.utf8), at: at))
+            let snapshot = try await drained(ingress, symbols: ["AAPL"])
+            #expect(snapshot.trades["AAPL"]?.price == 999, "Preserve raw latest trade")
+            #expect(snapshot.displayTrades["AAPL"]?.price == Double(100 + step))
+            #expect(snapshot.receivedUptime["D.AAPL"] != nil)
+            let published = live.publish(snapshot, from: ingress, now: at) { ticks, _, _ in
+                #expect(ticks["AAPL"]?.price == Double(100 + step))
+                #expect(ticks["AAPL"]?.timestamp == at)
+            }
+            #expect(published)
+            await ingress.acknowledge(snapshot.receivedUptime, at: ProcessInfo.processInfo.systemUptime)
+            last = snapshot
+        }
+        let old = try #require(last)
+        let renewedAt = now.addingTimeInterval(86_400)
+        await live.refreshReferences(now: renewedAt, stillValid: { true }, displayConditions: { [901] },
+            conditions: { [] }, exchangeList: { [:] })?.value
+        #expect(live.displayTradePolicy(at: renewedAt).generation != old.displayConditionGeneration)
+        let renewed = live.publish(old, from: ingress, now: renewedAt) { ticks, _, _ in
+            #expect(ticks.isEmpty, "An older policy capture cannot publish after renewal, even with equal condition IDs")
+        }
+        #expect(renewed)
+        ingress.invalidate("fixture access invalidation")
+        let invalidated = live.publish(old, from: ingress, now: renewedAt) { ticks, quotes, _ in
+            #expect(ticks.isEmpty && quotes.isEmpty)
+        }
+        #expect(!invalidated)
     }
 }

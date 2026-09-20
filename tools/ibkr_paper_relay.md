@@ -1,5 +1,7 @@
 # StockSage → IBKR paper relay
 
+> **Current status — manual research only.** This legacy relay is dormant and retained for offline compatibility tests. The operational examples and September 8 observations below are historical, not current setup or release-verification instructions. Do not start the relay or native paper automation under the current direction; this source integration does not authorize broker or automation activity.
+
 Relays new trades from StockSage's separate Qwen simulation to an eligible IBKR
 paper account automatically, without a confirmation click for each order.
 There is no live-account mode. This uses the TWS/Gateway API, separately from
@@ -82,6 +84,48 @@ StockSage's simulated ledger and IBKR fills are separate. The relay does not
 rewrite the simulation or the real trade journal. Broker executions must support
 the recorded filled quantity and average price. Fees not yet received are null,
 not zero; late commission reports are not backfilled after a terminal receipt.
+
+## Native ledger reader compatibility
+
+The offline source reader accepts native account versions 1 and 2. Version 1
+keeps the original minimal `version` + `trades` contract. Version 2 still reads
+trades only from `account.trades`: its immutable `audit-<UUID>.json` chunks contain
+older decisions, not relocated trades, and can never create broker intents.
+
+Before returning any version-2 trade, the reader validates the consumed audit
+integrity projection: version/audit pairing, canonical manifest references,
+regular non-symlink files, exact byte counts and SHA-256 hashes, archive JSON and
+record counts, finite decision dates, archive maximum dates, unique archive IDs,
+unique decision IDs across all chunks and the active tail, and recomputed audit
+control flags/latest-attempt dates. The per-symbol control maximum starts at
+Foundation `Date.distantPast` (`-63114076800` seconds since the Apple reference
+date), matching native audit derivation even for earlier finite decision dates.
+Hash-valid semantic inconsistencies therefore fail closed. Unreferenced archive
+orphans are ignored and never deleted.
+
+Account and referenced-archive paths are opened nonblocking without following a
+final symlink, then the opened descriptor must identify a regular file before any
+read. FIFOs and other non-regular descriptors therefore fail closed without
+waiting for a producer. A successfully wrapped descriptor has only the file
+object as owner; if wrapping fails, the raw descriptor is closed exactly once.
+
+Reads are bounded to 32 MB for the account, 32 MB per archive, and 128 MB for one
+captured account-plus-archive generation, with at most 1,000 archives, 1,000,000
+archived decisions, 50,000 active decisions, and 50,000 trades. There is no cache:
+each poll rereads the captured account and all of its references, so same-size and
+same-mtime atomic replacements and later archive corruption cannot reuse an old
+success. Atomic replacement during a call does not mix generations; that call
+validates the manifest captured from the account bytes it opened.
+
+The whole referenced archive set is revalidated sequentially on every poll, up to
+the stated 1,000-archive ceiling. Add a content index only if parent measurements
+show this bounded path is too slow; integrity checks must not be skipped.
+
+This is deliberately a trades-only consumed-integrity boundary, not a certificate
+of the complete native `Book`. Pending orders, cursor/cash/account rules, trade
+stop/target and optional measurement fields, and decision prose/facts/evidence/
+model/plan semantics remain native Swift's responsibility and are not projected
+into broker intents.
 
 State lives in `~/Library/Application Support/StockSageIBKRPaper/`:
 `receipts.sqlite3`, `status.json`, `relay.lock` and the optional `STOP` marker.

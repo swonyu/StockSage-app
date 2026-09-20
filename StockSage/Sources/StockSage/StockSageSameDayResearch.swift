@@ -68,11 +68,14 @@ import Combine
         guard let window = Self.session(at: Date()), Date() >= window.open.addingTimeInterval(1800) else {
             status = "Same-day research requires a verified regular session, thirty completed minutes and more than five minutes until close. Earlier saved research remains dated history."; return false
         }
-        guard ToolPolicy.isExternalAllowed, !store.isSampleData, StockSageMassive.isConfigured,
+        guard ToolPolicy.isExternalAllowed, !store.isSampleData,
               !StockSageLocalModelServer.isShuttingDown,
               let config = StockSageAIAssessments.configuration, config.requiresStrictOutput,
               config.model == StockSageLocalModelServer.gemmaModel else {
             status = "Fresh market access and the exact strict-output Gemma configuration are required. No research started."; return false
+        }
+        if let reason = StockSageMassive.credentialAccessBlocker() {
+            status = reason + " No research started."; return false
         }
         guard let receiptStore, (try? StockSageRecordWriter.require(.standard)) != nil else {
             status = "The same-day research writer is unavailable. No research started; existing records preserved."; return false
@@ -97,12 +100,13 @@ import Combine
                 && ToolPolicy.isExternalAllowed && AppSettings.policyRevision() == policy && !store.isSampleData
                 && StockSageMassive.apiKey == key && StockSageMassive.credentialRevision() == credentials
                 && StockSageAIAssessments.configuration == config && StockSageLocalModelServer.settingsRevision() == revision
+                && !receiptStore.persistenceFailed(scanID: id)
         }
         task = Task { [self] in
             defer { isRunning = false; task = nil }
             let probe = await StockSageLocalModelServer.prepare(config, stillValid: allowed)
-            guard allowed(), probe.reachable, probe.hasModel, !probe.isOllama else {
-                await failedRun("Gemma is unavailable or preparation was interrupted. No replacement model or pick.", initial: initial); return
+            if let failure = Self.preparationFailure(probe, isAllowed: allowed()) {
+                await failedRun(failure, initial: initial); return
             }
             do {
                 let selection = try await StockSageResearchUniverse.fetch(key: key, allowed: allowed)
@@ -118,6 +122,28 @@ import Combine
             } catch { await failedRun("Activity or quote-condition evidence unavailable or interrupted. No pick.", initial: initial) }
         }
         return true
+    }
+
+    nonisolated static func preparationFailure(_ probe: StockSageLocalModelServer.Probe,
+                                               isAllowed: Bool) -> String? {
+        guard isAllowed else { return "Gemma preparation was interrupted. No replacement model or pick." }
+        guard probe.reachable, probe.hasModel, !probe.isOllama else {
+            let detail = probe.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "Gemma preparation failed: " + (detail.isEmpty ? "Check the selected model server." : String(detail.prefix(512)))
+                + " No replacement model or pick."
+        }
+        return nil
+    }
+
+    private static let receiptFailure = "Research receipt could not be saved; collection stopped and no current pick published. Completed checks remain in memory."
+
+    private func reportReceiptFailure(scanID: UUID) {
+        guard receipt?.id == scanID, receiptStore?.persistenceFailed(scanID: scanID) == true else { return }
+        receipt?.selectedSymbol = nil; receipt?.blocker = Self.receiptFailure
+        status = Self.receiptFailure
+        // In production this cancels the parent request and its structured children immediately,
+        // including a model transport whose observer was the first failed write.
+        task?.cancel()
     }
 
     private func failedRun(_ reason: String, initial: Receipt) async {
@@ -140,13 +166,16 @@ import Combine
         var result = Receipt(id: id, startedAt: started,
             selection: "\(listings.count) of \(selection.receipt?.eligibleCount ?? selection.listings.count) eligible activity-selected listings shortlisted. " + (selection.receipt?.summary ?? "Selection activity receipt unavailable."),
             checks: listings.map { .init(symbol: $0.ticker, name: $0.name, at: started, note: "Not started") })
-        func active() -> Bool { !Task.isCancelled && allowed() && clock() >= started && Self.session(at: clock()) != nil }
+        func active() -> Bool {
+            !Task.isCancelled && allowed() && receiptStore?.persistenceFailed(scanID: id) != true
+                && clock() >= started && Self.session(at: clock()) != nil
+        }
         func finish(_ blocker: String?) {
             result.finishedAt = clock(); result.blocker = blocker
             _ = receiptStore?.saveSameDay(result)
             receiptStore?.finish(scanID: id, status: blocker ?? "Completed same-day research", at: clock())
             if receiptStore?.persistenceFailed(scanID: id) == true {
-                result.selectedSymbol = nil; result.blocker = "Research receipt could not be saved; no current pick published."
+                result.selectedSymbol = nil; result.blocker = Self.receiptFailure
             }
             receipt = result; status = result.blocker ?? "App-ranked Gemma-qualified pick: \(result.selectedSymbol ?? "none")"
             savedReceipts = receiptStore?.sameDayHistory ?? []
@@ -160,6 +189,8 @@ import Combine
         let attempts = receiptStore?.registerSelection(selection.receipt, listings: listings, for: id) ?? listings.map { _ in UUID() }
         guard attempts.count == listings.count else { finish("The research attempts could not be registered."); return }
         _ = receiptStore?.saveSameDay(result)
+        receipt = result
+        guard active() else { finish("Research interrupted before collection."); return }
         await withTaskGroup(of: (Int, Check).self) { group in
             var next = 0, inflight = 0, completed = 0
             while next < listings.count || inflight > 0 {
@@ -167,7 +198,11 @@ import Combine
                     let index = next, item = listings[index], attempt = attempts[index], writer = receiptStore
                     let activity = selection.receipt?.dollarVolume[item.ticker] ?? 0
                     writer?.beginAttempt(attempt, scanID: id, at: clock())
-                    let observer: Observer = { event in await writer?.capture(event, for: attempt, scanID: id) }
+                    guard active() else { group.cancelAll(); break }
+                    let observer: Observer = { [weak self] event in
+                        await writer?.capture(event, for: attempt, scanID: id)
+                        await self?.reportReceiptFailure(scanID: id)
+                    }
                     group.addTask { @MainActor @Sendable in (index, await analyze(item, activity, observer)) }
                     next += 1; inflight += 1
                 }
@@ -182,7 +217,9 @@ import Combine
                     validationOutcome: opinion == nil ? .unknown : .validated), attemptID: attempts[index], scanID: id,
                     status: check.qualified ? "qualified" : "not_qualified", at: clock())
                 _ = receiptStore?.saveSameDay(result)
-                receipt = result; status = "Same-day research · \(completed)/\(listings.count) checks completed"
+                receipt = result
+                if receiptStore?.persistenceFailed(scanID: id) == true { reportReceiptFailure(scanID: id) }
+                else { status = "Same-day research · \(completed)/\(listings.count) checks completed" }
                 if !active() { group.cancelAll() }
             }
         }

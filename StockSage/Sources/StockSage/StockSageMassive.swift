@@ -106,7 +106,7 @@ enum StockSageMassive {
     }
 
     /// Validate injected responses too; final URL identity cannot substitute another resource.
-    private nonisolated static func response(for request: URLRequest, maximumBytes: Int,
+    nonisolated static func response(for request: URLRequest, maximumBytes: Int,
                                              transport: Transport?) async throws -> (Data, HTTPURLResponse) {
         let (data, response): (Data, URLResponse)
         if let transport { (data, response) = try await transport(request) }
@@ -122,12 +122,27 @@ enum StockSageMassive {
 
     /// Settings field first (trimmed), then the `MASSIVE_API_KEY` environment variable; "" when neither
     /// is set. Read on every call so a key typed into Settings takes effect without a restart.
-    nonisolated static var apiKey: String {
+    nonisolated static var apiKey: String { (try? readAPIKey()) ?? "" }
+
+    /// Preserve the read failure for explicit access checks; request routing still fails closed.
+    nonisolated static func readAPIKey() throws -> String {
         // Test hosts use explicit environment/injected fixtures, never the owner's Keychain.
         let environment = ProcessInfo.processInfo.environment[keyEnvName]
         if StockSageStore.isRunningTests { return resolvedKey(saved: nil, environment: environment) }
-        return (try? StockSageMassiveCredential.resolve(defaults: .standard,
-            storage: StockSageMassiveCredential.keychain, environment: environment)) ?? ""
+        return try StockSageMassiveCredential.resolve(defaults: .standard,
+            storage: StockSageMassiveCredential.keychain, environment: environment)
+    }
+
+    /// Fixed recovery text never includes a credential, request URL, or raw storage error.
+    nonisolated static func credentialAccessBlocker(
+        readKey: () throws -> String = { try readAPIKey() }
+    ) -> String? {
+        do {
+            return try readKey().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "No market data key is configured. Add it in Settings → Data sources." : nil
+        } catch {
+            return "Keychain unavailable — unlock your device or allow StockSage to read its saved key, then retry Settings → Data sources → Test connection."
+        }
     }
 
     nonisolated static func resolvedKey(saved: String?, environment: String?) -> String {
@@ -204,7 +219,7 @@ enum StockSageMassive {
     /// `requestedSymbols` are emitted (the vendor's spelling is replaced by the one WE asked for, as the
     /// Yahoo parser does), so an unrequested extra row can never land on the board. Malformed / missing
     /// `tickers` ⇒ `[:]`.
-    static func parseSnapshot(_ data: Data, requestedSymbols: [String])
+    static func parseSnapshot(_ data: Data, requestedSymbols: [String], allowedTradeConditions: Set<Int64> = [])
         -> [String: StockSageQuoteService.LiveQuote] {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rows = obj["tickers"] as? [[String: Any]] else { return [:] }
@@ -218,7 +233,7 @@ enum StockSageMassive {
         for row in rows {
             guard let ticker = row["ticker"] as? String,
                   let requested = wanted[ticker],
-                  let q = parseTicker(row, requestedSymbol: requested) else { continue }
+                  let q = parseTicker(row, requestedSymbol: requested, allowedTradeConditions: allowedTradeConditions) else { continue }
             out[ticker.uppercased()] = q
         }
         return out
@@ -228,10 +243,14 @@ enum StockSageMassive {
     /// marketTime ← `lastTrade.t` (ns), previousClose ← `prevDay.c`; a missing/non-positive `prevDay.c`
     /// takes the SAME flat-placeholder + `isNewListing` route as the Yahoo parser (L3-08 parity),
     /// never a fabricated 0.00 %.
-    static func parseTicker(_ row: [String: Any], requestedSymbol: String)
+    static func parseTicker(_ row: [String: Any], requestedSymbol: String, allowedTradeConditions: Set<Int64> = [])
         -> StockSageQuoteService.LiveQuote? {
         guard let lastTrade = row["lastTrade"] as? [String: Any],
-              let price = finite(lastTrade["p"]), price > 0 else { return nil }
+              let price = finite(lastTrade["p"]), price > 0,
+              let rawConditions = lastTrade["c"] as? [Any] else { return nil }
+        let conditions = rawConditions.compactMap { int64($0) }
+        guard conditions.count == rawConditions.count, !conditions.isEmpty,
+              conditions.allSatisfy(allowedTradeConditions.contains) else { return nil }
         let realPreviousClose = finite((row["prevDay"] as? [String: Any])?["c"]).flatMap { $0 > 0 ? $0 : nil }
         let marketTime = int64(lastTrade["t"]).map(date(fromNanoseconds:))
         return StockSageQuoteService.LiveQuote(symbol: requestedSymbol, price: price,
@@ -274,6 +293,8 @@ enum StockSageMassive {
         guard access.allowed(), !Task.isCancelled, !symbols.isEmpty else { return [:] }
         let captured = access.capture()
         guard !captured.key.isEmpty, captured.isCurrent() else { return [:] }
+        guard let allowed = try? await StockSageMassiveTicks.displayTradeConditions(captured: captured, transport: transport),
+              captured.isCurrent() else { return [:] }
         var out: [String: StockSageQuoteService.LiveQuote] = [:]
         for chunk in chunks(symbols) {
             guard captured.isCurrent() else { return [:] }
@@ -281,7 +302,7 @@ enum StockSageMassive {
             let result = try? await response(for: req, maximumBytes: snapshotMaximumBytes, transport: transport)
             guard captured.isCurrent() else { return [:] }
             guard let (data, resp) = result, resp.statusCode == 200 else { continue }
-            out.merge(parseSnapshot(data, requestedSymbols: chunk)) { _, new in new }
+            out.merge(parseSnapshot(data, requestedSymbols: chunk, allowedTradeConditions: allowed)) { _, new in new }
         }
         return captured.isCurrent() ? out : [:]
     }
@@ -309,7 +330,7 @@ enum StockSageMassive {
         return request
     }
 
-    static func parseMarketSnapshot(_ data: Data) -> MarketSnapshot? {
+    static func parseMarketSnapshot(_ data: Data, allowedTradeConditions: Set<Int64> = []) -> MarketSnapshot? {
         guard data.count <= marketMaximumBytes,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK", let rows = root["tickers"] as? [[String: Any]],
@@ -319,7 +340,7 @@ enum StockSageMassive {
         for row in rows {
             guard let symbol = row["ticker"] as? String, (1...12).contains(symbol.utf8.count),
                   symbol.utf8.allSatisfy({ (65...90).contains($0) }), covers(symbol),
-                  let quote = parseTicker(row, requestedSymbol: symbol) else { continue }
+                  let quote = parseTicker(row, requestedSymbol: symbol, allowedTradeConditions: allowedTradeConditions) else { continue }
             let day = row["day"] as? [String: Any]
             var activity: Double?
             if let volume = finite(day?["v"]), volume >= 0,
@@ -339,7 +360,9 @@ enum StockSageMassive {
         guard captured.isCurrent(), let request = marketRequest(key: captured.key) else { return nil }
         let result = try? await response(for: request, maximumBytes: marketMaximumBytes, transport: transport)
         guard captured.isCurrent(), let (data, response) = result, response.statusCode == 200 else { return nil }
-        return parseMarketSnapshot(data)
+        guard let allowed = try? await StockSageMassiveTicks.displayTradeConditions(captured: captured, transport: transport),
+              captured.isCurrent() else { return nil }
+        return parseMarketSnapshot(data, allowedTradeConditions: allowed)
     }
 
     // MARK: - Split-adjusted daily history (M1b)
@@ -455,16 +478,25 @@ enum StockSageMassive {
     /// snapshot page's plan-access table.
     static func probe() async -> String {
         if let reason = ToolPolicy.webToolsDisabledReason() { return reason }
-        return await probe(access: .init())
+        return await probe(access: .init(), readKey: { try readAPIKey() })
     }
 
     static func probe(access: Access, transport: Transport? = nil) async -> String {
+        await probe(access: access, readKey: { access.key() }, transport: transport)
+    }
+
+    /// Explicit injection exercises the production credential decision without owner Keychain access.
+    static func probe(access: Access, readKey: () throws -> String,
+                      transport: Transport? = nil) async -> String {
         let interrupted = "Connection check cancelled or settings changed. Try again."
         guard !Task.isCancelled else { return interrupted }
         guard access.allowed() else { return "Web access is disabled." }
+        if let reason = credentialAccessBlocker(readKey: readKey) { return reason }
         let captured = access.capture()
         guard captured.isCurrent() else { return interrupted }
-        guard !captured.key.isEmpty else { return "No key set — enter your \(keyEnvName) above." }
+        guard !captured.key.isEmpty else {
+            return credentialAccessBlocker(readKey: readKey) ?? interrupted
+        }
         guard let req = request(for: ["AAPL"], key: captured.key) else { return "Could not build the request." }
         let result = try? await response(for: req, maximumBytes: snapshotMaximumBytes, transport: transport)
         guard captured.isCurrent() else { return interrupted }
@@ -473,9 +505,11 @@ enum StockSageMassive {
         }
         switch resp.statusCode {
         case 200:
-            return parseSnapshot(data, requestedSymbols: ["AAPL"]).count == 1
-                ? "Connected — HTTP 200, AAPL snapshot parsed."
-                : "HTTP 200 but no usable last trade in the payload (plan may not include trades)."
+            let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let rows = payload?["tickers"] as? [[String: Any]]
+            return payload?["status"] as? String == "OK" && rows?.contains(where: { $0["ticker"] as? String == "AAPL" }) == true
+                ? "Connected — HTTP 200, AAPL snapshot received. Price qualification is checked separately."
+                : "HTTP 200 but no AAPL snapshot in the payload."
         case 401: return "Rejected — HTTP 401 (key not accepted)."
         case 403: return "Forbidden — HTTP 403 (plan does not include this endpoint)."
         case let code: return "HTTP \(code)."

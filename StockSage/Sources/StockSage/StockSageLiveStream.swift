@@ -25,6 +25,9 @@ final class StockSageLiveStream: ObservableObject {
     private var publication: Task<Void, Never>?
     private var conditionTask: Task<Void, Never>?
     private var regularConditions: Set<Int64> = []
+    private var displayConditions: Set<Int64> = []
+    private var displayConditionsAsOf: Date?
+    private var displayConditionGeneration = UUID()
     private var conditionsAsOf: Date?
     private var exchangesAsOf: Date?
     private var referenceAttemptAt: Date?
@@ -37,20 +40,9 @@ final class StockSageLiveStream: ObservableObject {
         let price: Double
         let timestamp: Date
         var sequence: Int64? = nil
-        /// Parsed from `pt` and currently read by NOTHING — deliberately left in place rather than
-        /// deleted, because removing it would erase an unresolved question rather than answer it.
-        ///
-        /// The two ingest paths disagree about what "market time" means for the SAME provider and
-        /// the same `.massiveSIP` source. The streamed tick stores the SIP timestamp as marketTime
-        /// (`applyLiveTicks`), while the REST tick path stores the PARTICIPANT timestamp
-        /// (StockSageMassiveTicks.swift:258 `marketTime: trade.participantTime`). Participant time
-        /// is the exchange's own clock and is <= SIP time, so a symbol whose price alternates
-        /// between the two routes has its marketTime flip between two clocks — and marketTime is
-        /// exactly what `acceptsQuote` orders on and what `isStale` judges on.
-        ///
-        /// Wiring this field would change staleness verdicts and tick ordering; deleting it would
-        /// hide the inconsistency. Either is an owner-visible decision, not a cleanup.
+        /// Preserve the exchange event clock separately from SIP ordering.
         var participantTime: Date? = nil
+        var conditions: [Int64]? = nil
     }
 
     nonisolated enum Event: Sendable, Equatable {
@@ -79,29 +71,13 @@ final class StockSageLiveStream: ObservableObject {
             let timestamp = Date(timeIntervalSince1970: milliseconds / 1_000)
             switch row["ev"] as? String {
             case "T":
-                // `c` (trade conditions) is deliberately NOT read here, unlike the quote branch
-                // below which decodes it and gates NBBO display on costConditionVerified.
-                //
-                // DO NOT "fix" that asymmetry by filtering the stream alone. The app-wide display
-                // price is already unfiltered — StockSageMassive.parseTicker takes lastTrade.p with
-                // no condition test, and the streamed tick is ordered against exactly that value —
-                // so condition-filtering one source and not the other would make the two disagree
-                // about the same symbol, which is worse than the gap it closes. The repo's own
-                // ratified allowlist (StockSageMassiveTicks.swift:213-220) also ADMITS Form T and
-                // odd lots as "timely observations even though they do not update official OHLC",
-                // and HANDOFF.md scopes this path as last-trade ordering, not an execution-
-                // eligibility policy. The execution gate is separate and intact: a streamed tick
-                // never sets paperTradeQualified.
-                //
-                // What genuinely remains, at low impact: conditions the allowlist EXCLUDES
-                // (average-price 'W', sold out of sequence, derivatively priced, prior reference
-                // price) can still set a card's price with nothing on screen saying so. Closing
-                // that means filtering BOTH sources against one trade-scoped condition list —
-                // `regularQuoteConditions()` is quote-scoped — not patching this line.
                 guard let price = number(row["p"]), price > 0 else { return nil }
-                let participant = number(row["pt"]).flatMap { $0 > 0 && $0 <= milliseconds ? Date(timeIntervalSince1970: $0 / 1_000) : nil }
+                let participant = number(row["pt"]).flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0 / 1_000) : nil }
+                let rawConditions = row["c"] as? [Any]
+                let conditions = rawConditions?.compactMap { integer($0) }
                 return .trade(Tick(symbol: symbol, price: price, timestamp: timestamp,
-                                   sequence: integer(row["q"]), participantTime: participant))
+                    sequence: integer(row["q"]), participantTime: participant,
+                    conditions: conditions?.count == rawConditions?.count ? conditions : nil))
             case "Q":
                 guard let bid = number(row["bp"]), bid >= 0, let ask = number(row["ap"]), ask >= 0,
                       let bidSize = number(row["bs"]), bidSize >= 0,
@@ -231,7 +207,7 @@ final class StockSageLiveStream: ObservableObject {
         let current = StockSageLiveStreamConnection()
         connection = current
         current.open()
-        publication = Task { [weak self] in
+        publication = Task { [weak self, current] in
             while !Task.isCancelled {
                 guard let self, self.connection === current else { return }
                 guard ToolPolicy.isExternalAllowed, current.isCurrent else { self.stop(); return }
@@ -247,7 +223,9 @@ final class StockSageLiveStream: ObservableObject {
                     self.publicationCursor = selection.nextCursor
                     let retained = all.count > ingress.limits.publicationSymbols
                         ? self.quotes.filter { selected.contains($0.key) } : [:]
-                    let snapshot = await ingress.snapshot(symbols: selection.picked, retainingQuotes: retained)
+                    let policy = self.displayTradePolicy(at: Date())
+                    let snapshot = await ingress.snapshot(symbols: selection.picked, retainingQuotes: retained,
+                        displayConditions: policy.conditions, displayConditionGeneration: policy.generation)
                     guard !Task.isCancelled, self.connection === current, current.ingress === ingress else { continue }
                     guard ToolPolicy.isExternalAllowed, current.isCurrent else { self.stop(); return }
                     guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)) else {
@@ -269,17 +247,22 @@ final class StockSageLiveStream: ObservableObject {
     /// Shared runtime/test seam: tests replace only the reference transports and session check.
     @discardableResult
     func refreshReferences(now: Date = Date(), stillValid: @escaping @MainActor () -> Bool,
+        displayConditions: @escaping @MainActor () async throws -> Set<Int64> = {
+            // This layer owns its 24-hour age; a lower cache hit must not restart that clock.
+            try await StockSageMassiveTicks.displayTradeConditions(bypassCache: true)
+        },
         conditions: @escaping @MainActor () async throws -> Set<Int64> = {
             try await StockSageMassiveTicks.regularQuoteConditions()
         },
         exchangeList: @escaping @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange] = {
-            try await StockSageMassiveTicks.exchanges()
+            try await StockSageMassiveTicks.exchanges(bypassCache: true)
         }
     ) -> Task<Void, Never>? {
         guard now.timeIntervalSince1970.isFinite, stillValid(), conditionTask == nil else { return nil }
+        let displayFresh = displayConditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true
         let conditionsFresh = conditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true
         let exchangesFresh = exchangesAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true
-        guard !conditionsFresh || !exchangesFresh else { return nil }
+        guard !conditionsFresh || !exchangesFresh || !displayFresh else { return nil }
         // One retry per minute after failure/empty data; the 250ms publisher never fans out requests.
         if let at = referenceAttemptAt, (0..<60).contains(now.timeIntervalSince(at)) { return nil }
         referenceAttemptAt = now
@@ -291,6 +274,17 @@ final class StockSageLiveStream: ObservableObject {
                 if self?.referenceGeneration == run { self?.conditionTask = nil }
             }
             guard !Task.isCancelled, stillValid(), let self, self.referenceGeneration == run else { return }
+            if !displayFresh {
+                do {
+                    let allowed = try await displayConditions()
+                    guard !Task.isCancelled, stillValid(), self.referenceGeneration == run else { return }
+                    if !allowed.isEmpty {
+                        self.displayConditions = allowed
+                        self.displayConditionsAsOf = now
+                        self.displayConditionGeneration = UUID()
+                    }
+                } catch { /* Unavailable trade reference cannot qualify display prices. */ }
+            }
             if refreshConditions {
                 do {
                     let regular = try await conditions()
@@ -315,6 +309,18 @@ final class StockSageLiveStream: ObservableObject {
         }
         conditionTask = task
         return task
+    }
+
+    func displayTradePolicy(at now: Date) -> (conditions: Set<Int64>, generation: UUID?) {
+        guard displayConditionsAsOf.map({ (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) }) == true else {
+            return ([], nil)
+        }
+        return (displayConditions, displayConditionGeneration)
+    }
+
+    func exchangeReference(at now: Date) -> [Int64: StockSageMassiveTicks.Exchange] {
+        guard exchangesAsOf.map({ (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) }) == true else { return [:] }
+        return exchanges
     }
 
     /// The runtime and replay use the same @Published update. The clock ends after the store
@@ -344,7 +350,15 @@ final class StockSageLiveStream: ObservableObject {
         if isStreaming != recent { isStreaming = recent }
         let label = !snapshot.authorized ? "Feed authenticating" : recent ? "US trades + quotes" : "Feed connected · no recent observation"
         if connectionLabel != label { connectionLabel = label }
-        delivered = snapshot.authorized ? snapshot.trades : [:]
+        let displayPolicy = displayTradePolicy(at: now)
+        // Raw-only captures can be qualified directly during initial reference bootstrap.
+        // Preserved observations from a different policy generation must never be restored.
+        let displayCandidates = snapshot.displayConditionGeneration == nil ? snapshot.trades
+            : snapshot.displayConditionGeneration == displayPolicy.generation ? snapshot.displayTrades : [:]
+        delivered = snapshot.authorized ? displayCandidates.filter {
+            StockSageMassiveTicks.qualifiesDisplayTrade(conditions: $0.value.conditions,
+                allowed: displayPolicy.conditions, sip: $0.value.timestamp, participant: $0.value.participantTime)
+        } : [:]
         let regular = conditionsAsOf.map { (0..<Self.referenceLifetime).contains(now.timeIntervalSince($0)) } == true ? regularConditions : []
         // ponytail: retained cache/requalification can reach the existing 32,768-symbol
         // ingress bound; primary snapshot records stay capped at 4,096. No receipt time is invented.
@@ -415,6 +429,7 @@ final class StockSageLiveStream: ObservableObject {
         referenceGeneration = UUID(); referenceAttemptAt = nil
         connection?.close(); connection = nil
         regularConditions = []; conditionsAsOf = nil; exchanges = [:]; exchangesAsOf = nil
+        displayConditions = []; displayConditionsAsOf = nil; displayConditionGeneration = UUID()
         clearPrices(clearNBBO: clearNBBO)
         if connectionLabel != "Feed stopped" { connectionLabel = "Feed stopped" }
     }
@@ -423,12 +438,17 @@ final class StockSageLiveStream: ObservableObject {
 @MainActor
 final class StockSageLiveStreamConnection {
     private let revision: String?
+    private let policyRevision: String?
     private let currentRevision: @MainActor () -> String?
-    var isCurrent: Bool { revision == currentRevision() }
+    private let currentPolicyRevision: @MainActor () -> String?
+    var isCurrent: Bool { revision == currentRevision() && policyRevision == currentPolicyRevision() }
 
-    init(currentRevision: @escaping @MainActor () -> String? = { StockSageMassive.credentialRevision() }) {
+    init(currentRevision: @escaping @MainActor () -> String? = { StockSageMassive.credentialRevision() },
+         currentPolicyRevision: @escaping @MainActor () -> String? = { AppSettings.policyRevision() }) {
         self.currentRevision = currentRevision
+        self.currentPolicyRevision = currentPolicyRevision
         revision = currentRevision()
+        policyRevision = currentPolicyRevision()
     }
     private(set) var ingress: StockSageFeedIngress?
     private var socket: URLSessionWebSocketTask?

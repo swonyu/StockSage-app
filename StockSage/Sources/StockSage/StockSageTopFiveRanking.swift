@@ -84,6 +84,8 @@ enum StockSageTopFiveRanking {
         let ranked: [Ranked]
         /// True when the concentration guard changed the ranking that raw score alone would have produced.
         let concentrationGuardApplied: Bool
+        /// Absent only in legacy serialized rankings; never inferred on restore.
+        var scoredAt: Date? = nil
     }
 
     /// One eligible, fully-checked candidate. `sector` and `catalystIdentity` may be nil when
@@ -151,7 +153,48 @@ enum StockSageTopFiveRanking {
                 failedGates: failedGates, hardPenaltyReasons: penaltyReasons)
         }
         return Result(version: version, horizon: horizon.rawValue, ranked: ranked,
-            concentrationGuardApplied: qualifiedGuardApplied || fallbackGuardApplied)
+            concentrationGuardApplied: qualifiedGuardApplied || fallbackGuardApplied, scoredAt: now)
+    }
+
+    /// Shared pure adapter for the live completion and verification of the original full checks.
+    nonisolated static func capture(listings: [StockSageHorizonResearch.Listing],
+        results: [String: StockSageHorizonResearch.Result], horizon: StockSageHorizonResearch.Horizon,
+        at clock: Date) -> Result? {
+        guard results.count == listings.count, Set(results.keys) == Set(listings.map(\.ticker)), !listings.isEmpty else { return nil }
+        let candidates = listings.compactMap { listing -> StockSageTopFiveRanking.Candidate? in
+            guard let result = results[listing.ticker], let verdict = result.verdict,
+                  let qualification = result.qualification else { return nil }
+            // Reuse the SAME structural validator `isEligible` already applies, rather than
+            // trusting any non-nil receipt: symbol, requested horizon, evidence citations and
+            // capture time must all be internally consistent. A receipt that fails this can
+            // never read as Qualified below, but the candidate still appears with its real
+            // action and an explicit reason — this never hides a legitimate Hold/Avoid row.
+            let citedKeys = result.evidenceReceipt?.citedKeys ?? []
+            let valid = StockSageResearchQualification.valid(qualification, symbol: listing.ticker,
+                horizon: horizon.rawValue, at: result.at, citedKeys: citedKeys)
+            return .init(symbol: listing.ticker, action: verdict.action.rawValue,
+                catalystIdentity: qualification.candidateCatalysts.first?.identity,
+                qualification: qualification, insiderTransactions: result.insiderTransactions,
+                isReceiptValid: valid && qualification.originalAction == verdict.action.rawValue)
+        }
+        guard !candidates.isEmpty else { return nil }
+        return StockSageTopFiveRanking.rank(candidates, horizon: horizon, now: clock)
+    }
+
+    nonisolated static func valid(_ result: Result) -> Bool {
+        guard result.version == version, StockSageHorizonResearch.Horizon(rawValue: result.horizon) != nil,
+              let clock = result.scoredAt, clock.timeIntervalSince1970.isFinite,
+              !result.ranked.isEmpty, result.ranked.count <= 5,
+              Set(result.ranked.map(\.symbol)).count == result.ranked.count else { return false }
+        return result.ranked.enumerated().allSatisfy { index, row in
+            let c = row.components
+            return row.rank == index + 1 && StockSageHorizonResearch.validTicker(row.symbol)
+                && TradeAdvice.Action(rawValue: row.action) != nil
+                && [c.horizonFit, c.technicalConfluence, c.catalystQuality, c.liquidity,
+                    c.evidenceFreshness, c.insiderRelevance, c.counterevidence, c.hardPenalties, c.total].allSatisfy(\.isFinite)
+                && (row.status != .qualified || row.failedGates.isEmpty)
+                && row.insiderSignals.allSatisfy { !$0.ownerName.isEmpty && $0.ageDays.isFinite && $0.ageDays >= 0 && $0.contribution.isFinite }
+        }
     }
 
     private nonisolated static func score(_ candidate: Candidate, horizon: StockSageHorizonResearch.Horizon,

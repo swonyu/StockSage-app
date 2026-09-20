@@ -8,13 +8,17 @@ import SwiftUI
 struct StockSageTopFiveRankingSection: View {
     let result: StockSageTopFiveRanking.Result
     var openDetails: ((String) -> Void)? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private func priceLabel(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(1))) }
+    private func priceLabel(_ value: Double) -> String {
+        // Zero contrary checks can produce IEEE negative zero; preserve every nonzero score.
+        (value == 0 ? 0 : value).formatted(.number.precision(.fractionLength(1)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack {
-                Text("Top 5 · deterministic ranking").font(.headline).accessibilityAddTraits(.isHeader)
+                Text("Top 5").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text("\(result.ranked.count) ranked").font(.caption).foregroundStyle(.secondary)
             }
@@ -28,6 +32,7 @@ struct StockSageTopFiveRankingSection: View {
                 row(for: entry)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("research.topfive.section")
     }
 
@@ -36,13 +41,18 @@ struct StockSageTopFiveRankingSection: View {
             let opinion = Text("Model opinion: \(row.action)").font(.callout).foregroundStyle(.secondary)
             let status = Text(row.status == .qualified ? "Qualified" : "Not qualified")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(row.status == .qualified ? DS.Palette.successSoft : DS.Palette.accentText)
+                .foregroundStyle(row.status == .qualified ? DS.Palette.successSoft : DS.Palette.warningSoft)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background((row.status == .qualified ? DS.Palette.successSoft : DS.Palette.warningSoft).opacity(0.10), in: Capsule())
             let score = Text("Score \(priceLabel(row.components.total))")
                 .font(.caption).monospacedDigit().foregroundStyle(.secondary)
             let header = VStack(alignment: .leading, spacing: DS.Space.xs) {
                 HStack {
                     Text("#\(row.rank)").font(.title3.weight(.semibold)).monospacedDigit()
-                    Text(row.symbol).font(.headline)
+                        .foregroundStyle(DS.Palette.accentText)
+                        .padding(8)
+                        .background(DS.Palette.accent.opacity(0.12), in: .rect(cornerRadius: DS.Radius.small))
+                    Text(row.symbol).font(.title3.weight(.semibold))
                     Spacer()
                     if openDetails != nil {
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
@@ -67,24 +77,38 @@ struct StockSageTopFiveRankingSection: View {
                 header
             }
             // Every named component, always visible — this is the "explainable" part.
-            Text("Horizon fit \(priceLabel(row.components.horizonFit)) · Technical \(priceLabel(row.components.technicalConfluence)) · Catalyst \(priceLabel(row.components.catalystQuality)) · Liquidity \(priceLabel(row.components.liquidity)) · Freshness \(priceLabel(row.components.evidenceFreshness)) · Insider \(priceLabel(row.components.insiderRelevance)) · Counterevidence \(priceLabel(row.components.counterevidence))")
-                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            let components = [("Horizon fit", row.components.horizonFit), ("Technical", row.components.technicalConfluence),
+                ("Catalyst", row.components.catalystQuality), ("Liquidity", row.components.liquidity),
+                ("Freshness", row.components.evidenceFreshness), ("Insider", row.components.insiderRelevance),
+                ("Counterevidence", row.components.counterevidence)]
+            LazyVGrid(columns: [dynamicTypeSize.isAccessibilitySize ? GridItem(.flexible(), alignment: .leading)
+                : GridItem(.adaptive(minimum: 104), alignment: .leading)], alignment: .leading, spacing: 10) {
+                ForEach(components, id: \.0) { title, value in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.caption).foregroundStyle(.secondary)
+                        Text(priceLabel(value)).font(.callout.weight(.medium)).monospacedDigit()
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .padding(.vertical, 6)
             if !row.hardPenaltyReasons.isEmpty {
                 ForEach(Array(row.hardPenaltyReasons.enumerated()), id: \.offset) { _, reason in
-                    Label(reason, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                    Label(reason, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(DS.Palette.warningSoft)
                 }
             }
             if !row.insiderSignals.isEmpty {
                 DisclosureGroup("Insider evidence · \(row.insiderSignals.count)") {
                     ForEach(Array(row.insiderSignals.enumerated()), id: \.offset) { _, signal in
-                        HStack {
-                            Text(signal.direction == .purchase ? "Purchase" : "Sale")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(signal.direction == .purchase ? "Purchase" : "Sale") · \(signal.ownerName)")
                                 .foregroundStyle(signal.direction == .purchase ? DS.Palette.successSoft : DS.Palette.accentText)
-                            Text(signal.ownerName).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Text("\(Int(signal.ageDays))d ago").font(.caption).foregroundStyle(.secondary)
-                            Text(priceLabel(signal.contribution)).font(.caption).monospacedDigit()
-                        }.font(.callout)
+                            Text("\(Int(signal.ageDays))d old when scored · contribution \(priceLabel(signal.contribution))")
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 4)
                     }
                 }.font(.callout)
             }
@@ -96,8 +120,10 @@ struct StockSageTopFiveRankingSection: View {
                 }.font(.callout)
             }
         }
-        .padding(.vertical, DS.Space.xs)
+        .padding(DS.Space.lg)
+        .background(DS.Bezel.cardFill, in: .rect(cornerRadius: DS.Radius.card))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card).stroke(DS.Bezel.coreInnerHighlight, lineWidth: 1))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("research.topfive.row.\(row.symbol)")
-        Divider()
     }
 }

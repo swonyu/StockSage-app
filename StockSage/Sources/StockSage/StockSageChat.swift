@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// Foreground, local-only Q&A. History is never promoted to current market evidence.
+/// Foreground Q&A using the selected model server. History is never current market evidence.
 enum StockSageChat {
     /// Chat's upper request budget. A smaller verified serving window trims the request
     /// with the existing omission disclosures while preserving the original evidence.
@@ -291,7 +291,7 @@ enum StockSageChat {
         var offeredFacts = snapshot.facts
         var offeredSources = snapshot.sources ?? []
         var benzingaBudget = 12_000
-        var prior = history.suffix(StockSageChatSession.historyLimit).filter { !$0.answer.isEmpty && $0.isWatchlistAction != true }.map {
+        var prior = history.suffix(StockSageChatSession.contextHistoryLimit).filter { !$0.answer.isEmpty && $0.isWatchlistAction != true }.map {
             ["question": $0.question, "historical_unverified_reply": $0.answer]
         }
         while true {
@@ -374,9 +374,11 @@ final class StockSageChatSession: ObservableObject {
     /// never encoded into `turns` or saved history, never sent on its own.
     @Published var draft = ""
     private let historyURL: URL?
+    private let writer: Result<Void, Error>
     private var requestTask: Task<Void, Never>?
     private var unreadableHistory = false
-    nonisolated static let historyLimit = 24
+    /// Inference context only. Durable turns are preserved until explicit Clear history.
+    nonisolated static let contextHistoryLimit = 24
     private static let historyByteLimit = 2_000_000
 
     static var localHistoryURL: URL? {
@@ -384,15 +386,25 @@ final class StockSageChatSession: ObservableObject {
             .appendingPathComponent("StockSageChat/history.json")
     }
 
-    init(historyURL: URL?) {
+    init(historyURL: URL?, requireWriter: (() throws -> Void)? = nil) {
         self.historyURL = historyURL
+        // The actual owner history shares the process-lifetime record writer. Explicit
+        // temporary/memory fixtures do not acquire the owner's profile. Resolve once:
+        // a denied process must relaunch rather than reacquire over stale turns.
+        writer = Result {
+            if let requireWriter { try requireWriter() }
+            else if let historyURL, historyURL == Self.localHistoryURL {
+                try StockSageRecordWriter.require(.standard)
+            }
+        }
+        guard ownsWriter() else { return }
         guard let url = historyURL, FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
             guard size <= Self.historyByteLimit else { throw CocoaError(.fileReadCorruptFile) }
             let data = try Data(contentsOf: url)
             let decoded = try JSONDecoder().decode([Turn].self, from: data)
-            guard decoded.count <= Self.historyLimit, Set(decoded.map(\.id)).count == decoded.count,
+            guard Set(decoded.map(\.id)).count == decoded.count,
                   decoded.allSatisfy({ $0.question.count <= 2_000 && $0.answer.count <= StockSageChat.replyCharacterLimit && $0.snapshot.facts.count <= 12
                       && ($0.snapshot.sources?.count ?? 0) <= 6 }) else {
                 throw CocoaError(.fileReadCorruptFile)
@@ -414,8 +426,8 @@ final class StockSageChatSession: ObservableObject {
     /// purpose: the remaining work is genuinely unknown, so the stage is named instead of faked.
     nonisolated enum Phase: String, Sendable, CaseIterable {
         case sources = "Collecting evidence from your sources…"
-        case checkingModel = "Checking the local model server…"
-        case generating = "Asking the local model…"
+        case checkingModel = "Checking the selected model server…"
+        case generating = "Asking the selected model…"
         var notice: String { rawValue }
         static var allNotices: [String] { allCases.map(\.notice) }
     }
@@ -428,11 +440,11 @@ final class StockSageChatSession: ObservableObject {
     }
 
     func begin(question: String, snapshot: StockSageChat.Snapshot, model: String) -> UUID? {
-        guard pending == nil, !unreadableHistory, StockSageChat.safeQuestion(question) else { return nil }
+        guard ownsWriter(), pending == nil, !unreadableHistory, StockSageChat.safeQuestion(question) else { return nil }
         let id = UUID()
         turns.append(Turn(id: id, question: question, snapshot: snapshot, model: model,
-                          answer: "", evidence: [], notice: "Preparing sources and the local model request…"))
-        turns = Array(turns.suffix(Self.historyLimit)); pending = id; save()
+                          answer: "", evidence: [], notice: "Preparing sources and the selected model request…"))
+        pending = id; save()
         return id
     }
 
@@ -500,8 +512,8 @@ final class StockSageChatSession: ObservableObject {
                 ? reply.notice + " The model stopped at the reply length limit, so this answer is incomplete."
                 : reply.notice
         } else {
-            turns[index].answer = unavailable ?? "Local model unavailable. The captured app facts remain available below."
-            turns[index].notice = "Unavailable — app facts only; no cloud fallback"
+            turns[index].answer = unavailable ?? "Selected model unavailable. The captured app facts remain available below."
+            turns[index].notice = "Unavailable — app facts only; no replacement model"
         }
         if let requestSnapshot, requestSnapshot.researchStatus != captured.researchStatus,
            let disclosure = requestSnapshot.researchStatus {
@@ -546,6 +558,7 @@ final class StockSageChatSession: ObservableObject {
     }
 
     func clear() {
+        guard ownsWriter() else { return }
         cancel()
         do {
             if let url = historyURL, FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
@@ -554,7 +567,7 @@ final class StockSageChatSession: ObservableObject {
     }
 
     private func save() {
-        guard let url = historyURL, !unreadableHistory else { return }
+        guard ownsWriter(), let url = historyURL, !unreadableHistory else { return }
         do {
             let directory = url.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -566,5 +579,10 @@ final class StockSageChatSession: ObservableObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             storageError = nil
         } catch { storageError = "Chat is available in memory, but local history saving could not be confirmed. Recent changes may not survive closing the conversation or app." }
+    }
+
+    private func ownsWriter() -> Bool {
+        do { try writer.get(); return true }
+        catch { storageError = error.localizedDescription; return false }
     }
 }

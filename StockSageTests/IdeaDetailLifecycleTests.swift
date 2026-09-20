@@ -7,6 +7,21 @@ import AppKit
 
 @Suite(.serialized) @MainActor
 struct IdeaDetailLifecycleTests {
+    @Test func emptyAndUnavailableSECChecksRemainDistinct() async {
+        typealias Observation = StockSageDisclosureService.FilingsObservation
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        for outcome in [Observation.Outcome.answered, .unavailable(.unreachable)] {
+            let observation = Observation(checkedAt: at, outcome: outcome, filings: [])
+            let evidence = IdeaDetailEvidence(fetchInsider: { _ in nil }, fetchFilings: { _ in observation },
+                fetchQuote: { _ in nil }, isAllowed: { true })
+            let idea = DetailFixtureDriver.idea("AAPL")
+            evidence.selection = idea
+            await evidence.load(for: idea, using: { _ in nil })
+            #expect(evidence.filingsObservation == observation && evidence.disclosures.isEmpty)
+            #expect(!evidence.disclosuresLoading)
+        }
+    }
+
     @Test func mountingAnUnattributedCardDoesNotFetchOrOpenDetails() async throws {
         let driver = DetailFixtureDriver(source: nil)
         let window = mount(driver)
@@ -348,7 +363,7 @@ struct IdeaDetailEvidenceTests {
     init(source: String?) {
         self.source = source
         let probe = self.probe
-        evidence = IdeaDetailEvidence(fetchInsider: { await probe.insider($0) }, fetchFilings: { await probe.filings($0) },
+        evidence = IdeaDetailEvidence(fetchInsider: { await probe.insider($0) }, fetchFilings: { .init(checkedAt: Date(timeIntervalSince1970: 1_700_000_000), outcome: .answered, filings: await probe.filings($0)) },
             fetchQuote: { await probe.quote($0) }, isAllowed: { probe.allowed },
             fetchBenzinga: { await probe.benzinga($0) }, benzingaIsCurrent: { _ in probe.benzingaCurrent })
     }

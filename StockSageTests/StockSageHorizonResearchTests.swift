@@ -4,6 +4,36 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
+    @Test func bothHorizonsFreezeAndPersistFiveBeforeStrictComparisonFailure() async throws {
+        let history = StockSageResearchHistory()
+        let research = R(history: history)
+        let names = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"].map { listing($0) }
+        var observed: [R.Horizon: StockSageTopFiveRanking.Result] = [:]
+        let started = research.start([.week, .fortnight], allowed: { true }, universe: { .init(names) }, rank: { scan, horizon in
+            guard let ranking = scan.deterministicRanking else {
+                Issue.record("Completed ranking must already exist when strict comparison starts")
+                return .failure(.unavailable)
+            }
+            observed[horizon] = ranking
+            #expect(ranking.ranked.count == 5 && ranking.ranked.allSatisfy { $0.status == .notQualified })
+            #expect(history.completedScan(horizon: horizon)?.run.deterministicRanking == ranking)
+            return .failure(.modelFailure)
+        }, qualificationPolicyVersion: 1, makeAnalysis: { item in
+            { horizon in StockSageResearchHistoryTests().qualifiedResult(item.ticker, at: Date(), qualified: false, horizon: horizon) }
+        })
+        try #require(started)
+        defer { research.stop() }
+        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil && history.runs.count == 2)
+        let restored = R(history: history)
+        for horizon in R.Horizon.allCases {
+            let ranking = try #require(observed[horizon])
+            let scan = try #require(restored.scans[horizon])
+            #expect(scan.deterministicRanking == ranking && scan.topBuys.isEmpty)
+            #expect(scan.rankedTopFive(horizon: horizon, now: Date().addingTimeInterval(14 * 86_400)) == ranking)
+        }
+    }
+
     @Test(arguments: [false, true])
     func currentRankingReceiptPublishesAndRestoresAcrossQualificationPolicies(strict: Bool) async throws {
         let history = StockSageResearchHistory()
@@ -471,7 +501,7 @@ import Testing
         #expect(history.runs.count == 1 && history.completedScan(horizon: .week)?.scan.results.count == 1)
         var scan = try #require(research.scans[.week])
         scan.isComparing = true
-        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: true).title == "Comparing research for Top 5")
+        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: true).title == "Comparing strict picks")
     }
 
     @Test func failedComparisonRestoresAllChecksAndRetriesOnlyRanking() async throws {
@@ -631,7 +661,7 @@ import Testing
         #expect(research.running == nil && history.runs.isEmpty && scan.topBuys.isEmpty)
         #expect(scan.results.count == 1 && scan.rankingFailure != nil)
         #expect(!scan.status.contains("remaining listings were not checked"))
-        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: false).title == "Top five comparison unavailable")
+        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: false).title == "Strict comparison unavailable")
     }
 
     @Test func lastHorizonUsesIsolatedPreferencesAndExplicitHomeChoiceClearsSelection() throws {
@@ -699,7 +729,7 @@ import Testing
             #expect(Panel.filteredListings(scan, search: "", filter: filter).map(\.ticker) == expected)
         }
         #expect(scan.topBuys.isEmpty, "First-arriving buys are never presented as the best five")
-        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Top five after the full scan")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Strict picks after the full scan")
         #expect(Panel.filteredListings(scan, search: " buy3 ", filter: .all).map(\.ticker) == ["BUY3"])
         scan.results["UNCHECKED"] = .init(note: "Completed without an opinion")
         let originalListings = scan.listings
@@ -1037,11 +1067,12 @@ import Testing
         #expect(await task.value == nil)
     }
 
-    // MARK: - Settled-session review window (outcome policy 2)
+    // MARK: - Settled-session review window (outcome policies 2 and 3)
 
     private func dailyReviewRun(symbol: String = "ACME",
                                 horizon: StockSageResearchHistory.Horizon = .week,
-                                completed: String = "2026-09-14T21:00:00Z") -> StockSageResearchHistory.Run {
+                                completed: String = "2026-09-14T21:00:00Z",
+                                outcomePolicy: StockSageResearchHistory.OutcomePolicy = .dailyBarOpeningFirst) -> StockSageResearchHistory.Run {
         .init(id: UUID(), startedAt: reviewDate(completed).addingTimeInterval(-60),
             completedAt: reviewDate(completed), horizon: horizon,
             predictions: [.init(symbol: symbol, name: symbol, action: "Buy", reason: "Fixture", risk: "Fixture",
@@ -1050,7 +1081,7 @@ import Testing
                 levels: .init(entry: 100, stop: 90, target: 120, at: reviewDate("2026-09-11T04:00:00Z"),
                     basis: "Captured ATR scenario"))],
             coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil),
-            measurementPolicy: .nextTradingDateSessions, outcomePolicy: .dailyBarFirstHit)
+            measurementPolicy: .nextTradingDateSessions, outcomePolicy: outcomePolicy)
     }
 
     private func newYorkDateString(_ date: Date) -> String {
@@ -1096,8 +1127,9 @@ import Testing
             == StockSageResearchHistory.targetClose(for: legacy))
     }
 
-    @Test func dailyPolicyReviewRequestsTheSavedReferenceDateThroughTheLastSettledSession() async throws {
-        let run = dailyReviewRun()
+    @Test(arguments: [StockSageResearchHistory.OutcomePolicy.dailyBarFirstHit, .dailyBarOpeningFirst])
+    func dailyPolicyReviewRequestsTheSavedReferenceDateThroughTheLastSettledSession(policy: StockSageResearchHistory.OutcomePolicy) async throws {
+        let run = dailyReviewRun(outcomePolicy: policy)
         var clock = reviewDate("2026-09-18T04:01:00Z")
         var calls = 0
         let result = await R.fetchReviewObservation(prediction: run.predictions[0], run: run,
@@ -1426,11 +1458,11 @@ import Testing
         #expect(scan.status == "Stopping scan…")
         scan.status = "Scan incomplete: listing directory could not be verified."
         scan.listings = [listing()]
-        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Top five after the full scan")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Strict picks after the full scan")
         #expect(Panel.emptyState(for: scan, isRunning: false).title == "Scan stopped before comparison")
         scan.results["AAPL"] = .init(verdict: .init(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
         scan.ranking = .fixture(scan: scan, symbols: ["AAPL"], horizon: .week)
-        #expect(Panel.emptyState(for: scan, isRunning: false, search: "MSFT").title == "No matching top results")
+        #expect(Panel.emptyState(for: scan, isRunning: false, search: "MSFT").title == "No matching strict picks")
         #expect(scan.status == "Scan incomplete: listing directory could not be verified.")
     }
     #endif

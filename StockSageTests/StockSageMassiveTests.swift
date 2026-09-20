@@ -44,8 +44,12 @@ struct StockSageMassiveTests {
             .first(where: { $0.name == "tickers" })?.value?.split(separator: ",").first.map(String.init) ?? "AAPL"
         var body = Data((history
             ? #"{"adjusted":true,"status":"OK","ticker":"AAPL","results":[{"o":100,"h":101,"l":99,"c":100,"v":100,"t":1700000000000},{"o":100,"h":101,"l":99,"c":100,"v":100,"t":1700086400000}]}"#
-            : "{\"status\":\"OK\",\"count\":1,\"tickers\":[{\"ticker\":\"\(symbol)\",\"lastTrade\":{\"p\":100,\"t\":1700000000000000000},\"prevDay\":{\"c\":99}}]}").utf8)
-        if let actualLength, actualLength > body.count { body.append(Data(repeating: 32, count: actualLength - body.count)) }
+            : "{\"status\":\"OK\",\"count\":1,\"tickers\":[{\"ticker\":\"\(symbol)\",\"lastTrade\":{\"c\":[0],\"p\":100,\"t\":1700000000000000000},\"prevDay\":{\"c\":99}}]}").utf8)
+        let reference = request.url?.path == "/v3/reference/conditions"
+        if reference {
+            body = Data(#"{"status":"OK","results":[{"id":0,"asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":true}}}]}"#.utf8)
+        }
+        if !reference, let actualLength, actualLength > body.count { body.append(Data(repeating: 32, count: actualLength - body.count)) }
         let headers = declaredLength.map { ["Content-Length": String($0)] }
         return (body, HTTPURLResponse(url: url ?? request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!)
     }
@@ -81,6 +85,7 @@ struct StockSageMassiveTests {
         let symbols = (0..<501).map { "Q" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
         let task = Task { @MainActor in
             await M.fetchSnapshots(for: symbols, access: fixture.access, transport: { request in
+                if request.url?.path == "/v3/reference/conditions" { return Self.response(request) }
                 let count = calls.withLock { $0 += 1; return $0 }
                 if count == 2 { fixture.invalidate(mode) }
                 return Self.response(request)
@@ -127,6 +132,45 @@ struct StockSageMassiveTests {
             })
         }
         #expect(await task.value == false && calls.withLock { $0 } == 0)
+    }
+
+    @Test(arguments: ["unavailable", "missing", "saved", "environment"])
+    @MainActor func credentialReadFailureIsDistinctFromMissingAndNeverStartsHTTP(mode: String) async throws {
+        typealias C = StockSageMassiveCredential
+        let suite = "Massive.credential-probe.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let secret = "synthetic-credential-probe-secret"
+        if mode == "unavailable" { defaults.set(secret, forKey: M.keyDefaultsKey) }
+        let storage = C.Storage(read: {
+            if mode == "unavailable" {
+                throw NSError(domain: "\(secret) https://invalid.example/private", code: 1)
+            }
+            return mode == "saved" ? "synthetic-A" : nil
+        }, write: { _ in Issue.record("A connection check must not write credentials") })
+        let readKey: () throws -> String = {
+            try C.resolve(defaults: defaults, storage: storage,
+                environment: mode == "unavailable" ? secret : mode == "environment" ? "synthetic-A" : nil)
+        }
+        let blocker = M.credentialAccessBlocker(readKey: readKey)
+        let calls = Mutex(0)
+        let result = await M.probe(access: AccessFixture().access, readKey: readKey, transport: { request in
+            calls.withLock { $0 += 1 }
+            return Self.response(request)
+        })
+        switch mode {
+        case "unavailable":
+            #expect(blocker == "Keychain unavailable — unlock your device or allow StockSage to read its saved key, then retry Settings → Data sources → Test connection.")
+            #expect(result == blocker && calls.withLock { $0 } == 0)
+            #expect(defaults.string(forKey: M.keyDefaultsKey) == secret,
+                    "A failed secure read must preserve legacy bytes and never use either fallback")
+        case "missing":
+            #expect(blocker == "No market data key is configured. Add it in Settings → Data sources.")
+            #expect(result == blocker && calls.withLock { $0 } == 0)
+        default:
+            #expect(blocker == nil && result.hasPrefix("Connected") && calls.withLock { $0 } == 1)
+        }
+        #expect(!result.contains(secret) && !result.contains("https://"))
     }
 
     @Test @MainActor func probeFailureNeverDisclosesCredentialURLOrRawError() async {
@@ -374,7 +418,7 @@ struct StockSageMassiveTests {
 
     @Test("docs sample parses: lastTrade.p, prevDay.c, and the nanosecond lastTrade.t → exact Date")
     func parsesDocsSampleFixture() throws {
-        let out = M.parseSnapshot(Self.docsSample, requestedSymbols: ["bcat"])
+        let out = M.parseSnapshot(Self.docsSample, requestedSymbols: ["bcat"], allowedTradeConditions: [0, 14, 41])
         let q = try #require(out["BCAT"])
         #expect(q.symbol == "bcat")                               // the spelling WE asked for is preserved
         #expect(abs(q.price - 20.506) < 1e-9)                     // lastTrade.p (equals day.c here by coincidence — see missingLastTradeRejected)
@@ -393,7 +437,7 @@ struct StockSageMassiveTests {
         // The SAME sample carries min.t = 1684428600000 (13-digit MILLISECONDS = 2023-05-18) next to
         // lastTrade.t = 1605192894630916600 (19-digit ns = 2020-11-12). A parser that read min.t, or
         // treated the ns value as ms/s, could not produce 2020-11-12.
-        let q = try #require(M.parseSnapshot(Self.docsSample, requestedSymbols: ["BCAT"])["BCAT"])
+        let q = try #require(M.parseSnapshot(Self.docsSample, requestedSymbols: ["BCAT"], allowedTradeConditions: [0, 14, 41])["BCAT"])
         let t = try #require(q.marketTime)
         #expect(abs(t.timeIntervalSince1970 - 1684428600.0) > 86_400 * 365)       // not the ms field
         #expect(abs(t.timeIntervalSince1970 - 1605192894630916.6) > 1e12)         // not "ns read as ms"
@@ -414,25 +458,25 @@ struct StockSageMassiveTests {
 
     @Test("an unrequested ticker in the payload is ignored; a requested one that is absent is simply missing")
     func onlyRequestedTickersEmitted() {
-        let out = M.parseSnapshot(Self.docsSample, requestedSymbols: ["AAPL"])
+        let out = M.parseSnapshot(Self.docsSample, requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41])
         #expect(out.isEmpty)                                      // BCAT came back but was never asked for
-        let both = M.parseSnapshot(Self.docsSample, requestedSymbols: ["AAPL", "BCAT"])
+        let both = M.parseSnapshot(Self.docsSample, requestedSymbols: ["AAPL", "BCAT"], allowedTradeConditions: [0, 14, 41])
         #expect(both.count == 1)
         #expect(both["AAPL"] == nil)                              // absent ⇒ caller's fallback chain, never fabricated
     }
 
     @Test("missing or non-positive prevDay.c → flat placeholder + isNewListing (EODHD/Yahoo parity)")
     func missingPrevDayCloseFlagsNewListing() throws {
-        let noPrev: [String: Any] = ["ticker": "X", "lastTrade": ["p": 50.0, "t": 1605192894630916600]]
-        let q1 = try #require(M.parseTicker(noPrev, requestedSymbol: "X"))
+        let noPrev: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": 50.0, "t": 1605192894630916600]]
+        let q1 = try #require(M.parseTicker(noPrev, requestedSymbol: "X", allowedTradeConditions: [0]))
         #expect(q1.previousClose == q1.price)
         #expect(q1.isNewListing)
-        let zeroPrev: [String: Any] = ["ticker": "X", "lastTrade": ["p": 50.0, "t": 1605192894630916600], "prevDay": ["c": 0]]
-        let q2 = try #require(M.parseTicker(zeroPrev, requestedSymbol: "X"))
+        let zeroPrev: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": 50.0, "t": 1605192894630916600], "prevDay": ["c": 0]]
+        let q2 = try #require(M.parseTicker(zeroPrev, requestedSymbol: "X", allowedTradeConditions: [0]))
         #expect(q2.previousClose == q2.price)
         #expect(q2.isNewListing)
-        let realPrev: [String: Any] = ["ticker": "X", "lastTrade": ["p": 50.0, "t": 1605192894630916600], "prevDay": ["c": 49.0]]
-        let q3 = try #require(M.parseTicker(realPrev, requestedSymbol: "X"))
+        let realPrev: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": 50.0, "t": 1605192894630916600], "prevDay": ["c": 49.0]]
+        let q3 = try #require(M.parseTicker(realPrev, requestedSymbol: "X", allowedTradeConditions: [0]))
         #expect(q3.previousClose == 49.0)
         #expect(!q3.isNewListing)
     }
@@ -440,32 +484,32 @@ struct StockSageMassiveTests {
     @Test("no lastTrade (plan without trades), zero/negative/non-finite price → no quote, never day.c")
     func missingLastTradeRejected() {
         let noTrade: [String: Any] = ["ticker": "X", "day": ["c": 20.5], "prevDay": ["c": 20.0]]
-        #expect(M.parseTicker(noTrade, requestedSymbol: "X") == nil)
-        let zero: [String: Any] = ["ticker": "X", "lastTrade": ["p": 0, "t": 1], "prevDay": ["c": 20.0]]
-        #expect(M.parseTicker(zero, requestedSymbol: "X") == nil)
-        let negative: [String: Any] = ["ticker": "X", "lastTrade": ["p": -1.0, "t": 1]]
-        #expect(M.parseTicker(negative, requestedSymbol: "X") == nil)
-        let inf: [String: Any] = ["ticker": "X", "lastTrade": ["p": Double.infinity, "t": 1]]
-        #expect(M.parseTicker(inf, requestedSymbol: "X") == nil)
-        let nan: [String: Any] = ["ticker": "X", "lastTrade": ["p": Double.nan, "t": 1]]
-        #expect(M.parseTicker(nan, requestedSymbol: "X") == nil)
+        #expect(M.parseTicker(noTrade, requestedSymbol: "X", allowedTradeConditions: [0]) == nil)
+        let zero: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": 0, "t": 1], "prevDay": ["c": 20.0]]
+        #expect(M.parseTicker(zero, requestedSymbol: "X", allowedTradeConditions: [0]) == nil)
+        let negative: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": -1.0, "t": 1]]
+        #expect(M.parseTicker(negative, requestedSymbol: "X", allowedTradeConditions: [0]) == nil)
+        let inf: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": Double.infinity, "t": 1]]
+        #expect(M.parseTicker(inf, requestedSymbol: "X", allowedTradeConditions: [0]) == nil)
+        let nan: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": Double.nan, "t": 1]]
+        #expect(M.parseTicker(nan, requestedSymbol: "X", allowedTradeConditions: [0]) == nil)
     }
 
     @Test("a missing lastTrade.t yields marketTime nil (downstream nil ⇒ stale), not a fetch-time Date")
     func missingTimestampIsNil() throws {
-        let row: [String: Any] = ["ticker": "X", "lastTrade": ["p": 50.0], "prevDay": ["c": 49.0]]
-        let q = try #require(M.parseTicker(row, requestedSymbol: "X"))
+        let row: [String: Any] = ["ticker": "X", "lastTrade": ["c": [0], "p": 50.0], "prevDay": ["c": 49.0]]
+        let q = try #require(M.parseTicker(row, requestedSymbol: "X", allowedTradeConditions: [0]))
         #expect(q.marketTime == nil)
     }
 
     @Test("malformed, empty, non-object, and tickers-not-an-array payloads all parse to [:]")
     func malformedRejected() {
-        #expect(M.parseSnapshot(Data(), requestedSymbols: ["AAPL"]).isEmpty)
-        #expect(M.parseSnapshot("not json".data(using: .utf8)!, requestedSymbols: ["AAPL"]).isEmpty)
-        #expect(M.parseSnapshot("{}".data(using: .utf8)!, requestedSymbols: ["AAPL"]).isEmpty)
-        #expect(M.parseSnapshot("[]".data(using: .utf8)!, requestedSymbols: ["AAPL"]).isEmpty)
-        #expect(M.parseSnapshot(#"{"status":"OK","tickers":"AAPL"}"#.data(using: .utf8)!, requestedSymbols: ["AAPL"]).isEmpty)
-        #expect(M.parseSnapshot(#"{"status":"OK","tickers":[{"ticker":"AAPL"}]}"#.data(using: .utf8)!, requestedSymbols: ["AAPL"]).isEmpty)
+        #expect(M.parseSnapshot(Data(), requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41]).isEmpty)
+        #expect(M.parseSnapshot("not json".data(using: .utf8)!, requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41]).isEmpty)
+        #expect(M.parseSnapshot("{}".data(using: .utf8)!, requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41]).isEmpty)
+        #expect(M.parseSnapshot("[]".data(using: .utf8)!, requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41]).isEmpty)
+        #expect(M.parseSnapshot(#"{"status":"OK","tickers":"AAPL"}"#.data(using: .utf8)!, requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41]).isEmpty)
+        #expect(M.parseSnapshot(#"{"status":"OK","tickers":[{"ticker":"AAPL"}]}"#.data(using: .utf8)!, requestedSymbols: ["AAPL"], allowedTradeConditions: [0, 14, 41]).isEmpty)
     }
 
     // MARK: Key handling — by name only
@@ -500,8 +544,8 @@ struct StockSageMassiveTests {
     @Test func restIdentityCannotBeRelabelledOrCaseFolded() throws {
         #expect(M.parseHistory(Self.aggregateSample, symbol: "MSFT") == nil)
         let snapshot = #"{"tickers":[{"ticker":"APTVpA","lastTrade":{"p":20,"t":1700000000000000000},"prevDay":{"c":19}}]}"#
-        #expect(M.parseSnapshot(Data(snapshot.utf8), requestedSymbols: ["APTVPA"]).isEmpty)
-        #expect(M.parseSnapshot(Data(snapshot.utf8), requestedSymbols: ["APTVpA"]).isEmpty,
+        #expect(M.parseSnapshot(Data(snapshot.utf8), requestedSymbols: ["APTVPA"], allowedTradeConditions: [0, 14, 41]).isEmpty)
+        #expect(M.parseSnapshot(Data(snapshot.utf8), requestedSymbols: ["APTVpA"], allowedTradeConditions: [0, 14, 41]).isEmpty,
                 "The legacy uppercase board must not merge case-sensitive instruments")
     }
 
@@ -568,4 +612,19 @@ private nonisolated final class MassiveBodyProtocol: URLProtocol, @unchecked Sen
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+
+extension StockSageMassiveTests {
+    @Test func snapshotSpecialAndUnknownTradeConditionsCannotUpdateOrdinaryPrice() throws {
+        for codes: Any in [[901], [901,902], [999], [], [true], NSNull()] {
+            let row: [String: Any] = ["ticker":"AAPL", "lastTrade":["p":100, "t":Int64(1_700_000_000_000_000_000), "c":codes]]
+            let data = try JSONSerialization.data(withJSONObject: ["status":"OK", "count":1, "tickers":[row]])
+            let expected = (codes as? [Int]) == [901]
+            #expect((M.parseSnapshot(data, requestedSymbols: ["AAPL"], allowedTradeConditions: [901])["AAPL"] != nil) == expected)
+            #expect((M.parseMarketSnapshot(data, allowedTradeConditions: [901])?.rows.count == 1) == expected)
+        }
+        #expect(M.parseSnapshot(Self.docsSample, requestedSymbols: ["BCAT"]).isEmpty,
+                "Unavailable reference must not implicitly trust numeric condition codes")
+    }
 }

@@ -56,6 +56,38 @@ import Testing
         #expect(loader.ready && !loader.isWorking)
     }
 
+    @Test func manualRetryAndQuitUseEffectiveDefaultsWithoutEnablingLaunchLoading() async throws {
+        let name = "gemma-manual-retry-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let loader = StockSageLocalModelStartup()
+        #expect(StockSageLocalModelStartup.startupConfig(defaults) == nil)
+        var calls = 0, context = 8192
+        let transport: StockSageLocalModelStartup.Transport = { request in
+            calls += 1
+            return (try JSONSerialization.data(withJSONObject: inventory(loaded: true, context: context)),
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let failed = await loader.retryFromSavedSettings(defaults: defaults, transport: transport)
+        #expect(failed?.hasModel == false && calls == 1 && !loader.ready)
+        context = 16_384
+        let result = await loader.retryFromSavedSettings(defaults: defaults, transport: transport)
+        #expect(result?.hasModel == true && calls == 2 && loader.ready)
+        #expect(loader.pendingConfig == nil)
+        #expect(loader.quitConfig(defaults: defaults) == S.config(url: S.defaultURL, model: S.defaultModel))
+        #expect(defaults.object(forKey: StockSageLocalModelStartup.enabledKey) == nil)
+        #expect(StockSageLocalModelStartup.startupConfig(defaults) == nil)
+        defaults.set(S.runPodURL, forKey: S.urlKey)
+        #expect(loader.quitConfig(defaults: defaults) == nil, "Remote compute has no local unload lifecycle")
+        let remote = await loader.retryFromSavedSettings(defaults: defaults, transport: { _ in
+            Issue.record("Local-loader Retry must not contact RunPod"); throw URLError(.unsupportedURL)
+        })
+        #expect(remote == nil)
+        defaults.set(S.lmStudioURL, forKey: S.urlKey)
+        defaults.set("off", forKey: S.backendKey)
+        #expect(loader.quitConfig(defaults: defaults) == nil)
+    }
+
     @Test func disabledOrObsoleteSelectionNeverLoads() async throws {
         let c = try #require(S.config(url: "http://127.0.0.1:1234", model: "google/gemma-4-31b-qat"))
         let loader = StockSageLocalModelStartup()

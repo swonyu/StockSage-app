@@ -70,6 +70,19 @@ struct StockSageModelIdentityMigrationTests {
         #expect(defaults.string(forKey: S.urlKey) == "http://127.0.0.1:11434")
     }
 
+    @Test(arguments: ["http://127.0.0.1:8080", "http://192.168.1.5:8000"])
+    func deliberateGemmaEndpointWithoutInterruptedMarkerIsPreserved(endpoint: String) {
+        let (defaults, cleanup) = suite(#function); defer { cleanup() }
+        defaults.set(S.gemmaModel, forKey: S.modelKey)
+        defaults.set(endpoint, forKey: S.urlKey)
+        let revision = S.settingsRevision(defaults)
+        Migration.migrate(defaults: defaults)
+        #expect(defaults.string(forKey: S.urlKey) == endpoint)
+        #expect(defaults.string(forKey: S.modelKey) == S.gemmaModel)
+        #expect(S.settingsRevision(defaults) == revision)
+        #expect(defaults.string(forKey: Migration.markerKey) == Migration.done)
+    }
+
     @Test func migrationBumpsTheSettingsRevision() {
         let (defaults, cleanup) = suite(#function); defer { cleanup() }
         defaults.set("qwen3.5-9b", forKey: S.modelKey)

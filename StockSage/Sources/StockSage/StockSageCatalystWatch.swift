@@ -254,7 +254,8 @@ enum StockSageCatalystWatch {
             // still show a volume-move/extreme/regime/seasonality catalyst above, unaffected.
             let fallback = inputs.catalystNotApplicable
                 ? notApplicableItem(idea: idea)
-                : noneItem(idea: idea, checkedAt: inputs.earningsCheckedAt, sourcesAsked: inputs.catalystSourcesAsked)
+                : lapsedScheduleItem(idea: idea, inputs: inputs)
+                    ?? noneItem(idea: idea, checkedAt: inputs.earningsCheckedAt, sourcesAsked: inputs.catalystSourcesAsked)
             return Brief(idea: idea, primary: fallback, secondary: [])
         }
         return Brief(idea: idea, primary: primary, secondary: Array(candidates.dropFirst()))
@@ -422,6 +423,24 @@ enum StockSageCatalystWatch {
     /// `!sourcesAsked.isEmpty` half of the guard also makes the undated branch the fail-closed
     /// default for a `checkedAt` with no provable source — independently blunting the blocker
     /// that used to stamp a dated negative for a question nobody ever actually answered.
+    private nonisolated static func lapsedScheduleItem(idea: StockSageIdea, inputs: Inputs) -> Item? {
+        let prior: (Date, String)?
+        if let date = inputs.earningsDate, date.timeIntervalSince(inputs.now) < -86_400 {
+            prior = (date, "Previously returned earnings schedule")
+        } else if let date = inputs.catalystProjectedDate, date.timeIntervalSince(inputs.now) < -86_400 {
+            prior = (date, "Previous projection (not a confirmed date)")
+        } else { prior = nil }
+        guard let prior else { return nil }
+        let source = inputs.catalystSource.isEmpty ? inputs.catalystSourcesAsked.joined(separator: ", ") : inputs.catalystSource
+        let checked = inputs.earningsCheckedAt.map { "Prior check: " + dateStr($0) } ?? "Prior check time unavailable"
+        return Item(symbol: idea.symbol, kind: .none, headline: "Previous schedule passed — next date unavailable", date: nil,
+            why: ["\(prior.1): \(dateStr(prior.0)). Passing the scheduled date does not confirm an event occurred.",
+                  checked + ". The earlier positive result is not an answered-empty calendar check."],
+            watch: "Request a new calendar check before relying on the next schedule.", weight: .low,
+            source: source.isEmpty ? "Prior schedule; source unavailable" : source,
+            caveat: inputs.catalystProjectionBasis)
+    }
+
     private nonisolated static func noneItem(idea: StockSageIdea, checkedAt: Date?, sourcesAsked: [String]) -> Item {
         guard let checkedAt, !sourcesAsked.isEmpty else {
             return Item(symbol: idea.symbol, kind: .none, headline: "No dated catalyst on file", date: nil,

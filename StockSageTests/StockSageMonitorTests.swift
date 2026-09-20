@@ -10,6 +10,26 @@ import Foundation
 
 struct StockSageMonitorTests {
     typealias Monitor = StockSageMonitor
+    @MainActor @Test func automaticLoopChecksOnlyExplicitPriceAlerts() async throws {
+        try #require(StockSageStore.isRunningTests, "This fixture requires the OS-permission suppression gate")
+        let name = "monitor.manual-research.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var priceChecks = 0
+        var signalPushes = 0
+        let monitor = Monitor(defaults: defaults,
+            strongSignalSender: { _, _ in signalPushes += 1; return true },
+            priceAlertCheck: { priceChecks += 1 })
+        defer { monitor.stop() }
+        try monitor.start(interval: 180, firstCycleDelay: 0)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while priceChecks == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(priceChecks == 1 && signalPushes == 0)
+        monitor.stop()
+        #expect(!monitor.isRunning)
+    }
     private let marketNow = ISO8601DateFormatter().date(from: "2026-09-10T15:00:00Z")!
     private func quote(_ symbol: String, at: Date) -> StockSageQuoteService.LiveQuote {
         .init(symbol: symbol, price: 110, previousClose: 100, marketTime: at, priceSource: .yahoo,

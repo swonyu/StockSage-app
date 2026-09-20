@@ -73,7 +73,7 @@ struct ExplainAffordance: ViewModifier {
             content
             Button { showing = true } label: {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 11))
+                    .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
             }
             .buttonStyle(.plain)
@@ -83,7 +83,7 @@ struct ExplainAffordance: ViewModifier {
         .popover(isPresented: $showing) {
             ScrollView {
                 Text(text)
-                    .font(.system(size: 13))
+                    .font(.body)
                     .foregroundStyle(DS.Palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(DS.Space.md)

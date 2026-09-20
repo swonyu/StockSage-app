@@ -77,7 +77,7 @@ struct StockSageResearchHomeSummary: View {
                 #if os(iOS)
                 StockSageResearchHistoryButton(store: store, history: history)
                 #endif
-                Text("Open Saved research to check active results. Settled sessions are also checked once when the app becomes active; nothing is fetched while it is closed.")
+                Text("Open Saved research and choose Check active results to review settled sessions. Opening the app does not fetch or change outcomes.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             #if os(macOS)
@@ -131,8 +131,11 @@ struct StockSageResearchHomeSummary: View {
                     Text("The completion time is ahead of this device’s clock.")
                         .font(.callout).foregroundStyle(.orange)
                 }
+                Text(run.ranking == nil && run.rankingFailure == nil && !run.predictions.isEmpty
+                    ? "Legacy saved shortlist" : "Strict comparison picks")
+                    .font(.callout.weight(.semibold))
                 if run.predictions.isEmpty {
-                    Text(run.rankingFailure.map { "Top five comparison unavailable. " + $0 }
+                    Text(run.rankingFailure.map { "Strict comparison unavailable. " + $0 }
                          ?? "No Buy or Strong Buy picks qualified in the latest completed run.")
                         .font(.callout)
                 } else {
@@ -256,7 +259,7 @@ struct StockSageResearchHistoryView: View {
         if StockSageStore.isRunningTests { return "Outcome checks are disabled in test fixtures." }
         if let reason = ToolPolicy.webToolsDisabledReason() { return reason }
         if store.isSampleData { return "Leave sample data to check dated market prices." }
-        if !StockSageMassive.isConfigured { return "Configure Massive in Settings to check outcomes." }
+        if let reason = StockSageMassive.credentialAccessBlocker() { return reason }
         return nil
     }
 
@@ -264,12 +267,15 @@ struct StockSageResearchHistoryView: View {
         NavigationStack {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Label("Saved picks, dated outcomes", systemImage: "clock.arrow.circlepath")
+                            .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
                         Text("Original picks stay unchanged. New runs complete at the first settled session that reaches the captured stop or target, otherwise at the exact 7th or 14th session close.")
                             .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
                         DisclosureGroup("How outcome checks work") {
                             Text("Sessions use the verified Nasdaq calendar, including holidays and early closes. Only New York dates that have wholly ended are examined, so each split-adjusted daily aggregate is settled. Older runs retain their original endpoint-only schedule, shown in each saved run.")
-                            Text("Daily bars cannot establish intraday order or an actual fill. A session reaching both levels is recorded as a stop, and a session that gaps through a level is observed at its open. This is a measured research scenario, not realized trading profit.")
+                            Text("Daily bars cannot establish intraday order or an actual fill. New runs check opening gaps first; if the open is between the levels and a daily bar reaches both, the conservative stop-first rule applies. Older runs retain their recorded policy. This is a measured research scenario, not realized trading profit.")
                             Text(Self.directionOnlyDisclosure)
                         }
                         .font(.callout).foregroundStyle(.secondary)
@@ -286,6 +292,7 @@ struct StockSageResearchHistoryView: View {
                                   systemImage: "arrow.clockwise")
                                 .frame(minHeight: 44)
                         }
+                        .buttonStyle(.bordered)
                         .disabled(history.isChecking || accessReason != nil || history.runs.isEmpty)
                         .accessibilityIdentifier("research.history.check")
                         if let summary = history.lastCheckSummary {
@@ -294,14 +301,17 @@ struct StockSageResearchHistoryView: View {
                     }.padding(.vertical, 6)
                 }
                 Section("Prospective model evaluation") {
-                    Text("Separate studies compare future saved picks with SPY using a frozen setup and explicit modeled costs.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button { showEvaluation = true } label: {
-                        Label("Open prospective evaluations", systemImage: "chart.bar.xaxis")
-                            .frame(minHeight: 44)
-                    }
-                    .accessibilityIdentifier("research.history.evaluation")
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Separate studies compare future saved picks with SPY using a frozen setup and explicit modeled costs.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button { showEvaluation = true } label: {
+                            Label("Open prospective evaluations", systemImage: "chart.bar.xaxis")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("research.history.evaluation")
+                    }.padding(.vertical, 6)
                 }
                 if history.runs.isEmpty {
                     if history.lastError != nil {
@@ -309,21 +319,24 @@ struct StockSageResearchHistoryView: View {
                             description: Text("Existing saved data is preserved. Resolve the storage error above before saving another run."))
                     } else {
                         ContentUnavailableView("No saved research yet", systemImage: "doc.text.magnifyingglass",
-                            description: Text("Complete a Research run. Its original top five Buy / Strong Buy results and evidence are saved automatically."))
+                            description: Text("Complete a Research run to save its deterministic Top 5, original checks and separate strict comparison. Outcome reviews retain the original evidence."))
                     }
                 } else {
                     filterControls
-                    let visible = history.runs.filter { filter.matches($0) }
+                    let visible = history.runs.filter {
+                        filter.matches($0, archivedSearchMatch: history.matchesSearch(filter.query, in: $0))
+                    }
                     if visible.isEmpty {
                         // Never a bare empty list: say that the filters excluded everything, and
                         // offer the way back. An empty surface would read as "no saved research".
                         Section {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("No saved research matches this search or these filters.").font(.headline)
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("No saved research matches this search or these filters.", systemImage: "line.3.horizontal.decrease.circle")
+                                    .font(.headline).fixedSize(horizontal: false, vertical: true)
                                 Text("\(history.runs.count) saved \(history.runs.count == 1 ? "run is" : "runs are") hidden. Clearing the filters shows them again; nothing has been deleted.")
                                     .font(.callout).foregroundStyle(.secondary)
-                                Button("Clear filters") { filter = .init() }
-                            }.padding(.vertical, 6)
+                                Button("Clear filters") { filter = .init() }.buttonStyle(.bordered)
+                            }.padding(.vertical, 12)
                         }
                     }
                     Section("Completed runs") {
@@ -333,18 +346,22 @@ struct StockSageResearchHistoryView: View {
                             NavigationLink {
                                 StockSageResearchHistoryDetail(history: history, runID: run.id)
                             } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(run.horizon.title).font(.headline)
-                                    Text(run.completedAt.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.subheadline).foregroundStyle(.secondary)
-                                    Text("\(run.predictions.count) saved \(run.predictions.count == 1 ? "pick" : "picks") · \(reviewed) \(reviewed == 1 ? "outcome" : "outcomes") recorded")
-                                        .font(.callout)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(run.horizon.title).font(.title3.weight(.semibold))
+                                        Text(run.completedAt.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                    Text("\(run.deterministicRanking?.ranked.count ?? 0) ranked · \(run.predictions.count) strict picks · \(reviewed) outcomes recorded")
+                                        .font(.callout).monospacedDigit()
                                     if filter.isActive, matching < run.predictions.count {
                                         Text("\(matching) of \(run.predictions.count) match the filters")
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
                                     Text(Self.status(for: run)).font(.caption).foregroundStyle(.secondary)
-                                }.padding(.vertical, 4)
+                                }
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 10)
                             }
                             .accessibilityIdentifier("research.history.run.\(run.id)")
                         }
@@ -367,7 +384,7 @@ struct StockSageResearchHistoryView: View {
         }
         .task(id: checkRequest) {
             guard checkRequest > 0, accessReason == nil else { return }
-            // The same shared caller the foreground activation uses; no separate ownership wiring.
+            // Explicit outcome review; opening or foregrounding never starts this request.
             await StockSageHorizonResearch.checkSavedOutcomes(history: history, store: store)
         }
     }
@@ -404,7 +421,7 @@ struct StockSageResearchHistoryView: View {
         switch evaluation.state {
         case .due, .notDue:
             // A daily-policy prediction is simply active until a level or the horizon resolves it.
-            if run?.outcomePolicy == .dailyBarFirstHit { return "Active" }
+            if run?.usesDailyBarFirstHit == true { return "Active" }
             return evaluation.state == .due ? "Ready for review" : "Awaiting review date"
         case .dataUnavailable: return "Data unavailable"
         case .evaluated: return "Outcome unavailable"
@@ -412,11 +429,14 @@ struct StockSageResearchHistoryView: View {
     }
 
     static func status(for run: StockSageResearchHistory.Run, now: Date = Date()) -> String {
-        if run.rankingFailure != nil { return "Comparison unavailable · no ranked picks to review" }
+        if run.rankingFailure != nil {
+            return "Strict comparison unavailable · no strict picks for outcome review"
+                + (run.deterministicRanking == nil ? "" : ". Deterministic Top 5 retained.")
+        }
         let availability = StockSageResearchHistory.availability(for: run, now: now)
         guard let date = StockSageResearchHistory.checkAvailableAt(for: run) else { return availability.note }
         let dateLabel = date.formatted(date: .abbreviated, time: .shortened)
-        if run.outcomePolicy == .dailyBarFirstHit {
+        if run.usesDailyBarFirstHit {
             return availability.state == .notDue ? "Monitoring starts after \(dateLabel)" : "Settled-session checks available since \(dateLabel)"
         }
         return availability.state == .notDue ? "Review available after \(dateLabel)" : "Review available since \(dateLabel)"
@@ -446,12 +466,13 @@ struct StockSageResearchHistoryDetail: View {
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         Text(StockSageResearchHistoryView.status(for: run))
+                            .font(.headline).fixedSize(horizontal: false, vertical: true)
                         Text(StockSageResearchHistory.measurementDescription(for: run))
                             .font(.callout).foregroundStyle(.secondary)
                         Text("\(run.coverage.checked) listings checked · \(run.coverage.incomplete) incomplete opinions · \(run.coverage.buyCount) Buy / Strong Buy")
                             .font(.callout).foregroundStyle(.secondary)
                         if let qualified = run.coverage.qualifiedBuyCount {
-                            Text("\(qualified) passed the strict Top 5 screen").font(.caption)
+                            Text("\(qualified) passed the strict comparison screen").font(.caption)
                         }
                         if let ranking = run.ranking {
                             Text("\(ranking.model) compared \(ranking.candidateSymbols.count) eligible candidates in \(ranking.rounds.count) rounds. \(ranking.method)")
@@ -459,7 +480,7 @@ struct StockSageResearchHistoryDetail: View {
                             Text("\(ranking.rounds.reduce(0) { $0 + $1.omittedCitedFacts.values.reduce(0, +) }) cited-record omissions across comparison rounds; original cases, risks and coverage stayed whole.")
                                 .font(.caption).foregroundStyle(.secondary)
                         } else if let failure = run.rankingFailure {
-                            Text("Top five comparison unavailable. " + failure)
+                            Text("Strict comparison unavailable. " + failure)
                                 .font(.callout).foregroundStyle(.secondary)
                         } else if !run.predictions.isEmpty {
                             Text("Legacy shortlist: Strong Buy before Buy, with activity-order ties. This saved ordering has not been changed.")
@@ -481,12 +502,30 @@ struct StockSageResearchHistoryDetail: View {
                                 exportError = nil
                                 showExporter = true
                             } catch { exportError = "Research could not be exported: \(error.localizedDescription)" }
-                        } label: { Label("Export saved research", systemImage: "square.and.arrow.up") }
+                        } label: {
+                            Label("Export saved research", systemImage: "square.and.arrow.up")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
                         .accessibilityIdentifier("research.history.export")
                         Text("JSON includes the saved shortlist and review progress, plus original full checks when available. Missing or expired checks are explicitly identified. This is dated research, not live recommendations.")
                             .font(.caption).foregroundStyle(.secondary)
                         if let exportError { Text(exportError).font(.callout).foregroundStyle(.orange) }
                     }.padding(.vertical, 6)
+                }
+                Section("Saved deterministic Top 5") {
+                    if let ranked = run.deterministicRanking {
+                        if let clock = run.rankingScoredAt {
+                            Text("Scored \(clock.formatted(date: .abbreviated, time: .standard)); ordering and failed gates are frozen.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        StockSageTopFiveRankingSection(result: ranked)
+                    } else {
+                        Text("This older run did not record its deterministic Top 5. Its original checks and strict comparison remain unchanged.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    Text("Ranked rows can fail qualification. Outcome checks below belong only to the separate strict comparison shortlist.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Original full checks") {
                     if let fullChecks {
@@ -507,14 +546,22 @@ struct StockSageResearchHistoryDetail: View {
                     Text(StockSageResearchHistory.fullChecksRetentionPolicy).font(.caption).foregroundStyle(.secondary)
                 }
                 if run.predictions.isEmpty {
-                    Text(run.rankingFailure == nil ? "No Buy or Strong Buy results qualified in this completed run." : "No ranked picks were saved because comparison was unavailable.")
+                    Text(run.rankingFailure == nil ? "No Buy or Strong Buy results qualified in this completed run." : "No strict comparison picks were saved because comparison was unavailable.")
+                }
+                Section {
+                    Text("Strict comparison outcomes").font(.title3.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text("These saved scenarios are separate from the deterministic Top 5. A failed comparison does not erase the ranked five or their evidence.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(Array(run.predictions.enumerated()), id: \.element.id) { index, prediction in
                     Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(prediction.name).font(.headline)
-                            Text(prediction.action).foregroundStyle(DS.Palette.accentText).fontWeight(.semibold)
-                            Text(prediction.reason)
+                        VStack(alignment: .leading, spacing: 14) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(prediction.name).font(.title3.weight(.semibold))
+                                Text(prediction.action).font(.headline).foregroundStyle(DS.Palette.accentText)
+                            }
+                            Text(prediction.reason).fixedSize(horizontal: false, vertical: true)
                             Label(prediction.risk, systemImage: "exclamationmark.triangle")
                                 .font(.callout).foregroundStyle(.secondary)
                             if let price = prediction.referencePrice, let date = prediction.referenceDate {
@@ -607,8 +654,15 @@ struct StockSageResearchHistoryDetail: View {
                             Text("Every session examined through the terminal one. A missing session is never replaced by an adjacent bar.")
                                 .foregroundStyle(.secondary)
                             ForEach(bars, id: \.date) { bar in
-                                LabeledContent(StockSageResearchHistoryView.sessionDateLabel(bar.date),
-                                    value: "O \(price(bar.open)) · H \(price(bar.high)) · L \(price(bar.low)) · C \(price(bar.close))")
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(StockSageResearchHistoryView.sessionDateLabel(bar.date))
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("O \(price(bar.open)) · H \(price(bar.high)) · L \(price(bar.low)) · C \(price(bar.close))")
+                                        .monospacedDigit()
+                                }
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityElement(children: .combine)
+                                .padding(.vertical, 4)
                             }
                         }.font(.callout).padding(.vertical, 6)
                     }
@@ -654,7 +708,7 @@ struct StockSageResearchHistoryDetail: View {
                     Text("Complete daily-close path was not recorded or could not be verified; only the endpoint comparison is available.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-            } else if run.outcomePolicy == .dailyBarFirstHit {
+            } else if run.usesDailyBarFirstHit {
                 Text(evaluation.state == .dataUnavailable ? "Data unavailable" : "Active")
                     .font(.headline)
             } else {
@@ -663,7 +717,7 @@ struct StockSageResearchHistoryDetail: View {
                     .font(.headline)
             }
             if let close = evaluation.targetCloseAt {
-                Text(run.outcomePolicy == .dailyBarFirstHit
+                Text(run.usesDailyBarFirstHit
                         ? "Scheduled horizon session: \(StockSageResearchHistoryView.sessionDateLabel(close))"
                         : "Review session: \(StockSageResearchHistoryView.sessionDateLabel(close))")
                     .font(.caption).foregroundStyle(.secondary)
@@ -673,7 +727,13 @@ struct StockSageResearchHistoryDetail: View {
                 Text("\(provider) · retrieved \(fetched.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }.padding(.vertical, 8)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(DS.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.small)
+            .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }
 
     private func price(_ value: Double) -> String { value.formatted(.currency(code: "USD")) }
@@ -697,7 +757,6 @@ struct StockSageResearchHistoryDetail: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(state.badge + ". " + state.explanation)
     }
 
     /// Two different denominators, deliberately never summed: `captured` is the packet before

@@ -71,49 +71,98 @@ struct StockSageChatSection: View {
         #endif
     }
 
+    // At accessibility sizes the complete composer can exceed the phone's available
+    // height. Let the existing conversation scroll view carry it instead of compressing
+    // the question, actions and warning link into a pinned footer.
+    private var scrollsComposer: Bool {
+        #if os(iOS)
+        dynamicTypeSize.isAccessibilitySize
+        #else
+        false
+        #endif
+    }
+
+    private func composerPanel(_ proxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            composer
+            #if os(iOS)
+            if !Self.composerIssues(issue: issue, storageError: chat.storageError).isEmpty {
+                Button {
+                    questionFocused = false
+                    proxy.scrollTo("chat-issues", anchor: .top)
+                } label: {
+                    Label("Review input and saving issues", systemImage: "exclamationmark.circle")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("chat.reviewIssues")
+            }
+            #endif
+        }
+        .padding(.horizontal, contentPadding).padding(.vertical, 16).frame(maxWidth: 840)
+        .frame(maxWidth: .infinity).background(DS.Palette.bgTop)
+    }
+
     private var chatLayout: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                VStack(spacing: 0) {
-                    ScrollView {
-                        conversation.padding(contentPadding).frame(maxWidth: 840, alignment: .leading)
-                            .frame(maxWidth: .infinity)
-                        Color.clear.frame(height: 1).id("chat-bottom")
-                    }
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                ScrollView {
+                    conversation.padding(contentPadding).frame(maxWidth: 840, alignment: .leading)
+                        .frame(maxWidth: .infinity)
                     #if os(iOS)
-                    .scrollDismissesKeyboard(.interactively)
-                    #endif
-                    .onChange(of: Self.latestTurnID(in: chat)) { _, newID in
-                        // Follow new questions, not completion, cancellation or market updates.
-                        guard newID != nil else { return }
-                        proxy.scrollTo("chat-bottom", anchor: .bottom)
-                    }
-                    if showLatestReply {
-                        HStack {
-                            Spacer()
-                            Button {
-                                proxy.scrollTo("chat-bottom", anchor: .bottom)
-                            } label: {
-                                Label("Latest reply", systemImage: "arrow.down")
-                                    #if os(iOS)
-                                    .frame(minHeight: 44)
-                                    #endif
-                            }
-                            .controlSize(.small)
-                            .buttonStyle(.borderless)
-                            .help("Jump to the newest question and reply without sending a request.")
+                    if !Self.composerIssues(issue: issue, storageError: chat.storageError).isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Input and saving issues").font(.headline)
+                                .accessibilityAddTraits(.isHeader)
+                            Self.composerWarnings(issue: issue, storageError: chat.storageError)
                         }
-                        .padding(.horizontal, contentPadding)
-                        #if os(macOS)
-                        .padding(.vertical, 6)
-                        #endif
-                        .frame(maxWidth: 840).frame(maxWidth: .infinity)
+                        .padding(.horizontal, contentPadding).padding(.bottom, 16)
+                        .frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
+                        .id("chat-issues")
+                    }
+                    #endif
+                    Color.clear.frame(height: 1).id("chat-bottom")
+                    if scrollsComposer {
+                        Divider()
+                        composerPanel(proxy)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                #if os(iOS)
+                .scrollDismissesKeyboard(.interactively)
+                #endif
+                .onChange(of: Self.latestTurnID(in: chat)) { _, newID in
+                    // Follow new questions, not completion, cancellation or market updates.
+                    guard newID != nil else { return }
+                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+                }
+                if showLatestReply {
+                    HStack {
+                        Spacer()
+                        Button {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        } label: {
+                            Label("Latest reply", systemImage: "arrow.down")
+                                #if os(iOS)
+                                .frame(minHeight: 44)
+                                #endif
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                        .help("Jump to the newest question and reply without sending a request.")
+                    }
+                    .padding(.horizontal, contentPadding)
+                    #if os(macOS)
+                    .padding(.vertical, 6)
+                    #endif
+                    .frame(maxWidth: 840).frame(maxWidth: .infinity)
+                }
+                if !scrollsComposer {
+                    Divider()
+                    composerPanel(proxy)
+                }
             }
-            Divider()
-            composer.padding(.horizontal, contentPadding).padding(.vertical, 16).frame(maxWidth: 840)
-                .frame(maxWidth: .infinity).background(DS.Palette.bgTop)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -136,6 +185,7 @@ struct StockSageChatSection: View {
                     #endif
                     Spacer()
                     #if os(macOS)
+                    StockSageWhatsAppButton()
                     if config != nil { Button("Model settings", action: openModelSettings).tint(.secondary) }
                     Button("Clear history", role: .destructive) { confirmClear = true }
                         .disabled(chat.turns.isEmpty && chat.storageError == nil)
@@ -187,7 +237,7 @@ struct StockSageChatSection: View {
                         .font(.caption).foregroundStyle(.secondary)
                     if opening.facts.isEmpty { Text("No tracked quotes yet. General questions are still available.") }
                     ForEach(opening.facts.filter { $0.field == "observed price" }) { fact in
-                        Text(fact.text).font(.callout).lineSpacing(3)
+                        openingFact(fact)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -318,6 +368,38 @@ struct StockSageChatSection: View {
         }
     }
 
+    /// Display structured evidence without changing the original prompt or saved fact.
+    private func openingFact(_ fact: StockSageChat.Fact) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verbatim: fact.subject).font(.headline)
+            Text("\(fact.field.capitalized): \(fact.value) \(fact.unit)")
+                .font(.callout).monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: fact.status)
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Source: \(fact.source)")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let date = fact.asOf {
+                Text("As of \(date.formatted(date: .abbreviated, time: .standard))")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("As-of time unknown").font(.caption).foregroundStyle(.secondary)
+            }
+            DisclosureGroup("Original captured fact") {
+                Text(verbatim: fact.text).font(.caption).lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
     /// Match only cited IDs against the original capture; undated products stay typed records.
     static func selectedBenzingaRecords(in turn: StockSageChatSession.Turn) -> [StockSageBenzinga.Record] {
         let cited = Set(turn.evidence)
@@ -329,13 +411,12 @@ struct StockSageChatSection: View {
 
     private var composer: some View {
         #if os(iOS)
-        let stackedControls = dynamicTypeSize.isAccessibilitySize
-        #else
-        let stackedControls = false
-        #endif
-        let controls = stackedControls
+        let controls = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout())
+        #else
+        let controls = AnyLayout(HStackLayout())
+        #endif
         return VStack(alignment: .leading, spacing: 8) {
             QuestionField(question: $chat.draft, issue: $issue)
                 .focused($questionFocused)
@@ -367,18 +448,23 @@ struct StockSageChatSection: View {
                             #endif
                     }
                 }
-                if !stackedControls { Spacer() }
+                #if os(iOS)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                #else
+                Spacer()
+                #endif
                 Text("\(question.count)/2000").font(.caption).foregroundStyle(.secondary)
                     .accessibilityLabel("Question character count")
                     .accessibilityValue(Self.questionLengthDescription(question))
             }
-            Self.composerWarnings(issue: issue, storageError: chat.storageError)
             #if os(macOS)
+            Self.composerWarnings(issue: issue, storageError: chat.storageError)
             if config == nil {
                 Self.missingModelNotice(openModelSettings: openModelSettings)
             } else {
                 DisclosureGroup("Privacy and model connection") { connectionNotice }
                     .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             #endif
         }
@@ -524,13 +610,32 @@ struct StockSageChatSection: View {
         return ForEach(warnings.indices, id: \.self) { index in
             Text(warnings[index]).foregroundStyle(DS.Palette.warningSoft)
                 .fixedSize(horizontal: false, vertical: true)
+                #if os(macOS)
                 .lineLimit(composerLineLimit)
+                #endif
+                .accessibilityIdentifier("chat.warning.\(index)")
         }
     }
 
     private var connectionNotice: some View {
-        Text(Self.connectionDisclosure(config))
+        Self.connectionNotice(config)
+    }
+
+    @ViewBuilder static func connectionNotice(_ config: StockSageLocalModelServer.Config?) -> some View {
+        let notice = Text(connectionDisclosure(config))
             .font(.caption).foregroundStyle(.secondary)
+        #if os(macOS)
+        // The composer is outside the conversation scroll. Bound narrow-width measurement
+        // without truncating privacy disclosures or expanding the entire NavigationSplitView.
+        ScrollView {
+            notice.textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                .lineLimit(nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: 100)
+        #else
+        notice
+        #endif
     }
 
     static func connectionDisclosure(_ config: StockSageLocalModelServer.Config?) -> String {
@@ -544,7 +649,7 @@ struct StockSageChatSection: View {
             ? "Uses your selected remote model server. Your question, recent Chat history, selected news and private WhatsApp export excerpts leave this device for the model."
             : "Uses your configured local model server. Explicit ticker questions add selected news and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local."
         let connection = config.isRunPodEndpoint ? " The RunPod connection uses an encrypted SSH tunnel." : ""
-        return deviceGuidance + destination + connection + " News uses Massive when web access is enabled; EODHD is disabled. No broker credentials, account identifiers, journal notes, live WhatsApp connection or training are included. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation."
+        return deviceGuidance + destination + connection + " News uses Massive when web access is enabled; EODHD is disabled. No broker credentials, account identifiers, journal notes, live WhatsApp connection or training are included. Do not paste secrets. The app attempts to preserve your conversation locally and exclude it from backup. Model requests use at most the latest 24 turns and may use fewer to fit the context budget. Check any storage warning before closing Chat. Clear history removes this app's conversation."
     }
 
     private static func sourceCard(_ source: StockSageChat.Source) -> some View {
@@ -588,7 +693,7 @@ struct StockSageChatSection: View {
             #endif
             return
         }
-        guard let config else { issue = "Enable a loopback local model in Catalysts → Explanation model."; return }
+        guard let config else { issue = "Choose a model in Library → Events & model setup → Explanation model."; return }
         let facts = snapshot(for: text, followUp: true)
         let history = chat.turns
         let researchTicker = StockSageChat.requestedSymbols(question: text, symbols: store.symbols).first?.symbol

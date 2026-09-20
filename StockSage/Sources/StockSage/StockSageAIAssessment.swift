@@ -757,7 +757,7 @@ enum StockSageAIAssessment {
             case .repetitiveProse:
                 return "The model repeated text instead of completing a usable opinion. No opinion was accepted."
             case .unsupportedResearchClaim:
-                return "\(who) stated earnings timing or a probability that the captured research does not establish. Use the earnings window check and original evidence; no opinion was accepted."
+                return "\(who) stated a probability, earnings timing, or absence of earnings risk that the captured research does not establish. Review the original evidence; no opinion was accepted."
             default:
                 return "\(who) did not return the required complete answer format. Retry this research; no partial opinion was accepted."
             }
@@ -832,17 +832,17 @@ enum StockSageAIAssessment {
             guard (numericText as String).allSatisfy({ !$0.isNumber || $0.isASCII }) else { return .failure(.nonASCIINumber) }
             guard !StockSageCatalystNarrator.introducesForeignNumbers(numericText as String, facts: citedFacts) else { return .failure(.foreignNumber) }
             guard StockSageCatalystNarrator.numericTokens(numericText as String).isEmpty else { return .failure(.unboundNumber) }
-            if let earningsWindow, unsupportedResearchClaim(value, window: earningsWindow) {
+            if unsupportedResearchClaim(value, window: earningsWindow) {
                 return .failure(.unsupportedResearchClaim)
             }
         }
         return .success(Verdict(action: action, reason: reason, risk: risk, evidence: evidence))
     }
 
-    /// Research-only defense against observed calendar/probability claims. This finite English
+    /// Every opinion rejects unsupported probability and absence-of-earnings-risk claims.
     /// ponytail: finite heuristic, not semantic proof; novel paraphrases need evidence-quality review.
-    /// The typed window owns date arithmetic; accepted prose is never rewritten or sanitized.
-    private nonisolated static func unsupportedResearchClaim(_ text: String, window: StockSageMassiveEarnings.Window) -> Bool {
+    /// The optional typed window additionally checks event timing; accepted prose is never rewritten.
+    private nonisolated static func unsupportedResearchClaim(_ text: String, window: StockSageMassiveEarnings.Window?) -> Bool {
         let normalized = text.lowercased().replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: #"[.!?;]|\b(?:but|however|yet)\b"#, with: "\n", options: .regularExpression)
         for clause in normalized.split(separator: "\n").map(String.init) {
@@ -865,6 +865,7 @@ enum StockSageAIAssessment {
             if asserted(#"\b(?:high|strong|substantial|elevated)[\s-]+(?:probability|likelihood|chance)\b"#) { return true }
             guard has(#"\b(?:earnings|next\s+(?:quarterly\s+)?(?:report|release|results))\b"#) else { continue }
             if asserted(#"\b(?:no|zero)\s+earnings(?:[ -]gap)?\s+risk(?:\s+(?:exists|remains|is present|during|within|throughout)\b|\s*$)|\bearnings(?:[ -]gap)?\s+risk\s+(?:is|remains)\s+(?:absent|none|zero)\b"#) { return true }
+            guard let window else { continue }
             // Past volatility or an announced schedule does not make the earnings event past.
             let historical = has(#"\b(?:last|previous|prior|past|historical)\s+(?:quarterly\s+)?(?:earnings|report|release|results)\b|\b(?:earnings|report|results)\s+(?:(?:report|release)\s+)?(?:was|were)\s+(?:reported|released|announced|published)\b"#)
                 && !has(#"\b(?:next|upcoming|will|due|imminent)\b"#)

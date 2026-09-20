@@ -8,6 +8,8 @@ import Foundation
     struct RefreshKey: Equatable {
         let trades: [TradeRecord]
         let refreshedAt: Date?
+        var credentialRevision: String? = nil
+        var policyRevision: String? = nil
     }
     nonisolated struct Event: Sendable, Equatable {
         let id: String
@@ -134,21 +136,22 @@ import Foundation
         return .init(trade: copy, multiplier: factor, note: note)
     }
 
-    private static let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
-    private static var unavailableUntil: Date?
+    nonisolated static let denialGate = "stocksage.massive.splits.unavailableUntil"
 
-    static func fetch(symbol: String, since: Date, now: Date) async -> Snapshot? {
-        guard ToolPolicy.isExternalAllowed, !Task.isCancelled,
-              unavailableUntil.map({ now >= $0 }) ?? true,
-              let request = request(symbol: symbol, since: since, now: now, key: StockSageMassive.apiKey),
-              let (data, response) = try? await session.data(for: request),
-              ToolPolicy.isExternalAllowed, !Task.isCancelled, let http = response as? HTTPURLResponse else { return nil }
-        if [401, 402, 403].contains(http.statusCode) { unavailableUntil = now.addingTimeInterval(86_400) }
+    static func fetch(symbol: String, since: Date, now: Date, access: StockSageMassive.Access = .init(),
+                      defaults: UserDefaults = .standard, transport: StockSageMassive.Transport? = nil) async -> Snapshot? {
+        let captured = access.capture()
+        let revision = access.credentialRevision()
+        guard captured.isCurrent(),
+              StockSageMassiveCredential.denialUntil(denialGate, defaults: defaults).map({ now >= $0 }) ?? true,
+              let request = request(symbol: symbol, since: since, now: now, key: captured.key),
+              let (data, http) = try? await StockSageMassive.response(for: request, maximumBytes: 2_000_000, transport: transport),
+              captured.isCurrent() else { return nil }
+        if [401, 402, 403].contains(http.statusCode) {
+            StockSageMassiveCredential.recordDenial(now.addingTimeInterval(86_400), gate: denialGate,
+                                                    revision: revision, defaults: defaults)
+        }
         guard http.statusCode == 200 else { return nil }
         return try? parse(data, symbol: symbol, since: since, now: now)
-    }
-    private final class NoRedirect: NSObject, URLSessionTaskDelegate {
-        nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
     }
 }

@@ -389,7 +389,7 @@ final class StockSageResearchEvaluation: ObservableObject {
         if StockSageStore.isRunningTests { return "Live price checks are unavailable in the test host." }
         if let reason = ToolPolicy.webToolsDisabledReason() { return reason }
         if store.isSampleData { return "Sample mode cannot supply a prospective price comparison." }
-        if !StockSageMassive.isConfigured { return "Configure Massive access before checking saved prices." }
+        if let reason = StockSageMassive.credentialAccessBlocker() { return reason }
         return nil
     }
 

@@ -59,6 +59,7 @@ struct CatalystsSection: View {
     #endif
     @State private var expanded: Set<String> = []
     @State private var narrations: [String: StockSageCatalystNarrator.Result] = [:]
+    @State private var narrationEvidenceNotes: [String: [String]] = [:]
     @State private var narrationFacts: [String: [String]] = [:]
     @State private var narrationBaseFacts: [String: [String]] = [:]
     @State private var narrationBenzinga: [String: StockSageBenzinga.Snapshot] = [:]
@@ -324,9 +325,9 @@ struct CatalystsSection: View {
     nonisolated static func ideasRecoveryState(visibleCount: Int, totalCount: Int, loading: Bool,
         filteredMessage: String) -> (message: String, action: String)? {
         guard visibleCount == 0 else { return nil }
-        if totalCount > 0 { return (filteredMessage, "Open Ideas") }
-        return (loading ? "Ideas scan in progress. Results will appear here as ideas become available."
-            : "No ideas yet. Open Ideas to choose and run a scan.", "Open Ideas")
+        if totalCount > 0 { return (filteredMessage, "Open Rules screener") }
+        return (loading ? "Rules scan in progress. Results will appear here as ideas become available."
+            : "No ideas yet. Open Rules screener to choose and run a scan.", "Open Rules screener")
     }
 
     @ViewBuilder
@@ -338,7 +339,7 @@ struct CatalystsSection: View {
                 Text(state.message).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button(state.action, action: openIdeas)
-                    .help("Open the Ideas tab without changing filters or starting a scan.")
+                    .help("Open Library → Rules screener without changing filters or starting a scan.")
             }
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -352,83 +353,104 @@ struct CatalystsSection: View {
     private func headerCard(briefs: [StockSageCatalystWatch.Brief],
                             availability: StockSageCatalystNarrator.Availability,
                             now: Date? = nil, entries: [StockSageCatalystWatch.CalendarEntry]? = nil) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Text("Catalysts to watch")
-                .font(.system(size: font15, weight: .semibold)).foregroundStyle(.white)
-            Text("Events and dated evidence for your current Ideas, in ranked order.")
-                .font(.callout).foregroundStyle(DS.Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("AI badges are unvalidated; failed checks stay drafts. Rules actions, sizing and execution checks remain separate.")
-                .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
-                .fixedSize(horizontal: false, vertical: true)
-            #if os(macOS)
-            if let now, let entries {
-                Picker("Catalyst period", selection: $period) {
-                    ForEach(Period.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 420)
-                HStack {
-                    Text("\(Self.periodRangeLabel(period, now: now)) · UTC · Mon–Sun")
-                    Spacer()
-                    Picker("View", selection: $mode) {
-                        ForEach(Mode.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.menu).fixedSize()
-                }
-                .font(.system(size: font11, weight: .medium))
-                Text(Self.periodCountLabel(entries) + " · Current Ideas filters; recent coverage is limited.")
-                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
+        VStack(alignment: .leading, spacing: DS.Space.md) {
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Text("Catalysts to watch")
+                    .font(.system(size: font15, weight: .semibold)).foregroundStyle(.white)
+                    .accessibilityAddTraits(.isHeader)
+                Text("Events and dated evidence for your current Ideas, in ranked order.")
+                    .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if period == .thisMonth {
-                    Text("This Month filters retained observations; it is not a complete monthly event archive.")
+            }
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                #if os(macOS)
+                if let now, let entries {
+                    Picker("Catalyst period", selection: $period) {
+                        ForEach(Period.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 420)
+                    HStack {
+                        Text("\(Self.periodRangeLabel(period, now: now)) · UTC · Mon–Sun")
+                        Spacer()
+                        Picker("View", selection: $mode) {
+                            ForEach(Mode.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.menu).fixedSize()
+                    }
+                    .font(.system(size: font11, weight: .medium))
+                    Text(Self.periodCountLabel(entries) + " · Current Ideas filters; recent coverage is limited.")
+                        .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if period == .thisMonth {
+                        Text("This Month filters retained observations; it is not a complete monthly event archive.")
+                            .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
+                    }
+                }
+                #else
+                DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
+                    .accessibilityLabel("Catalyst view")
+                #endif
+                Self.ideasRecovery(visibleCount: ideas.count, totalCount: store.ideas.count,
+                    loading: store.isLoadingIdeas, filteredMessage: ideasFilterMessage,
+                    error: store.ideasError, openIdeas: onOpenIdeas)
+                    .font(.system(size: font11_5))
+                if let regime = store.regime {
+                    let gaugedStr = store.regimeGaugedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "not yet"
+                    Text("Regime: \(regime.state.rawValue) · sizing bias ×\(String(format: "%.2f", regime.sizingBias)) · gauged \(gaugedStr)")
+                        .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(regime.caveat + " " + store.regimeEvidenceText)
+                    Text(store.regimeIsStale ? "Stale gauge — re-gauge before relying on it." : store.regimeEvidenceText)
+                        .font(.system(size: metadataSize)).foregroundStyle(store.regimeIsStale ? DS.Palette.warningSoft : DS.Palette.textSecondary)
+                }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Label("Evidence status", systemImage: "info.circle")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
+                Text("AI badges are unvalidated; failed checks stay drafts. Rules actions, sizing and execution checks remain separate.")
+                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Honesty-floor label — always visible, never collapsible.
+                Text(StockSageCatalystWatch.caveat)
+                    .font(.system(size: font11_5)).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                if store.isSampleData {
+                    Text("Sample data — nothing here is a real catalyst.")
+                        .font(.system(size: font11_5)).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if case .unavailable(let reason) = availability {
+                    Text(reason).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Label("Sources & privacy", systemImage: "network")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    .accessibilityAddTraits(.isHeader)
+                // [network-safety-warn-first], fix pass 2026-09-06 (review blocker): this banner used
+                // to live ONLY inside `explanationModelSettings`'s `DisclosureGroup`, which defaults
+                // to collapsed — so it was invisible unless a viewer had already opened the settings
+                // panel. Hoisted here, into the header's always-visible (never collapsible) section,
+                // so it renders on first appearance of this tab — before the auto-probe below ever
+                // fires and before any "Explain" press — regardless of whether the panel is expanded.
+                if isNonLoopbackConfig { nonLoopbackWarning() }
+                DisclosureGroup("Where checks and explanations send data") {
+                    Text("When external access is enabled, daily checks send tracked US tickers to api.massive.com for ratings, guidance, filings and dividends. Explain sends its ticker to api.massive.com (hourly news), sec.gov (filings/insider trades) and the selected narrator. EODHD is disabled. Events are not trade signals; missing events do not establish absence. See Cards for coverage.")
+                        .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.system(size: metadataSize))
+                if !store.companyEventCacheSaved {
+                    Text("Company-event cache could not be saved; checks may repeat after relaunch.")
                         .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
                 }
             }
-            #else
-            DSSegmentPicker(cases: Mode.allCases, selection: $mode) { $0.title }.frame(maxWidth: 260)
-                .accessibilityLabel("Catalyst view")
-            #endif
-            Self.ideasRecovery(visibleCount: ideas.count, totalCount: store.ideas.count,
-                loading: store.isLoadingIdeas, filteredMessage: ideasFilterMessage,
-                error: store.ideasError, openIdeas: onOpenIdeas)
-                .font(.system(size: font11_5))
-            if let regime = store.regime {
-                let gaugedStr = store.regimeGaugedAt.map { $0.formatted(.relative(presentation: .named)) } ?? "not yet"
-                Text("Regime: \(regime.state.rawValue) · sizing bias ×\(String(format: "%.2f", regime.sizingBias)) · gauged \(gaugedStr)")
-                    .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(regime.caveat + " " + store.regimeEvidenceText)
-                Text(store.regimeIsStale ? "Stale gauge — re-gauge before relying on it." : store.regimeEvidenceText)
-                    .font(.system(size: metadataSize)).foregroundStyle(store.regimeIsStale ? DS.Palette.warningSoft : DS.Palette.textSecondary)
-            }
-            // Honesty-floor label — always visible, never collapsible.
-            Text(StockSageCatalystWatch.caveat)
-                .font(.system(size: font11_5)).foregroundStyle(DS.Palette.warningSoft)
-                .fixedSize(horizontal: false, vertical: true)
-            if store.isSampleData {
-                Text("Sample data — nothing here is a real catalyst.")
-                    .font(.system(size: font11_5)).foregroundStyle(DS.Palette.warningSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if case .unavailable(let reason) = availability {
-                Text(reason).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            // [network-safety-warn-first], fix pass 2026-09-06 (review blocker): this banner used
-            // to live ONLY inside `explanationModelSettings`'s `DisclosureGroup`, which defaults
-            // to collapsed — so it was invisible unless a viewer had already opened the settings
-            // panel. Hoisted here, into the header's always-visible (never collapsible) section,
-            // so it renders on first appearance of this tab — before the auto-probe below ever
-            // fires and before any "Explain" press — regardless of whether the panel is expanded.
-            if isNonLoopbackConfig { nonLoopbackWarning() }
-            Text("When external access is enabled, daily checks send tracked US tickers to api.massive.com for ratings, guidance, filings and dividends. Explain sends its ticker to api.massive.com (hourly news), sec.gov (filings/insider trades) and the selected narrator. EODHD is disabled. Events are not trade signals; missing events do not establish absence. See Cards for coverage.")
-                .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if !store.companyEventCacheSaved {
-                Text("Company-event cache could not be saved; checks may repeat after relaunch.")
-                    .font(.system(size: metadataSize)).foregroundStyle(DS.Palette.warningSoft)
-            }
+            .frame(maxWidth: 720, alignment: .leading)
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -480,10 +502,16 @@ struct CatalystsSection: View {
                         .font(.system(size: metadataSize)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 #endif
-                TextField("Server URL", text: Binding(get: { serverURL }, set: { updateModelSetting($0, key: StockSageLocalModelServer.urlKey) }))
-                    .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
-                TextField("Model", text: Binding(get: { serverModel }, set: { updateModelSetting($0, key: StockSageLocalModelServer.modelKey) }))
-                    .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Server URL").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                    TextField("Server URL", text: Binding(get: { serverURL }, set: { updateModelSetting($0, key: StockSageLocalModelServer.urlKey) }))
+                        .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Model").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                    TextField("Model", text: Binding(get: { serverModel }, set: { updateModelSetting($0, key: StockSageLocalModelServer.modelKey) }))
+                        .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
+                }
                 Button(probing ? "Testing…" : "Test connection") { testConnection() }
                     .buttonStyle(.plain).touchHitArea().disabled(probing)
                     .font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
@@ -790,6 +818,12 @@ struct CatalystsSection: View {
                 }
                 .font(.system(size: font11)).foregroundStyle(DS.Palette.textSecondary)
             }
+            if let notes = narrationEvidenceNotes[symbol] {
+                ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                    Text(note).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if let news = narrationNews[symbol] {
                 Text(news.summary).font(.system(size: metadataSize)).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -920,7 +954,7 @@ struct CatalystsSection: View {
                 narrationAborted[symbol] = Self.narrationAbortReason(
                     settingsChanged: requestSettings != explanationRequestSettings)
             }
-            guard let (sources, news, evidence) = await Self.citedSources(for: symbol, stillValid: active) else {
+            guard let (sources, news, evidence, evidenceNotes) = await Self.citedSources(for: symbol, stillValid: active) else {
                 markAborted(); return
             }
             // Freeze both the source capture and settings across probe/inference/publication.
@@ -929,14 +963,15 @@ struct CatalystsSection: View {
                     && (sources.isEmpty || ToolPolicy.isExternalAllowed)
             }
             guard allowed() else { markAborted(); return }
-            let suppliedFacts = StockSageCatalystNarrator.facts(for: brief, sources: sources, benzinga: evidence)
+            let suppliedFacts = StockSageCatalystNarrator.facts(for: brief, sources: sources, benzinga: evidence, evidenceNotes: evidenceNotes)
             narratingStage[symbol] = .explaining
-            let result = await StockSageCatalystNarrator.explain(brief, sources: sources, benzinga: evidence, stillValid: allowed)
+            let result = await StockSageCatalystNarrator.explain(brief, sources: sources, benzinga: evidence, evidenceNotes: evidenceNotes, stillValid: allowed)
             guard allowed() else { markAborted(); return }
             // Publish the response and its ORIGINAL context together, after the last await.
             // Retain prior snapshots; never publish a cancelled generation for new settings.
             narrationBaseFacts[symbol] = facts
             narrationFacts[symbol] = suppliedFacts
+            narrationEvidenceNotes[symbol] = evidenceNotes
             narrationBenzinga[symbol] = evidence
             narrationSettings[symbol] = settings
             narrationSources[symbol] = sources
@@ -948,11 +983,11 @@ struct CatalystsSection: View {
     /// One product capture alongside existing SEC lookups; news fallback receives that capture's
     /// page, including empty/failed/unchecked outcomes, rather than fetching it independently.
     private static func citedSources(for symbol: String, stillValid: @MainActor () -> Bool) async
-        -> ([StockSageCatalystNarrator.CitedSource], StockSageNewsService.Observation, StockSageBenzinga.Snapshot)? {
+        -> ([StockSageCatalystNarrator.CitedSource], StockSageNewsService.Observation, StockSageBenzinga.Snapshot, [String])? {
         guard stillValid() else { return nil }
         let now = Date()
         async let evidenceTask = StockSageBenzingaClient.shared.snapshot(for: symbol, now: now)
-        async let filingTask = StockSageDisclosureService.recentFilings(for: symbol, forms: ["8-K"], limit: 1)
+        async let filingTask = StockSageDisclosureService.recentFilingsObservation(for: symbol, forms: ["8-K"], limit: 1)
         async let insiderTask = StockSageInsider.recentActivity(for: symbol)
         let (evidence, filings, insider) = await (evidenceTask, filingTask, insiderTask)
         guard stillValid(), StockSageBenzingaClient.shared.isCurrent(evidence) else { return nil }
@@ -965,21 +1000,30 @@ struct CatalystsSection: View {
         guard ToolPolicy.isExternalAllowed else {
             var withheld = news
             withheld.withholdingReason = .policyDenied
-            return ([], withheld, evidence)
+            return ([], withheld, evidence, ["SEC evidence withheld because external access is disabled."])
         }
         var sources: [StockSageCatalystNarrator.CitedSource] = news.items.map { .init(news: $0) }
-        if let filing = filings.first {
+        var evidenceNotes = [StockSageCatalystNarrator.filingCoverage(filings)]
+        if let filing = filings.filings.first {
             let title = filing.itemDescriptions.isEmpty ? "8-K filed" : filing.itemDescriptions.joined(separator: ", ")
             sources.append(.init(date: filing.filingDate, source: "SEC 8-K", title: title, snippet: "", link: filing.documentURL))
         }
-        // Only transactions with a parsed date can be dated citable sources — never fabricate one.
-        for t in (insider?.discretionary ?? []).prefix(3) {
-            guard let date = t.date else { continue }
-            let verb = t.code == .openMarketPurchase ? "bought" : "sold"
-            let title = "\(t.insiderName) \(verb) \(Int(t.shares)) shares"
-            sources.append(.init(date: date, source: "SEC Form 4", title: title, snippet: "", link: nil))
+        if let insider {
+            evidenceNotes.append(insider.coverageDescription)
+            // Publication date is separate from the trade date; an undated filing remains
+            // unavailable for a dated citation, rather than borrowing the transaction clock.
+            let citable = insider.discretionary.filter { $0.filingDate != nil && $0.documentURL != nil }
+            for t in citable.prefix(3) {
+                let verb = t.code == .openMarketPurchase ? "reported P purchase" : "reported S sale"
+                let title = "\(t.insiderName): \(verb), \(t.shares) shares"
+                sources.append(.init(date: t.filingDate!, source: "SEC Form 4", title: title,
+                                     snippet: t.evidenceDescription, link: t.documentURL))
+            }
+            evidenceNotes.append("SEC Form 4 citation selection: \(min(3, citable.count)) of \(insider.discretionary.count) returned P/S rows shown. Omitted rows include the three-citation cap and unavailable filing dates/links; inspect the full filings before interpreting this subset.")
+        } else {
+            evidenceNotes.append("SEC Form 4 review unavailable or incomplete; no insider-activity absence or net-value conclusion is supported.")
         }
-        return (sources, news, evidence)
+        return (sources, news, evidence, evidenceNotes)
     }
 
     /// `.extreme` needs the idea's actual high/low direction, which the pure, testable

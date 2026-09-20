@@ -34,10 +34,10 @@ enum StockSageModelIdentityMigration {
         let trimmed = savedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let stripped = trimmed.hasSuffix(":latest") ? String(trimmed.dropLast(":latest".count)) : trimmed
         let savedURL = defaults.string(forKey: S.urlKey) ?? ""
-        // A previous run that wrote the model half but crashed before the URL half looks like
-        // "already on gemmaModel" -- detect that half-migrated state by checking whether the
-        // saved URL is actually one of the two endpoints this migration would have produced.
-        let isHalfMigrated = stripped == S.gemmaModel && !isManagedGemmaEndpoint(savedURL)
+        // A custom Gemma endpoint is an intentional supported choice unless this migration
+        // recorded that it started. The model/URL pair alone is not interruption evidence.
+        let isHalfMigrated = defaults.string(forKey: markerKey) == inProgress
+            && stripped == S.gemmaModel && !isManagedGemmaEndpoint(savedURL)
         guard S.retiredManagedIdentities.contains(stripped) || isHalfMigrated else {
             // Not a retired identity and not a half-migrated one: a deliberate choice (including
             // an already-correct Gemma setting) is never overridden.

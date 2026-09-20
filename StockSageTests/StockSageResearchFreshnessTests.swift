@@ -34,4 +34,23 @@ struct StockSageResearchFreshnessTests {
         #expect(F.change(from: old, to: new).contains("1h 0m ago"))
         #expect(F.change(from: nil, to: new).contains("no prior result"))
     }
+    @Test(arguments: [25.0, 400.0])
+    func separateAdjustedCapturesNeverInventSplitReturns(revised: Double) {
+        let now = date("2026-09-15T15:00:00Z")
+        let reference = date("2026-09-11T04:00:00Z")
+        let old = StockSageHorizonResearch.Result(note: "Original", at: now.addingTimeInterval(-3600),
+            referenceClose: (100, reference))
+        let sameSession = StockSageHorizonResearch.Result(note: "Revised", at: now,
+            referenceClose: (revised, reference))
+        let nextSession = StockSageHorizonResearch.Result(note: "New capture", at: now,
+            referenceClose: (revised, date("2026-09-14T04:00:00Z")))
+        #expect(F.change(from: old, to: sameSession).contains("Same-session reference price was revised"))
+        #expect(F.change(from: old, to: nextSession).contains("Reference session changed"))
+        for current in [sameSession, nextSession] {
+            #expect(!F.change(from: old, to: current).contains("%"))
+            #expect(F.change(from: old, to: current).contains("split-adjustment"))
+        }
+        #expect(old.referenceClose?.value == 100)
+    }
+
 }
