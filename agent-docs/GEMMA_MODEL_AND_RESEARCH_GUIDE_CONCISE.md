@@ -2,9 +2,9 @@
 
 Prepared for **Saleh**
 
-**Living edition 30 · Updated 21 September 2026, 00:04 Asia/Riyadh.**
+**Living edition 31 · Updated 21 September 2026, 01:02 Asia/Riyadh.**
 
-This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. The application evidence below is dated **20 September 2026**; this **21 September** update shortens the document and does not establish new model or market readiness. iOS and widgets remain on hold.
+This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. It records the **20 September installed baseline** and **21 September diagnostic follow-up**, without claiming new model or market readiness. iOS and widgets remain on hold.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
 
@@ -16,7 +16,7 @@ The PDF is limited to **20 pages including the cover and contents**. Detailed re
 4. Read the captured date, missing evidence and qualification status. Saved rankings and model labels do not automatically authorize a trade.
 ## 1. What the model names actually identify
 
-This concise edition is dated **21 September 2026**. Verification below describes **20 September** observations; it does not establish new model, market or delivery readiness today.
+This edition is dated **21 September 2026**. Section 13 separates the installed 20 September baseline from later diagnostic tests and observations; neither establishes new model or delivery readiness.
 
 | Name | Meaning |
 | --- | --- |
@@ -87,7 +87,7 @@ Chat uses selected symbols and its own bounded enrichment, not an entire univers
 
 Stock screener offers editable cap, P/E, ROA and debt/equity filters, with Micro cap and Large cap presets. Those display filters do not change the fixed cap-tracking qualification rules. Fifty displayed rows per page and twenty-four detailed setup candidates are separate from all-eligible-symbol momentum coverage.
 
-Company quality preserves dated provider P/E, P/S, P/B, ROA, ROE and debt/equity. Annual app-calculated ROCE/ROIC require consistent, explicitly USD-tagged SEC inputs and valid capital denominators; they are not shareholder returns or automatic one-off adjustments. Missing inputs remain unavailable. The observed SEC route was unavailable; successful Massive responses did not prove successful SEC calculations.
+Company quality preserves dated provider P/E, P/S, P/B, ROA, ROE and debt/equity. Annual app-calculated ROCE/ROIC require consistent, explicitly USD-tagged SEC inputs and valid capital denominators; they are not shareholder returns or automatic one-off adjustments. Missing inputs remain unavailable. A direct public SEC check returned HTTP 403 on 21 September. Successful Massive responses do not prove successful SEC calculations. The tested diagnostic update distinguishes rejected requests, timeouts, oversized responses and cancellation; unavailable values remain unavailable.
 
 **Annual formula boundary:** operating-income ROCE divides annual operating income by the opening/closing average of **assets minus current liabilities**. The ROIC proxy divides operating income after the reported effective tax rate by the opening/closing average of **debt and finance leases plus consolidated equity including noncontrolling interests, minus cash**. Consistent opening/closing balance dates are required; missing debt is not zero, and parent-only equity cannot replace consolidated equity. These measures are not normalized EBIT, TTM returns, sector rankings or forecasts.
 
@@ -188,11 +188,13 @@ The published trading calendar covers 2026; unsupported years remain unavailable
 
 ## 13. Existing tests and the verification boundary
 
-**Evidence dated 20 September 2026; condensed edition 30 dated 21 September. No new runtime observation is implied.** Installed signed arm64 Release **92be0b2** passed **3,216 test definitions / 4,135 parameter executions / zero failures / five skips**, with build/test exit 0 and targeted native diagnostic guard 0. The source manifest matched before and after testing. Installation/reopening checks preserved **20 saved runs and 3,068 compared saved files**, preferences, IDs and the active record image.
+**Installed baseline, verified 20 September 2026.** Installed signed arm64 Release **92be0b2** passed **3,216 test definitions / 4,135 parameter executions / zero failures / five skips**, with build/test exit 0 and targeted native diagnostic guard 0. The source manifest matched before and after testing. Installation/reopening checks preserved **20 saved runs and 3,068 compared saved files**, preferences, IDs and the active record image.
+
+**21 September follow-up:** reviewed code **d0e42cb** passed **3,217 test definitions / 4,146 executions / zero failures / five existing skips**, including the new SEC failure cases. Source hashes and the targeted native diagnostic guard passed. The 11-case regression failed on the old code before the fix. This is a diagnostic improvement, not restored SEC access; the latest direct public check returned **HTTP 403**. Its signed Mac Release build and ZIP verification passed; it is not installed at this revision. The full UI suite still logged excessive-window-count warnings also present in the earlier baseline.
 
 The completed Gemma scans retained **1,500 checks each**, not 1,500 accepted opinions: week **1,475 accepted/25 incomplete**, one strict-qualified candidate and comparison pick BWIN; fortnight **1,436 accepted/64 incomplete**, eleven strict-qualified candidates but a failed comparison because complete candidate context could not fit. Both deterministic Top 5 records remain saved. Scan completion does not turn a raw Buy into a qualified setup.
 
-The screener-heading workaround passed isolated reproduction and installed accessibility/screenshot checks, live reload, both cap presets, AAPL search and Company quality. Both cap trackers were enabled, Telegram paired and **Sunday-paused at the last observation**. This is not Monday readiness or a live event result. iOS/widget work remains paused.
+The screener-heading workaround passed isolated reproduction and installed accessibility/screenshot checks, live reload, both cap presets, AAPL search and Company quality. On **21 September at 00:49 Riyadh**, both installed cap trackers were again enabled, Telegram paired and correctly paused before the 11 AM tracking window. This does not verify in-window readiness or event delivery. iOS/widget work remains paused.
 
 Source review, offline tests, synthetic inference, installed UI, actual stock research and successful delivery are separate evidence. Targeted guard success does not establish absence of every framework warning.
 
@@ -200,6 +202,6 @@ Source review, offline tests, synthetic inference, installed UI, actual stock re
 
 Preserve original evidence and dates, offered/omitted/cited facts, model profile and raw attempts, validation/quality flags, strict policy, saved scoring clock, comparison protocol, numeric basis and outcome policy. Prior-context delivery requires its own transport record. Today's API responses cannot recreate yesterday's capture, and model text is not promised byte-identical.
 
-Installed runtime **92be0b2** and detailed reference revision **70bba19** identify the verified 20 September baseline; this condensed edition is a documentation-only update. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
+Installed runtime **92be0b2** identifies the verified 20 September baseline. Reviewed **d0e42cb** adds tested SEC diagnostics and awaits restart approval; its checks are separate from installed-app evidence. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
 
 Still unverified: live all-matching warm-up/gap handling, an installed stock Astra assessment, Telegram event delivery, and successful live SEC annual ROCE/ROIC calculations. Pairing is not delivery; a delivery test needs explicit approval. The completed Gemma scans and stopped pod do not prove prediction accuracy, final billing or storage disposition. No 4× speed, universal latency or profitability claim follows.
