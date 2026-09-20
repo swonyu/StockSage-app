@@ -14,6 +14,7 @@ import AppKit
         guard !StockSageStore.isRunningTests else { return .terminateNow }
         guard !quitting else { return .terminateLater }
         StockSageMicrocapMonitor.shared.stop()
+        StockSageMicrocapMonitor.largecap.stop()
         StockSageCodexResearch.stopAll()
         guard let config = StockSageLocalModelStartup.shared.quitConfig(defaults: .standard) else {
             return .terminateNow

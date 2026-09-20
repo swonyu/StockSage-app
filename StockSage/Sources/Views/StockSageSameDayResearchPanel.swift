@@ -5,7 +5,7 @@ struct StockSageSameDayResearchPanel: View {
     @ObservedObject var research = StockSageSameDayResearch.shared
     @ObservedObject var horizons = StockSageHorizonResearch.shared
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    private var identifier: String { research.isMicrocap ? "research.microcap" : "research.sameDay" }
+    private var identifier: String { research.isAstra ? "research." + research.mode.rawValue : "research.sameDay" }
 
     init(store: StockSageStore, research: StockSageSameDayResearch = .shared) {
         self.store = store
@@ -16,28 +16,29 @@ struct StockSageSameDayResearchPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.xl) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label(research.isMicrocap ? "Micro cap · same-day setups" : "Same-day · one pick", systemImage: research.isMicrocap ? "waveform.path" : "scope")
+                    Label(research.isAstra ? "\(research.title) · same-day setups" : "Same-day · one pick", systemImage: research.isAstra ? "waveform.path" : "scope")
                         .font(.system(.title2, design: .rounded, weight: .semibold))
                         .accessibilityAddTraits(.isHeader)
-                    Text(research.isMicrocap ? "Watch Nasdaq micro caps during the regular US session. Fresh qualifying setups go to Astra through your Codex subscription; a qualified pick can reach your phone." : "A fresh, manual check during the regular US session. One app-ranked, Gemma-qualified candidate when its evidence and observed scenario pass.")
+                    Text(research.isAstra ? "Track market and \(research.title.lowercased()) momentum Monday–Friday, 11 AM–11 PM Riyadh. Fresh regular-session setups go to Astra through your Codex subscription; a qualified pick can reach your phone." : "A fresh, manual check during the regular US session. One app-ranked, Gemma-qualified candidate when its evidence and observed scenario pass.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 #if os(macOS)
-                if research.isMicrocap { StockSageMicrocapActivityView(store: store, research: research) }
+                if research.isAstra { StockSageMicrocapActivityView(store: store, research: research) }
                 #endif
                 let actions = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
                     : AnyLayout(HStackLayout(spacing: 12))
                 actions {
-                    Button(research.isMicrocap ? "Run one Micro cap check" : "Run same-day research", systemImage: "play.fill") { research.start(store: store) }
+                    Button(research.isAstra ? "Run one \(research.title) check" : "Run same-day research", systemImage: "play.fill") { research.start(store: store) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .disabled(research.isRunning || horizons.running != nil)
                         .accessibilityIdentifier(identifier + ".run")
                     if research.isRunning {
                         Button("Stop", systemImage: "stop.fill") {
-                            if research.isMicrocap { StockSageMicrocapMonitor.shared.stop() }
-                            else { research.stop() }
+                            if research.mode == .microcap { StockSageMicrocapMonitor.shared.stop() }
+                            if research.mode == .largecap { StockSageMicrocapMonitor.largecap.stop() }
+                            research.stop()
                         }
                             .accessibilityIdentifier(identifier + ".stop")
                     }
@@ -97,7 +98,7 @@ struct StockSageSameDayResearchPanel: View {
                                 }
                                 Text(check.reason ?? "").font(.body)
                                 Text("Invalidation / risk: " + (check.risk ?? "Unrecorded")).foregroundStyle(.secondary)
-                                if research.isMicrocap, let fundamentals = check.fundamentals {
+                                if research.isAstra, let fundamentals = check.fundamentals {
                                     StockSageFundamentalsView(snapshot: fundamentals)
                                 }
                                 Text("Observed reference levels, not guaranteed execution or future prices. No order is created.").font(.caption)
@@ -166,9 +167,16 @@ struct StockSageSameDayResearchPanel: View {
 
     private func evidence(_ receipt: StockSageSameDayResearch.Receipt) -> some View {
         DisclosureGroup("All \(receipt.checks.count) checks and captured evidence") {
+            #if os(macOS)
+            if let market = receipt.marketMomentum { StockSageMomentumView(market: market) }
+            #endif
             ForEach(receipt.checks, id: \.symbol) { check in
                 VStack(alignment: .leading, spacing: 6) {
                     Text("\(check.symbol) · \(check.action ?? "No opinion")").font(.headline)
+                    if check.momentumTrigger != nil {
+                        Label("Momentum review · not a qualified trade", systemImage: "waveform.path.ecg")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    }
                     Text(check.note).font(.callout)
                     if let audit = check.codexAudit {
                         Text("Codex · \(audit.requestedModel) · \(audit.requestedEffort) · \(audit.terminalStatus)")
@@ -179,9 +187,12 @@ struct StockSageSameDayResearchPanel: View {
                     }
                     if let reason = check.reason { Text("Case: " + reason) }
                     if let risk = check.risk { Text("Risk: " + risk) }
-                    if receipt.mode == .microcap, let fundamentals = check.fundamentals {
+                    if receipt.mode?.isAstra == true, let fundamentals = check.fundamentals {
                         StockSageFundamentalsView(snapshot: fundamentals)
                     }
+                    #if os(macOS)
+                    if let momentum = check.momentum { StockSageMomentumView(stock: momentum) }
+                    #endif
                     if let packet = check.packet {
                         ForEach(Array(packet.facts.enumerated()), id: \.offset) { index, fact in
                             Text("F\(index + 1)\(check.evidence.contains("F\(index + 1)") ? " · cited" : ""): \(fact.text)")

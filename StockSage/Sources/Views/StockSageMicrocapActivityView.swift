@@ -5,19 +5,19 @@ import SwiftUI
 struct StockSageMicrocapActivityView: View {
     @ObservedObject var store: StockSageStore
     @ObservedObject var research: StockSageSameDayResearch
-    @ObservedObject private var monitor = StockSageMicrocapMonitor.shared
+    @ObservedObject private var monitor: StockSageMicrocapMonitor
     @ObservedObject private var telegram = StockSageTelegram.shared
     @ObservedObject private var live = StockSageLiveStream.shared
+    init(store: StockSageStore, research: StockSageSameDayResearch = .microcap) {
+        self.store = store; self.research = research
+        self.monitor = research.mode == .largecap ? .largecap : .shared
+    }
+    private var identifier: String { research.mode.rawValue }
     @State private var query = ""
     @State private var page = 0
     @State private var showScreen = false
     @State private var showTelegram = false
     private let pageSize = 50
-
-    init(store: StockSageStore, research: StockSageSameDayResearch = .microcap) {
-        self.store = store
-        self.research = research
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.lg) {
@@ -28,7 +28,7 @@ struct StockSageMicrocapActivityView: View {
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     Label("Screening coverage", systemImage: "line.3.horizontal.decrease.circle")
                         .font(DS.Typography.titleM)
-                    Text("A completed screen will keep every Nasdaq classification here, including exclusions, unavailable inputs and candidates outside the detailed-screen limit.")
+                    Text("A completed screen will keep every supported common-share classification here, including exclusions, unavailable inputs and candidates outside the detailed-screen limit.")
                         .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                     Text("Live observations appear alongside each screened symbol when the existing Massive feed has received them.")
                         .font(.caption).foregroundStyle(DS.Palette.textSecondary)
@@ -55,14 +55,27 @@ struct StockSageMicrocapActivityView: View {
                     watchButton
                 }
             }
+            if let market = monitor.marketMomentum { StockSageMomentumView(market: market) }
+            Text(monitor.momentumStatus).font(.caption).foregroundStyle(.secondary)
+            Text(monitor.momentumAlertStatus).font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier(identifier + ".momentum.alertStatus")
+            if !monitor.stockMomentum.isEmpty {
+                DisclosureGroup("Tracked stock momentum · \(monitor.stockMomentum.count) symbols") {
+                    ForEach(monitor.stockMomentum, id: \.symbol) { stock in StockSageMomentumView(stock: stock) }
+                }
+            }
             Text(monitor.status)
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("microcap.watch.status")
+                .accessibilityIdentifier(identifier + ".watch.status")
+            if monitor.isEnabled, let next = monitor.nextMomentumCheck {
+                Text("Next momentum check: \(next.formatted(date: .abbreviated, time: .standard))")
+                    .font(.caption).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
+            }
             if monitor.isEnabled, let next = monitor.nextCheck {
                 Text("Next check: \(next.formatted(date: .abbreviated, time: .standard))")
                     .font(.caption).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
             }
-            Text("Checks run at most every five minutes while StockSage is open and your Mac is awake. A fresh setup can use your Codex subscription and send a qualified pick to Telegram. Watching does not place orders or guarantee a same-day exit.")
+            Text("Monday–Friday · 11:00 AM–11:00 PM Riyadh. Momentum refreshes at most every five minutes while StockSage is open and your Mac is awake. New trade setups require the regular US session. Heavy momentum sends a descriptive Telegram alert and asks Astra for a review. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
                 .font(.caption).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
@@ -72,7 +85,7 @@ struct StockSageMicrocapActivityView: View {
                 Label(telegram.isReady ? "Telegram · paired" : "Set up Telegram alerts", systemImage: "paperplane")
                     .font(.subheadline.weight(.semibold))
             }
-            .accessibilityIdentifier("microcap.telegram.setup")
+            .accessibilityIdentifier(identifier + ".telegram.setup")
             .sheet(isPresented: $showTelegram) { StockSageTelegramSetupView(telegram: telegram) }
         }
         .padding(DS.Space.lg)
@@ -83,7 +96,7 @@ struct StockSageMicrocapActivityView: View {
 
     private var watchTitle: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label("Watch for fresh setups", systemImage: "waveform.path.ecg")
+            Label("Momentum & setup alerts", systemImage: "waveform.path.ecg")
                 .font(DS.Typography.titleM).accessibilityAddTraits(.isHeader)
             Text(monitor.isEnabled ? "Automatic checks enabled" : "Automatic checks stopped")
                 .font(.caption.weight(.medium))
@@ -95,13 +108,13 @@ struct StockSageMicrocapActivityView: View {
         if monitor.isEnabled {
             Button("Stop watching", systemImage: "stop.fill") { monitor.stop() }
                 .buttonStyle(.bordered).controlSize(.large)
-                .accessibilityIdentifier("microcap.watch.stop")
+                .accessibilityIdentifier(identifier + ".watch.stop")
         } else {
-            Button("Enable watching", systemImage: "play.fill") { monitor.start(store: store) }
+            Button("Enable tracking", systemImage: "play.fill") { monitor.start(store: store) }
                 .buttonStyle(.borderedProminent).controlSize(.large)
-                .disabled(!telegram.isReady || research.isRunning)
-                .help(telegram.isReady ? "Start automatic checks for a new qualified same-day setup." : "Pair your Telegram chat before enabling automatic alerts.")
-                .accessibilityIdentifier("microcap.watch.start")
+                .disabled(research.isRunning)
+                .help("Track momentum during your Riyadh schedule. Pair Telegram to enable momentum alerts, Astra reviews and fresh-setup assessments.")
+                .accessibilityIdentifier(identifier + ".watch.start")
         }
     }
 
@@ -140,7 +153,7 @@ struct StockSageMicrocapActivityView: View {
                             .font(.caption).foregroundStyle(live.gapCount > 0 ? DS.Palette.warningSoft : DS.Palette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .accessibilityIdentifier("microcap.activity.feed")
+                    .accessibilityIdentifier(identifier + ".activity.feed")
                     DisclosureGroup(isExpanded: $showScreen) {
                         VStack(alignment: .leading, spacing: DS.Space.md) {
                             searchField
@@ -162,7 +175,7 @@ struct StockSageMicrocapActivityView: View {
                     } label: {
                         Text("All saved classifications and live observations").font(.subheadline.weight(.semibold))
                     }
-                    .accessibilityIdentifier("microcap.screen.rows")
+                    .accessibilityIdentifier(identifier + ".screen.rows")
                 }
             }
         }
@@ -178,11 +191,11 @@ struct StockSageMicrocapActivityView: View {
                 TextField("Symbol, company or status", text: $query)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Search saved classifications")
-                    .accessibilityIdentifier("microcap.screen.search")
+                    .accessibilityIdentifier(identifier + ".screen.search")
                 if !query.isEmpty {
                     Button("Clear", systemImage: "xmark.circle.fill") { query = "" }
                         .buttonStyle(.bordered).accessibilityLabel("Clear classification search")
-                        .accessibilityIdentifier("microcap.screen.clear")
+                        .accessibilityIdentifier(identifier + ".screen.clear")
                 }
             }
         }
@@ -205,10 +218,10 @@ struct StockSageMicrocapActivityView: View {
     private func pageButtons(activePage: Int, pages: Int) -> some View {
         HStack(spacing: DS.Space.sm) {
             Button("Previous", systemImage: "chevron.left") { page = max(0, activePage - 1) }
-                .disabled(activePage == 0).accessibilityIdentifier("microcap.screen.previous")
+                .disabled(activePage == 0).accessibilityIdentifier(identifier + ".screen.previous")
             Text("Page \(activePage + 1) of \(pages)").font(.caption).monospacedDigit()
             Button("Next", systemImage: "chevron.right") { page = min(pages - 1, activePage + 1) }
-                .disabled(activePage + 1 >= pages).accessibilityIdentifier("microcap.screen.next")
+                .disabled(activePage + 1 >= pages).accessibilityIdentifier(identifier + ".screen.next")
         }.buttonStyle(.bordered)
     }
 
@@ -232,7 +245,7 @@ struct StockSageMicrocapActivityView: View {
                     Text(row.note).font(.callout).fixedSize(horizontal: false, vertical: true)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], alignment: .leading, spacing: DS.Space.sm) {
                         metric("Market cap", row.marketCap.map { $0.formatted(.currency(code: "USD").notation(.compactName)) } ?? "Unavailable / unqueried")
-                        metric("Free float", row.freeFloat.map { $0.formatted() + " shares" } ?? "Unavailable")
+                        if research.isMicrocap { metric("Free float", row.freeFloat.map { $0.formatted() + " shares" } ?? "Unavailable") }
                         metric("Opening gap", row.openingGap.map { ($0 * 100).formatted(.number.precision(.fractionLength(2))) + "%" } ?? "Unassessed / unavailable")
                         metric("Time-matched RVOL", row.relativeVolume.map { $0.formatted(.number.precision(.fractionLength(2))) + "×" } ?? "Unassessed / unavailable")
                         metric("Captured session volume", row.volume.map { $0.formatted() + " shares" } ?? "Unavailable")

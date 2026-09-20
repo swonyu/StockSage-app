@@ -1396,6 +1396,7 @@ struct MarketsView: View {
         case .research:        researchPanel(Self.resolvedSection(.research).researchHorizon ?? .week)
         case .sameDay:         StockSageSameDayResearchPanel(store: store)
         case .microcap:        StockSageSameDayResearchPanel(store: store, research: .microcap)
+        case .largecap:        StockSageSameDayResearchPanel(store: store, research: .largecap)
         case .screener:
             #if os(macOS)
             StockSageStockScreenerView(store: store)
@@ -1437,7 +1438,7 @@ struct MarketsView: View {
                 .tint(DS.Palette.accent)
                 .accessibilityLabel("Price-alert monitoring")
                 .sensoryFeedback(.selection, trigger: monitoring)
-                Text("Checks only the price levels you saved below. Research, model assessments and outcome reviews run only when you request them.")
+                Text("This control checks only your saved price levels. Enable automatic Astra assessments separately in Micro cap or Large cap. Gemma research and outcome reviews remain manual.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Divider().padding(.vertical, 4)
@@ -9998,7 +9999,7 @@ struct MarketsView: View {
 /// Sections shown inside the single Markets tab.
 enum MarketSection: String, CaseIterable, Identifiable {
     case watchlist, ideas, catalysts, all, heatmap, portfolio, alerts, chat, briefing, research, paper
-    case sameDay, weekResearch, fortnightResearch, library, microcap, screener
+    case sameDay, weekResearch, fortnightResearch, library, microcap, screener, largecap
     var id: String { rawValue }
     static let phoneSections: [Self] = [.sameDay, .weekResearch, .fortnightResearch, .library]
     static let recordSections: [Self] = [.briefing, .watchlist, .portfolio, .chat, .alerts]
@@ -10056,6 +10057,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .research:  return "Research"
         case .paper:     return "Legacy paper history"
         case .microcap: return "Micro cap"
+        case .largecap: return "Large cap"
         case .screener: return "Stock screener"
         case .sameDay: return "Same-day pick"
         case .weekResearch: return "1–7 trading days"
@@ -10079,6 +10081,7 @@ enum MarketSection: String, CaseIterable, Identifiable {
         case .research:  return "doc.text.magnifyingglass"
         case .paper:     return "arrow.left.arrow.right"
         case .microcap: return "waveform.path"
+        case .largecap: return "building.2"
         case .screener: return "line.3.horizontal.decrease.circle"
         case .sameDay: return "sun.max"
         case .weekResearch: return "chart.xyaxis.line"

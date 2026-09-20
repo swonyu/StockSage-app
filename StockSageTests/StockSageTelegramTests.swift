@@ -158,6 +158,36 @@ import Testing
         #expect(duplicate == .alreadyAttempted && f.sends.count == 1)
     }
 
+    @Test func capModesSharePairingButEachDeliveryRemainsDurablyIndependent() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let service = try await f.ready()
+        let pairing = service.pairingRevision
+        let facts: [StockSageAIAssessment.EvidenceFact] = [
+            .init(key: "sameDay.catalyst.news.0", text: "Synthetic public announcement", required: true, availability: .available)
+        ]
+        let micro = StockSageMicrocapMonitor.setupID(symbol: "TEST", facts: facts, at: f.now)
+        let large = StockSageMicrocapMonitor.setupID(symbol: "TEST", facts: facts, at: f.now, mode: .largecap)
+        try #require(micro != large)
+        for (id, label) in [(micro, "Micro cap"), (large, "Large cap")] {
+            let sent = await service.send(text: "StockSage · \(label) · TEST", deliveryID: id, stillValid: { true })
+            #expect(sent == .delivered(messageID: 81))
+            #expect(service.pairingRevision == pairing)
+        }
+        let reloaded = f.make()
+        #expect(reloaded.isReady && reloaded.pairingRevision == pairing)
+        for id in [micro, large] {
+            let duplicate = await reloaded.send(text: "Changed text", deliveryID: id, stillValid: { true })
+            #expect(duplicate == .alreadyAttempted)
+        }
+        #expect(f.sends.count == 2)
+        let sentBodies = try f.sends.map { request -> [String: Any] in
+            let bytes = try #require(request.httpBody)
+            return try #require(try JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        }
+        #expect(sentBodies.compactMap { ($0["chat_id"] as? NSNumber)?.int64Value } == [42, 42])
+        #expect(sentBodies.compactMap { $0["text"] as? String } == ["StockSage · Micro cap · TEST", "StockSage · Large cap · TEST"])
+    }
+
     @Test(arguments: ["remove-token", "replace-pairing", "policy-roundtrip", "expired-setup", "wrong-chat"])
     func postDispatchInvalidationCannotPublishSuccess(kind: String) async throws {
         let f = try Fixture(); defer { f.clean() }

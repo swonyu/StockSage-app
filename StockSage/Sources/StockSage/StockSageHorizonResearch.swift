@@ -966,6 +966,7 @@ final class StockSageHorizonResearch: ObservableObject {
 
     private func researchAccessBlocker(store: StockSageStore, needsMarketData: Bool) -> String? {
         if StockSageSameDayResearch.microcap.isRunning { return "Micro cap research is running. Finish or stop it before starting Top 5 research." }
+        if StockSageSameDayResearch.largecap.isRunning { return "Large cap research is running. Finish or stop it before starting Top 5 research." }
         if StockSageSameDayResearch.shared.isRunning { return "Same-day research is running. Finish or stop it before starting Top 5 research." }
         if StockSageLocalModelServer.isShuttingDown { return "StockSage is closing." }
         if !ToolPolicy.isExternalAllowed { return "Web access is disabled. Enable it in Settings." }

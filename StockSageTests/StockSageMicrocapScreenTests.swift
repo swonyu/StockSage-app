@@ -56,6 +56,72 @@ import Testing
         let decoded = try JSONDecoder().decode(S.Result.self, from: JSONEncoder().encode(receipt))
         #expect(decoded == receipt)
     }
+    @Test func largeCapClassificationUsesTenBillionFloorAndVerifiedListingMembershipWithoutFloat() throws {
+        for cap in [10_000_000_000.0, 4_000_000_000_000] {
+            let row = S.classify(listing(), reference: reference(cap), float: nil, at: now, profile: .largecap)
+            #expect(row.status == .unassessed && row.freeFloat == nil && row.marketCap == cap)
+        }
+        #expect(S.classify(listing(), reference: reference(9_999_999_999), float: nil, at: now, profile: .largecap).status == .excluded)
+        #expect(S.classify(listing(), reference: reference(.infinity), float: nil, at: now, profile: .largecap).status == .unavailable)
+        var member = listing("MEMBER", exchange: "XNYS")
+        #expect(S.classify(member, reference: reference(20_000_000_000), float: nil, at: now, profile: .largecap).status == .excluded)
+        let provenance = StockSageSP500Constituents.Provenance(sourceURL: StockSageSP500Constituents.sourceURL,
+            sha256: String(repeating: "a", count: 64), retrievedAt: now, reportedCount: 503)
+        member.sp500Membership = .init(symbol: "MEMBER", provenance: provenance)
+        let row = S.classify(member, reference: reference(20_000_000_000), float: nil, at: now, profile: .largecap)
+        #expect(row.status == .unassessed && row.sp500Membership == member.sp500Membership)
+        #expect(S.classify(member, reference: reference(), float: float(), at: now).status == .excluded)
+        var wrongVenue = listing("MEMBER", exchange: "OTC"); wrongVenue.sp500Membership = member.sp500Membership
+        #expect(S.classify(wrongVenue, reference: reference(20_000_000_000), float: nil, at: now, profile: .largecap).status == .excluded)
+        member.sp500Membership = .init(symbol: "OTHER", provenance: provenance)
+        #expect(S.classify(member, reference: reference(20_000_000_000), float: nil, at: now, profile: .largecap).status == .excluded)
+        member.sp500Membership = .init(symbol: "MEMBER", provenance: .init(sourceURL: provenance.sourceURL,
+            sha256: provenance.sha256, retrievedAt: now.addingTimeInterval(1), reportedCount: 503))
+        #expect(S.classify(member, reference: reference(20_000_000_000), float: nil, at: now, profile: .largecap).status == .excluded)
+    }
+
+    @Test func largeCapReferenceBindsProviderVenueToVerifiedMembershipAndRetainsTypedDateChecks() throws {
+        var member = listing("MEMBER", exchange: "XNYS")
+        member.sp500Membership = .init(symbol: "MEMBER", provenance: .init(sourceURL: StockSageSP500Constituents.sourceURL,
+            sha256: String(repeating: "b", count: 64), retrievedAt: now, reportedCount: 503))
+        let fields: [String: Any] = ["ticker": "MEMBER", "active": true, "market": "stocks", "locale": "us",
+            "primary_exchange": "XNYS", "type": "CS", "currency_name": "usd", "market_cap": 10_000_000_000.0]
+        func data(_ row: [String: Any]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["status": "OK", "results": row])
+        }
+        let valid = try S.parseReference(data(fields), listing: member, requestedDate: "2026-09-18", retrievedAt: now, profile: .largecap)
+        #expect(valid.marketCap == 10_000_000_000)
+        for (key, value): (String, Any) in [("primary_exchange", "XNAS"), ("ticker", "OTHER"), ("type", "ETF"),
+                                           ("market_cap", true), ("currency_name", "eur")] {
+            var invalid = fields; invalid[key] = value
+            #expect(throws: (any Error).self) {
+                try S.parseReference(data(invalid), listing: member, requestedDate: "2026-09-18", retrievedAt: now, profile: .largecap)
+            }
+        }
+        #expect(throws: (any Error).self) {
+            try S.parseReference(data(fields), listing: member, requestedDate: "2026-09-17", retrievedAt: now, profile: .largecap)
+        }
+        member.sp500Membership = nil
+        #expect(throws: (any Error).self) {
+            try S.parseReference(data(fields), listing: member, requestedDate: "2026-09-18", retrievedAt: now, profile: .largecap)
+        }
+    }
+
+    @Test func profileIdentityIsExactAndLegacyReceiptsDecodeWithoutNewProvenance() throws {
+        #expect(S.policyVersion == S.Profile.microcap.policyVersion)
+        #expect(S.Profile.largecap.policyVersion != S.policyVersion)
+        let receipt = S.Result(policyVersion: "unknown-largecap-policy", startedAt: now, cutoff: now, finishedAt: now,
+            directoryCount: 0, detailedCount: 0, unassessedCount: 0, rows: [], blocker: nil)
+        #expect(receipt.profile == nil && receipt.facts(for: "MICRO").isEmpty)
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(S.Profile.self, from: Data("\"unknown\"".utf8)) }
+        let legacy = S.Result(policyVersion: S.policyVersion, startedAt: now, cutoff: now, finishedAt: now,
+            directoryCount: 0, detailedCount: 0, unassessedCount: 0, rows: [], blocker: nil)
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        json.removeValue(forKey: "sp500")
+        let restored = try JSONDecoder().decode(S.Result.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(restored.profile == .microcap && restored.sp500 == nil)
+    }
+
     @Test func windowUsesCompletedMinutesAndExchangeLocalTimeAcrossDST() throws {
         let value = try S.window(at: date("2026-03-09T14:00:42Z"))
         #expect(value.cutoff == date("2026-03-09T14:00:00Z"))
@@ -282,6 +348,63 @@ import Testing
         let restored = try JSONDecoder().decode(S.Result.self, from: JSONEncoder().encode(result.receipt))
         #expect(restored == result.receipt)
     }
+    @Test func largeCapCollectorSkipsFloatRetainsMembershipAndMeasuresWithoutMicrocapThresholds() async throws {
+        let symbols = (65...90).map { "L" + String(UnicodeScalar($0)!) } + ["BELOW", "BADVENUE", "BIG"]
+        let window = try S.window(at: now)
+        var bodies = try fixtureBodies(symbols: symbols, window: window)
+        bodies.removeValue(forKey: "/stocks/vX/float")
+        var root = try #require(JSONSerialization.jsonObject(with: bodies["/v3/reference/tickers"]!) as? [String: Any])
+        var directory = try #require(root["results"] as? [[String: Any]])
+        for index in directory.indices {
+            let symbol = symbols[index]
+            if symbol == "BIG" { directory[index]["primary_exchange"] = "XNYS" }
+            if symbol == "BADVENUE" { directory[index]["primary_exchange"] = "OTC" }
+            var reference = directory[index]
+            reference["market_cap"] = symbol == "BELOW" ? 9_999_999_999.0 : symbol == "BIG" ? 10_000_000_000.0 : 4_000_000_000_000.0
+            bodies["/v3/reference/tickers/\(symbol)"] = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": reference])
+            let values = bars(window).map { bar -> S.Minute in
+                guard bar.at >= window.current.open else { return bar }
+                return .init(at: bar.at, open: 9.9, high: 9.9, low: 9.8, close: 9.8,
+                             volume: bar.at == window.current.open ? 40 : 10)
+            }
+            let path = try #require(S.minuteRequest(symbol: symbol, window: window, key: "fixture")?.url?.path)
+            bodies[path] = try minutePayload(values, extra: ["ticker": symbol])
+        }
+        root["results"] = directory
+        bodies["/v3/reference/tickers"] = try JSONSerialization.data(withJSONObject: root)
+        let memberSymbols = ["BIG", "BADVENUE"] + (0..<501).map { "SP\($0)" }
+        let csv = (["Symbol,Security,GICS Sector,GICS Sub-Industry,Headquarters Location,Date added,CIK,Founded"]
+            + memberSymbols.map { "\($0),Company,Technology,Software,City,2020-01-01,123,1900" }).joined(separator: "\n") + "\n"
+        bodies[URL(string: StockSageSP500Constituents.sourceURL)!.path] = Data(csv.utf8)
+        let fixture = FixtureTransport(bodies)
+        let result = await S.select(key: "fixture", allowed: { true }, now: now, clock: { now },
+            transport: { try await fixture.reply($0) }, profile: .largecap)
+        #expect(result.receipt.profile == .largecap && result.receipt.blocker == nil)
+        #expect(result.listings.count == 24 && result.receipt.rows.count == 29)
+        #expect(result.receipt.detailedCount == 24 && result.receipt.unassessedCount == 3)
+        #expect(result.receipt.rows.first { $0.symbol == "BELOW" }?.status == .excluded)
+        #expect(result.receipt.rows.first { $0.symbol == "BADVENUE" }?.status == .excluded)
+        let selected = try #require(result.receipt.rows.first { $0.symbol == "BIG" })
+        #expect(selected.status == .passed && selected.relativeVolume == 0.5 && selected.openingGap! < 0)
+        #expect(selected.freeFloat == nil && selected.floatEffectiveDate == nil)
+        #expect(selected.sp500Membership?.provenance == result.receipt.sp500)
+        #expect(result.listings.first { $0.ticker == "BIG" }?.sp500Membership == selected.sp500Membership)
+        let facts = result.receipt.facts(for: "BIG")
+        #expect(facts.count == 4 && facts.allSatisfy(\.required))
+        #expect(facts.map(\.key) == ["technical.largecap.size", "technical.largecap.activity", "technical.largecap.motion", "technical.largecap.policy"])
+        #expect(facts.contains { $0.text.contains("context") && $0.text.contains("not threshold") })
+        let (requests, peak) = await fixture.recorded()
+        #expect(peak <= 4 && !requests.contains { $0.url?.path == "/stocks/vX/float" })
+        #expect(!requests.contains { $0.url?.path == "/v3/reference/tickers/BADVENUE" })
+        let publisherRequests = requests.filter { $0.url?.host == "raw.githubusercontent.com" }
+        #expect(publisherRequests.count == 1 && publisherRequests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
+        #expect(requests.filter { $0.url?.host == "api.massive.com" }.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture" })
+        #expect(try JSONDecoder().decode(S.Result.self, from: JSONEncoder().encode(result.receipt)) == result.receipt)
+        let unknown = S.Result(policyVersion: "largecap-unknown", startedAt: now, cutoff: window.cutoff, finishedAt: now,
+            directoryCount: 29, detailedCount: 24, unassessedCount: 3, rows: result.receipt.rows, blocker: nil)
+        #expect(unknown.profile == nil && unknown.facts(for: "BIG").isEmpty)
+    }
+
     @Test func accessChangeAfterFloatResponseStopsBeforeAnyCapOrDetailAndKeepsDiscoveredRows() async throws {
         let fixture = FixtureTransport(try fixtureBodies(symbols: ["MICRO"], window: S.window(at: now)))
         let capture = CaptureClock(now)

@@ -27,10 +27,11 @@ import Testing
                                 "supportedReasoningEfforts": [["reasoningEffort": "ultra"]]]]]
         } else {
             let disabled = ["apps", "plugins", "remote_plugin", "memories", "multi_agent", "multi_agent_v2",
-                "browser_use", "browser_use_external", "browser_use_full_cdp_access", "in_app_browser", "code_mode", "code_mode_host",
+                "browser_use", "browser_use_external", "browser_use_full_cdp_access", "in_app_browser", "code_mode", "code_mode_only", "code_mode_host",
                 "shell_tool", "unified_exec", "skill_search", "hooks", "skill_mcp_dependency_install", "chronicle", "tool_suggest", "auth_elicitation", "view_image", "image_generation"]
             var features = Dictionary(uniqueKeysWithValues: disabled.map { ($0, false) })
             features["skip_host_skill_discovery"] = true
+            if scenario == "enabledCodeModeOnly" { features["code_mode_only"] = true }
             if scenario == "enabledShell" { features["shell_tool"] = true }
             if scenario == "enabledViewImage" { features["view_image"] = true }
             if scenario == "enabledImageGeneration" { features["image_generation"] = true }
@@ -38,6 +39,7 @@ import Testing
             var config: [String: Any] = ["model": "gpt-6-astra", "model_provider": "openai", "model_reasoning_effort": "ultra",
                 "forced_login_method": "chatgpt", "approval_policy": "never", "project_doc_max_bytes": 0,
                 "web_search": "disabled", "default_permissions": "research", "features": features,
+                "suppress_unstable_features_warning": scenario != "warningSuppressionIgnored",
                 "chatgpt_base_url": "https://chatgpt.com/backend-api/",
                 "model_instructions_file": call.directory.appendingPathComponent("instructions.md").path,
                 "developer_instructions": "", "instructions": "",
@@ -89,8 +91,22 @@ import Testing
         #expect(generation.arguments.contains("--ephemeral") && generation.arguments.contains("--json"))
         #expect(generation.arguments.contains("gpt-6-astra"))
         #expect(generation.arguments.contains("mcp_servers.fixture-server.enabled=false"))
+        #expect(generation.arguments.contains("mcp_servers.fixture-server.command=\"/usr/bin/false\""),
+                "Ignoring user config still requires a complete, disabled MCP transport")
+        #expect(calls.filter { $0.rpcMethod != nil }.allSatisfy {
+            !$0.arguments.contains("mcp_servers.fixture-server.command=\"/usr/bin/false\"")
+        }, "Metadata retains existing transports; only exec needs inert definitions")
         #expect(!generation.arguments.contains("--sandbox"), "A restricted permission profile must not conflict with legacy sandbox flags")
         #expect(calls.filter { $0.rpcMethod == "config/read" }.count == 2)
+        let configuredCalls = calls.filter { $0.arguments.contains("app-server") || $0.arguments.contains("exec") }
+        #expect(configuredCalls.count == 4)
+        for call in configuredCalls {
+            // CLI -c parses TOML, which rejects JSON's optional escaped forward slash.
+            // The metadata fixture must not conceal a path that the real CLI cannot open.
+            let path = call.directory.appendingPathComponent("instructions.md").path
+            #expect(call.arguments.contains("model_instructions_file=\"" + path + "\""))
+            #expect(!call.arguments.contains(where: { $0.hasPrefix("model_instructions_file=") && $0.contains("\\/") }))
+        }
         #expect(!generation.arguments.contains(user) && String(data: generation.input, encoding: .utf8)?.contains(user) == true)
         #expect(generation.environment["OPENAI_API_KEY"] == nil && generation.environment["CODEX_API_KEY"] == nil)
         #expect(generation.environment["MASSIVE_API_KEY"] == nil && generation.environment["HTTP_PROXY"] == nil)
@@ -128,7 +144,7 @@ import Testing
         guard case .failure = result else { Issue.record("Unsafe or incomplete \(scenario) must fail closed"); return }
     }
 
-    @Test(arguments: ["enabledShell", "enabledViewImage", "enabledImageGeneration", "enabledMCP", "providerOverride", "openaiRoute", "chatgptRoute",
+    @Test(arguments: ["enabledCodeModeOnly", "warningSuppressionIgnored", "enabledShell", "enabledViewImage", "enabledImageGeneration", "enabledMCP", "providerOverride", "openaiRoute", "chatgptRoute",
         "instructionPath", "developerInstructions", "userInstructions", "compactOverride", "catalogOverride",
         "unsupportedMCPName", "changedInstructions", "unrestrictedReads", "missingModel"])
     func unsafeEffectiveConfigurationStopsBeforeInference(scenario: String) async throws {
@@ -141,6 +157,38 @@ import Testing
             })
         #expect(generationCalls == 0)
         guard case .failure = result else { Issue.record("Unsafe configuration must not begin a model turn"); return }
+    }
+
+    @Test(arguments: ["exact", "nearMatch", "duplicate", "beforeThread", "duringTurn", "afterTurn", "wrongKind", "extraField", "reorderedTurn"])
+    func onlyExactDisabledHostStartupNoticeCanPrecedeTheTurn(scenario: String) async throws {
+        let notice = "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
+        let answer = text
+        var events = try stream(text).split(separator: 10).map {
+            try #require(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        var item: [String: Any] = ["id": "startup-notice", "type": scenario == "wrongKind" ? "mcp_tool_call" : "error",
+            "message": scenario == "nearMatch" ? notice + " Unexpected failure." : notice]
+        if scenario == "extraField" { item["tool"] = "unexpected" }
+        let event: [String: Any] = ["type": "item.completed", "item": item]
+        let index = scenario == "beforeThread" ? 0 : scenario == "duringTurn" ? 2 : scenario == "afterTurn" ? events.count : 1
+        events.insert(event, at: index)
+        if scenario == "duplicate" { events.insert(event, at: index) }
+        if scenario == "reorderedTurn" { events.swapAt(0, 2) }
+        let output = try events.reduce(into: Data()) { bytes, row in
+            bytes.append(try JSONSerialization.data(withJSONObject: row)); bytes.append(10)
+        }
+        let result = await C.complete(system: system, user: user, schema: schema,
+            deadline: Date().addingTimeInterval(30), allowed: { true }, executor: { call in
+                if let metadataOutput = try metadata(call) { return metadataOutput }
+                try Data(answer.utf8).write(to: #require(call.finalFile))
+                return .init(status: 0, stdout: output)
+            })
+        if case .success(let completion) = result {
+            #expect(scenario == "exact")
+            #expect(completion.text == answer && completion.audit.terminalStatus == "completed")
+        } else {
+            #expect(scenario != "exact", "Only the exact, once-only pre-turn disabled-host notice is nonfatal")
+        }
     }
 
     @Test(arguments: ["denied", "expired", "cancelled"])

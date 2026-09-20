@@ -5,7 +5,16 @@ import CoreFoundation
 nonisolated enum StockSageMicrocapScreen {
     typealias Listing = StockSageHorizonResearch.Listing
     typealias Minute = StockSageMassiveTicks.Minute
-    static let policyVersion = "microcap-1-cap50-300m-float20m-gap10-rvol5-20sessions-float90days"
+    nonisolated enum Profile: String, Codable, Sendable, CaseIterable {
+        case microcap, largecap
+        var policyVersion: String {
+            switch self {
+            case .microcap: "microcap-1-cap50-300m-float20m-gap10-rvol5-20sessions-float90days"
+            case .largecap: "largecap-1-cap10b-nasdaq-sp500-context20sessions"
+            }
+        }
+    }
+    static let policyVersion = Profile.microcap.policyVersion
     static let detailLimit = 24
     static let floatMaximumAge: TimeInterval = 90 * 86_400
     static let maximumDirectoryCount = 50_000
@@ -74,6 +83,7 @@ nonisolated enum StockSageMicrocapScreen {
         var previousRegularCloseDate: String? = nil
         var previousRegularCloseRetrievedAt: Date? = nil
         var latestRegularPrice: Double? = nil
+        var sp500Membership: StockSageSP500Constituents.Membership? = nil
         var id: String { symbol }
     }
     struct Result: Codable, Sendable, Equatable {
@@ -86,17 +96,32 @@ nonisolated enum StockSageMicrocapScreen {
         let unassessedCount: Int
         let rows: [Row]
         let blocker: String?
+        var sp500: StockSageSP500Constituents.Provenance? = nil
+        var profile: Profile? { Profile.allCases.first { $0.policyVersion == policyVersion } }
         func facts(for symbol: String) -> [StockSageAIAssessment.EvidenceFact] {
-            guard let row = rows.first(where: { $0.symbol == symbol && $0.status == .passed }),
-                  let cap = row.marketCap, let float = row.freeFloat, let floatDate = row.floatEffectiveDate,
+            guard let profile, let row = rows.first(where: { $0.symbol == symbol && $0.status == .passed }),
+                  let cap = row.marketCap,
                   let gap = row.openingGap, let rvol = row.relativeVolume, let volume = row.volume,
                   let baseline = row.baselineVolume, let momentum = row.momentum,
                   let volatility = row.annualizedVolatility else { return [] }
             func fact(_ key: String, _ text: String, _ kind: StockSageAIAssessment.FactClass,
                       at: Date?) -> StockSageAIAssessment.EvidenceFact {
                 .init(key: key, text: text, required: true, availability: .available, factClass: kind,
-                      source: "Massive public market data / StockSage deterministic microcap screen", observedAt: at)
+                      source: profile == .microcap ? "Massive public market data / StockSage deterministic microcap screen"
+                        : "Massive public market data / StockSage deterministic large-cap screen", observedAt: at)
             }
+            if profile == .largecap {
+                let membership = row.sp500Membership.map {
+                    "Reported S&P membership: \(StockSageSP500Constituents.sourceLabel), retrieved \($0.provenance.retrievedAt.ISO8601Format()); source \($0.provenance.sourceURL), SHA256 \($0.provenance.sha256). Retrieval is not an official index effective date."
+                } ?? "Eligible Nasdaq listing; no S&P membership is claimed."
+                return [
+                    fact("technical.largecap.size", "Large-cap screen for \(symbol): active US USD common shares on Nasdaq or an eligible exchange with reported S&P membership. Market cap \(cap) USD from ticker-reference date request \(row.marketCapRequestedDate ?? "unknown"), retrieved \(row.referenceRetrievedAt?.ISO8601Format() ?? "unknown"); provider supplies no separate market-cap effective timestamp. \(membership) Free float is not required or collected for this profile.", .fundamental, at: row.referenceRetrievedAt),
+                    fact("technical.largecap.activity", "Completed regular-session minutes through \(cutoff.ISO8601Format()): volume \(volume), mean volume over the same exchange-local window in twenty preceding verified sessions \(baseline), relative volume \(rvol)x. Opening gap from the preceding dated Massive daily open-close regular close \(gap * 100) percent; reference session \(row.previousRegularCloseDate ?? "unknown"), retrieved \(row.previousRegularCloseRetrievedAt?.ISO8601Format() ?? "unknown"). Gap and relative volume are measured context, not threshold filters. Not an official auction-price guarantee; after-hours close was not substituted.", .technical, at: row.observedAt),
+                    fact("technical.largecap.motion", "First regular minute open to latest completed-minute close momentum \(momentum * 100) percent. Annualized historical minute-close volatility proxy \(volatility * 100) percent from the final regular-session minute on twenty preceding dates (nineteen log returns, 252 periods per year), not official daily or auction closes. Momentum and volatility are context, not threshold filters. Last measured minute \(row.observedAt.ISO8601Format()).", .technical, at: row.observedAt),
+                    fact("technical.largecap.policy", "Passed unvalidated large-cap screening rules only: market cap at least ten billion USD, with no upper ceiling, verified listing eligibility and complete dated activity measurements. No microcap float, gap or RVOL threshold applies. This is not a qualified Buy, proof of institutional demand or guaranteed performance. Level 2 depth is unavailable; current halt and LULD-band status are unknown. Quotes, same-day catalyst, scenario and final freshness checks remain required.", .risk, at: cutoff)
+                ]
+            }
+            guard let float = row.freeFloat, let floatDate = row.floatEffectiveDate else { return [] }
             return [
                 fact("technical.microcap.classification", "Microcap screen for \(symbol): active Nasdaq US USD common shares. Market cap \(cap) USD from ticker-reference date request \(row.marketCapRequestedDate ?? "unknown"), retrieved \(row.referenceRetrievedAt?.ISO8601Format() ?? "unknown"); provider supplies no separate market-cap effective timestamp. Free float \(float) shares, effective \(floatDate.ISO8601Format()); maximum permitted float age ninety days. Outstanding shares were not substituted for float.", .fundamental, at: row.referenceRetrievedAt),
                 fact("technical.microcap.activity", "Completed regular-session minutes through \(cutoff.ISO8601Format()): volume \(volume), mean volume over the same exchange-local window in twenty preceding verified sessions \(baseline), relative volume \(rvol)x. Opening gap from the preceding dated Massive daily open-close regular close \(gap * 100) percent; reference session \(row.previousRegularCloseDate ?? "unknown"), retrieved \(row.previousRegularCloseRetrievedAt?.ISO8601Format() ?? "unknown"). Not an official auction-price guarantee; after-hours close was not substituted. Float turnover \(volume / float)x is reported volume divided by float, not unique shares or investor identity.", .technical, at: row.observedAt),
@@ -166,40 +191,53 @@ nonisolated enum StockSageMicrocapScreen {
         guard previous.count == 20 else { throw Failure.unavailable("Twenty comparable trading sessions are unavailable.") }
         return .init(cutoff: cutoff, current: current, previous: Array(previous.reversed()))
     }
-    static func classify(_ listing: Listing, reference: Reference?, float: FloatRecord?, at now: Date) -> Row {
+    static func classify(_ listing: Listing, reference: Reference?, float: FloatRecord?, at now: Date,
+                         profile: Profile = .microcap) -> Row {
         var row = Row(symbol: listing.ticker, name: listing.name, status: .unavailable,
-            note: "Market cap or dated free float is unavailable; missing values are not zero.",
+            note: profile == .microcap ? "Market cap or dated free float is unavailable; missing values are not zero."
+                : "Dated market cap is unavailable; missing values are not zero.",
             observedAt: now.timeIntervalSince1970.isFinite ? now : Date(timeIntervalSince1970: 0),
             marketCap: reference.flatMap { $0.marketCap.isFinite ? $0.marketCap : nil }, marketCapRequestedDate: reference?.requestedDate,
             referenceRetrievedAt: reference.flatMap { $0.retrievedAt.timeIntervalSince1970.isFinite ? $0.retrievedAt : nil },
-            freeFloat: float.flatMap { $0.shares.isFinite ? $0.shares : nil },
-            floatEffectiveDate: float.flatMap { $0.effectiveDate.timeIntervalSince1970.isFinite ? $0.effectiveDate : nil })
-        guard listing.active, listing.market == "stocks", listing.locale == "us",
-              listing.primary_exchange == "XNAS", listing.type == "CS",
-              listing.currency_name?.lowercased() == "usd", !listing.name.isEmpty,
-              StockSageHorizonResearch.validTicker(listing.ticker) else {
-            row.status = .excluded; row.note = "Not a verified active Nasdaq US USD common share."; return row
+            freeFloat: profile == .microcap ? float.flatMap { $0.shares.isFinite ? $0.shares : nil } : nil,
+            floatEffectiveDate: profile == .microcap ? float.flatMap { $0.effectiveDate.timeIntervalSince1970.isFinite ? $0.effectiveDate : nil } : nil,
+            sp500Membership: profile == .largecap ? listing.sp500Membership : nil)
+        let microcapListing = listing.active && listing.market == "stocks" && listing.locale == "us"
+              && listing.primary_exchange == "XNAS" && listing.type == "CS"
+              && listing.currency_name?.lowercased() == "usd" && !listing.name.isEmpty
+              && StockSageHorizonResearch.validTicker(listing.ticker)
+        guard profile == .microcap ? microcapListing : StockSageResearchUniverse.eligibleListing(listing, through: now) else {
+            row.status = .excluded
+            row.note = profile == .microcap ? "Not a verified active Nasdaq US USD common share."
+                : "Not a verified active US USD common share on Nasdaq or an eligible exchange with captured S&P membership."
+            return row
         }
-        guard now.timeIntervalSince1970.isFinite, let float, float.shares.isFinite,
-              float.shares > 0, float.shares.rounded(.towardZero) == float.shares,
-              float.effectiveDate.timeIntervalSince1970.isFinite,
-              (0...floatMaximumAge).contains(now.timeIntervalSince(float.effectiveDate)) else {
-            row.note = "Free float or its effective date is missing, invalid, future-dated or older than the ninety-day policy. Market cap may remain unqueried."; return row
+        if profile == .microcap {
+            guard now.timeIntervalSince1970.isFinite, let float, float.shares.isFinite,
+                  float.shares > 0, float.shares.rounded(.towardZero) == float.shares,
+                  float.effectiveDate.timeIntervalSince1970.isFinite,
+                  (0...floatMaximumAge).contains(now.timeIntervalSince(float.effectiveDate)) else {
+                row.note = "Free float or its effective date is missing, invalid, future-dated or older than the ninety-day policy. Market cap may remain unqueried."; return row
+            }
+            guard float.shares < 20_000_000 else {
+                row.status = .excluded; row.note = "Free float is not below twenty million shares. Market cap was not required for this exclusion and may be unqueried."; return row
+            }
         }
-        guard float.shares < 20_000_000 else {
-            row.status = .excluded; row.note = "Free float is not below twenty million shares. Market cap was not required for this exclusion and may be unqueried."; return row
-        }
-        guard let reference, reference.marketCap.isFinite, reference.marketCap > 0,
+        guard now.timeIntervalSince1970.isFinite, let reference, reference.marketCap.isFinite, reference.marketCap > 0,
               reference.retrievedAt.timeIntervalSince1970.isFinite, reference.retrievedAt <= now,
               reference.requestedDate == day(now), date(reference.requestedDate) != nil,
               day(reference.retrievedAt) == reference.requestedDate else {
             row.note = "A finite positive market cap from today's dated ticker-reference request is unavailable."; return row
         }
-        guard (50_000_000...300_000_000).contains(reference.marketCap) else {
-            row.status = .excluded; row.note = "Market cap is outside the inclusive fifty-to-three-hundred-million USD band."; return row
+        guard profile == .microcap ? (50_000_000...300_000_000).contains(reference.marketCap) : reference.marketCap >= 10_000_000_000 else {
+            row.status = .excluded
+            row.note = profile == .microcap ? "Market cap is outside the inclusive fifty-to-three-hundred-million USD band."
+                : "Market cap is below ten billion USD."
+            return row
         }
         row.status = .unassessed
-        row.note = "Cap and float rules passed; detailed gap and twenty-session RVOL have not been assessed."
+        row.note = profile == .microcap ? "Cap and float rules passed; detailed gap and twenty-session RVOL have not been assessed."
+            : "Large-cap and listing rules passed; detailed activity context has not been measured."
         return row
     }
     static func detailSymbols(rows: [Row], activity: [String: Double]) -> [String] {
@@ -329,17 +367,21 @@ nonisolated enum StockSageMicrocapScreen {
         }
         return (records, next, rows.count)
     }
-    static func parseReference(_ data: Data, listing: Listing, requestedDate: String, retrievedAt: Date) throws -> Reference {
+    static func parseReference(_ data: Data, listing: Listing, requestedDate: String, retrievedAt: Date,
+                               profile: Profile = .microcap) throws -> Reference {
         guard data.count <= 1_000_000, let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK", let row = root["results"] as? [String: Any],
               row["ticker"] as? String == listing.ticker, row["market"] as? String == "stocks",
-              row["locale"] as? String == "us", row["primary_exchange"] as? String == "XNAS",
+              row["locale"] as? String == "us",
+              row["primary_exchange"] as? String == (profile == .microcap ? "XNAS" : listing.primary_exchange),
+              profile == .microcap || StockSageResearchUniverse.eligibleListing(listing, through: retrievedAt),
               row["type"] as? String == "CS", (row["currency_name"] as? String)?.lowercased() == "usd",
               let active = row["active"] as? NSNumber, CFGetTypeID(active) == CFBooleanGetTypeID(), active.boolValue,
               let cap = number(row["market_cap"]), cap > 0,
               retrievedAt.timeIntervalSince1970.isFinite, date(requestedDate) != nil,
               day(retrievedAt) == requestedDate else {
-            throw Failure.unavailable("Dated market cap or matching Nasdaq common-share metadata is unavailable.")
+            throw Failure.unavailable(profile == .microcap ? "Dated market cap or matching Nasdaq common-share metadata is unavailable."
+                : "Dated market cap or matching eligible large-cap common-share metadata is unavailable.")
         }
         return .init(marketCap: cap, requestedDate: requestedDate, retrievedAt: retrievedAt)
     }
@@ -407,9 +449,10 @@ nonisolated enum StockSageMicrocapScreen {
     }
     @MainActor static func select(key: String, allowed: @escaping @MainActor () -> Bool,
         now: Date = Date(), clock: @escaping @MainActor () -> Date = Date.init,
-        transport: StockSageMassive.Transport? = nil) async -> Selection {
+        transport: StockSageMassive.Transport? = nil, profile: Profile = .microcap) async -> Selection {
         let started = now.timeIntervalSince1970.isFinite ? now : Date(timeIntervalSince1970: 0)
         var cutoff = started, directory: [Listing] = [], rows: [Row] = [], activity: [String: Double] = [:], detailed = 0
+        var membership: StockSageSP500Constituents.Snapshot?
         @MainActor func checkAccess() throws {
             try Task.checkCancellation()
             guard allowed(), !key.isEmpty else { throw CancellationError() }
@@ -430,9 +473,10 @@ nonisolated enum StockSageMicrocapScreen {
             let end = clock()
             let validEnd = end.timeIntervalSince1970.isFinite && end >= started
             let issue = blocker ?? (validEnd ? nil : "The capture clock became invalid.")
-            let receipt = Result(policyVersion: policyVersion, startedAt: started, cutoff: cutoff,
+            let receipt = Result(policyVersion: profile.policyVersion, startedAt: started, cutoff: cutoff,
                 finishedAt: validEnd ? end : started, directoryCount: directory.count, detailedCount: detailed,
-                unassessedCount: rows.filter { $0.status == .unassessed }.count, rows: rows, blocker: issue)
+                unassessedCount: rows.filter { $0.status == .unassessed }.count, rows: rows, blocker: issue,
+                sp500: membership?.provenance)
             let passed = Set(issue == nil ? rows.filter { $0.status == .passed }.map(\.symbol) : [])
             return .init(listings: directory.filter { passed.contains($0.ticker) }.sorted {
                 let a = activity[$0.ticker] ?? 0, b = activity[$1.ticker] ?? 0
@@ -448,41 +492,56 @@ nonisolated enum StockSageMicrocapScreen {
                 return (data, response)
             }
             let all = try await StockSageHorizonResearch.fetchUniverse(key: key, allowed: allowed, transport: guarded)
-            directory = all.filter { $0.primary_exchange == "XNAS" }
-            guard !directory.isEmpty else { throw Failure.unavailable("No Nasdaq listings were supplied by the completed directory response.") }
-            guard directory.count <= maximumDirectoryCount else { throw Failure.unavailable("The Nasdaq directory exceeds the supported record bound.") }
+            if profile == .largecap {
+                try checkAccess()
+                membership = try await StockSageSP500Constituents.fetch(allowed: allowed, clock: clock, transport: transport)
+                try checkAccess()
+            }
+            directory = all.filter { $0.primary_exchange == "XNAS" || membership?.symbols.contains($0.ticker) == true }
+                .map { listing in
+                    var value = listing
+                    if profile == .largecap { value.sp500Membership = membership?.membership(for: listing.ticker) }
+                    return value
+                }
+            guard !directory.isEmpty else { throw Failure.unavailable("No listings were supplied for the selected profile by the completed directory response.") }
+            guard directory.count <= maximumDirectoryCount else { throw Failure.unavailable("The selected directory exceeds the supported record bound.") }
             rows = directory.map { .init(symbol: $0.ticker, name: $0.name, status: .unavailable,
                 note: "Reference classification has not completed; eligibility is unknown.", observedAt: started) }
             var floats: [String: FloatRecord] = [:], next: String?, pages: Set<URL> = [], floatCount = 0
-            repeat {
-                guard let request = floatRequest(key: key, next: next), let url = request.url,
-                      pages.insert(url).inserted, pages.count <= 10 else {
-                    throw Failure.unavailable("Float coverage pagination is unsafe, repeated or exceeds ten pages; no partial classification was accepted.")
-                }
-                let page = try parseFloats(await load(request, maximum: 8_000_000))
-                floatCount += page.count
-                guard floatCount <= maximumDirectoryCount else { throw Failure.unavailable("Float directory exceeds fifty thousand records.") }
-                for (symbol, value) in page.records {
-                    guard floats[symbol] == nil else { throw Failure.unavailable("Float coverage repeats a ticker across pages.") }
-                    floats[symbol] = value
-                }
-                next = page.next
-            } while next != nil
+            if profile == .microcap {
+                repeat {
+                    guard let request = floatRequest(key: key, next: next), let url = request.url,
+                          pages.insert(url).inserted, pages.count <= 10 else {
+                        throw Failure.unavailable("Float coverage pagination is unsafe, repeated or exceeds ten pages; no partial classification was accepted.")
+                    }
+                    let page = try parseFloats(await load(request, maximum: 8_000_000))
+                    floatCount += page.count
+                    guard floatCount <= maximumDirectoryCount else { throw Failure.unavailable("Float directory exceeds fifty thousand records.") }
+                    for (symbol, value) in page.records {
+                        guard floats[symbol] == nil else { throw Failure.unavailable("Float coverage repeats a ticker across pages.") }
+                        floats[symbol] = value
+                    }
+                    next = page.next
+                } while next != nil
+            }
 
             let capturedFloats = floats
             @MainActor func classifyAt(_ index: Int) async throws -> (Int, Row) {
                 try checkAccess()
                 let listing = directory[index], checkedAt = clock(), value = capturedFloats[listing.ticker]
-                var row = classify(listing, reference: nil, float: value, at: checkedAt)
+                var row = classify(listing, reference: nil, float: value, at: checkedAt, profile: profile)
                 // Float-first exclusion is explicit; it never invents an out-of-band market cap.
-                guard row.status != .excluded, let value, value.shares > 0, value.shares < 20_000_000,
-                      (0...floatMaximumAge).contains(checkedAt.timeIntervalSince(value.effectiveDate)) else { return (index, row) }
+                guard row.status != .excluded else { return (index, row) }
+                if profile == .microcap {
+                    guard let value, value.shares > 0, value.shares < 20_000_000,
+                          (0...floatMaximumAge).contains(checkedAt.timeIntervalSince(value.effectiveDate)) else { return (index, row) }
+                }
                 do {
                     let requested = day(checkedAt)
                     let data = try await load(referenceRequest(symbol: listing.ticker, date: requested, key: key), maximum: 1_000_000)
                     let retrieved = clock()
-                    let reference = try parseReference(data, listing: listing, requestedDate: requested, retrievedAt: retrieved)
-                    row = classify(listing, reference: reference, float: value, at: retrieved)
+                    let reference = try parseReference(data, listing: listing, requestedDate: requested, retrievedAt: retrieved, profile: profile)
+                    row = classify(listing, reference: reference, float: value, at: retrieved, profile: profile)
                 } catch {
                     if stopsCollection(error) { throw error }
                     row.note = note(error)
@@ -513,23 +572,31 @@ nonisolated enum StockSageMicrocapScreen {
                 rows[index].activity = activity[rows[index].symbol]; rows[index].activityRetrievedAt = activityAt
                 if rows[index].activity == nil {
                     rows[index].status = .unavailable
-                    rows[index].note = "Cap and float passed, but current-session dollar activity is unavailable. Prior-session activity was not substituted."
+                    rows[index].note = profile == .microcap ? "Cap and float passed, but current-session dollar activity is unavailable. Prior-session activity was not substituted."
+                        : "Large-cap and listing rules passed, but current-session dollar activity is unavailable. Prior-session activity was not substituted."
                 }
             }
             let chosen = Set(detailSymbols(rows: rows, activity: activity))
             let indices = rows.indices.filter { chosen.contains(rows[$0].symbol) }
             for index in rows.indices where rows[index].status == .unassessed && !chosen.contains(rows[index].symbol) {
-                rows[index].note = "Cap and float passed; gap/RVOL unassessed because only the twenty-four highest current-session dollar-activity candidates receive detailed collection."
+                rows[index].note = profile == .microcap ? "Cap and float passed; gap/RVOL unassessed because only the twenty-four highest current-session dollar-activity candidates receive detailed collection."
+                    : "Large-cap and listing rules passed; activity context unassessed because only the twenty-four highest current-session dollar-activity candidates receive detailed collection."
             }
             let classifiedRows = rows
             @MainActor func detailedAt(_ index: Int) async throws -> (Int, Row) {
                 var row = classifiedRows[index]
                 do {
                     try checkAccess()
-                    guard let floatDate = row.floatEffectiveDate, let oldest = measuredWindow.previous.first else {
-                        throw Failure.unavailable("Float or comparison-window provenance is unavailable.")
+                    guard let oldest = measuredWindow.previous.first else {
+                        throw Failure.unavailable("Comparison-window provenance is unavailable.")
                     }
-                    let since = min(floatDate, oldest.open)
+                    let since: Date
+                    if profile == .microcap {
+                        guard let floatDate = row.floatEffectiveDate else {
+                            throw Failure.unavailable("Float or comparison-window provenance is unavailable.")
+                        }
+                        since = min(floatDate, oldest.open)
+                    } else { since = oldest.open }
                     let splitData = try await load(StockSageMassiveSplits.request(symbol: row.symbol, since: since, now: cutoff, key: key), maximum: 2_000_000)
                     let splits = try StockSageMassiveSplits.parse(splitData, symbol: row.symbol, since: since, now: cutoff)
                     guard splits.events.isEmpty else {
@@ -551,7 +618,9 @@ nonisolated enum StockSageMicrocapScreen {
                     row.previousRegularCloseDate = value.previousRegularCloseDate
                     row.previousRegularCloseRetrievedAt = value.previousRegularCloseRetrievedAt
                     row.latestRegularPrice = value.latestRegularPrice; row.observedAt = value.observedAt
-                    if value.openingGap >= 0.10 && value.relativeVolume >= 5 {
+                    if profile == .largecap {
+                        row.status = .passed; row.note = "Passed unvalidated large-cap and listing rules with complete measured activity context; no float, gap or RVOL threshold applies. Not a qualified pick; depth unavailable and halt/band status unknown."
+                    } else if value.openingGap >= 0.10 && value.relativeVolume >= 5 {
                         row.status = .passed; row.note = "Passed unvalidated cap, float, opening-gap and time-matched RVOL rules. Not a qualified pick; depth unavailable and halt/band status unknown."
                     } else {
                         row.status = .excluded; row.note = "Opening gap is below ten percent or twenty-session time-matched RVOL is below five times; measured values are retained."

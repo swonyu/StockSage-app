@@ -16,6 +16,7 @@ final class StockSageLiveStream: ObservableObject {
     private var diagnosticsNotificationUptime: TimeInterval?
     private var delivered: [String: Tick] = [:]
     var microcapSymbols: Set<String> = []
+    var largecapSymbols: Set<String> = []
     func latestTrade(for symbol: String) -> Tick? {
         guard let key = Self.stockSymbol(symbol) else { return nil }
         return delivered[key]
@@ -223,7 +224,7 @@ final class StockSageLiveStream: ObservableObject {
                 })
                 if let ingress = current.ingress {
                     let store = StockSageStore.shared
-                    let selected = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols)
+                    let selected = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols).union(self.largecapSymbols)
                     let all = selected.sorted()
                     let selection = StockSageStore.rotatedSweepSlice(all: all, cursor: self.publicationCursor,
                                                                    limit: ingress.limits.publicationSymbols)
@@ -235,7 +236,7 @@ final class StockSageLiveStream: ObservableObject {
                         displayConditions: policy.conditions, displayConditionGeneration: policy.generation)
                     guard !Task.isCancelled, self.connection === current, current.ingress === ingress else { continue }
                     guard ToolPolicy.isExternalAllowed, current.isCurrent else { self.stop(); return }
-                    guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols) else {
+                    guard selected == Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols).union(self.largecapSymbols) else {
                         self.publicationCursor = 0 // A selection changed while the worker was capturing.
                         continue
                     }

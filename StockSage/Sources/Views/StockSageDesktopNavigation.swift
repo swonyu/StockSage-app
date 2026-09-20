@@ -9,7 +9,7 @@ enum StockSageDesktop {
     /// The sidebar's single source of order and grouping; `sections` is derived from it, so a
     /// route can only disappear from the sidebar by disappearing from this list.
     static let groups: [SidebarGroup] = [
-        SidebarGroup(title: "Trading research", sections: [.sameDay, .microcap, .weekResearch, .fortnightResearch]),
+        SidebarGroup(title: "Trading research", sections: [.sameDay, .microcap, .largecap, .weekResearch, .fortnightResearch]),
         SidebarGroup(title: "Your workspace", sections: [.watchlist, .all, .screener, .library]),
     ]
     static let sections: [MarketSection] = groups.flatMap(\.sections)
@@ -39,7 +39,8 @@ enum StockSageDesktop {
         case .chat: "Ask about your data. No automatic orders."
         case .research: "All checks and top picks for 1–7 or 7–14 trading days."
         case .paper: "Recorded simulation. New runs are retired; open positions are not monitored after relaunch."
-        case .microcap: "Fresh same-day setups, Astra assessments and Telegram alerts."
+        case .microcap: "Micro cap momentum, fresh same-day setups and Astra alerts."
+        case .largecap: "Large cap momentum, fresh same-day setups and Astra alerts."
         case .screener: "Filter stocks using dated market cap and company-quality ratios."
         case .sameDay: "One manual pick with a buy entry, stop and target."
         case .weekResearch: "Top 5 for positions held 1–7 trading days."
@@ -57,7 +58,7 @@ enum StockSageDesktop {
         case .heatmap: "square.grid.3x3"
         case .portfolio: "briefcase"
         case .alerts: "bell"
-        case .chat, .research, .paper, .microcap, .screener, .sameDay, .weekResearch, .fortnightResearch, .library: section.icon
+        case .chat, .research, .paper, .microcap, .largecap, .screener, .sameDay, .weekResearch, .fortnightResearch, .library: section.icon
         }
     }
     enum PortfolioPage: String, CaseIterable, Identifiable {
@@ -74,6 +75,7 @@ struct StockSageResearchActivityNavigation: View {
     @ObservedObject private var horizons: StockSageHorizonResearch
     @ObservedObject private var sameDay = StockSageSameDayResearch.shared
     @ObservedObject private var microcap = StockSageSameDayResearch.microcap
+    @ObservedObject private var largecap = StockSageSameDayResearch.largecap
 
     init(destination: MarketSection, horizons: StockSageHorizonResearch = .shared,
          open: @escaping (MarketSection) -> Void) {
@@ -93,7 +95,15 @@ struct StockSageResearchActivityNavigation: View {
                     Text("Micro cap research is running. Switching pages does not stop it.").font(.caption)
                     HStack {
                         Button("Show Micro cap research") { open(.microcap) }
-                        Button("Stop Micro cap watching", systemImage: "stop.fill") { StockSageMicrocapMonitor.shared.stop() }
+                        Button("Stop Micro cap watching", systemImage: "stop.fill") { StockSageMicrocapMonitor.shared.stop(); microcap.stop() }
+                    }
+                }.padding(12)
+            } else if largecap.isRunning, destination != .largecap {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Large cap research is running. Switching pages does not stop it.").font(.caption)
+                    HStack {
+                        Button("Show Large cap research") { open(.largecap) }
+                        Button("Stop Large cap research", systemImage: "stop.fill") { StockSageMicrocapMonitor.largecap.stop(); largecap.stop() }
                     }
                 }.padding(12)
             } else if sameDay.isRunning, destination != .sameDay {

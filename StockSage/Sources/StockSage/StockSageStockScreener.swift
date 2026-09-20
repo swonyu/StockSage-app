@@ -16,6 +16,7 @@ import CoreFoundation
         let marketCap: Double?
         let metrics: [StockSageFundamentals.Metric]
         let note: String
+        var primaryExchange: String? = nil
         var id: String { symbol }
         func value(_ key: String) -> Double? { metrics.first { $0.key == key }?.value }
     }
@@ -23,12 +24,12 @@ import CoreFoundation
     nonisolated struct Match: Sendable { let status: MatchStatus; let reasons: [String] }
     nonisolated struct Filters: Sendable {
         var minimumCap: Double = 50_000_000
-        var maximumCap: Double = 300_000_000
+        var maximumCap: Double? = 300_000_000
         var maximumPE: Double? = nil
         var minimumROA: Double? = nil // Fraction; the UI accepts percentage points.
         var maximumDebtEquity: Double? = nil
         var isValid: Bool {
-            minimumCap.isFinite && maximumCap.isFinite && minimumCap >= 0 && maximumCap >= minimumCap
+            minimumCap.isFinite && minimumCap >= 0 && (maximumCap.map { $0.isFinite && $0 >= minimumCap } ?? true)
                 && (maximumPE.map { $0.isFinite && $0 > 0 } ?? true)
                 && (minimumROA.map(\.isFinite) ?? true)
                 && (maximumDebtEquity.map { $0.isFinite && $0 >= 0 } ?? true)
@@ -38,7 +39,7 @@ import CoreFoundation
             var missing: [String] = [], failed: [String] = []
             if !row.note.isEmpty { missing.append(row.note) }
             if let cap = row.marketCap {
-                if cap < minimumCap || cap > maximumCap { failed.append("Outside market-cap range") }
+                if cap < minimumCap || (maximumCap.map { cap > $0 } ?? false) { failed.append("Outside market-cap range") }
             } else { missing.append("Market cap unavailable") }
             if let ceiling = maximumPE {
                 if let value = row.value("price_to_earnings"), value > 0 {
@@ -217,7 +218,7 @@ import CoreFoundation
             guard StockSageResearchUniverse.eligibleListing(listing, through: now) else { return nil }
             var row = ratios[listing.ticker] ?? Row(symbol: listing.ticker, name: listing.name, date: nil,
                 marketCap: nil, metrics: [], note: "No usable daily ratio row in this capture; not treated as zero.")
-            row.name = listing.name
+            row.name = listing.name; row.primaryExchange = listing.primary_exchange
             return row
         }.sorted { $0.symbol < $1.symbol }
     }

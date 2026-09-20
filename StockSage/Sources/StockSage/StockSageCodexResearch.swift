@@ -49,8 +49,10 @@ import Darwin
     private static let executable = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
     private static let supportedVersion = "0.155.0-alpha.9.2"
     private static let disabledFeatures = ["apps", "plugins", "remote_plugin", "memories", "multi_agent", "multi_agent_v2",
-        "browser_use", "browser_use_external", "browser_use_full_cdp_access", "in_app_browser", "code_mode", "code_mode_host",
+        "browser_use", "browser_use_external", "browser_use_full_cdp_access", "in_app_browser", "code_mode", "code_mode_only", "code_mode_host",
         "shell_tool", "unified_exec", "skill_search", "hooks", "skill_mcp_dependency_install", "chronicle", "tool_suggest", "auth_elicitation", "view_image", "image_generation"]
+    // Pinned CLI emits this nonfatal notice because its code host is deliberately disabled.
+    private static let disabledCodeHostNotice = "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`."
     private static var processes: [UUID: Process] = [:]
     private static var generation = UUID()
     private static var busy = false
@@ -60,13 +62,13 @@ import Darwin
     private enum Rejection: Error { case unavailable, auth, isolation, model, output, overflow, interrupted }
     private static func digest(_ value: Data) -> String { SHA256.hash(data: value).map { String(format: "%02x", $0) }.joined() }
     private static func quoted(_ value: String) -> String {
-        String(decoding: try! JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed), as: UTF8.self)
+        String(decoding: try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes]), as: UTF8.self)
     }
 
     private static func overrides(in directory: URL, disabledMCP: [String]) -> [String] {
         let values = ["model=\(quoted(model))", "model_provider=\"openai\"", "model_reasoning_effort=\"ultra\"",
             "forced_login_method=\"chatgpt\"", "approval_policy=\"never\"", "project_doc_max_bytes=0",
-            "web_search=\"disabled\"", "memories.use_memories=false", "memories.generate_memories=false",
+            "web_search=\"disabled\"", "suppress_unstable_features_warning=true", "memories.use_memories=false", "memories.generate_memories=false",
             "developer_instructions=\"\"", "instructions=\"\"",
             "model_instructions_file=\(quoted(directory.appendingPathComponent("instructions.md").path))",
             "default_permissions=\"research\"",
@@ -108,7 +110,7 @@ import Darwin
               empty("developer_instructions"), empty("instructions"), empty("compact_prompt"),
               absent("experimental_compact_prompt_file"), absent("model_catalog_json"),
               value["approval_policy"] as? String == "never", value["project_doc_max_bytes"] as? Int == 0,
-              value["web_search"] as? String == "disabled", value["default_permissions"] as? String == "research",
+              value["web_search"] as? String == "disabled", flag(value["suppress_unstable_features_warning"], is: true), value["default_permissions"] as? String == "research",
               let features = value["features"] as? [String: Any],
               disabledFeatures.allSatisfy({ flag(features[$0], is: false) }), flag(features["skip_host_skill_discovery"], is: true),
               let memories = value["memories"] as? [String: Any], flag(memories["use_memories"], is: false), flag(memories["generate_memories"], is: false),
@@ -195,22 +197,41 @@ import Darwin
             guard try boundedFile(systemFile, maximum: 32_768) == Data(system.utf8),
                   try boundedFile(schemaFile, maximum: 32_768) == schema else { throw Rejection.isolation }
             let final = directory.appendingPathComponent("final.json")
-            let output = try await execute(["exec", "--ignore-user-config"] + settings + ["--ephemeral", "--skip-git-repo-check",
+            // exec omits owner config, so the disabled MCP names need inert transport definitions.
+            // Never copy owner commands, URLs, headers or credentials into the research invocation.
+            let executionSettings = settings + names.flatMap { ["-c", "mcp_servers.\($0).command=\"/usr/bin/false\""] }
+            let output = try await execute(["exec", "--ignore-user-config"] + executionSettings + ["--ephemeral", "--skip-git-repo-check",
                 "--model", model, "--json", "--output-schema", schemaFile.path, "--output-last-message", final.path, "-"],
                 input: Data(user.utf8), final: final)
             guard output.status == 0 else { throw Rejection.output }
             let events = try rows(output.stdout)
             var completed: [[String: Any]] = [], messages: [String] = [], reported: String?
+            var threadStarted = false, turnStarted = false, turnFinished = false, sawDisabledHostNotice = false
             for event in events {
                 if let value = event["model"] as? String {
                     guard value == model else { throw Rejection.model }; reported = value
                 }
                 switch event["type"] as? String {
-                case "thread.started", "turn.started": break
-                case "turn.completed": completed.append(event)
+                case "thread.started":
+                    guard !threadStarted, !turnStarted, !turnFinished else { throw Rejection.output }
+                    threadStarted = true
+                case "turn.started":
+                    guard threadStarted, !turnStarted, !turnFinished else { throw Rejection.output }
+                    turnStarted = true
+                case "turn.completed":
+                    guard turnStarted, !turnFinished else { throw Rejection.output }
+                    turnFinished = true
+                    completed.append(event)
                 case "item.started", "item.updated", "item.completed":
-                    guard let item = event["item"] as? [String: Any], let kind = item["type"] as? String,
-                          ["agent_message", "reasoning"].contains(kind) else { throw Rejection.output }
+                    guard threadStarted, !turnFinished, let item = event["item"] as? [String: Any],
+                          let kind = item["type"] as? String else { throw Rejection.output }
+                    if kind == "error", event["type"] as? String == "item.completed", !turnStarted, !sawDisabledHostNotice,
+                       Set(item.keys) == ["id", "type", "message"], let id = item["id"] as? String, !id.isEmpty,
+                       item["message"] as? String == disabledCodeHostNotice {
+                        sawDisabledHostNotice = true
+                        continue
+                    }
+                    guard turnStarted, ["agent_message", "reasoning"].contains(kind) else { throw Rejection.output }
                     if kind == "agent_message", event["type"] as? String == "item.completed" {
                         guard let text = item["text"] as? String else { throw Rejection.output }; messages.append(text)
                     }

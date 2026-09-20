@@ -44,6 +44,17 @@ import Testing
         #expect(!S.Filters(minimumROA: .nan).isValid)
     }
 
+    @Test func largeCapRangeIncludesMegaCapsWithoutInventedUpperLimit() throws {
+        let filters = S.Filters(minimumCap: 10_000_000_000, maximumCap: nil)
+        #expect(filters.isValid)
+        #expect(filters.classify(try row("TEST", cap: 9_999_999_999)).status == .excluded)
+        for cap in [10_000_000_000.0, 4_000_000_000_000] {
+            #expect(filters.classify(try row("TEST", cap: cap)).status == .matched)
+        }
+        #expect(!S.Filters(minimumCap: 10_000_000_000, maximumCap: .infinity).isValid)
+        #expect(!S.Filters(minimumCap: -.infinity, maximumCap: nil).isValid)
+    }
+
     @Test func malformedFutureAndStaleMeasurementsNeverBecomeMatches() throws {
         for bad: Any in [true, "100000000", Double.infinity] {
             var value = raw("TEST"); value["market_cap"] = bad

@@ -21,7 +21,7 @@ struct StockSageTelegramSetupView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Connect a bot to your own Telegram account for Micro cap research alerts. This setup does not enable monitoring or place orders.")
+                    Text("Connect a bot to your own Telegram account for Micro cap / Large cap research alerts. This setup does not enable monitoring or place orders.")
                         .fixedSize(horizontal: false, vertical: true)
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {

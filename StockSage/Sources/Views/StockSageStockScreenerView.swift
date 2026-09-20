@@ -19,11 +19,12 @@ struct StockSageStockScreenerView: View {
 
     private var filters: StockSageStockScreener.Filters? {
         func optional(_ text: String) -> Double? { Double(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        guard let low = optional(minimumCap), let high = optional(maximumCap),
+        guard let low = optional(minimumCap),
+              maximumCap.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || optional(maximumCap) != nil,
               maximumPE.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || optional(maximumPE) != nil,
               minimumROA.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || optional(minimumROA) != nil,
               maximumDebt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || optional(maximumDebt) != nil else { return nil }
-        let value = StockSageStockScreener.Filters(minimumCap: low * 1_000_000, maximumCap: high * 1_000_000,
+        let value = StockSageStockScreener.Filters(minimumCap: low * 1_000_000, maximumCap: optional(maximumCap).map { $0 * 1_000_000 },
             maximumPE: optional(maximumPE), minimumROA: optional(minimumROA).map { $0 / 100 },
             maximumDebtEquity: optional(maximumDebt))
         return value.isValid ? value : nil
@@ -76,7 +77,7 @@ struct StockSageStockScreenerView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Stock screener", systemImage: "line.3.horizontal.decrease.circle").font(.largeTitle.bold())
-            Text("Explore company size and reported financial quality. These editable filters are separate from Micro cap’s same-day qualification rules.")
+            Text("Explore company size and reported financial quality. These editable filters are separate from the Micro cap and Large cap same-day qualification rules.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
                 Button(screener.snapshot == nil ? "Load daily ratios" : "Reload daily ratios") { Task { await screener.load() } }
@@ -95,14 +96,21 @@ struct StockSageStockScreenerView: View {
     private var filterControls: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 8) {
+                    Text("Size presets").font(.subheadline.weight(.medium))
+                    Button("Micro cap · $50–300M") { minimumCap = "50"; maximumCap = "300" }
+                        .accessibilityIdentifier("screener.preset.microcap")
+                    Button("Large cap · $10B+") { minimumCap = "10000"; maximumCap = "" }
+                        .accessibilityIdentifier("screener.preset.largecap")
+                }.buttonStyle(.bordered)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 12) {
                     field("Minimum cap · USD millions", text: $minimumCap, id: "screener.minimumCap")
-                    field("Maximum cap · USD millions", text: $maximumCap, id: "screener.maximumCap")
+                    field("Maximum cap · USD millions · optional", text: $maximumCap, id: "screener.maximumCap")
                     field("P/E ceiling · optional", text: $maximumPE, id: "screener.maximumPE")
                     field("ROA minimum · % · optional", text: $minimumROA, id: "screener.minimumROA")
                     field("Debt/equity ceiling · optional", text: $maximumDebt, id: "screener.maximumDebt")
                 }
-                Text("Blank quality filters are disabled. P/E requires positive earnings; ROA is shown as a percentage; debt/equity is a multiple. Missing values never become zero. Ratios more than seven calendar days old cannot match. ROCE and ROIC are available only where supported in Company quality; they are not bulk filters.")
+                Text("A blank maximum cap has no upper ceiling. Size presets keep your quality filters. Blank quality filters are disabled. P/E requires positive earnings; ROA is shown as a percentage; debt/equity is a multiple. Missing values never become zero. Ratios more than seven calendar days old cannot match. ROCE and ROIC are available only where supported in Company quality; they are not bulk filters.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if filters == nil {
                     Label("Enter finite numbers, a nonnegative cap range in ascending order, positive P/E and nonnegative debt/equity.", systemImage: "exclamationmark.triangle")

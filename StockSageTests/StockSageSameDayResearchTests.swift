@@ -14,7 +14,7 @@ import AppKit
 
     @Test func microcapHasOwnMacDestinationWithoutReplacingExistingResearch() {
         let routes = StockSageDesktop.sections.map(\.rawValue)
-        #expect(routes.contains("microcap"))
+        #expect(routes.contains("microcap") && routes.contains("largecap"))
         #expect(Set(routes).count == routes.count)
         #expect(["sameDay", "weekResearch", "fortnightResearch", "watchlist", "all"].allSatisfy(routes.contains))
         #expect(!MarketSection.phoneSections.map(\.rawValue).contains("microcap"))
@@ -221,6 +221,34 @@ import AppKit
         if phase == "check" { #expect(engine.receipt?.checks.first == candidate) }
     }
 
+    @Test(arguments: [S.Mode.microcap, .largecap], [false, true])
+    func completedMomentumCannotPublishAnUnpersistedOpinion(mode: S.Mode, writeFails: Bool) throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let receipts = StockSageResearchReceiptStore(directory: folder, sameDayLabel: mode.rawValue)
+        let id = receipts.beginSameDay(at: now)
+        var initial = S.Receipt(id: id, startedAt: now, selection: "Descriptive momentum fixture", checks: [])
+        initial.mode = mode
+        try #require(receipts.saveSameDay(initial))
+        var accepted = S.Check(symbol: "AAPL", name: "Fixture", at: now, note: "Accepted descriptive opinion")
+        accepted.action = "Hold"; accepted.reason = "Dated momentum only."; accepted.risk = "Evidence is incomplete."
+        accepted.rawModelOutput = "Retained synthetic response"
+        initial.checks = [accepted]
+        if writeFails {
+            let directory = folder.appendingPathComponent("scan-" + id.uuidString)
+            try FileManager.default.removeItem(at: directory)
+            try Data("Fixture blocks the final write".utf8).write(to: directory)
+        }
+        let engine = S(receiptStore: receipts, mode: mode)
+        engine.finishReceipt(initial, at: now, status: accepted.note)
+        #expect(engine.receipt?.checks == [accepted], "The original accepted response must remain available in memory")
+        #expect(engine.receipt?.finishedAt == now && engine.receipt?.selectedSymbol == nil)
+        #expect(receipts.persistenceFailed(scanID: id) == writeFails)
+        #expect((engine.receipt?.blocker != nil) == writeFails, "The watcher requires blocker == nil before delivering an Astra summary")
+        #expect(engine.status.contains("could not be saved") == writeFails)
+        if !writeFails { #expect(StockSageResearchReceiptStore(directory: folder, sameDayLabel: mode.rawValue).latestSameDay == engine.receipt) }
+    }
+
     @Test func preparationFailuresKeepTheirSpecificActionableReason() {
         typealias Server = StockSageLocalModelServer
         for detail in ["Check the private connection and GPU server.", "Correct the served model identity.",
@@ -323,7 +351,7 @@ import AppKit
         #expect(StockSageResearchReceiptStore(directory: folder).sameDayHistory.isEmpty)
     }
 
-    @Test func microcapAstraKeepsOriginalOutputAndScreenExpiryBlocksFinalPick() async throws {
+    @Test(arguments: [S.Mode.microcap, .largecap]) func capAstraKeepsOriginalOutputAndScreenExpiryBlocksFinalPick(mode: S.Mode) async throws {
         let latest = try #require(StockSageMarketHours.latestCompletedDailySession(at: now))
         let dates = (0..<30).map { latest.addingTimeInterval(Double($0 - 29) * 86400) }
         let history = StockSagePriceHistory(symbol: "AAPL", dates: dates, opens: Array(repeating: 100, count: 30), highs: Array(repeating: 104, count: 30), lows: Array(repeating: 99, count: 30), closes: Array(repeating: 100, count: 30), volumes: Array(repeating: 1000, count: 30), priceSource: .massiveDaily)
@@ -334,12 +362,12 @@ import AppKit
         let packet = context.evidencePacket()
         let capture = StockSageHorizonResearch.Capture(history: history, context: context, facts: packet.facts.map(\.text), coverage: [], at: now, blockedByThrottle: false, evidencePacket: packet)
         var row = StockSageMicrocapScreen.Row(symbol: "AAPL", name: "Fixture micro cap", status: .passed, note: "Synthetic classification only", observedAt: now.addingTimeInterval(-180))
-        row.marketCap = 100_000_000; row.marketCapRequestedDate = "2026-09-18"; row.referenceRetrievedAt = now
-        row.freeFloat = 10_000_000; row.floatEffectiveDate = now.addingTimeInterval(-86400)
-        row.openingGap = 0.15; row.relativeVolume = 6; row.volume = 600; row.baselineVolume = 100
+        row.marketCap = mode == .largecap ? 10_000_000_000 : 100_000_000; row.marketCapRequestedDate = "2026-09-18"; row.referenceRetrievedAt = now
+        row.freeFloat = mode == .largecap ? nil : 10_000_000; row.floatEffectiveDate = now.addingTimeInterval(-86400)
+        row.openingGap = mode == .largecap ? -0.02 : 0.15; row.relativeVolume = mode == .largecap ? 0.5 : 6; row.volume = 600; row.baselineVolume = 100
         row.momentum = 0.02; row.annualizedVolatility = 0.5
-        let screen = StockSageMicrocapScreen.Result(policyVersion: StockSageMicrocapScreen.policyVersion, startedAt: now.addingTimeInterval(-200), cutoff: now.addingTimeInterval(-170), finishedAt: now, directoryCount: 1, detailedCount: 1, unassessedCount: 0, rows: [row], blocker: nil)
-        let denied = await S.assessCaptured(capture, item: listing("AAPL"), activity: 1000, intraday: bars(), quote: quote(), config: nil, allowed: { true }, clock: { now }, microcap: screen, admitSetup: { _ in false }, codexAssessment: { _, _, _ in
+        let screen = StockSageMicrocapScreen.Result(policyVersion: mode.screenProfile!.policyVersion, startedAt: now.addingTimeInterval(-200), cutoff: now.addingTimeInterval(-170), finishedAt: now, directoryCount: 1, detailedCount: 1, unassessedCount: 0, rows: [row], blocker: nil)
+        let denied = await S.assessCaptured(capture, item: listing("AAPL"), activity: 1000, intraday: bars(), quote: quote(), config: nil, allowed: { true }, clock: { now }, microcap: screen, admitSetup: { _ in false }, capMode: mode, codexAssessment: { _, _, _ in
             Issue.record("Denied setup must not consume Codex usage")
             return .failure(.init(message: "Unexpected call", audit: nil))
         })
@@ -352,7 +380,7 @@ import AppKit
                 inputs: [], note: "Fixture only; not real company data.")])
         let result = await S.assessCaptured(capture, item: listing("AAPL"), activity: 1000, intraday: bars(), quote: quote(), config: nil, allowed: { true }, clock: { now }, modelTransport: { _ in
             Issue.record("Micro cap must not call Gemma"); throw URLError(.cancelled)
-        }, microcap: screen, fundamentals: fundamentals, codexAssessment: { system, prompt, schema in
+        }, microcap: screen, fundamentals: fundamentals, capMode: mode, codexAssessment: { system, prompt, schema in
             calls += 1
             #expect(system.contains("remainder of today's regular trading session"))
             #expect(system.contains("business-quality evidence") && system.contains("Do not infer insider ownership"))
@@ -367,11 +395,19 @@ import AppKit
         #expect(result.expiresAt == now.addingTimeInterval(10))
         #expect(result.profile == nil && result.codexAudit != nil && result.rawModelOutput != nil)
         #expect(result.fundamentals == fundamentals)
+        #expect(result.packet?.facts.filter { $0.key.hasPrefix("technical." + mode.rawValue + ".") }.count == 4)
+        #expect(result.packet?.facts.contains { $0.key.hasPrefix("technical." + (mode == .largecap ? "microcap" : "largecap") + ".") } == false)
         let savedResult = try JSONDecoder().decode(S.Check.self, from: JSONEncoder().encode(result))
         #expect(savedResult.fundamentals == fundamentals, "Save exact financial inputs with the opinion for later review")
-        let engine = S(mode: .microcap)
+        let mismatch = await S.assessCaptured(capture, item: listing("AAPL"), activity: 1000, intraday: bars(), quote: quote(), config: nil,
+            allowed: { true }, clock: { now }, microcap: screen, capMode: mode == .largecap ? .microcap : .largecap,
+            codexAssessment: { _, _, _ in Issue.record("A mismatched cap profile must never reach Astra"); return .failure(.init(message: "Unexpected", audit: nil)) })
+        #expect(!mismatch.qualified && mismatch.rawModelOutput == nil)
+        let engine = S(mode: mode)
+        var initial = S.Receipt(id: UUID(), startedAt: now, selection: "Fixture", checks: [])
+        initial.mode = mode; initial.microcapScreen = screen
         var clock = now
-        await engine.run(selection: .init([listing("AAPL")]), capacity: { 1 }, allowed: { true }, clock: { clock }, analyze: { _, _, _ in result }, refreshQuote: { _ in
+        await engine.run(selection: .init([listing("AAPL")]), initial: initial, capacity: { 1 }, allowed: { true }, clock: { clock }, analyze: { _, _, _ in result }, refreshQuote: { _ in
             clock = now.addingTimeInterval(11)
             return quote(age: -11)
         })
@@ -380,13 +416,19 @@ import AppKit
     }
 
     #if os(macOS)
-    @Test(arguments: [false, true]) func populatedDatedCardRendersAtPhoneAndMacWidths(microcap: Bool) async throws {
+    @Test(arguments: [S.Mode.sameDay, .microcap, .largecap]) func populatedDatedCardRendersAtPhoneAndMacWidths(mode: S.Mode) async throws {
         let suite = "stocksage.same-day-render." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
-        let engine = S(mode: microcap ? .microcap : .sameDay), candidate = try check("AAPL")
-        await engine.run(selection: .init([listing("AAPL")]), capacity: { 1 }, allowed: { true }, clock: { now },
+        let engine = S(mode: mode), candidate = try check("AAPL")
+        var initial = S.Receipt(id: UUID(), startedAt: now, selection: "Synthetic render fixture", checks: [])
+        initial.mode = mode
+        if let profile = mode.screenProfile {
+            initial.microcapScreen = .init(policyVersion: profile.policyVersion, startedAt: now, cutoff: now,
+                finishedAt: now, directoryCount: 1, detailedCount: 1, unassessedCount: 0, rows: [], blocker: nil)
+        }
+        await engine.run(selection: .init([listing("AAPL")]), initial: initial, capacity: { 1 }, allowed: { true }, clock: { now },
             analyze: { _, _, _ in candidate }, refreshQuote: { _ in quote() })
         #expect(engine.receipt?.selectedSymbol == "AAPL")
         #expect(!S.current(try #require(engine.receipt), at: now.addingTimeInterval(86400)))
@@ -414,7 +456,7 @@ import AppKit
                 host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
             }
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
-            let path = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-\(microcap ? "microcap" : "same-day")-card-\(Int(width)).png")
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-\(mode.rawValue)-card-\(Int(width)).png")
             try png.write(to: path, options: .atomic)
             print("SAME_DAY_RENDER \(path.path)")
         }

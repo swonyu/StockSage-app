@@ -120,7 +120,7 @@ final class StockSageResearchReceiptStore {
     private let files: FileManager
     private let maxCompletedBytes: Int
     private let sameDayLabel: String
-    private var manifestByteLimit: Int { sameDayLabel == "microcap" ? 16_000_000 : Self.maxManifestBytes }
+    private var manifestByteLimit: Int { ["microcap", "largecap"].contains(sameDayLabel) ? 16_000_000 : Self.maxManifestBytes }
     private(set) var lastError: String?
     private var scans: [UUID: Scan] = [:]
     private var active: Set<UUID> = []
@@ -128,7 +128,7 @@ final class StockSageResearchReceiptStore {
 
     init(directory: URL, fileManager: FileManager = .default, maxCompletedBytes: Int = 512_000_000, sameDayLabel: String = "same-day") {
         self.directory = directory
-        self.sameDayLabel = sameDayLabel == "microcap" ? "microcap" : "same-day"
+        self.sameDayLabel = ["microcap", "largecap"].contains(sameDayLabel) ? sameDayLabel : "same-day"
         files = fileManager
         self.maxCompletedBytes = max(0, maxCompletedBytes)
         load()
@@ -286,7 +286,8 @@ final class StockSageResearchReceiptStore {
                   result.checks.count <= 24,
                   Set(result.checks.map(\.symbol)).count == result.checks.count else {
                 return .init(id: scan.id, startedAt: scan.startedAt, finishedAt: scan.endedAt,
-                    selection: "No verified shortlist payload was saved.", checks: [], blocker: scan.status)
+                    selection: "No verified shortlist payload was saved.", checks: [], blocker: scan.status,
+                    mode: .init(rawValue: sameDayLabel))
             }
             if result.finishedAt == nil || scan.persistence != "saved" {
                 result.selectedSymbol = nil
@@ -442,7 +443,7 @@ final class StockSageResearchReceiptStore {
         guard let dirs = try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey]) else { return }
         let sorted = dirs.compactMap { dir -> (URL, UUID, Date, Int)? in
             guard let id = scanID(from: dir), !active.contains(id), let scan = scans[id],
-                  scan.horizon != "same-day", scan.horizon != "microcap", scan.endedAt != nil else { return nil }
+                  scan.horizon != "same-day", scan.horizon != "microcap", scan.horizon != "largecap", scan.endedAt != nil else { return nil }
             return (dir, id, scan.endedAt ?? scan.startedAt, storedBytes(in: dir))
         }.sorted { $0.2 == $1.2 ? $0.1.uuidString > $1.1.uuidString : $0.2 > $1.2 }
         var retainedBytes = 0
