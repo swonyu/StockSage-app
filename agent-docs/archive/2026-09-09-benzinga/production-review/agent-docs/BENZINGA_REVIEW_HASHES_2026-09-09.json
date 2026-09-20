@@ -1,0 +1,50 @@
+{
+  "initial": {
+    "captured_utc": "2026-09-09T01:34:26.475278+00:00",
+    "parent": "/Users/saleh/StockSage-wt/qwen-context",
+    "baseline": "50c96cc",
+    "snapshot": "/var/folders/b1/tvm3jn711kq48mcrc1skxdn80000gn/T/stocksage-benzinga-review-0909-94oo8vkg",
+    "files": {
+      "docs/superpowers/specs/2026-09-09-benzinga-evidence-design.md": "136ddab0a9ac10b5429612e1017187022e56b3b1e1a60d0dbd90be414ff94d5b",
+      "docs/superpowers/plans/2026-09-09-benzinga-key.md": "ee4cdcaad0348ebfeb7c8571c1ba066811e87590d8aef5de9727b188d527ac62",
+      "StockSage.xcodeproj/project.pbxproj": "3074e6c8f5504a46972acbf2a2086e32e60f8d025e283d7bac2e88190d075755",
+      "StockSage/StockSageX.entitlements": "344d96bbcaae0e508478d4bea4bf22bed2aed9d98700d1a5002653a4a16ad53c",
+      "StockSage/Sources/App/ToolPolicy.swift": "a994c8a06de59d8792068b80b4a0c21cc964ee603903fb73249cf1bf213ca2c5",
+      "StockSage/Sources/App/StockSageSettings.swift": "c78f0e739f54569aaa4aa6eb4b1cde3512e2bc463c090295f37e09e8e35f9c33",
+      "StockSage/Sources/Views/IOSSettingsSheet.swift": "57370ea3bb8f7b737f8ba85e242b210e93588e1e99785b30a67cb15096eecc50",
+      "StockSage/Sources/Views/StockSageBenzingaKeyField.swift": "81b9dbea920ac87bfd570d1c8091030e1c3025f58b7f6952db2560f16ed6ae35",
+      "StockSageTests/StockSageBenzingaTests.swift": "1c755f449b3657ec03d703dd692b8b4e77716c990511d3de887fa2eb87a6e517",
+      "StockSage/Sources/StockSage/StockSageBenzinga.swift": "bdafbb4e0f264ebbc7ba967299b6d936a884e0e1366759a7f41ffa4e2b7e7c3f",
+      "StockSage/Sources/StockSage/StockSageNewsService.swift": "958308ecb000e27626bdef4e4314c909bc680db1e6952a099bc2fc802eb01d69",
+      "StockSage/Sources/StockSage/StockSageAIAssessment.swift": "1cf93cafd422fc1ce3638c2deefcd7feed8e163b43505f53c53aee64d202f0a0",
+      "StockSage/Sources/StockSage/StockSageChat.swift": "96b4b9c74e0920138cff26e4f595514a393e857bd211f337016b7e751463bfef",
+      "StockSage/Sources/StockSage/StockSagePaperAutomation.swift": "6187df83a996d8e32aa2b355c9c6257cdd24872d907e2ff5fe4cb5c968cc6e7f",
+      "StockSage/Sources/StockSage/StockSageMassiveEvents.swift": "040171073736a58d0cab0982912b5112d41d6ecd5a85e26744045595cfd24798"
+    }
+  },
+  "recheck_1": {
+    "captured_utc": "2026-09-09T01:37:06.349311+00:00",
+    "changes": {
+      "StockSage.xcodeproj/project.pbxproj": {
+        "original": "3074e6c8f5504a46972acbf2a2086e32e60f8d025e283d7bac2e88190d075755",
+        "recheck": "b6fee1365fc08b6b1f74e0ee7370535b3e608dc51d0b0a99f0329a59e2aeacc5"
+      },
+      "StockSage/Sources/Views/StockSageBenzingaKeyField.swift": {
+        "original": "81b9dbea920ac87bfd570d1c8091030e1c3025f58b7f6952db2560f16ed6ae35",
+        "recheck": "479c514e2f05dd6bef4f799591bad672cd99dcd8472513afe2dd601f872e36f6"
+      },
+      "StockSageTests/StockSageBenzingaTests.swift": {
+        "original": "1c755f449b3657ec03d703dd692b8b4e77716c990511d3de887fa2eb87a6e517",
+        "recheck": "c32781066a31f92e7f0581c05f860acd84b656d59b584b11414324064a5ba3e9"
+      },
+      "StockSage/Sources/StockSage/StockSageBenzinga.swift": {
+        "original": "bdafbb4e0f264ebbc7ba967299b6d936a884e0e1366759a7f41ffa4e2b7e7c3f",
+        "recheck": "336115cec2f66623616134f2537b1bc067f35e12731a633886316228461e2eca"
+      },
+      "StockSage/StockSageMac.entitlements": {
+        "original": null,
+        "recheck": "c4b816fe875e7bd4045bb6812f0d7974a0cc776f0c197ebc13a0a9fb30433e92"
+      }
+    }
+  }
+}

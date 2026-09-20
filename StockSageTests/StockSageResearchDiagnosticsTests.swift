@@ -38,7 +38,7 @@ struct StockSageResearchDiagnosticsTests {
         #expect(entries.allSatisfy { $0.outcome == nil })
     }
 
-    @Test func retentionPrunesCompletedContextsButKeepsActiveOnes() async throws {
+    @Test func retentionArchivesCompletedContextsButKeepsActiveOnes() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = Store(directory: dir, maximumContexts: 2)
@@ -50,7 +50,8 @@ struct StockSageResearchDiagnosticsTests {
         #expect(await store.finish(b, outcome: .init(state: .rejected, note: "No usable response.")))
         #expect(await store.begin(c))
         #expect(!(await store.entries(for: a.id)).isEmpty)
-        #expect((await store.entries(for: b.id)).isEmpty)
+        #expect((await store.entries(for: b.id)).last?.outcome?.state == .rejected)
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(b.id.uuidString + ".jsonl").path))
         #expect(!(await store.entries(for: c.id)).isEmpty)
     }
 
@@ -85,6 +86,7 @@ struct StockSageResearchDiagnosticsTests {
 
     private func byteCount(_ directory: URL) throws -> Int {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
+            .filter { $0.pathExtension == "jsonl" }
             .reduce(0) { try $0 + ($1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) }
     }
 
@@ -118,7 +120,7 @@ struct StockSageResearchDiagnosticsTests {
         #expect((await store.entries(for: b.id)).isEmpty)
         #expect(await store.finish(a, outcome: .init(state: .accepted, note: "Validated.")))
         #expect(await store.begin(b))
-        #expect((await store.entries(for: a.id)).isEmpty)
+        #expect((await store.entries(for: a.id)).last?.outcome?.state == .accepted)
     }
 
     @Test func oversizedAttemptFailsStickyWithoutGrowingAnActiveFile() async throws {
@@ -163,6 +165,133 @@ struct StockSageResearchDiagnosticsTests {
         #expect(entries.map(\.kind) == [.started, .attempt, .outcome])
         #expect(entries.dropFirst().first?.attempt == attempt)
         #expect(entries.last?.outcome?.state == .rejected)
+    }
+
+    @Test func inactiveRejectedRawReplySurvivesHotIndexEvictionAndReload() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Store(directory: dir, maximumContexts: 1)
+        let rejected = Store.Context(symbol: "AAPL", horizon: 7, purpose: .assessment)
+        let raw = Data((0..<65_536).map { UInt8($0 % 256) })
+        let attempt = event(body: raw)
+        #expect(await store.begin(rejected))
+        #expect(await store.record(attempt, context: rejected))
+        #expect(await store.finish(rejected, outcome: .init(state: .rejected, note: "Unsupported model claim.")))
+        let original = await store.entries(for: rejected.id)
+        #expect(original.map(\.kind) == [.started, .attempt, .outcome])
+        let originalBytes = try Data(contentsOf: dir.appendingPathComponent(rejected.id.uuidString + ".jsonl"))
+
+        let next = Store.Context(symbol: "META", horizon: 14, purpose: .assessment)
+        #expect(await store.begin(next))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(rejected.id.uuidString + ".jsonl").path))
+        let restored = Store(directory: dir, maximumContexts: 1)
+        let retained = await restored.entries(for: rejected.id)
+        #expect(retained == original)
+        #expect(retained.dropFirst().first?.attempt?.responseBody == raw)
+        #expect(retained.last?.outcome?.state == .rejected)
+        #expect(retained.last?.complete == true)
+        #expect((await restored.entries(for: next.id)).map(\.kind) == [.started])
+        let archive = dir.appendingPathComponent("Archive", isDirectory: true)
+        let archivedFile = archive.appendingPathComponent(rejected.id.uuidString + ".jsonl")
+        #expect(try Data(contentsOf: archivedFile) == originalBytes)
+        let archiveMode = try FileManager.default.attributesOfItem(atPath: archive.path)[.posixPermissions] as? NSNumber
+        let fileMode = try FileManager.default.attributesOfItem(atPath: archivedFile.path)[.posixPermissions] as? NSNumber
+        #expect(archiveMode?.intValue == 0o700)
+        #expect(fileMode?.intValue == 0o600)
+        #expect(!(await restored.begin(rejected)))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(rejected.id.uuidString + ".jsonl").path))
+    }
+
+    @Test func byteCapArchivesInterruptedTornBytesWithoutInventingOutcome() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let interrupted = Store.Context(symbol: "AAPL", horizon: 7, purpose: .assessment)
+        #expect(await Store(directory: dir).begin(interrupted))
+        let hot = dir.appendingPathComponent(interrupted.id.uuidString + ".jsonl")
+        let handle = try FileHandle(forWritingTo: hot)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"partial\":\"response".utf8))
+        try handle.close()
+        let original = try Data(contentsOf: hot)
+        let restored = Store(directory: dir, maximumBytes: original.count + 1)
+        let next = Store.Context(symbol: "META", horizon: 14, purpose: .assessment)
+        #expect(await restored.begin(next))
+        #expect(try byteCount(dir) <= original.count + 1)
+        #expect(!FileManager.default.fileExists(atPath: hot.path))
+        let archived = dir.appendingPathComponent("Archive").appendingPathComponent(hot.lastPathComponent)
+        #expect(try Data(contentsOf: archived) == original)
+        let entries = await Store(directory: dir).entries(for: interrupted.id)
+        #expect(entries.map(\.kind) == [.started])
+        #expect(entries.allSatisfy { $0.outcome == nil })
+    }
+
+    @Test(arguments: ["identical", "conflicting", "corrupt", "oversized", "symlink"])
+    func archiveCollisionNeverReplacesExistingEvidence(kind: String) async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Store(directory: dir, maximumContexts: 1, maximumContextBytes: 4_096)
+        let previous = Store.Context(symbol: "AAPL", horizon: 7, purpose: .assessment)
+        #expect(await store.begin(previous))
+        #expect(await store.finish(previous, outcome: .init(state: .rejected, note: "Original rejection.")))
+        let hot = dir.appendingPathComponent(previous.id.uuidString + ".jsonl")
+        let original = try Data(contentsOf: hot)
+        let archive = dir.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: false)
+        let target = archive.appendingPathComponent(hot.lastPathComponent)
+        let archivedBytes: Data
+        switch kind {
+        case "conflicting":
+            archivedBytes = Data(String(decoding: original, as: UTF8.self)
+                .replacingOccurrences(of: "Original rejection.", with: "Conflicting result.").utf8)
+            #expect(archivedBytes != original)
+        case "corrupt": archivedBytes = Data("not JSON\n".utf8)
+        case "oversized": archivedBytes = Data(repeating: 10, count: 4_097)
+        default: archivedBytes = original
+        }
+        if kind == "symlink" {
+            try FileManager.default.createSymbolicLink(at: target, withDestinationURL: hot)
+        } else { try archivedBytes.write(to: target) }
+        let next = Store.Context(symbol: "META", horizon: 14, purpose: .assessment)
+        #expect(await store.begin(next) == (kind == "identical"))
+        #expect(try Data(contentsOf: target) == archivedBytes)
+        if kind == "identical" {
+            #expect(!FileManager.default.fileExists(atPath: hot.path))
+            #expect((await Store(directory: dir).entries(for: previous.id)).last?.outcome?.state == .rejected)
+        } else {
+            #expect(try Data(contentsOf: hot) == original)
+            #expect((await store.entries(for: next.id)).isEmpty)
+        }
+    }
+
+    @Test func archiveLookupIsReadOnlyAndNeverMasksCorruptHotEvidence() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let originalStore = Store(directory: dir)
+        let context = Store.Context(symbol: "AAPL", horizon: 7, purpose: .assessment)
+        #expect(await originalStore.begin(context))
+        #expect(await originalStore.finish(context, outcome: .init(state: .rejected, note: "Rejected.")))
+        let originalEntries = await originalStore.entries(for: context.id)
+        let hot = dir.appendingPathComponent(context.id.uuidString + ".jsonl")
+        let archive = dir.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: false)
+        let cold = archive.appendingPathComponent(hot.lastPathComponent)
+        try FileManager.default.copyItem(at: hot, to: cold)
+        let originalBytes = try Data(contentsOf: cold)
+        try Data("corrupt hot evidence\n".utf8).write(to: hot)
+        let reader = Store(directory: dir)
+        #expect((await reader.entries(for: context.id)).isEmpty)
+        #expect(try Data(contentsOf: cold) == originalBytes)
+        try FileManager.default.removeItem(at: hot)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: archive.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: cold.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: archive.path) }
+        #expect(await reader.entries(for: context.id) == originalEntries)
+        #expect((await reader.entries(for: UUID())).isEmpty)
+        let directoryMode = try FileManager.default.attributesOfItem(atPath: archive.path)[.posixPermissions] as? NSNumber
+        let fileMode = try FileManager.default.attributesOfItem(atPath: cold.path)[.posixPermissions] as? NSNumber
+        #expect(directoryMode?.intValue == 0o500)
+        #expect(fileMode?.intValue == 0o400)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: archive.path) == [cold.lastPathComponent])
     }
 
     @Test func tornTailKeepsOnlyKnownLinesAndMalformedCompleteLineFailsClosed() async throws {
@@ -237,6 +366,22 @@ struct StockSageResearchDiagnosticsTests {
         try FileManager.default.createSymbolicLink(at: linkedFiles.appendingPathComponent(context.id.uuidString + ".jsonl"),
                                                   withDestinationURL: unknown.appendingPathComponent("notes.txt"))
         #expect(!(await Store(directory: linkedFiles).begin(.init(symbol: "META", horizon: 14, purpose: .assessment))))
+
+        let hotDirectory = root.appendingPathComponent("hot")
+        let writer = Store(directory: hotDirectory, maximumContexts: 1)
+        #expect(await writer.begin(context))
+        #expect(await writer.finish(context, outcome: .init(state: .rejected, note: "Preserve me.")))
+        let hot = hotDirectory.appendingPathComponent(context.id.uuidString + ".jsonl")
+        let original = try Data(contentsOf: hot)
+        let archive = hotDirectory.appendingPathComponent("Archive")
+        try FileManager.default.createSymbolicLink(at: archive, withDestinationURL: destination)
+        #expect(!(await writer.begin(.init(symbol: "META", horizon: 14, purpose: .assessment))))
+        #expect(try Data(contentsOf: hot) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
+        try FileManager.default.removeItem(at: archive)
+        try Data("not a directory".utf8).write(to: archive)
+        #expect(!(await writer.begin(.init(symbol: "ADI", horizon: 14, purpose: .assessment))))
+        #expect(try Data(contentsOf: hot) == original)
     }
 
     @Test func privatePermissionsAndNilTestMode() async throws {

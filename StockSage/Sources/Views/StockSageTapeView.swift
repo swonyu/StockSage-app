@@ -5,13 +5,16 @@ struct StockSageTapeView: View {
     let symbol: String
     @Environment(\.dismiss) private var dismiss
     @AppStorage("stocksage.ticks.nasdaqOnly") private var nasdaqOnly = false
+    @AppStorage("stocksage.massive.credentialRevision") private var credentialRevision = ""
+    @AppStorage("set_policyRevision") private var policyRevision = ""
     @State private var tape: StockSageMassiveTicks.Tape?
     @State private var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
     @State private var exchangeNotice: String?
+    private let access: StockSageMassive.Access
     private let loadExchanges: @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange]
     private let loadTape: @MainActor (String, Date, Date) async -> StockSageMassiveTicks.Tape
 
-    init(symbol: String,
+    init(symbol: String, access: StockSageMassive.Access = .init(),
          loadExchanges: @escaping @MainActor () async throws -> [Int64: StockSageMassiveTicks.Exchange] = {
              try await StockSageMassiveTicks.exchanges()
          },
@@ -19,6 +22,7 @@ struct StockSageTapeView: View {
              await StockSageMassiveTicks.fetch(symbol: $0, from: $1, to: $2)
          }) {
         self.symbol = symbol
+        self.access = access
         self.loadExchanges = loadExchanges
         self.loadTape = loadTape
     }
@@ -56,6 +60,12 @@ struct StockSageTapeView: View {
                                     .monospacedDigit()
                                 Text("\(trade.timestamp.formatted(date: .abbreviated, time: .standard)) · \(venue(trade.exchange))")
                                     .font(.caption).foregroundStyle(.secondary)
+                                Text("Conditions: \(trade.conditions.map { $0.map(String.init).joined(separator: ", ") } ?? "unavailable") · raw reported trade; not a qualified current price")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                if let participant = trade.participantTime {
+                                    Text("Exchange time: \(participant.formatted(date: .abbreviated, time: .standard))")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
                                 if let sequence = trade.sequence { Text("Sequence \(String(sequence))").font(.caption2).foregroundStyle(.secondary) }
                             }
                             .accessibilityElement(children: .combine)
@@ -86,22 +96,33 @@ struct StockSageTapeView: View {
             }
             .navigationTitle("Tape · \(symbol)")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task(id: symbol) {
+            .task(id: symbol + "|" + credentialRevision + "|" + policyRevision) {
                 tape = nil
                 exchanges = [:]
                 exchangeNotice = nil
+                let captured = access.capture()
+                @MainActor func acceptsResult() -> Bool {
+                    guard !Task.isCancelled else { return false }
+                    guard captured.isCurrent() else {
+                        tape = .init(notices: [StockSageMassiveTicks.Failure.unavailable.localizedDescription])
+                        exchanges = [:]
+                        return false
+                    }
+                    return true
+                }
+                guard acceptsResult() else { return }
                 let to = Date()
                 do {
                     let reference = try await loadExchanges()
-                    guard !Task.isCancelled else { return }
+                    guard acceptsResult() else { return }
                     exchanges = reference
                 } catch {
-                    guard !Task.isCancelled else { return }
+                    guard acceptsResult() else { return }
                     exchangeNotice = "Exchange reference unavailable; unknown venue IDs are not treated as Nasdaq."
                 }
-                guard !Task.isCancelled else { return }
+                guard acceptsResult() else { return }
                 let result = await loadTape(symbol, to.addingTimeInterval(-7 * 86_400), to)
-                guard !Task.isCancelled else { return }
+                guard acceptsResult() else { return }
                 tape = result
             }
         }

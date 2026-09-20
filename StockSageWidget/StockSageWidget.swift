@@ -74,55 +74,79 @@ struct StockSageWidgetView: View {
     }
 
     @ViewBuilder private func content(_ s: StockSageWidgetSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: family == .systemSmall ? 4 : 6) {
-            header(s)
-            if let sym = s.bestSymbol {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(sym).font(.title3.weight(.bold)).minimumScaleFactor(0.7).lineLimit(1)
-                    HStack(spacing: 4) {
-                        if let a = s.bestAction {
-                            Text(a).font(.caption2.weight(.semibold)).foregroundStyle(.tint)
-                        }
-                        if let st = s.bestStrength {
-                            // Ordinal, matching the board — never a percentage the engine cannot
-                            // support.
-                            Text("\(st)/5").font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } else {
-                Text("No idea clears the bar").font(.caption).foregroundStyle(.secondary)
-            }
-
-            if family != .systemSmall { heat(s) }
-
-            Spacer(minLength: 0)
-            footer(s)
+        ViewThatFits(in: .vertical) {
+            content(s, showIdea: true, showPaperDetails: true)
+                .fixedSize(horizontal: false, vertical: true)
+            content(s, showIdea: true, showPaperDetails: false)
+                .fixedSize(horizontal: false, vertical: true)
+            content(s, showIdea: false, showPaperDetails: false)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(family == .systemSmall ? 2 : 4)
-        // Stale data is dimmed as well as labelled — a glance that skips the text still reads
-        // "this is not live".
-        .opacity(s.isStale(now: entry.date) ? 0.55 : 1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Open StockSage for the full saved snapshot.")
+    }
+
+    @ViewBuilder private func content(_ s: StockSageWidgetSnapshot, showIdea: Bool,
+                                      showPaperDetails: Bool) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 4 : 6) {
+            if showIdea {
+                header(s)
+                if let sym = s.bestSymbol {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(sym).font(.title3.weight(.bold)).minimumScaleFactor(0.7).lineLimit(1)
+                        HStack(spacing: 4) {
+                            if let a = s.bestAction {
+                                Text(a).font(.caption2.weight(.semibold)).foregroundStyle(.tint)
+                                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let st = s.bestStrength {
+                                // Ordinal, matching the board — never a percentage the engine cannot
+                                // support.
+                                Text("\(st)/5").font(.caption2).foregroundStyle(.secondary)
+                                    .fixedSize()
+                            }
+                        }
+                    }
+                } else {
+                    Text("No idea clears the bar").font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                // At the largest text sizes, provenance and age take priority over the idea.
+                // There is no action here that could be mistaken for a live recommendation.
+                sourceLabel(s)
+            }
+
+            if showPaperDetails && family != .systemSmall { heat(s) }
+            footer(s, showPaperDetails: showPaperDetails)
+        }
     }
 
     @ViewBuilder private func header(_ s: StockSageWidgetSnapshot) -> some View {
-        HStack(spacing: 4) {
-            Text("Best opportunity").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Text(s.sourceText).font(.system(size: 8, weight: .bold))
-                .foregroundStyle(s.isSampleData || s.isCachedData == true ? .orange : .secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) { headerLabels(s) }
+                .fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: 1) { headerLabels(s) }
         }
+    }
+
+    @ViewBuilder private func headerLabels(_ s: StockSageWidgetSnapshot) -> some View {
+        Text("Rules idea").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+        sourceLabel(s)
+    }
+
+    @ViewBuilder private func sourceLabel(_ s: StockSageWidgetSnapshot) -> some View {
+        Text(s.sourceText).font(.caption2.weight(.bold))
+            .foregroundStyle(s.isSampleData || s.isCachedData == true ? .orange : .secondary)
     }
 
     @ViewBuilder private func heat(_ s: StockSageWidgetSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                // Heat only prints when an account size made it computable — see the snapshot's
-                // own note on why a 0 here would be a false reassurance.
-                if let heat = s.portfolioHeatPct {
-                    Text("Paper heat \(String(format: "%.1f", heat))% of \(String(format: "%.0f", s.heatCapPct))%")
-                        .font(.caption2).foregroundStyle(s.isAtHeatCap ? .red : .secondary)
-                }
-                Text(s.paperPositionsText).font(.caption2).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) { heatLabels(s) }
+                    .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 1) { heatLabels(s) }
             }
             if let f = s.heatFractionOfCap {
                 GeometryReader { geo in
@@ -137,16 +161,31 @@ struct StockSageWidgetView: View {
         }
     }
 
-    @ViewBuilder private func footer(_ s: StockSageWidgetSnapshot) -> some View {
+    @ViewBuilder private func heatLabels(_ s: StockSageWidgetSnapshot) -> some View {
+        // Heat only prints when an account size made it computable — see the snapshot's
+        // own note on why a 0 here would be a false reassurance.
+        if let heat = s.portfolioHeatPct {
+            Text("Paper heat \(String(format: "%.1f", heat))% of \(String(format: "%.0f", s.heatCapPct))%")
+                .font(.caption2).foregroundStyle(s.isAtHeatCap ? .red : .secondary)
+        }
+        Text(s.paperPositionsText).font(.caption2).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private func footer(_ s: StockSageWidgetSnapshot, showPaperDetails: Bool) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            if let progress = s.forwardProgressText {
+            if showPaperDetails, let progress = s.forwardProgressText {
                 Text(progress)
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             // Aged against the ENTRY's date, not Date(): see getTimeline. A rendered bitmap is
             // not re-evaluated, so Date() froze this text at render time.
-            Text(s.ageText(now: entry.date)).font(.system(size: 9))
+            // The stale classification stays readable and is spoken without relying on color.
+            Text(s.isStale(now: entry.date)
+                 ? "Stale scan · \(s.ageText(now: entry.date))"
+                 : "Scan \(s.ageText(now: entry.date))")
+                .font(.caption2)
                 .foregroundStyle(s.isStale(now: entry.date) ? .orange : .secondary)
+                .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -169,3 +208,40 @@ struct StockSageWidget: Widget {
 struct StockSageWidgetBundle: WidgetBundle {
     var body: some Widget { StockSageWidget() }
 }
+
+#if DEBUG
+private let widgetPreviewDate = Date(timeIntervalSince1970: 1_700_000_000)
+private let widgetPreviewSnapshot = StockSageWidgetSnapshot(
+    asOf: widgetPreviewDate.addingTimeInterval(-7 * 3600),
+    bestSymbol: "SYNWGT", bestAction: "Rules: Strong Buy", bestStrength: 4,
+    openPositions: 2, portfolioHeatPct: 4, heatCapPct: 8,
+    forwardCloses: 1, forwardNeeded: 4, isSampleData: true, isCachedData: false)
+private let widgetFuturePreviewSnapshot = StockSageWidgetSnapshot(
+    asOf: widgetPreviewDate.addingTimeInterval(3_600),
+    bestSymbol: "SYNTHETIC-LONG", bestAction: "Rules: Wait for a complete qualifying setup", bestStrength: 4,
+    openPositions: nil, portfolioHeatPct: nil, heatCapPct: 8,
+    forwardCloses: nil, forwardNeeded: 4, isSampleData: false, isCachedData: nil)
+private let widgetCachedPreviewSnapshot = StockSageWidgetSnapshot(
+    asOf: widgetPreviewDate.addingTimeInterval(-300),
+    bestSymbol: nil, bestAction: nil, bestStrength: nil,
+    openPositions: nil, portfolioHeatPct: nil, heatCapPct: 8,
+    forwardCloses: nil, forwardNeeded: 4, isSampleData: false, isCachedData: true)
+
+#Preview("Small", as: .systemSmall) {
+    StockSageWidget()
+} timeline: {
+    StockSageEntry(date: widgetPreviewDate, snapshot: nil)
+    StockSageEntry(date: widgetPreviewDate.addingTimeInterval(1), snapshot: widgetPreviewSnapshot)
+    StockSageEntry(date: widgetPreviewDate.addingTimeInterval(2), snapshot: widgetFuturePreviewSnapshot)
+    StockSageEntry(date: widgetPreviewDate.addingTimeInterval(3), snapshot: widgetCachedPreviewSnapshot)
+}
+
+#Preview("Medium", as: .systemMedium) {
+    StockSageWidget()
+} timeline: {
+    StockSageEntry(date: widgetPreviewDate, snapshot: nil)
+    StockSageEntry(date: widgetPreviewDate.addingTimeInterval(1), snapshot: widgetPreviewSnapshot)
+    StockSageEntry(date: widgetPreviewDate.addingTimeInterval(2), snapshot: widgetFuturePreviewSnapshot)
+    StockSageEntry(date: widgetPreviewDate.addingTimeInterval(3), snapshot: widgetCachedPreviewSnapshot)
+}
+#endif

@@ -15,6 +15,11 @@ struct StockSageAIAssessmentTests {
         #expect(profile.endpointProfile == .runPodGemma && profile.packetDigest == packet.digest)
         #expect(profile.initialOutputTokens == 192 && profile.maxOutputTokens == 384)
         #expect(profile.topP == nil && profile.seed == nil)
+        let expanded = A.InferenceProfile(config: config, isOllama: false, packet: packet,
+            outputTokens: 192, diagnostic: .init(finish: .stop), contextTokens: 24_576)
+        #expect(profile.contextTokens == 16_384 && expanded.contextTokens == 24_576)
+        #expect(expanded.valid(model: S.gemmaModel) && !profile.comparableCohort(with: expanded))
+        #expect(expanded.packetDigest == profile.packetDigest && expanded.maxOutputTokens == profile.maxOutputTokens)
         let bytes = try JSONEncoder().encode(profile)
         #expect(!String(decoding: bytes, as: UTF8.self).contains("127.0.0.1"))
         #expect(!String(decoding: bytes, as: UTF8.self).contains("18080"))
@@ -612,6 +617,44 @@ struct StockSageAIAssessmentTests {
         ]), as: UTF8.self)
     }
 
+    @Test func generalClaimGuardRejectsUnsupportedProbabilityAndRiskWithoutEarningsWindow() throws {
+        let facts = ["Completed minute observations and public contract news; earnings timing is unknown."]
+        for claim in ["The setup has a high probability of further upside.", "Earnings risk is absent."] {
+            for field in ["reason", "risk"] {
+                var body: [String: Any] = ["action": "Buy", "reason": "The observed setup has public support.",
+                    "risk": "A reversal would invalidate the setup.", "evidence": ["F1"]]
+                body[field] = claim
+                let raw = String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+                guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: facts) else {
+                    Issue.record("Accepted an unsupported \(field) without an earnings window: \(claim)")
+                    continue
+                }
+                #expect(A.parse(raw, facts: facts) == nil)
+                body.removeValue(forKey: "evidence")
+                let draft = String(decoding: try JSONSerialization.data(withJSONObject: body), as: UTF8.self)
+                #expect(A.evidenceRepairPrompt(draft, facts: facts) == nil,
+                        "Missing citations must not trigger a repair of an unsupported claim")
+            }
+        }
+    }
+
+    @Test func generalClaimGuardPreservesNegationAndUncertaintyWithoutEarningsWindow() throws {
+        let facts = ["Completed minute observations and public contract news; earnings timing is unknown."]
+        for claim in ["No high probability of a gain is established.",
+                      "Missing earnings data does not establish that no earnings risk exists.",
+                      "Earnings risk is not absent.",
+                      "No earnings risk can be ruled out.",
+                      "The earnings outcome remains unknown and a gap could bypass the stop."] {
+            for field in ["reason", "risk"] {
+                let reason = field == "reason" ? claim : "The observed setup has public support."
+                let risk = field == "risk" ? claim : "A reversal would invalidate the setup."
+                let raw = try researchAnswer(reason: reason, risk: risk)
+                let accepted = try A.validate(raw, facts: facts).get()
+                #expect(accepted.reason == reason && accepted.risk == risk && accepted.evidence == ["F1"])
+            }
+        }
+    }
+
     @Test func researchEarningsGuardRejectsCapturedNTAPAndAURTiming() throws {
         // Exact risk strings from the frozen September 15 replay, before this guard existed.
         let cases = [
@@ -640,7 +683,12 @@ struct StockSageAIAssessmentTests {
                      "Earnings are imminent.",
                      "The setup has a high probability of further downside."] {
             let raw = try researchAnswer(risk: risk)
-            #expect(A.parse(raw, facts: [window.fact]) != nil)
+            if risk == "The setup has a high probability of further downside." {
+                #expect(A.parse(raw, facts: [window.fact]) == nil,
+                        "Unsupported probability does not depend on a supplied earnings window")
+            } else {
+                #expect(A.parse(raw, facts: [window.fact]) != nil)
+            }
             guard case .failure(.unsupportedResearchClaim) = A.validate(raw, facts: [window.fact], earningsWindow: window) else {
                 Issue.record("Accepted an unsupported research claim: \(risk)")
                 continue

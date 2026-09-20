@@ -13,19 +13,29 @@ import AppKit
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !StockSageStore.isRunningTests else { return .terminateNow }
         guard !quitting else { return .terminateLater }
-        let defaults = UserDefaults.standard
-        let pendingLoad = StockSageLocalModelStartup.shared.pendingConfig
-        let backend = StockSageCatalystNarrator.selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
-        guard pendingLoad != nil || ((backend == .auto || backend == .localServerOnly)
-              && defaults.string(forKey: StockSageLocalModelServer.modelKey) != nil) else { return .terminateNow }
+        StockSageMicrocapMonitor.shared.stop()
+        StockSageMicrocapMonitor.largecap.stop()
+        let codexCleanup = StockSageCodexResearch.beginShutdown()
+        let config = StockSageLocalModelStartup.shared.quitConfig(defaults: .standard)
         quitting = true
-        let config = pendingLoad ?? StockSageLocalModelServer.config(
-            url: UserDefaults.standard.string(forKey: StockSageLocalModelServer.urlKey) ?? StockSageLocalModelServer.defaultURL,
-            model: UserDefaults.standard.string(forKey: StockSageLocalModelServer.modelKey) ?? StockSageLocalModelServer.defaultModel)
         Task {
+            guard await codexCleanup.value else {
+                let alert = NSAlert()
+                alert.messageText = "Research process could not be stopped"
+                alert.informativeText = "StockSage is staying open because an owned research process is still running. Try quitting again."
+                alert.addButton(withTitle: "Keep StockSage Open")
+                alert.runModal()
+                StockSageCodexResearch.cancelShutdown(); quitting = false
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            guard let config else {
+                sender.reply(toApplicationShouldTerminate: true)
+                return
+            }
             let wasBusy = await StockSageLocalModelServer.beginShutdown()
             let unloaded: Bool
-            if let config, config.supportsLocalUnload {
+            if config.supportsLocalUnload {
                 unloaded = await StockSageLocalModelServer.unloadOnQuit(config, inferenceWasActive: wasBusy)
             }
             else { unloaded = true }
@@ -38,7 +48,10 @@ import AppKit
                 alert.addButton(withTitle: "Keep StockSage Open")
                 shouldQuit = alert.runModal() == .alertFirstButtonReturn
             }
-            if !shouldQuit { StockSageLocalModelServer.cancelShutdown(); quitting = false }
+            if !shouldQuit {
+                StockSageCodexResearch.cancelShutdown()
+                StockSageLocalModelServer.cancelShutdown(); quitting = false
+            }
             sender.reply(toApplicationShouldTerminate: shouldQuit)
         }
         return .terminateLater
@@ -86,8 +99,6 @@ struct StockSageApp: App {
     #endif
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
     @State private var showOnboarding = false
-    /// One bounded outcome check per foreground activation. Not a timer, poller or background task.
-    @State private var researchReviewRequest = 0
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
@@ -135,7 +146,7 @@ struct StockSageApp: App {
                                 Text(message).font(.callout).textSelection(.enabled)
                                 Spacer()
                                 if !startup.isWorking {
-                                    Button("Retry model") { startup.startFromSavedSettings() }
+                                    Button("Retry model") { Task { await startup.retryFromSavedSettings() } }
                                 }
                             }
                             .padding().background(.bar)
@@ -158,18 +169,6 @@ struct StockSageApp: App {
                     // this the reopen would silently wait for the next launch).
                     .onChange(of: onboardingDone) {
                         if !onboardingDone { showOnboarding = true }
-                    }
-                    // Saved predictions complete at their first settled target or stop, so the app
-                    // re-checks once whenever it becomes active. StockSageHorizonResearch owns every
-                    // external-access, sample-data, credential and cancellation gate; isChecking is
-                    // the single-flight guard. The app never polls while closed or in the background.
-                    .onChange(of: scenePhase, initial: true) {
-                        if scenePhase == .active { researchReviewRequest &+= 1 }
-                    }
-                    .task(id: researchReviewRequest) {
-                        guard researchReviewRequest > 0 else { return }
-                        await StockSageHorizonResearch.checkSavedOutcomes(
-                            history: .shared, store: .shared)
                     }
                     #if os(iOS)
                     // One lifecycle entry for launch AND return: respect the saved iOS opt-out.

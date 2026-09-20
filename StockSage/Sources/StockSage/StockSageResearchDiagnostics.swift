@@ -1,7 +1,8 @@
 import Foundation
 import Darwin
 
-/// Bounded local diagnostic records. Prediction evidence remains in ResearchHistory.
+/// Bounded hot diagnostic records, with permanent per-context evidence in Archive.
+/// Prediction evidence remains separately in ResearchHistory.
 actor StockSageResearchDiagnostics {
     @MainActor static let shared = StockSageResearchDiagnostics(directory:
         StockSageStore.isRunningTests || (try? StockSageRecordWriter.require(.standard)) == nil ? nil :
@@ -68,7 +69,9 @@ actor StockSageResearchDiagnostics {
               active.count < maximumContexts else { return false }
         do {
             try prepareDirectory()
-            guard index[context.id] == nil else { return false }
+            guard let directory, index[context.id] == nil,
+                  try !pathExists(directory.appendingPathComponent("Archive", isDirectory: true)
+                    .appendingPathComponent(context.id.uuidString + ".jsonl")) else { return false }
         } catch { return false }
         active[context.id] = context
         return append(.init(context: context, at: Date(), kind: .started,
@@ -103,8 +106,21 @@ actor StockSageResearchDiagnostics {
         guard let directory else { return [] }
         do {
             try checkDirectory(directory)
-            return try readFile(directory.appendingPathComponent(id.uuidString + ".jsonl"), id: id).entries
+            let name = id.uuidString + ".jsonl"
+            let hot = directory.appendingPathComponent(name)
+            // A corrupt/unreadable hot file is not permission to substitute older bytes.
+            if try pathExists(hot) { return try readFile(hot, id: id).entries }
+            let archive = directory.appendingPathComponent("Archive", isDirectory: true)
+            try checkDirectory(archive)
+            return try readFile(archive.appendingPathComponent(name), id: id).entries
         } catch { return [] }
+    }
+
+    private func pathExists(_ url: URL) throws -> Bool {
+        var info = stat()
+        if lstat(url.path, &info) == 0 { return true }
+        guard errno == ENOENT else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        return false
     }
 
     private func valid(_ context: Context) -> Bool {
@@ -157,7 +173,7 @@ actor StockSageResearchDiagnostics {
         return size
     }
 
-    private func readFile(_ url: URL, id: UUID) throws -> (info: FileInfo, entries: [Entry]) {
+    private func readFile(_ url: URL, id: UUID) throws -> (info: FileInfo, entries: [Entry], data: Data) {
         let size = try fileBytes(url)
         let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
         guard descriptor >= 0 else { throw CocoaError(.fileReadCorruptFile) }
@@ -197,7 +213,71 @@ actor StockSageResearchDiagnostics {
         }
         let torn = data.last != 10
         guard !(finished && torn) else { throw CocoaError(.fileReadCorruptFile) }
-        return (.init(context: first.context, bytes: size, torn: torn), entries)
+        return (.init(context: first.context, bytes: size, torn: torn), entries, data)
+    }
+
+    private func synchronize(_ url: URL, isDirectory: Bool) throws {
+        let descriptor = open(url.path, (isDirectory ? O_RDONLY | O_DIRECTORY : O_RDWR) | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(isDirectory ? S_IFDIR : S_IFREG),
+              isDirectory || info.st_nlink == 1,
+              fchmod(descriptor, isDirectory ? 0o700 : 0o600) == 0 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        // Match the record store's treatment of filesystems without directory fsync.
+        if fsync(descriptor) != 0, !(isDirectory && (errno == EINVAL || errno == ENOTSUP)) {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    private func archive(_ id: UUID, from source: URL, expected: FileInfo) throws {
+        let current = try readFile(source, id: id)
+        guard current.info.context == expected.context, current.info.bytes == expected.bytes else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let parent = source.deletingLastPathComponent()
+        let archive = parent.appendingPathComponent("Archive", isDirectory: true)
+        try checkPath(archive)
+        if try !pathExists(archive) {
+            try files.createDirectory(at: archive, withIntermediateDirectories: false,
+                                      attributes: [.posixPermissions: 0o700])
+        }
+        try checkDirectory(archive)
+        try synchronize(archive, isDirectory: true)
+        let destination = archive.appendingPathComponent(source.lastPathComponent)
+        if try pathExists(destination) {
+            // A previous interrupted move may leave an identical copy. Never overwrite
+            // a conflicting, corrupt, oversized or linked archive to make room.
+            guard try readFile(destination, id: id).data == current.data else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            try synchronize(destination, isDirectory: false)
+            try files.removeItem(at: source)
+        } else {
+            // Same-filesystem, exclusive rename retains the exact bytes (including a torn
+            // tail) without a partial copy or an opportunity to replace an older archive.
+            guard renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
+                throw POSIXError(.init(rawValue: errno) ?? .EIO)
+            }
+            do {
+                guard try readFile(destination, id: id).data == current.data else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                try synchronize(destination, isDirectory: false)
+                try synchronize(archive, isDirectory: true)
+                try synchronize(parent, isDirectory: true)
+            } catch {
+                // Retain the hot original on archive verification/durability failure.
+                // If rollback itself fails, keep the archive and disable further writes.
+                if renamex_np(destination.path, source.path, UInt32(RENAME_EXCL)) != 0 {
+                    storageUnknown = true
+                }
+                throw error
+            }
+        }
     }
 
     private func prepareDirectory() throws {
@@ -212,10 +292,18 @@ actor StockSageResearchDiagnostics {
         }
         try checkDirectory(directory)
         try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        let archive = directory.appendingPathComponent("Archive", isDirectory: true)
+        if try pathExists(archive) { try checkDirectory(archive) }
         guard !loaded else { return }
         var found: [UUID: FileInfo] = [:]
         var total = 0
         for url in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            if url.lastPathComponent == "Archive" {
+                // The archive has no count/age/aggregate-byte expiry. Read only the
+                // requested UUID under the same per-file bound; do not index its contents.
+                try checkDirectory(url)
+                continue
+            }
             guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
                   url.lastPathComponent == id.uuidString + ".jsonl" else {
                 throw CocoaError(.fileReadCorruptFile)
@@ -257,17 +345,13 @@ actor StockSageResearchDiagnostics {
             var total = index.values.reduce(0) { $0 + $1.bytes }
             let additions = index[id] == nil ? 1 : 0
             if data.count > maximumBytes - total || additions > maximumContexts - index.count {
-                // Only this actor's live contexts are protected. Old interrupted diagnostics can
-                // expire; saved prediction evidence is held in a different directory.
+                // Active contexts stay hot. Inactive evidence moves to permanent storage
+                // before it leaves this bounded index, including rejected raw model replies.
                 for (oldID, old) in index.sorted(by: { $0.value.context.startedAt < $1.value.context.startedAt })
                     where oldID != id && active[oldID] == nil {
                     if data.count <= maximumBytes - total && additions <= maximumContexts - index.count { break }
                     let oldURL = directory.appendingPathComponent(oldID.uuidString + ".jsonl")
-                    let current = try readFile(oldURL, id: oldID).info
-                    guard current.context == old.context, current.bytes == old.bytes else {
-                        throw CocoaError(.fileReadCorruptFile)
-                    }
-                    try files.removeItem(at: oldURL)
+                    try archive(oldID, from: oldURL, expected: old)
                     index.removeValue(forKey: oldID)
                     total -= old.bytes
                 }

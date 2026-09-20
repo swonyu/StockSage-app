@@ -103,7 +103,7 @@ enum DS {
         static let shellFill        = Color.white.opacity(0.04)
         static let shellStroke      = Color.white.opacity(0.09)
         static let coreFill         = Color.white.opacity(0.06)
-        static let coreInnerHighlight = LinearGradient(colors: [Color.white.opacity(0.045), Color.white.opacity(0.045)],
+        static let coreInnerHighlight = LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)],
             startPoint: .top, endPoint: .bottom)
         /// Subtle fill for machined card containers — the background layer under
         /// the coreInnerHighlight stroke. Matches all per-view inline cards.

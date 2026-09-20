@@ -2,36 +2,19 @@ import Foundation
 
 /// Insider transactions from SEC Form 4 — public, legally-disclosed filings.
 ///
-/// WHY THIS EXISTS: the owner asked about material non-public information. That is insider
-/// trading and is not something this app will ever touch. But everything that makes MNPI
-/// valuable has a lawful public shadow, and this is the closest one: officers and directors are
-/// REQUIRED to disclose their own trades within two business days, and acting on that disclosure
-/// is entirely legal. Being fast on public information is the line; being early on private
-/// information is the other side of it.
-///
-/// THE HONESTY PROBLEM THIS SOLVES, and the reason the transaction CODE is the centre of the
-/// design: most Form 4 activity is not a market opinion. A naive feed reading "SVP disposed
-/// 16,238 shares" sounds bearish; in the AAPL filing that line came from, the codes were M and F
-/// — an option exercise and shares automatically withheld to pay the tax on it. The insider chose
-/// nothing. Surfacing that as selling would be fabricating a signal out of payroll mechanics.
-///
-/// So only OPEN-MARKET decisions are surfaced: code P (bought with their own money) and code S
-/// (sold into the market). Everything else is parsed, classified, and deliberately excluded — and
-/// the UI says that exclusion happened, because "no insider activity" and "activity, none of it
-/// discretionary" are different facts.
-///
-/// SCOPE: US only. The SEC publishes Form 4; Tadawul's insider disclosures live on the Saudi
-/// exchange's own site in a different format and are not covered here.
+/// Bounded SEC Table I review. Codes P/S include open-market OR private purchases/sales;
+/// neither the transaction code nor an absent plan checkbox establishes trading intent.
+/// Derivatives and other transaction codes remain excluded and counted explicitly.
 enum StockSageInsider {
 
-    /// Form 4 transaction codes, grouped by whether they represent a DECISION to trade.
+    /// Form 4 transaction codes. Case names are retained for source compatibility.
     /// Table I codes per SEC Form 4 instructions.
     enum Code: String, Sendable, Equatable {
-        case openMarketPurchase = "P"   // bought on the open market — own money, own choice
-        case openMarketSale = "S"       // sold on the open market
+        case openMarketPurchase = "P"   // reported open-market or private purchase
+        case openMarketSale = "S"       // reported open-market or private sale
         case grant = "A"                // award/grant from the company
         case optionExercise = "M"       // exercise of a derivative — mechanical
-        case taxWithholding = "F"       // shares withheld to cover tax — the insider chose nothing
+        case taxWithholding = "F"       // shares withheld to cover tax
         case gift = "G"
         case other = "?"
 
@@ -39,7 +22,7 @@ enum StockSageInsider {
             self = Code(rawValue: rawCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()) ?? .other
         }
 
-        /// Whether this code reflects a discretionary market decision. ONLY these are surfaced.
+        /// Historical API name: selects P/S codes only; it does not establish discretion.
         nonisolated var isDiscretionary: Bool { self == .openMarketPurchase || self == .openMarketSale }
     }
 
@@ -57,6 +40,19 @@ enum StockSageInsider {
         /// omits it. Added so a discretionary transaction can be offered to the catalyst narrator
         /// as a DATED citable source; never fabricated when absent (honesty floor).
         let date: Date?
+        var accession: String? = nil
+        var filingDate: Date? = nil
+        var documentURL: URL? = nil
+        var reportedRoles: [String] = []
+        var planDisclosure: String = "Rule 10b5-1 plan disclosure unavailable"
+
+        nonisolated var evidenceDescription: String {
+            let transaction = date.map { "transaction date " + StockSageCatalystNarrator.sourceDay($0) } ?? "transaction date unavailable"
+            let publication = filingDate.map { "filing date " + StockSageCatalystNarrator.sourceDay($0) } ?? "filing date unavailable"
+            let roles = (reportedRoles + (officerTitle.map { [$0] } ?? [])).joined(separator: ", ")
+            let price = pricePerShare.map { "price per share " + String($0) + " USD" } ?? "price per share unavailable"
+            return "Code \(code.rawValue); \(shares) shares; \(price); \(transaction); \(publication); role: \(roles.isEmpty ? "unavailable" : roles); \(planDisclosure); accession: \(accession ?? "unavailable"). P/S includes open-market or private transactions; intent is not established."
+        }
         nonisolated var dollarValue: Double? {
             guard let price = pricePerShare, price.isFinite, price >= 0,
                   shares.isFinite, shares > 0 else { return nil }
@@ -65,13 +61,21 @@ enum StockSageInsider {
         }
     }
 
-    /// What a symbol's recent filings actually contained — including what was excluded, so the
-    /// UI can distinguish "nothing happened" from "things happened, none of them a decision".
+    /// What the bounded filing selection contained, including excluded other-code rows.
     struct Summary: Sendable, Equatable {
         let symbol: String
         let discretionary: [Transaction]
-        /// Count of parsed rows dropped because they were mechanical (grants, exercises, tax).
+        /// Count of parsed Table I rows outside P/S; no conclusion about their intent.
         let nonDiscretionaryCount: Int
+        var checkedAt: Date? = nil
+        var reviewedFilings: Int = 0
+        var availableFilings: Int? = nil
+
+        nonisolated var coverageDescription: String {
+            let check = checkedAt.map { "Checked " + $0.ISO8601Format() } ?? "Check time unavailable"
+            let available = availableFilings.map { " of \($0) Form 4 filings in the returned SEC submissions page" } ?? ""
+            return "\(check). Reviewed \(reviewedFilings) filings\(available), capped at \(StockSageInsider.maxFilingsPerSymbol). Table I P/S rows only; \(nonDiscretionaryCount) other-code rows excluded. This is not a date-bounded census or an intent signal."
+        }
 
         nonisolated var netBuyValue: Double? {
             let vals = discretionary.compactMap { t -> Double? in
@@ -87,10 +91,10 @@ enum StockSageInsider {
     }
 
     nonisolated static let caveat =
-        "SEC Form 4 filings — public disclosures officers and directors must file within two "
-        + "business days. Only OPEN-MARKET purchases and sales are shown; option exercises, "
-        + "grants and tax withholding are excluded because the insider chose nothing. "
-        + "UNVALIDATED as a signal: no walk-forward test has been run on it."
+        "Public SEC Form 4 disclosures. P/S codes report open-market or private purchases/sales; "
+        + "they do not establish discretionary intent. Other codes and derivatives are excluded. "
+        + "A reported Rule 10b5-1 checkbox describes the filing; an absent checkbox does not prove no plan. "
+        + "Unvalidated as a predictive signal; inspect the original filing and footnotes."
 
     // MARK: - Parsing (pure — this is where the honesty lives)
 
@@ -113,8 +117,21 @@ enum StockSageInsider {
             }
         }
         guard let symbol = tag("issuerTradingSymbol"), !symbol.isEmpty else { return nil }
-        let name = tag("rptOwnerName") ?? "Unknown"
-        let title = tag("officerTitle")
+        let names = all("<rptOwnerName>(.*?)</rptOwnerName>", in: xml)
+        let name = names.isEmpty ? "Unknown" : names.joined(separator: "; ")
+        let title = all("<officerTitle>(.*?)</officerTitle>", in: xml).joined(separator: "; ")
+        func reported(_ tagName: String) -> Bool {
+            all("<\(tagName)>(.*?)</\(tagName)>", in: xml).contains { ["true", "1"].contains($0.lowercased()) }
+        }
+        let roles = [("isOfficer", "officer"), ("isDirector", "director"),
+                     ("isTenPercentOwner", "ten-percent owner"), ("isOther", "other reporting relationship")]
+            .filter { reported($0.0) }.map { $0.1 }
+        let plan: String
+        switch tag("aff10b5One")?.lowercased() {
+        case "true", "1": plan = "Rule 10b5-1 checkbox reported for this filing; consult transaction footnotes"
+        case "false", "0": plan = "Rule 10b5-1 checkbox not checked; discretionary intent is not established"
+        default: plan = "Rule 10b5-1 plan disclosure unavailable"
+        }
 
         let day = ISO8601DateFormatter()
         day.formatOptions = [.withFullDate]
@@ -132,7 +149,7 @@ enum StockSageInsider {
             guard !rawCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             let code = Code(rawCode: rawCode)
             guard code.isDiscretionary else { excluded += 1; continue }
-            // Catalyst citations render shares as Int; reject values that would trap there.
+            // Keep finite fractional quantities; no integer truncation in evidence rendering.
             guard let qty = value("transactionShares").flatMap(Double.init), qty.isFinite,
                   qty > 0, qty < Double(Int.max) else { return nil }
             let price = value("transactionPricePerShare").flatMap(Double.init).flatMap {
@@ -144,8 +161,9 @@ enum StockSageInsider {
             guard side == nil || side == (code == .openMarketPurchase ? "A" : "D") else { return nil }
             let acquired = side.map { $0 == "A" } ?? (code == .openMarketPurchase)
             discretionary.append(Transaction(symbol: symbol.uppercased(), insiderName: name,
-                                             officerTitle: title, code: code, acquired: acquired,
-                                             shares: qty, pricePerShare: price, date: date))
+                                             officerTitle: title.isEmpty ? nil : title, code: code, acquired: acquired,
+                                             shares: qty, pricePerShare: price, date: date,
+                                             reportedRoles: roles, planDisclosure: plan))
         }
         return Summary(symbol: symbol.uppercased(), discretionary: discretionary,
                        nonDiscretionaryCount: excluded)
@@ -165,7 +183,7 @@ enum StockSageInsider {
         return await StockSageDisclosureService.CIKMap.shared.cik(for: symbol)
     }
 
-    /// Recent open-market insider activity for one US symbol. nil when external access is off
+    /// Recent reported P/S insider activity for one US symbol. nil when external access is off
     /// (gated by `ToolPolicy.isExternalAllowed` — fix pass 2026-09-06: this feed hit the network
     /// unconditionally before, the only one of the app's SEC feeds that did), the symbol is not
     /// SEC-listed, or the filings cannot be read — never an empty summary standing in for
@@ -174,7 +192,8 @@ enum StockSageInsider {
     nonisolated static func recentActivity(for symbol: String,
         lookup: @Sendable (String) async -> String? = { await cik(for: $0) },
         transport: StockSageDisclosureService.Transport = StockSageDisclosureService.transport,
-        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Summary? {
+        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed },
+        now: Date = Date()) async -> Summary? {
         guard !Task.isCancelled, allowed() else { return nil }
         guard let cik = await lookup(symbol),
               let subsURL = URL(string: "https://data.sec.gov/submissions/CIK\(cik).json"),
@@ -186,20 +205,22 @@ enum StockSageInsider {
               let accessions = recent["accessionNumber"] as? [String], forms.count == accessions.count
         else { return nil }
 
-        let form4Window = zip(forms, accessions)
-            .filter { $0.0 == "4" || $0.0 == "4/A" }
-            .prefix(maxFilingsPerSymbol)
+        let filingDates = recent["filingDate"] as? [String]
+        guard recent["filingDate"] == nil || filingDates?.count == forms.count else { return nil }
+        let form4Indices = forms.indices.filter { forms[$0] == "4" || forms[$0] == "4/A" }
+        let selectedIndices = Array(form4Indices.prefix(maxFilingsPerSymbol))
+        let form4Window = selectedIndices.map { (forms[$0], accessions[$0]) }
         // An amendment can replace an earlier trade, not add another one. The bounded
         // summary cannot reconcile replacements yet; do not publish the original net.
         guard !form4Window.contains(where: { $0.0 == "4/A" }) else { return nil }
         let form4Accessions = form4Window.map { $0.1 }
         guard !form4Accessions.isEmpty else {
-            return Summary(symbol: symbol.uppercased(), discretionary: [], nonDiscretionaryCount: 0)
+            return Summary(symbol: symbol.uppercased(), discretionary: [], nonDiscretionaryCount: 0, checkedAt: now, availableFilings: form4Indices.count)
         }
 
         var summaries: [Summary] = []
         let numericCIK = String(Int(cik) ?? 0)
-        for acc in form4Accessions {
+        for (offset, acc) in form4Accessions.enumerated() {
             let bare = acc.replacingOccurrences(of: "-", with: "")
             guard let idxURL = URL(string: "https://www.sec.gov/Archives/edgar/data/\(numericCIK)/\(bare)/index.json"),
                   let idxData = await StockSageDisclosureService.get(idxURL, transport: transport, allowed: allowed),
@@ -212,13 +233,25 @@ enum StockSageInsider {
                   let docData = await StockSageDisclosureService.get(docURL, transport: transport, allowed: allowed),
                   let xml = String(data: docData, encoding: .utf8),
                   let parsed = parseForm4(xml), parsed.symbol == symbol.uppercased()
-            // Summary has no partial-coverage field: an unreadable selected filing
-            // could reverse the net or invalidate a "no activity" claim.
+            // An unreadable selected filing could reverse the net. Preserve the fail-closed
+            // complete-selection requirement; coverage metadata does not excuse a partial net.
             else { return nil }
-            summaries.append(parsed)
+            let day = ISO8601DateFormatter(); day.formatOptions = [.withFullDate]
+            let filed = filingDates.flatMap { day.date(from: $0[selectedIndices[offset]]) }
+            let rows = parsed.discretionary.map { row in
+                var result = row
+                result.accession = acc; result.filingDate = filed; result.documentURL = docURL
+                return result
+            }
+            summaries.append(Summary(symbol: parsed.symbol, discretionary: rows,
+                                     nonDiscretionaryCount: parsed.nonDiscretionaryCount))
         }
         guard !Task.isCancelled, allowed(), !summaries.isEmpty else { return nil }
-        return merge(summaries, symbol: symbol)
+        var result = merge(summaries, symbol: symbol)
+        result.checkedAt = now
+        result.reviewedFilings = summaries.count
+        result.availableFilings = form4Indices.count
+        return result
     }
 
     /// Merge per-filing summaries for one symbol.

@@ -48,29 +48,22 @@ struct StockSageLiveDataFooterTests {
         #expect(cool.contains("up to \(StockSageStore.streamGapMaxPerSweep) tracked names"))
     }
 
-    // THE REFUTED EDIT, pinned. "Manual only" is a claim about the whole board, and it is false
-    // whenever the stream is running — no toggle in that sheet stops the stream.
-    @Test func manualOnlyIsNeverClaimedWhileStreaming() {
-        let streamingAllOff = F.text(liveStream: true, autoRefresh: false, monitorEnabled: false, intervals: rest)
-        #expect(streamingAllOff.contains("prices move on their own"))
-        #expect(streamingAllOff.contains("non-streaming names update only when you pull to refresh"))
-        // The unqualified sentence must NOT appear beside "prices move on their own".
-        #expect(!streamingAllOff.contains("prices update only when you pull to refresh"))
-
-        // With the stream off and both polls off, the unqualified claim is finally true.
-        let darkBoard = F.text(liveStream: false, autoRefresh: false, monitorEnabled: false, intervals: rest)
-        #expect(darkBoard.contains("prices update only when you pull to refresh or tap the refresh button"))
-        #expect(!darkBoard.contains("prices move on their own"))
+    @Test func disabledPollingStillDisclosesStartupAndTrackedQuoteRequests() {
+        for live in [false, true] {
+            let copy = F.text(liveStream: live, autoRefresh: false, monitorEnabled: false, intervals: rest)
+            #expect(copy.contains("when StockSage opens") && copy.contains("newly tracked names"))
+            #expect(copy.contains("Periodic market refresh is off"))
+            #expect(!copy.contains("only when you pull to refresh"))
+            #expect(copy.contains("prices move on their own") == live)
+        }
     }
 
-    // Auto-refresh off does not mean nothing polls: the monitor is on by default and keeps going.
-    @Test func theBackgroundMonitorIsNotMistakenForSilence() {
-        let s = F.text(liveStream: false, autoRefresh: false, monitorEnabled: true, intervals: rest)
-        #expect(s.contains("Strong-signal monitoring"))
-        #expect(s.contains("every 3 minutes"))
-        #expect(!s.contains("only when you pull to refresh"), "something still polls; manual-only would be false")
-        // It names the control by its SHIPPED label so the reader can find it. The sheet's own
-        // "Strong Buy / Sell signals" toggle is a different key and stops no poll.
-        #expect(s.contains("the Markets alerts row"))
+    @Test(arguments: [false, true])
+    func theBackgroundMonitorDescribesOnlySavedPriceAlerts(autoRefresh: Bool) {
+        let copy = F.text(liveStream: false, autoRefresh: autoRefresh, monitorEnabled: true, intervals: hot)
+        #expect(copy.contains("normally every 3 minutes"))
+        #expect(copy.contains("every 6 minutes under thermal pressure"))
+        #expect(copy.contains("Library → Alerts → Price-alert monitoring"))
+        #expect(!copy.contains("Strong-signal"))
     }
 }

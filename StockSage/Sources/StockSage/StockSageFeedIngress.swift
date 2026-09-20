@@ -39,6 +39,9 @@ actor StockSageFeedIngress {
         var authorized = false
         var createdUptime = ProcessInfo.processInfo.systemUptime
         var trades: [String: L.Tick] = [:]
+        /// Preserved before raw latest-value coalescing; valid only for this policy generation.
+        var displayTrades: [String: L.Tick] = [:]
+        var displayConditionGeneration: UUID?
         var quotes: [String: StockSageNBBO] = [:]
         /// Approves only the exact prior observations submitted with this capture.
         /// Primary records remain capped; identities let unchanged quotes survive rotation.
@@ -60,13 +63,20 @@ actor StockSageFeedIngress {
         var active = true, draining = false
         var frames: [Frame] = []
         var metrics = Metrics()
+        var momentumConfigurationID = UUID()
     }
     nonisolated let limits: Limits
-    nonisolated private let mailbox = Mutex(Mailbox())
+    nonisolated let feedID = UUID()
+    nonisolated private let mailbox: Mutex<Mailbox>
     private let startedUptime = ProcessInfo.processInfo.systemUptime
     private var state: L.StreamState
+    private var momentum: StockSageMomentumStream.State
     private var metrics = Metrics()
     private var tradeReceived: [String: TimeInterval] = [:]
+    private var displayTradeReceived: [String: TimeInterval] = [:]
+    private var latestDisplayTrades: [String: L.Tick] = [:]
+    private var displayConditions: Set<Int64> = []
+    private var displayConditionGeneration: UUID?
     private var quoteReceived: [String: TimeInterval] = [:]
     private var newestSIP: Date?
     private var newestQuoteSIP: Date?
@@ -76,12 +86,20 @@ actor StockSageFeedIngress {
     private let authorized: @Sendable (StockSageFeedIngress) -> Void
     private let failed: @Sendable () -> Void
 
-    init(limits: Limits = Limits(), authorized: @escaping @Sendable (StockSageFeedIngress) -> Void = { _ in },
+    init(limits: Limits = Limits(), momentumSymbols: Set<String> = [], momentumConfigurationID: UUID = UUID(),
+         momentumMemberships: [String: UUID]? = nil,
+         authorized: @escaping @Sendable (StockSageFeedIngress) -> Void = { _ in },
          failed: @escaping @Sendable () -> Void = {}) {
         self.limits = limits
+        mailbox = Mutex(Mailbox(momentumConfigurationID: momentumConfigurationID))
         state = L.StreamState(symbolLimit: limits.symbols)
+        momentum = StockSageMomentumStream.State(feedID: feedID,
+            configurationID: momentumConfigurationID, symbolLimit: limits.symbols)
+        let accepted = momentum.configure(symbols: momentumSymbols, configurationID: momentumConfigurationID,
+                                          memberships: momentumMemberships)
         self.authorized = authorized
         self.failed = failed
+        if !accepted { invalidate("Feed momentum symbol capacity exceeded; gap and reconnect") }
     }
 
     /// A fresh ingress object is created per socket. Invalidated objects never accept late callbacks.
@@ -137,6 +155,38 @@ actor StockSageFeedIngress {
         isActive && snapshot.metrics.failure == nil && !snapshot.publicationExpired(at: uptime)
     }
 
+    nonisolated func acceptsMomentum(_ snapshot: StockSageMomentumStream.Snapshot, now: Date) -> Bool {
+        mailbox.withLock { box in
+            box.active && box.metrics.failure == nil && snapshot.feedID == feedID
+                && snapshot.configurationID == box.momentumConfigurationID
+                && (0...StockSageMomentumStream.maximumAge).contains(now.timeIntervalSince(snapshot.observedAt))
+                && box.frames.first.map { ProcessInfo.processInfo.systemUptime - $0.uptime <= L.maximumLiveAge } != false
+        }
+    }
+
+    func configureMomentum(symbols: Set<String>, configurationID: UUID, memberships: [String: UUID]? = nil) {
+        guard isActive else { return }
+        guard momentum.configure(symbols: symbols, configurationID: configurationID, memberships: memberships) else {
+            invalidate("Feed momentum symbol capacity exceeded; gap and reconnect"); return
+        }
+        mailbox.withLock { $0.momentumConfigurationID = configurationID }
+    }
+
+    /// Unlike display publication this examines every configured symbol, without a prefix/rotation.
+    func momentumSnapshot(symbols: Set<String>, profile: StockSageMicrocapScreen.Profile,
+                          now: Date) -> StockSageMomentumStream.Snapshot? {
+        guard isActive, state.isAuthorized else { return nil }
+        guard symbols.count <= min(limits.symbols, StockSageMomentumStream.maximumSymbols) else {
+            invalidate("Feed momentum symbol capacity exceeded; gap and reconnect"); return nil
+        }
+        if let oldest = mailbox.withLock({ $0.frames.first?.uptime }),
+           ProcessInfo.processInfo.systemUptime - oldest > L.maximumLiveAge {
+            invalidate("Feed consumer backlog exceeded 10s; gap and reconnect"); return nil
+        }
+        let result = momentum.snapshot(symbols: symbols, profile: profile, now: now)
+        return acceptsMomentum(result, now: now) ? result : nil
+    }
+
     private func drain() async {
         while let frame = mailbox.withLock({ box -> Frame? in
             guard box.active, !box.frames.isEmpty else { box.draining = false; return nil }
@@ -178,7 +228,8 @@ actor StockSageFeedIngress {
                 if wasAuthorized {
                     invalidate("Feed authorization reset; gap and reconnect"); return
                 }
-                tradeReceived.removeAll(); quoteReceived.removeAll(); newestSIP = nil; newestQuoteSIP = nil
+                tradeReceived.removeAll(); displayTradeReceived.removeAll(); latestDisplayTrades.removeAll()
+                quoteReceived.removeAll(); newestSIP = nil; newestQuoteSIP = nil
                 metrics.sipToReceive = nil; metrics.tradeSIPToReceive = nil; metrics.quoteSIPToReceive = nil
                 delayedQuotesSince = nil; delayedQuoteFrames = 0
             case .trade(let observation):
@@ -191,6 +242,18 @@ actor StockSageFeedIngress {
                     if oldTrades == state.latestTrades.count { metrics.coalesced += 1 }
                     if selected.contains(tick.symbol) { tradeReceived[tick.symbol] = frame.uptime }
                 } else { metrics.superseded += 1 }
+                // A later raw special-condition trade must not erase the last eligible price.
+                // Display ordering is independent of the raw cache's most recent sequence.
+                if state.isAuthorized, state.latestTrades[observation.symbol] != nil,
+                   StockSageMassiveTicks.qualifiesDisplayTrade(conditions: observation.conditions,
+                       allowed: displayConditions, sip: observation.timestamp, participant: observation.participantTime),
+                   StockSageStore.acceptsLiveTick(observation.timestamp,
+                       after: latestDisplayTrades[observation.symbol]?.timestamp,
+                       massiveTradeSequence: observation.sequence,
+                       afterMassiveTradeSequence: latestDisplayTrades[observation.symbol]?.sequence, now: frame.at) {
+                    latestDisplayTrades[observation.symbol] = observation
+                    if selected.contains(observation.symbol) { displayTradeReceived[observation.symbol] = frame.uptime }
+                }
             case .quote(let observation):
                 if observation.timestamp > frame.at { metrics.futureClocks += 1 }
                 if state.isAuthorized, observation.timestamp <= frame.at {
@@ -201,6 +264,10 @@ actor StockSageFeedIngress {
                     if oldQuotes == state.latestQuotes.count { metrics.coalesced += 1 }
                     if selected.contains(observation.symbol) { quoteReceived[observation.symbol] = frame.uptime }
                 } else { metrics.superseded += 1 }
+            case .minute(let minute):
+                if state.isAuthorized { momentum.consume(minute, now: frame.at) }
+            case .invalidMinute(let symbol):
+                if state.isAuthorized { momentum.invalidate(symbol: symbol) }
             case .status: break
             }
             if state.capacityExceeded {
@@ -237,7 +304,9 @@ actor StockSageFeedIngress {
 
     /// One caller awaits one snapshot; selection is capped even if the board grows unexpectedly.
     func snapshot(symbols: [String], now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
-                  retainingQuotes: [String: StockSageNBBO] = [:]) -> Snapshot {
+                  retainingQuotes: [String: StockSageNBBO] = [:],
+                  displayConditions requestedConditions: Set<Int64>? = nil,
+                  displayConditionGeneration requestedGeneration: UUID? = nil) -> Snapshot {
         guard retainingQuotes.count <= limits.symbols else {
             invalidate("Feed overloaded: retained quote capacity exceeded; gap and reconnect")
             return Snapshot(metrics: Metrics(failure: failureReason))
@@ -245,6 +314,7 @@ actor StockSageFeedIngress {
         if !symbols.isEmpty {
             selected = Set(symbols.prefix(limits.publicationSymbols))
             tradeReceived = tradeReceived.filter { selected.contains($0.key) }
+            displayTradeReceived = displayTradeReceived.filter { selected.contains($0.key) }
             quoteReceived = quoteReceived.filter { selected.contains($0.key) }
         }
         let raw = mailbox.withLock { $0.metrics }
@@ -257,7 +327,8 @@ actor StockSageFeedIngress {
         report.tradeSymbols = state.latestTrades.count; report.quoteSymbols = state.latestQuotes.count
         guard isActive else {
             state = L.StreamState(symbolLimit: limits.symbols)
-            tradeReceived.removeAll(); quoteReceived.removeAll(); newestSIP = nil
+            tradeReceived.removeAll(); displayTradeReceived.removeAll(); latestDisplayTrades.removeAll()
+            quoteReceived.removeAll(); newestSIP = nil
             return Snapshot(metrics: report)
         }
         let oldest = mailbox.withLock { $0.frames.first?.uptime }
@@ -266,13 +337,26 @@ actor StockSageFeedIngress {
             report.failure = mailbox.withLock { $0.metrics.failure }
             return Snapshot(metrics: report)
         }
-        var snapshot = Snapshot(authorized: state.isAuthorized, newestSIP: newestSIP, metrics: report)
+        if let requestedConditions,
+           requestedConditions != displayConditions || requestedGeneration != displayConditionGeneration {
+            displayConditions = requestedConditions
+            displayConditionGeneration = requestedGeneration
+            latestDisplayTrades = state.latestTrades.filter {
+                StockSageMassiveTicks.qualifiesDisplayTrade(conditions: $0.value.conditions,
+                    allowed: requestedConditions, sip: $0.value.timestamp, participant: $0.value.participantTime)
+            }
+            displayTradeReceived = tradeReceived.filter { latestDisplayTrades[$0.key] != nil }
+        }
+        var snapshot = Snapshot(authorized: state.isAuthorized, displayConditionGeneration: displayConditionGeneration,
+                                newestSIP: newestSIP, metrics: report)
         for symbol in symbols.prefix(limits.publicationSymbols) {
             snapshot.trades[symbol] = state.latestTrades[symbol]
+            snapshot.displayTrades[symbol] = latestDisplayTrades[symbol]
             snapshot.quotes[symbol] = state.latestQuotes[symbol]
             // Only outstanding replacements contribute to receive-to-publish delay. A quiet
             // symbol's observation age is not local backlog. Caller acknowledges after publish.
             if let at = tradeReceived[symbol] { snapshot.receivedUptime["T." + symbol] = at }
+            if let at = displayTradeReceived[symbol] { snapshot.receivedUptime["D." + symbol] = at }
             if let at = quoteReceived[symbol] { snapshot.receivedUptime["Q." + symbol] = at }
         }
         if state.isAuthorized, !symbols.isEmpty {
@@ -289,6 +373,7 @@ actor StockSageFeedIngress {
         for (key, at) in received {
             let symbol = String(key.dropFirst(2))
             if key.hasPrefix("T."), tradeReceived[symbol] == at { tradeReceived[symbol] = nil }
+            if key.hasPrefix("D."), displayTradeReceived[symbol] == at { displayTradeReceived[symbol] = nil }
             if key.hasPrefix("Q."), quoteReceived[symbol] == at { quoteReceived[symbol] = nil }
         }
         metrics.receiveToPublish = received.values.map { max(0, uptime - $0) }.max() ?? 0

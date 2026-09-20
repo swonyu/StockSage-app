@@ -30,7 +30,7 @@ struct StockSageResearchTable: NSViewRepresentable {
         table.setAccessibilityIdentifier("research.results.table")
         let specifications: [(String, CGFloat, CGFloat, CGFloat)] = [
             ("Stock", 80, 160, 300), ("Opinion", 90, 120, 200),
-            ("Evidence", 95, 130, 180), ("Daily close", 72, 92, 110),
+            ("Evidence", 95, 130, 180), ("Buy entry / close", 130, 145, 210),
             ("Stop", 65, 85, 110), ("Target", 65, 85, 110)
         ]
         for (index, spec) in specifications.enumerated() {

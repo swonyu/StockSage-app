@@ -175,10 +175,10 @@ extension StockSageResearchRanking.Receipt {
         #expect(scan.results["AAA"]?.verdict?.action == .strongBuy && scan.results["ZZZ"]?.verdict?.action == .buy)
     }
 
-    @Test func boundedRoundsConsiderEveryCandidateAndLateBestSurvives() async throws {
+    @Test(arguments: [48, 1_500]) func boundedRoundsConsiderEveryCandidateAndLateBestSurvives(count: Int) async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let names = (0..<48).map { String(format: "S%03d", $0) }
+        let names = (0..<count).map { String(format: "S%04d", $0) }
         let scan = fixtureScan(names.reversed(), caseText: String(repeating: "Dated supporting case. ", count: 25))
         var seen = Set<String>(), calls = 0
         let result = await Ranking.rank(scan: scan, horizon: .fortnight, config: config, isOllama: false, allowed: { true }, diagnostics: StockSageResearchDiagnostics(directory: dir), completion: { system, user, _ in

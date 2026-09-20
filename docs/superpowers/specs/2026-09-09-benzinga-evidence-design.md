@@ -90,7 +90,10 @@ symbol/query and credential generation. Maximum three evidence requests in fligh
 app-wide; keep the existing paper candidate count and worker count unchanged.
 
 New product lookups have a 12-second deadline, at most one page of 20 records and
-2 MB received bytes per response, cancelling transport at the byte limit. Label
+at most 2,000,000 bytes accumulated in the application's response Data and accepted
+for parsing. Oversized declared bodies are rejected before accumulation; streaming
+overflow cancels the task when detected. This does not bound URLSession-owned
+buffering or total wire traffic. Label
 bounded results as a recent sample, not complete coverage; existing calendar/event
 pagination and failure semantics remain unchanged. Reference metadata is fetched
 only for retained records, at most three analysts and three firms per snapshot.

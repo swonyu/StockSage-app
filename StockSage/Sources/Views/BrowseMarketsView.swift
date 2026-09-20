@@ -84,66 +84,36 @@ struct BrowseMarketsView: View {
 
     var body: some View {
         VStack(spacing: DS.Space.sm) {
+            #if os(iOS)
             HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Browse markets").font(DS.Typography.titleM).foregroundStyle(.white)
-                    Text("\(StockSageUniverse.catalog.count) instruments. Search and tap + to add a company to your watchlist.")
-                        .font(.system(size: bmFont12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Button("Done") { dismiss() }.buttonStyle(.plain).foregroundStyle(DS.Palette.accentText)
-                    .keyboardShortcut(.cancelAction).help("Close (Esc)")
+                Spacer(minLength: 0)
+                dismissButton
             }
-
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.system(size: bmFont12)).foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                TextField("Search symbol or market…", text: $query)
-                    #if os(iOS)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    #endif
-                    .textFieldStyle(.plain).font(.system(size: bmFont13))
-                    .accessibilityLabel("Search markets")
-                if !query.isEmpty {
-                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Asset class").font(.caption2).foregroundStyle(.secondary)
-                DSSegmentPicker(cases: Self.availableFilters, selection: $asset) { $0.rawValue }
-                    .accessibilityLabel("Asset class")
-            }
-
-            if let err = localAddError {
-                Text(err).font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
-            }
-
+            // Keep the close action available while all variable-height content scrolls.
+            // Large text and add errors must not consume the results viewport.
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
-                    ForEach(sections, id: \.market) { section in
-                        Section {
-                            ForEach(section.rows) { row(_for: $0) }
-                        } header: {
-                            Text(section.market).font(.system(size: bmFont11, weight: .semibold)).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 3).padding(.horizontal, 4)
-                                .background(.ultraThinMaterial)
-                        }
-                    }
-                    if sections.isEmpty {
-                        Text("No matches.").font(.caption).foregroundStyle(.secondary).padding()
-                    }
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    introduction
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    browseControls
+                    marketResults
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            #else
+            HStack(alignment: .top, spacing: 16) {
+                introduction
+                Spacer(minLength: 0)
+                dismissButton
+            }
+            browseControls
+            ScrollView { marketResults }
+            #endif
         }
         .padding(DS.Space.lg)
         #if os(macOS)
-        .frame(minWidth: 420, minHeight: 520)   // mac sheet floor — fenced: clips 375-402pt iPhones (review 2026-07-27)
+        .frame(minWidth: 420, idealWidth: 560, minHeight: 520, idealHeight: 600)
         #endif
         // System sheet chrome (macOS 27 overhaul): the opaque modalBG panel fought
         // the native sheet material and mismatched OnboardingSheet, which already
@@ -155,26 +125,124 @@ struct BrowseMarketsView: View {
         .onAppear { localAddError = nil }
     }
 
+    private var introduction: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Browse markets").font(.title2.weight(.semibold)).foregroundStyle(DS.Palette.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+            Text("\(StockSageUniverse.catalog.count) instruments · add companies to your watchlist.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var dismissButton: some View {
+        Button { dismiss() } label: {
+            Text("Done")
+                #if os(iOS)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
+        }
+            .buttonStyle(.bordered).tint(DS.Palette.accent)
+            .keyboardShortcut(.cancelAction).help("Close (Esc)")
+            .accessibilityIdentifier("browse.done")
+    }
+
+    private var browseControls: some View {
+        VStack(spacing: DS.Space.sm) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: bmFont12)).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("Search symbol or market…", text: $query)
+                    #if os(iOS)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .textFieldStyle(.plain).font(.system(size: bmFont13))
+                    .accessibilityLabel("Search markets")
+                    .accessibilityIdentifier("browse.search")
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            #if os(iOS)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                            #endif
+                    }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear market search")
+                        .accessibilityIdentifier("browse.clear")
+                }
+            }
+            #if os(iOS)
+            .frame(minHeight: 44)
+            .padding(.horizontal, 10).padding(.vertical, 2)
+            #else
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            #endif
+            .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Asset class").font(.caption2).foregroundStyle(.secondary)
+                DSSegmentPicker(cases: Self.availableFilters, selection: $asset) { $0.rawValue }
+                    .accessibilityLabel("Asset class")
+            }
+
+            if let err = localAddError {
+                Text(err).font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var marketResults: some View {
+        LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+            ForEach(sections, id: \.market) { section in
+                Section {
+                    ForEach(section.rows) { row(_for: $0) }
+                } header: {
+                    Text(section.market).font(.system(size: bmFont11, weight: .semibold)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 3).padding(.horizontal, 4)
+                        .background(.ultraThinMaterial)
+                }
+            }
+            if sections.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No matching markets").font(.headline)
+                    Text("Try another symbol or market name, or clear your search.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 24)
+                .accessibilityIdentifier("browse.empty")
+            }
+        }
+    }
+
     @ViewBuilder private func row(_for s: StockSageSymbol) -> some View {
         let isTracked = store.isWatchlisted(s.symbol)
         let isAdding = addingSymbol == s.symbol
-        HStack(spacing: 10) {
-            Text(s.symbol).font(.system(size: bmFont13, weight: .semibold)).foregroundStyle(.white)
-                .frame(width: 96, alignment: .leading).lineLimit(1)
-            Text(s.market).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            // Tadawul numeric tickers get their bilingual company name (owner, 2026-07-16).
-            if let n = StockSageTadawulNames.displayLine(for: s.symbol) {
-                Text(n).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.symbol).font(.headline).foregroundStyle(DS.Palette.textPrimary)
+                Text(s.market).font(.caption).foregroundStyle(.secondary)
+                if let name = StockSageTadawulNames.displayLine(for: s.symbol) {
+                    Text(name).font(.callout).foregroundStyle(.secondary)
+                }
             }
-            Spacer(minLength: 4)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("browse.identity.\(s.symbol)")
             if isTracked {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: bmFont14)).foregroundStyle(DS.Palette.successSoft)
+                    .frame(width: 44, height: 44)
                     .accessibilityLabel("\(s.symbol) is in your watchlist")
             } else if isAdding {
                 // Per-row spinner: only the symbol being added shows a ProgressView.
                 // Other untracked rows show a disabled '+' while an add is in flight, so
                 // tapping '+' on AAPL no longer spins hundreds of unrelated rows.
                 ProgressView().controlSize(.small)
+                    .frame(width: 44, height: 44)
                     .accessibilityLabel("Adding \(s.symbol)")
             } else {
                 Button {
@@ -186,10 +254,10 @@ struct BrowseMarketsView: View {
                     }
                 } label: {
                     Image(systemName: "plus.circle.fill").font(.system(size: bmFont15)).foregroundStyle(DS.Palette.accentText)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
                 .disabled(store.isAddingSymbol)   // disable other '+' buttons while one add is in flight
                 .accessibilityLabel("Add \(s.symbol), \(s.market)")
             }

@@ -20,14 +20,18 @@ import UserNotifications
 final class StockSageMonitor: ObservableObject {
     static let shared = StockSageMonitor()
     init(defaults: UserDefaults = .standard,
-         strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)? = nil) {
+         strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)? = nil,
+         priceAlertCheck: (@MainActor () async -> Void)? = nil) {
         self.defaults = defaults
         self.strongSignalSender = strongSignalSender
+        self.priceAlertCheck = priceAlertCheck
         budget = StockSageNotificationBudget(loadingFrom: defaults)
     }
 
     private let defaults: UserDefaults
     private let strongSignalSender: (@MainActor (StockSageSignal, String) async -> Bool)?
+
+    private let priceAlertCheck: (@MainActor () async -> Void)?
 
     private var task: Task<Void, Never>?
     @Published private(set) var isRunning = false
@@ -146,36 +150,11 @@ final class StockSageMonitor: ObservableObject {
             // without this delay both hit Yahoo simultaneously on every cold launch.
             try? await Task.sleep(for: .seconds(Int(firstCycleDelay)))
             while !Task.isCancelled {
-                // Watchlist-only mode (opt-in, re-read each cycle so toggling takes effect):
-                // fetch + scan ONLY the user's watchlist instead of refreshing the whole core.
-                let watch = StockSageStore.shared.userSymbols
-                let scoped = self?.defaults.bool(forKey: StockSageMonitor.watchlistOnlyKey) == true && !watch.isEmpty
-                if scoped {
-                    await self?.runWatchlistCycle(watch)
-                } else {
-                    // Evaluate on LIVE quotes: pull a fresh snapshot before each cycle (no-ops
-                    // cleanly when offline / web access is off). SCOPED to `.core` (review
-                    // round-2 finding 1, orchestrator-flagged; RATIFIED by the owner 2026-07-08 —
-                    // core+watchlist scoping, picked via question, see DEVELOPMENT_LOG.md's
-                    // Equity-2000 stage 2 ship entry): this is the UNATTENDED background
-                    // auto-cycle (~45s, indefinitely, while the app runs) — pulling Stage 2's full
-                    // 2,420-name universe on every tick risked a feed cooldown that would take the
-                    // whole app down. User-initiated refreshes (manual button, Find-Ideas scan)
-                    // are UNCHANGED and still pull the full universe — see
-                    // `StockSageStore.refresh(scope:)`'s doc comment.
-                    await StockSageStore.shared.refresh(scope: .core)
-                    // CONCURRENCY #2: stop() during the refresh await must not start a whole
-                    // evaluation cycle for a monitor the user just turned off.
-                    guard !Task.isCancelled else { break }
-                    await self?.runCycle()
-                }
-                // N2 (owner: "every tracked stock live"): the stream-gap top-up runs EVERY cycle,
-                // in BOTH branches above — watchlist-only mode skips `refresh(scope: .core)`
-                // entirely, which was the only poll a Tadawul board name (unstreamable — EODHD's
-                // stream is US-only) had between refreshes; without this line, turning on
-                // watchlist-only silently stopped tracking every Tadawul name.
+                // Research and model assessment require explicit actions. The timer
+                // checks only prices the user deliberately saved as alert levels.
+                if let check = self?.priceAlertCheck { await check() }
+                else { await self?.checkPriceAlerts() }
                 guard !Task.isCancelled else { break }
-                await StockSageStore.shared.refreshStreamGap()
                 // Throttle under pressure — back off to 2× the interval when the machine is
                 // stressed. STANDALONE DEVIATION (extraction @ fc8f383): the parent folded
                 // memory pressure + thermal state via its MemoryManager (part of the LLM stack,
@@ -571,6 +550,8 @@ final class StockSageMonitor: ObservableObject {
     }
 
     private func requestNotificationPermission() {
+        // Native loop fixtures must not change or prompt for the test host's OS permission.
+        guard !StockSageStore.isRunningTests else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error {
                 print("⚠️ StockSage: Failed to request notification authorization: \(error)")

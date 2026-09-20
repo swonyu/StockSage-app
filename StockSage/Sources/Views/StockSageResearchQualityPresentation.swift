@@ -71,7 +71,7 @@ nonisolated enum StockSageResearchQualityPresentation: Equatable {
             case .uncitedMaterialClaim: "A material claim cited no evidence."
             case .unresolvableCitation: "A citation named a fact that was not offered."
             case .citedUnavailableFact: "A cited fact was reported missing or unknown by its own source."
-            case .uncitedInsiderRecord: "An offered insider record was not mentioned in the answer."
+            case .uncitedInsiderRecord: "An offered insider record was not cited in the evidence list."
             case .insiderSaleFramedAsBuying: "Buying language was used while every cited insider record was a sale."
             case .insiderIntentClaimed: "Motive or confidence was attributed to a filing that states none."
             }

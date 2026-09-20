@@ -1,0 +1,72 @@
+[
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-direct-news-20260909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "StockSage/Sources/StockSage/StockSageBenzingaNews.swift",
+    "archived_path": "direct-news/StockSage/Sources/StockSage/StockSageBenzingaNews.swift",
+    "sha256": "82f11af75c54640d440aec0ec68b73e534c6eb71522f735ab1614dc31dd184c6"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-direct-news-20260909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "StockSageTests/StockSageBenzingaNewsTests.swift",
+    "archived_path": "direct-news/StockSageTests/StockSageBenzingaNewsTests.swift",
+    "sha256": "2ca3a098338cd2b2c49dc6b7b9838caeafbefe2f6ee75ab6badc2f448aa0a3a4"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-evidence-20260909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "StockSage/Sources/StockSage/StockSageBenzingaEvidence.swift",
+    "archived_path": "evidence/StockSage/Sources/StockSage/StockSageBenzingaEvidence.swift",
+    "sha256": "c5811e704e90f74f4620f9b8cdbbebdcdc98c893a99c882130da727c47ae95fd"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-evidence-20260909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "StockSage/Sources/StockSage/StockSageBenzingaEvidenceClient.swift",
+    "archived_path": "evidence/StockSage/Sources/StockSage/StockSageBenzingaEvidenceClient.swift",
+    "sha256": "6231ddf2a9963926d3fbb94997211159e1a025bbb691923a01c358b0f971d9e3"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-evidence-20260909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "StockSageTests/StockSageBenzingaEvidenceTests.swift",
+    "archived_path": "evidence/StockSageTests/StockSageBenzingaEvidenceTests.swift",
+    "sha256": "d0ce4f2a1d71c60d72bccf7827ff97314ab5fe6e8c7482fb9548a2ac1d4819fd"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-evidence-20260909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "agent-docs/BENZINGA_EVIDENCE_HANDOFF_2026-09-09.md",
+    "archived_path": "evidence/agent-docs/BENZINGA_EVIDENCE_HANDOFF_2026-09-09.md",
+    "sha256": "86c761a937b5ecc5182b7b02f7fe5d0a734671e81d97c7e7d2ffc5571663ea79"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-production-review-0909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "agent-docs/BENZINGA_PRODUCTION_REVIEW_2026-09-09.md",
+    "archived_path": "production-review/agent-docs/BENZINGA_PRODUCTION_REVIEW_2026-09-09.md",
+    "sha256": "fdd104ae5c8838ed25e1f447d81e0b052871390066ca7031bc27305f7891e5ac"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-production-review-0909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "agent-docs/BENZINGA_REVIEW_HASHES_2026-09-09.json",
+    "archived_path": "production-review/agent-docs/BENZINGA_REVIEW_HASHES_2026-09-09.json",
+    "sha256": "256f9cf38834ddfc8897c6f58c912c450181eef24b5db510c3a084c3a30f9cc8"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-production-review-0909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "agent-docs/checks/benzinga_stream_review.swift",
+    "archived_path": "production-review/agent-docs/checks/benzinga_stream_review.swift",
+    "sha256": "78094a037a9efd901ac1452e22087450be394c5a2ae2deb30b0b7f52adbf99c9"
+  },
+  {
+    "source_worktree": "/Users/saleh/StockSage-wt/benzinga-production-review-0909",
+    "source_head": "50c96ccc541c6121970911217f6d09219379d21c",
+    "relative_path": "agent-docs/checks/run_benzinga_stream_review.py",
+    "archived_path": "production-review/agent-docs/checks/run_benzinga_stream_review.py",
+    "sha256": "0ddbc3d30d6bee88102ae8e0c62bc1999b16ea3588ff294e77dce66c63bb38e5"
+  }
+]

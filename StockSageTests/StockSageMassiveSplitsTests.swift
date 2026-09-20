@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import StockSage
 
 @Suite("Journal split comparison boundaries")
@@ -144,5 +145,51 @@ struct StockSageMassiveSplitsTests {
         let actions = StockSageJournal.openActions(trades, mark: { _ in 89 })
         #expect(actions.count == 2 && Set(actions.map(\.id)).count == 2)
         #expect(Set(actions.map(\.tradeID)) == Set(trades.map(\.id)))
+    }
+}
+
+
+extension StockSageMassiveSplitsTests {
+    @Test @MainActor func splitDenialExpiresWhenCredentialRevisionChanges() async throws {
+        let suite = "split-access-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("one", forKey: "stocksage.massive.credentialRevision")
+        let revision = Mutex<String?>("one")
+        let access = StockSageMassive.Access(key: { "fixture" },
+            credentialRevision: { revision.withLock { $0 } },
+            policyRevision: { nil }, allowed: { true })
+        #expect(await S.fetch(symbol: "AAPL", since: opened, now: now, access: access, defaults: defaults,
+            transport: { request in (Data(), HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!) }) == nil)
+        #expect(StockSageMassiveCredential.denialUntil(S.denialGate, defaults: defaults) != nil)
+        defaults.set("two", forKey: "stocksage.massive.credentialRevision")
+        revision.withLock { $0 = "two" }
+        let recovered = await S.fetch(symbol: "AAPL", since: opened, now: now, access: access, defaults: defaults,
+            transport: { request in (Data(#"{"status":"OK","results":[]}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!) })
+        #expect(recovered?.events.isEmpty == true)
+    }
+}
+
+
+extension StockSageMassiveSplitsTests {
+    @Test @MainActor func obsoleteSplitDenialCannotPoisonReplacementAndOversizeIsRejected() async throws {
+        let suite = "split-obsolete-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("one", forKey: "stocksage.massive.credentialRevision")
+        let revision = Mutex<String?>("one")
+        let access = StockSageMassive.Access(key: { "fixture" }, credentialRevision: { revision.withLock { $0 } },
+            policyRevision: { nil }, allowed: { true })
+        let rejected = await S.fetch(symbol: "AAPL", since: opened, now: now, access: access, defaults: defaults,
+            transport: { request in
+                revision.withLock { $0 = "two" }
+                return (Data(), HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(rejected == nil && defaults.object(forKey: S.denialGate) == nil)
+        let oversized = await S.fetch(symbol: "AAPL", since: opened, now: now, access: access, defaults: defaults,
+            transport: { request in
+                (Data(repeating: 32, count: 2_000_001), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(oversized == nil)
     }
 }

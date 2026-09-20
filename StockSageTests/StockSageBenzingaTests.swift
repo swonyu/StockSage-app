@@ -150,7 +150,13 @@ struct StockSageBenzingaTests {
     }
 
     @Test func allNineDecodeWithOriginalIdentityAndCodableCapture() throws {
-        let pages = try B.Product.allCases.map { try page($0) }
+        let pages = try B.Product.allCases.map { product in
+            var value = row(product)
+            if [.earnings, .guidance, .ratings].contains(product) {
+                value["notes"] = "Provider note for \(product.rawValue)"
+            }
+            return try page(product, rows: [value])
+        }
         for page in pages {
             #expect(page.status == .answered && page.records.count == 1)
             #expect(page.credentialGeneration == "epoch" && page.checkedAt == now)
@@ -158,10 +164,36 @@ struct StockSageBenzingaTests {
             #expect(record.product == page.query.product)
             #expect(record.id.contains(record.revision) && !record.revision.isEmpty)
             #expect(record.source.contains("Massive/Benzinga"))
+            if [.earnings, .guidance, .ratings].contains(record.product) {
+                let note = "Provider note for \(record.product.rawValue)"
+                #expect(record.excerpt == note && record.sourceText.contains(note))
+            }
         }
         let snapshot = B.Snapshot(symbol: "AAPL", capturedAt: now, credentialGeneration: "epoch", pages: pages)
         #expect(snapshot.omittedRecordCount == 0)
         #expect(try JSONDecoder().decode(B.Snapshot.self, from: JSONEncoder().encode(snapshot)) == snapshot)
+    }
+
+    @Test(arguments: [B.Product.earnings, .guidance, .ratings])
+    func providerNotesRemainOptionalBoundedAndRevisionAware(_ product: B.Product) throws {
+        for note: Any? in [nil, NSNull(), ""] {
+            var value = row(product)
+            value["notes"] = note
+            let record = try #require(try page(product, rows: [value]).records.first)
+            #expect(record.excerpt == nil)
+        }
+        let prefix = String(repeating: "Provider note. ", count: 40)
+        var first = row(product), revised = row(product)
+        first["notes"] = prefix + "Original conclusion."
+        revised["notes"] = prefix + "Revised conclusion."
+        let records = try page(product, rows: [first, revised]).records
+        #expect(records.count == 2)
+        let original = try #require(records.first), update = try #require(records.last)
+        let excerpt = try #require(original.excerpt)
+        #expect(!excerpt.isEmpty && excerpt.count <= 400)
+        #expect(update.excerpt == excerpt, "A revision beyond the excerpt cap keeps the same bounded display")
+        #expect(original.id != update.id && original.revision != update.revision,
+                "Full provider notes still determine material revision identity")
     }
 
     // The owner's purchased products (billing summary supplied 2026-09-16). This list is a

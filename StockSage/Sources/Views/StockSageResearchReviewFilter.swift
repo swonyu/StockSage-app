@@ -84,10 +84,13 @@ nonisolated struct StockSageResearchReviewFilter: Equatable, Sendable {
 
     /// Zero-pick runs still contain coverage and comparison failures worth inspecting.
     /// Only prediction-level filters may exclude them; horizon alone is a run-level filter.
-    func matches(_ run: StockSageResearchHistory.Run) -> Bool {
+    func matches(_ run: StockSageResearchHistory.Run,
+                 archivedSearchMatch: @autoclosure () -> Bool = false) -> Bool {
         guard horizon == nil || horizon == run.horizon else { return false }
-        if action == .any, quality == .any, insider == .any, outcome == .any,
-           query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if action == .any, quality == .any, insider == .any, outcome == .any {
+            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+            if archivedSearchMatch() { return true }
+        }
         return !matchingPredictions(in: run).isEmpty
     }
 }

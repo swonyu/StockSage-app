@@ -414,21 +414,24 @@ struct StockSagePaperAutomationTests {
     }
 
     @Test func unqualifiedSnapshotCannotBypassTradeChecksOrSettle() async throws {
-        // The display snapshot preserves price/time, not condition/event-clock qualification.
-        for condition in [NSNull(), [999_999]] as [Any] {
+        for condition in [NSNull(), [999_999], [901]] as [Any] {
             let raw: [String: Any] = ["status": "OK", "tickers": [["ticker": "AAPL",
                 "lastTrade": ["p": 100, "t": (now.timeIntervalSince1970 + 1) * 1_000_000_000,
                               "c": condition, "s": 0], "prevDay": ["c": 99]]]]
             let data = try JSONSerialization.data(withJSONObject: raw)
-            let snapshot = try #require(StockSageMassive.parseSnapshot(data, requestedSymbols: ["AAPL"])["AAPL"])
+            let snapshots = StockSageMassive.parseSnapshot(data, requestedSymbols: ["AAPL"], allowedTradeConditions: [901])
+            if (condition as? [Int]) == [901] {
+                let snapshot = try #require(snapshots["AAPL"])
+                #expect(!snapshot.paperTradeQualified, "Display qualification is never execution qualification")
+            } else { #expect(snapshots.isEmpty, "Unknown/missing conditions cannot reach display or simulation") }
             var ticks = 0
             let selected = await A.fetchPaperQuotes(for: ["AAPL"], after: ["AAPL": now],
                 at: now.addingTimeInterval(2), externalAllowed: { true },
-                snapshots: { _ in ["AAPL": snapshot] }, tick: { _, _ in ticks += 1; return nil })
+                snapshots: { _ in snapshots }, tick: { _, _ in ticks += 1; return nil })
             #expect(ticks == 1 && selected.isEmpty)
             var book = A.Book()
             book.propose(symbol: "AAPL", action: .buy, at: now)
-            book.settle(quotes: ["AAPL": snapshot], at: now.addingTimeInterval(2))
+            book.settle(quotes: snapshots, at: now.addingTimeInterval(2))
             #expect(book.open.isEmpty && book.cash == A.initialCash)
         }
     }
@@ -923,10 +926,24 @@ struct StockSagePaperAutomationTests {
         #expect(started == 4)
     }
 
-    @Test func optedInResponseReplay() throws {
-        guard let path = ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_RESPONSE_REPLAY"] else { return }
+    private static func nonemptyReplayRows(_ root: [String: Any]) throws -> [[String: Any]] {
+        guard let rows = root["results"] as? [[String: Any]], !rows.isEmpty else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        return rows
+    }
+
+    @Test func responseReplayRequiresAtLeastOneRow() throws {
+        #expect(throws: CocoaError.self) { try Self.nonemptyReplayRows(["results": [[String: Any]]()]) }
+        #expect(throws: CocoaError.self) { try Self.nonemptyReplayRows([:]) }
+        #expect(try Self.nonemptyReplayRows(["results": [["text": "fixture"]]]).count == 1)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_RESPONSE_REPLAY"] != nil))
+    func optedInResponseReplay() throws {
+        let path = try #require(ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_RESPONSE_REPLAY"])
         let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
-        let results = try #require(root["results"] as? [[String: Any]])
+        let results = try Self.nonemptyReplayRows(root)
         for row in results {
             let text = try #require(row["text"] as? String)
             let facts = try #require(row["facts"] as? [String])
@@ -936,9 +953,10 @@ struct StockSagePaperAutomationTests {
         }
     }
 
-    @Test func optedInLivePaperDiagnostics() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_DIAGNOSTICS"] != nil))
+    func optedInLivePaperDiagnostics() async throws {
         // Explicit local diagnostic only; ordinary gates never read credentials or call the network.
-        guard let directory = ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_DIAGNOSTICS"] else { return }
+        let directory = try #require(ProcessInfo.processInfo.environment["STOCKSAGE_PAPER_DIAGNOSTICS"])
         let defaults = UserDefaults.standard
         let prior = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
         var temporary = prior
@@ -990,13 +1008,13 @@ struct StockSagePaperAutomationTests {
     @Test func marketParserPreservesCoverageAndRejectsErrorOrPartialPayload() throws {
         let ns = Int64(now.timeIntervalSince1970) * 1_000_000_000
         let rows: [[String: Any]] = [
-            ["ticker": "IBM", "lastTrade": ["p": 100, "t": ns], "day": ["v": 1000, "vw": 99]],
+            ["ticker": "IBM", "lastTrade": ["p": 100, "t": ns, "c": [901]], "day": ["v": 1000, "vw": 99]],
             ["ticker": "ORCL", "day": ["c": 100]], // No last trade is not a live observation.
             ["ticker": "BRK.B", "lastTrade": ["p": 500, "t": ns]], // Existing router does not support this spelling.
             ["ticker": "BAD/URL", "lastTrade": ["p": 100, "t": ns]]
         ]
         let data = try JSONSerialization.data(withJSONObject: ["status": "OK", "count": 4, "tickers": rows])
-        let snapshot = try #require(StockSageMassive.parseMarketSnapshot(data))
+        let snapshot = try #require(StockSageMassive.parseMarketSnapshot(data, allowedTradeConditions: [901]))
         #expect(snapshot.returnedCount == 4)
         #expect(snapshot.rows.count == 1 && snapshot.rows.first?.quote.symbol == "IBM")
         #expect(snapshot.rows.first?.dollarVolume == 99_000)

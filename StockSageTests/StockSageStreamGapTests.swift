@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StockSage
 
 // MARK: - Stream-gap candidate selection (B2, owner 2026-09-06: "every tracked stock should be live")
@@ -13,6 +14,30 @@ import Foundation
 @Suite("streamGap candidate selection")
 struct StockSageStreamGapTests {
     typealias S = StockSageStore
+
+    @MainActor @Test(arguments: [false, true])
+    func suspendedGapFetchCannotPublishAfterAccessChanges(invalidate: Bool) async throws {
+        let suite = "stocksage.stream-gap-generation." + UUID().uuidString
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = S(defaults: defaults, heldSymbols: { ["AAPL"] }, journalTrades: { [] })
+        let before = store.latestQuote("AAPL")
+        let generation = Mutex("first")
+        let access = StockSageMassive.Access(key: { "fixture" }, credentialRevision: { nil },
+            policyRevision: { generation.withLock { $0 } }, allowed: { true }).capture()
+        var requests = 0
+        await store.refreshStreamGap(candidates: ["AAPL"], allowed: access.isCurrent, fetch: { symbols in
+            requests += 1
+            #expect(symbols == ["AAPL"])
+            await Task.yield()
+            if invalidate { generation.withLock { $0 = "second" } }
+            return ["AAPL": .init(symbol: "AAPL", price: 123.45, previousClose: 120,
+                marketTime: Date(), priceSource: .massiveSIP)]
+        })
+        #expect(requests == 1)
+        if invalidate { #expect(store.latestQuote("AAPL") == before) }
+        else { #expect(store.latestQuote("AAPL")?.price == 123.45) }
+    }
 
     @Test("closed market yields no candidates")
     func closedMarketIsEmpty() {

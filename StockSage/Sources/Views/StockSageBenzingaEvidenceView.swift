@@ -101,7 +101,7 @@ struct StockSageBenzingaEvidenceView: View {
             case .missingCredential: return "Unavailable: Massive credential missing"
             case .unauthorized: return "Unavailable: authentication rejected"
             case .priorAuthenticationRejection(let subject, let checkedAt):
-                return "Not requested: this product rejected authentication for \(subject) at \(checkedAt.ISO8601Format()); retry after the short cache expires or use Recheck access."
+                return "Not requested: this product rejected authentication for \(subject) at \(checkedAt.ISO8601Format()); retry this evidence after the short cache expires, or use Settings → Data sources → Test connection to clear the cached rejection, then reopen this evidence. Test connection checks snapshot access only."
             case .entitlement: return "Unavailable: product access denied"
             case .throttled: return "Unavailable: rate limited"
             case .transport: return "Unavailable: transport failure"

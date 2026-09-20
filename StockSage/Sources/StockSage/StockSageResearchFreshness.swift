@@ -48,9 +48,10 @@ nonisolated enum StockSageResearchFreshness {
         var parts = [old == new ? "Opinion unchanged (\(new))." : "Opinion \(old) → \(new)."]
         if let a = previous.referenceClose, let b = current.referenceClose {
             if a.at == b.at, a.value == b.value { parts.append("Same completed daily bar; unchanged price is expected while markets are closed.") }
-            else if a.value.isFinite, b.value.isFinite, a.value > 0 {
-                let delta = (b.value / a.value - 1) * 100
-                if delta.isFinite { parts.append("Reference close change \(String(format: "%+.2f", delta))%.") }
+            else if a.at == b.at {
+                parts.append("Same-session reference price was revised; a common split-adjustment basis is unverified, so no price-change percentage is shown.")
+            } else {
+                parts.append("Reference session changed; a common split-adjustment basis is unverified, so no price-change percentage is shown.")
             }
         }
         if let oldNews = previous.newestNewsAt, let newNews = current.newestNewsAt {

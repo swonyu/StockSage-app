@@ -22,6 +22,8 @@ final class StockSageResearchHistory: ObservableObject {
     nonisolated enum OutcomePolicy: Int, Codable, Sendable {
         /// Settled adjusted daily OHLC bars, completing at the first target or stop event.
         case dailyBarFirstHit = 2
+        /// Session-open crossings are ordered before the later high/low range.
+        case dailyBarOpeningFirst = 3
     }
     nonisolated struct DailyBar: Codable, Sendable, Equatable {
         let date: Date
@@ -70,6 +72,7 @@ final class StockSageResearchHistory: ObservableObject {
         let partialSession: Bool
         let fallback: Bool
         let dollarVolume: [String: Double]
+        var sp500: StockSageSP500Constituents.Provenance? = nil
     }
     nonisolated struct Coverage: Codable, Sendable, Equatable {
         let requested: Int
@@ -92,6 +95,11 @@ final class StockSageResearchHistory: ObservableObject {
         /// Captured comparison and failure are immutable; absent in legacy activity-ordered runs.
         let ranking: StockSageResearchRanking.Receipt?
         let rankingFailure: String?
+        /// Exact deterministic visible selection, independent of strict model predictions.
+        /// Missing on older runs: no historical rank or scoring clock is reconstructed.
+        let deterministicRanking: StockSageTopFiveRanking.Result?
+        var rankingScoredAt: Date? { deterministicRanking?.scoredAt }
+        var usesDailyBarFirstHit: Bool { outcomePolicy != nil }
         /// A later comparison of the same captured checks; original failed history is retained.
         let originalRunID: UUID?
         /// A new capture of only incomplete checks, retaining completed results from this run.
@@ -108,12 +116,14 @@ final class StockSageResearchHistory: ObservableObject {
              measurementPolicy: MeasurementPolicy? = nil,
              ranking: StockSageResearchRanking.Receipt? = nil, rankingFailure: String? = nil,
              originalRunID: UUID? = nil, retainedFromRunID: UUID? = nil,
-             outcomePolicy: OutcomePolicy? = nil) {
+             outcomePolicy: OutcomePolicy? = nil,
+             deterministicRanking: StockSageTopFiveRanking.Result? = nil) {
             self.id = id; self.startedAt = startedAt; self.completedAt = completedAt
             self.horizon = horizon; self.predictions = predictions; self.coverage = coverage
             self.evaluations = evaluations; self.measurementPolicy = measurementPolicy
             self.ranking = ranking; self.rankingFailure = rankingFailure; self.originalRunID = originalRunID
             self.retainedFromRunID = retainedFromRunID; self.outcomePolicy = outcomePolicy
+            self.deterministicRanking = deterministicRanking
         }
     }
     nonisolated struct ReviewProgress: Codable, Sendable, Equatable {
@@ -177,6 +187,7 @@ final class StockSageResearchHistory: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var isChecking = false
     @Published private(set) var lastCheckSummary: String?
+    @Published private(set) var opinionReviewRevision = 0
     nonisolated static let maximumChecksPerRequest = 25
     nonisolated static let benchmarkCalendarBasis = "Nasdaq published 2026 holiday and early-close schedule; next trading-date daily open to target daily close"
     private let storageURL: URL?
@@ -186,6 +197,10 @@ final class StockSageResearchHistory: ObservableObject {
     private var interruptedMemory: [Horizon: InterruptedCheckpoint] = [:]
     private var archiveIndexMemory = FullChecksIndex()
     private var archiveMemory: [UUID: Data] = [:]
+    private var opinionMemory: [UUID: OpinionDocument] = [:]
+    private var interruptedArchiveMemory: [String: Data] = [:]
+    /// Only immutable listing identities are cached, never large evidence packets.
+    private var fullCheckSearchIdentities: [UUID: [String]] = [:]
 
     /// nil is deliberately memory-only. Test hosts cannot resolve the owner's production file.
     init(storageURL: URL? = nil, defaults: UserDefaults = .standard) {
@@ -214,7 +229,7 @@ final class StockSageResearchHistory: ObservableObject {
         let selection = scan.selection.map {
             SelectionReceipt(session: $0.session, requestedAt: $0.requestedAt, returnedCount: $0.returnedCount,
                 eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
-                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume)
+                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500)
         }
         return Run(id: id, startedAt: startedAt, completedAt: completedAt,
             horizon: horizon == .week ? .week : .fortnight, predictions: predictions,
@@ -224,7 +239,9 @@ final class StockSageResearchHistory: ObservableObject {
                 selection: selection, qualifiedBuyCount: scan.qualificationPolicyVersion == 1
                     ? scan.listings.filter { scan.isEligible($0.ticker) }.count : nil), measurementPolicy: .nextTradingDateSessions,
             ranking: scan.ranking, rankingFailure: scan.rankingFailure, originalRunID: originalRunID,
-            retainedFromRunID: scan.retainedFromRunID, outcomePolicy: .dailyBarFirstHit)
+            retainedFromRunID: scan.retainedFromRunID, outcomePolicy: .dailyBarOpeningFirst,
+            deterministicRanking: scan.deterministicRanking ?? (scan.completedAt == nil
+                ? StockSageTopFiveRanking.capture(listings: scan.listings, results: scan.results, horizon: horizon, at: completedAt) : nil))
     }
 
     @discardableResult func record(_ run: Run) -> Bool {
@@ -255,7 +272,7 @@ final class StockSageResearchHistory: ObservableObject {
             if let previous = run.reviewProgress?[symbol], previous.checkedAt > evaluation.checkedAt {
                 throw CocoaError(.fileWriteInvalidFileName)
             }
-            let quiet = evaluation.state == .notDue && run.outcomePolicy == .dailyBarFirstHit
+            let quiet = evaluation.state == .notDue && run.usesDailyBarFirstHit
                 && Self.availability(for: run, now: evaluation.checkedAt).state == .due
             let through = quiet ? Self.settledReviewDate(for: run, now: evaluation.checkedAt) : nil
             var progress = run.reviewProgress ?? [:]
@@ -319,7 +336,7 @@ final class StockSageResearchHistory: ObservableObject {
             for receipt in run.evaluations.values where receipt.state == .evaluated {
                 // A terminal scenario is counted by the level it reached. A horizon close keeps its
                 // own signed return and is never converted into a target hit.
-                if let terminal = receipt.terminalKind, run.outcomePolicy == .dailyBarFirstHit {
+                if let terminal = receipt.terminalKind, run.usesDailyBarFirstHit {
                     switch terminal {
                     case .targetHit: summary.targetHits += 1
                     case .stopHit: summary.stopHits += 1
@@ -483,8 +500,8 @@ final class StockSageResearchHistory: ObservableObject {
     private nonisolated static func calendarBasis(for run: Run) -> String {
         benchmarkCalendarBasis + (run.measurementPolicy == .nextTradingDateSessions
             ? "; seven/fourteen full sessions from the next trading-date open (policy 1)" : "")
-            + (run.outcomePolicy == .dailyBarFirstHit
-                ? "; completed at the first verified target or stop on settled adjusted daily bars, otherwise at the horizon session close (outcome policy 2)" : "")
+            + (run.usesDailyBarFirstHit
+                ? "; completed at the first verified target or stop on settled adjusted daily bars, otherwise at the horizon session close (outcome policy \(run.outcomePolicy!.rawValue))" : "")
     }
     /// A provider daily close can change after the regular close. Wait until the entire
     /// target New York date has ended before accepting its completed daily aggregate.
@@ -496,7 +513,7 @@ final class StockSageResearchHistory: ObservableObject {
     /// terminal target or stop can occur long before the scheduled horizon. Legacy runs keep
     /// waiting for the whole target date, so their captured schedule is unchanged.
     nonisolated static func checkAvailableAt(for run: Run) -> Date? {
-        guard run.outcomePolicy == .dailyBarFirstHit else { return reviewAvailableAt(for: run) }
+        guard run.usesDailyBarFirstHit else { return reviewAvailableAt(for: run) }
         guard let benchmark = benchmarkDay(after: run.completedAt) else { return nil }
         return calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: benchmark))
     }
@@ -525,7 +542,7 @@ final class StockSageResearchHistory: ObservableObject {
             return Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: nil, calendarBasis: calendarBasis(for: run),
                 note: "The future Nasdaq session calendar or evaluation clock could not be verified.")
         }
-        let firstHit = run.outcomePolicy == .dailyBarFirstHit
+        let firstHit = run.usesDailyBarFirstHit
         return Evaluation(state: now < availableAt ? .notDue : .due, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
             note: now < availableAt ? (firstHit
                     ? "Waiting until the first monitoring New York date ends, so its daily aggregate is complete. " + measurementDescription(for: run)
@@ -535,17 +552,27 @@ final class StockSageResearchHistory: ObservableObject {
     }
     nonisolated static func evaluate(_ prediction: Prediction, in run: Run,
                                      observation: Observation?, now: Date) -> Evaluation {
-        if run.outcomePolicy == .dailyBarFirstHit {
+        guard run.predictions.contains(prediction) else {
+            return Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: targetClose(for: run),
+                note: "This prediction is not part of the saved strict shortlist.")
+        }
+        if run.usesDailyBarFirstHit {
             return evaluateFirstHit(prediction, in: run, observation: observation, now: now)
         }
-        let available = availability(for: run, now: now)
+        return evaluateEndpoint(prediction, in: run, observation: observation, now: now)
+    }
+
+    /// Also measures accepted archived opinions without admitting them to the strict shortlist.
+    private nonisolated static func evaluateEndpoint(_ prediction: Prediction, in run: Run,
+                                                     observation: Observation?, now: Date) -> Evaluation {
+        let available = opinionAvailability(in: run, now: now)
         guard available.state == .due, let target = available.targetCloseAt else { return available }
         func unavailable(_ note: String) -> Evaluation {
-            Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
+            Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: target, calendarBasis: endpointCalendarBasis(for: run),
                 provider: observation?.provider,
                 fetchedAt: observation.flatMap { validDate($0.fetchedAt) && $0.fetchedAt <= now ? $0.fetchedAt : nil }, note: note)
         }
-        guard run.predictions.contains(prediction), let observation, observation.splitAdjusted,
+        guard let observation, observation.splitAdjusted,
               !observation.provider.isEmpty, validDate(observation.fetchedAt),
               let availableAt = reviewAvailableAt(for: run),
               observation.fetchedAt >= availableAt, observation.fetchedAt <= now,
@@ -594,7 +621,7 @@ final class StockSageResearchHistory: ObservableObject {
             guard dates.allSatisfy({ byDate[$0] != nil }) else { return nil }
             return dates.map { DailyClose(date: $0, price: byDate[$0]!) }
         }
-        return Evaluation(state: .evaluated, checkedAt: now, targetCloseAt: target, calendarBasis: calendarBasis(for: run),
+        return Evaluation(state: .evaluated, checkedAt: now, targetCloseAt: target, calendarBasis: endpointCalendarBasis(for: run),
             provider: observation.provider, fetchedAt: observation.fetchedAt,
             comparisonReferencePrice: baseline, comparisonReferenceDate: benchmark,
             targetPrice: targetPrice, priceReturn: change, direction: direction,
@@ -604,7 +631,7 @@ final class StockSageResearchHistory: ObservableObject {
     }
 
 
-    // MARK: - Daily-bar first-hit evaluation (outcome policy 2)
+    // MARK: - Daily-bar first-hit evaluation (outcome policies 2 and 3)
 
     private nonisolated struct TerminalEvent {
         let kind: Evaluation.TerminalKind
@@ -615,12 +642,20 @@ final class StockSageResearchHistory: ObservableObject {
     }
 
     /// Pure and chronological. The FIRST session that reaches a level ends the scenario; a bar that
-    /// reaches both cannot be ordered from a daily aggregate, so the conservative stop is recorded.
-    /// A gap through a level is observed at the session open, never at the unreachable captured level.
+    /// opens between levels and reaches both cannot be ordered, so the conservative stop is recorded.
+    /// Policy 3 orders known session-open crossings first; policy 2 retains its original stop precedence.
     private nonisolated static func terminalEvent(bars: [DailyBar], stop: Double?, target: Double?,
-                                                  horizonEnded: Bool) -> TerminalEvent? {
+                                                  horizonEnded: Bool, policy: OutcomePolicy) -> TerminalEvent? {
         if let stop, let target {
             for bar in bars {
+                if policy == .dailyBarOpeningFirst {
+                    if bar.open <= stop {
+                        return TerminalEvent(kind: .stopHit, bar: bar, price: bar.open, sameBar: false, gapped: true)
+                    }
+                    if bar.open >= target {
+                        return TerminalEvent(kind: .targetHit, bar: bar, price: bar.open, sameBar: false, gapped: true)
+                    }
+                }
                 let stopHit = bar.low <= stop
                 let targetHit = bar.high >= target
                 if stopHit {
@@ -687,7 +722,7 @@ final class StockSageResearchHistory: ObservableObject {
         return bars
     }
 
-    private nonisolated static let firstHitDisclosure = "Daily bars cannot establish intraday order or an actual fill. This is a measured research scenario, not an order, an execution price or realized profit."
+    private nonisolated static let firstHitDisclosure = "Daily bars cannot establish high/low ordering or an actual fill. This is a measured research scenario, not an order, an execution price or realized profit."
 
     private nonisolated static func evaluateFirstHit(_ prediction: Prediction, in run: Run,
                                                      observation: Observation?, now: Date) -> Evaluation {
@@ -700,7 +735,7 @@ final class StockSageResearchHistory: ObservableObject {
                 fetchedAt: observation.flatMap { validDate($0.fetchedAt) && $0.fetchedAt <= now ? $0.fetchedAt : nil },
                 note: note)
         }
-        guard run.predictions.contains(prediction), let observation, observation.splitAdjusted,
+        guard let observation, observation.splitAdjusted,
               !observation.provider.isEmpty, validDate(observation.fetchedAt), observation.fetchedAt <= now,
               let benchmark = benchmarkDay(after: run.completedAt),
               let settled = settledReviewDate(for: run, now: now),
@@ -743,7 +778,7 @@ final class StockSageResearchHistory: ObservableObject {
         let atHorizon = settled == calendar.startOfDay(for: target)
         let horizonEnded = atHorizon && path.count == expected.count
         guard let event = terminalEvent(bars: path, stop: levels?.stop, target: levels?.target,
-                                        horizonEnded: horizonEnded) else {
+                                        horizonEnded: horizonEnded, policy: run.outcomePolicy!) else {
             guard atHorizon || path.count != expected.count else {
                 return receipt(.notDue, "Active. No verified target or stop event yet; the scenario continues until its next settled session or the scheduled horizon close. "
                     + measurementDescription(for: run))
@@ -789,8 +824,8 @@ final class StockSageResearchHistory: ObservableObject {
 
     /// A daily-policy receipt must be reproducible from its OWN stored bars. Nothing here trusts
     /// the writer: the terminal kind, price, same-bar rule and adjusted levels are recomputed.
-    private nonisolated static func validFirstHit(_ evaluation: Evaluation, run: Run, symbol: String) -> Bool {
-        guard run.outcomePolicy == .dailyBarFirstHit, validDate(evaluation.checkedAt),
+    private nonisolated static func validFirstHit(_ evaluation: Evaluation, run: Run, prediction: Prediction) -> Bool {
+        guard run.usesDailyBarFirstHit, validDate(evaluation.checkedAt),
               evaluation.checkedAt >= run.completedAt, !evaluation.calendarBasis.isEmpty,
               evaluation.dailyCloses == nil else { return false }
         if let target = evaluation.targetCloseAt {
@@ -832,10 +867,11 @@ final class StockSageResearchHistory: ObservableObject {
         }) else { return false }
         guard let change = evaluation.priceReturn, change.isFinite, change == price / first.open - 1 else { return false }
         let direction: Evaluation.Direction = price == first.open ? .flat : (price > first.open ? .rose : .fell)
+        let isBuy = prediction.action == "Buy" || prediction.action == "Strong Buy"
         guard evaluation.direction == direction,
-              evaluation.buyDirectionSupported == (direction == .flat ? nil : direction == .rose) else { return false }
+              evaluation.buyDirectionSupported == (isBuy && direction != .flat ? direction == .rose : nil) else { return false }
         var stopLevel: Double?, targetLevel: Double?
-        if let captured = run.predictions.first(where: { $0.symbol == symbol })?.levels {
+        if let captured = prediction.levels {
             guard let ratio = evaluation.adjustmentRatio, ratio.isFinite, ratio > 0,
                   let entry = evaluation.adjustedEntry, let stop = evaluation.adjustedStop,
                   let level = evaluation.adjustedTarget,
@@ -847,15 +883,16 @@ final class StockSageResearchHistory: ObservableObject {
                   evaluation.adjustedStop == nil, evaluation.adjustedTarget == nil else { return false }
         }
         guard let recomputed = terminalEvent(bars: bars, stop: stopLevel, target: targetLevel,
-                                             horizonEnded: terminalAt == calendar.startOfDay(for: target)),
+                                             horizonEnded: terminalAt == calendar.startOfDay(for: target), policy: run.outcomePolicy!),
               recomputed.kind == kind, recomputed.bar.date == terminalAt, recomputed.price == price,
               evaluation.sameBarStopFirst == (recomputed.sameBar ? true : nil) else { return false }
         return true
     }
 
     nonisolated static func measurementDescription(for run: Run) -> String {
-        if run.outcomePolicy == .dailyBarFirstHit {
+        if run.usesDailyBarFirstHit {
             return "Completes at the first settled daily session that reaches the captured stop or target, otherwise at the \(run.horizon.rawValue)th session close. Monitoring starts at the next trading-date open."
+                + (run.outcomePolicy == .dailyBarOpeningFirst ? " A session-open crossing takes precedence; when the open is between levels and both are reached, the conservative stop-first rule applies." : " Legacy policy 2 gives the stop precedence whenever a daily bar reaches both levels.")
         }
         return run.measurementPolicy == .nextTradingDateSessions
             ? "\(run.horizon.rawValue) full Nasdaq sessions, starting at the next trading-date open."
@@ -896,6 +933,11 @@ final class StockSageResearchHistory: ObservableObject {
               (0...run.coverage.checked - run.coverage.incomplete).contains(run.coverage.buyCount) else { return false }
         if let qualified = run.coverage.qualifiedBuyCount {
             guard (0...run.coverage.buyCount).contains(qualified) else { return false }
+        }
+        if let visible = run.deterministicRanking {
+            guard StockSageTopFiveRanking.valid(visible), visible.horizon == run.horizon.title,
+                  let clock = visible.scoredAt, validDate(clock), clock >= run.startedAt, clock <= run.completedAt,
+                  visible.ranked.count <= run.coverage.checked - run.coverage.incomplete else { return false }
         }
         if let ranking = run.ranking {
             guard run.rankingFailure == nil, StockSageResearchRanking.valid(ranking),
@@ -944,6 +986,7 @@ final class StockSageResearchHistory: ObservableObject {
         }
         if let selection = run.coverage.selection {
             guard validDate(selection.requestedAt), selection.requestedAt <= run.completedAt,
+                  selection.sp500.map({ $0.valid(through: selection.requestedAt) }) ?? true,
                   selection.returnedCount >= 0, selection.eligibleCount >= 0, selection.directoryCount >= 0,
                   selection.dollarVolume.values.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return false }
         }
@@ -951,7 +994,7 @@ final class StockSageResearchHistory: ObservableObject {
             guard run.predictions.contains(where: { $0.symbol == symbol }), validDate(progress.checkedAt),
                   progress.checkedAt >= run.completedAt else { return false }
             guard let through = progress.verifiedThrough else { return true }
-            guard run.outcomePolicy == .dailyBarFirstHit, validDate(through),
+            guard run.usesDailyBarFirstHit, validDate(through),
                   let first = benchmarkDay(after: run.completedAt),
                   let settled = settledReviewDate(for: run, now: progress.checkedAt) else { return false }
             return through >= first && through <= settled && calendar.startOfDay(for: through) == through
@@ -963,7 +1006,13 @@ final class StockSageResearchHistory: ObservableObject {
         }
     }
     private nonisolated static func valid(_ evaluation: Evaluation, run: Run, symbol: String) -> Bool {
-        guard run.outcomePolicy == nil else { return validFirstHit(evaluation, run: run, symbol: symbol) }
+        guard let prediction = run.predictions.first(where: { $0.symbol == symbol }) else { return false }
+        return validMeasurement(evaluation, run: run, prediction: prediction, scenario: run.usesDailyBarFirstHit)
+    }
+
+    private nonisolated static func validMeasurement(_ evaluation: Evaluation, run: Run,
+                                                     prediction: Prediction, scenario: Bool) -> Bool {
+        guard !scenario else { return validFirstHit(evaluation, run: run, prediction: prediction) }
         // An endpoint-policy receipt never carries a terminal field; new keys stay absent.
         guard evaluation.terminalKind == nil, evaluation.terminalAt == nil, evaluation.outcomePrice == nil,
               evaluation.adjustmentRatio == nil, evaluation.adjustedEntry == nil, evaluation.adjustedStop == nil,
@@ -1009,13 +1058,15 @@ final class StockSageResearchHistory: ObservableObject {
                   path.last?.price == targetPrice else { return false }
         }
         let direction: Evaluation.Direction = targetPrice == baseline ? .flat : (targetPrice > baseline ? .rose : .fell)
-        return evaluation.direction == direction && evaluation.buyDirectionSupported == (direction == .flat ? nil : direction == .rose)
+        let isBuy = prediction.action == "Buy" || prediction.action == "Strong Buy"
+        return evaluation.direction == direction
+            && evaluation.buyDirectionSupported == (isBuy && direction != .flat ? direction == .rose : nil)
     }
 }
 
 // Latest checkpoints support recovery; bounded per-run archives support exact historical inspection.
 extension StockSageResearchHistory {
-    nonisolated static let maximumCompletedChecksBytes = 16_777_216
+    nonisolated static let maximumCompletedChecksBytes = 48 * 1_024 * 1_024
 
     nonisolated struct CompletedCheck: Codable, Equatable, Sendable {
         struct Verdict: Codable, Equatable, Sendable {
@@ -1060,6 +1111,8 @@ extension StockSageResearchHistory {
         var newsCheckedAt: Date? = nil
         var newestNewsAt: Date? = nil
         var newsCheckSummary: String? = nil
+        var priorAssessment: StockSageHorizonResearch.PriorAssessment? = nil
+        var priorAssessmentNote: String? = nil
         var hasRecordedInsiderTransactions: Bool { includesInsiderTransactions }
 
         init(listing: StockSageHorizonResearch.Listing, result: StockSageHorizonResearch.Result) {
@@ -1081,6 +1134,7 @@ extension StockSageResearchHistory {
             validationFailure = result.validationFailure
             newsCheckedAt = result.newsCheckedAt; newestNewsAt = result.newestNewsAt
             newsCheckSummary = result.newsCheckSummary
+            priorAssessment = result.priorAssessment; priorAssessmentNote = result.priorAssessmentNote
             includesInsiderTransactions = result.hasRecordedInsiderTransactions
             if insiderEvidence != nil || qualityReport != nil {
                 insiderCoverage = coverage.first { $0.source == StockSageMassiveEvents.Feed.insider.source }
@@ -1095,6 +1149,7 @@ extension StockSageResearchHistory {
             case evidenceReceipt, diagnosticID, diagnosticsComplete, qualification, insiderTransactions
             case factClasses, inferenceProfile, qualityReport, insiderEvidence, insiderCoverage
             case validationOutcome, validationFailure, newsCheckedAt, newestNewsAt, newsCheckSummary
+            case priorAssessment, priorAssessmentNote
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1124,6 +1179,8 @@ extension StockSageResearchHistory {
             newsCheckedAt = try c.decodeIfPresent(Date.self, forKey: .newsCheckedAt)
             newestNewsAt = try c.decodeIfPresent(Date.self, forKey: .newestNewsAt)
             newsCheckSummary = try c.decodeIfPresent(String.self, forKey: .newsCheckSummary)
+            priorAssessment = try c.decodeIfPresent(StockSageHorizonResearch.PriorAssessment.self, forKey: .priorAssessment)
+            priorAssessmentNote = try c.decodeIfPresent(String.self, forKey: .priorAssessmentNote)
         }
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1151,6 +1208,8 @@ extension StockSageResearchHistory {
             try c.encodeIfPresent(newsCheckedAt, forKey: .newsCheckedAt)
             try c.encodeIfPresent(newestNewsAt, forKey: .newestNewsAt)
             try c.encodeIfPresent(newsCheckSummary, forKey: .newsCheckSummary)
+            try c.encodeIfPresent(priorAssessment, forKey: .priorAssessment)
+            try c.encodeIfPresent(priorAssessmentNote, forKey: .priorAssessmentNote)
         }
 
         static func == (lhs: Self, rhs: Self) -> Bool {
@@ -1166,6 +1225,7 @@ extension StockSageResearchHistory {
                 && lhs.validationOutcome == rhs.validationOutcome && lhs.validationFailure == rhs.validationFailure
                 && lhs.newsCheckedAt == rhs.newsCheckedAt && lhs.newestNewsAt == rhs.newestNewsAt
                 && lhs.newsCheckSummary == rhs.newsCheckSummary
+                && lhs.priorAssessment == rhs.priorAssessment && lhs.priorAssessmentNote == rhs.priorAssessmentNote
         }
 
         var result: StockSageHorizonResearch.Result? {
@@ -1184,11 +1244,26 @@ extension StockSageResearchHistory {
                 qualification: qualification, insiderTransactions: insiderTransactions, factClasses: factClasses,
                 inferenceProfile: inferenceProfile, qualityReport: qualityReport, insiderEvidence: insiderEvidence,
                 hasRecordedInsiderTransactions: includesInsiderTransactions,
-                newsCheckedAt: newsCheckedAt, newestNewsAt: newestNewsAt, newsCheckSummary: newsCheckSummary)
+                newsCheckedAt: newsCheckedAt, newestNewsAt: newestNewsAt, newsCheckSummary: newsCheckSummary,
+                priorAssessment: priorAssessment, priorAssessmentNote: priorAssessmentNote)
         }
 
         var prediction: Prediction? {
             guard let verdict = verdict?.value, verdict.action == .buy || verdict.action == .strongBuy else { return nil }
+            return projectedPrediction(verdict)
+        }
+
+        var hasAcceptedOpinion: Bool {
+            verdict?.value != nil && validationOutcome != .rejected && validationFailure == nil
+        }
+
+        /// A price-measurement input, never insertion into Run.predictions or strict eligibility.
+        fileprivate var measurementPrediction: Prediction? {
+            guard hasAcceptedOpinion, let verdict = verdict?.value else { return nil }
+            return projectedPrediction(verdict)
+        }
+
+        private func projectedPrediction(_ verdict: StockSageAIAssessment.Verdict) -> Prediction {
             // Older checkpoints have evidence/qualification fields but their original Predictions
             // did not. Keep that original projection, rather than invalidating legacy checkpoints.
             let recorded = inferenceProfile != nil || qualityReport != nil || insiderEvidence != nil
@@ -1208,6 +1283,7 @@ extension StockSageResearchHistory {
         let startedAt: Date
         let checks: [CompletedCheck]
         var qualificationPolicyVersion: Int? = nil
+        var configurationID: String? = nil
     }
 
     static func captureChecks(scan: StockSageHorizonResearch.Scan, horizon: StockSageHorizonResearch.Horizon,
@@ -1216,7 +1292,7 @@ extension StockSageResearchHistory {
               scan.listings.count == scan.results.count else { return nil }
         let archive = CompletedChecks(version: 1, horizon: horizon == .week ? .week : .fortnight,
             startedAt: startedAt, checks: scan.listings.map { .init(listing: $0, result: scan.results[$0.ticker]!) },
-            qualificationPolicyVersion: scan.qualificationPolicyVersion)
+            qualificationPolicyVersion: scan.qualificationPolicyVersion, configurationID: scan.resumeConfigurationID)
         guard capturedSince == nil || scan.retainedFromRunID != nil else { return nil }
         return validChecks(archive, through: completedAt, capturedSince: capturedSince) ? archive : nil
     }
@@ -1237,11 +1313,13 @@ extension StockSageResearchHistory {
         scan.at = archive.startedAt
         scan.retainedFromRunID = run.retainedFromRunID
         scan.qualificationPolicyVersion = archive.qualificationPolicyVersion
+        scan.resumeConfigurationID = archive.configurationID
         scan.ranking = run.ranking; scan.rankingFailure = run.rankingFailure
+        scan.deterministicRanking = run.deterministicRanking; scan.completedAt = run.completedAt
         scan.selection = run.coverage.selection.map {
             .init(session: $0.session, requestedAt: $0.requestedAt, returnedCount: $0.returnedCount,
                 eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount, partialSession: $0.partialSession,
-                fallback: $0.fallback, dollarVolume: $0.dollarVolume)
+                fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500)
         }
         scan.status = "Completed checks restored from saved research; original evidence and dates retained."
         return scan
@@ -1251,14 +1329,13 @@ extension StockSageResearchHistory {
         let earliest = capturedSince ?? archive.startedAt
         guard validDate(earliest), earliest <= archive.startedAt, archive.version == 1, validDate(archive.startedAt), validDate(completedAt), archive.startedAt <= completedAt,
               archive.qualificationPolicyVersion == nil || archive.qualificationPolicyVersion == 1,
+              archive.configurationID.map({ $0.count == 64 && $0.allSatisfy({ "0123456789abcdef".contains($0) }) }) ?? true,
               archive.checks.count <= StockSageHorizonResearch.scanLimit,
               Set(archive.checks.map { $0.listing.ticker }).count == archive.checks.count,
               let bytes = try? JSONEncoder().encode(archive), bytes.count <= maximumCompletedChecksBytes else { return false }
         return archive.checks.allSatisfy { check in
             let listing = check.listing
-            guard StockSageHorizonResearch.validTicker(listing.ticker), !listing.name.isEmpty,
-                  listing.active, listing.market == "stocks", listing.locale == "us", listing.type == "CS",
-                  listing.primary_exchange == "XNAS", listing.currency_name?.lowercased() == "usd",
+            guard StockSageResearchUniverse.eligibleListing(listing, through: check.at),
                   validDate(check.at), check.at >= earliest, check.at <= completedAt,
                   check.result != nil, check.facts.count <= 10_000, check.coverage.count <= 64,
                   check.coverage.allSatisfy({ !$0.source.isEmpty && ($0.checkedAt.map { validDate($0) && $0 <= completedAt } ?? true) }) else { return false }
@@ -1266,6 +1343,15 @@ extension StockSageResearchHistory {
                 model: check.model, symbol: listing.ticker, factCount: check.facts.count,
                 citations: check.verdict?.evidence ?? []) else { return false }
             guard check.factClasses.isEmpty || check.factClasses.count == check.facts.count else { return false }
+            if let prior = check.priorAssessment {
+                guard archive.horizon == .fortnight, prior.model == check.model,
+                      prior.sourceScanAt <= archive.startedAt,
+                      prior.valid(for: listing.ticker, through: check.at) else { return false }
+            }
+            if let note = check.priorAssessmentNote {
+                guard archive.horizon == .fortnight, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      note.utf8.count <= 2_000 else { return false }
+            }
             if let quality = check.qualityReport,
                !quality.valid(action: check.verdict?.action, evidenceCount: check.verdict?.evidence.count ?? 0, factCount: check.facts.count) { return false }
             guard validInsiderEvidence(check.insiderEvidence, coverage: check.insiderCoverage,
@@ -1380,8 +1466,17 @@ extension StockSageResearchHistory {
         if strict, run.coverage.qualifiedBuyCount != eligible.count { return false }
         let bySymbol = Dictionary(uniqueKeysWithValues: archive.checks.map { ($0.listing.ticker, $0) })
         if let selection = run.coverage.selection, Set(selection.dollarVolume.keys) != Set(bySymbol.keys) { return false }
+        guard archive.checks.allSatisfy({ check in
+            check.listing.sp500Membership.map { $0.provenance == run.coverage.selection?.sp500 } ?? true
+        }) else { return false }
         if let ranking = run.ranking,
            Set(ranking.candidateSymbols) != Set(eligible.map { $0.listing.ticker }) { return false }
+        if let visible = run.deterministicRanking {
+            guard let clock = visible.scoredAt, archive.checks.allSatisfy({ $0.at <= clock }),
+                  StockSageTopFiveRanking.capture(listings: archive.checks.map(\.listing),
+                    results: Dictionary(uniqueKeysWithValues: archive.checks.map { ($0.listing.ticker, $0.result!) }),
+                    horizon: run.horizon == .week ? .week : .fortnight, at: clock) == visible else { return false }
+        }
         let eligibleSymbols = Set(eligible.map { $0.listing.ticker })
         return run.predictions.allSatisfy { eligibleSymbols.contains($0.symbol) && bySymbol[$0.symbol]?.prediction == $0 }
     }
@@ -1455,7 +1550,8 @@ extension StockSageResearchHistory {
                 } else { original.append(check) }
             }
             let restored = CompletedChecks(version: 1, horizon: source.horizon, startedAt: source.startedAt, checks: original,
-                qualificationPolicyVersion: source.coverage.qualifiedBuyCount == nil ? nil : 1)
+                qualificationPolicyVersion: source.coverage.qualifiedBuyCount == nil ? nil : 1,
+                configurationID: archive.configurationID)
             guard checksMatch(restored, run: source, capturedSince: source.retainedFromRunID == nil ? nil : sourceStart),
                   (try? checksDigest(restored)) == receipt.sourceChecksDigest else { return false }
             archive = restored; run = source
@@ -1467,10 +1563,8 @@ extension StockSageResearchHistory {
         storageURL?.deletingLastPathComponent().appendingPathComponent("completed-\(horizon.rawValue).json")
     }
 
-    nonisolated static let maximumFullCheckArchives = 20
-    nonisolated static let maximumFullCheckArchiveBytes = 134_217_728
     private nonisolated static let maximumArchiveIndexBytes = 4_194_304
-    nonisolated static let fullChecksRetentionPolicy = "Original full checks: newest 20 runs within 128 MiB, at most 16 MiB per run. Older full-check archives expire; saved shortlists and outcomes remain."
+    nonisolated static let fullChecksRetentionPolicy = "Original full checks are retained without automatic expiration. Each archived capture is limited to 48 MiB; storage failures preserve existing evidence."
 
     nonisolated enum FullChecksState: String, Codable, Sendable {
         case available, legacyCheckpoint, missing, expired, corrupt
@@ -1487,7 +1581,7 @@ extension StockSageResearchHistory {
             case .available: "Original full checks retained for this run."
             case .legacyCheckpoint: "Original full checks available from this run's exact recovery checkpoint. No per-run archive was recorded."
             case .missing: "Original full checks were not archived for this run. Only its saved shortlist and receipts are available; missing evidence is never reconstructed."
-            case .expired: "This run's full-check archive expired under the retention policy. Its saved shortlist and outcomes remain."
+            case .expired: "An earlier app version expired this run's full-check archive. Its saved shortlist and outcomes remain; missing evidence is never reconstructed."
             case .corrupt: "This run's full checks could not be verified. Existing bytes are preserved; no other scan is substituted."
             }
         }
@@ -1507,19 +1601,6 @@ extension StockSageResearchHistory {
         var version = 1
         let runID: UUID
         let checks: CompletedChecks
-    }
-
-    /// Newest-first selection obeys both limits; the original capture is never truncated.
-    nonisolated static func retainedFullCheckIDs(_ entries: [FullChecksEntry]) -> Set<UUID> {
-        var kept: Set<UUID> = [], size = 0
-        for entry in entries.filter({ !$0.expired }).sorted(by: {
-            $0.completedAt == $1.completedAt ? $0.runID.uuidString < $1.runID.uuidString : $0.completedAt > $1.completedAt
-        }) {
-            guard kept.count < maximumFullCheckArchives,
-                  entry.byteCount > 0, entry.byteCount <= maximumFullCheckArchiveBytes - size else { break }
-            kept.insert(entry.runID); size += entry.byteCount
-        }
-        return kept
     }
 
     private var fullChecksDirectory: URL? {
@@ -1552,12 +1633,9 @@ extension StockSageResearchHistory {
             index = try JSONDecoder().decode(FullChecksIndex.self,
                 from: boundedArchiveBytes(url, maximum: Self.maximumArchiveIndexBytes))
         } else { index = archiveIndexMemory }
-        let active = index.entries.filter { !$0.expired }
         guard index.version == 1, Set(index.entries.map(\.runID)).count == index.entries.count,
               index.entries.allSatisfy({ Self.validDate($0.completedAt) && (1...Self.maximumCompletedChecksBytes).contains($0.byteCount)
-                && $0.digest.count == 64 && $0.digest.allSatisfy({ "0123456789abcdef".contains($0) }) }),
-              active.count <= Self.maximumFullCheckArchives,
-              active.reduce(0, { $0 + $1.byteCount }) <= Self.maximumFullCheckArchiveBytes else {
+                && $0.digest.count == 64 && $0.digest.allSatisfy({ "0123456789abcdef".contains($0) }) }) else {
             throw CocoaError(.fileReadCorruptFile)
         }
         return index
@@ -1596,7 +1674,7 @@ extension StockSageResearchHistory {
         if let position = index.entries.firstIndex(where: { $0.runID == checkpoint.run.id }) {
             let existing = index.entries[position]
             guard existing.digest == digest, existing.byteCount == bytes.count else { throw CocoaError(.fileWriteInvalidFileName) }
-            if existing.expired { return } // Retrying an old receipt cannot undo retention.
+            if existing.expired { return } // Preserve the honest availability recorded by earlier versions.
             guard try checkedArchiveBytes(existing) == bytes else { throw CocoaError(.fileReadCorruptFile) }
             index.entries[position].completedAt = max(existing.completedAt, checkpoint.run.completedAt)
         } else {
@@ -1609,50 +1687,38 @@ extension StockSageResearchHistory {
             index.entries.append(.init(runID: checkpoint.run.id, completedAt: checkpoint.run.completedAt,
                 byteCount: bytes.count, digest: digest))
         }
-        let retained = Self.retainedFullCheckIDs(index.entries)
-        for position in index.entries.indices where !retained.contains(index.entries[position].runID) {
-            index.entries[position].expired = true
-        }
-        // Verify every deletion candidate first. Corrupt or foreign bytes never become cleanup work.
-        for entry in index.entries where entry.expired {
-            if let url = fullChecksURL(entry.runID), archivePathExists(url) {
-                _ = try checkedArchiveBytes(entry)
-            }
-        }
         let indexBytes = try encoder.encode(index)
+        // The index remains an input trust boundary. Exhaustion fails the new save without
+        // expiring, truncating or deleting any previously retained product evidence.
         guard indexBytes.count <= Self.maximumArchiveIndexBytes else { throw CocoaError(.fileWriteOutOfSpace) }
         if let indexURL, let url = fullChecksURL(checkpoint.run.id) {
-            if retained.contains(checkpoint.run.id), !archivePathExists(url) {
-                // A failed atomic index write can leave one staged payload. Bound those bytes too,
-                // without deleting unindexed files or silently adopting another run's evidence.
-                let files = try FileManager.default.contentsOfDirectory(at: indexURL.deletingLastPathComponent(),
-                    includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" && UUID(uuidString: $0.deletingPathExtension().lastPathComponent) != nil }
-                var storedBytes = 0
-                for file in files {
-                    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-                    guard attributes[.type] as? FileAttributeType == .typeRegular,
-                          let size = attributes[.size] as? NSNumber,
-                          (0...Self.maximumCompletedChecksBytes).contains(size.intValue) else { throw CocoaError(.fileReadCorruptFile) }
-                    storedBytes += size.intValue
-                }
-                guard files.count < Self.maximumFullCheckArchives + 1,
-                      storedBytes + bytes.count <= Self.maximumFullCheckArchiveBytes + Self.maximumCompletedChecksBytes else {
-                    throw CocoaError(.fileWriteOutOfSpace)
-                }
+            if !archivePathExists(url) {
                 try bytes.write(to: url, options: [.atomic, .completeFileProtection])
             }
             try indexBytes.write(to: indexURL, options: [.atomic, .completeFileProtection])
-            // Index marks expiration before payload removal; a failed removal is retried on the next save.
-            for entry in index.entries where entry.expired {
-                if let expiredURL = fullChecksURL(entry.runID), archivePathExists(expiredURL) {
-                    try FileManager.default.removeItem(at: expiredURL)
-                }
-            }
         } else {
-            if retained.contains(checkpoint.run.id) { archiveMemory[checkpoint.run.id] = bytes }
+            archiveMemory[checkpoint.run.id] = bytes
             archiveIndexMemory = index
-            archiveMemory = archiveMemory.filter { retained.contains($0.key) }
         }
+        cacheSearchIdentities(checkpoint.completedChecks, runID: checkpoint.run.id)
+    }
+
+    private func cacheSearchIdentities(_ checks: CompletedChecks, runID: UUID) {
+        fullCheckSearchIdentities[runID] = checks.checks.flatMap { [$0.listing.ticker, $0.listing.name] }
+    }
+
+    /// Searches every preserved checked listing, including failed gates and non-Buy opinions.
+    /// No missing archive is reconstructed from another run or from current provider data.
+    func matchesSearch(_ query: String, in run: Run) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        if run.predictions.contains(where: { $0.symbol.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) })
+            || run.deterministicRanking?.ranked.contains(where: { $0.symbol.localizedCaseInsensitiveContains(query) }) == true { return true }
+        if fullCheckSearchIdentities[run.id] == nil {
+            if let checks = fullChecks(runID: run.id).checks { cacheSearchIdentities(checks, runID: run.id) }
+            else { fullCheckSearchIdentities[run.id] = [] }
+        }
+        return fullCheckSearchIdentities[run.id]?.contains { $0.localizedCaseInsensitiveContains(query) } == true
     }
 
     func fullChecks(runID: UUID) -> FullChecksAvailability {
@@ -1669,6 +1735,7 @@ extension StockSageResearchHistory {
                       Self.checksMatch(file.checks, run: run, capturedSince: run.retainedFromRunID == nil ? nil : start) else {
                     throw CocoaError(.fileReadCorruptFile)
                 }
+                cacheSearchIdentities(file.checks, runID: runID)
                 return .init(runID: runID, state: .available, checks: file.checks)
             }
             if let url = checkpointURL(run.horizon), archivePathExists(url) {
@@ -1677,6 +1744,7 @@ extension StockSageResearchHistory {
             if let legacy = try readCheckpoint(run.horizon), legacy.run.id == runID,
                let start = Self.retainedCaptureStart(run, in: current),
                Self.checksMatch(legacy.completedChecks, run: run, capturedSince: run.retainedFromRunID == nil ? nil : start) {
+                cacheSearchIdentities(legacy.completedChecks, runID: runID)
                 return .init(runID: runID, state: .legacyCheckpoint, checks: legacy.completedChecks)
             }
             return .init(runID: runID, state: .missing)
@@ -1691,6 +1759,134 @@ extension StockSageResearchHistory {
         let selection: SelectionReceipt?
         let completedChecks: CompletedChecks
         let configurationID: String?
+    }
+
+    nonisolated struct InterruptedArchive: Identifiable, Equatable, Sendable {
+        let id: String
+        let horizon: Horizon
+        let startedAt: Date
+        let updatedAt: Date
+        let checkedCount: Int
+        let selectedCount: Int
+    }
+
+    private var interruptedArchiveDirectory: URL? {
+        storageURL?.deletingLastPathComponent().appendingPathComponent("interrupted-archives", isDirectory: true)
+    }
+
+    /// These new stores are single-level children of the caller's existing history root.
+    /// Reject a redirected child before either reading it or allowing the lock to create files.
+    private func verifiedOutcomeDirectory(_ directory: URL, create: Bool) throws -> Bool {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else { throw CocoaError(.fileReadCorruptFile) }
+            return true
+        } catch {
+            let failure = error as NSError
+            guard failure.domain == NSCocoaErrorDomain,
+                  failure.code == NSFileNoSuchFileError || failure.code == NSFileReadNoSuchFileError else { throw error }
+            guard create else { return false }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            guard try FileManager.default.attributesOfItem(atPath: directory.path)[.type] as? FileAttributeType == .typeDirectory else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return true
+        }
+    }
+
+    private nonisolated static func interruptedArchiveID(_ bytes: Data, horizon: Horizon) -> String {
+        "\(horizon.rawValue)-\(archiveDigest(bytes))"
+    }
+
+    private func decodedInterruptedArchive(_ bytes: Data, id: String) throws -> InterruptedCheckpoint {
+        guard bytes.count <= Self.maximumCompletedChecksBytes else { throw CocoaError(.fileReadTooLarge) }
+        let checkpoint = try JSONDecoder().decode(InterruptedCheckpoint.self, from: bytes)
+        guard Self.validInterrupted(checkpoint),
+              Self.interruptedArchiveID(bytes, horizon: checkpoint.completedChecks.horizon) == id else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return checkpoint
+    }
+
+    private func readInterruptedArchiveBytes(id: String) throws -> Data {
+        // Filenames are content identities, never user paths.
+        let parts = id.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2, ["7", "14"].contains(String(parts[0])), parts[1].count == 64,
+              parts[1].allSatisfy({ "0123456789abcdef".contains($0) }), readable else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let bytes: Data
+        if let directory = interruptedArchiveDirectory {
+            guard StockSageRecordWriter.mayRead(defaults) else { throw CocoaError(.fileReadNoPermission) }
+            guard try verifiedOutcomeDirectory(directory, create: false) else { throw CocoaError(.fileReadNoSuchFile) }
+            bytes = try boundedArchiveBytes(directory.appendingPathComponent(id + ".json"), maximum: Self.maximumCompletedChecksBytes)
+        } else {
+            guard let saved = interruptedArchiveMemory[id] else { throw CocoaError(.fileReadNoSuchFile) }
+            bytes = saved
+        }
+        _ = try decodedInterruptedArchive(bytes, id: id)
+        return bytes
+    }
+
+    /// The exact prior recovery file is retained before a newer capture may replace it.
+    /// A failed archive write leaves the original recovery file untouched.
+    private func preserveInterrupted(_ checkpoint: InterruptedCheckpoint) throws {
+        let bytes: Data
+        if let url = interruptedURL(checkpoint.completedChecks.horizon) {
+            bytes = try boundedArchiveBytes(url, maximum: Self.maximumCompletedChecksBytes)
+            guard try JSONDecoder().decode(InterruptedCheckpoint.self, from: bytes) == checkpoint else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+        } else { bytes = try JSONEncoder().encode(checkpoint) }
+        let id = Self.interruptedArchiveID(bytes, horizon: checkpoint.completedChecks.horizon)
+        _ = try decodedInterruptedArchive(bytes, id: id)
+        if let directory = interruptedArchiveDirectory {
+            try StockSageRecordWriter.require(defaults)
+            _ = try verifiedOutcomeDirectory(directory, create: true)
+            let destination = directory.appendingPathComponent(id + ".json")
+            if archivePathExists(destination) {
+                guard try boundedArchiveBytes(destination, maximum: Self.maximumCompletedChecksBytes) == bytes else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+            } else { try bytes.write(to: destination, options: [.atomic, .completeFileProtection]) }
+        } else { interruptedArchiveMemory[id] = bytes }
+    }
+
+    /// Separate incomplete captures remain discoverable; they are never presented as completed runs.
+    func interruptedArchives() -> [InterruptedArchive]? {
+        do {
+            guard readable else { throw CocoaError(.fileReadCorruptFile) }
+            let ids: [String]
+            if let directory = interruptedArchiveDirectory {
+                guard StockSageRecordWriter.mayRead(defaults) else { throw CocoaError(.fileReadNoPermission) }
+                guard try verifiedOutcomeDirectory(directory, create: false) else { return [] }
+                ids = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                    .filter { $0.pathExtension == "json" }.map { $0.deletingPathExtension().lastPathComponent }
+            } else { ids = Array(interruptedArchiveMemory.keys) }
+            return try ids.map { id in
+                let checkpoint = try decodedInterruptedArchive(readInterruptedArchiveBytes(id: id), id: id)
+                return InterruptedArchive(id: id, horizon: checkpoint.completedChecks.horizon,
+                    startedAt: checkpoint.completedChecks.startedAt, updatedAt: checkpoint.updatedAt,
+                    checkedCount: checkpoint.completedChecks.checks.count, selectedCount: checkpoint.listings.count)
+            }.sorted { $0.startedAt == $1.startedAt ? $0.id < $1.id : $0.startedAt > $1.startedAt }
+        } catch {
+            lastError = "Earlier interrupted research could not be verified. Original capture files are preserved. \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func interruptedArchiveData(id: String) -> Data? {
+        do { return try readInterruptedArchiveBytes(id: id) }
+        catch {
+            lastError = "The original interrupted capture could not be verified. Its bytes are preserved. \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func interruptedArchive(id: String) -> InterruptedCheckpoint? {
+        guard let bytes = interruptedArchiveData(id: id) else { return nil }
+        return try? decodedInterruptedArchive(bytes, id: id)
     }
 
     /// Only the digest is persisted. Endpoint credentials, query strings and settings stay private.
@@ -1711,11 +1907,10 @@ extension StockSageResearchHistory {
               validChecks(archive, through: checkpoint.updatedAt),
               archive.checks.count <= symbols.count,
               checkpoint.configurationID.map({ $0.count == 64 && $0.allSatisfy({ "0123456789abcdef".contains($0) }) }) ?? true,
+              archive.configurationID == nil || archive.configurationID == checkpoint.configurationID,
               checkpoint.listings.allSatisfy({ listing in
-                  StockSageHorizonResearch.validTicker(listing.ticker) && !listing.name.isEmpty
-                    && listing.active && listing.market == "stocks" && listing.locale == "us"
-                    && listing.type == "CS" && listing.primary_exchange == "XNAS"
-                    && listing.currency_name?.lowercased() == "usd"
+                  StockSageResearchUniverse.eligibleListing(listing, through: checkpoint.updatedAt)
+                    && (listing.sp500Membership.map { $0.provenance == checkpoint.selection?.sp500 } ?? true)
               }) else { return false }
         let bySymbol = Dictionary(uniqueKeysWithValues: checkpoint.listings.map { ($0.ticker, $0) })
         let capturedSymbols = Set(archive.checks.map(\.listing.ticker))
@@ -1723,6 +1918,7 @@ extension StockSageResearchHistory {
               archive.checks.map(\.listing.ticker) == symbols.filter(capturedSymbols.contains) else { return false }
         if let selection = checkpoint.selection {
             guard validDate(selection.requestedAt), selection.requestedAt <= checkpoint.updatedAt,
+                  selection.sp500.map({ $0.valid(through: selection.requestedAt) }) ?? true,
                   selection.returnedCount >= 0, selection.eligibleCount >= symbols.count,
                   selection.directoryCount >= symbols.count,
                   Set(selection.dollarVolume.keys) == Set(symbols),
@@ -1760,10 +1956,10 @@ extension StockSageResearchHistory {
             let h: Horizon = horizon == .week ? .week : .fortnight
             let archive = CompletedChecks(version: 1, horizon: h, startedAt: started,
                 checks: scan.listings.compactMap { listing in scan.results[listing.ticker].map { CompletedCheck(listing: listing, result: $0) } },
-                qualificationPolicyVersion: scan.qualificationPolicyVersion)
+                qualificationPolicyVersion: scan.qualificationPolicyVersion, configurationID: scan.resumeConfigurationID)
             let selection = scan.selection.map { SelectionReceipt(session: $0.session, requestedAt: $0.requestedAt,
                 returnedCount: $0.returnedCount, eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
-                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume) }
+                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500) }
             let checkpoint = InterruptedCheckpoint(version: 1, updatedAt: Date(), listings: scan.listings,
                 selection: selection, completedChecks: archive, configurationID: scan.resumeConfigurationID)
             guard Self.validInterrupted(checkpoint) else { throw CocoaError(.fileWriteInvalidFileName) }
@@ -1780,6 +1976,8 @@ extension StockSageResearchHistory {
                               previous.completedChecks.checks.allSatisfy({ captured[$0.listing.ticker] == $0 }) else {
                             throw CocoaError(.fileWriteInvalidFileName)
                         }
+                    } else {
+                        try preserveInterrupted(previous)
                     }
                 }
             }
@@ -1814,7 +2012,7 @@ extension StockSageResearchHistory {
             scan.resumeConfigurationID = checkpoint.configurationID; scan.isInterrupted = true
             scan.selection = checkpoint.selection.map { .init(session: $0.session, requestedAt: $0.requestedAt,
                 returnedCount: $0.returnedCount, eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
-                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume) }
+                partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500) }
             scan.status = "Interrupted research restored · \(scan.results.count)/\(scan.listings.count) checked. Original evidence and dates retained; resume remaining listings when ready."
             return scan
         } catch {
@@ -1898,6 +2096,7 @@ extension StockSageResearchHistory {
                         guard run.completedAt >= previous.run.completedAt,
                               (run.originalRunID ?? run.id) == (previous.run.originalRunID ?? previous.run.id),
                               run.retainedFromRunID == previous.run.retainedFromRunID,
+                              run.deterministicRanking == previous.run.deterministicRanking,
                               archive == previous.completedChecks else { throw CocoaError(.fileWriteInvalidFileName) }
                         amendment = previous.amendment
                         previousAmendments = previous.previousAmendments
@@ -2005,7 +2204,240 @@ extension StockSageResearchHistory {
               original.originalRunID == nil, original.horizon == run.horizon,
               original.startedAt == run.startedAt, original.completedAt <= run.completedAt,
               original.coverage == run.coverage, original.retainedFromRunID == run.retainedFromRunID,
+              original.deterministicRanking == run.deterministicRanking,
               run.ranking.map({ $0.at >= original.completedAt }) ?? true else { return false }
         return true
+    }
+}
+
+// Every archived accepted opinion can acquire separate observed outcomes. Original checks,
+// strict picks and their already recorded outcomes are never rewritten by this manual path.
+extension StockSageResearchHistory {
+    nonisolated struct OpinionOutcome: Codable, Equatable, Sendable {
+        let checkDigest: String
+        let checkedAt: Date
+        let horizonReturn: Evaluation
+        /// Only a terminal or unavailable original long scenario; nil means pending/not applicable.
+        let scenario: Evaluation?
+    }
+
+    private struct OpinionDocument: Codable {
+        var version = 1
+        let runID: UUID
+        let runDigest: String
+        let checksDigest: String
+        var outcomes: [String: OpinionOutcome] = [:]
+    }
+
+    private struct OpinionSource {
+        let run: Run
+        let checks: CompletedChecks
+        let document: OpinionDocument
+    }
+
+    private nonisolated static func endpointCalendarBasis(for run: Run) -> String {
+        guard run.usesDailyBarFirstHit else { return calendarBasis(for: run) }
+        return benchmarkCalendarBasis + (run.measurementPolicy == .nextTradingDateSessions
+            ? "; seven/fourteen full sessions from the next trading-date open (policy 1)" : "")
+    }
+
+    nonisolated static func opinionAvailability(in run: Run, now: Date) -> Evaluation {
+        guard run.usesDailyBarFirstHit else { return availability(for: run, now: now) }
+        guard valid(run), validDate(now), now >= run.completedAt,
+              let target = targetClose(for: run), let available = reviewAvailableAt(for: run) else {
+            return Evaluation(state: .dataUnavailable, checkedAt: now, targetCloseAt: nil,
+                calendarBasis: endpointCalendarBasis(for: run), note: "The saved horizon's calendar or review clock is unavailable.")
+        }
+        return Evaluation(state: now < available ? .notDue : .due, checkedAt: now, targetCloseAt: target,
+            calendarBasis: endpointCalendarBasis(for: run),
+            note: "Observed horizon return is measured from the next trading-date open after run completion to the exact \(run.horizon.rawValue)th session close. Waiting until that New York date has wholly ended; an earlier scenario outcome does not replace this measurement.")
+    }
+
+    nonisolated static func hasOpinionScenario(check: CompletedCheck, in run: Run) -> Bool {
+        guard run.usesDailyBarFirstHit, check.measurementPrediction != nil,
+              let levels = check.levels, let reference = check.referenceClose,
+              [levels.entry, levels.stop, levels.target, reference.value].allSatisfy({ $0.isFinite && $0 > 0 }),
+              levels.stop < levels.entry, levels.entry < levels.target,
+              validDate(levels.at), validDate(reference.at), levels.at <= run.completedAt,
+              reference.at <= run.completedAt else { return false }
+        return true
+    }
+
+    nonisolated static func opinionCheckDigest(_ check: CompletedCheck) throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return archiveDigest(try encoder.encode(check))
+    }
+
+    /// Callers bind the check to its original archive before storing the result. No model call,
+    /// invented action, short position or correct/incorrect label for Hold/Avoid is introduced.
+    nonisolated static func evaluateOpinion(check: CompletedCheck, in run: Run,
+                                            observation: Observation?, now: Date) -> OpinionOutcome? {
+        guard valid(run), validDate(now), now >= run.completedAt, validDate(check.at), check.at <= run.completedAt,
+              let prediction = check.measurementPrediction, let digest = try? opinionCheckDigest(check) else { return nil }
+        let horizon = evaluateEndpoint(prediction, in: run, observation: observation, now: now)
+        var scenario: Evaluation?
+        if hasOpinionScenario(check: check, in: run) {
+            let measured = evaluateFirstHit(prediction, in: run, observation: observation, now: now)
+            if measured.state == .evaluated || measured.state == .dataUnavailable { scenario = measured }
+        }
+        return OpinionOutcome(checkDigest: digest, checkedAt: now, horizonReturn: horizon, scenario: scenario)
+    }
+
+    nonisolated static func validOpinionOutcome(_ outcome: OpinionOutcome, check: CompletedCheck, run: Run) -> Bool {
+        guard valid(run), validDate(check.at), check.at <= run.completedAt,
+              let prediction = check.measurementPrediction,
+              outcome.checkDigest == (try? opinionCheckDigest(check)), validDate(outcome.checkedAt),
+              outcome.checkedAt >= run.completedAt,
+              outcome.horizonReturn.checkedAt <= outcome.checkedAt,
+              outcome.horizonReturn.targetCloseAt == targetClose(for: run),
+              outcome.horizonReturn.calendarBasis == endpointCalendarBasis(for: run),
+              validMeasurement(outcome.horizonReturn, run: run, prediction: prediction, scenario: false) else { return false }
+        if outcome.horizonReturn.state == .evaluated,
+           outcome.horizonReturn.comparisonReferenceDate != benchmarkDay(after: run.completedAt) { return false }
+        if let scenario = outcome.scenario {
+            guard hasOpinionScenario(check: check, in: run),
+                  scenario.state == .evaluated || scenario.state == .dataUnavailable,
+                  scenario.checkedAt <= outcome.checkedAt, scenario.targetCloseAt == targetClose(for: run),
+                  scenario.calendarBasis == calendarBasis(for: run),
+                  validMeasurement(scenario, run: run, prediction: prediction, scenario: true) else { return false }
+        }
+        return true
+    }
+
+    private func opinionSource(runID: UUID) throws -> OpinionSource {
+        guard readable, storageURL == nil || StockSageRecordWriter.mayRead(defaults) else { throw CocoaError(.fileReadNoPermission) }
+        let current = storageURL == nil ? runs : try read().runs
+        guard let run = current.first(where: { $0.id == runID }),
+              let checks = fullChecks(runID: runID).checks else { throw CocoaError(.fileReadCorruptFile) }
+        var original = run; original.evaluations = [:]; original.reviewProgress = nil
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let document = OpinionDocument(runID: runID, runDigest: Self.archiveDigest(try encoder.encode(original)),
+            checksDigest: try Self.checksDigest(checks))
+        return OpinionSource(run: run, checks: checks, document: document)
+    }
+
+    private func opinionURL(_ id: UUID) -> URL? {
+        storageURL?.deletingLastPathComponent().appendingPathComponent("opinion-outcomes", isDirectory: true)
+            .appendingPathComponent(id.uuidString + ".json")
+    }
+
+    private func opinionActivation(_ source: OpinionSource) -> Data {
+        Data((source.document.runID.uuidString + "\n" + source.document.runDigest + "\n" + source.document.checksDigest).utf8)
+    }
+
+    private func readOpinions(_ source: OpinionSource) throws -> OpinionDocument {
+        let document: OpinionDocument
+        if let url = opinionURL(source.run.id) {
+            guard try verifiedOutcomeDirectory(url.deletingLastPathComponent(), create: false) else { return source.document }
+            let marker = url.appendingPathExtension("activated")
+            if archivePathExists(marker) {
+                guard try boundedArchiveBytes(marker, maximum: 256) == opinionActivation(source), archivePathExists(url) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+            }
+            guard archivePathExists(url) else { return source.document }
+            document = try JSONDecoder().decode(OpinionDocument.self,
+                from: boundedArchiveBytes(url, maximum: Self.maximumCompletedChecksBytes))
+        } else { document = opinionMemory[source.run.id] ?? source.document }
+        let checks = Dictionary(uniqueKeysWithValues: source.checks.checks.map { ($0.listing.ticker, $0) })
+        guard document.version == 1, document.runID == source.run.id,
+              document.runDigest == source.document.runDigest, document.checksDigest == source.document.checksDigest,
+              document.outcomes.count <= checks.count,
+              document.outcomes.allSatisfy({ symbol, outcome in
+                  checks[symbol].map { Self.validOpinionOutcome(outcome, check: $0, run: source.run) } == true
+              }) else { throw CocoaError(.fileReadCorruptFile) }
+        return document
+    }
+
+    /// nil is an explicit unavailable/corrupt state. Empty means no review has been recorded yet.
+    func opinionOutcomes(runID: UUID) -> [String: OpinionOutcome]? {
+        try? readOpinions(opinionSource(runID: runID)).outcomes
+    }
+
+    private func recordOpinion(_ outcome: OpinionOutcome, check: CompletedCheck, source: OpinionSource) throws {
+        var lease: StockSageFileLock?
+        if let url = opinionURL(source.run.id) {
+            try StockSageRecordWriter.require(defaults)
+            _ = try verifiedOutcomeDirectory(url.deletingLastPathComponent(), create: true)
+            lease = try StockSageFileLock(url: url.appendingPathExtension("lock"))
+        }
+        defer { withExtendedLifetime(lease) {} }
+        var document = try readOpinions(source)
+        guard Self.validOpinionOutcome(outcome, check: check, run: source.run) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let symbol = check.listing.ticker
+        var saved = outcome
+        if let old = document.outcomes[symbol] {
+            guard outcome.checkedAt >= old.checkedAt else { throw CocoaError(.fileWriteInvalidFileName) }
+            // A scenario can finish days before the full horizon. Keep each terminal result
+            // independently, even if the next provider response fails or revises older bars.
+            saved = .init(checkDigest: outcome.checkDigest, checkedAt: outcome.checkedAt,
+                horizonReturn: old.horizonReturn.state == .evaluated ? old.horizonReturn : outcome.horizonReturn,
+                scenario: old.scenario?.state == .evaluated ? old.scenario : outcome.scenario)
+        }
+        guard Self.validOpinionOutcome(saved, check: check, run: source.run) else { throw CocoaError(.fileWriteInvalidFileName) }
+        document.outcomes[symbol] = saved
+        let bytes = try JSONEncoder().encode(document)
+        guard bytes.count <= Self.maximumCompletedChecksBytes else { throw CocoaError(.fileWriteOutOfSpace) }
+        if let url = opinionURL(source.run.id) {
+            try bytes.write(to: url, options: [.atomic, .completeFileProtection])
+            let marker = url.appendingPathExtension("activated")
+            if !archivePathExists(marker) { try opinionActivation(source).write(to: marker, options: [.atomic, .completeFileProtection]) }
+        } else { opinionMemory[source.run.id] = document }
+        opinionReviewRevision += 1
+    }
+
+    /// One explicit, cancellable batch. The original full checks are only read. Persisted last
+    /// attempt times give unseen rows priority after relaunch; no timer or automatic continuation.
+    func checkAllOpinions(runID: UUID? = nil, clock: @escaping @MainActor () -> Date = { Date() },
+                          allowed: @escaping @MainActor () -> Bool,
+                          fetch: @escaping @MainActor (CompletedCheck, Run) async -> Observation?) async {
+        guard !isChecking, !Task.isCancelled, allowed(), readable else { return }
+        isChecking = true; lastCheckSummary = nil
+        defer { isChecking = false }
+        do {
+            if storageURL != nil { try StockSageRecordWriter.require(defaults) }
+            let current = storageURL == nil ? runs : try read().runs
+            if let runID, !current.contains(where: { $0.id == runID }) { throw CocoaError(.fileReadNoSuchFile) }
+            var work: [(OpinionSource, CompletedCheck, Date)] = []
+            var noOpinion = 0, missingArchives = 0
+            for run in current where runID == nil || run.id == runID {
+                guard !Task.isCancelled, allowed() else { return }
+                let archive = fullChecks(runID: run.id)
+                if archive.state == .corrupt { throw CocoaError(.fileReadCorruptFile) }
+                guard archive.checks != nil else { missingArchives += 1; continue }
+                let source = try opinionSource(runID: run.id)
+                let previous = try readOpinions(source).outcomes
+                for check in source.checks.checks {
+                    guard check.measurementPrediction != nil else { noOpinion += 1; continue }
+                    let old = previous[check.listing.ticker]
+                    let scenarioDone = !Self.hasOpinionScenario(check: check, in: run) || old?.scenario?.state == .evaluated
+                    guard old?.horizonReturn.state != .evaluated || !scenarioDone else { continue }
+                    guard Self.availability(for: run, now: clock()).state == .due else { continue }
+                    work.append((source, check, old?.checkedAt ?? .distantPast))
+                }
+            }
+            work.sort {
+                if $0.2 != $1.2 { return $0.2 < $1.2 }
+                if $0.0.run.completedAt != $1.0.run.completedAt { return $0.0.run.completedAt < $1.0.run.completedAt }
+                if $0.0.run.id != $1.0.run.id { return $0.0.run.id.uuidString < $1.0.run.id.uuidString }
+                return $0.1.listing.ticker < $1.1.listing.ticker
+            }
+            var checked = 0
+            for (source, check, _) in work.prefix(Self.maximumChecksPerRequest) {
+                guard !Task.isCancelled, allowed() else { return }
+                let observation = await fetch(check, source.run)
+                guard !Task.isCancelled, allowed() else { return }
+                guard let result = Self.evaluateOpinion(check: check, in: source.run, observation: observation, now: clock()) else {
+                    throw CocoaError(.fileWriteInvalidFileName)
+                }
+                try recordOpinion(result, check: check, source: source)
+                checked += 1
+            }
+            lastError = nil
+            lastCheckSummary = "Checked \(checked) saved opinions (up to \(Self.maximumChecksPerRequest) per manual batch). \(work.count - checked) due opinions remain for another batch. \(noOpinion) checks have no accepted opinion."
+                + (missingArchives > 0 ? " \(missingArchives) runs have no available full-check archive; they were not reconstructed." : "")
+        } catch {
+            lastError = "All-opinion review stopped because saved records or storage could not be verified. Existing evidence and outcomes are preserved. \(error.localizedDescription)"
+        }
     }
 }

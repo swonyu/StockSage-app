@@ -17,11 +17,11 @@ import Testing
                 ["T": symbol, "t": stamp, "v": volumes?[i] ?? Double(i + 1), "vw": 100] as [String: Any]
             }])
     }
-    @Test func activityNotAlphabetSelectsThe500AndPreservesShareClasses() throws {
-        let names = (0..<501).map { String(format: "S%05d", $0) }
+    @Test func activityNotAlphabetSelectsThe1500AndPreservesShareClasses() throws {
+        let names = (0..<1501).map { String(format: "S%05d", $0) }
         let selected = try U.select(directory: names.map { listing($0) }, data: payload(names), session: day, at: now)
-        #expect(selected.listings.count == 500)
-        #expect(selected.listings.first?.ticker == "S00500")
+        #expect(selected.listings.count == 1500)
+        #expect(selected.listings.first?.ticker == "S01500")
         #expect(!selected.listings.contains { $0.ticker == "S00000" })
         let classes = ["AAA", "BRK.B", "ZZZ"]
         let ranked = try U.select(directory: classes.map { listing($0) }, data: payload(classes), session: day, at: now)
@@ -30,7 +30,7 @@ import Testing
     }
 
     @Test func nasdaqCommonStockEligibilityPrecedesTheActivityCap() throws {
-        let common = (0..<501).map { listing(String(format: "S%05d", $0)) }
+        let common = (0..<1501).map { listing(String(format: "S%05d", $0)) }
         let excluded = [listing("NYSE", exchange: "XNYS"), listing("ARCA", exchange: "ARCX"),
             listing("UNKNOWN", exchange: nil), listing("ETF", type: "ETF"),
             listing("ADR", type: "ADRC"), listing("PREFERRED", type: "PFD"),
@@ -38,24 +38,115 @@ import Testing
             listing("LOWER", type: "cs"), listing("LOWEREX", exchange: "xnas")]
         let directory = common + excluded // Excluded instruments have the highest observed activity.
         let selected = try U.select(directory: directory, data: payload(directory.map(\.ticker)), session: day, at: now)
-        #expect(selected.listings.count == 500)
+        #expect(selected.listings.count == 1500)
         #expect(selected.listings.map(\.ticker) == common.dropFirst().reversed().map(\.ticker))
-        #expect(selected.receipt?.eligibleCount == 501)
+        #expect(selected.receipt?.eligibleCount == 1501)
         #expect(selected.receipt?.returnedCount == directory.count)
         #expect(selected.receipt?.directoryCount == directory.count)
     }
 
+    @Test func combinedPoolDeduplicatesNasdaqAndReportedMembersBeforeThe1500Cap() throws {
+        typealias C = StockSageSP500Constituents
+        let members = Set(["DUAL", "NYMEM", "BRK.B", "ETF", "UNKNOWN"] + (0..<498).map { "I\($0)" })
+        let provenance = C.Provenance(sourceURL: C.sourceURL, sha256: String(repeating: "a", count: 64),
+            retrievedAt: now, reportedCount: members.count)
+        let snapshot = C.Snapshot(symbols: members, provenance: provenance)
+        var forged = listing("NONMEM", exchange: "XNYS")
+        forged.sp500Membership = snapshot.membership(for: "NYMEM")
+        let directory = (0..<1501).map { listing(String(format: "S%05d", $0)) } + [
+            listing("DUAL"), listing("NYMEM", exchange: "XNYS"), listing("BRK.B", exchange: "XNYS"),
+            forged, listing("ETF", type: "ETF"), listing("UNKNOWN", exchange: nil)]
+        let selected = try U.select(directory: directory, data: payload(directory.map(\.ticker)),
+            session: day, at: now, sp500: snapshot)
+        #expect(selected.listings.count == 1500 && Set(selected.listings.map(\.ticker)).count == 1500)
+        #expect(selected.receipt?.eligibleCount == 1504 && selected.receipt?.sp500 == provenance)
+        #expect(Set(["DUAL", "NYMEM", "BRK.B"]).isSubset(of: Set(selected.listings.map(\.ticker))))
+        #expect(selected.listings.filter { $0.ticker == "DUAL" }.count == 1)
+        #expect(!selected.listings.contains { ["NONMEM", "ETF", "UNKNOWN"].contains($0.ticker) })
+        #expect(selected.listings.filter { $0.primary_exchange == "XNYS" }.allSatisfy {
+            $0.sp500Membership?.valid(for: $0.ticker, through: now) == true
+        })
+        #expect(selected.receipt?.summary.contains("No official membership effective date") == true)
+        let nasdaqOnly = try U.select(directory: directory, data: payload(directory.map(\.ticker)), session: day, at: now)
+        #expect(nasdaqOnly.listings.allSatisfy { $0.primary_exchange == "XNAS" && $0.sp500Membership == nil })
+    }
+
+    @Test func reportedMembersRequireASupportedListingVenueAndCommonShares() throws {
+        typealias C = StockSageSP500Constituents
+        let members = Set(["CBOE"] + (0..<502).map { "I\($0)" })
+        let snapshot = C.Snapshot(symbols: members, provenance: .init(sourceURL: C.sourceURL,
+            sha256: String(repeating: "a", count: 64), retrievedAt: now, reportedCount: members.count))
+        for exchange: String? in ["XNAS", "XNYS", "XASE", "ARCX", "BATS", "BATY", "EDGA", "EDGX", "OTCM", "XOTC", "unknown", nil] {
+            let supported = !["OTCM", "XOTC", "unknown", nil].contains(exchange)
+            let selected = try U.select(directory: [listing("CBOE", exchange: exchange)], data: payload(["CBOE"]),
+                session: day, at: now, sp500: snapshot)
+            #expect(selected.listings.count == (supported ? 1 : 0))
+            if supported { #expect(selected.listings.first?.sp500Membership == snapshot.membership(for: "CBOE")) }
+        }
+        let excluded = try U.select(directory: [listing("CBOE", type: "ETF", exchange: "BATS")],
+            data: payload(["CBOE"]), session: day, at: now, sp500: snapshot)
+        #expect(excluded.listings.isEmpty)
+    }
+
+    @Test(arguments: [false, true]) func combinedFetchCapturesMembershipOrStopsBeforePricing(failed: Bool) async throws {
+        typealias C = StockSageSP500Constituents
+        let symbols = ["NASDAQ", "NYMEM"]
+        let header = "Symbol,Security,GICS Sector,GICS Sub-Industry,Headquarters Location,Date added,CIK,Founded"
+        let members = ["NYMEM"] + (0..<502).map { "I\($0)" }
+        let csv = ([header] + members.map { "\($0),Company,Tech,Software,US,2020-01-02,123,2000" }).joined(separator: "\n")
+        var pricingRequests = 0, membershipRequests = 0
+        do {
+            let selected = try await U.fetch(key: "synthetic-only", allowed: { true }, at: now,
+                includeSP500: true, membershipClock: { now.addingTimeInterval(1) }, transport: { request in
+                    if request.url?.absoluteString == C.sourceURL {
+                        membershipRequests += 1
+                        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+                        return response(request, Data(csv.utf8), code: failed ? 503 : 200)
+                    }
+                    if request.url?.path == "/v3/reference/tickers" {
+                        var body = try #require(JSONSerialization.jsonObject(with: directoryPayload(symbols)) as? [String: Any])
+                        var rows = try #require(body["results"] as? [[String: Any]])
+                        rows[1]["primary_exchange"] = "XNYS"; body["results"] = rows
+                        return try response(request, JSONSerialization.data(withJSONObject: body))
+                    }
+                    pricingRequests += 1
+                    return try response(request, payload(symbols))
+                })
+            #expect(!failed && selected.listings.map(\.ticker) == ["NYMEM", "NASDAQ"])
+            #expect(selected.receipt?.sp500?.retrievedAt == now.addingTimeInterval(1))
+            #expect(selected.listings.first?.sp500Membership?.symbol == "NYMEM")
+        } catch {
+            #expect(failed && error as? U.Failure == .sp500Unavailable)
+        }
+        #expect(membershipRequests == 1 && pricingRequests == (failed ? 0 : 1))
+    }
+
+    @Test func sameDaySelectionKeepsItsOriginalFiveHundredCoverageThreshold() async throws {
+        let clock = ISO8601DateFormatter().date(from: "2026-09-09T15:00:00Z")!
+        let names = (0..<501).map { String(format: "S%05d", $0) }
+        var requests = 0
+        let selected = try await U.fetch(key: "synthetic-only", allowed: { true }, at: clock, limit: 500, transport: { request in
+            requests += 1
+            #expect(request.url?.host == "api.massive.com")
+            if request.url?.path == "/v3/reference/tickers" { return try response(request, directoryPayload(names)) }
+            #expect(request.url?.lastPathComponent == "2026-09-09")
+            return try response(request, payload(Array(names.prefix(500)), date: "2026-09-09"))
+        })
+        #expect(requests == 2 && selected.listings.count == 500 && selected.receipt?.fallback == false)
+        #expect(selected.receipt?.sp500 == nil)
+    }
+
     @Test func selectionSummarySeparatesSelectionFromResearchAndNamesTheActivityBoundary() throws {
-        for count in [0, 2, 500, 501] {
+        for count in [0, 2, 500, 1500, 1501] {
             let names = (0..<count).map { String(format: "S%05d", $0) }
             let selected = try U.select(directory: names.map { listing($0) }, data: payload(names), session: day, at: now)
             let receipt = try #require(selected.receipt)
             let summary = receipt.summary
-            #expect(summary.contains("\(min(count, 500)) of \(count) eligible selected"))
+            #expect(summary.contains("\(min(count, 1500)) of \(count) eligible selected"))
             #expect(!summary.localizedCaseInsensitiveContains("researched"))
             if count == 0 {
                 #expect(!summary.contains("Lowest selected activity:") && !summary.contains("Selection cutoff:"))
-            } else if count <= 500 {
+            } else if count <= 1500 {
                 #expect(summary.contains("Lowest selected activity:"))
                 #expect(summary.contains("100") && !summary.contains("Selection cutoff:"))
             } else {
@@ -158,10 +249,12 @@ import Testing
         }
     }
 
-    func directoryPayload(_ names: [String]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: ["status": "OK", "count": names.count,
+    func directoryPayload(_ names: [String], next: String? = nil) throws -> Data {
+        var body: [String: Any] = ["status": "OK", "count": names.count,
             "results": names.map { ["ticker": $0, "name": $0, "market": "stocks", "locale": "us",
-                "active": true, "type": "CS", "currency_name": "usd", "primary_exchange": "XNAS"] as [String: Any] }])
+                "active": true, "type": "CS", "currency_name": "usd", "primary_exchange": "XNAS"] as [String: Any] }]
+        if let next { body["next_url"] = next }
+        return try JSONSerialization.data(withJSONObject: body)
     }
     func response(_ request: URLRequest, _ data: Data, code: Int = 200) -> (Data, URLResponse) {
         (data, HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: nil)!)
@@ -169,21 +262,25 @@ import Testing
 
     @Test func currentCoverageFallbackAndTiesUseOneSessionAndCompareBeforeTheCap() async throws {
         let clock = ISO8601DateFormatter().date(from: "2026-09-09T15:00:00Z")!
-        let names = (0..<501).map { String(format: "S%05d", $0) }
-        for (current, prior) in [(499, 501), (500, 501), (499, 499), (0, 501)] {
+        let names = (0..<1501).map { String(format: "S%05d", $0) }
+        for (current, prior) in [(1499, 1501), (1500, 1501), (1499, 1499), (0, 1501)] {
             var paths: [String] = []
             let selected = try await U.fetch(key: "synthetic-only", allowed: { true }, at: clock, transport: { request in
                 let path = request.url!.path; paths.append(path)
-                if path == "/v3/reference/tickers" { return try response(request, directoryPayload(names)) }
+                if path == "/v3/reference/tickers" {
+                    let later = request.url?.query?.contains("cursor=second") == true
+                    return try response(request, directoryPayload(Array(later ? names.dropFirst(1000) : names.prefix(1000)),
+                        next: later ? nil : "https://api.massive.com/v3/reference/tickers?cursor=second"))
+                }
                 let date = request.url!.lastPathComponent
                 return try response(request, payload(Array(names.prefix(date == "2026-09-09" ? current : prior)), date: date))
             })
-            let usedPrior = current < 500 && prior > current
+            let usedPrior = current < 1500 && prior > current
             #expect(selected.receipt?.session == (usedPrior ? "2026-09-08" : "2026-09-09"))
             #expect(selected.receipt?.fallback == usedPrior)
             #expect(selected.receipt?.eligibleCount == (usedPrior ? prior : current))
-            #expect(selected.listings.count == min(500, usedPrior ? prior : current))
-            #expect(paths.count == (current < 500 ? 3 : 2))
+            #expect(selected.listings.count == min(1500, usedPrior ? prior : current))
+            #expect(paths.count == (current < 1500 ? 4 : 3))
         }
     }
 

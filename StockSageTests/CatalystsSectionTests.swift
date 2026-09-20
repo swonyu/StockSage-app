@@ -24,7 +24,7 @@ struct CatalystsSectionTests {
             filter: filter == "action" ? .sells : .all, sourceIsEmpty: false)
         let recovery = try #require(CatalystsSection.ideasRecoveryState(visibleCount: visible.count,
             totalCount: source.count, loading: loading, filteredMessage: detail))
-        #expect(recovery.message == detail && recovery.action == "Open Ideas")
+        #expect(recovery.message == detail && recovery.action == "Open Rules screener")
     }
 
     @Test("a saved rules sort can exclude ideas without any active filter")
@@ -44,16 +44,16 @@ struct CatalystsSectionTests {
             filter: .all, sourceIsEmpty: true) == "No ideas in this scan.")
         let recovery = try #require(CatalystsSection.ideasRecoveryState(visibleCount: 0,
             totalCount: source.count, loading: false, filteredMessage: message))
-        #expect(recovery.message == message && recovery.action == "Open Ideas")
+        #expect(recovery.message == message && recovery.action == "Open Rules screener")
     }
 
     @Test(arguments: [false, true])
     func catalystRecoveryDistinguishesAnEmptyScanFromLoading(loading: Bool) throws {
         let recovery = try #require(CatalystsSection.ideasRecoveryState(visibleCount: 0,
             totalCount: 0, loading: loading, filteredMessage: "Do not display a filter explanation"))
-        #expect(recovery.message == (loading ? "Ideas scan in progress. Results will appear here as ideas become available."
-            : "No ideas yet. Open Ideas to choose and run a scan."))
-        #expect(recovery.action == "Open Ideas")
+        #expect(recovery.message == (loading ? "Rules scan in progress. Results will appear here as ideas become available."
+            : "No ideas yet. Open Rules screener to choose and run a scan."))
+        #expect(recovery.action == "Open Rules screener")
         #expect(CatalystsSection.ideasRecoveryState(visibleCount: 1, totalCount: 2,
             loading: loading, filteredMessage: "Some names hidden") == nil)
     }

@@ -151,10 +151,19 @@ struct StockSageFeedBannerLayoutTests {
     // the exact path the feed banner's 2185pt took. Both views below sit in the composer and wrap
     // without a cap.
     //
-    // `connectionNotice` is deliberately NOT tested here. It carries a far longer sentence (584
-    // characters) but no `.fixedSize`, so a width-less proposal gets its one-line ideal instead of a
-    // wrapped height. Absence of the modifier is what makes it safe, and that is worth stating so a
-    // later reader does not "fix" it by adding one.
+    // An expanded privacy disclosure also escaped the composer on macOS 27 even without
+    // fixedSize. Its entire notice must remain readable without growing the split view.
+
+    @Test func expandedPrivacyNoticeCannotExpandTheWorkspace() throws {
+        let config = StockSageLocalModelServer.Config(
+            baseURL: try #require(URL(string: "http://127.0.0.1:18080")),
+            model: StockSageLocalModelServer.gemmaModel)
+        let disclosure = DisclosureGroup("Privacy and model connection", isExpanded: .constant(true)) {
+            StockSageChatSection.connectionNotice(config)
+        }.font(.caption).lineLimit(1)
+        let h = try height(disclosure)
+        #expect(h < 180, "Expanded privacy disclosure measured \(h)pt and can push sidebar controls outside the window")
+    }
 
     @Test func theMissingModelNoticeStaysBounded() throws {
         let h = try height(StockSageChatSection.missingModelNotice(openModelSettings: {}))

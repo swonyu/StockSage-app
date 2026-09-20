@@ -148,6 +148,13 @@ enum StockSageCurrency {
         return currencyForSuffix[String(s[s.index(after: dot)...])] == nil ? nil : resolved
     }
 
+    /// Names raw quote units without confusing pence/cents with major-unit valuation.
+    nonisolated static func quoteUnitLabel(forSymbol symbol: String) -> String {
+        guard let currency = knownQuoteCurrency(forSymbol: symbol) else { return "quote currency unconfirmed" }
+        return minorUnitSuffixes.contains(where: { symbol.uppercased().hasSuffix($0) })
+            ? "\(currency) minor units (100 = 1 \(currency))" : currency
+    }
+
     /// The unit clause every prose surface prints when `knownQuoteCurrency` is nil — one string so
     /// the assessment prompt and the Chat fact cannot drift apart.
     nonisolated static let unconfirmedQuoteCurrencyClause = "in the listing's own currency; quote currency unconfirmed"
@@ -157,7 +164,7 @@ enum StockSageCurrency {
     /// "≈188 SAR"-style (code suffix) — a 1120.SR risk number in raw SAR shown with a bare "$"
     /// misreads ~3.75× (SAR/USD).
     nonisolated static func approxAmount(_ v: Double, symbol: String) -> String {
-        let ccy = currencyForSymbol(symbol)
+        let ccy = conversionCurrencyForSymbol(symbol)
         // Audit 2026-07-12 (ideas-card wave-2 #3): every caller passes a RAW native-currency amount
         // (dollarsAtRisk / notional = shares × native price), so a pence-quoted listing (.L/.JO) arrives
         // in PENCE — normalize to the major unit (÷100) before formatting, or "4000p" renders as
@@ -174,9 +181,15 @@ enum StockSageCurrency {
     /// US universe); non-USD suffixes the code ("+150.00 SAR"). Pence-quoted raw amounts are
     /// normalized to major units exactly like `approxAmount` (a pence P&L labeled GBP must be pounds).
     nonisolated static func signedAmount(_ v: Double, symbol: String) -> String {
-        let ccy = currencyForSymbol(symbol)
+        let ccy = conversionCurrencyForSymbol(symbol)
         let mv = majorUnitValue(symbol: symbol, rawValue: v)
-        return ccy == "USD" ? String(format: "%+.2f", mv) : String(format: "%+.2f %@", mv, ccy)
+        return signedAmount(mv, currency: ccy)
+    }
+
+    /// Aggregated amounts already normalized to major quote-currency units.
+    nonisolated static func signedAmount(_ value: Double, currency: String) -> String {
+        currency == "USD" ? String(format: "%+.2f", value)
+            : String(format: "%+.2f %@", value, currency)
     }
 
     /// ALERT-FMT-1: single shared adaptive price formatter — was quadruplicated byte-identically
@@ -185,11 +198,15 @@ enum StockSageCurrency {
     /// rounds to "0.00" (a $0.0023 micro-cap/coin basis shows "0.0023") and two nearby sub-dollar
     /// levels never collapse to the same string (DOGE-USD stop 0.099 / target 0.104 must NOT both
     /// read "0.10", which bare `%.2f` does). ≥ $1 (or exactly 0) keeps the familiar 2 dp.
-    nonisolated static func adaptivePrice(_ v: Double) -> String {
+    nonisolated static func adaptivePrice(_ v: Double, grouped: Bool = false) -> String {
         let a = abs(v)
-        if a >= 1 || a == 0 { return String(format: "%.2f", v) }
-        if a >= 0.01 { return String(format: "%.4f", v) }
-        return String(format: "%.6f", v)                          // sub-cent → show real magnitude
+        let digits = a >= 1 || a == 0 ? 2 : a >= 0.01 ? 4 : 6
+        if grouped {
+            // Opt-in display formatting; entry fields, prompts and alerts keep their existing text.
+            return v.formatted(.number.locale(Locale(identifier: "en_US"))
+                .grouping(.automatic).precision(.fractionLength(digits)))
+        }
+        return String(format: "%.*f", digits, v)
     }
 
     private nonisolated static let currencyForSuffix: [String: String] = [

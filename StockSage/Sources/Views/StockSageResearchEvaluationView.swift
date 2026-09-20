@@ -28,7 +28,7 @@ struct StockSageResearchEvaluationView: View {
 
     private var setupReason: String? {
         guard let config = selectedConfiguration, config.requiresStrictOutput else {
-            return "Select a Gemma explanation profile in Catalysts → Explanation model before starting a study."
+            return "Select a Gemma explanation profile in Library → Events & model setup → Explanation model before starting a study."
         }
         return nil
     }
@@ -37,30 +37,37 @@ struct StockSageResearchEvaluationView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    Text("Freeze a setup now, then compare future saved picks with SPY. Earlier research is excluded; opening this page does not start a study or check prices.")
-                        .font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Text(StockSageResearchEvaluation.disclosure)
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("Future picks, one frozen setup", systemImage: "chart.bar.xaxis")
+                            .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                        Text("Freeze a setup now, then compare future saved picks with SPY. Earlier research is excluded; opening this page does not start a study or check prices.")
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        Text(StockSageResearchEvaluation.disclosure)
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.padding(.vertical, 6)
                 }
                 if let error = evaluation.lastError {
                     Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
                 }
                 Section("Start a prospective study") {
                     if let config = selectedConfiguration {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("Current explanation model").font(.caption).foregroundStyle(.secondary)
-                            Text(config.model).font(.callout).fixedSize(horizontal: false, vertical: true)
-                        }
+                            Text(config.model).font(.headline).fixedSize(horizontal: false, vertical: true)
+                        }.padding(.vertical, 4)
                     }
                     if let reason = setupReason { Text(reason).font(.callout).foregroundStyle(.secondary) }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Modeled round-trip cost (basis points)").font(.callout)
+                        Text("Modeled round-trip cost (basis points)").font(.subheadline.weight(.semibold))
                         TextField("Required, e.g. 25", text: $costText)
                             .textFieldStyle(.roundedBorder).decimalKeyboardOnIOS()
                             .accessibilityLabel("Modeled round-trip cost in basis points")
                             .accessibilityIdentifier("research.evaluation.cost")
                             .onSubmit(startStudy)
+                            #if os(iOS)
+                            .frame(minHeight: 44)
+                            #endif
                         Text("Enter an assumption from 0 to 1,000 basis points, including 0 if intended. The same buy-and-sell cost is applied to the picks and to SPY; dividends are excluded.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -75,18 +82,20 @@ struct StockSageResearchEvaluationView: View {
                 }
                 Section("Frozen studies") {
                     if evaluation.studies.isEmpty {
-                        Text("No studies yet. A study will start collecting matching future research after you freeze its setup.")
-                            .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        ContentUnavailableView("No frozen studies", systemImage: "calendar.badge.clock",
+                            description: Text("No studies yet. A study will start collecting matching future research after you freeze its setup."))
                     }
                     ForEach(evaluation.studies.sorted { $0.contract.frozenAt > $1.contract.frozenAt }) { study in
                         NavigationLink(value: study.id) {
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 10) {
                                 Text(study.contract.model).font(.headline).fixedSize(horizontal: false, vertical: true)
                                 Text(study.contract.frozenAt.formatted(date: .abbreviated, time: .shortened))
                                     .font(.callout).foregroundStyle(.secondary)
                                 Text("SPY comparison · \(Self.costLabel(study.contract.roundTripCostBPS)) round-trip cost")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }.padding(.vertical, 4)
+                                    .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.vertical, 10)
                         }
                         .accessibilityIdentifier("research.evaluation.study.\(study.id)")
                     }
@@ -138,11 +147,15 @@ struct StockSageResearchEvaluationView: View {
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         List {
                             Section {
-                                Text(study.contract.model).font(.headline).fixedSize(horizontal: false, vertical: true)
-                                Text("Frozen \(study.contract.frozenAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.callout).foregroundStyle(.secondary)
-                                Text(StockSageResearchEvaluation.disclosure)
-                                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(study.contract.model).font(.title3.weight(.semibold))
+                                    Text("Frozen \(study.contract.frozenAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.callout).foregroundStyle(.secondary)
+                                    Text(StockSageResearchEvaluation.disclosure)
+                                        .font(.callout).foregroundStyle(.secondary)
+                                }
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.vertical, 6)
                                 DisclosureGroup("Frozen setup and comparison rules") {
                                     Text("\(profileLabel(study.contract.endpointProfile)) · prompt \(study.contract.promptVersion) · schema \(study.contract.schemaVersion)")
                                     Text("Saved records identify a model name and endpoint profile cohort, not the exact server or model-weight files.")
@@ -200,6 +213,7 @@ struct StockSageResearchEvaluationView: View {
                     Label(evaluation.isChecking ? "Checking saved prices…" : "Check saved prices", systemImage: "arrow.clockwise")
                         .frame(minHeight: 44)
                 }
+                .buttonStyle(.bordered)
                 .disabled(evaluation.isChecking || reason != nil)
                 .accessibilityIdentifier("research.evaluation.check")
             }
@@ -211,22 +225,25 @@ struct StockSageResearchEvaluationView: View {
         @Environment(\.dynamicTypeSize) private var typeSize
 
         var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(summary.horizon.title).font(.headline).accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 16) {
+                Text(summary.horizon.title).font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
                 Text(summary.readiness).font(.callout).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("research.evaluation.readiness.\(summary.horizon.rawValue)")
-                Text("\(summary.measuredWindows) of \(summary.selectedWindows) selected windows measured")
-                    .font(.subheadline.weight(.semibold))
-                Text("\(summary.measuredPredictions) of \(summary.expectedPredictions) selected picks measured")
-                    .font(.callout)
-                Text("Waiting: \(summary.waitingWindows) · Not checked: \(summary.uncheckedWindows) · Data unavailable: \(summary.unavailableWindows)")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(summary.measuredWindows) of \(summary.selectedWindows) selected windows measured")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(summary.measuredPredictions) of \(summary.expectedPredictions) selected picks measured")
+                        .font(.callout)
+                    Text("Waiting: \(summary.waitingWindows) · Not checked: \(summary.uncheckedWindows) · Data unavailable: \(summary.unavailableWindows)")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .monospacedDigit().fixedSize(horizontal: false, vertical: true)
                 Divider()
-                ViewThatFits(in: .horizontal) {
-                    if !typeSize.isAccessibilitySize {
-                        HStack(alignment: .top, spacing: 20) { metrics.fixedSize(horizontal: true, vertical: false) }
-                    }
-                    VStack(alignment: .leading, spacing: 12) { metrics }
+                LazyVGrid(columns: typeSize.isAccessibilitySize
+                    ? [GridItem(.flexible(), alignment: .leading)]
+                    : [GridItem(.adaptive(minimum: 160), alignment: .leading)],
+                    alignment: .leading, spacing: 12) {
+                    metrics
                 }
                 Text("Mean net price returns across complete windows; excess is the picks minus SPY. Incomplete windows stay in the counts above.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -238,7 +255,7 @@ struct StockSageResearchEvaluationView: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("research.evaluation.summary.\(summary.horizon.rawValue)")
         }
@@ -250,11 +267,17 @@ struct StockSageResearchEvaluationView: View {
         }
 
         private func metric(_ title: String, value: Double?) -> some View {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(percentDescription(value))
-                    .font(.title3.weight(.semibold)).monospacedDigit()
+                    .font(.title2.weight(.semibold)).monospacedDigit()
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.small)
+                .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
             .accessibilityElement(children: .combine)
         }
 

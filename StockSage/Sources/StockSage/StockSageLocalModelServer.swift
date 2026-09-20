@@ -409,10 +409,21 @@ enum StockSageLocalModelServer {
         transport: ((URLRequest) async throws -> (Data, URLResponse))?,
         deadline: ContinuousClock.Instant? = nil,
         clock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now },
-        sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }) async -> [String: Any]? {
+        sleepUntil: @escaping (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) },
+        probeObserver: ((CapacityProbe) -> Void)? = nil) async -> [String: Any]? {
         var request = URLRequest(url: url)
         request.timeoutInterval = 2.5
-        let limit = clock().advanced(by: .milliseconds(2500))
+        let began = clock()
+        let limit = began.advanced(by: .milliseconds(2500))
+        var probe = CapacityProbe()
+        defer {
+            if let probeObserver {
+                let elapsed = began.duration(to: clock()).components
+                let milliseconds = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
+                probe.elapsedMilliseconds = Int(min(16_777_216, max(0, milliseconds)))
+                probeObserver(probe)
+            }
+        }
         let requestSession = metadataSession
         do {
             let (data, response) = try await Pending<(Data, URLResponse)>().run(
@@ -420,10 +431,17 @@ enum StockSageLocalModelServer {
                     if let transport { return try await transport(request) }
                     return try await StockSageHTTP.data(for: request, session: requestSession, maximumBytes: 262_144)
                 }
-            guard data.count <= 262_144, let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode) else { return nil }
-            return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard data.count <= 262_144 else { probe.failureCategory = .responseTooLarge; return nil }
+            guard let http = response as? HTTPURLResponse else { probe.failureCategory = .nonHTTP; return nil }
+            probe.httpStatus = (100...599).contains(http.statusCode) ? http.statusCode : nil
+            guard (200..<300).contains(http.statusCode) else { probe.failureCategory = .http; return nil }
+            guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                probe.failureCategory = .malformedJSON
+                return nil
+            }
+            return object
         } catch {
+            probe.failureCategory = transportFailure(error).diagnostic.category
             return nil
         }
     }
@@ -468,10 +486,15 @@ enum StockSageLocalModelServer {
                 detail: "RunPod · Gemma 4 31B ready · \(capacity.context / 1024)K context · \(capacity.parallel) research workers.",
                 researchParallelism: capacity.parallel, servingContext: capacity.context)
         }
-        if c.isLMStudioGemma,
-           let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport),
-           let native = managedInventory(inventory, modelKey: c.model) {
-            return denied() ? stopped : native
+        if c.isLMStudioGemma {
+            let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent("api/v1/models"), transport: transport)
+            guard !denied() else { return stopped }
+            guard let inventory, var native = managedInventory(inventory, modelKey: c.model) else {
+                return Probe(reachable: inventory != nil, isOllama: false, models: [], hasModel: false,
+                    detail: "Gemma could not be verified in LM Studio. Check that its server is running and Gemma 4 31B QAT Q4_0 is available.")
+            }
+            native.servingContext = verifiedContext(inventory, model: c.model)
+            return native
         }
         guard !denied() else { return stopped }
         if let tags = await fetchJSONObject(c.baseURL.appendingPathComponent("api/tags"), transport: transport),
@@ -626,7 +649,15 @@ enum StockSageLocalModelServer {
             return await StockSageLocalModelStartup.shared.ensureLoaded(c, stillValid: stillValid, transport: transport)
         }
         #endif
-        return await probe(c, stillValid: stillValid, transport: transport)
+        let result = await probe(c, stillValid: stillValid, transport: transport)
+        // Passive discovery can establish that weights exist without a ready serving instance.
+        // Non-Mac callers cannot load that instance and must stop before inference.
+        if c.isLMStudioGemma, result.hasModel,
+           (result.servingContext ?? 0) < researchContextTokens {
+            return Probe(reachable: result.reachable, isOllama: false, models: result.models, hasModel: false,
+                detail: "Gemma is downloaded but serving readiness is unverified. Check that LM Studio has one canonical Gemma instance with at least 16K context and one worker.")
+        }
+        return result
     }
 
     /// The model maximum is not the serving instance's actual window. Ambiguous instances
@@ -713,6 +744,14 @@ enum StockSageLocalModelServer {
         case repeatedTokenSequence
         case repeatedCharacterRun
     }
+    /// Metadata-check observations, separate from the successful generation response.
+    /// Only bounded numbers and closed failure categories; never URLs, headers or server prose.
+    nonisolated struct CapacityProbe: Codable, Sendable, Equatable {
+        var failureCategory: FailureCategory? = nil
+        var httpStatus: Int? = nil
+        var elapsedMilliseconds = 0
+        var observedContextTokens: Int? = nil
+    }
     nonisolated struct Diagnostic: Codable, Sendable, Equatable {
         var category: FailureCategory? = nil
         var httpStatus: Int? = nil
@@ -739,10 +778,15 @@ enum StockSageLocalModelServer {
         /// Callers use it to show elapsed time and to explain a slow turn instead of a spinner
         /// with no information. It is a measured duration, never an estimate.
         var elapsedMilliseconds: Int? = nil
+        /// Absent on older records and calls without post-response capacity verification.
+        var capacityProbe: CapacityProbe? = nil
 
         // Fixed keys/enums and capped integers only. Never interpolate server strings/errors.
         var summary: String {
-            "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) degenerate=\(degenerateReason?.rawValue ?? "none") elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries) retryReason=\(retryReason ?? "none")"
+            let capacity = capacityProbe.map {
+                " capacityCheck=\($0.failureCategory?.rawValue ?? "verified") capacityStatus=\($0.httpStatus.map(String.init) ?? "unknown") capacityElapsedMs=\($0.elapsedMilliseconds) capacityTokens=\($0.observedContextTokens.map(String.init) ?? "unknown")"
+            } ?? ""
+            return "server=\(category?.rawValue ?? "completed") status=\(httpStatus.map(String.init) ?? "unknown") body=\(bodyBytes.map(String.init) ?? "unknown") oversized=\(oversizedBody) text=\(textBytes.map(String.init) ?? "unknown") finish=\(finish.rawValue) prompt=\(promptTokens.map(String.init) ?? "unknown") completion=\(completionTokens.map(String.init) ?? "unknown") malformedUsage=\(malformedUsage) degenerate=\(degenerateReason?.rawValue ?? "none") elapsedMs=\(elapsedMilliseconds.map(String.init) ?? "unknown") concurrent=\(concurrentRequests.map(String.init) ?? "unknown") outputLimitRetries=\(outputLimitRetries) retryReason=\(retryReason ?? "none")" + capacity
         }
     }
     nonisolated struct Completion: Sendable, Equatable {
@@ -1071,9 +1115,11 @@ enum StockSageLocalModelServer {
         guard timeout.isFinite, timeout > 0 else {
             return .failure(.init(diagnostic: .init(category: .invalidConfig)))
         }
-        let started = DispatchTime.now()
+        let started = SuspendingClock.now
         func elapsedMilliseconds() -> Int {
-            Int((DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds) / 1_000_000)
+            // Match uptime timing: diagnostics exclude system sleep; deadlines remain continuous.
+            let elapsed = started.duration(to: .now).components
+            return Int(elapsed.seconds) * 1_000 + Int(elapsed.attoseconds / 1_000_000_000_000_000)
         }
         // Counted for the whole transport, and released on EVERY exit path including a thrown
         // cancellation, so an abandoned request can never inflate the observed concurrency.
@@ -1251,21 +1297,30 @@ enum StockSageLocalModelServer {
                         diagnostic.httpStatus = http.statusCode
                         return await failed(.init(diagnostic: diagnostic))
                     }
+                    var diagnostic = reply.diagnostic
+                    diagnostic.httpStatus = http.statusCode
                     if c.requiresStrictOutput {
+                        var capacityProbe: CapacityProbe?
                         let inventory = await fetchJSONObject(c.baseURL.appendingPathComponent(c.isRunPodGemma ? "props" : "api/v1/models"),
-                            transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil)
+                            transport: transport, deadline: deadline, clock: clock, sleepUntil: sleepUntil,
+                            probeObserver: { capacityProbe = $0 })
                         guard clock() < deadline else { return await failed(.init(diagnostic: .init(category: .timeout))) }
                         guard lifecycle == lifecycleRevision else { return await failed(.init(diagnostic: .init(category: .cancelled))) }
                         if let failure = requestFailure(c, stillValid: stillValid, externalAllowed: externalAllowed) { return await failed(failure) }
                         let context = inventory.flatMap { object in
                             c.isRunPodGemma ? runPodCapacity(object)?.context : reply.model.flatMap { verifiedContext(object, model: $0) }
                         }
+                        capacityProbe?.observedContextTokens = context.flatMap { (1..<1_048_576).contains($0) ? $0 : nil }
+                        if inventory != nil, context.map({ $0 < contextTokens }) ?? true {
+                            capacityProbe?.failureCategory = .contextBudget
+                        }
+                        diagnostic.capacityProbe = capacityProbe
                         guard let context, context >= contextTokens else {
-                            return await failed(.init(diagnostic: .init(category: .contextBudget)))
+                            diagnostic.category = .contextBudget
+                            return await failed(.init(diagnostic: diagnostic))
                         }
                     }
-                    var diagnostic = enriched(reply.diagnostic)
-                    diagnostic.httpStatus = http.statusCode
+                    diagnostic = enriched(diagnostic)
                     await observe(.finished, diagnostic: diagnostic)
                     if attemptObserver != nil, let failure = failureAfterSuspension() { return await failed(failure) }
                     return .success(.init(text: reply.text, diagnostic: diagnostic, model: reply.model))

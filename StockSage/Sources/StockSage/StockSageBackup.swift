@@ -1,4 +1,6 @@
 import Foundation
+import CoreTransferable
+import UniformTypeIdentifiers
 
 // MARK: - Full backup / restore + parent-app (Salehman AI) migration
 //
@@ -72,6 +74,16 @@ enum StockSageBackup {
     static let currentSchemaVersion = 2
 
     // MARK: Export
+
+    /// A native JSON attachment; share previews alone do not declare its type or filename.
+    struct JSONExport: Transferable, Sendable {
+        let data: Data
+
+        nonisolated static var transferRepresentation: some TransferRepresentation {
+            DataRepresentation(exportedContentType: .json) { document in document.data }
+                .suggestedFileName("stocksage-backup.json")
+        }
+    }
 
     /// Read committed sources at the action, including after a native save panel returns.
     /// Restored profiles read the leased atomic image; legacy profiles retain their preferences.

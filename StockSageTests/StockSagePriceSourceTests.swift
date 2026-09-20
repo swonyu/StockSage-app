@@ -21,7 +21,7 @@ import Testing
 
     @Test func providerParsersAttachOriginNotFreshness() throws {
         let massive = try #require(StockSageMassive.parseSnapshot(StockSageMassiveTests.docsSample,
-                                                                 requestedSymbols: ["BCAT"])["BCAT"])
+                                                                 requestedSymbols: ["BCAT"], allowedTradeConditions: [14, 41])["BCAT"])
         #expect(massive.priceSource == .massiveSIP)
         let yahoo = try #require(StockSageQuoteService.parseChart(Data(#"{"chart":{"result":[{"meta":{"symbol":"AAPL","regularMarketPrice":100,"previousClose":99,"regularMarketTime":1700000000}}]}}"#.utf8)))
         #expect(yahoo.priceSource == .yahoo)

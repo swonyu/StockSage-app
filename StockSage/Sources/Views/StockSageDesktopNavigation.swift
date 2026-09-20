@@ -9,9 +9,8 @@ enum StockSageDesktop {
     /// The sidebar's single source of order and grouping; `sections` is derived from it, so a
     /// route can only disappear from the sidebar by disappearing from this list.
     static let groups: [SidebarGroup] = [
-        SidebarGroup(title: "Workspace", sections: [.briefing, .research, .watchlist, .chat]),
-        SidebarGroup(title: "Explore", sections: [.ideas, .all, .catalysts, .heatmap]),
-        SidebarGroup(title: "Your records", sections: [.portfolio, .paper, .alerts]),
+        SidebarGroup(title: "Trading research", sections: [.sameDay, .microcap, .largecap, .weekResearch, .fortnightResearch]),
+        SidebarGroup(title: "Your workspace", sections: [.watchlist, .all, .screener, .library]),
     ]
     static let sections: [MarketSection] = groups.flatMap(\.sections)
     static let berry = DS.Palette.accentText
@@ -40,6 +39,13 @@ enum StockSageDesktop {
         case .chat: "Ask about your data. No automatic orders."
         case .research: "All checks and top picks for 1–7 or 7–14 trading days."
         case .paper: "Recorded simulation. New runs are retired; open positions are not monitored after relaunch."
+        case .microcap: "Micro cap momentum, fresh same-day setups and Astra alerts."
+        case .largecap: "Large cap momentum, fresh same-day setups and Astra alerts."
+        case .screener: "Filter stocks using dated market cap and company-quality ratios."
+        case .sameDay: "One manual pick with a buy entry, stop and target."
+        case .weekResearch: "Top 5 for positions held 1–7 trading days."
+        case .fortnightResearch: "Top 5 for positions held 7–14 trading days."
+        case .library: "Saved research, your records and supporting market tools."
         }
     }
     static func icon(for section: MarketSection) -> String {
@@ -52,13 +58,64 @@ enum StockSageDesktop {
         case .heatmap: "square.grid.3x3"
         case .portfolio: "briefcase"
         case .alerts: "bell"
-        case .chat, .research, .paper: section.icon
+        case .chat, .research, .paper, .microcap, .largecap, .screener, .sameDay, .weekResearch, .fortnightResearch, .library: section.icon
         }
     }
     enum PortfolioPage: String, CaseIterable, Identifiable {
         case holdings = "Holdings", journal = "Journal", paper = "Paper", analytics = "Analytics"
         var id: Self { self }
         var title: String { self == .paper ? "Forward record" : rawValue }
+    }
+}
+
+/// Observe progress here so a arriving result does not rebuild the entire workspace.
+struct StockSageResearchActivityNavigation: View {
+    let destination: MarketSection
+    let open: (MarketSection) -> Void
+    @ObservedObject private var horizons: StockSageHorizonResearch
+    @ObservedObject private var sameDay = StockSageSameDayResearch.shared
+    @ObservedObject private var microcap = StockSageSameDayResearch.microcap
+    @ObservedObject private var largecap = StockSageSameDayResearch.largecap
+
+    init(destination: MarketSection, horizons: StockSageHorizonResearch = .shared,
+         open: @escaping (MarketSection) -> Void) {
+        self.destination = destination
+        self.open = open
+        _horizons = ObservedObject(wrappedValue: horizons)
+    }
+
+    var body: some View {
+        Group {
+            if let running = horizons.running, destination.researchHorizon == nil {
+                StockSageResearchModesPanel.runningScanControls(running: running,
+                    show: { open(.researchDestination(running)) }, stop: { horizons.stop() })
+                    .padding(12)
+            } else if microcap.isRunning, destination != .microcap {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Micro cap research is running. Switching pages does not stop it.").font(.caption)
+                    HStack {
+                        Button("Show Micro cap research") { open(.microcap) }
+                        Button("Stop Micro cap watching", systemImage: "stop.fill") { StockSageMicrocapMonitor.shared.stop(); microcap.stop() }
+                    }
+                }.padding(12)
+            } else if largecap.isRunning, destination != .largecap {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Large cap research is running. Switching pages does not stop it.").font(.caption)
+                    HStack {
+                        Button("Show Large cap research") { open(.largecap) }
+                        Button("Stop Large cap research", systemImage: "stop.fill") { StockSageMicrocapMonitor.largecap.stop(); largecap.stop() }
+                    }
+                }.padding(12)
+            } else if sameDay.isRunning, destination != .sameDay {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Same-day research is running. Switching pages does not stop it.").font(.caption)
+                    HStack {
+                        Button("Show same-day research") { open(.sameDay) }
+                        Button("Stop same-day research", systemImage: "stop.fill") { sameDay.stop() }
+                    }
+                }.padding(12)
+            }
+        }
     }
 }
 

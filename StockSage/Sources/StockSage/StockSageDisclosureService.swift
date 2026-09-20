@@ -161,7 +161,7 @@ enum StockSageDisclosureService {
         /// this taxonomy says exactly what is knowable here and no more.
         enum Failure: Sendable, Equatable {
             case externalAccessDisabled, cancelled, noCIK, unreachable, invalidPayload
-            var message: String {
+            nonisolated var message: String {
                 switch self {
                 case .externalAccessDisabled: StockSageMassiveEvents.Failure.externalAccessDisabled.message
                 case .cancelled: StockSageMassiveEvents.Failure.cancelled.message

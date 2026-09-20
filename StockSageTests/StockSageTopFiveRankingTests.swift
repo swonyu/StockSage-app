@@ -65,6 +65,18 @@ struct StockSageTopFiveRankingTests {
               pricePerShare: 50, planReported: false, amendment: amendment)
     }
 
+    @Test func scoringClockRoundTripsAndLegacyAbsenceIsNotInvented() throws {
+        let result = T.rank([candidate("AAA"), candidate("BBB", qualified: false)], horizon: .week, now: now)
+        #expect(result.scoredAt == now && T.valid(result))
+        let bytes = try JSONEncoder().encode(result)
+        #expect(try JSONDecoder().decode(T.Result.self, from: bytes) == result)
+        var legacy = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        legacy.removeValue(forKey: "scoredAt")
+        let restored = try JSONDecoder().decode(T.Result.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(restored.scoredAt == nil && restored.ranked == result.ranked)
+        #expect(!T.valid(restored), "An unrecorded clock cannot be claimed as a new durable ranking receipt")
+    }
+
     @Test func fewerThanFiveQualifiedFillsRemainingSlotsFromTheEligiblePool() {
         let pool = ["AAA", "BBB"].map { candidate($0, qualified: true) }
             + ["CCC", "DDD", "EEE"].map { candidate($0, qualified: false) }

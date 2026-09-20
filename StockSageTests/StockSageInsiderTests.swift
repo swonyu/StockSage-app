@@ -126,9 +126,9 @@ struct StockSageInsiderTests {
 
     @Test("the caveat states both the legality and the lack of validation")
     func caveatIsHonest() {
-        #expect(I.caveat.contains("public"))
-        #expect(I.caveat.contains("UNVALIDATED"))
-        #expect(I.caveat.lowercased().contains("tax withholding"))
+        #expect(I.caveat.lowercased().contains("public"))
+        #expect(I.caveat.lowercased().contains("unvalidated"))
+        #expect(I.caveat.lowercased().contains("other codes"))
     }
 
     // MARK: transactionDate parsing (W4 — insider items need a date to be citable)
@@ -280,5 +280,22 @@ struct StockSageInsiderTests {
         let result = await I.recentActivity(for: "AAPL")
         Self.unlockAndRestore(prior)
         #expect(result == nil)
+    }
+}
+
+
+extension StockSageInsiderTests {
+    @Test func planAndRoleDisclosureDoNotImplyDiscretionaryIntent() throws {
+        let xml = purchaseFiling.replacingOccurrences(of: "<ownershipDocument>", with: "<ownershipDocument><aff10b5One>true</aff10b5One>")
+            .replacingOccurrences(of: "<officerTitle>", with: "<isDirector>true</isDirector><officerTitle>")
+            .replacingOccurrences(of: "<value>5000</value>", with: "<value>0.125</value>")
+        let transaction = try #require(I.parseForm4(xml)?.discretionary.first)
+        #expect(transaction.shares == 0.125)
+        #expect(transaction.planDisclosure.contains("reported"))
+        #expect(transaction.reportedRoles.contains("director"))
+        #expect(transaction.evidenceDescription.contains("0.125"))
+        #expect(transaction.evidenceDescription.contains("filing date unavailable"))
+        #expect(!I.caveat.contains("chose nothing"))
+        #expect(I.caveat.contains("private"))
     }
 }

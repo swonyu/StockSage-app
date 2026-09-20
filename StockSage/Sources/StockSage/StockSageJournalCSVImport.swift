@@ -35,8 +35,9 @@ enum StockSageJournalCSVImport {
         }
 
         let iso = ISO8601DateFormatter()
-        // Same existing identity policy, extended to rows accepted earlier in this batch.
-        var seenKeys = Set(existing.map { dupeKey(symbol: $0.symbol, side: $0.side, entry: $0.entry, shares: $0.shares, openedAt: $0.openedAt) })
+        // CSV has no record IDs. Match complete exported rows with multiplicity:
+        // repeated imports are idempotent, but separate identical executions survive.
+        var existingCounts = Dictionary(grouping: existing, by: { dupeKey($0, iso: iso) }).mapValues(\.count)
 
         var trades: [TradeRecord] = []
         var errors: [(line: Int, reason: String)] = []
@@ -93,12 +94,13 @@ enum StockSageJournalCSVImport {
             // ignore the incoming text, never store it as an asserted performance figure.
             let note = fields[10].isEmpty ? nil : fields[10]
 
-            let key = dupeKey(symbol: symbol, side: side, entry: entry, shares: shares, openedAt: openedAt)
             let trade = TradeRecord(symbol: symbol, side: side, entry: entry, stop: stop, target: target,
                                     shares: shares, openedAt: openedAt, exitPrice: exitPrice, closedAt: closedAt,
                                     note: note)
             if let error = trade.closureError { errors.append((line, error)); continue }
-            guard seenKeys.insert(key).inserted else {
+            let key = dupeKey(trade, iso: iso)
+            if let remaining = existingCounts[key], remaining > 0 {
+                existingCounts[key] = remaining - 1
                 errors.append((line, Self.duplicateReason)); continue
             }
             trades.append(trade)
@@ -108,7 +110,7 @@ enum StockSageJournalCSVImport {
 
     /// The one row-error reason that is an intentional skip, not a failure — shared between
     /// parse()'s append and preview()'s partition so the two can never drift.
-    static let duplicateReason = "duplicate of an existing or earlier accepted trade — skipped"
+    static let duplicateReason = "matches an existing exported trade row — skipped"
 
     /// CSV must accept String(Double)'s decimal exponents without loosening human-input
     /// rules. Keep the existing unambiguous comma policy; never admit hex, NaN or infinity.
@@ -133,16 +135,17 @@ enum StockSageJournalCSVImport {
         return ImportPreview(trades: trades, imported: trades.count, skipped: dupes.count, errors: failures)
     }
 
-    private static func dupeKey(symbol: String, side: TradeRecord.Side, entry: Double, shares: Double, openedAt: Date) -> String {
-        // "to-the-minute" — truncate the timestamp's seconds.
-        let minuteEpoch = (openedAt.timeIntervalSince1970 / 60).rounded(.down)
-        return "\(symbol.uppercased())|\(side.rawValue)|\(entry)|\(shares)|\(minuteEpoch)"
+    private static func dupeKey(_ trade: TradeRecord, iso: ISO8601DateFormatter) -> [String] {
+        [trade.symbol.uppercased(), trade.side.rawValue, String(trade.entry), String(trade.stop),
+         trade.target.map { String($0) } ?? "", String(trade.shares), iso.string(from: trade.openedAt),
+         trade.exitPrice.map { String($0) } ?? "", trade.closedAt.map { iso.string(from: $0) } ?? "",
+         trade.note ?? ""]
     }
 
     /// RFC-4180 row splitter: handles quoted fields containing commas, doubled quotes, and
     /// embedded newlines (CR, LF, CRLF) — a naive `.split(separator: "\n")` would break a
     /// multi-line quoted note into multiple fake rows.
-    private static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String], error: String?)] {
+    nonisolated static func splitRFC4180(_ csv: String) -> [(line: Int, fields: [String], error: String?)] {
         var rows: [(line: Int, fields: [String], error: String?)] = []
         var fields: [String] = []
         var field = ""

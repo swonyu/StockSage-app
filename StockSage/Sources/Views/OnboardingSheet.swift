@@ -20,38 +20,43 @@ struct OnboardingSheet: View {
     }
 
     private let steps: [Step] = [
-        .init(id: 1, icon: "magnifyingglass", title: "Start with your daily summary",
-              detail: "Home shows the latest saved picks and predictions ready for review. Open Research, choose 1–7 or 7–14 trading days and run a scan. These are multi-session holding horizons, not intraday trades or long-term investment plans."),
-        .init(id: 2, icon: "list.number", title: "Review up to five Buy / Strong Buy results",
-              detail: "After every check, the local model compares the eligible Buy / Strong Buy research and selects up to five for each horizon. A Buy can rank above a Strong Buy. Large pools use approximate comparison rounds. Fewer qualifying opinions means fewer picks; a failed comparison produces no ranked shortlist."),
+        .init(id: 1, icon: "magnifyingglass", title: "Choose your trading window",
+              detail: "Open Same-day pick for one intraday candidate with a buy entry, stop and target, or choose the separate 1–7 and 7–14 trading-day Top 5 pages. Every research run starts with your explicit action; switching tabs does not run research."),
+        .init(id: 2, icon: "list.number", title: "Separate rankings from qualified picks",
+              detail: "Each trading-day page shows its own deterministic ranked five when enough completed research exists. Ranked stocks can fail the strict screen; only Qualified stocks passed it. The separate model comparison selects from eligible Buy / Strong Buy opinions. Same-day research can return no pick when its checks fail."),
         .init(id: 3, icon: "doc.text.magnifyingglass", title: "Read the evidence and uncertainty",
               detail: "Open a result to inspect its dated sources, warnings and coverage gaps. Check the price source and timestamp. Model opinions and the ranking are unvalidated; they are not forecasts or win probabilities."),
         .init(id: 4, icon: "clock.arrow.circlepath", title: "Return to Saved research",
-              detail: "Completed runs keep a dated snapshot of the original results. Review the outcome after 7 trading days for the 1–7-day horizon, or 14 trading days for the 7–14-day horizon. Later outcomes do not rewrite the original opinions. Missing review prices remain unavailable; past results do not guarantee future returns."),
+              detail: "Completed runs keep the original results and evidence. You can request an outcome check after the first monitoring New York session has fully ended. Strict comparison scenarios finish at the first verified stop or target event, otherwise at the 7th or 14th session close. Older runs retain their recorded policy. Later outcomes never rewrite the original opinions; missing prices remain unavailable."),
         .init(id: 5, icon: "star", title: "Follow companies with Watchlist and Chat",
               detail: "Add symbols in Watchlist or ask Chat, such as “add RKLB to watchlist.” Chat can help you inspect your evidence. Adding a symbol does not place an order."),
         .init(id: 6, icon: "scalemass", title: "Review the planned risk",
               detail: "Sizing estimates risk at the planned stop. Gaps, actual fills and costs can make the loss larger. Review all warnings and assumptions; a copied plan still needs your own broker review before any real trade."),
-        .init(id: 7, icon: "book.closed", title: "Keep your records in Portfolio",
-              detail: "Choose Journal to record a trade you made, including planned and actual fill prices. Log trade opens an unsaved draft. Review the close preview and recorded units before saving a close; editing the journal does not execute a broker order."),
+        .init(id: 7, icon: "book.closed", title: "Keep your records in Library",
+              detail: "Open Library → Holdings & journal → Journal to record a trade you made, including planned and actual fill prices. Log trade opens an unsaved draft. Review the close preview and recorded units before saving a close; editing the journal does not execute a broker order."),
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("Welcome to StockSage")
-                        .font(.title2.weight(.bold))
-                    Text("Research for 1–7 and 7–14 trading days, with a saved record you can review later. Watchlist, Chat and your own records support that work.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Welcome to StockSage")
+                            .font(.title2.weight(.bold))
+                            .accessibilityAddTraits(.isHeader)
+                        Text("One same-day pick and separate Top 5 research for 1–7 and 7–14 trading days. Start each run manually; find saved research, Chat and your records in Library.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     ForEach(steps) { step in
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: step.icon)
                                 .fixedSize().frame(minWidth: 22, alignment: .leading)
                                 .foregroundStyle(DS.Palette.accentText)
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 6) {
                                 Text("\(step.id). \(step.title)").font(.callout.weight(.semibold))
+                                    .accessibilityAddTraits(.isHeader)
+                                    .accessibilityIdentifier("onboarding.step.\(step.id)")
                                 Text(step.detail).font(.callout).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -61,9 +66,12 @@ struct OnboardingSheet: View {
                     #if os(macOS)
                     parentAppImport
                     #else
-                    Text("Have a StockSage backup? Open Portfolio → Journal → Data → Restore backup to select the backup file on your iPhone.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Bring your saved records").font(.headline)
+                        Text("Have a StockSage backup? Open Library → Holdings & journal → Journal → Data → Restore backup to select the backup file on your iPhone.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     #endif
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -74,12 +82,18 @@ struct OnboardingSheet: View {
 
             HStack {
                 Spacer()
-                Button("Get started") {
+                Button {
                     onboardingDone = true
                     isPresented = false
+                } label: {
+                    Text("Get started")
+                        #if os(iOS)
+                        .frame(minHeight: 44)
+                        #endif
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
-                .touchHitArea()
                 .accessibilityIdentifier("onboarding.getStarted")
             }
         }
@@ -98,6 +112,10 @@ struct OnboardingSheet: View {
     #if os(macOS)
     private var parentAppImport: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("Bring your saved records").font(.headline)
+            Text("Optionally import journal records from Salehman AI. Existing records stay in place.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Button("Import data from Salehman AI") {
                 do {
                     if let parent = try StockSageBackup.importFromParentApp() {
@@ -114,6 +132,7 @@ struct OnboardingSheet: View {
                     importResult = "Import failed: \(error.localizedDescription)"
                 }
             }
+            .accessibilityIdentifier("onboarding.import")
             if let importResult {
                 Text(importResult).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

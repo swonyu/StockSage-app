@@ -135,6 +135,112 @@ struct StockSageIOSPresentationTests {
     }
 
     @Test(arguments: [false, true])
+    func sameDayLevelsAndDatedWarningRemainReadableOnPhone(accessibility: Bool) async throws {
+        let suite = "stocksage.ios.same-day.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        let fixture = StockSageSameDayResearchTests()
+        let research = StockSageSameDayResearch()
+        let check = try fixture.check("AAPL")
+        await research.run(selection: .init([fixture.listing("AAPL")]), capacity: { 1 },
+            allowed: { true }, clock: { fixture.now }, analyze: { _, _, _ in check },
+            refreshQuote: { _ in fixture.quote() })
+        let original = try #require(research.receipt)
+        try #require(original.selectedSymbol == "AAPL")
+        let panel = StockSageSameDayResearchPanel(store: store, research: research)
+        try await capture(panel.defaultAppStorage(defaults), name: "same-day-dated-levels",
+                          accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
+            _ = try await reveal(in: window, identifier: "research.sameDay.dated")
+            for label in ["Buy entry (ceiling)", "Stop-loss reference", "Target reference"] {
+                let level = try await reveal(in: window, labelContaining: label)
+                let bounds = window.convert(level.accessibilityFrame, from: nil)
+                #expect(bounds.minX >= 0 && bounds.maxX <= window.bounds.width && bounds.height > 0)
+                #expect(level.accessibilityLabel?.contains("$") == true,
+                        "Each price must remain paired with its role for VoiceOver")
+            }
+            try await saveViewport(window, name: "same-day-levels-visible", accessibility: accessibility)
+            // The unprefixed risk also appears in the selected-pick card. Only the raw
+            // check's prefixed case/risk prove that All checks actually expanded.
+            let captured = try #require(original.checks.first)
+            let rawCase = "Case: " + (try #require(captured.reason))
+            let rawRisk = "Risk: " + (try #require(captured.risk))
+            #expect(!nativeElements(window).contains { $0.accessibilityLabel == rawCase })
+            let evidence = try await reveal(in: window, labelContaining: "checks and captured evidence")
+            try #require(evidence.accessibilityActivate())
+            let detail = try await reveal(in: window, labelContaining: rawCase)
+            #expect(detail.accessibilityLabel == rawCase)
+            try await saveViewport(window, name: "same-day-expanded-check-case", accessibility: accessibility,
+                afterDisclosureSettles: { _ = try await reveal(in: window, labelContaining: rawCase) })
+            let risk = try await reveal(in: window, labelContaining: rawRisk)
+            #expect(risk.accessibilityLabel == rawRisk)
+            try await saveViewport(window, name: "same-day-expanded-evidence", accessibility: accessibility)
+            let collapse = try await reveal(in: window, labelContaining: "checks and captured evidence")
+            try #require(collapse.accessibilityActivate())
+            try await waitUntil("Closing All checks must remove its raw check body") {
+                !nativeElements(window).contains { $0.accessibilityLabel == rawCase }
+            }
+        }
+        #expect(research.receipt == original && !research.isRunning)
+        #expect(!store.isRefreshing && store.userSymbols.isEmpty)
+    }
+
+    @Test(arguments: [DynamicTypeSize.accessibility3, .accessibility5])
+    func chatSavingWarningIsReachableWithoutLosingTheDraft(size: DynamicTypeSize) async throws {
+        let suite = "stocksage.ios.chat-warnings.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let blocker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("Synthetic storage failure".utf8).write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        let chat = StockSageChatSession(historyURL: blocker.appendingPathComponent("history.json"))
+        let id = try #require(chat.begin(question: "What remains uncertain?",
+            snapshot: .init(at: now, facts: [], context: "Synthetic local context"), model: "fixture"))
+        chat.cancel(id: id)
+        let warning = try #require(chat.storageError)
+        chat.draft = "Keep this unsent question about AAPL"
+        let draft = chat.draft
+        let view = StockSageChatSection(store: store, openModelSettings: {}, chat: chat)
+            .defaultAppStorage(defaults).environment(\.dynamicTypeSize, size)
+        try await capture(view, name: "chat-saving-warning-\(size)", accessibility: true,
+                          dynamicTypeSize: size, viewportHeight: 812, shellPadding: 0) { _, window in
+            let review = try await reveal(in: window, identifier: "chat.reviewIssues")
+            let frame = window.convert(review.accessibilityFrame, from: nil)
+            #expect(frame.height >= 44 && window.bounds.contains(frame),
+                    "The full large-text warning action must be reachable without compression")
+            try await saveViewport(window, name: "chat-saving-warning-composer-\(size)", accessibility: true)
+            try #require(review.accessibilityActivate())
+            let message = try await element(in: window, identifier: "chat.warning.0")
+            #expect(message.accessibilityLabel == warning, "Keep the complete actual save/recovery failure")
+            let bounds = window.convert(message.accessibilityFrame, from: nil)
+            #expect(bounds.minX >= 0 && bounds.maxX <= window.bounds.width && bounds.height > 0)
+            #expect(bounds.intersects(window.bounds), "The warning action must reveal its scrollable recovery text")
+            try await saveViewport(window, name: "chat-saving-warning-revealed-\(size)", accessibility: true)
+        }
+        #expect(chat.draft == draft && chat.storageError == warning && chat.pending == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func providerSettingsAndExecutionMetricsScaleOnPhone(accessibility: Bool) async throws {
+        try await capture(ScrollView { StockSageMassiveKeyField().padding(16) },
+                          name: "provider-settings", accessibility: accessibility, viewportHeight: 812) { _, window in
+            let save = try await reveal(in: window, identifier: "settings.massive.save")
+            #expect(save.accessibilityTraits.contains(.notEnabled))
+            let test = try await reveal(in: window, identifier: "settings.massive.test")
+            #expect(test.accessibilityFrame.height >= 44)
+        }
+        let trades = (0..<3).map { index in
+            TradeRecord(symbol: "AAPL", side: .long, entry: 100, stop: 95, target: 110, shares: 10,
+                openedAt: now.addingTimeInterval(-86400), exitPrice: 105, closedAt: now,
+                note: "Synthetic measured fill \(index)", plannedEntry: 100, entryFill: 100.1,
+                plannedExit: 105, exitFill: 104.9)
+        }
+        try await capture(ExecutionQualityPanel(trades: trades), name: "execution-metrics", accessibility: accessibility)
+    }
+
+    @Test(arguments: [false, true])
     func chatReceiptAndEvidenceFitThePhone(accessibility: Bool) async throws {
         let receipt = StockSageChatSession.Turn(id: UUID(), question: "add rklb to watchlist",
             snapshot: .init(at: now, facts: [], context: "Local watchlist action."), model: "StockSage",
@@ -164,6 +270,74 @@ struct StockSageIOSPresentationTests {
                           name: "chat-evidence", accessibility: accessibility)
         #expect(edits == 0, "Rendering cannot edit or send a question")
         #expect(turn.snapshot == snapshot && turn.evidence == [fact.id, source.id])
+    }
+
+    @Test(arguments: [false, true], StockSageHorizonResearch.Horizon.allCases)
+    func deterministicFiveLeadThePhoneResearchPage(accessibility: Bool, horizon: StockSageHorizonResearch.Horizon) async throws {
+        let suite = "stocksage.ios.five.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let research = try await StockSageLayoutFixtures.populatedResearch(horizon: horizon)
+        let scan = try #require(research.scans[horizon])
+        let ranked = try #require(scan.rankedTopFive(horizon: horizon, now: Date()))
+        let model = PhoneResearchPresentationModel(horizon: horizon)
+        let view = PhoneResearchPresentationFixture(model: model, store: store, research: research)
+            .defaultAppStorage(defaults)
+        let name = "deterministic-five-\(horizon == .week ? "week" : "fortnight")"
+        try await capture(view, name: name, accessibility: accessibility, viewportHeight: 812) { _, window in
+            for row in ranked.ranked {
+                let button = try await reveal(in: window, identifier: "research.topfive.open.\(row.symbol)")
+                #expect(button.accessibilityLabel?.contains(row.action) == true)
+                #expect(button.accessibilityLabel?.contains(row.status == .qualified ? "Qualified" : "Not qualified") == true)
+                try await saveViewport(window, name: name + "-rank\(row.rank)", accessibility: accessibility)
+            }
+            let last = try #require(ranked.ranked.last)
+            let rowID = "research.topfive.row.\(last.symbol)"
+            _ = try await reveal(in: window, labelContaining: "Counterevidence", within: rowID)
+            try await saveViewport(window, name: name + "-rank5-tail", accessibility: accessibility)
+            let signal = try #require(last.insiderSignals.first)
+            let insiderLabel = "\(signal.direction == .purchase ? "Purchase" : "Sale") · \(signal.ownerName)"
+            let row = try #require(nativeElements(window).first { nativeIdentifier($0) == rowID })
+            #expect(!nativeElements(row).contains { $0.accessibilityLabel == insiderLabel })
+            let insider = try await reveal(in: window, labelContaining: "Insider evidence", within: rowID)
+            try #require(insider.accessibilityActivate())
+            let owner = try await reveal(in: window, labelContaining: insiderLabel, within: rowID)
+            #expect(owner.accessibilityLabel == insiderLabel)
+            try await saveViewport(window, name: name + "-rank5-insider-owner", accessibility: accessibility,
+                afterDisclosureSettles: {
+                    _ = try await reveal(in: window, labelContaining: insiderLabel, within: rowID)
+                })
+            _ = try await reveal(in: window, labelContaining: "old when scored · contribution", within: rowID)
+            try await saveViewport(window, name: name + "-rank5-insider-age", accessibility: accessibility)
+
+            try #require(last.status == .notQualified)
+            let distinctGate = try #require(last.failedGates.first { !last.hardPenaltyReasons.contains($0) })
+            let expandedRow = try #require(nativeElements(window).first { nativeIdentifier($0) == rowID })
+            #expect(!nativeElements(expandedRow).contains { $0.accessibilityLabel == distinctGate })
+            let gates = try await reveal(in: window, labelContaining: "Failed gates", within: rowID)
+            try #require(gates.accessibilityActivate())
+            for (index, reason) in last.failedGates.enumerated() {
+                let gate = try await reveal(in: window, labelContaining: reason, within: rowID)
+                #expect(gate.accessibilityLabel == reason)
+                try await saveViewport(window, name: name + "-rank5-gate\(index + 1)", accessibility: accessibility,
+                    afterDisclosureSettles: {
+                        _ = try await reveal(in: window, labelContaining: reason, within: rowID)
+                    })
+            }
+            let button = try await reveal(in: window, identifier: "research.topfive.open.\(last.symbol)")
+            try #require(button.accessibilityActivate())
+            try await waitUntil { model.presentation.selected == last.symbol }
+            let close = try await element(in: window, label: "Close details")
+            if !close.accessibilityActivate() {
+                let control = try #require(close as? UIControl)
+                try #require(control.isEnabled && control.window === window)
+                control.sendActions(for: .touchUpInside)
+            }
+            try await waitUntil { model.presentation.selected == nil }
+            #expect(model.presentation.filter == .all)
+        }
+        #expect(research.running == nil && research.scans[horizon]?.rankingScoredAt == scan.rankingScoredAt)
     }
 
     @Test(arguments: [false, true], StockSageHorizonResearch.Horizon.allCases)
@@ -243,11 +417,42 @@ struct StockSageIOSPresentationTests {
                 .defaultAppStorage(defaults)
             try await capture(interactive, name: "research-filter-actions", accessibility: accessibility,
                               viewportHeight: 812) { _, window in
+                // Intrinsic full-content PNGs can compress SwiftUI labels differently.
+                // Capture these long controls/headings inside the actual phone viewport.
+                _ = try await reveal(in: window, identifier: "research.retryIncomplete")
+                try await saveViewport(window, name: "research-retry-viewport", accessibility: accessibility)
+                _ = try await reveal(in: window, labelContaining: "5 shown · select a stock")
+                try await saveViewport(window, name: "research-strict-heading-viewport", accessibility: accessibility)
+                if accessibility {
+                    let selection = try await reveal(in: window, identifier: "research.filter.selection")
+                    let title = StockSageResearchModesPanel.ResultFilter.topBuys.rawValue
+                    #expect(selection.accessibilityLabel == title)
+                    let frame = window.convert(selection.accessibilityFrame, from: nil)
+                    let font = UIFont.preferredFont(forTextStyle: .callout, compatibleWith: window.traitCollection)
+                    let required = (title as NSString).boundingRect(
+                        with: CGSize(width: frame.width, height: .greatestFiniteMagnitude),
+                        options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil).height
+                    #expect(frame.height + 1 >= ceil(required),
+                            "The whole selected filter must fit at the actual native Dynamic Type size")
+                    try await saveViewport(window, name: "research-filter-selection-viewport", accessibility: accessibility)
+                }
                 for filter in [StockSageResearchModesPanel.ResultFilter.all, .incomplete] {
                     let picker = try await reveal(in: window, identifier: "research.filter")
+                    if accessibility { #expect(picker.accessibilityValue == model.presentation.filter.rawValue) }
                     try #require(picker.accessibilityActivate(), "The native research filter must open")
-                    let owner = try #require(picker as? UIButton)
-                    let choice = try await element(in: window, label: filter.rawValue)
+                    // SwiftUI Menu exposes an AX node separate from its backing UIButton.
+                    // Match the mounted menu button to the rendered filter's exact bounds.
+                    let pickerFrame = window.convert(picker.accessibilityFrame, from: nil)
+                    let candidates = nativeElements(window).compactMap { $0 as? UIButton }.filter { button in
+                        guard button.window === window, button.isEnabled, button.menu != nil else { return false }
+                        let frame = button.convert(button.bounds, to: window)
+                        return abs(frame.minX - pickerFrame.minX) < 1 && abs(frame.minY - pickerFrame.minY) < 1
+                            && abs(frame.width - pickerFrame.width) < 1 && abs(frame.height - pickerFrame.height) < 1
+                    }
+                    let owner = try #require((picker as? UIButton) ?? (candidates.count == 1 ? candidates.first : nil),
+                                             "The visible research filter must own one mounted native menu button")
+                    defer { owner.contextMenuInteraction?.dismissMenu() }
+                    let choice = try await element(in: window, label: filter.rawValue, button: true)
                     try await activateMenuChoice(filter.rawValue, rendered: choice, owner: owner)
                     try await waitUntil("The selected research filter must update") { model.presentation.filter == filter }
                     if filter == .all {
@@ -376,8 +581,10 @@ struct StockSageIOSPresentationTests {
             let link = try await reveal(in: window, identifier: "research.history.run.\(stopped.id)")
             try #require(link.accessibilityActivate())
             _ = try await reveal(in: window, labelContaining: "Stop hit")
-            _ = try await reveal(in: window, labelContaining: "Adjusted scenario")
             _ = try await reveal(in: window, labelContaining: "Observed outcome price")
+            try await saveViewport(window, name: "research-terminal-stop-price", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "Adjusted scenario")
+            try await saveViewport(window, name: "research-terminal-stop-scenario", accessibility: accessibility)
             _ = try await reveal(in: window, labelContaining: "the conservative stop-first rule was applied")
             _ = try await reveal(in: window, labelContaining: "Synthetic adjusted daily prices")
             try await saveViewport(window, name: "research-terminal-stop-detail", accessibility: accessibility)
@@ -385,24 +592,32 @@ struct StockSageIOSPresentationTests {
         try await capture(NavigationStack { StockSageResearchHistoryDetail(history: history, runID: hit.id) },
             name: "research-terminal-target", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
             _ = try await reveal(in: window, labelContaining: "Target hit")
-            _ = try await reveal(in: window, labelContaining: "Daily bars cannot establish intraday order")
+            _ = try await reveal(in: window, labelContaining: "Observed outcome price")
+            try await saveViewport(window, name: "research-terminal-target-price", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "Adjusted scenario")
+            try await saveViewport(window, name: "research-terminal-target-scenario", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "Daily bars cannot establish high/low ordering")
             #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("stop-first rule") == true })
             try await saveViewport(window, name: "research-terminal-target-detail", accessibility: accessibility)
         }
         try await capture(NavigationStack { StockSageResearchHistoryDetail(history: history, runID: quiet.id) },
             name: "research-terminal-horizon", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
             _ = try await reveal(in: window, labelContaining: "Horizon close")
+            _ = try await reveal(in: window, labelContaining: "Observed outcome price")
             try await saveViewport(window, name: "research-terminal-horizon-detail", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "Adjusted scenario")
+            try await saveViewport(window, name: "research-terminal-horizon-scenario", accessibility: accessibility)
         }
         try await capture(NavigationStack { StockSageResearchHistoryDetail(history: history, runID: active.id) },
             name: "research-terminal-active", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
             _ = try await reveal(in: window, labelContaining: "Active")
+            _ = try await reveal(in: window, labelContaining: "Scheduled horizon session:")
             #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("Target hit") == true })
             try await saveViewport(window, name: "research-terminal-active-detail", accessibility: accessibility)
         }
         // The aggregate counts live on Home, reported as three separate kinds and never as a rate.
         try await captureWorkspace(section: .briefing, name: "home-terminal-outcome-counts",
-            accessibility: accessibility, researchHistory: history) { _, window in
+            accessibility: accessibility, researchHistory: history, inspect: { _, window in
             let counts = try await reveal(in: window, identifier: "home.research.outcomes")
             let label = try #require(counts.accessibilityLabel)
             #expect(label.contains("1 target hit") && label.contains("1 stop hit")
@@ -412,7 +627,7 @@ struct StockSageIOSPresentationTests {
             #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("Earlier endpoint-only checks") == true },
                     "No legacy endpoint receipts exist in this fixture, so that line stays absent")
             try await saveViewport(window, name: "home-terminal-outcome-counts", accessibility: accessibility)
-        }
+        })
         #expect(history.runs == originalRuns && history.lastError == nil && !history.isChecking,
                 "Rendering terminal outcomes must not rewrite original research or recorded receipts")
     }
@@ -676,9 +891,10 @@ struct StockSageIOSPresentationTests {
         let best = try #require(StockSageExpectedValue.bestOpportunity(store.ideas, regime: store.regime,
             earnings: store.earnings, liquidity: store.liquidity, seasonality: store.seasonality,
             calibration: store.convictionCalibration)?.idea)
+        let note = "Synthetic journal rationale with a long explanation of the original setup, its uncertainty, and the planned invalidation. Keep the full note readable after closure. Final note sentence."
         let trade = TradeRecord(symbol: "RKLB", side: short ? .short : .long,
             entry: 100, stop: short ? 110 : 90, target: short ? 80 : 120,
-            shares: 2, openedAt: Date(), note: "Isolated native UI fixture")
+            shares: 2, openedAt: Date(), note: note)
         try #require(journal.add(trade))
         let live = StockSageLiveStream()
         let ai = StockSageAIAssessments()
@@ -700,22 +916,28 @@ struct StockSageIOSPresentationTests {
             let symbol = try #require(descendants(host.view).compactMap { $0 as? UITextField }
                 .first { $0.placeholder == "Symbol" })
             #expect(symbol.text == best.symbol, "The shared Portfolio route must show the actual prefilled Journal form")
+            let openNote = try await reveal(in: window, identifier: "journal.notes.\(trade.id.uuidString)")
+            try #require(openNote.accessibilityActivate())
+            _ = try await element(in: window, label: note)
+            try await saveViewport(window, name: "journal-open-note-\(short)", accessibility: accessibility)
+            let collapseNote = try await element(in: window, identifier: "journal.notes.\(trade.id.uuidString)", button: true)
+            try #require(collapseNote.accessibilityActivate())
             let toggle = try await reveal(in: window, identifier: "journal.close.\(trade.id.uuidString)")
             #expect(toggle.accessibilityFrame.width >= 44 && toggle.accessibilityFrame.height >= 44, "Close must expose its full touch target: \(nativeDescription(toggle))")
             try #require(toggle.accessibilityActivate())
             try await waitUntil("Close must expose the actual exit-price field") {
-                descendants(host.view).contains { ($0 as? UITextField)?.placeholder == "Exit px" }
+                nativeElements(window).contains { nativeIdentifier($0) == "journal.field.Exit px" }
             }
             let cancel = try await element(in: window, identifier: "journal.close.\(trade.id.uuidString)")
             try #require(cancel.accessibilityActivate())
             try await waitUntil("Cancel must remove the exit-price field without saving") {
-                !descendants(host.view).contains { ($0 as? UITextField)?.placeholder == "Exit px" }
+                !nativeElements(window).contains { nativeIdentifier($0) == "journal.field.Exit px" }
             }
             #expect(journal.trades == [trade], "Cancel must leave fixture accounting untouched")
             let reopen = try await element(in: window, identifier: "journal.close.\(trade.id.uuidString)")
             try #require(reopen.accessibilityActivate())
             try await waitUntil("Reopening Close must restore the exit-price field") {
-                descendants(host.view).contains { ($0 as? UITextField)?.placeholder == "Exit px" }
+                nativeElements(window).contains { nativeIdentifier($0) == "journal.field.Exit px" }
             }
             try await editField("Exit px", value: "invalid", host: host, window: window)
             let invalidConfirm = try await reveal(in: window, identifier: "journal.confirmClose")
@@ -744,28 +966,384 @@ struct StockSageIOSPresentationTests {
             let closed = try #require(journal.trades.first)
             #expect(closed.exitPrice == 105.25 && closed.plannedExit == 104.50 && closed.exitFill == 105.10)
             #expect(closed.side == trade.side && closed.shares == trade.shares && closed.entry == trade.entry)
+            #expect(closed.note == note)
+            let closedNote = try await reveal(in: window, identifier: "journal.notes.\(trade.id.uuidString)")
+            try #require(closedNote.accessibilityActivate())
+            _ = try await element(in: window, label: note)
+            try await saveViewport(window, name: "journal-closed-note-\(short)", accessibility: accessibility)
             #expect(StockSageJournalStore(defaults: defaults).trades == [closed], "Read back only the leased fixture suite")
             #expect(!live.isStreaming && live.subscribed.isEmpty && !monitor.isRunning && ai.activeSymbol == nil)
             #expect(paper.trades.isEmpty && portfolio.positions.isEmpty && velocity.series.isEmpty)
         }
     }
 
-    // Actual phone navigation and the first viewport only. Content below the fold and
-    // keyboard/menu presentation require their separate interaction fixtures.
-    @Test(arguments: [false, true], ["home", "markets", "watchlist", "portfolio", "alerts", "catalysts", "research", "chat", "ideas", "heatmap"])
+    @Test(arguments: [false, true])
+    func portfolioSecondaryPagesKeepRecordsAndDrafts(accessibility: Bool) async throws {
+        let closed: [TradeRecord] = (0..<12).map { index in
+            let exit = index.isMultiple(of: 3) ? 95.0 : 112.0
+            let date = now.addingTimeInterval(-Double(index + 1) * 7 * 86_400)
+            return TradeRecord(symbol: index == 0 ? "RKLB" : "AAPL", side: .long,
+                entry: 100, stop: 90, target: 120, shares: 2.5,
+                openedAt: date.addingTimeInterval(-2 * 86_400), exitPrice: exit, closedAt: date,
+                note: "Synthetic retained journal evidence. Original plan and uncertainty stay readable after changing Portfolio pages.",
+                plannedEntry: 99, entryFill: 100, plannedExit: exit - 0.25, exitFill: exit)
+        }
+        let retainedPaper = TradeRecord(symbol: "MSFT", side: .long, entry: 100, stop: 90,
+            target: 120, shares: 2, openedAt: now.addingTimeInterval(-10 * 86_400),
+            note: "Synthetic retained legacy paper record; never submitted to a broker.")
+        let draftNote = "Unsaved synthetic draft stays intact across Journal, Forward record and Analytics."
+        try await captureWorkspace(section: .portfolio, name: "portfolio-secondary", accessibility: accessibility,
+            configureRecords: { portfolio, journal, paper in
+                try #require(portfolio.add(symbol: "AAPL", shares: 12.5, costBasis: 100))
+                for trade in closed { try #require(journal.add(trade)) }
+                paper.add(retainedPaper)
+                try #require(paper.trades == [retainedPaper])
+            }) { host, window in
+            @MainActor func choose(_ title: String) async throws {
+                let picker = try await reveal(in: window, identifier: "phone.portfolio.tabs")
+                let owner = try #require(picker as? UIButton)
+                try #require(owner.accessibilityActivate())
+                let choice = try await element(in: window, label: title)
+                try await activateMenuChoice(title, rendered: choice, owner: owner)
+                try await waitUntil("The actual Portfolio menu must select \(title)") {
+                    nativeElements(window).contains {
+                        nativeIdentifier($0) == "phone.portfolio.tabs"
+                            && $0.accessibilityLabel?.contains(title) == true
+                    }
+                }
+            }
+            try await choose("Journal")
+            _ = try await reveal(in: window, labelContaining: "Trade journal")
+            try await saveViewport(window, name: "portfolio-journal-top", accessibility: accessibility)
+            try await scanToBottom(in: window, name: "portfolio-journal", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "R-multiple distribution")
+            _ = try await reveal(in: window, labelContaining: "By month")
+            let remove = try await reveal(in: window, labelContaining: "Delete RKLB from journal")
+            try #require(remove.accessibilityActivate(), "Open the real confirmation without deleting the fixture record")
+            _ = try await element(in: window, label: "Delete RKLB")
+            try await saveViewport(window, name: "portfolio-journal-delete-confirmation", accessibility: accessibility)
+            if let cancel = nativeElements(window).first(where: { $0.accessibilityLabel == "Cancel" }) {
+                if !cancel.accessibilityActivate() {
+                    let control = try #require(cancel as? UIControl)
+                    try #require(control.isEnabled)
+                    control.sendActions(for: .touchUpInside)
+                }
+            } else {
+                // Same native popover cancellation used by the Holdings fixture.
+                let dismiss = try await element(in: window, identifier: "PopoverDismissRegion")
+                var presenter: UIViewController = host
+                while let presented = presenter.presentedViewController { presenter = presented }
+                let dismissed = dismiss.accessibilityActivate() || dismiss.accessibilityPerformEscape()
+                    || presenter.accessibilityPerformEscape() || presenter.view.accessibilityPerformEscape()
+                try #require(dismissed)
+            }
+            try await waitUntil("Cancel must remove the real journal deletion confirmation") {
+                !nativeElements(window).contains { $0.accessibilityLabel == "Delete RKLB" }
+            }
+            let log = try await reveal(in: window, labelContaining: "Log trade")
+            try #require(log.accessibilityActivate())
+            _ = try await reveal(in: window, identifier: "journal.field.Symbol")
+            try await editField("Symbol", value: "MSFT", host: host, window: window)
+            _ = try await reveal(in: window, identifier: "journal.field.Note (optional)")
+            try await editField("Note (optional)", value: draftNote, host: host, window: window)
+
+            try await choose("Forward record")
+            _ = try await reveal(in: window, labelContaining: "Forward scoreboard")
+            _ = try await reveal(in: window, labelContaining: "1 simulated position recorded open")
+            _ = try await reveal(in: window, labelContaining: "Automatic entries, marking and exits have stopped.")
+            try await saveViewport(window, name: "portfolio-forward-record", accessibility: accessibility)
+            try await scanToBottom(in: window, name: "portfolio-forward-record", accessibility: accessibility)
+
+            try await choose("Analytics")
+            _ = try await reveal(in: window, labelContaining: "Allocation")
+            try await saveViewport(window, name: "portfolio-analytics-top", accessibility: accessibility)
+            try await scanToBottom(in: window, name: "portfolio-analytics", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "Risk-parity weights")
+            _ = try await reveal(in: window, labelContaining: "Risk analytics")
+            _ = try await reveal(in: window, labelContaining: "Position sizer (Kelly)")
+            let win = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+                .first { $0.accessibilityLabel == "Win %" })
+            win.text = "invalid"
+            win.sendActions(for: .editingChanged)
+            _ = try await reveal(in: window, labelContaining: "Enter a valid Win %, Payoff R, and Account $ to see a Kelly suggestion.")
+            try await saveViewport(window, name: "portfolio-kelly-invalid", accessibility: accessibility)
+            let validWin = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+                .first { $0.accessibilityLabel == "Win %" })
+            try #require(validWin.window === window)
+            validWin.text = "55"
+            validWin.sendActions(for: .editingChanged)
+            _ = try await reveal(in: window, labelContaining: "Full Kelly")
+            try await saveViewport(window, name: "portfolio-kelly-valid", accessibility: accessibility)
+
+            try await choose("Journal")
+            _ = try await reveal(in: window, identifier: "journal.field.Symbol")
+            let symbol = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+                .first { nativeIdentifier($0) == "journal.field.Symbol" })
+            #expect(symbol.text == "MSFT", "Changing Portfolio pages must retain the unsaved Journal draft")
+            _ = try await reveal(in: window, identifier: "journal.field.Note (optional)")
+            let note = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+                .first { nativeIdentifier($0) == "journal.field.Note (optional)" })
+            #expect(note.text == draftNote)
+            try await saveViewport(window, name: "portfolio-journal-draft-retained", accessibility: accessibility)
+            try await choose("Holdings")
+            _ = try await reveal(in: window, identifier: "portfolio.identity.AAPL")
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func rulesPlanningAndBacktestDisclosuresExpandWithoutRequests(accessibility: Bool) async throws {
+        let planningTitle = "Planning tools · allocation, fast lane and today's actions"
+        let diagnosticsTitle = "Backtests and strategy diagnostics"
+        let alertsExplanation = "Flags when an idea turns bullish/bearish or its price crosses the advised stop or target — between refreshes."
+        try await captureWorkspace(section: .ideas, name: "rules-secondary", accessibility: accessibility, inspect: { _, window in
+            let planning = try await reveal(in: window, labelContaining: planningTitle)
+            try #require(planning.accessibilityActivate())
+            try await saveViewport(window, name: "rules-planning-expanded", accessibility: accessibility)
+            try await scanToBottom(in: window, name: "rules-planning", accessibility: accessibility)
+            _ = try await reveal(in: window, labelContaining: "Fast lane — fastest compounding")
+            _ = try await reveal(in: window, labelContaining: "Today's plan — executable equities first")
+            _ = try await reveal(in: window, labelContaining: "Signal alerts")
+            let explanation = try #require(nativeElements(window).first { $0.accessibilityHint == alertsExplanation })
+            try #require(explanation.accessibilityActivate())
+            _ = try await reveal(in: window, labelContaining: alertsExplanation)
+            try await saveViewport(window, name: "rules-alerts-explanation", accessibility: accessibility)
+            let collapsePlanning = try await reveal(in: window, labelContaining: planningTitle)
+            try #require(collapsePlanning.accessibilityActivate())
+            try await waitUntil("Collapsing Planning tools must remove its child controls") {
+                !nativeElements(window).contains { $0.accessibilityLabel == "Signal alerts" }
+            }
+
+            let diagnostics = try await reveal(in: window, labelContaining: diagnosticsTitle)
+            try #require(diagnostics.accessibilityActivate())
+            _ = try await reveal(in: window, labelContaining: "Strategy backtest")
+            let strategyExplanation = try #require(nativeElements(window).first {
+                $0.accessibilityHint?.contains("The advisor's rules across the sample") == true
+            })
+            try #require(strategyExplanation.accessibilityActivate())
+            _ = try await reveal(in: window, labelContaining: "The advisor's rules across the sample")
+            try await saveViewport(window, name: "rules-backtest-explanation", accessibility: accessibility)
+            try await scanToBottom(in: window, name: "rules-backtests", accessibility: accessibility)
+            let collapseDiagnostics = try await reveal(in: window, labelContaining: diagnosticsTitle)
+            try #require(collapseDiagnostics.accessibilityActivate())
+            try await waitUntil("Collapsing diagnostics must remove its Run surface") {
+                !nativeElements(window).contains { $0.accessibilityLabel == "Strategy backtest" }
+            }
+            let reopen = try await reveal(in: window, labelContaining: planningTitle)
+            try #require(reopen.accessibilityActivate())
+            _ = try await reveal(in: window, labelContaining: "Signal alerts")
+            try await saveViewport(window, name: "rules-planning-reopened", accessibility: accessibility)
+        })
+    }
+
+    @Test(arguments: [false, true])
+    func settingsSheetScrollsPersistsAllocationAndDismisses(accessibility: Bool) async throws {
+        try #require(StockSageStore.isRunningTests)
+        let suite = "stocksage.ios.settings.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set(false, forKey: "stocksage.monitor.iosEnabled")
+        defaults.set(false, forKey: AppSettings.Keys.webAccess)
+        defaults.set(true, forKey: AppSettings.Keys.offlineOnly)
+        defaults.set("greedyKnapsack", forKey: "stocksage.allocStrategy")
+        let settings = AppSettings(defaults: defaults)
+        let content = PhoneSheetPresentationFixture {
+            StockSageIOSSettingsSheet(settings: settings).defaultAppStorage(defaults)
+        }
+        try await capture(content, name: "settings-sheet", accessibility: accessibility,
+                          viewportHeight: 812, shellPadding: 0) { _, window in
+            let open = try await element(in: window, identifier: "fixture.openSheet")
+            try #require(open.accessibilityActivate())
+            _ = try await element(in: window, identifier: "settings.ios.done")
+            try await scanToBottom(in: window, name: "settings-sheet", accessibility: accessibility)
+            _ = try await reveal(in: window, identifier: "settings.massive.disclosure")
+            try await saveViewport(window, name: "settings-source-disclosure", accessibility: accessibility)
+            let allocation = try await reveal(in: window, identifier: "settings.ios.allocation")
+            if accessibility {
+                try #require(allocation.accessibilityActivate(), "The large-text native allocation menu must open")
+                let owner = try #require(allocation as? UIButton)
+                let balanced = try await element(in: window, label: "Balanced")
+                try await activateMenuChoice("Balanced", rendered: balanced, owner: owner)
+            } else {
+                let segmented = try #require(nativeElements(window).compactMap { $0 as? UISegmentedControl }
+                    .first { control in
+                        (0..<control.numberOfSegments).contains { control.titleForSegment(at: $0) == "Balanced" }
+                    })
+                let index = try #require((0..<segmented.numberOfSegments).first {
+                    segmented.titleForSegment(at: $0) == "Balanced"
+                })
+                try #require(segmented.isEnabled && segmented.window === window)
+                segmented.selectedSegmentIndex = index
+                segmented.sendActions(for: .valueChanged)
+            }
+            try await waitUntil("The native allocation picker must persist Balanced in the fixture suite") {
+                defaults.string(forKey: "stocksage.allocStrategy") == "uniformScale"
+            }
+            _ = try await reveal(in: window, identifier: "settings.ios.priceAlerts")
+            _ = try await reveal(in: window, labelContaining: "Disabled price alerts stay armed")
+            try await saveViewport(window, name: "settings-notifications-bottom", accessibility: accessibility)
+            try await dismissSavedSheet(in: window)
+            let reopen = try await element(in: window, identifier: "fixture.openSheet")
+            try #require(reopen.accessibilityActivate())
+            let persistedAllocation = try await reveal(in: window, identifier: "settings.ios.allocation")
+            if accessibility {
+                #expect(persistedAllocation.accessibilityValue?.contains("Balanced") == true
+                        || persistedAllocation.accessibilityLabel?.contains("Balanced") == true
+                        || (persistedAllocation as? UIButton)?.currentTitle == "Balanced",
+                        "Reopening must display the persisted Balanced menu selection")
+            } else {
+                let segmented = try #require(nativeElements(window).compactMap { $0 as? UISegmentedControl }
+                    .first { control in
+                        (0..<control.numberOfSegments).contains { control.titleForSegment(at: $0) == "Balanced" }
+                    })
+                #expect(segmented.titleForSegment(at: segmented.selectedSegmentIndex) == "Balanced")
+            }
+            try await saveViewport(window, name: "settings-allocation-persisted", accessibility: accessibility)
+            try await dismissSavedSheet(in: window)
+        }
+        #expect(defaults.string(forKey: "stocksage.allocStrategy") == "uniformScale")
+        #expect(!settings.webAccess && settings.offlineOnly && AppSettings.policyRevision(defaults: defaults) == nil)
+        #expect(!defaults.bool(forKey: "stocksage.liveStream") && !defaults.bool(forKey: "stocksage.autoRefresh")
+                && !defaults.bool(forKey: "stocksage.monitor.iosEnabled"),
+                "Reading Settings and changing allocation must leave fixture network and monitoring preferences intact")
+    }
+
+    @Test(arguments: [DynamicTypeSize.large, .accessibility3, .accessibility5])
+    func browseSheetSearchClearNoMatchAndDone(size: DynamicTypeSize) async throws {
+        let accessibility = size.isAccessibilitySize
+        try #require(StockSageStore.isRunningTests)
+        let suite = "stocksage.ios.browse.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        let originalSymbols = store.userSymbols
+        let symbol = try #require(StockSageUniverse.catalog.first { $0.symbol == "2222.SR" }).symbol
+        let content = PhoneSheetPresentationFixture { BrowseMarketsView(store: store).defaultAppStorage(defaults) }
+        try await capture(content, name: "browse-sheet-\(size)", accessibility: accessibility,
+                          dynamicTypeSize: size, viewportHeight: 812, shellPadding: 0) { _, window in
+            let open = try await element(in: window, identifier: "fixture.openSheet")
+            try #require(open.accessibilityActivate())
+            _ = try await element(in: window, identifier: "browse.done")
+            try await saveViewport(window, name: "browse-presented-\(size)", accessibility: accessibility)
+            let field = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+                .first { nativeIdentifier($0) == "browse.search" })
+            try #require(field.window === window)
+            field.text = symbol
+            field.sendActions(for: .editingChanged)
+            _ = try await reveal(in: window, identifier: "browse.identity.\(symbol)")
+            try await saveViewport(window, name: "browse-bilingual-search-\(size)", accessibility: accessibility)
+            field.text = "NO-MATCH-SYNTHETIC-ZZZ"
+            field.sendActions(for: .editingChanged)
+            _ = try await reveal(in: window, identifier: "browse.empty")
+            _ = try await element(in: window, label: "No matching markets")
+            try await saveViewport(window, name: "browse-no-match-\(size)", accessibility: accessibility)
+            let clear = try await reveal(in: window, identifier: "browse.clear")
+            try #require(clear.accessibilityActivate(), "The real Clear search action must restore the catalog")
+            try await waitUntil("Clear must empty the native search field and remove the empty state") {
+                field.text == "" && !nativeElements(window).contains { nativeIdentifier($0) == "browse.empty" }
+            }
+            try await saveViewport(window, name: "browse-cleared-\(size)", accessibility: accessibility)
+            try await dismissSavedSheet(in: window)
+        }
+        #expect(store.userSymbols == originalSymbols && store.addSymbolError == nil,
+                "Browsing and searching must not add names or start an add-symbol request")
+    }
+
+    // Capture each viewport through the bottom of every production route. Menus,
+    // disclosures and sheets still have their own explicit interaction fixtures.
+    @Test(arguments: [false, true], ["sameDay", "week", "fortnight", "library", "home", "markets", "watchlist", "portfolio", "alerts", "catalysts", "research", "chat", "ideas", "heatmap", "paper"])
     func wholePhonePagesRenderFirstViewport(accessibility: Bool, page: String) async throws {
         try #require(StockSageStore.isRunningTests)
         let sections: [String: MarketSection] = ["home": .briefing, "markets": .all,
             "watchlist": .watchlist, "portfolio": .portfolio, "alerts": .alerts,
             "catalysts": .catalysts, "research": .research, "chat": .chat,
-            "ideas": .ideas, "heatmap": .heatmap]
+            "ideas": .ideas, "heatmap": .heatmap, "paper": .paper,
+            "sameDay": .sameDay, "week": .weekResearch, "fortnight": .fortnightResearch, "library": .library]
         let section = try #require(sections[page])
-        try await captureWorkspace(section: section, name: "page-\(page)-first-viewport", accessibility: accessibility)
+        try await captureWorkspace(section: section, name: "page-\(page)-first-viewport", accessibility: accessibility, inspect: { _, window in
+            try await scanToBottom(in: window, name: "page-\(page)", accessibility: accessibility)
+            if page == "alerts" {
+                for (title, value) in [("≤", "At or below"), ("≥", "At or above")] {
+                    let picker = try await reveal(in: window, labelContaining: "Alert direction")
+                    let owner = try #require(picker as? UIButton)
+                    try #require(owner.window === window && owner.isEnabled)
+                    // Cancel the native menu if a rendered choice/action is unavailable.
+                    defer { owner.contextMenuInteraction?.dismissMenu() }
+                    try #require(owner.accessibilityActivate(), "The actual alert-direction menu must open")
+                    let choice = try await element(in: window, label: title, button: true)
+                    try await activateMenuChoice(title, rendered: choice, owner: owner)
+                    try await waitUntil("The selected alert direction must update its accessibility value") {
+                        nativeElements(window).contains {
+                            $0.accessibilityLabel?.contains("Alert direction") == true
+                                && $0.accessibilityValue == value
+                        }
+                    }
+                }
+                _ = try await reveal(in: window, labelContaining: "Add", button: true)
+                let picker = try #require(nativeElements(window).first {
+                    $0.accessibilityLabel?.contains("Alert direction") == true
+                        && $0.accessibilityTraits.contains(.button)
+                })
+                let price = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+                    .first { nativeIdentifier($0) == "journal.field.Price" })
+                let add = try await element(in: window, label: "Add", button: true)
+                let pickerFrame = window.convert(picker.accessibilityFrame, from: nil)
+                let priceFrame = window.convert(price.accessibilityFrame, from: nil)
+                let addFrame = window.convert(add.accessibilityFrame, from: nil)
+                for frame in [pickerFrame, priceFrame, addFrame] {
+                    try #require(!frame.isEmpty && window.bounds.contains(frame),
+                                 "Measure the current visible alert controls, not detached or offscreen nodes")
+                }
+                #expect(!pickerFrame.intersects(priceFrame), "Alert direction must not overlap the Price field")
+                #expect(addFrame.height >= 44, "Add must retain a 44-point minimum height")
+                #expect(price.text?.isEmpty != false, "Changing direction must leave the unsubmitted price draft empty")
+                try await saveViewport(window, name: "alerts-direction-checked", accessibility: accessibility)
+            }
+        })
+    }
+
+    @Test(arguments: [false, true])
+    func tradingTabsAndLibraryOpenWithoutStartingResearch(accessibility: Bool) async throws {
+        let originalReceipt = StockSageSameDayResearch.shared.receipt
+        try await captureWorkspace(section: .sameDay, name: "trading-navigation", accessibility: accessibility, inspect: { _, window in
+            _ = try await reveal(in: window, identifier: "research.sameDay.run")
+            @MainActor func activate(_ label: String) async throws {
+                let item = try await element(in: window, label: label, button: true)
+                if nativeIdentifier(item) == "BackButton" {
+                    try activateNativeBack(in: window)
+                    return
+                }
+                if !item.accessibilityActivate() {
+                    let control = try #require(item as? UIControl)
+                    try #require(control.isEnabled)
+                    control.sendActions(for: .touchUpInside)
+                }
+            }
+            for horizon in StockSageHorizonResearch.Horizon.allCases {
+                try await activate(horizon.rawValue)
+                _ = try await reveal(in: window, labelContaining: "Run \(horizon.rawValue) research scan")
+                #expect(!nativeElements(window).contains { nativeIdentifier($0) == "research.mode" },
+                    "Each research tab must own exactly its titled horizon")
+            }
+            try await activate("Library")
+            let chat = try await reveal(in: window, identifier: "library.open.chat")
+            try #require(chat.accessibilityActivate())
+            _ = try await reveal(in: window, labelContaining: "Model settings")
+            try await activate("Library")
+            _ = try await reveal(in: window, identifier: "library.open.briefing")
+            try await activate("Same-day pick")
+            _ = try await reveal(in: window, identifier: "research.sameDay.run")
+            #expect(!StockSageSameDayResearch.shared.isRunning
+                    && StockSageSameDayResearch.shared.receipt == originalReceipt)
+        })
     }
 
     @Test(arguments: [false, true])
     func ideasCardDetailKeepsHeaderControlsVisibleAndCaveatReachable(accessibility: Bool) async throws {
-        try await captureWorkspace(section: .ideas, name: "ideas-detail-route", accessibility: accessibility) { _, window in
+        try await captureWorkspace(section: .ideas, name: "ideas-detail-route", accessibility: accessibility, inspect: { _, window in
             let card = try await reveal(in: window, identifier: "ideas.result.AAPL")
             try await saveViewport(window, name: "ideas-card", accessibility: accessibility)
             try #require(card.accessibilityActivate(), "Open the actual idea card's detail sheet")
@@ -789,7 +1367,7 @@ struct StockSageIOSPresentationTests {
             try await waitUntil("Close must dismiss the actual idea detail sheet") {
                 !nativeElements(window).contains { nativeIdentifier($0) == "idea.detail.close" }
             }
-        }
+        })
     }
 
     @Test(arguments: [false, true])
@@ -830,8 +1408,8 @@ struct StockSageIOSPresentationTests {
         try #require(H.availability(for: week, now: Date()).state == .due)
 
         try await captureWorkspace(section: .briefing, name: "home-research-summary", accessibility: accessibility,
-            researchHistory: history) { _, window in
-            _ = try await reveal(in: window, labelContaining: "Your research today")
+            researchHistory: history, inspect: { _, window in
+            _ = try await reveal(in: window, labelContaining: "Saved research")
             _ = try await reveal(in: window, labelContaining: "Ready for review")
             _ = try await reveal(in: window, labelContaining: "1 saved prediction is ready to check.")
             let ready = try await reveal(in: window, identifier: "home.review.\(week.id)")
@@ -860,13 +1438,13 @@ struct StockSageIOSPresentationTests {
 
             let openResearch = try await reveal(in: window, identifier: "home.research.14")
             try #require(openResearch.accessibilityActivate(), "The actual Home action must navigate to Research")
-            _ = try await reveal(in: window, labelContaining: "Market research")
+            _ = try await reveal(in: window, labelContaining: "Run 7–14 trading days research scan")
             _ = try await element(in: window, label: "Run \(StockSageHorizonResearch.Horizon.fortnight.rawValue) research scan")
             #expect(!nativeElements(window).contains {
                 $0.accessibilityLabel == "Run \(StockSageHorizonResearch.Horizon.week.rawValue) research scan"
             }, "The visible Research controls must use the requested fortnight horizon")
             try await saveViewport(window, name: "home-opened-fortnight-research", accessibility: accessibility)
-        }
+        })
         #expect(history.runs == originalRuns && history.lastError == nil && !history.isChecking,
                 "Home navigation must preserve every original prediction and outcome")
     }
@@ -918,19 +1496,16 @@ struct StockSageIOSPresentationTests {
                 try await waitUntil("The actual Portfolio picker must select Analytics") {
                     nativeElements(window).contains { nativeIdentifier($0) == "phone.portfolio.tabs" && $0.accessibilityLabel?.contains("Analytics") == true }
                 }
-                let home = try await element(in: window, label: "Home")
-                if !home.accessibilityActivate() {
-                    let control = try #require(home as? UIControl, "The rendered Home tab must expose a native control")
-                    try #require(control.isEnabled)
-                    control.sendActions(for: .touchUpInside)
-                }
-                try await waitUntil("The native Home tab must show the Home page") {
-                    nativeElements(window).contains { $0.accessibilityLabel == "Your research today" }
-                }
+                let back = try await element(in: window, identifier: "BackButton")
+                try #require(back.accessibilityLabel == "Library")
+                try activateNativeBack(in: window)
+                _ = try await reveal(in: window, identifier: "library.open.ideas")
             }
             if route == "home" || route == "analytics" {
-                let ideas = try await reveal(in: window, labelContaining: "Find ideas, Compare evidence and risk")
-                try #require(ideas.accessibilityActivate(), "Home's link must open Ideas without running a scan")
+                let ideas = route == "analytics"
+                    ? try await reveal(in: window, identifier: "library.open.ideas")
+                    : try await reveal(in: window, labelContaining: "Rules screener, Supporting market context")
+                try #require(ideas.accessibilityActivate(), "The supporting link must open the rules screener without running a scan")
             }
             let log: NSObject
             if route == "detail" {
@@ -963,7 +1538,7 @@ struct StockSageIOSPresentationTests {
         defaults.set(true, forKey: "stocksage.ticks.nasdaqOnly")
         var calls = 0
         let reference = [Int64(24): StockSageMassiveTicks.Exchange(id: 24, mic: "XNYS", acronym: "NYSE")]
-        let view = StockSageTapeView(symbol: "RKLB", loadExchanges: { reference }, loadTape: { symbol, _, _ in
+        let view = StockSageTapeView(symbol: "RKLB", access: .init(key: { "fixture" }, credentialRevision: { nil }, policyRevision: { nil }, allowed: { true }), loadExchanges: { reference }, loadTape: { symbol, _, _ in
             calls += 1
             return .init(trades: [.init(price: 25.25, size: 10, exchange: 24, timestamp: now, sequence: 901)],
                          quotes: [.init(symbol: symbol, bid: 25, ask: 25.5, bidSize: 10, askSize: 20,
@@ -1092,11 +1667,13 @@ struct StockSageIOSPresentationTests {
     // dataUnavailable needs offeredCount == 0 (hence no citations at all).
     private func qualityFixture(_ state: StockSageAIAssessment.QualityReport.State) -> StockSageAIAssessment.QualityReport {
         let unavailable = state == .dataUnavailable
+        let unverified = state == .unverified
         return .init(version: StockSageAIAssessment.QualityReport.version, state: state,
-              findings: state == .unverified ? [.uncitedInsiderRecord] : [],
-              citedCount: unavailable ? 0 : 1, offeredCount: unavailable ? 0 : 1,
-              classCounts: unavailable ? [:] : ["technical": 1],
-              insiderPurchases: 0, insiderSales: 0, uncitedInsiderIDs: [],
+              findings: unverified ? [.uncitedInsiderRecord] : [],
+              citedCount: unavailable ? 0 : 1, offeredCount: unavailable ? 0 : (unverified ? 2 : 1),
+              classCounts: unavailable ? [:] : (unverified ? ["technical": 1, "insider": 1] : ["technical": 1]),
+              insiderPurchases: 0, insiderSales: unverified ? 1 : 0,
+              uncitedInsiderIDs: unverified ? ["F2"] : [],
               acceptedAction: "Buy", rejectionReason: nil)
     }
 
@@ -1106,7 +1683,8 @@ struct StockSageIOSPresentationTests {
         // A saved prediction is a shortlist entry: the validator accepts only Buy / Strong Buy.
         var value = StockSageResearchHistory.Prediction(symbol: symbol, name: "\(symbol) synthetic company",
             action: "Buy", reason: "Synthetic saved opinion.", risk: "Synthetic risk.", evidence: ["F1"],
-            facts: ["F1 synthetic evidence; no live recommendation."], model: "fixture-model",
+            facts: ["F1 synthetic evidence; no live recommendation."]
+                + (quality?.uncitedInsiderIDs.isEmpty == false ? ["F2 synthetic insider sale; no motive inferred."] : []), model: "fixture-model",
             note: "Synthetic unvalidated research only.", referencePrice: 100, referenceDate: at, levels: nil)
         value.insiderEvidence = insider
         value.insiderCoverage = coverageState.map {
@@ -1154,16 +1732,31 @@ struct StockSageIOSPresentationTests {
         try await capture(StockSageResearchHistoryDetail(history: history, runID: run.id),
                           name: "insider-quality-states", accessibility: accessibility,
                           viewportHeight: 812, shellPadding: 0) { _, window in
-            _ = try await reveal(in: window, labelContaining: "P. Buyer")
-            _ = try await reveal(in: window, labelContaining: "S. Seller")
-            // A plan disclosure is displayed as supplied and never interpreted.
-            _ = try await reveal(in: window, labelContaining: "Rule 10b5-1")
-            // Missing data reads as not recorded, never as an absence of insider activity.
-            _ = try await reveal(in: window, labelContaining: "Insider activity was not recorded")
-            _ = try await reveal(in: window, labelContaining: "Quality not assessed")
-            // Unavailable evidence is its own state, distinct from never-assessed, and its copy
-            // describes the EVIDENCE rather than warning about the company.
-            _ = try await reveal(in: window, labelContaining: "Evidence unavailable")
+            // Preserve the existing exact-state checks and save the viewport at each one;
+            // a single initial PNG only contains the run's introduction.
+            let states = [
+                ("purchase", "P. Buyer"),
+                ("uncited-warning", "An offered insider record was not cited in the evidence list."),
+                ("uncited-source", "Insider records offered but not cited: F2"),
+                ("sale", "S. Seller"),
+                // Supplied plan disclosure, without interpreting the owner's intent.
+                ("plan", "Rule 10b5-1"),
+                // Missing data, never-assessed quality and unavailable evidence stay distinct.
+                ("not-recorded", "Insider activity was not recorded for this saved research"),
+                ("not-assessed", "Quality not assessed"),
+                ("unavailable", "Evidence unavailable")
+            ]
+            for (name, label) in states {
+                if name == "not-recorded" {
+                    // The header also speaks this headline after "Insider activity.".
+                    // Capture the separately rendered paragraph, not that summary header.
+                    let paragraph = try await reveal(in: window, label: label)
+                    #expect(paragraph.accessibilityLabel == label)
+                } else {
+                    _ = try await reveal(in: window, labelContaining: label)
+                }
+                try await saveViewport(window, name: "insider-quality-" + name, accessibility: accessibility)
+            }
         }
     }
 
@@ -1191,13 +1784,36 @@ struct StockSageIOSPresentationTests {
         try await capture(StockSageResearchHistoryView(store: store, history: history),
                           name: "saved-research-filters", accessibility: accessibility,
                           viewportHeight: 812, shellPadding: 0) { _, window in
-            _ = try await reveal(in: window, identifier: "research.history.filters")
+            let filters = try await reveal(in: window, identifier: "research.history.filters")
+            #expect(!nativeElements(window).contains { $0.accessibilityLabel?.hasPrefix("Evidence checks") == true })
+            try #require(filters.accessibilityActivate())
+            for (name, label) in [("horizon", "Horizon"), ("action", "Action"),
+                                  ("evidence", "Evidence checks"), ("insider", "Insider activity"),
+                                  ("outcome", "Outcome")] {
+                _ = try await reveal(in: window, labelContaining: label, button: true)
+                try await saveViewport(window, name: "saved-research-filter-" + name, accessibility: accessibility)
+            }
+            // This original run has no terminal receipt: selecting Settled must hide it,
+            // state that filters excluded existing history, and offer the native clear action.
+            let outcome = try await reveal(in: window, labelContaining: "Outcome", button: true)
+            try #require(outcome.accessibilityActivate())
+            let owner = try #require(outcome as? UIButton)
+            let settled = try await element(in: window, label: "Settled")
+            try await activateMenuChoice("Settled", rendered: settled, owner: owner)
+            _ = try await reveal(in: window, labelContaining: "No saved research matches this search or these filters.")
+            try await saveViewport(window, name: "saved-research-filtered-empty", accessibility: accessibility)
+            #expect(!nativeElements(window).contains { nativeIdentifier($0) == "research.history.run.\(run.id)" })
+            let clear = try await reveal(in: window, labelContaining: "Clear filters")
+            try #require(clear.accessibilityActivate())
             _ = try await reveal(in: window, identifier: "research.history.run.\(run.id)")
+            try await saveViewport(window, name: "saved-research-filter-cleared", accessibility: accessibility)
+            #expect(history.runs.count == 1 && history.runs.first?.id == run.id && !history.isChecking)
         }
     }
 
     private func captureWorkspace(section: MarketSection, name: String, accessibility: Bool,
                                   researchHistory: StockSageResearchHistory? = nil,
+                                  configureRecords: (@MainActor (StockSagePortfolio, StockSageJournalStore, StockSagePaperTradeStore) throws -> Void)? = nil,
                                   inspect: (@MainActor (UIHostingController<AnyView>, UIWindow) async throws -> Void)? = nil) async throws {
         try #require(StockSageStore.isRunningTests)
         let suite = "stocksage.ios.page.\(UUID().uuidString)"
@@ -1221,6 +1837,12 @@ struct StockSageIOSPresentationTests {
         // automatic scan. Require its untouched state; never stop or reset a shared scan.
         try #require(StockSageHorizonResearch.shared.running == nil && StockSageHorizonResearch.shared.scans.isEmpty)
         let history = researchHistory ?? StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        try configureRecords?(portfolio, journal, paper)
+        let originalTrades = journal.trades
+        let originalPositions = portfolio.positions
+        let originalPaper = paper.trades
+        let originalIdeaSymbols = store.ideas.map(\.symbol)
+        let originalIdeasUpdated = store.ideasUpdated
         let originalRuns = history.runs
         let view = MarketsView(chatSession: chat, qaSection: section,
             store: store, aiAssessments: ai, portfolio: portfolio, journal: journal,
@@ -1229,7 +1851,18 @@ struct StockSageIOSPresentationTests {
                           accessibility: accessibility, viewportHeight: 812, shellPadding: 0, inspect: inspect)
         #expect(store.isSampleData && store.userSymbols == ["AAPL", "MSFT", "RKLB"])
         #expect(!live.isStreaming && live.subscribed.isEmpty && !monitor.isRunning && ai.activeSymbol == nil)
-        #expect(journal.trades.isEmpty && portfolio.positions.isEmpty && paper.trades.isEmpty && velocity.series.isEmpty)
+        #expect(journal.trades == originalTrades && portfolio.positions == originalPositions
+                && paper.trades == originalPaper && velocity.series.isEmpty,
+                "Navigation, disclosures and canceled dialogs must retain every fixture record")
+        let savedJournal = try journal.backupRecords()
+        let savedPortfolio = try portfolio.backupRecords()
+        let savedPaper = StockSagePaperTradeStore(defaults: defaults)
+        #expect(savedJournal == originalTrades && savedPortfolio == originalPositions)
+        #expect(savedPaper.hasLoadedRecords && savedPaper.lastError == nil && savedPaper.trades == originalPaper)
+        #expect(!store.isRefreshing && !store.isLoadingIdeas && !store.isLoadingStrategy
+                && !store.isBacktesting && !store.isComputingParity && !store.isLoadingAnalytics)
+        #expect(store.ideas.map(\.symbol) == originalIdeaSymbols && store.ideasUpdated == originalIdeasUpdated,
+                "Opening supporting panels must not replace the seeded Rules results")
         #expect(chat.turns.isEmpty && chat.draft.isEmpty)
         #expect(StockSageHorizonResearch.shared.running == nil && StockSageHorizonResearch.shared.scans.isEmpty)
         #expect(history.runs == originalRuns && history.lastError == nil && !history.isChecking,
@@ -1243,7 +1876,7 @@ struct StockSageIOSPresentationTests {
             try #require(control.isEnabled)
             control.sendActions(for: .touchUpInside)
         }
-        try await waitUntil("Done must dismiss the actual saved-research sheet") {
+        try await waitUntil("Done must dismiss the actual presented sheet") {
             func presented(_ controller: UIViewController) -> Bool {
                 controller.presentedViewController != nil || controller.children.contains(where: presented)
             }
@@ -1251,7 +1884,8 @@ struct StockSageIOSPresentationTests {
         }
     }
 
-    private func saveViewport(_ window: UIWindow, name: String, accessibility: Bool) async throws {
+    private func saveViewport(_ window: UIWindow, name: String, accessibility: Bool,
+                              afterDisclosureSettles: (@MainActor () async throws -> Void)? = nil) async throws {
         func settled(_ controller: UIViewController) -> Bool {
             controller.transitionCoordinator == nil && controller.children.allSatisfy(settled)
                 && (controller.presentedViewController.map(settled) ?? true)
@@ -1262,41 +1896,120 @@ struct StockSageIOSPresentationTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         try #require(settled(root), "Capture the completed native navigation, not an animation frame")
-        window.layoutIfNeeded()
-        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
-        var rendered = false
-        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
-            rendered = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        func renderedPNG() throws -> Data {
+            window.layoutIfNeeded()
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+            var rendered = false
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+                rendered = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try #require(rendered, "The navigated native research viewport must draw completely")
+            return try #require(image.pngData())
         }
-        try #require(rendered, "The navigated native research viewport must draw completely")
-        let png = try #require(image.pngData())
+        if let afterDisclosureSettles {
+            // SwiftUI exposes final AX frames before DisclosureGroup finishes painting.
+            // These few disclosure captures require a quiet rendered viewport, not just
+            // a nil navigation coordinator or repeatedly identical logical AX bounds.
+            let paintDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+            var previous = try renderedPNG()
+            var identicalFrames = 0
+            while identicalFrames < 5, ContinuousClock.now < paintDeadline {
+                try await Task.sleep(for: .milliseconds(50))
+                let current = try renderedPNG()
+                identicalFrames = current == previous ? identicalFrames + 1 : 0
+                previous = current
+            }
+            try #require(identicalFrames == 5, "Disclosure paint did not settle within three seconds")
+            // The logical child may have moved while its parent expanded. Scroll to
+            // its current frame after settling, then capture the actual final viewport.
+            try await afterDisclosureSettles()
+        }
+        let png = try renderedPNG()
         let size = accessibility ? "accessibility3" : "default"
         try png.write(to: FileManager.default.temporaryDirectory
             .appendingPathComponent("stocksage-ios-\(name)-375-\(size).png"), options: .atomic)
     }
 
+    private func scanToBottom(in window: UIWindow, name: String, accessibility: Bool) async throws {
+        func visibleScrolls() -> [UIScrollView] {
+            guard let root = visibleContentView(in: window) else { return [] }
+            return descendants(root).compactMap { $0 as? UIScrollView }.filter { scroll in
+                guard !(scroll is UITextView), scroll.isScrollEnabled, scroll.window === window,
+                      scroll.bounds.height > 1,
+                      scroll.convert(scroll.bounds, to: window).intersects(window.bounds) else { return false }
+                var ancestor: UIView? = scroll
+                while let node = ancestor {
+                    if node.isHidden || node.alpha <= 0.01 { return false }
+                    ancestor = node.superview
+                }
+                return scroll.contentSize.height + scroll.adjustedContentInset.top
+                    + scroll.adjustedContentInset.bottom > scroll.bounds.height + 1
+            }
+        }
+        var reachedBottom = false
+        for step in 0..<60 {
+            window.layoutIfNeeded()
+            let scrolls = visibleScrolls()
+            let pending = scrolls.filter { scroll in
+                scroll.contentOffset.y < scroll.contentSize.height + scroll.adjustedContentInset.bottom
+                    - scroll.bounds.height - 1
+            }
+            if pending.isEmpty {
+                // Lazy lists can revise their extent after a layout pass. Require a
+                // second settled observation before declaring the page complete.
+                if reachedBottom {
+                    try await saveViewport(window, name: "\(name)-bottom", accessibility: accessibility)
+                    return
+                }
+                reachedBottom = true
+            } else {
+                reachedBottom = false
+                for scroll in pending {
+                    let bottom = max(-scroll.adjustedContentInset.top,
+                        scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
+                    scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x,
+                        y: min(bottom, scroll.contentOffset.y + scroll.bounds.height * 0.7)), animated: false)
+                }
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            try await saveViewport(window, name: "\(name)-scroll-\(step + 1)", accessibility: accessibility)
+        }
+        Issue.record("The \(name) fixture did not reach the bottom of its visible native scroll views in 60 viewports")
+    }
+
     private func capture(_ view: some View, name: String, accessibility: Bool,
+                         dynamicTypeSize: DynamicTypeSize? = nil,
                          viewportHeight: CGFloat? = nil,
                          shellPadding: CGFloat = 16,
                          inspect: (@MainActor (UIHostingController<AnyView>, UIWindow) async throws -> Void)? = nil) async throws {
         let width: CGFloat = 375
+        let textSize = dynamicTypeSize ?? (accessibility ? .accessibility3 : .large)
+        try #require([DynamicTypeSize.large, .accessibility3, .accessibility5].contains(textSize))
         var appeared = false
         // Erase the fixture wrapper to avoid the documented iOS 27 deep generic metadata issue.
         let host = UIHostingController(rootView: AnyView(view.padding(shellPadding)
             .environment(\.colorScheme, .dark)
-            .environment(\.dynamicTypeSize, accessibility ? .accessibility3 : .large)
+            .environment(\.dynamicTypeSize, textSize)
             .tint(DS.Palette.accent)
-            // This is a component capture; device safe areas must not shrink its measured height.
-            .ignoresSafeArea()
+            // Intrinsic component captures measure full content; real phone viewports
+            // retain the device's safe areas and keyboard avoidance.
+            .ignoresSafeArea(.container, edges: viewportHeight == nil ? .all : [])
             .onAppear { appeared = true }))
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: width, height: 812)
         window.overrideUserInterfaceStyle = .dark
+        // Presented UIKit/SwiftUI sheets inherit native traits from their window.
+        window.traitOverrides.preferredContentSizeCategory = textSize == .accessibility5
+            ? .accessibilityExtraExtraExtraLarge : (textSize == .accessibility3 ? .accessibilityExtraLarge : .large)
         window.rootViewController = host
         host.view.backgroundColor = UIColor(DS.Palette.bgTop)
-        window.isHidden = false
-        defer { window.isHidden = true; window.rootViewController = nil }
+        let previousKeyWindow = scene.keyWindow
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true; window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !appeared, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         try #require(appeared)
@@ -1364,6 +2077,7 @@ struct StockSageIOSPresentationTests {
         do { try await inspect?(host, window) }
         catch {
             try writeNativeDiagnostics(window, name: "\(name)-\(suffix)-failure")
+            try? await saveViewport(window, name: name + "-failure", accessibility: accessibility)
             throw error
         }
     }
@@ -1395,13 +2109,14 @@ struct StockSageIOSPresentationTests {
         return elements
     }
 
-    private func element(in window: UIWindow, identifier: String? = nil, label: String? = nil,
+    private func element(in window: UIWindow, identifier: String? = nil, label: String? = nil, button: Bool = false,
                          sourceLocation: SourceLocation = #_sourceLocation) async throws -> NSObject {
         var match: NSObject?
         try await waitUntil("Native element missing: \(identifier ?? label ?? "unspecified")", sourceLocation: sourceLocation) {
             // A native menu may be presented in another window of this fixture's test scene.
             let roots = window.windowScene?.windows.filter { !$0.isHidden } ?? [window]
             match = roots.flatMap { nativeElements($0) }.first { object in
+                guard !button || object.accessibilityTraits.contains(.button) else { return false }
                 if let identifier {
                     return nativeIdentifier(object) == identifier
                 }
@@ -1419,11 +2134,38 @@ struct StockSageIOSPresentationTests {
         return controller?.view
     }
 
-    private func reveal(in window: UIWindow, identifier: String? = nil, labelContaining: String? = nil) async throws -> NSObject {
-        let description = identifier ?? labelContaining ?? "unspecified"
+    private func activateNativeBack(in window: UIWindow) throws {
+        // SwiftUI's system back accessibility element is not a UIControl. Exercise
+        // UIKit's actual back navigation and verify the resulting SwiftUI route.
+        func controllers(_ root: UIViewController) -> [UIViewController] {
+            [root] + root.children.flatMap(controllers)
+        }
+        let root = try #require(window.rootViewController)
+        let candidates = controllers(root).compactMap { $0 as? UINavigationController }.filter {
+            $0.isViewLoaded && $0.view.window === window && !$0.view.isHidden
+                && $0.viewControllers.count > 1 && $0.navigationBar.backItem != nil
+        }
+        try #require(candidates.count == 1, "The visible Library stack must own one native back route")
+        try #require(candidates[0].popViewController(animated: false) != nil)
+    }
+
+    private func reveal(in window: UIWindow, identifier: String? = nil, label: String? = nil,
+                        labelContaining: String? = nil, within containerIdentifier: String? = nil,
+                        button: Bool = false) async throws -> NSObject {
+        let description = identifier ?? label ?? labelContaining ?? "unspecified"
+        // Identical disclosure labels appear in all five rows. Resolve the current
+        // container each time because scrolling can replace its native AX subtree.
+        func candidates() -> [NSObject] {
+            let elements = nativeElements(window)
+            guard let containerIdentifier else { return elements }
+            guard let container = elements.first(where: { nativeIdentifier($0) == containerIdentifier }) else { return [] }
+            return nativeElements(container)
+        }
         for attempt in 0..<30 {
-            if let match = nativeElements(window).first(where: { object in
+            if let match = candidates().first(where: { object in
+                guard !button || object.accessibilityTraits.contains(.button) else { return false }
                 if let identifier { return nativeIdentifier(object) == identifier }
+                if let label { return object.accessibilityLabel == label }
                 return labelContaining.map { text in object.accessibilityLabel?.contains(text) == true } ?? false
             }) {
                 if let root = visibleContentView(in: window) {
@@ -1436,8 +2178,27 @@ struct StockSageIOSPresentationTests {
                     root.layoutIfNeeded()
                 }
                 try await Task.sleep(for: .milliseconds(50))
-                print("Native reveal matched: \(nativeDescription(match))")
-                return match
+                // Scrolling a SwiftUI subtree can replace the original native node.
+                // Activate its current visible counterpart, not a detached menu owner.
+                let current = candidates().first { object in
+                    guard !button || object.accessibilityTraits.contains(.button) else { return false }
+                    if let identifier { return nativeIdentifier(object) == identifier }
+                    if let label { return object.accessibilityLabel == label }
+                    return labelContaining.map { object.accessibilityLabel?.contains($0) == true } ?? false
+                }
+                if let current, !current.accessibilityFrame.isEmpty,
+                   current.accessibilityFrame.minX.isFinite, current.accessibilityFrame.minY.isFinite {
+                    let frame = window.convert(current.accessibilityFrame, from: nil)
+                    let visible = visibleContentView(in: window).map {
+                        window.convert($0.bounds, from: $0).intersection(window.bounds)
+                    } ?? window.bounds
+                    if visible.intersects(frame), frame.minX >= window.bounds.minX - 1,
+                       frame.maxX <= window.bounds.maxX + 1 {
+                        print("Native reveal matched: \(nativeDescription(current))")
+                        return current
+                    }
+                }
+                continue
             }
             if let root = visibleContentView(in: window) {
                 for scroll in descendants(root).compactMap({ $0 as? UIScrollView })
@@ -1462,24 +2223,37 @@ struct StockSageIOSPresentationTests {
     }
 
     private func editField(_ placeholder: String, value: String, host: UIHostingController<AnyView>, window: UIWindow) async throws {
-        // The unsaved entry draft above the open trades has the same optional plan/fill
-        // placeholders. The close editor is last in this actual view hierarchy.
-        let field = try #require(descendants(host.view).compactMap { $0 as? UITextField }
-            .last { $0.placeholder == placeholder })
-        try #require(field.window === window)
-        var ancestor = field.superview
-        while let node = ancestor {
-            if let scroll = node as? UIScrollView {
-                scroll.scrollRectToVisible(field.convert(field.bounds, to: scroll).insetBy(dx: 0, dy: -8), animated: false)
+        // AX can expose an offscreen SwiftUI field before its native view is mounted.
+        // Resolve its label, reveal it, then reacquire the current mounted field.
+        // The close editor is last; its label distinguishes the duplicate entry-fill ID.
+        let match = try #require(nativeElements(window).compactMap { $0 as? UITextField }
+            .last { nativeIdentifier($0) == "journal.field.\(placeholder)" || $0.placeholder == placeholder })
+        let label = try #require(match.accessibilityLabel)
+        _ = try await reveal(in: window, label: label)
+        func mountedField() -> UITextField? {
+            guard let root = visibleContentView(in: window) else { return nil }
+            return descendants(root).compactMap { $0 as? UITextField }.last {
+                $0.window === window && !$0.isHidden && $0.alpha >= 0.01 && !$0.bounds.isEmpty
+                    && $0.accessibilityLabel == label
+                    && (nativeIdentifier($0) == "journal.field.\(placeholder)" || $0.placeholder == placeholder)
             }
-            ancestor = node.superview
         }
-        host.view.layoutIfNeeded()
+        try await waitUntil("Revealed field must mount in the fixture window: \(label)") {
+            host.view.layoutIfNeeded()
+            return mountedField() != nil
+        }
+        let field = try #require(mountedField())
+        try #require(field.window === window && field.isEnabled)
+        let frame = field.convert(field.bounds, to: window)
+        let root = try #require(visibleContentView(in: window))
+        let viewport = window.convert(root.bounds, from: root).intersection(window.bounds)
+        try #require(viewport.intersects(frame), "Type into the revealed native field: \(label)")
         field.text = value
         field.sendActions(for: .editingChanged)
         host.view.layoutIfNeeded()
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(field.text == value)
+        try await waitUntil("The current mounted field must retain the entered text: \(label)") {
+            mountedField()?.text == value
+        }
     }
 
     private func activateMenuChoice(_ title: String, rendered choice: NSObject, owner: UIButton) async throws {
@@ -1562,6 +2336,17 @@ struct StockSageIOSPresentationTests {
     }
 }
 
+@MainActor private struct PhoneSheetPresentationFixture<Content: View>: View {
+    @State private var isPresented = false
+    let content: () -> Content
+
+    var body: some View {
+        Button("Open fixture sheet") { isPresented = true }
+            .accessibilityIdentifier("fixture.openSheet")
+            .sheet(isPresented: $isPresented, content: content)
+    }
+}
+
 @MainActor private struct PhoneSegmentFixtures: View {
     let changed: (String, String) -> Void
     @State private var catalyst = CatalystsSection.Mode.cards
@@ -1602,7 +2387,7 @@ struct StockSageIOSPresentationTests {
         VStack(spacing: 0) {
             Button("Reload synthetic tape") { symbol = "MSFT" }
                 .accessibilityIdentifier("tape.fixture.reload")
-            StockSageTapeView(symbol: symbol, loadExchanges: loadExchanges, loadTape: loadTape)
+            StockSageTapeView(symbol: symbol, access: .init(key: { "fixture" }, credentialRevision: { nil }, policyRevision: { nil }, allowed: { true }), loadExchanges: loadExchanges, loadTape: loadTape)
         }
     }
 }

@@ -787,6 +787,7 @@ struct StockSageBenzingaClientTests {
         #expect(second.records == first.records && !first.records.contains { $0.vendorID == "2" })
     }
 
+    // Checks accumulated body size and cancellation, not wire bytes or URLSession buffering.
     @Test func nativeStreamingCapAndTotalDeadlineCancelTheActualReader() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [BenzingaBodyProtocol.self]
@@ -809,6 +810,7 @@ struct StockSageBenzingaClientTests {
     }
 }
 
+// Restates URLProtocol's inherited conformance. No mutable instance state; counters use Mutex.
 private nonisolated final class BenzingaBodyProtocol: URLProtocol, @unchecked Sendable {
     static let started = Mutex(0), stopped = Mutex(0)
     override class func canInit(with request: URLRequest) -> Bool { true }

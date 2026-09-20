@@ -4,6 +4,141 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
+
+    @Test(arguments: [false, true])
+    func pairedResumePreservesUnequalCapturedChecksAndRunsOnlyPendingHorizonsInOrder(weekAlreadyComplete: Bool) async throws {
+        let suite = "stocksage.research.paired-resume.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let names = ["AAA", "BBB", "CCC", "DDD"].map { listing($0) }
+        let began = Date().addingTimeInterval(-60)
+        let identity = String(repeating: "a", count: 64)
+        var originals: [R.Horizon: [String: StockSageResearchHistory.CompletedCheck]] = [:]
+        for horizon in R.Horizon.allCases {
+            var scan = R.Scan()
+            scan.at = began; scan.listings = names; scan.resumeConfigurationID = identity
+            for item in names.prefix(horizon == .week ? (weekAlreadyComplete ? names.count : 2) : 1) {
+                let result = R.Result(facts: ["Original \(item.ticker) \(horizon.rawValue)"],
+                    note: "Original incomplete opinion stays a completed check", at: began.addingTimeInterval(1))
+                scan.results[item.ticker] = result
+                originals[horizon, default: [:]][item.ticker] = .init(listing: item, result: result)
+            }
+            if horizon == .week && weekAlreadyComplete {
+                scan.rankingFailure = "Original strict comparison unavailable."
+                scan.freezeTopFive(horizon: horizon, at: Date())
+                let run = StockSageResearchHistory.snapshot(startedAt: began, completedAt: scan.completedAt!, horizon: horizon, scan: scan)
+                try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+            } else {
+                try #require(history.saveInterruptedChecks(scan, horizon: horizon))
+            }
+        }
+        let reopened = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let research = R(history: reopened)
+        let completedWeek = reopened.completedScan(horizon: .week)?.run
+        defer { research.stop() }
+        var prepared: [String] = [], calls: [String] = []
+        let resumed = research.start([.week, .fortnight], allowed: { true }, universe: { .init(names) },
+            configurationID: identity, resuming: try #require(research.scans[.week]), makeAnalysis: { item in
+                prepared.append(item.ticker)
+                return { horizon in
+                    calls.append(item.ticker + ":" + horizon.rawValue)
+                    if horizon == .fortnight {
+                        #expect(research.scans[.week]?.results[item.ticker] != nil,
+                                "The same stock's week result must be published before its fortnight call")
+                    }
+                    return .init(facts: ["Fresh \(item.ticker) \(horizon.rawValue)"], note: "Fresh check")
+                }
+            })
+        try #require(resumed, "Both restored horizons must resume without replacing their unequal completed prefixes")
+        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil)
+        #expect(prepared == ["BBB", "CCC", "DDD"])
+        let pendingCalls = weekAlreadyComplete ? ["BBB", "CCC", "DDD"].map { $0 + ":" + R.Horizon.fortnight.rawValue }
+            : ["BBB:" + R.Horizon.fortnight.rawValue,
+                          "CCC:" + R.Horizon.week.rawValue, "CCC:" + R.Horizon.fortnight.rawValue,
+                          "DDD:" + R.Horizon.week.rawValue, "DDD:" + R.Horizon.fortnight.rawValue]
+        #expect(calls == pendingCalls)
+        if weekAlreadyComplete { #expect(reopened.completedScan(horizon: .week)?.run == completedWeek) }
+        let cold = R(history: StockSageResearchHistory(storageURL: url, defaults: defaults))
+        for horizon in R.Horizon.allCases {
+            let scan = try #require(cold.scans[horizon])
+            #expect(scan.at == began && scan.listings == names && scan.results.count == names.count)
+            for item in names where originals[horizon]?[item.ticker] != nil {
+                let restored = StockSageResearchHistory.CompletedCheck(listing: item, result: try #require(scan.results[item.ticker]))
+                #expect(restored == originals[horizon]?[item.ticker], "Existing results, including old incomplete checks, remain exact")
+            }
+        }
+    }
+
+    @Test func pairedResearchAlwaysAssessesWeekBeforeFortnightEvenWhenRequestedInReverse() async throws {
+        let research = R()
+        defer { research.stop() }
+        var calls: [R.Horizon] = []
+        let started = research.start([.fortnight, .week], allowed: { true }, universe: { .init([listing("AAA")]) },
+            analyze: { _, horizon in calls.append(horizon); return .init(note: "Synthetic opinion") })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(research.running == nil && calls == [.week, .fortnight])
+    }
+
+    @Test(arguments: ["configuration", "listings", "capture", "legacy"])
+    func pairedResumeRejectsMismatchedCapturesWithoutReplacingChecks(mismatch: String) throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let began = Date().addingTimeInterval(-60), identity = String(repeating: "a", count: 64)
+        var week = R.Scan(), fortnight = R.Scan()
+        week.at = began; week.listings = [listing("AAA"), listing("BBB")]; week.resumeConfigurationID = identity
+        week.results["AAA"] = .init(facts: ["Original week evidence"], note: "Retained", at: began.addingTimeInterval(1))
+        fortnight = week
+        if mismatch == "configuration" { fortnight.resumeConfigurationID = String(repeating: "b", count: 64) }
+        if mismatch == "listings" { fortnight.listings[1] = listing("CCC") }
+        if mismatch == "capture" { fortnight.at = began.addingTimeInterval(-1) }
+        if mismatch == "legacy" { week.resumeConfigurationID = nil; fortnight.resumeConfigurationID = nil }
+        try #require(history.saveInterruptedChecks(week, horizon: .week) && history.saveInterruptedChecks(fortnight, horizon: .fortnight))
+        let research = R(history: history)
+        #expect(!research.canResumeBoth)
+        let original = try #require(research.scans[.week])
+        let started = research.start([.week, .fortnight], allowed: { true }, universe: { Issue.record("No universe call expected"); return .init([]) },
+            configurationID: original.resumeConfigurationID, resuming: original, makeAnalysis: { _ in
+                Issue.record("No evidence capture expected"); return { _ in .init(note: "Must not execute") }
+            })
+        #expect(!started)
+        #expect(research.running == nil && research.scans[.week]?.results["AAA"]?.facts == ["Original week evidence"])
+        #expect(research.scans[.fortnight]?.at == fortnight.at && research.scans[.fortnight]?.listings == fortnight.listings)
+    }
+
+    @Test func bothHorizonsFreezeAndPersistFiveBeforeStrictComparisonFailure() async throws {
+        let history = StockSageResearchHistory()
+        let research = R(history: history)
+        let names = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"].map { listing($0) }
+        var observed: [R.Horizon: StockSageTopFiveRanking.Result] = [:]
+        let started = research.start([.week, .fortnight], allowed: { true }, universe: { .init(names) }, rank: { scan, horizon in
+            guard let ranking = scan.deterministicRanking else {
+                Issue.record("Completed ranking must already exist when strict comparison starts")
+                return .failure(.unavailable)
+            }
+            observed[horizon] = ranking
+            #expect(ranking.ranked.count == 5 && ranking.ranked.allSatisfy { $0.status == .notQualified })
+            #expect(history.completedScan(horizon: horizon)?.run.deterministicRanking == ranking)
+            return .failure(.modelFailure)
+        }, qualificationPolicyVersion: 1, makeAnalysis: { item in
+            { horizon in StockSageResearchHistoryTests().qualifiedResult(item.ticker, at: Date(), qualified: false, horizon: horizon) }
+        })
+        try #require(started)
+        defer { research.stop() }
+        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil && history.runs.count == 2)
+        let restored = R(history: history)
+        for horizon in R.Horizon.allCases {
+            let ranking = try #require(observed[horizon])
+            let scan = try #require(restored.scans[horizon])
+            #expect(scan.deterministicRanking == ranking && scan.topBuys.isEmpty)
+            #expect(scan.rankedTopFive(horizon: horizon, now: Date().addingTimeInterval(14 * 86_400)) == ranking)
+        }
+    }
+
     @Test(arguments: [false, true])
     func currentRankingReceiptPublishesAndRestoresAcrossQualificationPolicies(strict: Bool) async throws {
         let history = StockSageResearchHistory()
@@ -471,7 +606,7 @@ import Testing
         #expect(history.runs.count == 1 && history.completedScan(horizon: .week)?.scan.results.count == 1)
         var scan = try #require(research.scans[.week])
         scan.isComparing = true
-        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: true).title == "Comparing research for Top 5")
+        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: true).title == "Comparing strict picks")
     }
 
     @Test func failedComparisonRestoresAllChecksAndRetriesOnlyRanking() async throws {
@@ -631,7 +766,7 @@ import Testing
         #expect(research.running == nil && history.runs.isEmpty && scan.topBuys.isEmpty)
         #expect(scan.results.count == 1 && scan.rankingFailure != nil)
         #expect(!scan.status.contains("remaining listings were not checked"))
-        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: false).title == "Top five comparison unavailable")
+        #expect(StockSageResearchModesPanel.emptyState(for: scan, isRunning: false).title == "Strict comparison unavailable")
     }
 
     @Test func lastHorizonUsesIsolatedPreferencesAndExplicitHomeChoiceClearsSelection() throws {
@@ -699,7 +834,7 @@ import Testing
             #expect(Panel.filteredListings(scan, search: "", filter: filter).map(\.ticker) == expected)
         }
         #expect(scan.topBuys.isEmpty, "First-arriving buys are never presented as the best five")
-        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Top five after the full scan")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Strict picks after the full scan")
         #expect(Panel.filteredListings(scan, search: " buy3 ", filter: .all).map(\.ticker) == ["BUY3"])
         scan.results["UNCHECKED"] = .init(note: "Completed without an opinion")
         let originalListings = scan.listings
@@ -1037,11 +1172,12 @@ import Testing
         #expect(await task.value == nil)
     }
 
-    // MARK: - Settled-session review window (outcome policy 2)
+    // MARK: - Settled-session review window (outcome policies 2 and 3)
 
     private func dailyReviewRun(symbol: String = "ACME",
                                 horizon: StockSageResearchHistory.Horizon = .week,
-                                completed: String = "2026-09-14T21:00:00Z") -> StockSageResearchHistory.Run {
+                                completed: String = "2026-09-14T21:00:00Z",
+                                outcomePolicy: StockSageResearchHistory.OutcomePolicy = .dailyBarOpeningFirst) -> StockSageResearchHistory.Run {
         .init(id: UUID(), startedAt: reviewDate(completed).addingTimeInterval(-60),
             completedAt: reviewDate(completed), horizon: horizon,
             predictions: [.init(symbol: symbol, name: symbol, action: "Buy", reason: "Fixture", risk: "Fixture",
@@ -1050,7 +1186,7 @@ import Testing
                 levels: .init(entry: 100, stop: 90, target: 120, at: reviewDate("2026-09-11T04:00:00Z"),
                     basis: "Captured ATR scenario"))],
             coverage: .init(requested: 1, checked: 1, incomplete: 0, buyCount: 1, selection: nil),
-            measurementPolicy: .nextTradingDateSessions, outcomePolicy: .dailyBarFirstHit)
+            measurementPolicy: .nextTradingDateSessions, outcomePolicy: outcomePolicy)
     }
 
     private func newYorkDateString(_ date: Date) -> String {
@@ -1058,6 +1194,73 @@ import Testing
         formatter.formatOptions = [.withFullDate]
         formatter.timeZone = TimeZone(identifier: "America/New_York")!
         return formatter.string(from: date)
+    }
+
+    @Test(arguments: ["valid", "unadjusted", "revoked", "incomplete", "notDue"])
+    func allOpinionPriceFetchKeepsSettledWindowAndRejectsUnusableResponses(scenario: String) async throws {
+        let run = dailyReviewRun()
+        let check = StockSageResearchHistory.CompletedCheck(listing: listing("ACME"), result: .init(
+            verdict: scenario == "incomplete" ? nil : .init(action: .hold, reason: "Wait for evidence", risk: "Volatility", evidence: ["F1"]),
+            facts: ["Dated fixture"], note: "Original opinion", at: run.completedAt.addingTimeInterval(-1), model: "fixture-model",
+            referenceClose: (100, reviewDate("2026-09-11T04:00:00Z"))))
+        let now = reviewDate(scenario == "notDue" ? "2026-09-15T16:00:00Z" : "2026-09-18T04:01:00Z")
+        var allowed = true, calls = 0
+        let observation = await R.fetchOpinionReviewObservation(check: check, run: run, key: "synthetic-test-only",
+            allowed: { allowed }, clock: { now }, transport: { request in
+                calls += 1
+                #expect(request.url?.path == "/v2/aggs/ticker/ACME/range/1/day/2026-09-11/2026-09-17")
+                var payload = dailyReviewPayload(run, sessions: ["2026-09-15T04:00:00Z", "2026-09-16T04:00:00Z", "2026-09-17T04:00:00Z"])
+                if scenario == "unadjusted" { payload["adjusted"] = false }
+                if scenario == "revoked" { allowed = false }
+                return (try JSONSerialization.data(withJSONObject: payload),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        #expect(calls == (["incomplete", "notDue"].contains(scenario) ? 0 : 1))
+        #expect((observation != nil) == (scenario == "valid"))
+        #expect(check.verdict?.action == (scenario == "incomplete" ? nil : "Hold"))
+    }
+
+    @Test(arguments: ["allowed", "testHost", "sampleData", "externalDenied", "missingKey", "revokedKey", "changedPolicy", "cancelled"])
+    func allOpinionReviewUsesTheSameOwnershipGates(scenario: String) async throws {
+        let (store, defaults, suite) = try outcomeTriggerStore(sample: scenario == "sampleData")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let completed = reviewDate("2026-09-14T21:00:00Z")
+        var scan = R.Scan()
+        scan.at = completed.addingTimeInterval(-60)
+        scan.listings = [listing("ACME")]
+        scan.results["ACME"] = .init(verdict: .init(action: .hold, reason: "Wait for evidence", risk: "Volatility", evidence: ["F1"]),
+            facts: ["Dated fixture"], note: "Original neutral opinion", at: completed.addingTimeInterval(-1), model: "fixture-model")
+        scan.rankingFailure = "No qualified buys"
+        scan.freezeTopFive(horizon: .week, at: completed)
+        let run = StockSageResearchHistory.snapshot(startedAt: scan.at!, completedAt: completed, horizon: .week, scan: scan)
+        try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+        #expect(run.predictions.isEmpty)
+        var key = scenario == "missingKey" ? "" : "synthetic-test-only"
+        var policy = "first-policy"
+        var fetches = 0
+        var gates = R.SavedOutcomeGates()
+        gates.isRunningTests = { scenario == "testHost" }
+        gates.externalAllowed = { scenario != "externalDenied" }
+        gates.apiKey = { key }
+        gates.credentialRevision = { "fixture-generation" }
+        gates.policyRevision = { policy }
+        gates.clock = { self.reviewDate("2026-10-05T13:00:00Z") }
+        gates.fetchOpinion = { check, _, _, _ in
+            fetches += 1
+            #expect(check.verdict?.action == "Hold")
+            if scenario == "revokedKey" { key = "rotated-synthetic-key" }
+            if scenario == "changedPolicy" { policy = "second-policy" }
+            return nil
+        }
+        let task = Task { @MainActor in
+            if scenario == "cancelled" { withUnsafeCurrentTask { $0?.cancel() } }
+            await R.checkSavedOutcomes(history: history, store: store, includeAllOpinions: true, gates: gates)
+        }
+        await task.value
+        #expect(fetches == (["allowed", "revokedKey", "changedPolicy"].contains(scenario) ? 1 : 0))
+        #expect(history.opinionOutcomes(runID: run.id)?.count == (scenario == "allowed" ? 1 : 0))
+        #expect(history.runs[0].predictions.isEmpty && history.runs[0].evaluations.isEmpty && !history.isChecking)
     }
 
     /// One adjusted series: the saved reference bar followed by settled monitoring sessions.
@@ -1096,8 +1299,9 @@ import Testing
             == StockSageResearchHistory.targetClose(for: legacy))
     }
 
-    @Test func dailyPolicyReviewRequestsTheSavedReferenceDateThroughTheLastSettledSession() async throws {
-        let run = dailyReviewRun()
+    @Test(arguments: [StockSageResearchHistory.OutcomePolicy.dailyBarFirstHit, .dailyBarOpeningFirst])
+    func dailyPolicyReviewRequestsTheSavedReferenceDateThroughTheLastSettledSession(policy: StockSageResearchHistory.OutcomePolicy) async throws {
+        let run = dailyReviewRun(outcomePolicy: policy)
         var clock = reviewDate("2026-09-18T04:01:00Z")
         var calls = 0
         let result = await R.fetchReviewObservation(prediction: run.predictions[0], run: run,
@@ -1426,11 +1630,11 @@ import Testing
         #expect(scan.status == "Stopping scan…")
         scan.status = "Scan incomplete: listing directory could not be verified."
         scan.listings = [listing()]
-        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Top five after the full scan")
+        #expect(Panel.emptyState(for: scan, isRunning: true).title == "Strict picks after the full scan")
         #expect(Panel.emptyState(for: scan, isRunning: false).title == "Scan stopped before comparison")
         scan.results["AAPL"] = .init(verdict: .init(action: .buy, reason: "Fixture", risk: "Fixture", evidence: ["F1"]), note: "Fixture")
         scan.ranking = .fixture(scan: scan, symbols: ["AAPL"], horizon: .week)
-        #expect(Panel.emptyState(for: scan, isRunning: false, search: "MSFT").title == "No matching top results")
+        #expect(Panel.emptyState(for: scan, isRunning: false, search: "MSFT").title == "No matching strict picks")
         #expect(scan.status == "Scan incomplete: listing directory could not be verified.")
     }
     #endif
@@ -1642,7 +1846,7 @@ import Testing
         #expect(scan.status.contains("Scan stopped") && !scan.status.contains("Earlier"))
     }
     @Test(arguments: R.Horizon.allCases)
-    func manualRunCapsDirectoryAt500BeforeResearch(_ horizon: R.Horizon) async throws {
+    func manualRunCapsDirectoryAt1500BeforeResearch(_ horizon: R.Horizon) async throws {
         let r = R()
         let names = (0..<13_000).map { listing(String(format: "S%05d", $0)) }
         var seen: [String] = []
@@ -1653,17 +1857,17 @@ import Testing
         #expect(started)
         for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
         #expect(r.running == nil)
-        #expect(seen.count == 500 && Set(seen).count == 500)
-        #expect(Array(seen.prefix(500)) == names.prefix(500).map(\.ticker))
-        #expect(r.scans[horizon]?.listings.count == 500)
-        #expect(r.scans[horizon]?.results.count == 500)
-        #expect(r.scans[horizon]?.status.contains("500 listings checked once") == true)
+        #expect(seen.count == 1500 && Set(seen).count == 1500)
+        #expect(Array(seen.prefix(1500)) == names.prefix(1500).map(\.ticker))
+        #expect(r.scans[horizon]?.listings.count == 1500)
+        #expect(r.scans[horizon]?.results.count == 1500)
+        #expect(r.scans[horizon]?.status.contains("1500 listings checked once") == true)
     }
 
-    @Test(arguments: ["initial", "resume", "retry"], [16, 24])
+    @Test(arguments: ["initial", "resume", "retry"], [4, 16, 24])
     func verifiedWorkersRetainBackpressureAndOriginalChecks(mode: String, capacity: Int) async throws {
         let history = StockSageResearchHistory()
-        let names = (0..<(capacity + 2)).map { listing("S\($0)") }
+        let names = (0..<(capacity + 3)).map { listing("S\($0)") }
         let originalAt = Date().addingTimeInterval(-20)
         if mode == "resume" {
             var interrupted = R.Scan()
@@ -1719,6 +1923,19 @@ import Testing
         #expect(prepared.count == capacity && !prepared.contains("S\(firstPending)") && comparisons == 0,
             "Worker \(capacity + 1) must wait for a whole serving slot")
         if mode != "initial" { #expect(!prepared.contains("S0")) }
+        let releasedSymbol = mode == "initial" ? "S0" : "S1"
+        let pending = waiting.removeValue(forKey: releasedSymbol)
+        let release = try #require(pending)
+        let blocked = Set(waiting.keys)
+        release.resume()
+        for _ in 0..<500 where waiting["S\(firstPending)"] == nil {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(waiting["S\(firstPending)"] != nil && prepared.count == capacity + 1,
+                "One available stock slot must start the next capture and model request without waiting for a second worker")
+        #expect(blocked.isSubset(of: Set(waiting.keys)) && !prepared.contains("S\(firstPending + 1)"),
+                "The other workers remain blocked and the single freed slot must not admit an extra capture")
+        #expect(active <= capacity && peak == capacity && comparisons == 0)
         for _ in 0..<500 where r.running != nil {
             let ready = Array(waiting.values); waiting.removeAll()
             for held in ready { held.resume() }
@@ -1726,7 +1943,7 @@ import Testing
         }
         try #require(r.running == nil)
         #expect(comparisons == 1 && peak == capacity && r.scans[.week]?.listings == names)
-        #expect(prepared.count == (mode == "initial" ? capacity + 2 : capacity + 1) && Set(prepared).count == prepared.count)
+        #expect(prepared.count == (mode == "initial" ? capacity + 3 : capacity + 2) && Set(prepared).count == prepared.count)
         if let original {
             #expect(r.scans[.week]?.results["S0"]?.facts == original.facts)
             #expect(r.scans[.week]?.results["S0"]?.at == original.at)

@@ -61,6 +61,20 @@ import Foundation
         #expect(F().matchingPredictions(in: value).count == 2)
     }
 
+    @Test func archivedCheckSearchKeepsZeroPickRunsWithoutBypassingOtherFacets() {
+        let empty = run([])
+        var filter = F()
+        filter.query = "ORCL"
+        #expect(filter.matches(empty, archivedSearchMatch: true))
+        #expect(!filter.matches(empty, archivedSearchMatch: false))
+        filter.horizon = .fortnight
+        #expect(!filter.matches(empty, archivedSearchMatch: true))
+        filter.horizon = nil
+        filter.action = .buy
+        #expect(!filter.matches(empty, archivedSearchMatch: true),
+                "An archived Hold/Incompleted check cannot satisfy strict prediction filters")
+    }
+
     @Test func completedRunsWithoutPicksRemainVisibleWithoutPredictionFilters() {
         let empty = run([])
         #expect(F().matches(empty))

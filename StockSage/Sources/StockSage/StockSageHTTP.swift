@@ -1,6 +1,7 @@
 import Foundation
 
-/// Shared bounded body reader for model/evidence clients. Callers own host/policy checks.
+/// Caps accumulated response Data and cancels on detected overflow. URLSession-owned
+/// buffering and total wire traffic are outside this cap. Callers own host/policy checks.
 enum StockSageHTTP {
     nonisolated final class NoRedirect: NSObject, URLSessionTaskDelegate {
         func urlSession(_ session: URLSession, task: URLSessionTask,

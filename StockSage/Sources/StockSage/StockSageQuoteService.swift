@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+import Synchronization
 
 // MARK: - StockSageQuoteService
 //
@@ -151,22 +152,23 @@ enum StockSageQuoteService {
     }
 
     nonisolated enum YahooResponse: Sendable { case data(Data), throttled, unavailable }
-    // The deadline is lock-protected. Foundation documents UserDefaults as thread-safe:
-    // https://developer.apple.com/documentation/foundation/userdefaults#Thread-Safety
+    // The SDK does not mark UserDefaults Sendable, although Foundation explicitly permits
+    // sharing it across threads/tasks. Retain that framework-boundary assertion only;
+    // our mutable deadline and its ordered persistence are protected by Mutex.
+    // https://developer.apple.com/documentation/foundation/userdefaults
     nonisolated final class YahooCooldown: @unchecked Sendable {
-        private let lock = NSLock()
-        private var until: Date?
+        private let until: Mutex<Date?>
         private let defaults: UserDefaults?
         private static let key = "stocksage.yahoo.retryAfter"
 
         init(defaults: UserDefaults? = nil) {
             let seconds = defaults?.double(forKey: Self.key) ?? 0
-            until = seconds.isFinite && seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+            until = Mutex(seconds.isFinite && seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil)
             self.defaults = defaults
         }
         func permits(at now: Date = Date()) -> Bool {
             guard now.timeIntervalSince1970.isFinite else { return false }
-            return lock.withLock { until.map { now >= $0 } ?? true }
+            return until.withLock { $0.map { now >= $0 } ?? true }
         }
         func observe(_ response: HTTPURLResponse, now: Date = Date()) {
             guard response.statusCode == 429 || response.statusCode == 503,
@@ -175,9 +177,11 @@ enum StockSageQuoteService {
                 now: now, maximumDelay: .greatestFiniteMagnitude)
             let until = now.addingTimeInterval(max(1, delay))
             guard until.timeIntervalSince1970.isFinite else { return }
-            lock.withLock {
-                self.until = max(self.until ?? until, until)
-                defaults?.set(self.until!.timeIntervalSince1970, forKey: Self.key)
+            self.until.withLock { current in
+                let deadline = max(current ?? until, until)
+                current = deadline
+                // Persist under the same lock so a shorter response cannot overwrite a later one.
+                defaults?.set(deadline.timeIntervalSince1970, forKey: Self.key)
             }
         }
     }

@@ -547,3 +547,22 @@ struct StockSageCatalystNarratorTests {
         #expect(N.Result.text("a", .onDevice) != .unverified("a", .onDevice, reason: "check failed"))
     }
 }
+
+
+extension StockSageCatalystNarratorTests {
+    @Test func failedAndEmptySECChecksRemainAvailabilityFactsWithoutSyntheticCitations() {
+        let failed = StockSageDisclosureService.FilingsObservation(checkedAt: Self.now,
+            outcome: .unavailable(.unreachable), filings: [])
+        let empty = StockSageDisclosureService.FilingsObservation(checkedAt: Self.now,
+            outcome: .answered, filings: [])
+        let failedNote = N.filingCoverage(failed), emptyNote = N.filingCoverage(empty)
+        #expect(failedNote.contains("not evidence of no filing"))
+        #expect(emptyNote.contains("no matching 8-K") && !emptyNote.contains("unusable response"))
+        let source = N.CitedSource(date: Self.now, source: "Fixture", title: "Dated report", snippet: "", link: nil)
+        let facts = N.facts(for: brief(symbol: "AAPL"), sources: [source], evidenceNotes: [failedNote])
+        #expect(facts.contains { $0 == "Evidence availability: " + failedNote })
+        #expect(facts.filter { $0.hasPrefix("[1]") }.count == 1)
+        #expect(!facts.contains { $0.hasPrefix("[2]") })
+        #expect(!N.citationsValid("Reported [2]", sourceCount: 1))
+    }
+}

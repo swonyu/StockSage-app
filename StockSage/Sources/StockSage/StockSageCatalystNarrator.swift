@@ -131,7 +131,8 @@ enum StockSageCatalystNarrator {
     /// `citationsValid(_:sourceCount:)` is the other half of this contract: it checks the model's
     /// output never cites a number outside `1...sources.count`.
     nonisolated static func facts(for brief: StockSageCatalystWatch.Brief,
-                                  sources: [CitedSource] = [], benzinga: StockSageBenzinga.Snapshot? = nil) -> [String] {
+                                  sources: [CitedSource] = [], benzinga: StockSageBenzinga.Snapshot? = nil,
+                                  evidenceNotes: [String] = []) -> [String] {
         let idea = brief.idea
         let advice = idea.advice
         var lines: [String] = []
@@ -172,6 +173,8 @@ enum StockSageCatalystNarrator {
         if let regimeItem = brief.all.first(where: { $0.kind == .regime }) {
             lines.append("Regime: \(regimeItem.headline)")
         }
+        // App-authored check/scope notes are not publications and receive no citation ID.
+        lines.append(contentsOf: evidenceNotes.prefix(8).map { "Evidence availability: " + String($0.prefix(1_000)) })
         for (i, s) in sources.enumerated() {
             lines.append(sourceLine(number: i + 1, source: s))
         }
@@ -182,6 +185,17 @@ enum StockSageCatalystNarrator {
             lines.append(projection.text)
         }
         return lines
+    }
+
+    nonisolated static func filingCoverage(_ observation: StockSageDisclosureService.FilingsObservation) -> String {
+        let checked = "SEC 8-K check at " + observation.checkedAt.ISO8601Format() + ": "
+        switch observation.outcome {
+        case .answered:
+            return checked + (observation.filings.isEmpty
+                ? "no matching 8-K in the returned SEC submissions page; not a complete filing-history census."
+                : "\(observation.filings.count) matching filing(s) retained from the returned SEC submissions page; bounded selection, not a complete history.")
+        case .unavailable(let failure): return checked + failure.message + " Absence of a citation is not evidence of no filing."
+        }
     }
 
     /// UTC-fixed day formatter for a source line's date — matches the engine's own UTC-fixed
@@ -406,13 +420,14 @@ enum StockSageCatalystNarrator {
     /// `.unverified` with the draft and generating source preserved. The session is local to
     /// this call — no shared mutable state.
     private static func explainOnDevice(_ brief: StockSageCatalystWatch.Brief,
-                                        sources: [CitedSource] = [], benzinga: StockSageBenzinga.Snapshot? = nil) async -> Result {
+                                        sources: [CitedSource] = [], benzinga: StockSageBenzinga.Snapshot? = nil,
+                                        evidenceNotes: [String] = []) async -> Result {
         #if canImport(FoundationModels)
         guard case .available = availability else {
             if case .unavailable(let reason) = availability { return .unavailable(reason) }
             return .unavailable("On-device model not available in this build.")
         }
-        let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
+        let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga, evidenceNotes: evidenceNotes)
         let session = LanguageModelSession(instructions: instructions)
         do {
             let response = try await session.respond(
@@ -459,9 +474,10 @@ enum StockSageCatalystNarrator {
                                          isOllama: Bool,
                                          sources: [CitedSource] = [],
                                          benzinga: StockSageBenzinga.Snapshot? = nil,
+                                         evidenceNotes: [String] = [],
                                          stillValid: @escaping @MainActor () -> Bool = { true },
                                          transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> Result {
-        let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga)
+        let briefFacts = facts(for: brief, sources: sources, benzinga: benzinga, evidenceNotes: evidenceNotes)
         let result = await StockSageLocalModelServer.completeDetailed(
             config, isOllama: isOllama, system: instructions, user: prompt(facts: briefFacts),
             contextTokens: StockSageLocalModelServer.researchContextTokens, stillValid: stillValid, transport: transport)
@@ -521,6 +537,7 @@ enum StockSageCatalystNarrator {
     /// AND `citationsValid` check gate the result before it ever becomes `.text`.
     static func explain(_ brief: StockSageCatalystWatch.Brief, sources: [CitedSource] = [],
         benzinga: StockSageBenzinga.Snapshot? = nil,
+        evidenceNotes: [String] = [],
         defaults: UserDefaults = .standard,
         stillValid: @escaping @MainActor () -> Bool = { true },
         checkServer: ((StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe)? = nil,
@@ -532,7 +549,7 @@ enum StockSageCatalystNarrator {
                 return .unavailable("Research capture is invalid. Refresh evidence before requesting an explanation.")
             }
         }
-        guard facts(for: brief, sources: sources, benzinga: benzinga).joined(separator: "\n").utf8.count <= 12_000 else {
+        guard facts(for: brief, sources: sources, benzinga: benzinga, evidenceNotes: evidenceNotes).joined(separator: "\n").utf8.count <= 12_000 else {
             return .unavailable("Evidence exceeds the explanation budget. Use a smaller source selection; provider checks were not silently omitted.")
         }
         let backend = selectedBackend(defaults.string(forKey: StockSageLocalModelServer.backendKey))
@@ -553,13 +570,13 @@ enum StockSageCatalystNarrator {
 
         func onDevice() async -> Result {
             guard active() else { return stopped }
-            let result = if let local { await local() } else { await explainOnDevice(brief, sources: sources, benzinga: benzinga) }
+            let result = if let local { await local() } else { await explainOnDevice(brief, sources: sources, benzinga: benzinga, evidenceNotes: evidenceNotes) }
             return active() ? result : stopped
         }
         func viaServer(_ config: StockSageLocalModelServer.Config, _ ollama: Bool) async -> Result {
             guard active() else { return stopped }
             let result = if let server { await server(config, ollama) }
-                else { await explainViaServer(brief, config: config, isOllama: ollama, sources: sources, benzinga: benzinga, stillValid: active) }
+                else { await explainViaServer(brief, config: config, isOllama: ollama, sources: sources, benzinga: benzinga, evidenceNotes: evidenceNotes, stillValid: active) }
             return active() ? result : stopped
         }
         func fetchProbe(_ config: StockSageLocalModelServer.Config) async -> StockSageLocalModelServer.Probe {

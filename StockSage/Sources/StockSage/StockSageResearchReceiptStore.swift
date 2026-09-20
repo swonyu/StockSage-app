@@ -1,9 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// Optional bounded horizon manifests for explicit capture/replay callers. Production research
-/// keeps its existing Diagnostics and ResearchHistory stores; no second default writer is enabled.
-/// Manifests stay small; model calls are separate atomic files.
+/// Bounded horizon diagnostic manifests and durable same-day product history.
+/// Same-day receipts are the only saved source for their checks/evidence and never expire
+/// automatically. Individual manifests/calls remain bounded inputs and separate atomic files.
 @MainActor
 final class StockSageResearchReceiptStore {
     nonisolated static let schemaVersion = 2
@@ -13,6 +13,7 @@ final class StockSageResearchReceiptStore {
     nonisolated static let maxPayloadUTF8 = 24_000
     nonisolated static let maxFacts = 96
     nonisolated static let maxCompletedScans = 30
+    nonisolated static let maxManifestBytes = 3_000_000
     nonisolated static let maxCallBytes = 600_000
     nonisolated static let maxFactsBytes = 1_200_000
 
@@ -24,6 +25,7 @@ final class StockSageResearchReceiptStore {
         let directoryCount: Int?
         let partialSession: Bool?
         let fallback: Bool?
+        var sp500: StockSageSP500Constituents.Provenance? = nil
     }
 
     nonisolated struct ModelCall: Codable, Sendable, Equatable {
@@ -117,13 +119,16 @@ final class StockSageResearchReceiptStore {
     private let directory: URL
     private let files: FileManager
     private let maxCompletedBytes: Int
+    private let sameDayLabel: String
+    private var manifestByteLimit: Int { ["microcap", "largecap"].contains(sameDayLabel) ? 16_000_000 : Self.maxManifestBytes }
     private(set) var lastError: String?
     private var scans: [UUID: Scan] = [:]
     private var active: Set<UUID> = []
     private var failed: Set<UUID> = []
 
-    init(directory: URL, fileManager: FileManager = .default, maxCompletedBytes: Int = 512_000_000) {
+    init(directory: URL, fileManager: FileManager = .default, maxCompletedBytes: Int = 512_000_000, sameDayLabel: String = "same-day") {
         self.directory = directory
+        self.sameDayLabel = ["microcap", "largecap"].contains(sameDayLabel) ? sameDayLabel : "same-day"
         files = fileManager
         self.maxCompletedBytes = max(0, maxCompletedBytes)
         load()
@@ -138,7 +143,7 @@ final class StockSageResearchReceiptStore {
         begin(label: horizon.rawValue, at: date)
     }
 
-    func beginSameDay(at date: Date) -> UUID { begin(label: "same-day", at: date) }
+    func beginSameDay(at date: Date) -> UUID { begin(label: sameDayLabel, at: date) }
 
     private func begin(label: String, at date: Date) -> UUID {
         let id = UUID()
@@ -158,7 +163,7 @@ final class StockSageResearchReceiptStore {
             listings.count <= Self.maxAttempts else { return [] }
         scan.selection = Selection(session: value.map { bounded($0.session, 256) }, requestedAt: value?.requestedAt,
             returnedCount: value?.returnedCount, eligibleCount: value?.eligibleCount,
-            directoryCount: value?.directoryCount, partialSession: value?.partialSession, fallback: value?.fallback)
+            directoryCount: value?.directoryCount, partialSession: value?.partialSession, fallback: value?.fallback, sp500: value?.sp500)
         scan.attempts = listings.enumerated().map { index, item in
             Attempt(id: UUID(), listingID: bounded(item.id, 256), index: index,
                 symbol: bounded(sanitize(item.ticker) ?? "", 128),
@@ -273,14 +278,16 @@ final class StockSageResearchReceiptStore {
     func receipt(scanID: UUID) -> Scan? { scans[scanID] }
     var latestSameDay: StockSageSameDayResearch.Receipt? { sameDayHistory.first }
     var sameDayHistory: [StockSageSameDayResearch.Receipt] {
-        scans.values.filter { $0.horizon == "same-day" }.sorted {
+        scans.values.filter { $0.horizon == sameDayLabel }.sorted {
             $0.startedAt == $1.startedAt ? $0.id.uuidString > $1.id.uuidString : $0.startedAt > $1.startedAt
         }.map { scan in
             guard var result = scan.sameDay, result.policyVersion == 1, result.id == scan.id,
+                  (result.mode?.rawValue ?? "same-day") == sameDayLabel,
                   result.checks.count <= 24,
                   Set(result.checks.map(\.symbol)).count == result.checks.count else {
                 return .init(id: scan.id, startedAt: scan.startedAt, finishedAt: scan.endedAt,
-                    selection: "No verified shortlist payload was saved.", checks: [], blocker: scan.status)
+                    selection: "No verified shortlist payload was saved.", checks: [], blocker: scan.status,
+                    mode: .init(rawValue: sameDayLabel))
             }
             if result.finishedAt == nil || scan.persistence != "saved" {
                 result.selectedSymbol = nil
@@ -292,7 +299,8 @@ final class StockSageResearchReceiptStore {
     }
     @discardableResult func saveSameDay(_ receipt: StockSageSameDayResearch.Receipt) -> Bool {
         guard receipt.policyVersion == 1, receipt.checks.count <= 24,
-              scans[receipt.id]?.horizon == "same-day" else { return false }
+              (receipt.mode?.rawValue ?? "same-day") == sameDayLabel,
+              scans[receipt.id]?.horizon == sameDayLabel else { return false }
         scans[receipt.id]?.sameDay = receipt
         persistManifest(receipt.id)
         return !persistenceFailed(scanID: receipt.id)
@@ -325,7 +333,7 @@ final class StockSageResearchReceiptStore {
             }
             try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
             let data = try JSONEncoder.receipt.encode(scan)
-            guard data.count <= 1_000_000 else { throw Failure.writeFailed }
+            guard data.count <= manifestByteLimit else { throw Failure.writeFailed }
             let path = dir.appendingPathComponent("manifest.json")
             let tmp = dir.appendingPathComponent("manifest.json.tmp")
             try data.write(to: tmp, options: [.atomic, .completeFileProtection])
@@ -369,7 +377,7 @@ final class StockSageResearchReceiptStore {
         guard let dirs = try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return }
         for dir in dirs {
             guard let id = scanID(from: dir), let manifest = boundedManifestURL(dir),
-                let data = try? Data(contentsOf: manifest), data.count <= 1_000_000,
+                let data = try? Data(contentsOf: manifest), data.count <= manifestByteLimit,
                 let scan = try? JSONDecoder.receipt.decode(Scan.self, from: data),
                 scan.id == id, scan.schemaVersion == Self.schemaVersion,
                 scan.attempts.count <= Self.maxAttempts,
@@ -434,7 +442,8 @@ final class StockSageResearchReceiptStore {
     private func prune() {
         guard let dirs = try? files.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey]) else { return }
         let sorted = dirs.compactMap { dir -> (URL, UUID, Date, Int)? in
-            guard let id = scanID(from: dir), !active.contains(id), let scan = scans[id], scan.endedAt != nil else { return nil }
+            guard let id = scanID(from: dir), !active.contains(id), let scan = scans[id],
+                  scan.horizon != "same-day", scan.horizon != "microcap", scan.horizon != "largecap", scan.endedAt != nil else { return nil }
             return (dir, id, scan.endedAt ?? scan.startedAt, storedBytes(in: dir))
         }.sorted { $0.2 == $1.2 ? $0.1.uuidString > $1.1.uuidString : $0.2 > $1.2 }
         var retainedBytes = 0
@@ -473,7 +482,7 @@ final class StockSageResearchReceiptStore {
 
     private func boundedManifestURL(_ dir: URL) -> URL? {
         let url = dir.appendingPathComponent("manifest.json")
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]), values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size <= 1_000_000 else { return nil }
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]), values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size <= manifestByteLimit else { return nil }
         return url
     }
 

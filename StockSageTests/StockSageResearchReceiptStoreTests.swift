@@ -384,14 +384,15 @@ struct StockSageResearchReceiptStoreTests {
         #expect(directories.count == 2)
     }
 
-    @Test
-    func fullFiveHundredListingReceiptBenchmarkPersistsAndReloadsEveryPayload() throws {
+    @Test(arguments: [500, 1_500])
+    func fullListingReceiptPersistsAndReloadsEveryPayload(count: Int) throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let benchmarkStart = ContinuousClock.now
         let store = ReceiptStore(directory: root)
         let scanID = store.begin(horizon: .week, at: Date(timeIntervalSinceReferenceDate: 50_000))
-        let listings = (0..<ReceiptStore.maxAttempts).map { listing("T" + String(format: "%03d", $0)) }
+        let listings = (0..<count).map { listing("T" + String(format: "%03d", $0)) }
+        let longOutcome = String(repeating: "x", count: 1_000)
         let attemptIDs = store.registerSelection(
             selection(at: Date(timeIntervalSinceReferenceDate: 50_000),
                       returnedCount: listings.count, eligibleCount: listings.count,
@@ -399,7 +400,7 @@ struct StockSageResearchReceiptStoreTests {
             listings: listings,
             for: scanID
         )
-        try #require(attemptIDs.count == 500)
+        try #require(attemptIDs.count == count)
         var callIDs: [UUID] = []
         callIDs.reserveCapacity(attemptIDs.count)
 
@@ -417,7 +418,8 @@ struct StockSageResearchReceiptStoreTests {
                                 prompt: prompt, response: response, finish: .stop),
                           for: attemptID, scanID: scanID)
             store.finishAttempt(
-                .init(facts: ["F1: " + symbol + " has dated evidence."], note: "Accepted " + symbol,
+                .init(facts: ["F1: " + symbol + " has dated evidence."],
+                      note: count == 1_500 ? longOutcome : "Accepted " + symbol,
                       model: "qwen3.5-9b", validationOutcome: .validated),
                 attemptID: attemptID,
                 scanID: scanID,
@@ -425,20 +427,31 @@ struct StockSageResearchReceiptStoreTests {
                 at: startedAt.addingTimeInterval(1)
             )
         }
-        store.finish(scanID: scanID, status: "finished", at: Date(timeIntervalSinceReferenceDate: 51_000))
+        let finishedAt = Date(timeIntervalSinceReferenceDate: 50_002 + Double(count))
+        store.finish(scanID: scanID, status: "finished", at: finishedAt)
         #expect(!store.persistenceFailed(scanID: scanID))
 
         let manifestBytes = try Data(contentsOf: manifestURL(scanID, in: root)).count
-        #expect(manifestBytes < 1_000_000)
+        #expect(manifestBytes < 3_000_000)
+        if count == 1_500 {
+            #expect(manifestBytes > 1_000_000, "This fixture must exercise the former manifest-size boundary")
+        } else {
+            #expect(manifestBytes < 1_000_000, "The original 500-listing receipt remains readable")
+        }
         let reopened = ReceiptStore(directory: root)
         #expect(!reopened.persistenceFailed(scanID: scanID))
         let scan = try #require(reopened.receipt(scanID: scanID))
         #expect(scan.persistence == "saved")
-        #expect(scan.attempts.count == 500)
+        #expect(scan.attempts.count == count && scan.endedAt == finishedAt)
         #expect(scan.attempts.allSatisfy {
             $0.endedAt != nil && $0.terminalStatus == "accepted" && $0.modelCalls.count == 1
         })
-        #expect(scan.attempts.reduce(0) { $0 + $1.modelCalls.count } == 500)
+        #expect(scan.attempts.reduce(0) { $0 + $1.modelCalls.count } == count)
+        #expect(scan.attempts.allSatisfy { $0.endedAt.map { $0 < finishedAt } == true })
+        if count == 1_500 {
+            #expect(scan.attempts.allSatisfy { $0.uiOutcome == longOutcome },
+                    "Increasing scan capacity must not truncate or discard individual outcomes")
+        }
 
         for (index, attempt) in scan.attempts.enumerated() {
             let call = try #require(reopened.call(
@@ -458,7 +471,7 @@ struct StockSageResearchReceiptStoreTests {
         let elapsedMilliseconds = Int64(elapsed.seconds) * 1_000
             + Int64(elapsed.attoseconds / 1_000_000_000_000_000)
         let benchmark: [String: Any] = [
-            "case": "receipt_store_500",
+            "case": "receipt_store_\(count)",
             "elapsed_ms": elapsedMilliseconds,
             "manifest_bytes": manifestBytes,
             "total_file_bytes": directoryBytes(root),

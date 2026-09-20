@@ -8,8 +8,12 @@ mkdir "$probe_dir/bin"
 cat > "$probe_dir/bin/xcodebuild" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$PROBE_ARGS"
-test -z "${STOCKSAGE_PAPER_DIAGNOSTICS:-}${STOCKSAGE_PAPER_RESPONSE_REPLAY:-}${STOCKSAGE_PAPER_PROCESS_DEATH:-}${SIMCTL_CHILD_STOCKSAGE_PAPER_DIAGNOSTICS:-}${SIMCTL_CHILD_STOCKSAGE_PAPER_RESPONSE_REPLAY:-}${SIMCTL_CHILD_STOCKSAGE_PAPER_PROCESS_DEATH:-}" || exit 99
-test -z "${TEST_RUNNER_STOCKSAGE_PAPER_DIAGNOSTICS:-}${TEST_RUNNER_STOCKSAGE_PAPER_RESPONSE_REPLAY:-}${TEST_RUNNER_STOCKSAGE_PAPER_PROCESS_DEATH:-}" || exit 99
+for prefix in '' SIMCTL_CHILD_ TEST_RUNNER_; do
+  for flag in STOCKSAGE_PAPER_DIAGNOSTICS STOCKSAGE_PAPER_RESPONSE_REPLAY STOCKSAGE_PAPER_PROCESS_DEATH STOCKSAGE_QUALITY_EXPORT_RECEIPT STOCKSAGE_THROUGHPUT_DIR STOCKSAGE_THROUGHPUT_MODE STOCKSAGE_RECOVERY_DIR; do
+    name="$prefix$flag"
+    test -z "${!name:-}" || exit 99
+  done
+done
 printf '%s\n' "${PROBE_LOG:-}"
 exit "$PROBE_EXIT"
 STUB
@@ -18,6 +22,12 @@ cat > "$probe_dir/bin/xcrun" <<'STUB'
 printf '{"result":"Passed","passedTests":%s,"failedTests":0,"skippedTests":0}\n' "$PROBE_PASSED"
 STUB
 chmod +x "$probe_dir/bin/xcodebuild" "$probe_dir/bin/xcrun"
+for prefix in '' SIMCTL_CHILD_ TEST_RUNNER_; do
+  for flag in STOCKSAGE_PAPER_DIAGNOSTICS STOCKSAGE_PAPER_RESPONSE_REPLAY STOCKSAGE_PAPER_PROCESS_DEATH STOCKSAGE_QUALITY_EXPORT_RECEIPT STOCKSAGE_THROUGHPUT_DIR STOCKSAGE_THROUGHPUT_MODE STOCKSAGE_RECOVERY_DIR; do
+    export "$prefix$flag=$probe_dir/sentinel"
+  done
+done
+printf '%s' 'unchanged' > "$probe_dir/sentinel"
 for scenario in success failure empty build layout hosting table publication constraints; do
     expected=0; native_exit=0; passed=1; log=''; args=(--filter StockSageQuoteCacheTests --no-parallel)
     case "$scenario" in
@@ -48,6 +58,7 @@ for scenario in success failure empty build layout hosting table publication con
     fi
     grep -q -- '-skip-testing:StockSageTests/LiveUniverseVerificationTests' "$probe_dir/args"
 done
+test "$(cat "$probe_dir/sentinel")" = unchanged
 test "$(find "$probe_dir" -maxdepth 1 -type d -name 'stocksage-tests.*' | wc -l | tr -d ' ')" -eq 9
 result=0
 bash "$repo/tools/runtests.sh" "$repo" --filter '.*' >/dev/null 2>&1 || result=$?

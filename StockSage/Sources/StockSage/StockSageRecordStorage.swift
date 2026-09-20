@@ -5,7 +5,8 @@ import Darwin
 /// A full restore activates one authoritative image. Legacy preferences stay untouched;
 /// thereafter every participating mutation replaces this image, never four separate keys.
 /// An interrupted staged write leaves the previous image authoritative. Temporary files
-/// are never promoted on launch, and an unreadable image never falls back to preferences.
+/// are never promoted on launch. After recorded activation, a missing or unreadable image
+/// never falls back to preferences. Legacy preference payloads remain untouched.
 @MainActor enum StockSageRecordStorage {
     nonisolated enum Value: Codable {
         case data(Data), strings([String]), flag(Bool), absent
@@ -38,7 +39,7 @@ import Darwin
         var errorDescription: String? {
             switch self {
             case .unreadable:
-                "Saved records could not be verified. The saved file was preserved; recover it before editing or restoring."
+                "Saved records could not be verified or their committed file is missing. Existing data was not changed; recover the file before editing or restoring."
             case .invalidProfile:
                 "The backup destinations do not share one supported record store. Nothing was changed."
             case .durabilityUnconfirmed:
@@ -63,6 +64,8 @@ import Darwin
         }
     }
     private static var cache: [String: (Stamp, [String: Value])] = [:]
+    static let activationKey = "stocksage.sharedRecords.activated.v1"
+    private static var activatedPaths: Set<String> = []
     private static let keys = ["stocksage.journal.v1", "stocksage_portfolio_v1", "stocksage_user_symbols", "stocksage_price_alerts"]
     private static let maximumBytes = 50_000_000
 
@@ -114,8 +117,13 @@ import Darwin
         let bytes = try encoder.encode(Envelope(version: 1, payload: payload, sha256: digest(payload)))
         guard bytes.count <= maximumBytes else { throw Failure.unreadable }
         do {
-            try replace(bytes, at: fileURL(defaults: defaults), beforeReplace: beforeReplace,
-                        afterReplace: { try StockSageRecordWriter.afterRecordReplace(defaults) })
+            let url = try fileURL(defaults: defaults)
+            try replace(bytes, at: url, beforeReplace: beforeReplace, afterReplace: {
+                // rename is the commit point. A pre-commit failure must leave a genuine
+                // legacy profile unactivated; a later durability warning is still a commit.
+                recordActivation(defaults: defaults, url: url)
+                try StockSageRecordWriter.afterRecordReplace(defaults)
+            })
         } catch Failure.durabilityUnconfirmed {
             return Failure.durabilityUnconfirmed.localizedDescription
         }
@@ -172,13 +180,20 @@ import Darwin
 
     private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
+    private static func recordActivation(defaults: UserDefaults, url: URL) {
+        activatedPaths.insert(url.path)
+        if !defaults.bool(forKey: activationKey) { defaults.set(true, forKey: activationKey) }
+    }
+
     private static func load(defaults: UserDefaults) throws -> [String: Value]? {
         // Parent-app import and explicitly injected read-only suites retain their legacy reads.
         guard StockSageRecordWriter.manages(defaults) else { return nil }
         let url = try fileURL(defaults: defaults)
         let descriptor = Darwin.open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
         guard descriptor >= 0 else {
-            if errno == ENOENT { cache.removeValue(forKey: url.path); return nil }
+            if errno == ENOENT, !defaults.bool(forKey: activationKey), !activatedPaths.contains(url.path) {
+                return nil // Only a profile with no observed/committed activation may use legacy data.
+            }
             throw Failure.unreadable
         }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
@@ -189,7 +204,10 @@ import Darwin
         guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
               info.st_size >= 0, info.st_size <= Int64(maximumBytes) else { throw Failure.unreadable }
         let stamp = Stamp(info)
-        if let saved = cache[url.path], saved.0 == stamp { return saved.1 }
+        if let saved = cache[url.path], saved.0 == stamp {
+            recordActivation(defaults: defaults, url: url)
+            return saved.1
+        }
         do {
             let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
             guard data.count <= maximumBytes else { throw Failure.unreadable }
@@ -198,6 +216,9 @@ import Darwin
             let image = try JSONDecoder().decode([String: Value].self, from: envelope.payload)
             try validate(image)
             cache[url.path] = (stamp, image)
+            // Adopt an existing pre-marker image only after fully validating it. A corrupt
+            // file, stale preference values or a temporary stage are not activation evidence.
+            recordActivation(defaults: defaults, url: url)
             return image
         } catch { throw Failure.unreadable }
     }

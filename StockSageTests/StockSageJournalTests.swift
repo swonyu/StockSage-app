@@ -6,6 +6,19 @@ import Foundation
 
 struct StockSageJournalTests {
 
+    @Test func mixedPenceAndPoundsNormalizeBeforeSumming() throws {
+        let trades = [tSym("BP.L", .long, entry: 100, stop: 90, shares: 1, exit: 50),
+                      tSym("EURGBP=X", .long, entry: 0.75, stop: 0.5, shares: 2, exit: 1.25)]
+        let stats = StockSageJournal.stats(trades)
+        let year = try #require(StockSageJournal.yearlyPnL(trades).first)
+        #expect(stats.profitCurrency == "GBP" && stats.totalProfit == 0.5)
+        #expect(year.profitCurrency == "GBP" && year.realizedDollars == 0.5)
+        #expect(StockSageCurrency.signedAmount(stats.totalProfit, currency: "GBP") == "+0.50 GBP")
+        #expect(StockSageCurrency.signedAmount(10, symbol: "EURUSD=X") == "+10.00")
+        #expect(StockSageCurrency.signedAmount(1, symbol: "EURGBP=X") == "+1.00 GBP")
+        #expect(StockSageCurrency.approxAmount(10, symbol: "EURUSD=X") == "≈$10")
+    }
+
     @Test func invalidMarksCannotProduceAnOpenAction() {
         let trade = t(.long, entry: 100, stop: 90, shares: 10)
         for px in [Double.nan, .infinity, -.infinity, 0, -1] {
@@ -567,7 +580,7 @@ struct StockSageJournalTests {
     // First-real-trade review (2026-07-16): totalProfit sums each closed trade's profit in its
     // NATIVE currency, so it's only a valid single figure when the book is one currency. stats()
     // now reports profitCurrency (single ISO code, else nil=mixed) + profitSymbol (representative,
-    // for pence normalization). Expected values HAND-DERIVED: profit(at:) = (exit-entry)*shares
+    // for identity only). Each trade is normalized before summing. Expected values HAND-DERIVED: profit(at:) = (exit-entry)*shares
     // for a long; conversionCurrencyForSymbol: no-dot → USD, .SR → SAR, .L → GBP (pence, ÷100).
     @Test func statsProfitCurrencyIsSingleCodeOrNilWhenMixed() {
         // All-USD closed book: single currency "USD", representative symbol carried.
@@ -582,9 +595,9 @@ struct StockSageJournalTests {
         #expect(sar.profitCurrency == "SAR")
         #expect(sar.profitSymbol == "2222.SR")
 
-        // All-.L (pence): currency "GBP"; totalProfit is RAW pence (display ÷100 via signedAmount).
+        // All-.L (pence): currency "GBP"; totalProfit is already normalized to pounds.
         let gbp = StockSageJournal.stats([tSym("SHEL.L", .long, entry: 500, stop: 400, shares: 1, exit: 900)])
-        #expect(gbp.totalProfit == 400)           // 400 pence raw
+        #expect(gbp.totalProfit == 4)             // 400 pence = 4 pounds
         #expect(gbp.profitCurrency == "GBP")
         #expect(gbp.profitSymbol == "SHEL.L")
 
@@ -603,7 +616,7 @@ struct StockSageJournalTests {
         #expect(StockSageJournal.stats([]).profitSymbol == nil)
     }
 
-    // The signedAmount rendering the display uses over totalProfit: pence normalizes, SAR labels,
+    // Per-trade signedAmount rendering: pence normalizes, SAR labels,
     // USD stays bare. (Guards that the .L raw-pence total is not shown ~100× over.)
     @Test func realizedProfitRendersInBookCurrencyWithPenceNormalized() {
         #expect(StockSageCurrency.signedAmount(50, symbol: "AAPL") == "+50.00")

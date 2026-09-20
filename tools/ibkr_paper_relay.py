@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -18,6 +19,7 @@ from pathlib import Path
 import re
 import signal
 import sqlite3
+import stat
 import subprocess
 import time
 import uuid
@@ -29,10 +31,18 @@ CLIENT_ID = 23817
 SOURCE = Path.home() / "Library/Application Support/StockSageQwenPaper/account.json"
 STATE = Path.home() / "Library/Application Support/StockSageIBKRPaper"
 APPLE_EPOCH = 978307200
+FOUNDATION_DISTANT_PAST = -63_114_076_800.0
 MAX_AGE = 120
 POSITION_CAP = Decimal("2000")
 CAPITAL_CAP = Decimal("10000")
 FEE_RESERVE = Decimal("5")  # Reservation only; actual IBKR fees are recorded separately.
+MAX_SOURCE_BYTES = 32_000_000
+MAX_ARCHIVE_BYTES = 32_000_000
+MAX_SNAPSHOT_BYTES = 128_000_000
+MAX_AUDIT_ARCHIVES = 1_000
+MAX_ARCHIVED_DECISIONS = 1_000_000
+MAX_ACTIVE_DECISIONS = 50_000
+MAX_TRADES = 50_000
 
 
 class Halt(RuntimeError):
@@ -82,37 +92,279 @@ class Intent:
         return f"SSP-{uuid.UUID(self.trade_id).hex}-{self.side[0]}"
 
 
-def read_source(path):
-    if not path.exists():
-        raise Halt("StockSage paper ledger is not available")
-    if path.stat().st_size > 32_000_000:
-        raise Halt("Source ledger exceeds its size limit")
+def _read_bounded(path, limit, label):
+    """Read one regular file generation without following a final symlink."""
+    path = Path(path)
     try:
-        value = json.loads(path.read_bytes())
-        if value["version"] != 1 or not isinstance(value["trades"], list) or len(value["trades"]) > 50_000:
-            raise ValueError()
-        ids, intents = set(), []
-        for t in value["trades"]:
-            trade_id = str(uuid.UUID(t["id"]))
-            if trade_id in ids or t["side"] != "Long" or not re.fullmatch(r"[A-Z][A-Z0-9.]{0,11}", t["symbol"]):
-                raise ValueError()
-            ids.add(trade_id)
-            qty, entry = number(t["shares"]), number(t["entry"])
-            opened = float(number(t["openedAt"])) + APPLE_EPOCH
-            if qty < 1 or qty != int(qty) or qty > 1_000_000 or entry < 1 or not math.isfinite(opened):
-                raise ValueError()
-            intents.append(Intent(trade_id, t["symbol"], "BUY", int(qty), entry, opened))
-            close, price = t.get("closedAt"), t.get("exitPrice")
-            if (close is None) != (price is None):
-                raise ValueError()
-            if close is not None:
-                closed, exit_price = float(number(close)) + APPLE_EPOCH, number(price)
-                if not math.isfinite(closed) or closed < opened or exit_price <= 0:
-                    raise ValueError()
-                intents.append(Intent(trade_id, t["symbol"], "SELL", int(qty), exit_price, closed))
-        return sorted(intents, key=lambda item: (item.at, item.side == "SELL"))
-    except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise Halt("Invalid StockSage source ledger; existing files preserved") from exc
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                             | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError as exc:
+        message = ("StockSage paper ledger is not available" if label == "account"
+                   else "Referenced StockSage audit archive is missing")
+        raise Halt(message) from exc
+    except OSError as exc:
+        raise Halt(f"StockSage {label} must be a regular non-symlink file") from exc
+    try:
+        source = os.fdopen(descriptor, "rb")
+    except Exception:
+        os.close(descriptor)
+        raise
+    with source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise Halt(f"StockSage {label} must be a regular non-symlink file")
+        if not 0 < before.st_size <= limit:
+            raise Halt(f"StockSage {label} exceeds its size limit")
+        data = source.read(limit + 1)
+        after = os.fstat(source.fileno())
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                              value.st_mtime_ns, value.st_ctime_ns)
+    if len(data) > limit:
+        raise Halt(f"StockSage {label} exceeds its size limit")
+    if len(data) != before.st_size or identity(before) != identity(after):
+        raise Halt(f"StockSage {label} changed while reading; retry the captured generation")
+    return data
+
+
+def _reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise Halt("Duplicate JSON key in StockSage data")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(token):
+    raise ValueError(token)
+
+
+def _decode_json(data, label):
+    try:
+        return json.loads(data, parse_float=Decimal, object_pairs_hook=_reject_duplicate_keys,
+                          parse_constant=_reject_json_constant)
+    except Halt:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise Halt(f"Invalid StockSage {label} JSON; existing files preserved") from exc
+
+
+def _uuid_value(value, label):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}", value):
+        raise Halt(f"Invalid StockSage {label} UUID")
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise Halt(f"Invalid StockSage {label} UUID") from exc
+
+
+def _integer(value, label, minimum=0):
+    if type(value) is not int or value < minimum:
+        raise Halt(f"Invalid StockSage {label}")
+    return value
+
+
+def _finite_number(value, label):
+    try:
+        result = number(value)
+        if not math.isfinite(float(result)):
+            raise Halt("Outside native numeric range")
+        return result
+    except (Halt, OverflowError) as exc:
+        raise Halt(f"Invalid StockSage {label}") from exc
+
+
+def _finite_date(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise Halt(f"Invalid StockSage {label}")
+    try:
+        result = float(_finite_number(value, label))
+    except OverflowError as exc:
+        raise Halt(f"Invalid StockSage {label}") from exc
+    if not math.isfinite(result):
+        raise Halt(f"Invalid StockSage {label}")
+    return result
+
+
+def _decision_projection(record, label):
+    if not isinstance(record, dict):
+        raise Halt(f"Invalid StockSage {label} decision record")
+    decision_id = _uuid_value(record.get("id"), f"{label} decision ID")
+    at = _finite_date(record.get("at"), f"{label} decision time")
+    if not isinstance(record.get("symbol"), str):
+        raise Halt(f"Invalid StockSage {label} decision symbol")
+    if not isinstance(record.get("action"), str):
+        raise Halt(f"Invalid StockSage {label} decision action")
+    return decision_id, at, record["symbol"], record["action"]
+
+
+def _audit_control(records):
+    latest = {}
+    for _, at, symbol, _ in records:
+        if symbol:
+            latest[symbol] = max(latest.get(symbol, FOUNDATION_DISTANT_PAST), at)
+    return {
+        "sameDayActivated": any(action == "Same-day policy activated" for _, _, _, action in records),
+        "settlementActivated": any(action == "T+1 cash policy activated" for _, _, _, action in records),
+        "marketScanned": any(action.startswith("Market scan") for _, _, _, action in records),
+        "latestAttempt": latest,
+    }
+
+
+def _validate_audit_control(control, records):
+    if not isinstance(control, dict):
+        raise Halt("Invalid StockSage audit control")
+    actual = {}
+    latest = control.get("latestAttempt")
+    if not isinstance(latest, dict) or any(not isinstance(key, str) for key in latest):
+        raise Halt("Invalid StockSage audit control latestAttempt")
+    for key, value in latest.items():
+        actual[key] = _finite_date(value, "audit control latestAttempt")
+    supplied = {key: control.get(key) for key in
+                ("sameDayActivated", "settlementActivated", "marketScanned")}
+    if any(type(value) is not bool for value in supplied.values()):
+        raise Halt("Invalid StockSage audit control Boolean")
+    supplied["latestAttempt"] = actual
+    if supplied != _audit_control(records):
+        raise Halt("StockSage audit control does not match referenced decisions")
+
+
+def _validate_v2(value, account, account_bytes):
+    audit = value.get("audit")
+    active = value.get("decisions")
+    if not isinstance(audit, dict):
+        raise Halt("StockSage version 2 requires an audit manifest")
+    if not isinstance(active, list):
+        raise Halt("StockSage version 2 requires an active decisions array")
+    if len(active) > MAX_ACTIVE_DECISIONS:
+        raise Halt("StockSage active decision count exceeds its limit")
+    archives = audit.get("archives")
+    if not isinstance(archives, list):
+        raise Halt("Invalid StockSage audit manifest archives")
+    if len(archives) > MAX_AUDIT_ARCHIVES:
+        raise Halt("StockSage audit archive count exceeds its limit")
+
+    seen_decisions = set()
+    for record in active:
+        decision_id, _, _, _ = _decision_projection(record, "active")
+        if decision_id in seen_decisions:
+            raise Halt("Duplicate StockSage decision ID across active and archived history")
+        seen_decisions.add(decision_id)
+
+    parsed, archive_ids = [], set()
+    total_bytes, total_decisions = account_bytes, 0
+    for descriptor in archives:
+        if not isinstance(descriptor, dict):
+            raise Halt("Invalid StockSage audit archive descriptor")
+        archive_id = _uuid_value(descriptor.get("id"), "audit archive ID")
+        if archive_id in archive_ids:
+            raise Halt("Duplicate StockSage audit archive ID")
+        archive_ids.add(archive_id)
+        count = _integer(descriptor.get("count"), "audit archive decision count", minimum=1)
+        size = _integer(descriptor.get("bytes"), "audit archive byte count", minimum=1)
+        if size > MAX_ARCHIVE_BYTES:
+            raise Halt("StockSage audit archive exceeds its size limit")
+        digest = descriptor.get("sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise Halt("Invalid StockSage audit archive SHA-256")
+        latest = _finite_date(descriptor.get("latestAt"), "audit archive latestAt")
+        total_bytes += size
+        total_decisions += count
+        if total_bytes > MAX_SNAPSHOT_BYTES:
+            raise Halt("StockSage captured generation exceeds its size limit")
+        if total_decisions > MAX_ARCHIVED_DECISIONS:
+            raise Halt("StockSage archived decision count exceeds its limit")
+        parsed.append((archive_id, count, size, digest, latest))
+
+    archived = []
+    directory = Path(account).parent
+    # ponytail: revalidate at most 1,000 whole archives sequentially per poll;
+    # add a content index only if parent measurements show this ceiling is too slow.
+    for archive_id, count, size, digest, latest in parsed:
+        path = directory / f"audit-{str(archive_id).upper()}.json"
+        data = _read_bounded(path, MAX_ARCHIVE_BYTES, "audit archive")
+        if len(data) != size:
+            raise Halt("StockSage audit archive byte count does not match manifest")
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise Halt("StockSage audit archive SHA-256 does not match manifest")
+        records = _decode_json(data, "audit archive")
+        if not isinstance(records, list):
+            raise Halt("StockSage audit archive must contain a JSON array")
+        if len(records) != count:
+            raise Halt("StockSage audit archive decision count does not match manifest")
+        projected = [_decision_projection(record, "audit") for record in records]
+        for decision_id, _, _, _ in projected:
+            if decision_id in seen_decisions:
+                raise Halt("Duplicate StockSage decision ID across active and archived history")
+            seen_decisions.add(decision_id)
+        if max(record[1] for record in projected) != latest:
+            raise Halt("StockSage audit archive latestAt does not match its decisions")
+        archived.extend(projected)
+    _validate_audit_control(audit.get("control"), archived)
+
+
+def _trade_intents(trades):
+    ids, intents = set(), []
+    for trade in trades:
+        if not isinstance(trade, dict):
+            raise Halt("Invalid StockSage trade record")
+        trade_uuid = _uuid_value(trade.get("id"), "trade ID")
+        trade_id = str(trade_uuid)
+        symbol = trade.get("symbol")
+        if trade_uuid in ids:
+            raise Halt("Duplicate StockSage trade ID")
+        if trade.get("side") != "Long" or not isinstance(symbol, str) \
+                or not re.fullmatch(r"[A-Z][A-Z0-9.]{0,11}", symbol):
+            raise Halt("Invalid StockSage trade side or symbol")
+        ids.add(trade_uuid)
+        qty = _finite_number(trade.get("shares"), "trade share count")
+        entry = _finite_number(trade.get("entry"), "trade entry price")
+        try:
+            opened = float(_finite_number(trade.get("openedAt"), "trade open time")) + APPLE_EPOCH
+        except OverflowError as exc:
+            raise Halt("Invalid StockSage trade open time") from exc
+        if qty < 1 or qty > 1_000_000 or qty != qty.to_integral_value() \
+                or entry < 1 or not math.isfinite(opened):
+            raise Halt("Invalid StockSage trade price, size or open time")
+        intents.append(Intent(trade_id, symbol, "BUY", int(qty), entry, opened))
+        close, price = trade.get("closedAt"), trade.get("exitPrice")
+        if (close is None) != (price is None):
+            raise Halt("StockSage trade close time and exit price must be paired")
+        if close is not None:
+            try:
+                closed = float(_finite_number(close, "trade close time")) + APPLE_EPOCH
+            except OverflowError as exc:
+                raise Halt("Invalid StockSage trade close time") from exc
+            exit_price = _finite_number(price, "trade exit price")
+            if not math.isfinite(closed) or closed < opened or exit_price <= 0:
+                raise Halt("Invalid StockSage trade exit price or close time")
+            intents.append(Intent(trade_id, symbol, "SELL", int(qty), exit_price, closed))
+    return sorted(intents, key=lambda item: (item.at, item.side == "SELL"))
+
+
+def read_source(path):
+    data = _read_bounded(path, MAX_SOURCE_BYTES, "account")
+    value = _decode_json(data, "account")
+    if not isinstance(value, dict):
+        raise Halt("StockSage source ledger root must be a JSON object")
+    version = value.get("version")
+    if type(version) is not int:
+        raise Halt("StockSage source ledger version must be an integer")
+    if version not in (1, 2):
+        raise Halt(f"Unsupported StockSage source ledger version {version}")
+    trades = value.get("trades")
+    if not isinstance(trades, list):
+        raise Halt("StockSage source ledger trades must be a JSON array")
+    if len(trades) > MAX_TRADES:
+        raise Halt("StockSage trade count exceeds its limit")
+    intents = _trade_intents(trades)
+    if version == 1:
+        if value.get("audit") is not None:
+            raise Halt("StockSage version 1 cannot contain an audit manifest")
+    else:
+        _validate_v2(value, path, len(data))
+    return intents
 
 
 def source_running(path):

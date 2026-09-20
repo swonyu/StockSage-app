@@ -16,12 +16,11 @@ struct StockSageNBBOView: View {
     @ObservedObject private var live = StockSageLiveStream.shared
     @AppStorage("stocksage.ticks.nasdaqOnly") private var nasdaqOnly = false
     @State private var showTape = false
-    @State private var exchanges: [Int64: StockSageMassiveTicks.Exchange] = [:]
-    @State private var exchangeNotice: String?
 
     var body: some View {
         if StockSageLiveStream.stockSymbol(symbol) != nil {
             TimelineView(.periodic(from: .now, by: 1)) { context in
+                let exchanges = live.exchangeReference(at: context.date)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(nasdaqOnly ? "Nasdaq-attributed SIP sides" : "NBBO · Massive SIP").font(.headline)
@@ -29,15 +28,15 @@ struct StockSageNBBOView: View {
                         Button("Tape") { showTape = true }.buttonStyle(.bordered)
                     }
                     Toggle("Nasdaq only", isOn: $nasdaqOnly).font(.caption)
-                    if let exchangeNotice {
-                        Text(exchangeNotice).font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                    if exchanges.isEmpty, !live.quotes.isEmpty {
+                        Text("Exchange reference unavailable — venue names and Nasdaq attribution cannot be verified.").font(.caption).foregroundStyle(DS.Palette.warningSoft)
                     }
                     if let quote = StockSageLiveStream.displayQuote(for: symbol, in: live.quotes) {
                         ViewThatFits(in: .horizontal) {
-                            HStack { side("Bid", price: quote.bid, size: quote.bidSize, exchange: quote.bidExchange); Spacer(); side("Ask", price: quote.ask, size: quote.askSize, exchange: quote.askExchange) }
+                            HStack { side("Bid", price: quote.bid, size: quote.bidSize, exchange: quote.bidExchange, exchanges: exchanges); Spacer(); side("Ask", price: quote.ask, size: quote.askSize, exchange: quote.askExchange, exchanges: exchanges) }
                             VStack(alignment: .leading, spacing: 4) {
-                                side("Bid", price: quote.bid, size: quote.bidSize, exchange: quote.bidExchange)
-                                side("Ask", price: quote.ask, size: quote.askSize, exchange: quote.askExchange)
+                                side("Bid", price: quote.bid, size: quote.bidSize, exchange: quote.bidExchange, exchanges: exchanges)
+                                side("Ask", price: quote.ask, size: quote.askSize, exchange: quote.askExchange, exchanges: exchanges)
                             }
                         }
                         if nasdaqOnly {
@@ -71,22 +70,6 @@ struct StockSageNBBOView: View {
                 .padding(12)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
-            .task {
-                guard !StockSageStore.isRunningTests, StockSageMassive.isConfigured else { return }
-                // A swallowed `try?` here was the whole defect: a FAILED reference load left
-                // `exchanges` empty, and an empty map made every side render "No Nasdaq-attributed
-                // side" — a confident claim about the venue, produced by not knowing the venue.
-                do {
-                    exchanges = try await StockSageMassiveTicks.exchanges()
-                    exchangeNotice = nil
-                } catch {
-                    exchanges = [:]
-                    exchangeNotice = "Exchange reference unavailable — venue names and Nasdaq attribution cannot be verified."
-                }
-            }
-            // Deliberate: the !isConfigured path sets NO notice. Without a key there is no
-            // authenticated quote, `side(...)` never renders, and the card already says so —
-            // an amber line there would be a new false alarm for every keyless user.
             .sheet(isPresented: $showTape) {
                 StockSageTapeView(symbol: symbol).presentationDetents([.large])
             }
@@ -107,7 +90,7 @@ struct StockSageNBBOView: View {
         return StockSageMassiveTicks.isNasdaq(exchange, exchanges: exchanges) ? nil : "No Nasdaq-attributed side"
     }
 
-    private func side(_ label: String, price: Double, size: Double, exchange: Int64?) -> some View {
+    private func side(_ label: String, price: Double, size: Double, exchange: Int64?, exchanges: [Int64: StockSageMassiveTicks.Exchange]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption).foregroundStyle(.secondary)
             if let notice = Self.filteredSideNotice(nasdaqOnly: nasdaqOnly, exchanges: exchanges, exchange: exchange) {

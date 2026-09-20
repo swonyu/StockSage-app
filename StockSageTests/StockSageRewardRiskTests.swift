@@ -44,6 +44,17 @@ struct StockSageRewardRiskTests {
         #expect(RR.assess(entry: 100, stop: 90, target: 100) == nil)    // reward 0
     }
 
+    @Test func crossedLevelsAndUnusablePricesHaveNoRewardRisk() {
+        #expect(RR.assess(entry: 94, stop: 95, target: 110) == nil)
+        #expect(RR.assess(entry: 115, stop: 95, target: 110) == nil)
+        for invalid in [0.0, -1, Double.nan, Double.infinity, -Double.infinity] {
+            #expect(RR.assess(entry: invalid, stop: 90, target: 120) == nil)
+            #expect(RR.assess(entry: 100, stop: invalid, target: 120) == nil)
+            #expect(RR.assess(entry: 100, stop: 90, target: invalid) == nil)
+        }
+        #expect(RR.assess(entry: 100, stop: 110, target: 70)?.ratio == 3)
+    }
+
     // MARK: - wave-11 "gross" note tests (F18) — hand-derived via derive_wave11f.swift
 
     // note for ratio=3.0 (Strong): "R:R 3.0 gross — Strong; needs a >25.0% win-rate just to break even."

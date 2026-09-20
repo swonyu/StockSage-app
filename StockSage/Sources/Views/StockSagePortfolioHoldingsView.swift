@@ -17,7 +17,6 @@ struct StockSagePortfolioHoldingsView: View {
         @Published var cost = ""
     }
     @Environment(\.dynamicTypeSize) private var workspaceTypeSize
-    @ScaledMetric(relativeTo: .caption2) private var mvFont9: CGFloat = 9
     @ScaledMetric(relativeTo: .callout) private var mvFont12: CGFloat = 12
     @ScaledMetric(relativeTo: .body) private var mvFont14: CGFloat = 14
     @ScaledMetric(relativeTo: .headline) private var mvFont15: CGFloat = 15
@@ -191,12 +190,12 @@ struct StockSagePortfolioHoldingsView: View {
             }
             if !untrackedFXCurrencies.isEmpty {
                 Text("Excludes \(untrackedFXCurrencies.joined(separator: ", ")) holdings — no usable FX rate to convert to USD. Refresh market data and verify the FX feed. P&L at the selected rate blends asset and currency moves.")
-                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
+                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !unverifiedFXCurrencies.isEmpty {
                 Text("FX valuation for \(unverifiedFXCurrencies.joined(separator: ", ")) uses an old or unverified rate (over \(Int(StockSageCurrency.maxSizingFXAge / 3600))h old, or market time/source unknown). The total may be off; this rate cannot size a new trade.")
-                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
+                    .font(.caption).foregroundStyle(DS.Palette.warningSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -222,6 +221,11 @@ struct StockSagePortfolioHoldingsView: View {
                 VStack(alignment: .leading, spacing: 12) { addPositionFormFields }
             }
             #endif
+            Text(draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Cost per share is entered in the instrument’s quoted units."
+                : "Cost unit: " + StockSageCurrency.quoteUnitLabel(forSymbol: draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines)))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 12)
     }
@@ -337,7 +341,7 @@ struct StockSagePortfolioHoldingsView: View {
             Button("Cancel", role: .cancel) { pendingPositionRemoval = nil }
                 .accessibilityIdentifier("portfolio.cancelRemove")
         } message: {
-            Text("Remove \(numString(p.shares)) shares with cost per share \(adaptivePrice(p.costBasis)) from saved holdings? This changes your tracked portfolio totals and cannot be undone. It does not place a sell order.")
+            Text("Remove \(numString(p.shares)) shares with cost per share \(adaptivePrice(p.costBasis)) \(StockSageCurrency.quoteUnitLabel(forSymbol: p.symbol)) from saved holdings? This changes your tracked portfolio totals and cannot be undone. It does not place a sell order.")
         }
         .onHover { over in
             withAnimation(DS.Motion.smooth) {
@@ -350,9 +354,9 @@ struct StockSagePortfolioHoldingsView: View {
     private func positionIdentity(_ p: PortfolioPosition, price: Double?, asOf now: Date) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(p.symbol).font(.system(size: mvFont14, weight: .bold, design: .rounded)).foregroundStyle(.white)
-            Text("\(numString(p.shares)) sh @ \(adaptivePrice(p.costBasis))")
+            Text("\(numString(p.shares)) sh · Cost \(adaptivePrice(p.costBasis)) \(StockSageCurrency.quoteUnitLabel(forSymbol: p.symbol)) per share")
                 .font(.caption2).foregroundStyle(.secondary)
-                .accessibilityLabel("\(numString(p.shares)) shares, cost per share \(adaptivePrice(p.costBasis))")
+                .accessibilityLabel("\(numString(p.shares)) shares, cost per share \(adaptivePrice(p.costBasis)) \(StockSageCurrency.quoteUnitLabel(forSymbol: p.symbol))")
             if price != nil, let quote = store.latestQuote(p.symbol) {
                 Text(MarketsView.sourceTagLabel(isSampleData: false, loadedFromCache: store.loadedFromCache,
                     priceAsOf: quote.marketTime, now: now, priceSource: quote.priceSource) ?? "Source and time unknown")

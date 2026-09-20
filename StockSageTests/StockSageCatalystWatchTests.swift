@@ -461,3 +461,17 @@ struct StockSageCatalystWatchTests {
         #expect(!entries[0].isNegativeRecord)
     }
 }
+
+
+extension StockSageCatalystWatchTests {
+    @Test func lapsedPositiveScheduleIsNeverAnAnsweredEmptyCheck() {
+        let prior = Self.now.addingTimeInterval(-3 * 86_400)
+        let brief = W.brief(for: SageFix.idea("PAST", conviction: 0.5),
+            inputs: W.Inputs(earningsDate: prior, earningsCheckedAt: prior.addingTimeInterval(-86_400),
+                             now: Self.now, catalystSourcesAsked: ["calendar fixture"]))
+        #expect(brief.primary.kind == .none && brief.primary.date == nil)
+        #expect(brief.primary.headline.contains("Previous schedule passed"))
+        #expect(!brief.primary.why.joined().contains("none returned"))
+        #expect(brief.primary.why.joined().contains("Prior check:"))
+    }
+}

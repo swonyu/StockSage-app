@@ -188,21 +188,11 @@ struct JournalStats: Sendable, Equatable {
     let totalR: Double
     let totalProfit: Double
     let avgR: Double
-    /// First-real-trade review (2026-07-16): `totalProfit` is a RAW sum of each closed trade's
-    /// `realizedProfit`, and profit is in the symbol's NATIVE quote currency (SAR for .SR, pence
-    /// for .L) — so a mixed-currency book sums SAR + USD at 1:1, a meaningless number the honesty
-    /// floor forbids presenting. This is the single ISO currency code when EVERY closed trade
-    /// shares one (→ the sum is valid and labelable), else nil = MIXED (the display must refuse to
-    /// show it as one figure). A USD-only book (the whole NASDAQ half) gets "USD" ⇒ byte-identical
-    /// bare rendering. Uses conversionCurrencyForSymbol (the denomination leg — the currency the
-    /// profit is actually in).
+    /// Major quote currency of the normalized total, or nil for mixed/empty books.
     let profitCurrency: String?
-    /// A representative closed-trade symbol for the single-currency case (nil when mixed/empty) —
-    /// lets the display render `totalProfit` through `StockSageCurrency.signedAmount`, which
-    /// applies the pence ÷100 major-unit normalization a bare currency code can't (an all-.L book
-    /// sums PENCE, so "+4000 GBP" must render as "+40.00 GBP"). Any contributing trade's symbol
-    /// works since the book is one currency; the first (sorted, deterministic) is used.
+    /// Representative identity only; never use its raw-unit scale on the normalized sum.
     let profitSymbol: String?
+
 }
 
 /// The EDGE decomposition over closed trades — why the expectancy is what it is.
@@ -266,15 +256,11 @@ struct YearlyPnL: Sendable, Equatable, Identifiable {
     let trades: Int
     let wins: Int
     let winRate: Double         // 0–1
-    let realizedDollars: Double // RAW sum of realized P&L in each trade's NATIVE currency — a
-                                // valid single figure ONLY when profitSymbol != nil (see below)
+    /// Major quote-currency units. Never present a mixed-currency sum as one amount.
+    let realizedDollars: Double
     let totalR: Double
-    /// First-real-trade review (2026-07-16): `realizedDollars` sums native-currency profit, so a
-    /// year mixing `.SR` (SAR) and NASDAQ (USD) trades is a meaningless 1:1 sum. Representative
-    /// closed-trade symbol when the YEAR's contributing trades are one currency (→ the display
-    /// renders it via `signedAmount`, pence-aware; USD byte-identical), nil = MIXED (the row shows
-    /// "mixed" not a fabricated number). Same rule as `JournalStats.profitSymbol`.
     let profitSymbol: String?
+    var profitCurrency: String? { profitSymbol.map { StockSageCurrency.conversionCurrencyForSymbol($0) } }
     var id: String { year }
 }
 
@@ -504,7 +490,7 @@ enum StockSageJournal {
             let currencies = Set(contributing.map { StockSageCurrency.conversionCurrencyForSymbol($0.symbol) })
             return YearlyPnL(year: year, trades: ts.count, wins: wins,
                              winRate: ts.isEmpty ? 0 : Double(wins) / Double(ts.count),
-                             realizedDollars: ts.compactMap(\.realizedProfit).reduce(0, +),
+                             realizedDollars: contributing.reduce(0) { $0 + StockSageCurrency.majorUnitValue(symbol: $1.symbol, rawValue: $1.realizedProfit!) },
                              totalR: ts.compactMap(\.realizedR).reduce(0, +),
                              profitSymbol: currencies.count == 1 ? contributing.map(\.symbol).sorted().first : nil)
         }.sorted { $0.year > $1.year }
@@ -739,10 +725,8 @@ enum StockSageJournal {
         let profits = closed.compactMap { $0.realizedProfit }
         let wins = profits.filter { $0 > 0 }.count
         let totalR = rs.reduce(0, +)
-        // The single currency `totalProfit` is denominated in, or nil when the closed book mixes
-        // currencies (the raw sum is then meaningless — the display must not present it as one
-        // number). Keyed off the trades that actually contributed a realizedProfit; the
-        // representative symbol (first, sorted → deterministic) lets the display apply pence ÷100.
+        // Normalize each amount before summing; a GBP book can contain both
+        // pence-quoted equities and pound-denominated FX profits.
         let contributing = closed.filter { $0.realizedProfit != nil }
         let currencies = Set(contributing.map { StockSageCurrency.conversionCurrencyForSymbol($0.symbol) })
         let single = currencies.count == 1
@@ -751,7 +735,7 @@ enum StockSageJournal {
             wins: wins,
             winRate: closed.isEmpty ? 0 : Double(wins) / Double(closed.count),
             totalR: totalR,
-            totalProfit: profits.reduce(0, +),
+            totalProfit: contributing.reduce(0) { $0 + StockSageCurrency.majorUnitValue(symbol: $1.symbol, rawValue: $1.realizedProfit!) },
             avgR: rs.isEmpty ? 0 : totalR / Double(rs.count),
             profitCurrency: single ? currencies.first : nil,
             profitSymbol: single ? contributing.map(\.symbol).sorted().first : nil)

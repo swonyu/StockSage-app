@@ -1,12 +1,22 @@
 import Testing
 import Foundation
 import Combine
+import Synchronization
 @testable import StockSage
 
 @Suite("Massive live stream")
 struct StockSageLiveStreamTests {
     typealias L = StockSageLiveStream
     typealias ExchangeContinuation = CheckedContinuation<[Int64: StockSageMassiveTicks.Exchange], Never>
+
+    @Test func latestTradeSizeRemainsAPrintNotAnInventedVolumeTotal() {
+        for (raw, expected): (String, Double?) in [("250", 250), ("true", nil), ("-3", nil), ("null", nil)] {
+            let events = L.events(in: "[{\"ev\":\"T\",\"sym\":\"MICRO\",\"p\":10,\"t\":1789910000000,\"s\":\(raw)}]")
+            guard case .trade(let print) = events.first else { Issue.record("Valid trade must remain visible"); continue }
+            #expect(print.size == expected)
+            #expect(print.price == 10)
+        }
+    }
 
     @MainActor @Test("diagnostics notify once per second, with immediate failure changes and recovery")
     func diagnosticsNotificationsKeepLatestReportWithoutInvalidatingEverySnapshot() {
@@ -68,15 +78,30 @@ struct StockSageLiveStreamTests {
     }
 
     @MainActor @Test func connectionOwnershipChangesWithoutOpeningASocket() {
-        var revision: String? = nil
-        let first = StockSageLiveStreamConnection(currentRevision: { revision })
+        let revision = Mutex<String?>(nil)
+        let first = StockSageLiveStreamConnection(currentRevision: { revision.withLock { $0 } }, currentPolicyRevision: { nil })
         #expect(first.isCurrent)
-        revision = "replacement"
+        revision.withLock { $0 = "replacement" }
         #expect(!first.isCurrent)
-        let replacement = StockSageLiveStreamConnection(currentRevision: { revision })
+        let replacement = StockSageLiveStreamConnection(currentRevision: { revision.withLock { $0 } }, currentPolicyRevision: { nil })
         #expect(replacement.isCurrent)
-        revision = "removed"
+        revision.withLock { $0 = "removed" }
         #expect(!first.isCurrent && !replacement.isCurrent)
+        first.close(); replacement.close()
+    }
+
+    @MainActor @Test func policyOffThenOnCannotRestoreAnOldConnection() {
+        let policyRevision = Mutex<String?>(nil)
+        let first = StockSageLiveStreamConnection(currentRevision: { "same-credential" },
+            currentPolicyRevision: { policyRevision.withLock { $0 } })
+        #expect(first.isCurrent)
+        policyRevision.withLock { $0 = "access-off" }
+        #expect(!first.isCurrent)
+        policyRevision.withLock { $0 = "access-on-again" }
+        #expect(!first.isCurrent, "Returning to allowed access must not restore the old socket generation")
+        let replacement = StockSageLiveStreamConnection(currentRevision: { "same-credential" },
+            currentPolicyRevision: { policyRevision.withLock { $0 } })
+        #expect(replacement.isCurrent)
         first.close(); replacement.close()
     }
 
@@ -158,7 +183,7 @@ struct StockSageLiveStreamTests {
         let data = try #require(subscription.data(using: .utf8))
         let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: String])
         #expect(payload["action"] == "subscribe")
-        #expect(payload["params"] == "T.*,Q.*")
+        #expect(payload["params"] == "T.*,Q.*,AM.*")
         #expect(L.massiveSubscription(symbols: []) != nil)
     }
 
@@ -276,21 +301,23 @@ struct StockSageLiveStreamTests {
         }
 
         let firstRequest = live.refreshReferences(now: now, stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         let first = try #require(firstRequest)
         await first.value
         #expect(conditionCalls == 1 && exchangeCalls == 1 && live.exchanges.isEmpty)
         let early = live.refreshReferences(now: now.addingTimeInterval(59), stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         #expect(early == nil)
         #expect(conditionCalls == 1 && exchangeCalls == 1)
 
         let retryRequest = live.refreshReferences(now: now.addingTimeInterval(60), stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         let retry = try #require(retryRequest)
         await retry.value
         #expect(conditionCalls == 1 && exchangeCalls == 2)
         #expect(live.exchanges[1]?.acronym == "NASDAQ")
+        #expect(live.exchangeReference(at: now.addingTimeInterval(60))[1]?.acronym == "NASDAQ")
+        #expect(live.exchangeReference(at: now.addingTimeInterval(86_460)).isEmpty)
     }
 
     @Test @MainActor
@@ -310,7 +337,7 @@ struct StockSageLiveStreamTests {
         }
 
         let firstRequest = live.refreshReferences(now: now, stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         let first = try #require(firstRequest)
         await first.value
         #expect(conditionCalls == 1 && exchangeCalls == 1)
@@ -326,23 +353,23 @@ struct StockSageLiveStreamTests {
                 "Exchange coverage alone must not qualify quote costs")
 
         let conditionRequest = live.refreshReferences(now: now.addingTimeInterval(60), stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         let conditionRetry = try #require(conditionRequest)
         await conditionRetry.value
         #expect(conditionCalls == 2 && exchangeCalls == 1)
 
         let exchangeRequest = live.refreshReferences(now: now.addingTimeInterval(86_400), stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         let exchangeRetry = try #require(exchangeRequest)
         await exchangeRetry.value
         #expect(conditionCalls == 2 && exchangeCalls == 2)
         #expect(live.exchanges[1]?.acronym == "SECOND")
         let early = live.refreshReferences(now: now.addingTimeInterval(86_459), stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         #expect(early == nil)
 
         let nextConditionRequest = live.refreshReferences(now: now.addingTimeInterval(86_460), stillValid: { true },
-            conditions: conditions, exchangeList: exchanges)
+            displayConditions: { [0] }, conditions: conditions, exchangeList: exchanges)
         let nextCondition = try #require(nextConditionRequest)
         await nextCondition.value
         #expect(conditionCalls == 3 && exchangeCalls == 2)
@@ -352,27 +379,27 @@ struct StockSageLiveStreamTests {
     func falseStillValidRejectsLateExchangeMetadata() async throws {
         let live = L()
         var exchangeResume: ExchangeContinuation?
-        var allowed = true
+        let allowed = Mutex(true)
         defer {
             exchangeResume?.resume(returning: [:])
             live.stop(clearNBBO: {})
         }
         let firstRequest = live.refreshReferences(now: Date(timeIntervalSince1970: 1_700_000_000),
-            stillValid: { allowed }, conditions: { [801] }, exchangeList: {
+            stillValid: { allowed.withLock { $0 } }, displayConditions: { [0] }, conditions: { [801] }, exchangeList: {
                 await withCheckedContinuation { exchangeResume = $0 }
             })
         let first = try #require(firstRequest)
         let pendingExchange = try await waitForContinuation { exchangeResume }
-        allowed = false
+        allowed.withLock { $0 = false }
         pendingExchange.resume(returning: [1: .init(id: 1, mic: "XNAS", acronym: "OLD")])
         exchangeResume = nil
         await first.value
         #expect(live.exchanges.isEmpty)
 
-        allowed = true
+        allowed.withLock { $0 = true }
         var conditionCalls = 0
         let retryRequest = live.refreshReferences(now: Date(timeIntervalSince1970: 1_700_000_060),
-            stillValid: { allowed }, conditions: { conditionCalls += 1; return [999] },
+            stillValid: { allowed.withLock { $0 } }, displayConditions: { [0] }, conditions: { conditionCalls += 1; return [999] },
             exchangeList: { [2: .init(id: 2, mic: "XNYS", acronym: "NEW")] })
         let retry = try #require(retryRequest)
         await retry.value
@@ -389,12 +416,12 @@ struct StockSageLiveStreamTests {
             live.stop(clearNBBO: {})
         }
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let oldRequest = live.refreshReferences(now: now, stillValid: { true }, conditions: { [801] },
+        let oldRequest = live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [0] }, conditions: { [801] },
             exchangeList: { await withCheckedContinuation { oldResume = $0 } })
         let old = try #require(oldRequest)
         let oldContinuation = try await waitForContinuation { oldResume }
         live.stop(clearNBBO: {})
-        let replacementRequest = live.refreshReferences(now: now, stillValid: { true }, conditions: { [999] },
+        let replacementRequest = live.refreshReferences(now: now, stillValid: { true }, displayConditions: { [0] }, conditions: { [999] },
             exchangeList: { await withCheckedContinuation { nextResume = $0 } })
         let replacement = try #require(replacementRequest)
         let nextContinuation = try await waitForContinuation { nextResume }
@@ -405,7 +432,7 @@ struct StockSageLiveStreamTests {
         #expect(live.exchanges.isEmpty)
         var duplicateCalls = 0
         let duplicate = live.refreshReferences(now: now.addingTimeInterval(60), stillValid: { true },
-            conditions: { duplicateCalls += 1; return [1] }, exchangeList: { duplicateCalls += 1; return [:] })
+            displayConditions: { [0] }, conditions: { duplicateCalls += 1; return [1] }, exchangeList: { duplicateCalls += 1; return [:] })
         #expect(duplicate == nil)
         #expect(duplicateCalls == 0, "An old completion must not clear the replacement in-flight guard")
 

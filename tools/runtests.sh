@@ -22,11 +22,13 @@ done
 cd "$REPO" || exit 2
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/stocksage-tests.XXXXXX") || exit 2
 echo "[runtests] native $action; artifacts: $OUT"
-env -u STOCKSAGE_PAPER_DIAGNOSTICS -u STOCKSAGE_PAPER_RESPONSE_REPLAY -u STOCKSAGE_PAPER_PROCESS_DEATH \
-  -u SIMCTL_CHILD_STOCKSAGE_PAPER_DIAGNOSTICS -u SIMCTL_CHILD_STOCKSAGE_PAPER_RESPONSE_REPLAY \
-  -u SIMCTL_CHILD_STOCKSAGE_PAPER_PROCESS_DEATH \
-  -u TEST_RUNNER_STOCKSAGE_PAPER_DIAGNOSTICS -u TEST_RUNNER_STOCKSAGE_PAPER_RESPONSE_REPLAY \
-  -u TEST_RUNNER_STOCKSAGE_PAPER_PROCESS_DEATH \
+isolation_flags=()
+for prefix in '' SIMCTL_CHILD_ TEST_RUNNER_; do
+  for flag in STOCKSAGE_PAPER_DIAGNOSTICS STOCKSAGE_PAPER_RESPONSE_REPLAY STOCKSAGE_PAPER_PROCESS_DEATH STOCKSAGE_QUALITY_EXPORT_RECEIPT STOCKSAGE_THROUGHPUT_DIR STOCKSAGE_THROUGHPUT_MODE STOCKSAGE_RECOVERY_DIR; do
+    isolation_flags+=(-u "$prefix$flag")
+  done
+done
+env "${isolation_flags[@]}" \
   xcodebuild "$action" -project StockSage.xcodeproj -scheme StockSage -configuration Debug \
   -destination 'platform=macOS,arch=arm64' -jobs 4 \
   -derivedDataPath "$OUT/derived" -resultBundlePath "$OUT/result.xcresult" \

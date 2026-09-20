@@ -48,15 +48,15 @@ enum StockSageSpokenProvenance {
 }
 
 struct BestOpportunityIntent: AppIntent {
-    static let title: LocalizedStringResource = "Best Opportunity Now"
+    static let title: LocalizedStringResource = "Rules Screener Candidate"
     static let description = IntentDescription(
-        "The current top-ranked idea with its estimated (gross) EV — an estimate, not advice.")
+        "A rules-screener candidate with estimated gross EV, separate from the manual research picks.")
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let store = StockSageStore.shared
         guard !store.ideas.isEmpty else {
-            return .result(dialog: "No ideas on the board yet — open StockSage and run Find ideas.")
+            return .result(dialog: "No ideas on the board yet — open Library → Rules screener in StockSage and run Find ideas.")
         }
         // A board refreshed on Friday and asked on Sunday is NEITHER sample NOR cached
         // (`loadedFromCache` clears on the next successful refresh), so the two flags alone let a
@@ -87,14 +87,14 @@ struct BestOpportunityIntent: AppIntent {
             asOf: idea.priceAsOf, now: now)
         return .result(dialog: IntentDialog(stringLiteral:
             "\(idea.symbol)\(name): \(idea.advice.action.rawValue), \(evText)\(ideaProvenance). "
-            + "An estimate from conviction, not a forecast — details and sizing in StockSage."))
+            + "An estimate from conviction, not a forecast — details in StockSage → Library → Rules screener."))
     }
 }
 
 struct RunScanIntent: AppIntent {
-    static let title: LocalizedStringResource = "Run StockSage Scan"
+    static let title: LocalizedStringResource = "Run StockSage Rules Scan"
     static let description = IntentDescription(
-        "Starts a Find-ideas scan of the Tadawul + NASDAQ universe. Results appear in the app.")
+        "Explicitly starts a rules scan of the Tadawul + NASDAQ universe. Results appear in Library → Rules screener.")
     static let openAppWhenRun = true
 
     @MainActor
@@ -104,7 +104,7 @@ struct RunScanIntent: AppIntent {
             return .result(dialog: IntentDialog(stringLiteral: reason))
         }
         Task { await store.refreshIdeas() }
-        return .result(dialog: "Scan started — the board fills in over the next few minutes.")
+        return .result(dialog: "Rules scan started — open Library → Rules screener for results. This does not run the same-day or trading-day research.")
     }
 }
 
