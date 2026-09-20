@@ -572,8 +572,8 @@ final class StockSageHorizonResearch: ObservableObject {
                         var count: Int
                         while true {
                             let capacity = min(24, max(1, parallelism()))
-                            count = min(gatherLimit, min(capacity, pendingNames.count - next))
-                            if occupied + count <= capacity { break }
+                            count = min(gatherLimit, min(max(0, capacity - occupied), pendingNames.count - next))
+                            if count > 0 { break }
                             try await group.next()
                             occupied -= 1
                         }
@@ -882,8 +882,8 @@ final class StockSageHorizonResearch: ObservableObject {
                         var count: Int
                         while true {
                             let capacity = min(24, max(1, parallelism()))
-                            count = min(gatherLimit, min(capacity, missing.count - next))
-                            if occupied + count <= capacity { break }
+                            count = min(gatherLimit, min(max(0, capacity - occupied), missing.count - next))
+                            if count > 0 { break }
                             if let result = try await group.next() { try accept(result) }
                             occupied -= 1
                         }

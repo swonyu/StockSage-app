@@ -1692,10 +1692,10 @@ import Testing
         #expect(r.scans[horizon]?.status.contains("1500 listings checked once") == true)
     }
 
-    @Test(arguments: ["initial", "resume", "retry"], [16, 24])
+    @Test(arguments: ["initial", "resume", "retry"], [4, 16, 24])
     func verifiedWorkersRetainBackpressureAndOriginalChecks(mode: String, capacity: Int) async throws {
         let history = StockSageResearchHistory()
-        let names = (0..<(capacity + 2)).map { listing("S\($0)") }
+        let names = (0..<(capacity + 3)).map { listing("S\($0)") }
         let originalAt = Date().addingTimeInterval(-20)
         if mode == "resume" {
             var interrupted = R.Scan()
@@ -1751,6 +1751,19 @@ import Testing
         #expect(prepared.count == capacity && !prepared.contains("S\(firstPending)") && comparisons == 0,
             "Worker \(capacity + 1) must wait for a whole serving slot")
         if mode != "initial" { #expect(!prepared.contains("S0")) }
+        let releasedSymbol = mode == "initial" ? "S0" : "S1"
+        let pending = waiting.removeValue(forKey: releasedSymbol)
+        let release = try #require(pending)
+        let blocked = Set(waiting.keys)
+        release.resume()
+        for _ in 0..<500 where waiting["S\(firstPending)"] == nil {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(waiting["S\(firstPending)"] != nil && prepared.count == capacity + 1,
+                "One available stock slot must start the next capture and model request without waiting for a second worker")
+        #expect(blocked.isSubset(of: Set(waiting.keys)) && !prepared.contains("S\(firstPending + 1)"),
+                "The other workers remain blocked and the single freed slot must not admit an extra capture")
+        #expect(active <= capacity && peak == capacity && comparisons == 0)
         for _ in 0..<500 where r.running != nil {
             let ready = Array(waiting.values); waiting.removeAll()
             for held in ready { held.resume() }
@@ -1758,7 +1771,7 @@ import Testing
         }
         try #require(r.running == nil)
         #expect(comparisons == 1 && peak == capacity && r.scans[.week]?.listings == names)
-        #expect(prepared.count == (mode == "initial" ? capacity + 2 : capacity + 1) && Set(prepared).count == prepared.count)
+        #expect(prepared.count == (mode == "initial" ? capacity + 3 : capacity + 2) && Set(prepared).count == prepared.count)
         if let original {
             #expect(r.scans[.week]?.results["S0"]?.facts == original.facts)
             #expect(r.scans[.week]?.results["S0"]?.at == original.at)
