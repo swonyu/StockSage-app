@@ -192,22 +192,25 @@ nonisolated enum StockSageMomentum {
     static func intraday(symbol: String, now: Date, access: StockSageMassive.Access,
                          transport: StockSageMassive.Transport? = nil) async -> Intraday? {
         let captured = access.capture()
-        guard validDate(now), sessionBounds(at: now) != nil, StockSageMassive.covers(symbol),
-              !captured.key.isEmpty, captured.isCurrent() else { return nil }
-        let fixed = StockSageMassive.Access(key: { captured.key }, credentialRevision: { nil },
-            policyRevision: { nil }, allowed: captured.isCurrent)
-        let prefix = "/v2/aggs/ticker/\(symbol)/range/1/minute/"
-        let minuteOnly: StockSageMassive.Transport = { request in
-            guard captured.isCurrent(), request.url?.host == "api.massive.com",
-                  request.url?.path.hasPrefix(prefix) == true else { throw URLError(.unsupportedURL) }
-            let response = try await StockSageMassive.response(for: request,
-                maximumBytes: StockSageMassiveTicks.maximumBytes, transport: transport)
-            guard captured.isCurrent() else { throw CancellationError() }
-            return (response.0, response.1)
-        }
-        let value = await StockSageMassiveTicks.intradayFacts(symbol: symbol,
-            from: now.addingTimeInterval(-3600), now: now, access: fixed, transport: minuteOnly)
-        return captured.isCurrent() ? value : nil
+        let from = now.addingTimeInterval(-3600)
+        guard validDate(now), sessionBounds(at: now) != nil, supportsMinutes(symbol),
+              !captured.key.isEmpty, captured.isCurrent(),
+              let lower = Int64(exactly: (from.timeIntervalSince1970 * 1000).rounded(.down)),
+              let upper = Int64(exactly: (now.timeIntervalSince1970 * 1000).rounded(.down)), lower > 0,
+              let url = URL(string: StockSageMassive.host + "/v2/aggs/ticker/\(symbol)/range/1/minute/\(lower)/\(upper)?adjusted=true&sort=asc&limit=200") else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        request.setValue("Bearer \(captured.key)", forHTTPHeaderField: "Authorization")
+        guard let response = try? await StockSageMassive.response(for: request,
+            maximumBytes: StockSageMassiveTicks.maximumBytes, transport: transport),
+              response.1.statusCode == 200, captured.isCurrent() else { return nil }
+        return StockSageMassiveTicks.parseIntradayFacts(response.0, symbol: symbol, from: from, now: now)
+    }
+
+    /// This candle route preserves the provider's exact uppercase common-share identity, including BRK.B.
+    /// It does not widen any other Massive endpoint's symbol contract.
+    static func supportsMinutes(_ symbol: String) -> Bool {
+        symbol == symbol.uppercased() && StockSageHorizonResearch.validTicker(symbol)
+            && StockSageLiveStream.stockSymbol(symbol) == symbol
     }
 
     /// Pure capture seam, also used for saved synthetic/native fixtures.

@@ -55,27 +55,49 @@ struct StockSageMicrocapActivityView: View {
                     watchButton
                 }
             }
-            if let market = monitor.marketMomentum { StockSageMomentumView(market: market) }
-            Text(monitor.momentumStatus).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: DS.Space.xs) {
+                Text("Momentum detection coverage").font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text(monitor.momentumStatus).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("When enabled, detection covers all matching symbols with a current dated \(research.title) cap classification concurrently. Missing or stale classifications are not eligible. Confirmed observations below are recent event details, not the coverage list.")
+                    .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("After connection or a feed gap, each symbol needs twenty consecutive completed minutes with positive volume before detection is ready. Missing minutes are unavailable, not zero. Prospective events are checked against Massive REST minute bars before alerts or Astra reviews.")
+                    .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityIdentifier(identifier + ".momentum.coverage")
             Text(monitor.momentumAlertStatus).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(identifier + ".momentum.alertStatus")
+            Text(monitor.momentumWorkStatus).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let market = monitor.marketMomentum { StockSageMomentumView(market: market) }
             if !monitor.stockMomentum.isEmpty {
-                DisclosureGroup("Tracked stock momentum · \(monitor.stockMomentum.count) symbols") {
-                    ForEach(monitor.stockMomentum, id: \.symbol) { stock in StockSageMomentumView(stock: stock) }
+                DisclosureGroup("Confirmed momentum observations · \(monitor.stockMomentum.count) symbols") {
+                    LazyVStack(alignment: .leading, spacing: DS.Space.md) {
+                        ForEach(monitor.stockMomentum, id: \.symbol) { stock in StockSageMomentumView(stock: stock) }
+                    }
                 }
+                .accessibilityIdentifier(identifier + ".momentum.observations")
+            } else {
+                Text("No confirmed momentum observations. See detection coverage for connection, warm-up or missing-data status; an empty detail list does not establish that every symbol was quiet.")
+                    .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(identifier + ".momentum.observations.empty")
             }
             Text(monitor.status)
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(identifier + ".watch.status")
-            if monitor.isEnabled, let next = monitor.nextMomentumCheck {
-                Text("Next momentum check: \(next.formatted(date: .abbreviated, time: .standard))")
-                    .font(.caption).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
-            }
             if monitor.isEnabled, let next = monitor.nextCheck {
-                Text("Next check: \(next.formatted(date: .abbreviated, time: .standard))")
+                Text("Next regular-session setup check: \(next.formatted(date: .abbreviated, time: .standard))")
                     .font(.caption).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
             }
-            Text("Monday–Friday · 11:00 AM–11:00 PM Riyadh. Momentum refreshes at most every five minutes while StockSage is open and your Mac is awake. New trade setups require the regular US session. Heavy momentum sends a descriptive Telegram alert and asks Astra for a review. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
+            Text("Monday–Friday · 11:00 AM–11:00 PM Riyadh, including premarket, while StockSage is open and your Mac is awake. Confirmed heavy momentum can send a descriptive Telegram alert and queue a fresh-event Astra review. Reviews wait for research capacity and may expire before they run. A queued event is not a completed review or confirmed delivery.")
+                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("New trade setups require the regular US session. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
                 .font(.caption).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()

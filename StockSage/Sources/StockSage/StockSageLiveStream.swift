@@ -15,8 +15,27 @@ final class StockSageLiveStream: ObservableObject {
     private(set) var lastGap: String?
     private var diagnosticsNotificationUptime: TimeInterval?
     private var delivered: [String: Tick] = [:]
-    var microcapSymbols: Set<String> = []
-    var largecapSymbols: Set<String> = []
+    var microcapSymbols: Set<String> = [] {
+        didSet { if oldValue != microcapSymbols { momentumConfigurationChanged() } }
+    }
+    var largecapSymbols: Set<String> = [] {
+        didSet { if oldValue != largecapSymbols { momentumConfigurationChanged() } }
+    }
+    private var momentumConfigurationID = UUID()
+    private(set) var momentumMemberships: [String: UUID] = [:]
+    private var momentumSymbols: Set<String> {
+        let selected = microcapSymbols.union(largecapSymbols)
+        return selected.isEmpty ? [] : selected.union(["SPY", "QQQ"])
+    }
+    private func momentumConfigurationChanged() {
+        let selected = momentumSymbols
+        momentumMemberships = momentumMemberships.filter { selected.contains($0.key) }
+        for symbol in selected where momentumMemberships[symbol] == nil { momentumMemberships[symbol] = UUID() }
+        momentumConfigurationID = UUID()
+        connection?.momentumSymbols = momentumSymbols
+        connection?.momentumMemberships = momentumMemberships
+        connection?.momentumConfigurationID = momentumConfigurationID
+    }
     func latestTrade(for symbol: String) -> Tick? {
         guard let key = Self.stockSymbol(symbol) else { return nil }
         return delivered[key]
@@ -56,6 +75,9 @@ final class StockSageLiveStream: ObservableObject {
         case status(String)
         case trade(Tick)
         case quote(StockSageNBBO)
+        case minute(StockSageMomentumStream.Minute)
+        /// A malformed correction must not leave an older candidate candle authoritative.
+        case invalidMinute(String)
     }
 
     /// Decode EVERY event, including mixed status/trade frames. A malformed element must not
@@ -72,6 +94,23 @@ final class StockSageLiveStream: ObservableObject {
             guard let row = element as? [String: Any] else { return nil }
             if row["ev"] as? String == "status", let status = row["status"] as? String {
                 return .status(status)
+            }
+            // https://massive.com/docs/websocket/stocks/aggregates-per-minute
+            // AM has s/e window clocks, not the T/Q `t` clock; s/e span exactly one minute.
+            if row["ev"] as? String == "AM" {
+                guard let symbol = row["sym"] as? String, stockSymbol(symbol) != nil else { return nil }
+                func invalid() -> Event { oversizedMetadata += 1; return .invalidMinute(symbol) }
+                guard row["otc"] as? Bool != true,
+                      let start = number(row["s"]), let end = number(row["e"]),
+                      let open = number(row["o"]), let high = number(row["h"]),
+                      let low = number(row["l"]), let close = number(row["c"]),
+                      let volume = number(row["v"]) else { return invalid() }
+                let minute = StockSageMomentumStream.Minute(symbol: symbol,
+                    start: Date(timeIntervalSince1970: start / 1_000),
+                    end: Date(timeIntervalSince1970: end / 1_000),
+                    open: open, high: high, low: low, close: close, volume: volume)
+                guard minute.isValid else { return invalid() }
+                return .minute(minute)
             }
             guard let rawSymbol = row["sym"] as? String, let symbol = stockSymbol(rawSymbol),
                   let milliseconds = number(row["t"]), milliseconds > 0 else { return nil }
@@ -149,7 +188,7 @@ final class StockSageLiveStream: ObservableObject {
                 isAuthorized = true
             case .status("auth_failed"), .status("error"), .status("connected"):
                 self = StreamState(symbolLimit: symbolLimit)
-            case .status:
+            case .status, .minute, .invalidMinute:
                 break // Informational/subscription messages do not revoke authentication.
             case .quote(let quote):
                 guard isAuthorized, Self.valid(quote.symbol),
@@ -186,7 +225,7 @@ final class StockSageLiveStream: ObservableObject {
     }
 
     nonisolated static func massiveSubscription(symbols _: Set<String> = []) -> String? {
-        #"{"action":"subscribe","params":"T.*,Q.*"}"#
+        #"{"action":"subscribe","params":"T.*,Q.*,AM.*"}"#
     }
 
     private nonisolated static func number(_ any: Any?) -> Double? {
@@ -212,7 +251,8 @@ final class StockSageLiveStream: ObservableObject {
         if connection?.isCurrent == false { stop() }
         // Viewing a different board never changes the wildcard subscription or reconnects.
         guard connection == nil else { return }
-        let current = StockSageLiveStreamConnection()
+        let current = StockSageLiveStreamConnection(momentumSymbols: momentumSymbols,
+            momentumConfigurationID: momentumConfigurationID, momentumMemberships: momentumMemberships)
         connection = current
         current.open()
         publication = Task { [weak self, current] in
@@ -223,6 +263,9 @@ final class StockSageLiveStream: ObservableObject {
                     current?.isCurrent == true && self?.connection === current && ToolPolicy.isExternalAllowed
                 })
                 if let ingress = current.ingress {
+                    await ingress.configureMomentum(symbols: self.momentumSymbols,
+                        configurationID: self.momentumConfigurationID, memberships: self.momentumMemberships)
+                    guard !Task.isCancelled, self.connection === current, current.ingress === ingress else { continue }
                     let store = StockSageStore.shared
                     let selected = Set(store.trackedSymbolsUnion + store.ideas.map(\.symbol)).union(self.microcapSymbols).union(self.largecapSymbols)
                     let all = selected.sorted()
@@ -250,6 +293,30 @@ final class StockSageLiveStream: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
+    }
+
+    /// Detection is performed on the ingress actor over the complete configured universe,
+    /// independently of the 4,096-symbol quote/display publication rotation.
+    func momentumSnapshot(symbols: Set<String>, profile: StockSageMicrocapScreen.Profile,
+                          now: Date) async -> StockSageMomentumStream.Snapshot? {
+        guard ToolPolicy.isExternalAllowed, let current = connection, current.isCurrent,
+              let ingress = current.ingress, symbols.isSubset(of: momentumSymbols) else { return nil }
+        let revision = momentumConfigurationID
+        await ingress.configureMomentum(symbols: momentumSymbols, configurationID: revision,
+                                        memberships: momentumMemberships)
+        let captured = await ingress.momentumSnapshot(symbols: symbols, profile: profile, now: now)
+        guard !Task.isCancelled, connection === current, current.ingress === ingress,
+              current.isCurrent, ToolPolicy.isExternalAllowed, momentumConfigurationID == revision,
+              let captured, captured.configurationID == revision,
+              ingress.acceptsMomentum(captured, now: Date()) else { return nil }
+        return captured
+    }
+
+    func isMomentumCurrent(_ snapshot: StockSageMomentumStream.Snapshot) -> Bool {
+        guard ToolPolicy.isExternalAllowed, let current = connection, current.isCurrent,
+              snapshot.configurationID == momentumConfigurationID,
+              snapshot.symbols.isSubset(of: momentumSymbols), let ingress = current.ingress else { return false }
+        return ingress.acceptsMomentum(snapshot, now: Date())
     }
 
     /// Shared runtime/test seam: tests replace only the reference transports and session check.
@@ -420,7 +487,7 @@ final class StockSageLiveStream: ObservableObject {
         let trade = m.tradeSIPToReceive.map { String(format: "%.3fs", $0) } ?? "unknown"
         let quote = m.quoteSIPToReceive.map { String(format: "%.3fs", $0) } ?? "unknown"
         let sip = m.sipToReceive.map { String(format: "%.3fs", $0) } ?? "unknown"
-        return "\(connectionLabel). Whole-market T.*,Q.*; latest values, not a complete tape. "
+        return "\(connectionLabel). Whole-market T.*,Q.*,AM.*; latest prices and provisional minute nominations, not a complete tape. "
             + "\(m.tradeSymbols) trade / \(m.quoteSymbols) quote symbols. "
             + "Queue \(m.queuedFrames) frames / \(m.queuedBytes) bytes (peak \(m.peakFrames) / \(m.peakBytes)). "
             + String(format: "Receive→process %.3fs; receive→publish %.3fs (peak %.3fs). ", m.receiveToProcess, m.receiveToPublish, m.peakReceiveToPublish)
@@ -450,9 +517,17 @@ final class StockSageLiveStreamConnection {
     private let currentRevision: @MainActor () -> String?
     private let currentPolicyRevision: @MainActor () -> String?
     var isCurrent: Bool { revision == currentRevision() && policyRevision == currentPolicyRevision() }
+    var momentumSymbols: Set<String>
+    var momentumConfigurationID: UUID
+    var momentumMemberships: [String: UUID]
 
-    init(currentRevision: @escaping @MainActor () -> String? = { StockSageMassive.credentialRevision() },
+    init(momentumSymbols: Set<String> = [], momentumConfigurationID: UUID = UUID(),
+         momentumMemberships: [String: UUID]? = nil,
+         currentRevision: @escaping @MainActor () -> String? = { StockSageMassive.credentialRevision() },
          currentPolicyRevision: @escaping @MainActor () -> String? = { AppSettings.policyRevision() }) {
+        self.momentumSymbols = momentumSymbols
+        self.momentumConfigurationID = momentumConfigurationID
+        self.momentumMemberships = momentumMemberships ?? Dictionary(uniqueKeysWithValues: momentumSymbols.map { ($0, UUID()) })
         self.currentRevision = currentRevision
         self.currentPolicyRevision = currentPolicyRevision
         revision = currentRevision()
@@ -472,7 +547,9 @@ final class StockSageLiveStreamConnection {
         guard !key.isEmpty, let url = URL(string: StockSageLiveStream.massiveHost) else { return }
         let socket = URLSession.shared.webSocketTask(with: url)
         socket.maximumMessageSize = StockSageFeedIngress.Limits().frameBytes
-        let ingress = StockSageFeedIngress(authorized: { [weak self] source in
+        let ingress = StockSageFeedIngress(momentumSymbols: momentumSymbols,
+            momentumConfigurationID: momentumConfigurationID, momentumMemberships: momentumMemberships,
+            authorized: { [weak self] source in
             // One auth transition may hop to MainActor to recheck policy; data frames never do.
             Task { @MainActor in
                 guard source.isActive else { return }

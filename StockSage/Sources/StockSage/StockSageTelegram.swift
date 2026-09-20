@@ -231,7 +231,15 @@ import Darwin
 
     func send(text: String, deliveryID: String,
               stillValid: @escaping @MainActor () -> Bool) async -> DeliveryResult {
-        guard !isBusy else { status = Notice.busy.text; return .blocked }
+        let waitingPairing = pairingRevision, waitingPolicy = policyRevision()
+        while isBusy {
+            guard !Task.isCancelled, allowed(), stillValid(), pairingRevision == waitingPairing,
+                  policyRevision() == waitingPolicy else { status = Notice.staleAlert.text; return .blocked }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard !Task.isCancelled, pairingRevision == waitingPairing, policyRevision() == waitingPolicy else {
+            status = Notice.staleAlert.text; return .blocked
+        }
         do { try reload() } catch { failStorage(); return .blocked }
         guard state.deliveries[deliveryID] == nil else { status = Notice.attempted.text; return .alreadyAttempted }
         guard Self.validID(deliveryID), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

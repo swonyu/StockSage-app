@@ -30,12 +30,44 @@ import Testing
         #expect(StockSageMicrocapMonitor.nextTrackingStart(after: .init(timeIntervalSince1970: .infinity)) == nil)
     }
 
-    @Test func momentumSelectionPrefersModeCandidatesAndDisclosesTheBound() {
+    @Test func momentumSelectionIncludesEveryMatchingSymbolWithoutTheOldTwentyFourBound() {
         let candidates = (0..<30).map { "C" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
         let selection = StockSageMicrocapMonitor.momentumSelection(candidates: candidates + ["../bad", "caa"], watchlist: ["AAPL", "CBA"])
-        #expect(selection.symbols == Array(candidates.prefix(24)))
+        #expect(selection.symbols == candidates + ["AAPL"])
         #expect(selection.total == 32, "Thirty unique candidates, one unsupported symbol, and one extra watchlist symbol must all be accounted for")
-        #expect(selection.skipped == 8)
+        #expect(selection.skipped == 1)
+    }
+
+    @Test func momentumCoverageHasNoDisplayLimitAndKeepsDottedShareClasses() {
+        let symbols = (0..<5_000).map { "A\($0)" } + ["BRK.B"]
+        let selected = StockSageMicrocapMonitor.momentumSelection(candidates: symbols, watchlist: [])
+        #expect(selected.symbols == symbols && selected.skipped == 0)
+    }
+
+    @Test func freshReviewsBeyondTheFirstRemainQueuedAndReplacementKeepsTheirPlace() throws {
+        let now = try #require(ISO8601DateFormatter().date(from: "2026-09-18T15:00:30Z"))
+        let end = now.addingTimeInterval(-30)
+        let bars: [StockSageMassiveTicks.Minute] = (0..<20).map { index in
+            let close = index < 15 ? 100.0 : 104.0
+            return .init(at: end.addingTimeInterval(Double(index - 20) * 60), open: close,
+                high: close + 1, low: close - 1, close: close, volume: index < 15 ? 100 : 400)
+        }
+        let input = StockSageMassiveTicks.Intraday(facts: [], asOf: end, bars: bars, verifiedMinutes: true)
+        let market = StockSageMomentum.market(spy: input, qqq: input, now: now)
+        let stock = StockSageMomentum.stock(symbol: "TEST", intraday: input, market: market, now: now)
+        let trigger = try #require(stock.heavyMomentum(profile: .microcap, now: now))
+        var queue: [StockSageMicrocapMonitor.PendingMomentum] = []
+        for index in 0..<30 {
+            StockSageMicrocapMonitor.enqueue(.init(id: String(index), stock: stock, market: market,
+                trigger: trigger, stillValid: { true }), into: &queue)
+        }
+        StockSageMicrocapMonitor.enqueue(.init(id: "0", stock: stock, market: market,
+            trigger: trigger, stillValid: { false }), into: &queue)
+        #expect(queue.map(\.id) == (0..<30).map(String.init))
+        let revoked = StockSageMicrocapMonitor.prune(&queue, at: now)
+        #expect(revoked.revoked == 1 && revoked.expired == 0 && queue.first?.id == "1")
+        let expired = StockSageMicrocapMonitor.prune(&queue, at: now.addingTimeInterval(181))
+        #expect(expired.expired == 29 && expired.revoked == 0 && queue.isEmpty)
     }
 
     @Test func aMomentumReviewDoesNotReplaceTheSavedModeScreenForTracking() {
@@ -184,6 +216,12 @@ import Testing
         #expect(monitor.stockMomentum.first?.vsSPY.allSatisfy { $0.status == .available } == true,
                 "A real advancing request clock must not make the market capture look future-dated to its stock")
         #expect(monitor.stockMomentum.first?.vsQQQ.allSatisfy { $0.status == .available } == true)
+        #expect(monitor.stockMomentum.first?.heavyMomentum(profile: .largecap, now: fixture.clockDate) == nil,
+                "Flat REST candles cannot confirm a provisional heavy-momentum event")
+        let calls = fixture.calls
+        let oversized = await monitor.refreshMomentum(candidates: ["AAPL", "MSFT", "META", "AMZN", "NVDA"], watchlist: [], at: fixture.now,
+            access: fixture.access, transport: { try await fixture.reply($0) }, clock: { fixture.clockDate }, stillValid: { true })
+        #expect(!oversized && fixture.calls == calls, "All-universe detection must not turn into an unbounded REST sweep")
     }
 
     @Test func setupIdentityIgnoresMovingQuotesButChangesForNewCatalystOrSession() {

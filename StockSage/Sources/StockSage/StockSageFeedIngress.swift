@@ -63,11 +63,14 @@ actor StockSageFeedIngress {
         var active = true, draining = false
         var frames: [Frame] = []
         var metrics = Metrics()
+        var momentumConfigurationID = UUID()
     }
     nonisolated let limits: Limits
-    nonisolated private let mailbox = Mutex(Mailbox())
+    nonisolated let feedID = UUID()
+    nonisolated private let mailbox: Mutex<Mailbox>
     private let startedUptime = ProcessInfo.processInfo.systemUptime
     private var state: L.StreamState
+    private var momentum: StockSageMomentumStream.State
     private var metrics = Metrics()
     private var tradeReceived: [String: TimeInterval] = [:]
     private var displayTradeReceived: [String: TimeInterval] = [:]
@@ -83,12 +86,20 @@ actor StockSageFeedIngress {
     private let authorized: @Sendable (StockSageFeedIngress) -> Void
     private let failed: @Sendable () -> Void
 
-    init(limits: Limits = Limits(), authorized: @escaping @Sendable (StockSageFeedIngress) -> Void = { _ in },
+    init(limits: Limits = Limits(), momentumSymbols: Set<String> = [], momentumConfigurationID: UUID = UUID(),
+         momentumMemberships: [String: UUID]? = nil,
+         authorized: @escaping @Sendable (StockSageFeedIngress) -> Void = { _ in },
          failed: @escaping @Sendable () -> Void = {}) {
         self.limits = limits
+        mailbox = Mutex(Mailbox(momentumConfigurationID: momentumConfigurationID))
         state = L.StreamState(symbolLimit: limits.symbols)
+        momentum = StockSageMomentumStream.State(feedID: feedID,
+            configurationID: momentumConfigurationID, symbolLimit: limits.symbols)
+        let accepted = momentum.configure(symbols: momentumSymbols, configurationID: momentumConfigurationID,
+                                          memberships: momentumMemberships)
         self.authorized = authorized
         self.failed = failed
+        if !accepted { invalidate("Feed momentum symbol capacity exceeded; gap and reconnect") }
     }
 
     /// A fresh ingress object is created per socket. Invalidated objects never accept late callbacks.
@@ -142,6 +153,38 @@ actor StockSageFeedIngress {
     /// cannot restore liquidity after this same session was invalidated off-main.
     nonisolated func acceptsPublication(_ snapshot: Snapshot, at uptime: TimeInterval) -> Bool {
         isActive && snapshot.metrics.failure == nil && !snapshot.publicationExpired(at: uptime)
+    }
+
+    nonisolated func acceptsMomentum(_ snapshot: StockSageMomentumStream.Snapshot, now: Date) -> Bool {
+        mailbox.withLock { box in
+            box.active && box.metrics.failure == nil && snapshot.feedID == feedID
+                && snapshot.configurationID == box.momentumConfigurationID
+                && (0...StockSageMomentumStream.maximumAge).contains(now.timeIntervalSince(snapshot.observedAt))
+                && box.frames.first.map { ProcessInfo.processInfo.systemUptime - $0.uptime <= L.maximumLiveAge } != false
+        }
+    }
+
+    func configureMomentum(symbols: Set<String>, configurationID: UUID, memberships: [String: UUID]? = nil) {
+        guard isActive else { return }
+        guard momentum.configure(symbols: symbols, configurationID: configurationID, memberships: memberships) else {
+            invalidate("Feed momentum symbol capacity exceeded; gap and reconnect"); return
+        }
+        mailbox.withLock { $0.momentumConfigurationID = configurationID }
+    }
+
+    /// Unlike display publication this examines every configured symbol, without a prefix/rotation.
+    func momentumSnapshot(symbols: Set<String>, profile: StockSageMicrocapScreen.Profile,
+                          now: Date) -> StockSageMomentumStream.Snapshot? {
+        guard isActive, state.isAuthorized else { return nil }
+        guard symbols.count <= min(limits.symbols, StockSageMomentumStream.maximumSymbols) else {
+            invalidate("Feed momentum symbol capacity exceeded; gap and reconnect"); return nil
+        }
+        if let oldest = mailbox.withLock({ $0.frames.first?.uptime }),
+           ProcessInfo.processInfo.systemUptime - oldest > L.maximumLiveAge {
+            invalidate("Feed consumer backlog exceeded 10s; gap and reconnect"); return nil
+        }
+        let result = momentum.snapshot(symbols: symbols, profile: profile, now: now)
+        return acceptsMomentum(result, now: now) ? result : nil
     }
 
     private func drain() async {
@@ -221,6 +264,10 @@ actor StockSageFeedIngress {
                     if oldQuotes == state.latestQuotes.count { metrics.coalesced += 1 }
                     if selected.contains(observation.symbol) { quoteReceived[observation.symbol] = frame.uptime }
                 } else { metrics.superseded += 1 }
+            case .minute(let minute):
+                if state.isAuthorized { momentum.consume(minute, now: frame.at) }
+            case .invalidMinute(let symbol):
+                if state.isAuthorized { momentum.invalidate(symbol: symbol) }
             case .status: break
             }
             if state.capacityExceeded {

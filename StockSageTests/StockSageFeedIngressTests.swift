@@ -4,6 +4,224 @@ import Darwin
 import Synchronization
 @testable import StockSage
 
+extension StockSageFeedIngressTests {
+    typealias M = StockSageMomentumStream
+    private var minuteNow: Date { Date(timeIntervalSince1970: 1_700_006_400) }
+
+    private func minutes(_ symbol: String = "BRK.B", lastClose: Double = 105) -> [M.Minute] {
+        (0..<20).map { index in
+            let start = minuteNow.addingTimeInterval(Double(index - 20) * 60)
+            let close = index == 19 ? lastClose : 100
+            return M.Minute(symbol: symbol, start: start, end: start.addingTimeInterval(60),
+                open: 100, high: max(100, close), low: min(100, close), close: close,
+                volume: index >= 15 ? 400 : 100)
+        }
+    }
+
+    @Test func aggregateMinutesDecodeWithoutTradeClockAndRejectMalformedCorrections() throws {
+        let row: [String: Any] = ["ev": "AM", "sym": "BRK.B", "s": 1_700_006_340_000,
+            "e": 1_700_006_400_000, "o": 100, "h": 105, "l": 99, "c": 104, "v": 400]
+        let data = try JSONSerialization.data(withJSONObject: [row])
+        let decoded = L.decode(data)
+        #expect(decoded.rejected == 0)
+        guard case .minute(let minute) = try #require(decoded.events.first) else {
+            Issue.record("Expected a minute aggregate, not a trade"); return
+        }
+        #expect(minute.symbol == "BRK.B" && minute.end == minuteNow)
+        for (key, value) in [("v", true as Any), ("e", 1_700_006_399_999 as Any), ("h", 90 as Any)] {
+            var invalid = row; invalid[key] = value
+            let invalidData = try JSONSerialization.data(withJSONObject: [invalid])
+            #expect(L.decode(invalidData).events == [.invalidMinute("BRK.B")])
+        }
+    }
+
+    @Test func provisionalCandidatesUseAllTwentyMinutesAndReplaceCorrections() {
+        var state = M.State()
+        let configured1 = state.configure(symbols: ["BRK.B"])
+        #expect(configured1)
+        let original = minutes(lastClose: 101.5)
+        for bar in original { state.consume(bar, now: minuteNow) }
+        let small = state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        #expect(small.ready == 1 && small.candidates.isEmpty)
+        let large = state.snapshot(symbols: ["BRK.B"], profile: .largecap, now: minuteNow)
+        #expect(large.candidates == [.init(symbol: "BRK.B", at: minuteNow, revision: original.hashValue)])
+        // Repeated frames replace the same bucket; they cannot multiply prior-window volume.
+        for bar in original { state.consume(bar, now: minuteNow) }
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .largecap, now: minuteNow) == large)
+        // Current unfinished minutes and older irrelevant corrections must not retrigger REST.
+        for volume in [100.0, 500.0] {
+            state.consume(.init(symbol: "BRK.B", start: minuteNow, end: minuteNow.addingTimeInterval(60),
+                open: 100, high: 110, low: 100, close: 110, volume: volume), now: minuteNow.addingTimeInterval(30))
+        }
+        let oldStart = minuteNow.addingTimeInterval(-1_800)
+        state.consume(.init(symbol: "BRK.B", start: oldStart, end: oldStart.addingTimeInterval(60),
+            open: 100, high: 200, low: 100, close: 200, volume: 2_000), now: minuteNow)
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .largecap, now: minuteNow.addingTimeInterval(30)).candidates == large.candidates)
+        for bar in minutes(lastClose: 96) { state.consume(bar, now: minuteNow) }
+        let corrected = state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        #expect(corrected.candidates == [.init(symbol: "BRK.B", at: minuteNow, revision: minutes(lastClose: 96).hashValue)])
+        #expect(corrected.candidates != large.candidates)
+        let final = original[19]
+        state.consume(.init(symbol: final.symbol, start: final.start, end: final.end,
+            open: 100, high: 100, low: 100, close: 100, volume: 100), now: minuteNow)
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow).candidates.isEmpty)
+    }
+
+    @Test func minuteCoverageDistinguishesWarmGapStaleUnsupportedAndFuture() {
+        var state = M.State()
+        let configured2 = state.configure(symbols: ["BRK.B", "WARM", "GAP", "ZERO", "FUTURE"])
+        #expect(configured2)
+        for bar in minutes() { state.consume(bar, now: minuteNow) }
+        for bar in minutes("WARM").suffix(19) { state.consume(bar, now: minuteNow) }
+        for (index, bar) in minutes("GAP").enumerated() where index != 8 { state.consume(bar, now: minuteNow) }
+        for (index, bar) in minutes("ZERO").enumerated() {
+            state.consume(.init(symbol: bar.symbol, start: bar.start, end: bar.end, open: bar.open,
+                high: bar.high, low: bar.low, close: bar.close, volume: index == 8 ? 0 : bar.volume), now: minuteNow)
+        }
+        for bar in minutes("FUTURE") { state.consume(bar, now: minuteNow.addingTimeInterval(-60)) }
+        let result = state.snapshot(symbols: ["BRK.B", "WARM", "GAP", "ZERO", "bad", "FUTURE"], profile: .microcap, now: minuteNow.addingTimeInterval(-1))
+        #expect(result.ready == 0 && result.warming == 3 && result.staleOrGapped == 2 && result.unsupported == 1)
+        #expect(result.candidates.isEmpty)
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow.addingTimeInterval(181)).staleOrGapped == 1)
+        state.invalidate(symbol: "BRK.B")
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow).warming == 1)
+    }
+
+    @Test func minuteDetectionIsNotLimitedToTheDisplayRotationAndRemovalDropsHistory() {
+        let symbols = Set((0..<5_000).map { "S\($0)" }).union(["BRK.B"])
+        var state = M.State()
+        let configured3 = state.configure(symbols: symbols)
+        #expect(configured3)
+        for bar in minutes() { state.consume(bar, now: minuteNow) }
+        let snapshot = state.snapshot(symbols: symbols, profile: .microcap, now: minuteNow)
+        #expect(snapshot.symbols.count == 5_001 && snapshot.ready == 1 && snapshot.warming == 5_000)
+        #expect(snapshot.candidates == [.init(symbol: "BRK.B", at: minuteNow, revision: minutes().hashValue)])
+        let configured4 = state.configure(symbols: [])
+        #expect(configured4)
+        let configured5 = state.configure(symbols: ["BRK.B"])
+        #expect(configured5)
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow).warming == 1)
+        let configured6 = state.configure(symbols: Set((0..<32_769).map { "S\($0)" }))
+        #expect(!configured6)
+    }
+
+    @Test func minuteIngressRequiresAuthorizationAndCannotSurviveSessionGap() async throws {
+        let source = I(momentumSymbols: ["BRK.B"])
+        defer { source.invalidate() }
+        let rows: [[String: Any]] = minutes().map { bar in
+            ["ev": "AM", "sym": bar.symbol, "s": bar.start.timeIntervalSince1970 * 1_000,
+             "e": bar.end.timeIntervalSince1970 * 1_000, "o": bar.open, "h": bar.high,
+             "l": bar.low, "c": bar.close, "v": bar.volume]
+        }
+        let data = try JSONSerialization.data(withJSONObject: rows)
+        #expect(source.offer(data, at: minuteNow))
+        _ = try await drained(source)
+        let unauthorized = await source.momentumSnapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        #expect(unauthorized == nil)
+        #expect(source.offer(auth, at: minuteNow))
+        #expect(source.offer(data, at: minuteNow))
+        _ = try await drained(source)
+        let captured = await source.momentumSnapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        let snapshot = try #require(captured)
+        #expect(snapshot.ready == 1 && snapshot.candidates.count == 1)
+        #expect(source.acceptsMomentum(snapshot, now: minuteNow))
+        let otherSession = I(momentumSymbols: ["BRK.B"])
+        defer { otherSession.invalidate() }
+        #expect(!otherSession.acceptsMomentum(snapshot, now: minuteNow))
+        source.invalidate("Synthetic feed gap")
+        #expect(!source.acceptsMomentum(snapshot, now: minuteNow))
+        #expect(!source.offer(data, at: minuteNow))
+        let invalidated = await source.momentumSnapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        #expect(invalidated == nil)
+    }
+
+    @Test func minuteRetentionAndConfigurationAreBoundedWithoutSilentUniverseTruncation() async throws {
+        var state = M.State()
+        let configured7 = state.configure(symbols: ["BRK.B"])
+        #expect(configured7)
+        for bar in minutes() { state.consume(bar, now: minuteNow) }
+        for index in 0..<60 {
+            let start = minuteNow.addingTimeInterval(Double(index) * 60)
+            state.consume(.init(symbol: "BRK.B", start: start, end: start.addingTimeInterval(60),
+                open: 100, high: 100, low: 100, close: 100, volume: 100), now: start.addingTimeInterval(60))
+        }
+        // Old observations cannot be reconstructed out of the bounded hot minute window.
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow).warming == 1)
+        let later = minuteNow.addingTimeInterval(3_600)
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: later).ready == 1)
+        let revision = UUID()
+        let configured8 = state.configure(symbols: ["BRK.B"], configurationID: revision)
+        #expect(configured8)
+        #expect(state.snapshot(symbols: ["BRK.B"], profile: .microcap, now: later).ready == 1)
+
+        var limits = I.Limits(); limits.symbols = 2
+        let source = I(limits: limits, momentumSymbols: ["BRK.B"])
+        defer { source.invalidate() }
+        await source.configureMomentum(symbols: ["BRK.B", "SPY", "QQQ"], configurationID: UUID())
+        #expect(!source.isActive && source.failureReason?.contains("momentum symbol capacity") == true)
+        let failed = await source.momentumSnapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        #expect(failed == nil)
+    }
+
+    @Test func malformedMinuteCorrectionAndConfigurationRevokePriorNomination() async throws {
+        let source = I(momentumSymbols: ["BRK.B"])
+        defer { source.invalidate() }
+        let rows: [[String: Any]] = minutes().map { bar in
+            ["ev": "AM", "sym": bar.symbol, "s": bar.start.timeIntervalSince1970 * 1_000,
+             "e": bar.end.timeIntervalSince1970 * 1_000, "o": bar.open, "h": bar.high,
+             "l": bar.low, "c": bar.close, "v": bar.volume]
+        }
+        #expect(source.offer(auth, at: minuteNow))
+        let data = try JSONSerialization.data(withJSONObject: rows)
+        #expect(source.offer(data, at: minuteNow))
+        _ = try await drained(source)
+        let before = await source.momentumSnapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        let captured = try #require(before)
+        #expect(captured.candidates.count == 1)
+        var correction = try #require(rows.last); correction["v"] = true
+        let invalidData = try JSONSerialization.data(withJSONObject: [correction])
+        #expect(source.offer(invalidData, at: minuteNow))
+        _ = try await drained(source)
+        let after = await source.momentumSnapshot(symbols: ["BRK.B"], profile: .microcap, now: minuteNow)
+        #expect(after?.warming == 1 && after?.candidates.isEmpty == true)
+        await source.configureMomentum(symbols: [], configurationID: UUID())
+        #expect(!source.acceptsMomentum(captured, now: minuteNow))
+    }
+
+    @MainActor @Test func membershipEpochsPreserveOtherCapWarmupButDetectUnpublishedDisableAndReenable() {
+        let live = L()
+        live.microcapSymbols = ["MICRO"]
+        let firstMembership = live.momentumMemberships
+        var state = M.State()
+        let configured = state.configure(symbols: Set(firstMembership.keys), configurationID: UUID(),
+                                         memberships: firstMembership)
+        #expect(configured)
+        for bar in minutes("MICRO") { state.consume(bar, now: minuteNow) }
+
+        live.largecapSymbols = ["LARGE"]
+        #expect(live.momentumMemberships["MICRO"] == firstMembership["MICRO"])
+        #expect(live.momentumMemberships["SPY"] == firstMembership["SPY"])
+        let enlarged = state.configure(symbols: Set(live.momentumMemberships.keys), configurationID: UUID(),
+                                       memberships: live.momentumMemberships)
+        #expect(enlarged)
+        #expect(state.snapshot(symbols: ["MICRO"], profile: .microcap, now: minuteNow).ready == 1)
+        for bar in minutes("LARGE") { state.consume(bar, now: minuteNow) }
+
+        // The ingress sees only the final union, while setters observe both membership transitions.
+        live.microcapSymbols = []
+        live.microcapSymbols = ["MICRO"]
+        #expect(live.momentumMemberships["MICRO"] != firstMembership["MICRO"])
+        #expect(live.momentumMemberships["QQQ"] == firstMembership["QQQ"])
+        let reenabled = state.configure(symbols: Set(live.momentumMemberships.keys), configurationID: UUID(),
+                                        memberships: live.momentumMemberships)
+        #expect(reenabled)
+        #expect(state.snapshot(symbols: ["MICRO"], profile: .microcap, now: minuteNow).warming == 1)
+        #expect(state.snapshot(symbols: ["LARGE"], profile: .largecap, now: minuteNow).ready == 1)
+        live.microcapSymbols = []; live.largecapSymbols = []
+        #expect(live.momentumMemberships.isEmpty)
+    }
+}
+
 @Suite("Bounded whole-market ingestion")
 struct StockSageFeedIngressTests {
     typealias I = StockSageFeedIngress

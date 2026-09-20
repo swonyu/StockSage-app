@@ -2170,6 +2170,36 @@ struct StockSageChatTests {
         #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 
+    @Test(arguments: [StockSageSameDayResearch.Mode.microcap, .largecap], [393.0, 900.0])
+    func nativeMomentumActivitySeparatesDetectionCoverageFromConfirmedDetails(mode: StockSageSameDayResearch.Mode, width: Double) async throws {
+        let suite = "stocksage.momentum.activity.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        let research = StockSageSameDayResearch(mode: mode)
+        let size = CGSize(width: width, height: 1500)
+        let view = ScrollView {
+            StockSageMicrocapActivityView(store: store, research: research)
+                .padding(16)
+        }.frame(width: size.width, height: size.height)
+        let rendered = try await capture(view, name: "momentum-activity-\(mode.rawValue)-\(Int(width))") { root in
+            let text = nativeAccessibilityText(in: root)
+            for required in ["Momentum detection coverage", "all matching symbols", "twenty consecutive",
+                             "REST", "No confirmed momentum observations", "expire", "Enable tracking"] {
+                #expect(text.contains(required), "Coverage, confirmation, warm-up and review expiry must remain visible")
+            }
+            #expect(!text.contains("Tracked stock momentum"))
+            #expect(!text.contains("every five minutes") && !text.contains("24-symbol"))
+            let identifiers = Set(nativeAccessibilityElements(in: root).compactMap { $0.accessibilityIdentifier?() })
+            #expect(identifiers.contains(mode.rawValue + ".momentum.coverage"))
+            #expect(identifiers.contains(mode.rawValue + ".momentum.observations.empty"))
+            #expect(identifiers.contains(mode.rawValue + ".watch.start"))
+        }
+        #expect(abs(rendered.width - width) < 1)
+        #expect(abs(rendered.height - size.height) < 1)
+        #expect(research.receipt == nil && !research.isRunning)
+    }
+
     @Test func nativeQuestionFocusUsesActualFieldWithoutOwnerState() async throws {
         var focus: FocusState<Bool>.Binding?
         var text: Binding<String>?

@@ -190,6 +190,23 @@ import Testing
         #expect(result.qqq.returns.allSatisfy { $0.percent != nil })
     }
 
+    @Test func candleConfirmationPreservesDottedIdentityAndRejectsOtherRoutes() async throws {
+        let body = try payload(symbol: "BRK.B"), calls = Mutex(0)
+        let transport: StockSageMassive.Transport = { request in
+            calls.withLock { $0 += 1 }
+            #expect(request.url?.path.hasPrefix("/v2/aggs/ticker/BRK.B/range/1/minute/") == true)
+            #expect(request.url?.query?.contains("adjusted=true") == true)
+            #expect(request.url?.query?.contains("apiKey") == false)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let result = await M.intraday(symbol: "BRK.B", now: now, access: access, transport: transport)
+        #expect(result?.verifiedMinutes == true && calls.withLock { $0 } == 1)
+        for symbol in ["../BRK.B", "BRK/B", "BRK.B?apiKey=x", "BRK..B", "brk.b", "APTVpA", "^SPX"] {
+            #expect(await M.intraday(symbol: symbol, now: now, access: access, transport: transport) == nil)
+        }
+        #expect(calls.withLock { $0 } == 1)
+    }
+
     @Test(arguments: ["denied", "noKey", "credential", "policy", "cancelled"])
     func interruptedAccessCannotPublishEitherProxy(mode: String) async throws {
         let revision = Mutex("one"), calls = Mutex(0)

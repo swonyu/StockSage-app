@@ -158,6 +158,84 @@ import Testing
         #expect(duplicate == .alreadyAttempted && f.sends.count == 1)
     }
 
+    @Test(arguments: ["fresh", "revoked", "pairing", "policy", "cancelled"])
+    func concurrentFreshDeliveryWaitsWithoutClaimingAndRevokedWaiterNeverSends(kind: String) async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let service = try await f.ready()
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        f.beforeSendReply = {
+            await withCheckedContinuation { releaseFirst = $0 }
+        }
+        let first = Task { @MainActor in
+            await service.send(text: "First public fixture.", deliveryID: "delivery-one", stillValid: { true })
+        }
+        defer { first.cancel(); releaseFirst?.resume() }
+        for _ in 0..<200 {
+            if releaseFirst != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(releaseFirst != nil && service.isBusy && f.sends.count == 1)
+        let firstAttemptBytes = try Data(contentsOf: f.stateURL)
+        var secondEntered = false, secondFinished = false, secondValid = true
+        let second = Task { @MainActor in
+            secondEntered = true
+            let result = await service.send(text: "Second public fixture.", deliveryID: "delivery-waiting",
+                stillValid: { secondValid })
+            secondFinished = true
+            return result
+        }
+        defer { second.cancel() }
+        for _ in 0..<200 {
+            if secondEntered { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(secondEntered)
+        #expect(!secondFinished, "A fresh unattempted delivery must wait for the shared sender, not be discarded as busy")
+        #expect(f.sends.count == 1)
+        #expect(try Data(contentsOf: f.stateURL) == firstAttemptBytes,
+                "A waiting delivery must not claim its identity before send capacity is available")
+        switch kind {
+        case "revoked": secondValid = false
+        case "pairing":
+            let originalPairing = service.pairingRevision
+            await service.saveAndVerify(token: f.token)
+            f.updates = [f.message(chat: 43)]
+            await service.verifyPairing()
+            #expect(service.isReady && service.pairingRevision != originalPairing,
+                    "The queued call must not retarget to a different successfully paired private chat")
+        case "policy": f.revision = "policy-B"
+        case "cancelled": second.cancel()
+        default: break
+        }
+        if kind != "revoked" {
+            #expect(secondValid, "Pairing, policy and cancellation rejection must not depend on the caller revoking stillValid")
+        }
+        f.beforeSendReply = nil
+        let release = try #require(releaseFirst)
+        releaseFirst = nil
+        release.resume()
+        let firstResult = await first.value
+        let secondResult = await second.value
+        if kind == "pairing" || kind == "policy" {
+            #expect(firstResult == .unknown, "The first POST already happened, but changed authorization must prevent a success claim")
+        } else {
+            #expect(firstResult == .delivered(messageID: 81))
+        }
+        let saved = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: f.stateURL)) as? [String: Any])
+        let deliveries = try #require(saved["deliveries"] as? [String: Any])
+        if kind == "fresh" {
+            #expect(secondResult == .delivered(messageID: 81) && f.sends.count == 2)
+            #expect(deliveries["delivery-waiting"] != nil)
+            let duplicate = await f.make().send(text: "Never repeat a completed delivery.",
+                deliveryID: "delivery-waiting", stillValid: { true })
+            #expect(duplicate == .alreadyAttempted && f.sends.count == 2)
+        } else {
+            #expect(secondResult == .blocked && f.sends.count == 1)
+            #expect(deliveries["delivery-waiting"] == nil,
+                    "A revoked, retargeted, policy-invalidated or cancelled waiter must make neither a POST nor a durable attempt")
+        }
+    }
+
     @Test func capModesSharePairingButEachDeliveryRemainsDurablyIndependent() async throws {
         let f = try Fixture(); defer { f.clean() }
         let service = try await f.ready()

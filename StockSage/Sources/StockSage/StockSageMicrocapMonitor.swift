@@ -16,18 +16,52 @@ import Combine
     @Published private(set) var momentumStatus = "Momentum tracking is off."
     @Published private(set) var momentumAlertStatus = "Pair Telegram for heavy-momentum observations and Astra reviews."
     @Published private(set) var momentumReviewsDeferred = 0
+    @Published private(set) var momentumWorkStatus = "No momentum events are queued."
     @Published private(set) var nextMomentumCheck: Date?
     private var task: Task<Void, Never>?
     private var momentumTask: Task<Void, Never>?
     private var momentumReviewTask: Task<Void, Never>?
+    private var momentumConfirmationTask: Task<Void, Never>?
+    private var momentumDeliveryTask: Task<Void, Never>?
+    private var momentumSession = UUID()
+    private var momentumFeed: StockSageMomentumStream.Snapshot?
+    private var nominations: [StockSageMomentumStream.Candidate] = []
+    private var attemptedNominations: [String: StockSageMomentumStream.Candidate] = [:]
+    private var pendingAlerts: [PendingMomentum] = []
+    private var pendingReviews: [PendingMomentum] = []
+    private var expiredConfirmations = 0, rejectedConfirmations = 0, revokedEvents = 0, expiredObservations = 0
+    struct PendingMomentum {
+        let id: String
+        let stock: StockSageMomentum.Stock
+        let market: StockSageMomentum.Market
+        let trigger: StockSageMomentum.Trigger
+        let stillValid: @MainActor () -> Bool
+    }
+    /// Preserve FIFO admission when newer evidence replaces an already-waiting event.
+    static func enqueue(_ event: PendingMomentum, into queue: inout [PendingMomentum]) {
+        // ponytail: bounded by the dated universe; use an ordered map only if measured bursts make array insertion costly.
+        if let index = queue.firstIndex(where: { $0.id == event.id }) { queue[index] = event }
+        else { queue.append(event) }
+    }
+    static func prune(_ queue: inout [PendingMomentum], at now: Date) -> (expired: Int, revoked: Int) {
+        var expired = 0, revoked = 0
+        queue.removeAll { event in
+            if event.stock.heavyMomentum(profile: event.trigger.profile, now: now) != event.trigger { expired += 1; return true }
+            if !event.stillValid() { revoked += 1; return true }
+            return false
+        }
+        return (expired, revoked)
+    }
     private var generation = UUID()
     private var ownedRun: UUID?
     private(set) var claimFailure: String?
     private let directory: URL?
     private let requireWriter: () throws -> Void
     static let interval: TimeInterval = 300
-    nonisolated static let trackingPolicy = "Monday–Friday, 11:00–23:00 Asia/Riyadh; end exclusive. Descriptive momentum refreshes every five minutes while StockSage is open. Qualified setup research still requires the verified US regular-session setup window."
+    nonisolated static let trackingPolicy = "Monday–Friday, 11:00–23:00 Asia/Riyadh; end exclusive. Streaming minute detection covers every dated eligible symbol while StockSage is open; fresh events require REST confirmation. Qualified setup research still requires the verified US regular-session setup window."
     private static var momentumOwner: UUID?
+    private static var confirmationWaiters: Set<StockSageSameDayResearch.Mode> = []
+    private static var lastConfirmationMode: StockSageSameDayResearch.Mode?
     private static var marketCache: (value: StockSageMomentum.Market, at: Date, key: String, isCurrent: @Sendable () -> Bool)?
 
     init(mode: StockSageSameDayResearch.Mode = .microcap, directory: URL? = nil,
@@ -77,7 +111,7 @@ import Combine
         var seen = Set<String>()
         let all = (candidates + watchlist).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
             .filter { !$0.isEmpty && seen.insert($0).inserted }
-        let selected = Array(all.filter { StockSageMassive.covers($0) }.prefix(24))
+        let selected = all.filter { StockSageMomentum.supportsMinutes($0) }
         return (selected, all.count, all.count - selected.count)
     }
 
@@ -156,7 +190,7 @@ import Combine
         }
     }
 
-    /// One bounded data refresh across both watchers. It never starts a model or consumes a setup.
+    /// Confirm at most four provisional events; never sweep the entire universe with serial REST calls.
     @discardableResult func refreshMomentum(candidates: [String], watchlist: [String], at now: Date,
         access: StockSageMassive.Access, transport: StockSageMassive.Transport? = nil,
         eligibleHeavy: Set<String> = [],
@@ -165,9 +199,12 @@ import Combine
         let captured = access.capture()
         let refreshGeneration = generation
         func active() -> Bool { !Task.isCancelled && self.generation == refreshGeneration && captured.isCurrent() && stillValid() && Self.trackingWindow(at: clock()) != nil }
-        guard mode.isAstra, Self.trackingWindow(at: now) != nil, active(), Self.momentumOwner == nil else { return false }
+        let selection = Self.momentumSelection(candidates: candidates, watchlist: watchlist)
+        guard mode.isAstra, Self.trackingWindow(at: now) != nil, active(), Self.momentumOwner == nil,
+              selection.symbols.count <= 4,
+              Self.lastConfirmationMode != mode || Self.confirmationWaiters.subtracting([mode]).isEmpty else { return false }
         let owner = UUID(); Self.momentumOwner = owner
-        defer { if Self.momentumOwner == owner { Self.momentumOwner = nil } }
+        defer { if Self.momentumOwner == owner { Self.momentumOwner = nil; Self.lastConfirmationMode = mode } }
         let pinned = StockSageMassive.Access(key: { captured.key }, credentialRevision: { nil }, policyRevision: { nil }, allowed: captured.isCurrent)
         let market: StockSageMomentum.Market
         if let cache = Self.marketCache, cache.key == captured.key, cache.isCurrent(),
@@ -178,7 +215,6 @@ import Combine
             guard active() else { return false }
             Self.marketCache = (market, now, captured.key, captured.isCurrent)
         }
-        let selection = Self.momentumSelection(candidates: candidates, watchlist: watchlist)
         var stocks: [StockSageMomentum.Stock] = []
         // Four outstanding symbol requests at most, including when both watchers are enabled.
         for start in stride(from: 0, to: selection.symbols.count, by: 4) {
@@ -206,9 +242,11 @@ import Combine
             nextMomentumCheck = clock().addingTimeInterval(Self.interval)
             return false
         }
-        marketMomentum = market; stockMomentum = stocks; eligibleHeavySymbols = eligibleHeavy.intersection(selection.symbols)
-        momentumStatus = "Tracking \(selection.symbols.count) of \(selection.total) selected candidate/watchlist symbols; \(selection.skipped) outside the 24-symbol bound or unsupported. \(eligibleHeavySymbols.count) have a matching dated cap classification for automatic alerts. Other watchlist momentum is descriptive only; cap classification is needed for alerts. Dated momentum is not entry qualification."
-        nextMomentumCheck = clock().addingTimeInterval(Self.interval)
+        marketMomentum = market
+        var retained = Dictionary(uniqueKeysWithValues: stockMomentum.map { ($0.symbol, $0) })
+        for stock in stocks { retained[stock.symbol] = stock }
+        stockMomentum = retained.values.sorted { $0.symbol < $1.symbol }
+        eligibleHeavySymbols = eligibleHeavy
         return true
     }
 
@@ -290,7 +328,9 @@ import Combine
         generation = UUID(); isEnabled = false; nextCheck = nil
         task?.cancel(); task = nil
         momentumTask?.cancel(); momentumTask = nil; nextMomentumCheck = nil
-        momentumReviewTask?.cancel(); momentumReviewTask = nil
+        #if os(macOS)
+        resetMomentumWork()
+        #endif
         momentumReviewsDeferred = 0
         eligibleHeavySymbols = []
         liveSymbols([])
@@ -302,107 +342,195 @@ import Combine
     }
 
     #if os(macOS)
-    private func handleHeavyMomentum(store: StockSageStore, access: StockSageMassive.Access,
-        stillValid: @escaping @MainActor () -> Bool) async {
-        guard let profile = mode.screenProfile, let market = marketMomentum else { return }
-        guard StockSageTelegram.shared.isReady else {
-            momentumAlertStatus = "Pair Telegram for heavy-momentum observations and Astra reviews. Descriptive tracking continues."
-            return
+    private func resetMomentumWork() {
+        momentumSession = UUID()
+        momentumConfirmationTask?.cancel(); momentumConfirmationTask = nil
+        momentumDeliveryTask?.cancel(); momentumDeliveryTask = nil
+        momentumReviewTask?.cancel(); momentumReviewTask = nil
+        revokedEvents += nominations.count + pendingAlerts.count + pendingReviews.count
+        nominations.removeAll(); attemptedNominations.removeAll()
+        pendingAlerts.removeAll(); pendingReviews.removeAll(); momentumFeed = nil
+        Self.confirmationWaiters.remove(mode)
+        if let ownedRun, research.isRunning, research.receipt?.id == ownedRun,
+           research.receipt?.checks.contains(where: { $0.momentumTrigger != nil }) == true { research.stop() }
+    }
+
+    private func updateMomentumWorkStatus() {
+        let alerts = Self.prune(&pendingAlerts, at: Date()), reviews = Self.prune(&pendingReviews, at: Date())
+        expiredObservations += alerts.expired; momentumReviewsDeferred += reviews.expired
+        revokedEvents += alerts.revoked + reviews.revoked
+        momentumWorkStatus = "Pending: \(nominations.count) confirmations, \(pendingAlerts.count) observations, \(pendingReviews.count) Astra reviews. \(expiredConfirmations) confirmations expired; \(rejectedConfirmations) did not confirm; \(expiredObservations) observations and \(momentumReviewsDeferred) reviews expired; \(revokedEvents) items revoked by a feed, classification, pairing or tracking change. No expired event is assessed."
+    }
+
+    /// The stream intake never waits for HTTP delivery or a model. Each worker retains its original feed generation.
+    private func confirmMomentum(store: StockSageStore, access: StockSageMassive.Access,
+        snapshot: StockSageMomentumStream.Snapshot, stillValid: @escaping @MainActor () -> Bool) {
+        guard momentumConfirmationTask == nil, let profile = mode.screenProfile else { return }
+        let session = momentumSession
+        let captured = access.capture()
+        let active: @MainActor () -> Bool = {
+            guard !Task.isCancelled, self.momentumSession == session, captured.isCurrent(), stillValid(),
+                  Self.trackingWindow(at: Date()) != nil, let current = self.momentumFeed,
+                  current.feedID == snapshot.feedID, current.configurationID == snapshot.configurationID else { return false }
+            return StockSageLiveStream.shared.isMomentumCurrent(current)
         }
-        let captured = access.capture(), pairing = StockSageTelegram.shared.pairingRevision
-        let run = generation
-        momentumReviewsDeferred = 0
-        func active() -> Bool {
-            !Task.isCancelled && self.generation == run && captured.isCurrent() && stillValid()
-                && Self.trackingWindow(at: Date()) != nil && StockSageTelegram.shared.isReady
-                && StockSageTelegram.shared.pairingRevision == pairing
-        }
-        for stock in stockMomentum {
-            guard active() else { return }
-            guard eligibleHeavySymbols.contains(stock.symbol), currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol) else { continue }
-            guard let trigger = stock.heavyMomentum(profile: profile, now: Date()),
-                  let alertID = Self.momentumID(trigger, mode: mode, purpose: .observation),
-                  let reviewID = Self.momentumID(trigger, mode: mode, purpose: .review),
-                  let summaryID = Self.momentumID(trigger, mode: mode, purpose: .reviewSummary),
-                  let text = Self.momentumAlert(trigger, mode: mode, at: Date()) else { continue }
-            let delivered = await StockSageTelegram.shared.send(text: text, deliveryID: alertID, stillValid: {
-                active() && self.currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol)
-                    && stock.heavyMomentum(profile: profile, now: Date()) == trigger
-            })
-            guard active() else { return }
-            switch delivered {
-            case .delivered: momentumAlertStatus = "Heavy-momentum observation sent. It is not a qualified trade."
-            case .alreadyAttempted: momentumAlertStatus = "This observation already has a saved Telegram attempt; no duplicate was sent."
-            case .blocked: momentumAlertStatus = "Telegram observation was blocked or expired; no delivery is claimed."
-            case .unknown: momentumAlertStatus = "Observation delivery is unconfirmed. Its saved attempt will not retry automatically."
+        momentumConfirmationTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.momentumSession == session {
+                    self.momentumConfirmationTask = nil; Self.confirmationWaiters.remove(self.mode)
+                    self.updateMomentumWorkStatus()
+                }
             }
-            guard stock.heavyMomentum(profile: profile, now: Date()) == trigger else { continue }
-            guard !research.savedReceipts.contains(where: { $0.checks.contains(where: { $0.setupID == reviewID }) }) else { continue }
-            guard momentumReviewTask == nil else { momentumReviewsDeferred += 1; continue }
-            let engine = research
-            momentumReviewTask = Task { [weak self] in
-                guard let self else { return }
-                var ownedReview: UUID?
-                defer {
-                    if self.generation == run {
-                        if let ownedReview, self.ownedRun == ownedReview { self.ownedRun = nil }
-                        self.momentumReviewTask = nil
-                    }
+            // Keep proxy context available even on quiet days; its original timestamp is preserved by the shared cache.
+            var needsMarket = self.marketMomentum.map { Date().timeIntervalSince($0.capturedAt) >= 120 } ?? true
+            while active(), !self.nominations.isEmpty || needsMarket {
+                let now = Date(), eligible = self.currentHeavySymbols(at: Date())
+                self.nominations.removeAll { candidate in
+                    if !eligible.contains(candidate.symbol) { self.revokedEvents += 1; return true }
+                    if !(0...180).contains(now.timeIntervalSince(candidate.at)) { self.expiredConfirmations += 1; return true }
+                    return false
                 }
-                while active(), StockSageSameDayResearch.anyRunning || StockSageHorizonResearch.shared.running != nil {
-                    guard stock.heavyMomentum(profile: profile, now: Date()) == trigger else {
-                        self.momentumAlertStatus = "Heavy-momentum observation was processed, but its Astra review expired while waiting for research capacity. No review claim or model call was made."
-                        return
-                    }
-                    self.momentumAlertStatus = "Heavy-momentum observation processed. One Astra review is waiting for research capacity while its source remains fresh."
-                    try? await Task.sleep(for: .milliseconds(250))
+                let batch = Array(self.nominations.prefix(4))
+                guard let batchSnapshot = self.momentumFeed else { return }
+                let batchActive: @MainActor () -> Bool = {
+                    active() && StockSageLiveStream.shared.isMomentumCurrent(batchSnapshot)
                 }
-                guard active(), self.currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol),
-                      stock.heavyMomentum(profile: profile, now: Date()) == trigger else { return }
-                let started = engine.startMomentum(store: store, trigger: trigger, stock: stock, market: market,
-                    setupID: reviewID, stillValid: {
-                        active() && self.currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol)
-                    }, admitSetup: { [weak self] id in
-                        guard let self, active(), id == reviewID, self.currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol),
-                              stock.heavyMomentum(profile: profile, now: Date()) == trigger else { return false }
+                Self.confirmationWaiters.insert(self.mode)
+                let refreshed = await self.refreshMomentum(candidates: batch.map(\.symbol), watchlist: [], at: now,
+                    access: access, eligibleHeavy: eligible, stillValid: batchActive)
+                guard active() else { return }
+                guard refreshed else { try? await Task.sleep(for: .seconds(1)); continue }
+                needsMarket = false
+                for candidate in batch {
+                    self.attemptedNominations[candidate.symbol] = candidate
+                    self.nominations.removeAll { $0 == candidate }
+                    guard let market = self.marketMomentum,
+                          let stock = self.stockMomentum.first(where: { $0.symbol == candidate.symbol }),
+                          stock.capturedAt >= now, let trigger = stock.heavyMomentum(profile: profile, now: Date()),
+                          trigger.at >= candidate.at,
+                          let id = Self.momentumID(trigger, mode: self.mode, purpose: .review) else {
+                        self.rejectedConfirmations += 1; continue
+                    }
+                    let pairing = StockSageTelegram.shared.pairingRevision
+                    let eventValid: @MainActor () -> Bool = {
+                        batchActive() && StockSageTelegram.shared.isReady && StockSageTelegram.shared.pairingRevision == pairing
+                            && self.currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol)
+                    }
+                    guard eventValid() else { continue }
+                    Self.enqueue(.init(id: id, stock: stock, market: market, trigger: trigger, stillValid: eventValid), into: &self.pendingAlerts)
+                }
+                self.deliverMomentum(store: store)
+                self.updateMomentumWorkStatus()
+                // Yield between bounded batches so the other cap mode can claim the shared four-request lease.
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func deliverMomentum(store: StockSageStore) {
+        guard momentumDeliveryTask == nil else { return }
+        let session = momentumSession
+        momentumDeliveryTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.momentumSession == session { self.momentumDeliveryTask = nil; self.updateMomentumWorkStatus() } }
+            while !Task.isCancelled, self.momentumSession == session, !self.pendingAlerts.isEmpty {
+                let event = self.pendingAlerts.removeFirst()
+                guard event.stillValid(), event.stock.heavyMomentum(profile: event.trigger.profile, now: Date()) == event.trigger,
+                      let alertID = Self.momentumID(event.trigger, mode: self.mode, purpose: .observation),
+                      let text = Self.momentumAlert(event.trigger, mode: self.mode, at: Date()) else {
+                    self.revokedEvents += 1; continue
+                }
+                let result = await StockSageTelegram.shared.send(text: text, deliveryID: alertID, stillValid: {
+                    event.stillValid() && event.stock.heavyMomentum(profile: event.trigger.profile, now: Date()) == event.trigger
+                })
+                guard !Task.isCancelled, self.momentumSession == session else { return }
+                switch result {
+                case .delivered: self.momentumAlertStatus = "Heavy-momentum observation sent. It is not a qualified trade."
+                case .alreadyAttempted: self.momentumAlertStatus = "This observation already has a saved Telegram attempt; no duplicate was sent."
+                case .blocked: self.momentumAlertStatus = "Telegram observation was blocked or expired; no delivery is claimed."
+                case .unknown: self.momentumAlertStatus = "Observation delivery is unconfirmed. Its saved attempt will not retry automatically."
+                }
+                guard event.stillValid(), event.stock.heavyMomentum(profile: event.trigger.profile, now: Date()) == event.trigger else {
+                    self.momentumReviewsDeferred += 1; continue
+                }
+                guard !self.research.savedReceipts.contains(where: { $0.checks.contains(where: { $0.setupID == event.id }) }) else { continue }
+                Self.enqueue(event, into: &self.pendingReviews)
+                self.reviewMomentum(store: store)
+                self.updateMomentumWorkStatus()
+            }
+        }
+    }
+
+    private func reviewMomentum(store: StockSageStore) {
+        guard momentumReviewTask == nil else { return }
+        let session = momentumSession, engine = research
+        momentumReviewTask = Task { [weak self] in
+            guard let self else { return }
+            var ownedReview: UUID?
+            defer {
+                if let ownedReview, self.ownedRun == ownedReview {
+                    if engine.isRunning, engine.receipt?.id == ownedReview { engine.stop() }
+                    self.ownedRun = nil
+                }
+                if self.momentumSession == session { self.momentumReviewTask = nil; self.updateMomentumWorkStatus() }
+            }
+            while !Task.isCancelled, self.momentumSession == session, !self.pendingReviews.isEmpty {
+                // Keep queued observations visible while shared research capacity is occupied.
+                self.pendingReviews.removeAll { event in
+                    if !event.stillValid() { self.revokedEvents += 1; return true }
+                    if event.stock.heavyMomentum(profile: event.trigger.profile, now: Date()) != event.trigger {
+                        self.momentumReviewsDeferred += 1; return true
+                    }
+                    return false
+                }
+                guard !self.pendingReviews.isEmpty else { return }
+                if StockSageSameDayResearch.anyRunning || StockSageHorizonResearch.shared.running != nil {
+                    self.updateMomentumWorkStatus()
+                    try? await Task.sleep(for: .milliseconds(250)); continue
+                }
+                let event = self.pendingReviews.removeFirst(), trigger = event.trigger, stock = event.stock
+                let started = engine.startMomentum(store: store, trigger: trigger, stock: stock, market: event.market,
+                    setupID: event.id, stillValid: event.stillValid, admitSetup: { id in
+                        guard event.stillValid(), id == event.id,
+                              stock.heavyMomentum(profile: trigger.profile, now: Date()) == trigger else { return false }
                         return self.claim(id)
                     })
                 guard started, let receiptID = engine.receipt?.id else {
-                    self.momentumAlertStatus = self.claimFailure ?? "Astra review did not start: its attempt is already saved or current admission was unavailable."
-                    return
+                    self.momentumAlertStatus = self.claimFailure ?? "Astra review did not start: its attempt was already saved or admission was unavailable."
+                    continue
                 }
                 ownedReview = receiptID; self.ownedRun = receiptID
-                while engine.isRunning, engine.receipt?.id == receiptID, active() {
+                while engine.isRunning, engine.receipt?.id == receiptID, event.stillValid() {
                     try? await Task.sleep(for: .milliseconds(250))
                 }
-                guard active() else {
-                    if self.ownedRun == receiptID, engine.isRunning, engine.receipt?.id == receiptID { engine.stop() }
-                    return
+                guard event.stillValid() else {
+                    if engine.isRunning, engine.receipt?.id == receiptID { engine.stop() }
+                    if self.ownedRun == receiptID { self.ownedRun = nil }
+                    self.revokedEvents += 1; continue
                 }
+                if self.ownedRun == receiptID { self.ownedRun = nil }; ownedReview = nil
                 let completed = engine.receipt?.id == receiptID ? engine.receipt : engine.savedReceipts.first { $0.id == receiptID }
                 guard let receipt = completed, receipt.id == receiptID, receipt.mode == self.mode,
                       receipt.finishedAt != nil, receipt.blocker == nil,
                       let check = receipt.checks.first, check.momentumTrigger == trigger,
                       check.codexAudit?.requestedModel == "gpt-6-astra", check.action != nil,
                       !check.qualified, check.scenario == nil, let reason = check.reason, let risk = check.risk,
-                      Self.trackingWindow(at: Date()) != nil else { return }
+                      let summaryID = Self.momentumID(trigger, mode: self.mode, purpose: .reviewSummary) else { continue }
                 let text = "StockSage · \(self.mode.title) · \(check.symbol)\nAstra heavy-momentum review — not a qualified trade\nObservation: \(trigger.at.ISO8601Format())\nOpinion: \(check.action ?? "unavailable")\n\(reason)\nRisk: \(risk)\nDated descriptive review only; no qualified entry, stop or target. See all evidence and limitations in StockSage."
                 let result = await StockSageTelegram.shared.send(text: text, deliveryID: summaryID, stillValid: {
-                    active() && self.currentHeavySymbols(at: Date(), only: stock.symbol).contains(stock.symbol)
-                        && (engine.receipt == receipt || engine.savedReceipts.contains(receipt))
+                    event.stillValid() && (engine.receipt == receipt || engine.savedReceipts.contains(receipt))
                         && (0...180).contains(Date().timeIntervalSince(trigger.at))
                 })
-                guard active() else { return }
+                guard !Task.isCancelled, self.momentumSession == session else { return }
                 switch result {
                 case .delivered: self.momentumAlertStatus = "Astra momentum review sent; no qualified trade or price plan."
                 case .alreadyAttempted: self.momentumAlertStatus = "This Astra review already has a saved delivery attempt."
                 case .blocked: self.momentumAlertStatus = "Astra review is saved; delivery was blocked or its observation expired."
                 case .unknown: self.momentumAlertStatus = "Astra review is saved; Telegram delivery is unconfirmed and will not retry automatically."
                 }
+                self.updateMomentumWorkStatus()
             }
-        }
-        if momentumReviewsDeferred > 0 {
-            momentumAlertStatus += " \(momentumReviewsDeferred) additional observations were not queued for Astra; only one pending review is retained per mode."
         }
     }
 
@@ -425,22 +553,42 @@ import Combine
                 let now = Date()
                 guard Self.trackingWindow(at: now) != nil else {
                     self.liveSymbols([])
+                    if self.momentumFeed != nil { self.resetMomentumWork() }
                     self.nextMomentumCheck = Self.nextTrackingStart(after: now)
                     self.momentumStatus = "Momentum paused outside Monday–Friday 11:00–23:00 Asia/Riyadh. Earlier observations remain dated."
                     try? await Task.sleep(for: .seconds(5)); continue
                 }
-                if let next = self.nextMomentumCheck, next > now {
-                    try? await Task.sleep(for: .seconds(min(5, next.timeIntervalSince(now)))); continue
+                let eligible = self.currentHeavySymbols(at: now)
+                self.eligibleHeavySymbols = eligible
+                self.liveSymbols(eligible.sorted())
+                let live = StockSageLiveStream.shared
+                live.start(symbols: [])
+                guard let profile = self.mode.screenProfile,
+                      let snapshot = await live.momentumSnapshot(symbols: eligible, profile: profile, now: now), active() else {
+                    if self.momentumFeed != nil { self.resetMomentumWork() }
+                    self.momentumStatus = "\(eligible.count) dated eligible symbols awaiting a current minute stream. Feed interruption or unavailable access cannot establish momentum. Load daily ratios in Stock screener if classifications are missing."
+                    self.updateMomentumWorkStatus()
+                    try? await Task.sleep(for: .seconds(5)); continue
                 }
-                let eligibleHeavy = self.currentHeavySymbols(at: now)
-                let candidates = Self.momentumCandidates(current: research.receipt, saved: research.savedReceipts, mode: self.mode)
-                    + eligibleHeavy.sorted()
-                let selection = Self.momentumSelection(candidates: candidates, watchlist: store.userSymbols)
-                self.liveSymbols(selection.symbols)
-                StockSageLiveStream.shared.start(symbols: [])
-                let refreshed = await self.refreshMomentum(candidates: candidates, watchlist: store.userSymbols, at: now,
-                    access: pinned, eligibleHeavy: eligibleHeavy, stillValid: active)
-                if refreshed { await self.handleHeavyMomentum(store: store, access: pinned, stillValid: active) }
+                if self.momentumFeed?.feedID != snapshot.feedID || self.momentumFeed?.configurationID != snapshot.configurationID {
+                    self.resetMomentumWork()
+                }
+                self.momentumFeed = snapshot
+                self.attemptedNominations = self.attemptedNominations.filter { eligible.contains($0.key) }
+                let candidates = Set(snapshot.candidates.map(\.symbol))
+                self.nominations.removeAll { candidate in
+                    if !candidates.contains(candidate.symbol) { self.revokedEvents += 1; return true }
+                    return false
+                }
+                for candidate in snapshot.candidates where self.attemptedNominations[candidate.symbol] != candidate {
+                    if let index = self.nominations.firstIndex(where: { $0.symbol == candidate.symbol }) { self.nominations[index] = candidate }
+                    else { self.nominations.append(candidate) }
+                }
+                self.stockMomentum = self.stockMomentum.filter { eligible.contains($0.symbol) }
+                self.momentumStatus = "Monitoring all \(eligible.count) dated eligible symbols: \(snapshot.ready) have twenty fresh complete positive-volume minutes; \(snapshot.warming) warming; \(snapshot.staleOrGapped) stale or gapped; \(snapshot.unsupported) unsupported. No 24-stock or display-row cutoff. Classifications missing from the loaded screener remain unknown; this is not the entire market. Streaming candidates require independent REST confirmation."
+                self.nextMomentumCheck = now.addingTimeInterval(5)
+                self.confirmMomentum(store: store, access: pinned, snapshot: snapshot, stillValid: active)
+                self.updateMomentumWorkStatus()
                 try? await Task.sleep(for: .seconds(5))
             }
             if self.generation == run { self.liveSymbols([]) }
