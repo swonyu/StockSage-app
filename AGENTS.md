@@ -80,3 +80,10 @@ implemented, tested, installed, and pending work; do not claim unrun checks or l
 model/provider readiness. This is part of the active work, not a scheduled task.
 Do not resend the PDF without an explicit request. The dated guide is a separate
 historical source snapshot, not the editable source for this living PDF.
+
+Owner update, 21 September 2026: the PDF must be **20 pages maximum**, including
+cover and contents, with readable type. Maintain the concise PDF source in
+`agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE_CONCISE.md` alongside the full living
+technical reference. Keep verified behavior and limitations in the concise guide;
+leave detailed historical receipts in the full reference. Check the page count,
+content and rendered pages before replacing the owner's PDF.
