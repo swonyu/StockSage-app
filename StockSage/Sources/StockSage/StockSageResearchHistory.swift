@@ -1253,9 +1253,13 @@ extension StockSageResearchHistory {
             return projectedPrediction(verdict)
         }
 
+        var hasAcceptedOpinion: Bool {
+            verdict?.value != nil && validationOutcome != .rejected && validationFailure == nil
+        }
+
         /// A price-measurement input, never insertion into Run.predictions or strict eligibility.
         fileprivate var measurementPrediction: Prediction? {
-            guard let verdict = verdict?.value, validationOutcome != .rejected, validationFailure == nil else { return nil }
+            guard hasAcceptedOpinion, let verdict = verdict?.value else { return nil }
             return projectedPrediction(verdict)
         }
 

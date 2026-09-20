@@ -323,6 +323,97 @@ struct StockSageChatTests {
         #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: suite) ?? [:]).isEqual(to: originalDefaults))
     }
 
+    @Test func savedHistoryDoesNotOfferOpinionReviewForRetainedRejectedVerdict() async throws {
+        try #require(StockSageStore.isRunningTests)
+        typealias H = StockSageResearchHistory
+        typealias R = StockSageHorizonResearch
+        let suite = "stocksage.history.native-accepted.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = H(storageURL: url, defaults: defaults)
+        let started = try #require(ISO8601DateFormatter().date(from: "2026-09-15T07:00:00Z"))
+        let rawFact = "Original public fixture evidence retained despite rejected model output."
+        let rawReason = "Original raw Buy case remains available for inspection."
+        let failure = "Original captured validation rejection."
+        var scan = R.Scan()
+        scan.at = started
+        scan.completedAt = started.addingTimeInterval(60)
+        scan.rankingFailure = "No strict comparison was completed for this fixture."
+        for (index, ticker) in ["REJECT", "HOLD"].enumerated() {
+            scan.listings.append(.init(ticker: ticker, name: "Saved \(ticker) fixture", market: "stocks",
+                locale: "us", active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS"))
+            scan.results[ticker] = .init(verdict: .init(action: index == 0 ? .buy : .hold,
+                reason: index == 0 ? rawReason : "Accepted neutral fixture opinion.",
+                risk: "Original uncertainty is retained.", evidence: ["F1"]),
+                facts: [rawFact], note: index == 0 ? failure : "Accepted fixture output.",
+                at: started.addingTimeInterval(Double(index)), model: "fixture-model",
+                validationOutcome: index == 0 ? .rejected : .validated,
+                validationFailure: index == 0 ? failure : nil)
+        }
+        let run = H.snapshot(startedAt: started, completedAt: started.addingTimeInterval(60), horizon: .week, scan: scan)
+        try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+        let archiveURL = directory.appendingPathComponent("full-checks/\(run.id.uuidString).json")
+        let originalBytes = try Data(contentsOf: archiveURL)
+        let reopened = H(storageURL: url, defaults: defaults)
+        let originalChecks = try #require(reopened.fullChecks(runID: run.id).checks)
+        try #require(originalChecks.checks.count == 2 && originalChecks.checks[0].verdict?.action == "Buy")
+        let view = NavigationStack { StockSageResearchHistoryDetail(history: reopened, runID: run.id) }
+            .defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
+        _ = try await capture(view, name: "stocksage-history-rejected-opinion", viewport: CGSize(width: 760, height: 680)) { root in
+            @MainActor func text(_ matching: (String) -> Bool) -> AnyObject? {
+                nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityRole?() == .staticText
+                        && nativeAccessibilityText(in: $0).components(separatedBy: "\n").contains(where: matching)
+                }
+            }
+            @MainActor func disclosure(_ matching: (String) -> Bool) -> AnyObject? {
+                nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityRole?() != .staticText && matching($0.accessibilityLabel?() ?? "")
+                }
+            }
+            let count = try await revealFormContent("saved opinion count", in: root, matching: {
+                text { $0.contains("saved checks ·") && $0.contains("accepted opinions") }
+            })
+            #expect(nativeAccessibilityText(in: count).contains("2 saved checks · 1 accepted opinions"),
+                    "Retained raw rejected output must not count as an accepted opinion")
+            let all = try await revealFormContent("all original checks disclosure", in: root, matching: {
+                disclosure { $0 == "Inspect all 2 original checks" }
+            })
+            try #require(all.accessibilityPerformPress?() == true)
+            let rejected = try await revealFormContent("rejected original check", in: root, matching: {
+                disclosure { $0 == "REJECT · Buy" }
+            })
+            try #require(rejected.accessibilityPerformPress?() == true)
+            let noOpinion = "No accepted opinion to score. The original failure and evidence remain below."
+            let review = "No price review recorded yet. Use Review all saved opinions in Saved research when settled sessions are available."
+            let status = try await revealFormContent("rejected opinion review status", in: root, matching: {
+                text { $0 == noOpinion || $0 == review }
+            })
+            #expect(nativeAccessibilityText(in: status).contains(noOpinion),
+                    "Rejected raw Buy must take the no-accepted-opinion branch")
+            let rejectedReviewPrompt = text { $0 == review }
+            #expect(rejectedReviewPrompt == nil,
+                    "The rejected row must not suggest that it is eligible for a saved-opinion review")
+            _ = try await revealFormContent("retained raw Buy reason", in: root, matching: { text { $0 == rawReason } })
+            let evidence = try await revealFormContent("operable evidence disclosure", in: root, matching: {
+                nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityRole?() == .button
+                        && ($0.accessibilityLabel?() ?? "").hasPrefix("Evidence captured ")
+                }
+            })
+            try #require(evidence.accessibilityPerformPress?() == true)
+            _ = try await revealFormContent("retained original evidence", in: root, matching: { text { $0 == "F1: \(rawFact)" } })
+        }
+        let after = try Data(contentsOf: archiveURL)
+        #expect(after == originalBytes && reopened.fullChecks(runID: run.id).checks == originalChecks)
+        #expect(originalChecks.checks[0].validationOutcome == .rejected && originalChecks.checks[0].validationFailure == failure)
+        #expect(originalChecks.checks[0].facts == [rawFact])
+        #expect(reopened.runs == [run] && !reopened.isChecking && reopened.lastError == nil)
+        #expect(reopened.opinionOutcomes(runID: run.id)?.isEmpty == true)
+    }
+
     @Test(.serialized, arguments: ["sameDay", "week", "fortnight", "library", "research", "chat", "home", "ideas", "markets", "watchlist", "portfolio", "alerts", "catalysts", "heatmap", "paper"], [900, 1300])
     func renderActualMacWorkspaceWithoutStartingServices(page: String, width: Int) async throws {
         try #require(StockSageStore.isRunningTests)

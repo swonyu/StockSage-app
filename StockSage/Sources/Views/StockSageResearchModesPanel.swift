@@ -965,11 +965,35 @@ struct StockSageResearchModesPanel: View {
                     }.font(.caption)
                 }
             } else { Text("This listing has not been checked. No opinion or price levels are assumed.") }
-        }.textSelection(.enabled).accessibilityElement(children: .contain)
+        }
+        #if os(macOS)
+        .disclosureGroupStyle(ResearchDetailDisclosureStyle())
+        #endif
+        .textSelection(.enabled).accessibilityElement(children: .contain)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    #if os(macOS)
+    /// A native List row otherwise renders these nested disclosures as inert headings.
+    private struct ResearchDetailDisclosureStyle: DisclosureGroupStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { configuration.isExpanded.toggle() } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2).accessibilityHidden(true)
+                        configuration.label
+                        Spacer(minLength: 0)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+                if configuration.isExpanded { configuration.content.padding(.leading, 16) }
+            }
+        }
+    }
+    #endif
 
     static func coverageSummary(_ coverage: [StockSageHorizonResearch.EvidenceCoverage]) -> String {
         guard !coverage.isEmpty else { return "Not captured" }

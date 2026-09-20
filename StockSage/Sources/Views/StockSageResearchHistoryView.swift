@@ -571,7 +571,7 @@ struct StockSageResearchHistoryDetail: View {
                         Text(fullChecks.message).font(.callout)
                             .foregroundStyle(fullChecks.state == .corrupt ? Color.orange : .secondary)
                         if let checks = fullChecks.checks {
-                            let accepted = checks.checks.filter { $0.verdict != nil }.count
+                            let accepted = checks.checks.filter(\.hasAcceptedOpinion).count
                             Text("\(checks.checks.count) saved checks · \(accepted) accepted opinions")
                                 .font(.callout).monospacedDigit()
                             if let opinionOutcomes {
@@ -686,7 +686,7 @@ struct StockSageResearchHistoryDetail: View {
 
     @ViewBuilder private func opinionReview(_ check: StockSageResearchHistory.CompletedCheck,
                                            run: StockSageResearchHistory.Run) -> some View {
-        if check.verdict == nil {
+        if !check.hasAcceptedOpinion {
             Text("No accepted opinion to score. The original failure and evidence remain below.")
                 .font(.callout).foregroundStyle(.secondary)
         } else if let receipt = opinionOutcomes?[check.listing.ticker] {
