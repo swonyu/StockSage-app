@@ -182,6 +182,80 @@ struct StockSageChatTests {
                 "Scrolling Settings must not change any preferences")
     }
 
+    @Test func secContactRequiresNativeSaveAndReloadsWithoutCommittingInvalidDrafts() async throws {
+        let suite = "stocksage.mac.sec-contact.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = StockSageDisclosureService.contactEmailKey
+        let contact = "research@example.com"
+        @MainActor func waitFor(_ ready: @MainActor () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            try #require(ready())
+        }
+        @MainActor func control(_ name: String, in root: NSView) -> AnyObject? {
+            nativeAccessibilityElements(in: root).first {
+                $0.accessibilityIdentifier?() == "settings.secContact.\(name)"
+            }
+        }
+        @MainActor func field(in root: NSView) throws -> NSTextField {
+            func editableFields(_ view: NSView) -> [NSTextField] {
+                if let field = view as? NSTextField, field.isEditable { return [field] }
+                return view.subviews.flatMap(editableFields)
+            }
+            let fields = editableFields(root)
+            try #require(fields.count == 1, "This isolated contact component has one native input")
+            return fields[0]
+        }
+        @MainActor func enter(_ value: String, in field: NSTextField) throws {
+            let window = try #require(field.window)
+            try #require(window.makeFirstResponder(field))
+            let editor = try #require(field.currentEditor() as? NSTextView)
+            editor.insertText(value, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+            window.makeFirstResponder(nil)
+        }
+        _ = try await capture(Form { StockSageSECContactField() }.formStyle(.grouped)
+            .defaultAppStorage(defaults), name: "stocksage-sec-contact-edit",
+            viewport: CGSize(width: 520, height: 400)) { root in
+            _ = try await revealFormContent("settings.secContact.email", in: root)
+            let email = try field(in: root)
+            #expect(email.stringValue.isEmpty && defaults.string(forKey: key) == nil)
+            #expect(control("save", in: root)?.isAccessibilityEnabled?() == false)
+            #expect(control("remove", in: root)?.isAccessibilityEnabled?() == false)
+            try enter("  \(contact)  ", in: email)
+            try await waitFor { control("save", in: root)?.isAccessibilityEnabled?() == true }
+            #expect(defaults.string(forKey: key) == nil, "Typing must change only the unsaved draft")
+            let save = try await revealFormContent("settings.secContact.save", in: root)
+            try #require(save.accessibilityPerformPress?() == true)
+            try await waitFor { defaults.string(forKey: key) == contact && email.stringValue == contact }
+            #expect(control("save", in: root)?.isAccessibilityEnabled?() == false)
+            try enter("research@@example.com", in: email)
+            try await waitFor {
+                email.stringValue == "research@@example.com"
+                    && control("save", in: root)?.isAccessibilityEnabled?() == false
+                    && nativeAccessibilityText(in: root).contains("Enter a valid contact email before saving.")
+            }
+            #expect(defaults.string(forKey: key) == contact, "An invalid draft must preserve the saved contact")
+        }
+        _ = try await capture(Form { StockSageSECContactField() }.formStyle(.grouped)
+            .defaultAppStorage(defaults), name: "stocksage-sec-contact-reopened",
+            viewport: CGSize(width: 520, height: 400)) { root in
+            _ = try await revealFormContent("settings.secContact.email", in: root)
+            let email = try field(in: root)
+            try await waitFor { email.stringValue == contact }
+            #expect(defaults.string(forKey: key) == contact, "Reopening must load the saved contact, not the invalid draft")
+            #expect(control("save", in: root)?.isAccessibilityEnabled?() == false)
+            let disclosure = try await revealFormContent("settings.secContact.disclosure", in: root)
+            #expect(nativeAccessibilityText(in: disclosure).contains("Saving does not verify access."))
+            let remove = try await revealFormContent("settings.secContact.remove", in: root)
+            try #require(remove.isAccessibilityEnabled?() == true)
+            try #require(remove.accessibilityPerformPress?() == true)
+            try await waitFor { defaults.string(forKey: key) == "" && email.stringValue.isEmpty }
+            #expect(control("save", in: root)?.isAccessibilityEnabled?() == false)
+            #expect(control("remove", in: root)?.isAccessibilityEnabled?() == false)
+        }
+    }
+
     @Test func browseSheetSearchClearAndCloseUseNativeControlsWithoutAddingSymbols() async throws {
         try #require(StockSageStore.isRunningTests)
         let suite = "stocksage.mac.browse.\(UUID().uuidString)"

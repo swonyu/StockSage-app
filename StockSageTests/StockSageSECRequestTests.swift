@@ -12,6 +12,40 @@ struct StockSageSECRequestTests {
     }
 
 
+    @Test(arguments: ["research@example.com", "  Research+sec@example.co.uk  "])
+    func contactIsDeclaredThroughTheActualSECRequest(raw: String) async throws {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = URL(string: "https://data.sec.gov/api/xbrl/companyfacts/CIK0000000123.json")!
+        let calls = Mutex(0)
+        let result = await D.fetch(url, transport: { request in
+            calls.withLock { $0 += 1 }
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == "StockSageX/1.0 " + normalized)
+            #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+            #expect(request.timeoutInterval == 15)
+            return Self.response(request, Data("{}".utf8))
+        }, allowed: { true }, contactEmail: raw)
+        #expect(try result.get() == Data("{}".utf8))
+        #expect(calls.withLock { $0 } == 1)
+        #expect(D.normalizedContactEmail(raw) == normalized)
+    }
+
+    @Test(arguments: ["", "GitHub swonyu", "a@example.com\r\nX-Injected: value", "a@example.com b@example.com",
+        "a@@example.com", ".a@example.com", "a..b@example.com", "a@example..com", "a@-example.com",
+        "a@example.com-", "a@localhost", "a@éxample.com", "a@exam_ple.com", String(repeating: "a", count: 65) + "@example.com"])
+    func invalidContactNeverEntersARequestHeader(raw: String) async throws {
+        let url = URL(string: "https://data.sec.gov/submissions/CIK0000000123.json")!
+        #expect(D.normalizedContactEmail(raw) == nil)
+        let calls = Mutex(0)
+        let result = await D.fetch(url, transport: { request in
+            calls.withLock { $0 += 1 }
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == "StockSageX/1.0 (personal research; contact via GitHub swonyu)")
+            #expect(request.value(forHTTPHeaderField: "X-Injected") == nil)
+            return Self.response(request, Data("{}".utf8))
+        }, allowed: { true }, contactEmail: raw)
+        #expect(calls.withLock { $0 } == 1)
+        #expect(try result.get() == Data("{}".utf8))
+    }
+
     @Test(arguments: ["P", "S"], ["A", "D", "X", "", "missing"])
     func insiderDirectionMustAgreeThroughActualSECRequests(code: String, flag: String) async throws {
         func row(_ code: String, _ flag: String, shares: Int) -> String {

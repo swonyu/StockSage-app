@@ -70,6 +70,9 @@ struct StockSageSettingsView: View {
 
             Section {
                 StockSageMassiveKeyField()
+                #if os(macOS)
+                StockSageSECContactField()
+                #endif
             } header: {
                 Text("Data sources")
             }
@@ -131,6 +134,62 @@ struct StockSageSettingsView: View {
         }
     }
 }
+
+#if os(macOS)
+/// Editing this public request-contact value never starts a request or reads credentials.
+struct StockSageSECContactField: View {
+    @AppStorage(StockSageDisclosureService.contactEmailKey) private var savedContact = ""
+    @State private var draft = ""
+
+    private var normalizedDraft: String? {
+        StockSageDisclosureService.normalizedContactEmail(draft)
+    }
+
+    private var status: String {
+        if !draft.isEmpty, normalizedDraft == nil { return "Enter a valid contact email before saving." }
+        if (normalizedDraft ?? draft) != savedContact { return "Changes are not saved." }
+        return savedContact.isEmpty ? "No SEC contact email saved." : "SEC contact email saved on this Mac."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("SEC contact email").font(.headline)
+            TextField("Contact email", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .accessibilityLabel("SEC contact email")
+                .accessibilityIdentifier("settings.secContact.email")
+                .onSubmit { saveContact() }
+            HStack(spacing: 8) {
+                Button("Save contact") { saveContact() }
+                    .disabled(normalizedDraft == nil || normalizedDraft == savedContact)
+                    .accessibilityIdentifier("settings.secContact.save")
+                Button("Remove saved contact", role: .destructive) {
+                    savedContact = ""
+                    draft = ""
+                }
+                .disabled(savedContact.isEmpty)
+                .accessibilityIdentifier("settings.secContact.remove")
+            }
+            Text(status)
+                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.secContact.status")
+            Text("Sent only as contact information with SEC requests; it is not an API key. Saving does not verify access. After saving, reopen Company quality to reload its SEC data.")
+                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.secContact.disclosure")
+        }
+        .onAppear { draft = savedContact }
+    }
+
+    private func saveContact() {
+        guard let value = normalizedDraft, value != savedContact else { return }
+        savedContact = value
+        draft = value
+    }
+}
+#endif
 
 #Preview {
     StockSageSettingsView()

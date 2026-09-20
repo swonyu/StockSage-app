@@ -54,13 +54,14 @@ enum StockSageDisclosureService {
 
     /// Fixed failure categories only; never retain raw errors or rejected response bodies.
     nonisolated static func fetch(_ url: URL, transport: Transport = Self.transport,
-        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed }) async -> Result<Data, RequestFailure> {
+        allowed: @Sendable () -> Bool = { ToolPolicy.isExternalAllowed },
+        contactEmail: String? = UserDefaults.standard.string(forKey: contactEmailKey)) async -> Result<Data, RequestFailure> {
         guard !Task.isCancelled else { return .failure(.cancelled) }
         guard allowed() else { return .failure(.accessDisabled) }
         guard validURL(url) else { return .failure(.invalidURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent(contactEmail: contactEmail), forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await transport(request)
             guard !Task.isCancelled else { return .failure(.cancelled) }
@@ -146,7 +147,36 @@ enum StockSageDisclosureService {
     /// politeness — undeclared clients get blocked.
     /// `nonisolated` so the nested `CIKMap` actor can read it off the main actor —
     /// same reason `StockSageQuoteService.ua` is nonisolated.
-    nonisolated static let ua = "StockSageX/1.0 (personal research; contact via GitHub swonyu)"
+    nonisolated static let contactEmailKey = "stocksage.sec.contactEmail"
+    nonisolated static var ua: String {
+        userAgent(contactEmail: UserDefaults.standard.string(forKey: contactEmailKey))
+    }
+
+    /// A local contact preference, never a provider credential or research fact.
+    nonisolated static func normalizedContactEmail(_ raw: String) -> String? {
+        let email = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = email.split(separator: "@", omittingEmptySubsequences: false)
+        guard email.utf8.count <= 254, parts.count == 2 else { return nil }
+        let local = parts[0], domain = parts[1]
+        let localCharacters = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!#$%&'*+-/=?^_`{|}~".utf8)
+        guard !local.isEmpty, local.utf8.count <= 64,
+              local.first != ".", local.last != ".", !local.contains(".."),
+              local.utf8.allSatisfy({ localCharacters.contains($0) }) else { return nil }
+        let labels = domain.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, labels.allSatisfy({ label in
+            !label.isEmpty && label.utf8.count <= 63 && label.first != "-" && label.last != "-"
+                && label.utf8.allSatisfy { (65...90).contains($0) || (97...122).contains($0)
+                    || (48...57).contains($0) || $0 == 45 }
+        }) else { return nil }
+        return email
+    }
+
+    nonisolated private static func userAgent(contactEmail: String?) -> String {
+        if let contactEmail, let email = normalizedContactEmail(contactEmail) {
+            return "StockSageX/1.0 \(email)"
+        }
+        return "StockSageX/1.0 (personal research; contact via GitHub swonyu)"
+    }
 
     // MARK: CIK lookup
 
