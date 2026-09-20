@@ -57,7 +57,8 @@ import Combine
     private(set) var claimFailure: String?
     private let directory: URL?
     private let requireWriter: () throws -> Void
-    static let interval: TimeInterval = 300
+    /// Shared pause after each periodic setup check; research capacity and session gates still apply.
+    static let interval: TimeInterval = 150
     nonisolated static let trackingPolicy = "Monday–Friday, 11:00–23:00 Asia/Riyadh; end exclusive. Streaming minute detection covers every dated eligible symbol while StockSage is open; fresh events require REST confirmation. Qualified setup research still requires the verified US regular-session setup window."
     private static var momentumOwner: UUID?
     private static var confirmationWaiters: Set<StockSageSameDayResearch.Mode> = []
@@ -239,7 +240,7 @@ import Combine
         guard active() else { return false }
         guard (0...180).contains(clock().timeIntervalSince(now)) else {
             momentumStatus = "Momentum collection exceeded its freshness window. Earlier observations remain dated; a later scheduled refresh will try again."
-            nextMomentumCheck = clock().addingTimeInterval(Self.interval)
+            nextMomentumCheck = clock().addingTimeInterval(5)
             return false
         }
         marketMomentum = market

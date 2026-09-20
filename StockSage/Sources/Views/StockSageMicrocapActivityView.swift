@@ -97,7 +97,7 @@ struct StockSageMicrocapActivityView: View {
             Text("Monday–Friday · 11:00 AM–11:00 PM Riyadh, including premarket, while StockSage is open and your Mac is awake. Confirmed heavy momentum can send a descriptive Telegram alert and queue a fresh-event Astra review. Reviews wait for research capacity and may expire before they run. A queued event is not a completed review or confirmed delivery.")
                 .font(.caption).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("New trade setups require the regular US session. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
+            Text("New trade setups require the regular US session. Automatic setup checks wait 2.5 minutes after each completed check and run when research capacity is available. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
                 .font(.caption).foregroundStyle(DS.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()

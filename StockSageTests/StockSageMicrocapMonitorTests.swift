@@ -24,6 +24,8 @@ import Testing
     }
 
     @Test func nextTrackingStartSkipsWeekendAndRejectsInvalidClock() throws {
+        #expect(StockSageMicrocapMonitor.interval == 150,
+                "Micro cap and Large cap share a 2.5-minute pause between completed automatic setup checks")
         let fridayClose = try #require(ISO8601DateFormatter().date(from: "2026-09-25T20:00:00Z"))
         #expect(StockSageMicrocapMonitor.nextTrackingStart(after: fridayClose)?.ISO8601Format() == "2026-09-28T08:00:00Z")
         #expect(StockSageMicrocapMonitor.trackingWindow(at: .init(timeIntervalSince1970: .nan)) == nil)
