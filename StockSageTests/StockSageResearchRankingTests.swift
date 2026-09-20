@@ -42,6 +42,16 @@ extension StockSageResearchRanking.Receipt {
     typealias Ranking = StockSageResearchRanking
     typealias Research = StockSageHorizonResearch
     private let at = Date(timeIntervalSince1970: 1_789_419_570)
+    @Test func promptVersionCompatibilityRetainsOriginalQualificationPolicies() {
+        #expect(Ranking.supports(version: 1, strictQualification: false))
+        #expect(!Ranking.supports(version: 1, strictQualification: true))
+        #expect(Ranking.supports(version: 2, strictQualification: true))
+        #expect(!Ranking.supports(version: 2, strictQualification: false))
+        #expect(Ranking.supports(version: 3, strictQualification: false))
+        #expect(Ranking.supports(version: 3, strictQualification: true))
+        #expect(!Ranking.supports(version: 4, strictQualification: false))
+        #expect(!Ranking.supports(version: 4, strictQualification: true))
+    }
     private var config: StockSageLocalModelServer.Config {
         .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "offline-ranking-fixture")
     }

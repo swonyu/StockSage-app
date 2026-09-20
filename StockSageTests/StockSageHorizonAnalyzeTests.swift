@@ -341,12 +341,13 @@ struct StockSageHorizonAnalyzeTests {
         let strictAnalysis = Research.preparedAnalysis(gathered, config: config, isOllama: true,
             allowed: { true }, modelTransport: { request in
                 let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
-                #expect(body.contains("Strict qualification v1") && body.contains("Be selective"))
+                #expect(body.contains("Strict qualification v1") && body.contains("no critical unresolved data gap"))
                 return Self.ok(Self.verdictPayload(action: "Buy"), request)
             }, evidenceIsCurrent: { _ in true }, qualify: true)
         let strict = await strictAnalysis(.fortnight)
         let qualified = try #require(strict.qualification)
-        #expect(strict.verdict?.action == .buy && strict.levels != nil && !qualified.isQualified)
+        #expect(strict.verdict?.action == .buy && strict.levels == nil && !qualified.isQualified,
+            "A failed strict screen must not substitute generic ATR entry/exit levels")
         #expect(strict.evidenceReceipt?.requiredKeys.contains("research.qualification.v1") == true)
         #expect(StockSageResearchQualification.valid(qualified, symbol: "ACME", horizon: Research.Horizon.fortnight.rawValue,
             at: strict.at, citedKeys: strict.evidenceReceipt?.citedKeys ?? []))
@@ -639,12 +640,12 @@ struct StockSageHorizonAnalyzeTests {
                 opens: opens, highs: opens, lows: closes, closes: closes, volumes: volumes, priceSource: .massiveDaily)
         }
         let ordinary = Research.historicalFacts(history(closes: [100,100,100], opens: [100,200,50], volumes: [10,10,10]))
-        #expect(ordinary.contains { $0.contains("1000.0 USD") })
-        #expect(ordinary.contains { $0.contains("mean absolute 75.0%") && $0.contains("largest absolute 100.0%") })
+        #expect(ordinary.contains { $0.text.contains("1000.0 USD") && $0.key == "history.dollarVolume" && $0.factClass == .market })
+        #expect(ordinary.contains { $0.text.contains("mean absolute 75.0%") && $0.text.contains("largest absolute 100.0%") && $0.key == "history.overnightGaps" && $0.factClass == .risk })
         let overflow = Research.historicalFacts(history(closes: [100,100,100], opens: [100,200,50], volumes: [.greatestFiniteMagnitude,10,10]))
-        #expect(overflow.count == 1 && overflow[0].hasPrefix("Historical open-to-prior-close gaps"))
+        #expect(overflow.count == 1 && overflow[0].key == "history.overnightGaps" && overflow[0].factClass == .risk)
         let gapOverflow = Research.historicalFacts(history(closes: [.leastNonzeroMagnitude,100,100], opens: [100,.greatestFiniteMagnitude,50], volumes: [10,10,10]))
-        #expect(gapOverflow.count == 1 && gapOverflow[0].hasPrefix("Historical average daily dollar volume"))
+        #expect(gapOverflow.count == 1 && gapOverflow[0].key == "history.dollarVolume" && gapOverflow[0].factClass == .market)
     }
 
     @Test func independentEarningsAndSECChecksKeepDatesAndDoNotClaimDocumentContents() async throws {
@@ -721,6 +722,12 @@ struct StockSageHorizonAnalyzeTests {
         #expect(facts.contains("SEC submissions metadata"))
         #expect(facts.contains("Historical average daily dollar volume"))
         #expect(facts.contains("Historical open-to-prior-close gaps"))
+        #expect(result.evidenceReceipt?.requiredKeys.contains("history.dollarVolume") == true)
+        #expect(result.evidenceReceipt?.requiredKeys.contains("history.overnightGaps") == true)
+        let liquidity = try #require(result.facts.firstIndex { $0.hasPrefix("Historical average daily dollar volume") })
+        let gaps = try #require(result.facts.firstIndex { $0.hasPrefix("Historical open-to-prior-close gaps") })
+        #expect(result.factClasses[liquidity] == .market)
+        #expect(result.factClasses[gaps] == .risk)
         #expect(facts.contains("Full filings were not retrieved"))
     }
 
@@ -786,7 +793,8 @@ struct StockSageHorizonAnalyzeTests {
             let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
             let messages = try #require(body["messages"] as? [[String: String]])
             let system = try #require(messages.first(where: { $0["role"] == "system" })?["content"])
-            #expect(system.contains("multi-session"), "The repair must retain the holding-horizon constraint")
+            #expect(system.contains("for a \(Research.Horizon.week.rawValue) holding horizon"),
+                    "The repair must retain the requested holding horizon")
             #expect(system.contains("same-session day-trading"))
             #expect(system.contains("beyond 14 trading days"))
             if calls == 1 {
@@ -868,10 +876,10 @@ struct StockSageHorizonAnalyzeTests {
             throw URLError(.cancelled) // Observe the real dispatch without a model or provider request.
         })
         #expect(sentSystem.contains("for a \(horizon.rawValue) holding horizon"))
-        #expect(sentSystem.contains("multi-session"))
+        #expect(sentSystem.contains("Manual only; no scheduled picks or automatic trading"))
         #expect(sentSystem.contains("Do not propose intraday or same-session day-trading strategies"))
         #expect(sentSystem.contains("beyond 14 trading days"))
-        #expect(sentSystem.contains("historical windows are background evidence"))
+        #expect(sentSystem.contains("longer history is background, not a holding horizon"))
         #expect(sentUser.contains(horizon.rawValue))
         #expect(sentUser.localizedCaseInsensitiveContains("Research only"))
     }
@@ -1056,5 +1064,74 @@ struct StockSageHorizonAnalyzeTests {
         // Levels are reference research output, explicitly not an order.
         #expect(result.note.localizedCaseInsensitiveContains("no order"))
         #expect(result.note.localizedCaseInsensitiveContains("unvalidated"))
+    }
+
+    @Test func coverageMapsLastHorizonCitationToItsExactOfferedSlot() async throws {
+        let result = await run(model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            let user = try #require(messages.last?["content"])
+            let last = try #require(user.split(separator: "\n").last { $0.hasPrefix("F") })
+            let reference = String(try #require(last.split(separator: ":").first))
+            let verdict = try JSONSerialization.data(withJSONObject: ["evidence": [reference], "action": "Hold",
+                "reason": "Mixed evidence", "risk": "Uncertain outlook"])
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["message": ["content": String(decoding: verdict, as: UTF8.self)], "done_reason": "stop"]), request)
+        })
+        #expect(result.verdict != nil)
+        let coverage = try #require(result.evidenceReceipt)
+        #expect(coverage.symbol == "ACME")
+        #expect(coverage.offeredKeys.count == result.facts.count)
+        #expect(coverage.citedKeys == ["nextEarnings.window"])
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("nextEarnings"))
+        #expect(coverage.missingOrUnknownRequiredKeys.contains("news.status"))
+    }
+
+    @Test func oversizedMandatorySourceStatePreventsModelDispatch() async {
+        // Deliberately malformed oversized input at an injected boundary; no external client runs.
+        let attempts = Array(repeating: StockSageNewsService.Attempt(provider: .massive, checkedAt: Date(),
+            status: .notChecked(.notRequested)), count: 250)
+        var calls = 0
+        let result = await run(news: { _ in .init(attempts: attempts) }, model: { request in
+            calls += 1
+            return Self.ok(Self.verdictPayload(), request)
+        })
+        #expect(calls == 0 && result.verdict == nil)
+        #expect(result.note.contains("mandatory horizon or source-status fact") || result.note.contains("Evidence exceeded the age limit"))
+    }
+
+    // MARK: The path runs, and what it sends is bounded
+
+    @Test(arguments: ["ETF", "CS"])
+    func productionPathPreservesProviderIdentityAndChecksApplicability(_ type: String) async throws {
+        let listing = Research.Listing(ticker: "ACME", name: "Fixture", market: "stocks", locale: "us",
+                                       active: true, type: type, currency_name: "usd", primary_exchange: "XNYS")
+        var sentUser = ""
+        let result = await run(listing: listing, model: { request in
+            let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            sentUser = messages.last?["content"] ?? ""
+            let draft = #"{"evidence":["F1"],"action":"Hold","reason":"Analyst consensus is mixed","risk":"Market risk"}"#
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": StockSageModelHarnessTests.ollamaFixtureModel,
+                "message": ["content": draft], "done_reason": "stop"]), request)
+        })
+        #expect(sentUser.contains("provider type " + type))
+        #expect(sentUser.components(separatedBy: "Instrument identity from Massive").count == 2)
+        #expect(result.referenceClose != nil)
+        if type == "ETF" {
+            #expect(result.verdict == nil)
+            #expect(result.validationFailure == "instrumentApplicability")
+        } else { #expect(result.verdict != nil) }
+    }
+
+    @Test func anInvalidNumericClaimIsMarkedRejectedWithTheValidatorReason() async throws {
+        let invalid = try! JSONSerialization.data(withJSONObject: [
+            "model": StockSageModelHarnessTests.ollamaFixtureModel,
+            "message": ["content": #"{"evidence":["F1"],"action":"Hold","reason":"Expected profit 999%","risk":"The setup can reverse."}"#],
+            "done_reason": "stop",
+        ])
+        let result = await run(model: { Self.ok(invalid, $0) })
+        #expect(result.verdict == nil)
+        #expect(result.validationOutcome == .rejected)
+        #expect(result.validationFailure == StockSageAIAssessment.ValidationFailure.foreignNumber.rawValue)
     }
 }

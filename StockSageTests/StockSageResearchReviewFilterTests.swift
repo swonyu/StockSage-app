@@ -61,11 +61,54 @@ import Foundation
         #expect(F().matchingPredictions(in: value).count == 2)
     }
 
+    @Test func completedRunsWithoutPicksRemainVisibleWithoutPredictionFilters() {
+        let empty = run([])
+        #expect(F().matches(empty))
+        #expect(F(horizon: .week).matches(empty))
+        #expect(!F(horizon: .fortnight).matches(empty))
+        #expect(!F(action: .buy).matches(empty))
+        #expect(!F(quality: .notAssessed).matches(empty))
+        #expect(!F(insider: .notKnown).matches(empty))
+        #expect(!F(outcome: .active).matches(empty))
+    }
+
+    @Test func failedComparisonsRemainVisibleForInspection() {
+        let failed = H.Run(id: UUID(), startedAt: at.addingTimeInterval(-60),
+            completedAt: at, horizon: .week, predictions: [],
+            coverage: .init(requested: 500, checked: 500, incomplete: 61,
+                            buyCount: 66, selection: nil),
+            rankingFailure: "The model could not complete the research comparison.")
+        #expect(F().matches(failed))
+        #expect(F(horizon: .week).matches(failed))
+    }
+
     @Test func actionAndHorizonNarrowIndependently() {
         let value = run([prediction("AAA"), prediction("BBB", action: "Strong Buy")])
         #expect(F(action: .strongBuy).matchingPredictions(in: value).map(\.symbol) == ["BBB"])
         #expect(F(horizon: .fortnight).matchingPredictions(in: value).isEmpty)
         #expect(F(horizon: .week, action: .buy).matchingPredictions(in: value).map(\.symbol) == ["AAA"])
+    }
+
+    @Test func searchFindsSavedSymbolsOrCompaniesAndCombinesWithFacets() {
+        let value = run([prediction("AAA"), prediction("BBB", action: "Strong Buy")])
+        #expect(F(query: " aaA ").matchingPredictions(in: value).map(\.symbol) == ["AAA"])
+        #expect(F(query: "bbb co").matchingPredictions(in: value).map(\.symbol) == ["BBB"])
+        #expect(!F(action: .buy, query: "BBB").matches(value))
+        #expect(!F(query: "missing").matches(value))
+        #expect(F(query: "  \n").matches(run([])))
+        #expect(!F(query: "AAA").matches(run([])))
+    }
+
+    @Test func exportedResearchRetainsOriginalEvidenceAndDates() throws {
+        let saved = run([prediction("AAA", insider: observation(rows: 1), coverage: "answered")])
+        let exportedAt = at.addingTimeInterval(86_400.123456)
+        let data = try StockSageResearchExport.data(for: saved, at: exportedAt)
+        let decoder = JSONDecoder()
+        let report = try decoder.decode(StockSageResearchExport.Report.self, from: data)
+        #expect(report.schemaVersion == 1 && report.exportedAt == exportedAt)
+        #expect(report.run == saved)
+        #expect(report.run.predictions[0].insiderEvidence == saved.predictions[0].insiderEvidence)
+        #expect(report.scope.contains("not live") && report.scope.contains("not a complete scan"))
     }
 
     // The heart of it: three insider outcomes that must never collapse into two.

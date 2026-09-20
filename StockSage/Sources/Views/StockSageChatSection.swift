@@ -535,11 +535,16 @@ struct StockSageChatSection: View {
 
     static func connectionDisclosure(_ config: StockSageLocalModelServer.Config?) -> String {
         guard let config else { return modelSetupGuidance }
+        #if os(iOS)
+        let deviceGuidance = modelSetupGuidance + " "
+        #else
+        let deviceGuidance = ""
+        #endif
         let destination = config.requiresExternalAccess
             ? "Uses your selected remote model server. Your question, recent Chat history, selected news and private WhatsApp export excerpts leave this device for the model."
             : "Uses your configured local model server. Explicit ticker questions add selected news and private WhatsApp export leads for the first selected ticker only. Only that ticker goes to news providers; group text stays local."
         let connection = config.isRunPodEndpoint ? " The RunPod connection uses an encrypted SSH tunnel." : ""
-        return destination + connection + " News uses Massive when web access is enabled; EODHD is disabled. No broker credentials, account identifiers, journal notes, live WhatsApp connection or training are included. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation."
+        return deviceGuidance + destination + connection + " News uses Massive when web access is enabled; EODHD is disabled. No broker credentials, account identifiers, journal notes, live WhatsApp connection or training are included. Do not paste secrets. The app attempts to save the latest 24 turns locally and exclude them from backup. Check any storage warning before closing Chat. Clear history removes this app's conversation."
     }
 
     private static func sourceCard(_ source: StockSageChat.Source) -> some View {

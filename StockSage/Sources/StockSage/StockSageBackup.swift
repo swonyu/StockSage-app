@@ -11,14 +11,14 @@ import Foundation
 //
 // HONESTY FLOOR: merge missing record IDs only; existing records win, never guess or
 // overwrite quantities/costs. The two file pickers share the same application path.
-// ponytail: four UserDefaults writes are not crash-atomic or cross-process locked;
-// a transactional store is needed for that stronger guarantee.
+// A successful restore commits all four collections and record-deletion markers as
+// one atomic image; subsequent reads/edits use that image instead of legacy preferences.
 enum StockSageBackup {
 
     // MARK: Payload
 
     struct BackupPayload: Codable, Sendable {
-        var schemaVersion: Int = 1
+        var schemaVersion: Int = 2
         var exportedAt: Date
         var trades: [TradeRecord]
         var positions: [PortfolioPosition]
@@ -35,7 +35,9 @@ enum StockSageBackup {
         case invalidPosition(index: Int)
         case invalidSymbol(index: Int, reason: String)
         case invalidPriceAlert(index: Int, reason: String)
+        case conflictingRecordID(collection: String, index: Int)
         case restoreFailed(String)
+        case restoreDurabilityUnconfirmed
 
         var errorDescription: String? {
             switch self {
@@ -44,7 +46,7 @@ enum StockSageBackup {
             case .sourceReadFailed(let collection):
                 return "Couldn't read the saved \(collection). Existing data was preserved."
             case .unsupportedSchemaVersion(let found, let supported):
-                return "This backup file is schema version \(found); this app reads version \(supported). It may be from a newer or older version of StockSage."
+                return "This backup file is schema version \(found); this app reads versions 1 through \(supported). It may be from a newer or older version of StockSage."
             case .decodeFailed(let reason):
                 return "Couldn't read this backup file — it may be corrupt or not a StockSage backup. (\(reason))"
             case .invalidJournalRecord(let index, let reason):
@@ -55,20 +57,24 @@ enum StockSageBackup {
                 return "Invalid watchlist entry \(index): \(reason) Nothing was restored."
             case .invalidPriceAlert(let index, let reason):
                 return "Invalid price alert \(index): \(reason) Nothing was restored."
+            case .conflictingRecordID(let collection, let index):
+                return "Invalid \(collection) record \(index): its ID conflicts with an earlier record. Nothing was restored."
             case .restoreFailed(let reason):
                 return "Couldn't prepare the saved records: \(reason) Nothing was restored."
+            case .restoreDurabilityUnconfirmed:
+                return StockSageRecordStorage.Failure.durabilityUnconfirmed.localizedDescription
             }
         }
     }
 
-    /// Current schema version this build writes and reads. Bump when `BackupPayload`'s
-    /// shape changes in a way older readers can't handle.
-    static let currentSchemaVersion = 1
+    /// Schema 2 preserves Date's exact seconds since 2001-01-01T00:00:00Z.
+    /// Schema 1's ISO-8601 dates remain readable at their original second precision.
+    static let currentSchemaVersion = 2
 
     // MARK: Export
 
     /// Read committed sources at the action, including after a native save panel returns.
-    /// These sequential defaults reads are not a cross-process transactional snapshot.
+    /// Restored profiles read the leased atomic image; legacy profiles retain their preferences.
     @MainActor static func save(to url: URL, journal: StockSageJournalStore,
                                 portfolio: StockSagePortfolio, store: StockSageStore) throws {
         let data = try export(journal: journal, portfolio: portfolio, store: store)
@@ -89,7 +95,7 @@ enum StockSageBackup {
         try data.write(to: url, options: .atomic)
     }
 
-    /// Builds a pretty-printed, ISO-8601-dated JSON snapshot of everything passed in.
+    /// Builds a pretty-printed JSON snapshot with lossless Foundation Date values.
     /// Pure value encoder for fixtures and recovery, including retained invalid closures.
     /// Native full-backup actions use the store-taking overload to check committed sources.
     static func export(trades: [TradeRecord], positions: [PortfolioPosition], userSymbols: [String],
@@ -104,7 +110,7 @@ enum StockSageBackup {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .deferredToDate
         do { return try encoder.encode(payload) }
         catch { throw BackupError.encodeFailed }
     }
@@ -132,19 +138,21 @@ enum StockSageBackup {
                 let trades = try journal.prepareBackupImport(payload.trades)
                 let positions = try portfolio.prepareBackupImport(payload.positions)
                 let symbols = try store.prepareBackupImport(payload.userSymbols)
-                let alerts = try payload.priceAlerts.map { try store.preparePriceAlertBackupImport($0) }
-                // All decoding, reconciliation and encoding succeeded; no await between writes.
-                try trades.apply()
-                try positions.apply()
-                symbols.apply()
-                alerts?.apply()
+                // Old backups omit alerts; retain their committed records and refresh stale memory.
+                let alerts = try store.preparePriceAlertBackupImport(payload.priceAlerts ?? [])
+                // Validation/preparation is complete before the one durable commit and publication.
+                let warning = try StockSageRecordStorage.commit([trades, positions, symbols, alerts])
+                if warning != nil { return .failure(.restoreDurabilityUnconfirmed) }
                 let alertCount = payload.priceAlerts?.count ?? 0
-                let alertsAdded = alerts?.added ?? 0
+                let alertsAdded = alerts.added
                 return .success(RestoreSummary(trades: trades.added, positions: positions.added,
                     symbols: symbols.added, priceAlerts: alertsAdded,
                     skipped: payload.trades.count + payload.positions.count + payload.userSymbols.count
                         + alertCount - trades.added - positions.added - symbols.added - alertsAdded))
             } catch let error as BackupError {
+                if case .sourceReadFailed = error {
+                    return .failure(.restoreFailed(error.localizedDescription))
+                }
                 return .failure(error)
             } catch {
                 return .failure(.restoreFailed(error.localizedDescription))
@@ -155,22 +163,20 @@ enum StockSageBackup {
     /// Decode/validate only, with watchlist normalization. Use the store-taking overload
     /// to apply all four collections; this overload never writes any state.
     static func restore(from data: Data) -> Result<BackupPayload, BackupError> {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
         // Schema version is checked from the raw JSON first (via a minimal probe struct
         // that only cares about that one field), so a version mismatch reports as
         // `unsupportedSchemaVersion` even for a future shape whose other fields wouldn't
         // otherwise decode under this build's BackupPayload.
         struct SchemaProbe: Decodable { let schemaVersion: Int }
-        if let probe = try? JSONDecoder().decode(SchemaProbe.self, from: data),
-           probe.schemaVersion != currentSchemaVersion {
-            return .failure(.unsupportedSchemaVersion(found: probe.schemaVersion, supported: currentSchemaVersion))
-        }
         do {
-            var payload = try decoder.decode(BackupPayload.self, from: data)
-            guard payload.schemaVersion == currentSchemaVersion else {
-                return .failure(.unsupportedSchemaVersion(found: payload.schemaVersion, supported: currentSchemaVersion))
+            let version = try JSONDecoder().decode(SchemaProbe.self, from: data).schemaVersion
+            guard (1...currentSchemaVersion).contains(version) else {
+                return .failure(.unsupportedSchemaVersion(found: version, supported: currentSchemaVersion))
             }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = version == 1 ? .iso8601 : .deferredToDate
+            var payload = try decoder.decode(BackupPayload.self, from: data)
+            var seenTrades: [UUID: TradeRecord] = [:]
             for (index, trade) in payload.trades.enumerated() {
                 if let error = trade.ownerJournalError { return .failure(.invalidJournalRecord(index: index + 1, reason: error)) }
                 guard !trade.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -180,12 +186,21 @@ enum StockSageBackup {
                       trade.conviction.map({ $0.isFinite && (0...1).contains($0) }) ?? true else {
                     return .failure(.invalidJournalRecord(index: index + 1, reason: "Invalid ticker, price, size or conviction."))
                 }
+                if let prior = seenTrades[trade.id], prior != trade {
+                    return .failure(.conflictingRecordID(collection: "journal", index: index + 1))
+                }
+                seenTrades[trade.id] = trade
             }
+            var seenPositions: [UUID: PortfolioPosition] = [:]
             for (index, position) in payload.positions.enumerated() {
                 guard !position.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       position.shares > 0, position.shares.isFinite,
                       position.costBasis >= 0, position.costBasis.isFinite,
                       position.totalCost.isFinite else { return .failure(.invalidPosition(index: index + 1)) }
+                if let prior = seenPositions[position.id], prior != position {
+                    return .failure(.conflictingRecordID(collection: "portfolio", index: index + 1))
+                }
+                seenPositions[position.id] = position
             }
             for (index, raw) in payload.userSymbols.enumerated() {
                 let validated = StockSageStore.validateNewSymbol(raw, alreadyTracked: [])

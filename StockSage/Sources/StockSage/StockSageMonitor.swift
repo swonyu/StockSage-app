@@ -388,7 +388,9 @@ final class StockSageMonitor: ObservableObject {
         // Muted type: check nothing, consume nothing — the user's armed alerts stay armed.
         guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { return }
         let armed = currentAlerts().filter { $0.isArmed }
-        guard !armed.isEmpty else { return }
+        // One process owns both delivery and its persisted one-shot latch. Checking only
+        // when saving would let another copy deliver the same alert before its write fails.
+        guard (try? StockSageRecordWriter.require(defaults)) != nil, !armed.isEmpty else { return }
         let q = await fetchQuotes(Array(Set(armed.map { $0.symbol })))
         // CONCURRENCY #2 (L3-09): a stop() during the fetch await above must not let this cycle
         // push a one-shot price alert — same idiom as runCycle's post-await guards. Without this,

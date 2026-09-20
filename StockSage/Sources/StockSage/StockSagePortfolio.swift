@@ -77,7 +77,7 @@ final class StockSagePortfolio: ObservableObject {
 
     /// Validated backup lots keep their IDs. Never call add() here: it creates a fresh ID,
     /// which would duplicate every holding on repeat restore and erase lot provenance.
-    func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> (added: Int, apply: () throws -> Void) {
+    func prepareBackupImport(_ incoming: [PortfolioPosition]) throws -> StockSageRecordStorage.PreparedImport {
         try StockSageRecordWriter.require(defaults)
         let disk = try deletions.read(PortfolioPosition.self)
         var merged = positions.filter { !deletions.contains($0.id) }
@@ -87,12 +87,12 @@ final class StockSagePortfolio: ObservableObject {
         merged.append(contentsOf: additions)
         let data = try JSONEncoder().encode(merged)
         let records = merged
-        return (additions.count, {
-            try self.deletions.restore(Set(additions.map(\.id)))
-            self.defaults.set(data, forKey: Self.key)
+        let changes = deletions.restorationChanges(Set(additions.map(\.id)))
+            + [StockSageRecordStorage.Change(key: Self.key, value: .data(data))]
+        return .init(defaults: defaults, added: additions.count, changes: changes, publish: { warning in
             self.positions = records
             self.hasLoadedRecords = true
-            self.lastError = nil
+            self.lastError = warning
         })
     }
 
@@ -118,12 +118,15 @@ final class StockSagePortfolio: ObservableObject {
         guard let data = try? JSONEncoder().encode(records) else {
             lastError = "Couldn't encode the portfolio; the previous saved records were kept."; return false
         }
-        do { try deletions.mark(removed) }
+        let warning: String?
+        do {
+            warning = try StockSageRecordStorage.update(deletions.deletionChanges(removed)
+                + [.init(key: Self.key, value: .data(data))], defaults: defaults)
+        }
         catch { lastError = error.localizedDescription; return false }
-        defaults.set(data, forKey: Self.key)
         positions = records
         hasLoadedRecords = true
-        lastError = nil
+        lastError = warning
         return true
     }
 

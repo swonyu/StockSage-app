@@ -574,6 +574,139 @@ struct StockSageLocalModelServerTests {
         if case .success = result { Issue.record("Wrong model response was accepted under the configured 9B identity") }
     }
 
+    @Test(arguments: [StockSageLocalModelServer.lmStudioURL, StockSageLocalModelServer.runPodURL])
+    @MainActor func managedResearchRejectsRepetitiveJunkBeforeLengthRetry(url: String) async throws {
+        let config = try #require(S.config(url: url, model: S.gemmaModel))
+        let schema = Data(#"{"type":"object"}"#.utf8)
+        for (junk, reason) in [(String(repeating: "Buy ", count: 8_000), S.DegenerateReason.repeatedTokenSequence),
+                               (String(repeating: "x", count: 32_000), .repeatedCharacterRun)] {
+            let events = ModelAttemptRecorder()
+            var calls = 0
+            let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+                maxTokens: 192, jsonSchema: schema, phase: "research",
+                attemptObserver: { await events.append($0) }, externalAllowed: { true }, transport: { request in
+                    calls += 1
+                    #expect(request.httpMethod == "POST")
+                    let body = try JSONSerialization.data(withJSONObject: ["model": config.model,
+                        "choices": [["message": ["content": junk], "finish_reason": "length"]]])
+                    return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                })
+            guard case .failure(let failure) = result else {
+                Issue.record("Repetitive research output was accepted"); continue
+            }
+            #expect(calls == 1, "Cyclic junk must not spend the length-recovery retry")
+            #expect(failure.diagnostic.category == .degenerateOutput && failure.diagnostic.degenerateReason == reason)
+            #expect(failure.diagnostic.outputLimitRetries == 0 && failure.diagnostic.retryReason == nil)
+            #expect(S.cause(for: failure.diagnostic) == .unreadable)
+            #expect(failure.diagnostic.summary.contains("degenerate=\(reason.rawValue)"))
+            let captured = await events.snapshot()
+            try #require(captured.count == 2)
+            let start = captured[0], terminal = captured[1]
+            #expect(captured.map(\.stage) == [.started, .finished] && captured.map(\.ordinal) == [1, 1])
+            #expect(start.phase == "research" && start.callID == terminal.callID && terminal.endedAt != nil)
+            #expect(!start.transportStarted && terminal.transportStarted)
+            #expect(terminal.diagnostic == failure.diagnostic && terminal.diagnostic?.finish == .tokenLimit)
+            #expect(terminal.responseBody?.count == 24_000 && terminal.responseBodyTruncated)
+            #expect((terminal.responseBodyBytes ?? 0) > 24_000 && terminal.schema != nil)
+            let data = try JSONEncoder().encode(captured)
+            #expect(try JSONDecoder().decode([S.ModelAttemptEvent].self, from: data) == captured)
+        }
+    }
+
+    @Test func legitimateRepeatedTermsAreNotClassifiedAsDegenerate() {
+        let text = "The report repeats Buy when describing both the bullish Buy case and the cautious Buy case; each use refers to a different context and evidence record."
+        #expect(S.degenerateOutputReason(in: text) == nil)
+        let structured = "{\"risk\": \"" + String(repeating: "F1 ", count: 32) + "\"}"
+        #expect(S.degenerateOutputReason(in: structured) == nil)
+        #expect(S.degenerateOutputReason(in: String(repeating: "Buy based on F1 ", count: 8)) == .repeatedTokenSequence)
+        #expect(S.degenerateOutputReason(in: "{\"risk\":\"" + String(repeating: "x", count: 48) + "\"}") == .repeatedCharacterRun)
+    }
+
+    @Test @MainActor func wrongModelIdentityPrecedesDegenerateOutputRejection() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        var calls = 0
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+            jsonSchema: Data(#"{"type":"object"}"#.utf8), transport: { request in
+                calls += 1
+                let body = try JSONSerialization.data(withJSONObject: ["model": "wrong-model",
+                    "choices": [["message": ["content": String(repeating: "Buy ", count: 64)], "finish_reason": "length"]]])
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        guard case .failure(let failure) = result else { Issue.record("Wrong model response was accepted"); return }
+        #expect(calls == 1 && failure.diagnostic.category == .responseShape && failure.diagnostic.degenerateReason == nil)
+    }
+
+    @Test @MainActor func lmStudioWithoutSchemaLeavesRepeatedChatTextAccepted() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        let inventory = String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
+        let text = String(repeating: "Buy ", count: 128)
+        let events = ModelAttemptRecorder()
+        var posts = 0
+        let result = await S.completeDetailed(config, isOllama: false, system: "chat", user: "question",
+            attemptObserver: { await events.append($0) }, transport: { request in
+                if request.httpMethod == "GET" { return StockSageManagedModelLifecycleTests.response(request, inventory) }
+                posts += 1
+                let body = try JSONSerialization.data(withJSONObject: ["model": config.model,
+                    "choices": [["message": ["content": text], "finish_reason": "stop"]]])
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let completion = try result.get()
+        #expect(posts == 1 && completion.text == text.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(completion.diagnostic.category == nil && completion.diagnostic.degenerateReason == nil)
+        let captured = await events.snapshot()
+        #expect(captured.count == 2 && captured.allSatisfy { $0.schema == nil && !$0.schemaTruncated })
+    }
+
+    @Test @MainActor func structuredRepeatedTailStillGetsUsefulLengthRetry() async throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        let schema = Data(#"{"type":"object"}"#.utf8)
+        let inventory = String(decoding: try JSONSerialization.data(withJSONObject: Self.gemmaInventory()), as: UTF8.self)
+        let tail = #"{"risk":""# + String(repeating: "F1 ", count: 64) + #""}"#
+        let complete = #"{"evidence":["F1"],"action":"Buy","reason":"Support holds.","risk":"The setup can reverse."}"#
+        var outputs: [Int] = []
+        let events = ModelAttemptRecorder()
+        let result = await S.completeDetailed(config, isOllama: false, system: "instructions", user: "facts",
+            maxTokens: 192, jsonSchema: schema, phase: "research",
+            attemptObserver: { await events.append($0) }, transport: { request in
+                if request.httpMethod == "GET" { return StockSageManagedModelLifecycleTests.response(request, inventory) }
+                let body = try #require(request.httpBody)
+                let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                outputs.append(try #require(object["max_tokens"] as? Int))
+                let content = outputs.count == 1 ? tail : complete
+                let finish = outputs.count == 1 ? "length" : "stop"
+                let reply = try JSONSerialization.data(withJSONObject: ["model": config.model,
+                    "choices": [["message": ["content": content], "finish_reason": finish]]])
+                return (reply, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let completion = try result.get()
+        #expect(completion.text == complete && outputs == [192, 384])
+        #expect(completion.diagnostic.outputLimitRetries == 1 && completion.diagnostic.degenerateReason == nil)
+        let captured = await events.snapshot()
+        try #require(captured.count == 4)
+        #expect(captured.map(\.stage) == [.started, .finished, .started, .finished])
+        #expect(captured.map(\.ordinal) == [1, 1, 2, 2] && Set(captured.map(\.callID)).count == 2)
+        #expect(captured[1].diagnostic?.category == nil && captured[1].diagnostic?.finish == .tokenLimit)
+    }
+
+    @Test @MainActor func genericChatKeepsItsTruncatedPartialOutput() async throws {
+        let config = try #require(S.config(url: "http://127.0.0.1:11434", model: "qwen3.8"))
+        let text = String(repeating: "Buy ", count: 32)
+        let events = ModelAttemptRecorder()
+        var calls = 0
+        let result = await S.completeDetailed(config, isOllama: true, system: "chat", user: "question",
+            jsonSchema: Data(#"{"type":"object"}"#.utf8), attemptObserver: { await events.append($0) }, transport: { request in
+                calls += 1
+                let body = try JSONSerialization.data(withJSONObject: ["model": config.model,
+                    "message": ["content": text], "done_reason": "length"])
+                return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            })
+        let completion = try result.get()
+        #expect(calls == 1 && completion.text == text.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(completion.diagnostic.category == nil && S.rejectsTruncatedOutput(completion))
+        let captured = await events.snapshot()
+        #expect(captured.count == 2 && captured.allSatisfy { $0.schema == nil && !$0.schemaTruncated })
+    }
+
     @Test @MainActor func responseReaderCapsActualBytesNotJustContentLength() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ModelBodyProtocol.self]

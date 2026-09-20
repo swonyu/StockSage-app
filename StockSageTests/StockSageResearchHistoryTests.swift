@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import CryptoKit
 @testable import StockSage
 
 @Suite("Saved research predictions", .serialized)
@@ -9,7 +10,7 @@ struct StockSageResearchHistoryTests {
 
     private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
 
-    private func qualifiedResult(_ symbol: String, at: Date, qualified: Bool) -> StockSageHorizonResearch.Result {
+    func qualifiedResult(_ symbol: String, at: Date, qualified: Bool) -> StockSageHorizonResearch.Result {
         typealias R = StockSageHorizonResearch
         var dates: [Date] = [], day = at.addingTimeInterval(-86_400)
         while dates.count < 70 {
@@ -135,6 +136,32 @@ struct StockSageResearchHistoryTests {
         revised.qualificationPolicyVersion = nil
         let downgraded = History.snapshot(startedAt: began, completedAt: began.addingTimeInterval(2), horizon: .fortnight, scan: revised)
         #expect(!history.record(downgraded) && !history.saveCompletedChecks(downgraded, scan: revised))
+    }
+
+    @Test func realCurrentRankingRetryPublishesOnlyQualifiedCandidatesAndRestoresThem() async throws {
+        let (pending, scan) = strictFixture()
+        let history = History()
+        try #require(history.record(pending) && history.saveCompletedChecks(pending, scan: scan))
+        let research = StockSageHorizonResearch(history: history)
+        var comparisons = 0
+        let started = research.retryTopFive(.fortnight, allowed: { true }) { saved, horizon in
+            await StockSageResearchRanking.rank(scan: saved, horizon: horizon,
+                config: .init(baseURL: URL(string: "http://127.0.0.1:1234")!, model: "offline-fixture"),
+                isOllama: false, allowed: { true }, completion: { _, _, _ in
+                    comparisons += 1
+                    return .success(.init(text: "{\"symbols\":[\"AAA\"]}", diagnostic: .init(finish: .stop), model: "offline-fixture"))
+                })
+        }
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(comparisons == 1 && research.running == nil)
+        let completed = try #require(history.runs.first)
+        #expect(completed.ranking?.version == StockSageResearchRanking.currentVersion)
+        #expect(completed.originalRunID == pending.id && completed.predictions.map(\.symbol) == ["AAA"])
+        let restored = try #require(StockSageHorizonResearch(history: history).scans[.fortnight])
+        #expect(restored.topBuys.map(\.ticker) == ["AAA"] && restored.rankingFailure == nil)
+        #expect(restored.results["BBB"]?.verdict?.action == .buy && !restored.isEligible("BBB"))
+        #expect(restored.results["CCC"]?.verdict?.action == .buy && !restored.isEligible("CCC"))
     }
 
     @Test func legacyQualificationFieldsRemainAbsentFromDigestMaterial() throws {
@@ -826,6 +853,144 @@ struct StockSageResearchHistoryTests {
 }
 
 extension StockSageResearchHistoryTests {
+    @Test func archiveRetentionExpiresPayloadsWithoutRemovingSavedRuns() throws {
+        let (history, url, defaults, suite) = try fileStore("archive-retention")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        var saved: [History.Run] = []
+        for index in 0...History.maximumFullCheckArchives {
+            let (run, scan) = checkpointFixture(count: 2, start: date("2026-09-15T07:00:00Z").addingTimeInterval(Double(index) * 3600))
+            try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+            saved.append(run)
+        }
+        let reopened = History(storageURL: url, defaults: defaults)
+        #expect(reopened.runs.count == saved.count)
+        #expect(reopened.fullChecks(runID: saved[0].id).state == .expired)
+        #expect(reopened.completedScan(runID: saved[0].id) == nil)
+        #expect(reopened.fullChecks(runID: saved[1].id).state == .available)
+        #expect(reopened.fullChecks(runID: saved.last!.id).state == .available)
+        let directory = url.deletingLastPathComponent().appendingPathComponent("full-checks")
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(saved[0].id.uuidString + ".json").path))
+        let payloads = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) != nil }
+        #expect(payloads.count == History.maximumFullCheckArchives)
+        let report = try JSONDecoder().decode(StockSageResearchExport.Report.self,
+            from: StockSageResearchExport.data(for: saved[0], fullChecks: reopened.fullChecks(runID: saved[0].id)))
+        #expect(report.fullChecks == nil && report.fullChecksState == .expired && report.run == saved[0])
+    }
+
+    @Test func fullCheckArchiveSelectionEnforcesTheTotalByteBudget() {
+        let entries = (0..<12).map { index in
+            History.FullChecksEntry(runID: UUID(), completedAt: Date(timeIntervalSince1970: Double(index)),
+                byteCount: History.maximumCompletedChecksBytes, digest: String(repeating: "0", count: 64))
+        }
+        let kept = History.retainedFullCheckIDs(entries)
+        #expect(kept == Set(entries.suffix(8).map(\.runID)))
+        #expect(entries.filter { kept.contains($0.runID) }.reduce(0, { $0 + $1.byteCount }) == History.maximumFullCheckArchiveBytes)
+    }
+
+    @Test(arguments: ["payload", "index", "oversizedIndex", "foreignRun", "symlink"])
+    func fullCheckArchiveCorruptionNeverSubstitutesAnotherCapture(mode: String) throws {
+        let (history, url, defaults, suite) = try fileStore("archive-corrupt-" + mode)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (first, scan) = checkpointFixture(count: 8)
+        try #require(history.saveCompletedChecks(first, scan: scan) && history.record(first))
+        let (second, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        try #require(history.saveCompletedChecks(second, scan: replacement) && history.record(second))
+        let directory = url.deletingLastPathComponent().appendingPathComponent("full-checks")
+        let payload = directory.appendingPathComponent(first.id.uuidString + ".json")
+        let indexURL = directory.appendingPathComponent("index.json")
+        var unchangedURL = payload
+        switch mode {
+        case "index": unchangedURL = indexURL; try Data("Original corrupt index".utf8).write(to: indexURL)
+        case "oversizedIndex": unchangedURL = indexURL; try Data(repeating: 32, count: 4_194_305).write(to: indexURL)
+        case "foreignRun":
+            let other = try Data(contentsOf: directory.appendingPathComponent(second.id.uuidString + ".json"))
+            try other.write(to: payload)
+            var index = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: indexURL)) as? [String: Any])
+            var entries = try #require(index["entries"] as? [[String: Any]])
+            let position = try #require(entries.firstIndex(where: { ($0["runID"] as? String) == first.id.uuidString }))
+            entries[position]["digest"] = SHA256.hash(data: other).map { String(format: "%02x", $0) }.joined()
+            entries[position]["byteCount"] = other.count
+            index["entries"] = entries
+            try JSONSerialization.data(withJSONObject: index).write(to: indexURL)
+        case "symlink":
+            unchangedURL = url.deletingLastPathComponent().appendingPathComponent("foreign.json")
+            try Data("Private fixture bytes must not be read as an archive or deleted".utf8).write(to: unchangedURL)
+            try FileManager.default.removeItem(at: payload)
+            try FileManager.default.createSymbolicLink(at: payload, withDestinationURL: unchangedURL)
+        default: try Data("Original corrupt archive bytes".utf8).write(to: payload)
+        }
+        let untouched = try Data(contentsOf: unchangedURL)
+        let reopened = History(storageURL: url, defaults: defaults)
+        let unavailable = reopened.fullChecks(runID: first.id)
+        #expect(unavailable.state == .corrupt && unavailable.checks == nil)
+        #expect(reopened.completedScan(runID: first.id) == nil)
+        #expect(reopened.runs.first(where: { $0.id == first.id }) == first)
+        let report = try JSONDecoder().decode(StockSageResearchExport.Report.self,
+            from: StockSageResearchExport.data(for: first, fullChecks: unavailable))
+        #expect(report.fullChecks == nil && report.fullChecksState == .corrupt)
+        #expect(try Data(contentsOf: unchangedURL) == untouched)
+    }
+
+    @Test func legacyFullCheckAvailabilityAndExportRemainExactOrMissing() throws {
+        let (history, url, defaults, suite) = try fileStore("archive-legacy")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (original, scan) = checkpointFixture(count: 8)
+        try #require(history.record(original))
+        #expect(history.fullChecks(runID: original.id).state == .missing)
+        try #require(history.saveCompletedChecks(original, scan: scan))
+        let retained = history.fullChecks(runID: original.id)
+        let data = try StockSageResearchExport.data(for: original, fullChecks: retained)
+        let exported = try JSONDecoder().decode(StockSageResearchExport.Report.self, from: data)
+        #expect(exported.schemaVersion == 2 && exported.fullChecksState == .available)
+        #expect(exported.fullChecks == retained.checks && exported.run == original)
+        let (other, _) = checkpointFixture(count: 2, start: original.completedAt.addingTimeInterval(60))
+        #expect(throws: (any Error).self) { try StockSageResearchExport.data(for: other, fullChecks: retained) }
+        try FileManager.default.removeItem(at: url.deletingLastPathComponent().appendingPathComponent("full-checks"))
+        let reopened = History(storageURL: url, defaults: defaults)
+        let legacy = reopened.fullChecks(runID: original.id)
+        #expect(legacy.state == .legacyCheckpoint && legacy.checks == retained.checks)
+        #expect(reopened.fullChecks(runID: UUID()).state == .missing)
+    }
+
+    @Test func archiveSaveDoesNotOverwriteUnreadableIndexOrExistingCheckpoint() throws {
+        let (history, url, defaults, suite) = try fileStore("archive-preserve")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (first, scan) = checkpointFixture(count: 8)
+        try #require(history.saveCompletedChecks(first, scan: scan) && history.record(first))
+        let checkpoint = url.deletingLastPathComponent().appendingPathComponent("completed-14.json")
+        let oldCheckpoint = try Data(contentsOf: checkpoint)
+        let index = url.deletingLastPathComponent().appendingPathComponent("full-checks/index.json")
+        let invalid = Data("Unrecoverable original index".utf8)
+        try invalid.write(to: index)
+        let (later, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        #expect(!history.saveCompletedChecks(later, scan: replacement))
+        #expect(try Data(contentsOf: index) == invalid)
+        #expect(try Data(contentsOf: checkpoint) == oldCheckpoint)
+    }
+
+    @Test func earlierFullChecksRemainExactAfterLaterRunAndRelaunch() throws {
+        let (history, url, defaults, suite) = try fileStore("archived-full-checks")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (first, original) = checkpointFixture(count: 90)
+        try #require(history.saveCompletedChecks(first, scan: original) && history.record(first))
+        let (later, replacement) = checkpointFixture(count: 8, start: first.completedAt.addingTimeInterval(60))
+        try #require(history.saveCompletedChecks(later, scan: replacement) && history.record(later))
+
+        let reopened = History(storageURL: url, defaults: defaults)
+        let restored = try #require(reopened.completedScan(runID: first.id))
+        #expect(restored.run == first)
+        #expect(History.captureChecks(scan: restored.scan, horizon: .fortnight,
+            startedAt: first.startedAt, completedAt: first.completedAt) ==
+            History.captureChecks(scan: original, horizon: .fortnight,
+                startedAt: first.startedAt, completedAt: first.completedAt))
+        #expect(restored.scan.results["S083"]?.verdict?.action == .hold)
+        #expect(restored.scan.results["S089"]?.verdict == nil)
+        #expect(restored.scan.results["S089"]?.facts == original.results["S089"]?.facts)
+        #expect(reopened.completedScan(horizon: .fortnight)?.run.id == later.id)
+        #expect(reopened.completedScan(runID: UUID()) == nil)
+    }
+
     /// Explicit, offline recovery receipt. Never discovers or writes the owner's app directory.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_RECOVERY_DIR"] != nil))
     func validateSuppliedRecoveryCheckpoint() throws {
@@ -1381,8 +1546,8 @@ extension StockSageResearchHistoryTests {
         let active = History.evaluate(original.predictions[0], in: original,
             observation: dailyObservation(highs: [105, 106, 125], lows: [98, 97, 96], sessions: gapped),
             now: date("2026-09-19T04:01:00Z"))
-        #expect(active.state == .notDue && active.terminalKind == nil,
-                "A hole at 2026-09-17 cannot be closed by substituting the 09-18 bar")
+        #expect(active.state == .dataUnavailable && active.terminalKind == nil,
+                "A missing settled 2026-09-17 session must be disclosed immediately; the 09-18 bar cannot bridge it")
 
         let atHorizon = History.evaluate(original.predictions[0], in: original,
             observation: dailyObservation(highs: [105, 106, 125], lows: [98, 97, 96], sessions: gapped,
@@ -1583,6 +1748,46 @@ extension StockSageResearchHistoryTests {
         }
         #expect(store.lastCheckSummary == "Checked 1 active prediction. 1 completed.")
         #expect(store.runs.count == 26)
+    }
+
+    @Test func quietActiveReviewAdvancesPastTheFirstBatchAfterRelaunch() async throws {
+        let suite = "stocksage.research.quiet-progress.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let store = History(storageURL: url, defaults: defaults)
+        for _ in 0..<26 { try #require(store.record(dailyRun())) }
+        var firstPass: Set<UUID> = []
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, run in
+            firstPass.insert(run.id)
+            return self.dailyObservation(highs: [105, 106], lows: [95, 96])
+        }
+        #expect(firstPass.count == 25 && store.runs.allSatisfy { $0.evaluations.isEmpty })
+        let reopened = History(storageURL: url, defaults: defaults)
+        var nextPass: [UUID] = []
+        await reopened.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, run in
+            nextPass.append(run.id)
+            return self.dailyObservation(highs: [105, 106], lows: [95, 96])
+        }
+        let first = try #require(nextPass.first)
+        #expect(!firstPass.contains(first), "The next bounded pass must start with the previously unvisited prediction")
+        #expect(firstPass.union(nextPass).count == 26)
+        #expect(reopened.runs.allSatisfy { $0.evaluations.isEmpty }, "Quiet progress is not a completed outcome")
+    }
+
+    @Test func healthyQuietReviewClearsAnEarlierUnavailableStatus() async throws {
+        let store = History(storageURL: nil)
+        let original = dailyRun()
+        try #require(store.record(original))
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in nil }
+        try #require(store.runs[0].evaluations["ACME"]?.state == .dataUnavailable)
+        await store.checkActive(clock: { self.dailyNow(afterSessions: 2) }, allowed: { true }) { _, _ in
+            self.dailyObservation(highs: [105, 106], lows: [95, 96])
+        }
+        #expect(store.runs[0].evaluations["ACME"] == nil,
+                "Recovered coverage must stop displaying the old unavailable receipt without inventing a terminal outcome")
+        #expect(store.runs[0].predictions == original.predictions)
     }
 
     @Test func homeSummaryWaitsForTheFirstMonitoringSessionOnDailyPolicyRuns() throws {
@@ -1787,6 +1992,77 @@ extension StockSageResearchHistoryTests {
     /// Regression (independent review, 2026-09-16): CompletedCheck previously dropped
     /// `Result.insiderTransactions` entirely on save/restore, silently changing a later
     /// recomputed insider score for a restored historical scan.
+    @Test func completedCheckRoundTripsNewsAndValidationProvenance() throws {
+        let (_, original) = checkpointFixture(count: 1)
+        var scan = original
+        let listing = try #require(scan.listings.first)
+        let checked = try #require(scan.results[listing.ticker]?.at)
+        scan.results[listing.ticker]?.validationOutcome = .rejected
+        scan.results[listing.ticker]?.validationFailure = "unsupportedResearchClaim"
+        scan.results[listing.ticker]?.newsCheckedAt = checked
+        scan.results[listing.ticker]?.newestNewsAt = checked.addingTimeInterval(-3_600)
+        scan.results[listing.ticker]?.newsCheckSummary = "Provider answered; one dated article retained."
+        let run = History.snapshot(startedAt: try #require(scan.at), completedAt: checked.addingTimeInterval(1),
+                                   horizon: .fortnight, scan: scan)
+        let suite = "stocksage.research.freshness-roundtrip.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let store = History(storageURL: url, defaults: defaults)
+        try #require(store.record(run) && store.saveCompletedChecks(run, scan: scan))
+        let restored = try #require(History(storageURL: url, defaults: defaults)
+            .completedScan(horizon: .fortnight)?.scan.results[listing.ticker])
+        #expect(restored.validationOutcome == .rejected && restored.validationFailure == "unsupportedResearchClaim")
+        #expect(restored.newsCheckedAt == checked && restored.newestNewsAt == checked.addingTimeInterval(-3_600))
+        #expect(restored.newsCheckSummary == "Provider answered; one dated article retained.")
+        let legacyCheck = History.CompletedCheck(listing: listing, result: try #require(original.results[listing.ticker]))
+        let legacy = try #require(JSONDecoder().decode(History.CompletedCheck.self,
+            from: JSONEncoder().encode(legacyCheck)).result)
+        #expect(legacy.validationOutcome == .unknown && legacy.validationFailure == nil)
+        #expect(legacy.newsCheckedAt == nil && legacy.newestNewsAt == nil && legacy.newsCheckSummary == nil)
+    }
+
+    @Test func interruptedArchiveBindsUniverseAndStoresOnlyConfigurationDigest() throws {
+        let (_, complete) = checkpointFixture(count: 2)
+        var scan = complete
+        scan.results.removeValue(forKey: scan.listings[1].ticker)
+        let config = StockSageLocalModelServer.Config(baseURL: URL(string: "https://fixture-user:fixture-password@example.invalid?token=fixture-token#private")!,
+                                                     model: "fixture-model")
+        let identity = History.configurationIdentity(config)
+        scan.resumeConfigurationID = identity
+        #expect(identity != History.configurationIdentity(.init(baseURL: config.baseURL, model: "different-model")))
+        #expect(identity == History.configurationIdentity(config), "Restoring the same actual settings permits an explicit new resume")
+        let suite = "stocksage.research.interrupted-binding.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = History(storageURL: url, defaults: defaults)
+        try #require(history.saveInterruptedChecks(scan, horizon: .fortnight))
+        let checkpoint = directory.appendingPathComponent("interrupted-14.json")
+        let original = try Data(contentsOf: checkpoint)
+        let text = try #require(String(data: original, encoding: .utf8))
+        #expect(!text.contains("fixture-user") && !text.contains("fixture-password") && !text.contains("fixture-token"))
+        #expect(!text.contains("example.invalid") && text.contains(identity))
+        let reopened = History(storageURL: url, defaults: defaults)
+        let restored = try #require(reopened.interruptedScan(horizon: .fortnight))
+        #expect(restored.listings == scan.listings && restored.results.count == 1 && reopened.runs.isEmpty)
+
+        var object = try #require(JSONSerialization.jsonObject(with: original) as? [String: Any])
+        var archive = try #require(object["completedChecks"] as? [String: Any])
+        var checks = try #require(archive["checks"] as? [[String: Any]])
+        var listing = try #require(checks[0]["listing"] as? [String: Any])
+        listing["name"] = "Unrelated substituted issuer"
+        checks[0]["listing"] = listing; archive["checks"] = checks; object["completedChecks"] = archive
+        let tampered = try JSONSerialization.data(withJSONObject: object)
+        try tampered.write(to: checkpoint)
+        let rejected = History(storageURL: url, defaults: defaults)
+        #expect(rejected.interruptedScan(horizon: .fortnight) == nil)
+        #expect(!rejected.saveInterruptedChecks(scan, horizon: .fortnight))
+        #expect(try Data(contentsOf: checkpoint) == tampered)
+    }
+
     @Test func completedCheckRoundTripsInsiderTransactions() throws {
         var (run, scan) = checkpointFixture(count: 2)
         typealias E = StockSageMassiveEvents
@@ -1883,7 +2159,8 @@ extension StockSageResearchHistoryTests {
         #expect(saved.insiderEvidence?.insiderEvents == [event] && saved.insiderEvidence?.insiderOmittedRecordCount == 0)
         #expect(saved.hasRecordedInsiderEvidence && saved.insiderCoverage?.state == "answered")
         #expect(saved.factClasses == [.insider, .coverageGap])
-        #expect(reopened.completedScan(runID: first.id) == nil, "Never substitute the newer scan's checks")
+        #expect(reopened.completedScan(runID: first.id)?.scan.results[symbol]?.insiderEvidence == scan.results[symbol]?.insiderEvidence,
+                "Earlier full checks retain their own original insider evidence")
         #expect(reopened.completedScan(runID: second.id)?.run.id == second.id)
         #expect(reopened.completedScan(runID: UUID()) == nil)
     }

@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StockSage
 
 // Massive REST snapshot source (pipeline-4 M1, 2026-09-06). Every fixture below is either the
@@ -10,6 +11,150 @@ import Foundation
 struct StockSageMassiveTests {
 
     typealias M = StockSageMassive
+
+    nonisolated private final class AccessFixture: Sendable {
+        let key = Mutex("synthetic-A")
+        let credential = Mutex<String?>("credential-1")
+        let policy = Mutex<String?>("policy-1")
+        let allowed = Mutex(true)
+        var access: M.Access {
+            .init(key: { self.key.withLock { $0 } }, credentialRevision: { self.credential.withLock { $0 } },
+                  policyRevision: { self.policy.withLock { $0 } }, allowed: { self.allowed.withLock { $0 } })
+        }
+        func invalidate(_ mode: String) {
+            switch mode {
+            case "key": key.withLock { $0 = "synthetic-B" }
+            case "credentialRoundTrip":
+                key.withLock { $0 = "synthetic-B" }; credential.withLock { $0 = "credential-2" }
+                key.withLock { $0 = "synthetic-A" }; credential.withLock { $0 = "credential-3" }
+            case "policy": allowed.withLock { $0 = false }
+            case "policyRoundTrip":
+                allowed.withLock { $0 = false }; policy.withLock { $0 = "policy-2" }
+                allowed.withLock { $0 = true }; policy.withLock { $0 = "policy-3" }
+            case "cancel": withUnsafeCurrentTask { $0?.cancel() }
+            default: break
+            }
+        }
+    }
+
+    nonisolated private static func response(_ request: URLRequest, url: URL? = nil,
+        declaredLength: Int? = nil, actualLength: Int? = nil) -> (Data, URLResponse) {
+        let history = request.url?.path.contains("/aggs/") == true
+        let symbol = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "tickers" })?.value?.split(separator: ",").first.map(String.init) ?? "AAPL"
+        var body = Data((history
+            ? #"{"adjusted":true,"status":"OK","ticker":"AAPL","results":[{"o":100,"h":101,"l":99,"c":100,"v":100,"t":1700000000000},{"o":100,"h":101,"l":99,"c":100,"v":100,"t":1700086400000}]}"#
+            : "{\"status\":\"OK\",\"count\":1,\"tickers\":[{\"ticker\":\"\(symbol)\",\"lastTrade\":{\"p\":100,\"t\":1700000000000000000},\"prevDay\":{\"c\":99}}]}").utf8)
+        if let actualLength, actualLength > body.count { body.append(Data(repeating: 32, count: actualLength - body.count)) }
+        let headers = declaredLength.map { ["Content-Length": String($0)] }
+        return (body, HTTPURLResponse(url: url ?? request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!)
+    }
+
+    @MainActor private func accepted(_ endpoint: String, access: M.Access,
+                                     transport: @escaping M.Transport) async -> Bool {
+        switch endpoint {
+        case "snapshots": return !(await M.fetchSnapshots(for: ["AAPL"], access: access, transport: transport)).isEmpty
+        case "market": return await M.fetchMarketSnapshot(access: access, transport: transport) != nil
+        case "history": return await M.fetchHistory(symbol: "AAPL", range: "1y", interval: "1d", access: access, transport: transport) != nil
+        default: return await M.probe(access: access, transport: transport).hasPrefix("Connected")
+        }
+    }
+
+    @Test(arguments: ["snapshots", "market", "history", "probe"],
+          ["key", "credentialRoundTrip", "policy", "policyRoundTrip", "cancel"])
+    @MainActor func legacyTransportRejectsAccessChangesAfterAwait(endpoint: String, mode: String) async {
+        let fixture = AccessFixture(), calls = Mutex(0)
+        let task = Task { @MainActor in
+            await accepted(endpoint, access: fixture.access, transport: { request in
+                calls.withLock { $0 += 1 }
+                fixture.invalidate(mode)
+                return Self.response(request)
+            })
+        }
+        #expect(await task.value == false)
+        #expect(calls.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: ["credentialRoundTrip", "policyRoundTrip", "policy", "cancel"])
+    @MainActor func snapshotInvalidationDropsEarlierChunksAndStopsFurtherRequests(mode: String) async {
+        let fixture = AccessFixture(), calls = Mutex(0)
+        let symbols = (0..<501).map { "Q" + String(UnicodeScalar(65 + $0 / 26)!) + String(UnicodeScalar(65 + $0 % 26)!) }
+        let task = Task { @MainActor in
+            await M.fetchSnapshots(for: symbols, access: fixture.access, transport: { request in
+                let count = calls.withLock { $0 += 1; return $0 }
+                if count == 2 { fixture.invalidate(mode) }
+                return Self.response(request)
+            })
+        }
+        #expect(await task.value.isEmpty, "Earlier accepted chunks cannot survive an invalidated batch")
+        #expect(calls.withLock { $0 } == 2, "No third request may follow credential or policy invalidation")
+    }
+
+    @Test(arguments: ["snapshots", "market", "history", "probe"])
+    @MainActor func legacyTransportRejectsChangedFinalResponseURL(endpoint: String) async {
+        let accepted = await accepted(endpoint, access: AccessFixture().access, transport: { request in
+            Self.response(request, url: URL(string: "https://api.massive.com/different-resource")!)
+        })
+        #expect(!accepted, "Even a response on the approved host must match the exact requested resource")
+    }
+
+    @Test(arguments: ["snapshots", "market", "history", "probe"])
+    @MainActor func legacyTransportRejectsExcessDeclaredResponseLength(endpoint: String) async {
+        let limit = endpoint == "market" ? M.marketMaximumBytes : endpoint == "history" ? M.historyMaximumBytes : M.snapshotMaximumBytes
+        #expect(await accepted(endpoint, access: AccessFixture().access, transport: { request in
+            Self.response(request, declaredLength: limit + 1)
+        }) == false)
+    }
+
+    @Test(arguments: ["snapshots", "history", "probe"])
+    @MainActor func legacyTransportBoundsActualResponseLength(endpoint: String) async {
+        let limit = endpoint == "history" ? M.historyMaximumBytes : M.snapshotMaximumBytes
+        #expect(await accepted(endpoint, access: AccessFixture().access, transport: { request in
+            Self.response(request, actualLength: limit + 1)
+        }) == false)
+        #expect(await accepted(endpoint, access: AccessFixture().access, transport: { request in
+            Self.response(request, actualLength: limit)
+        }), "A valid body exactly at the limit remains usable")
+    }
+
+    @Test(arguments: ["snapshots", "market", "history", "probe"], ["policy", "cancel"])
+    @MainActor func legacyTransportDeniedBeforeStartMakesNoRequest(endpoint: String, mode: String) async {
+        let fixture = AccessFixture(), calls = Mutex(0)
+        let task = Task { @MainActor in
+            fixture.invalidate(mode)
+            return await accepted(endpoint, access: fixture.access, transport: { request in
+                calls.withLock { $0 += 1 }; return Self.response(request)
+            })
+        }
+        #expect(await task.value == false && calls.withLock { $0 } == 0)
+    }
+
+    @Test @MainActor func probeFailureNeverDisclosesCredentialURLOrRawError() async {
+        let result = await M.probe(access: AccessFixture().access, transport: { request in
+            throw NSError(domain: "synthetic-A https://api.massive.com/private-credential-context", code: 1)
+        })
+        #expect(result == "No response — check the network.")
+        #expect(!result.contains("synthetic-A") && !result.contains("https://"))
+    }
+
+    @Test(arguments: ["exact", "overflow", "declared"])
+    func nativeRESTTransportBoundsBodyWithoutPersistedSessionState(mode: String) async throws {
+        #expect(M.restSession.delegate is StockSageHTTP.NoRedirect)
+        let configuration = M.restSession.configuration
+        #expect(configuration.urlCache == nil && configuration.urlCredentialStorage == nil
+                && configuration.httpCookieStorage == nil && !configuration.httpShouldSetCookies
+                && configuration.timeoutIntervalForResource == 30)
+        configuration.protocolClasses = [MassiveBodyProtocol.self]
+        let session = URLSession(configuration: configuration, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let request = URLRequest(url: URL(string: "https://api.massive.com/\(mode)")!)
+        do {
+            let (data, _) = try await M.restTransport(request, maximumBytes: M.snapshotMaximumBytes, session: session)
+            #expect(mode == "exact" && data.count == M.snapshotMaximumBytes)
+        } catch {
+            #expect(mode != "exact" && (error as? URLError)?.code == .dataLengthExceedsMaximum)
+        }
+    }
 
     @Test func environmentFallbackLaunchDoesNotInheritAnotherLaunchDenial() throws {
         typealias C = StockSageMassiveCredential
@@ -407,4 +552,20 @@ struct StockSageMassiveTests {
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer unit-test-key")
         #expect(M.historyRequest(symbol: "2222.SR", from: "2023-09-01", to: "2024-09-01", key: "unit-test-key") == nil)
     }
+}
+
+/// Real URLSession bytes, served entirely in process without credentials or a provider call.
+private nonisolated final class MassiveBodyProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let url = request.url!, maximum = StockSageMassive.snapshotMaximumBytes
+        let headers = url.lastPathComponent == "declared" ? ["Content-Length": String(maximum + 1)] : [:]
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200,
+            httpVersion: "HTTP/1.1", headerFields: headers)!, cacheStoragePolicy: .notAllowed)
+        let count = url.lastPathComponent == "overflow" ? maximum + 1 : maximum
+        client?.urlProtocol(self, didLoad: Data(repeating: 32, count: count))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

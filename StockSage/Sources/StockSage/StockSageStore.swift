@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Synchronization
 
 /// One ranked trade idea: a symbol joined with the advisor's verdict on its real
 /// candle history. What the "Ideas" board renders.
@@ -291,7 +292,7 @@ final class StockSageStore: ObservableObject {
     /// the flag on, the card correctly reads "On — no events yet". Persisting the toggle must
     /// never be read as persisting the events.
     @Published var alertsEnabled = false {
-        didSet { defaults.set(alertsEnabled, forKey: Self.alertsEnabledKey) }
+        didSet { if oldValue != alertsEnabled { defaults.set(alertsEnabled, forKey: Self.alertsEnabledKey) } }
     }
     @Published private(set) var alerts: [IdeaAlert] = []
     private static let maxAlerts = 50
@@ -303,6 +304,7 @@ final class StockSageStore: ObservableObject {
     @Published private(set) var userSymbols: [String] = []
     @Published private(set) var isAddingSymbol = false
     @Published private(set) var addSymbolError: String?
+    @Published private(set) var watchlistPersistenceError: String?
     private static let userSymbolsKey = "stocksage_user_symbols"
     private static let userMarketLabel = "★ My watchlist"
 
@@ -353,7 +355,8 @@ final class StockSageStore: ObservableObject {
         self.defaults = defaults
         self.heldSymbols = heldSymbols
         self.journalTrades = journalTrades
-        userSymbols = (defaults.array(forKey: Self.userSymbolsKey) as? [String]) ?? []
+        do { userSymbols = try backupSymbols() }
+        catch { watchlistPersistenceError = "Saved watchlist could not be read. It has not been changed." }
         do { priceAlerts = try Self.loadPriceAlerts(from: defaults) }
         catch { priceAlertsPersistenceError = "Saved price alerts could not be read. They were preserved; recover the saved alerts before editing or monitoring." }
         // Absent key ⇒ false ⇒ the opt-in default is unchanged on a first run.
@@ -416,13 +419,13 @@ final class StockSageStore: ObservableObject {
 
     private static func loadPriceAlerts(from defaults: UserDefaults) throws -> [PriceAlert] {
         // Preserve baseline loading: backup validation must not hide decodable saved records.
-        guard let stored = defaults.object(forKey: priceAlertsKey) else { return [] }
+        guard let stored = try StockSageRecordStorage.object(forKey: priceAlertsKey, defaults: defaults) else { return [] }
         guard let data = stored as? Data else { throw CocoaError(.fileReadCorruptFile) }
         return try JSONDecoder().decode([PriceAlert].self, from: data)
     }
 
     private static func readPriceAlerts(from defaults: UserDefaults) throws -> [PriceAlert] {
-        guard let stored = defaults.object(forKey: priceAlertsKey) else { return [] }
+        guard let stored = try StockSageRecordStorage.object(forKey: priceAlertsKey, defaults: defaults) else { return [] }
         guard let data = stored as? Data,
               let decoded = try? JSONDecoder().decode([PriceAlert].self, from: data),
               StockSageBackup.priceAlertValidationError(in: decoded) == nil else {
@@ -442,21 +445,29 @@ final class StockSageStore: ObservableObject {
     /// Read the committed collection before any edit. Corruption is not an empty collection.
     private func mutatePriceAlerts(_ change: (inout [PriceAlert]) -> Bool) -> Bool {
         do {
+            try StockSageRecordWriter.require(defaults)
             var records = applyingPendingTriggers(to: try Self.loadPriceAlerts(from: defaults))
             let changed = change(&records)
             let data = try JSONEncoder().encode(records)
-            defaults.set(data, forKey: Self.priceAlertsKey)
+            let warning = try StockSageRecordStorage.set(data, forKey: Self.priceAlertsKey, defaults: defaults)
             priceAlerts = records
             pendingPriceAlertTriggers = [:]
-            priceAlertsPersistenceError = nil
+            priceAlertsPersistenceError = warning
             return changed
         } catch {
-            priceAlertsPersistenceError = "Price alerts could not be saved. Existing storage was preserved; recover saved alerts before editing or monitoring."
+            priceAlertsPersistenceError = error is StockSageFileLock.Failure || error is StockSageRecordStorage.Failure ? error.localizedDescription
+                : "Price alerts could not be saved. Existing storage was preserved; recover saved alerts before editing or monitoring."
             return false
         }
     }
 
     func priceAlertsForMonitoring() -> [PriceAlert] {
+        do { try StockSageRecordWriter.require(defaults) }
+        catch {
+            let message = error.localizedDescription
+            if priceAlertsPersistenceError != message { priceAlertsPersistenceError = message }
+            return []
+        }
         do {
             let records = try Self.loadPriceAlerts(from: defaults)
             if !pendingPriceAlertTriggers.isEmpty {
@@ -465,7 +476,10 @@ final class StockSageStore: ObservableObject {
                 return priceAlerts
             }
             if priceAlerts != records { priceAlerts = records }
-            if priceAlertsPersistenceError != nil { priceAlertsPersistenceError = nil }
+            if priceAlertsPersistenceError != nil,
+               priceAlertsPersistenceError != StockSageRecordStorage.Failure.durabilityUnconfirmed.localizedDescription {
+                priceAlertsPersistenceError = nil
+            }
             return records
         }
         catch {
@@ -509,6 +523,8 @@ final class StockSageStore: ObservableObject {
     /// Mark alerts triggered (one-shot). Called by the Monitor after it fires them.
     func markPriceAlertsTriggered(_ ids: [UUID], at when: Date = Date()) {
         guard !ids.isEmpty else { return }
+        do { try StockSageRecordWriter.require(defaults) }
+        catch { priceAlertsPersistenceError = error.localizedDescription; return }
         let set = Set(ids)
         for id in ids { pendingPriceAlertTriggers[id] = when }
         // Delivery already happened: retain its latch even if the disk becomes unreadable.
@@ -545,13 +561,19 @@ final class StockSageStore: ObservableObject {
     /// `lastUpdated` — it only updates observed rows, so the board never over-claims that
     /// the WHOLE snapshot is live.
     @discardableResult
-    func mergeLiveQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote]) -> Bool {
+    func mergeLiveQuotes(_ quotes: [String: StockSageQuoteService.LiveQuote],
+                         including requested: [StockSageSymbol] = []) -> Bool {
         guard !quotes.isEmpty else { return false }
         // Holdings can enter the feed before a full refresh creates their price row.
-        // Stage only current user-tracked members; the existing merger validates their
-        // first observation, including clock/source ordering against any existing idea.
+        // A stopped board sweep may also price a missing curated row. Stage definitions only;
+        // the shared merger validates every first observation and existing idea's clock.
         let missing = Set(quotes.keys.map { $0.uppercased() }).subtracting(symbolIndex.keys)
-        let added = missing.isEmpty ? [] : Self.composeTrackedDefs(base: [],
+        let personal = Set(userSymbols.map { $0.uppercased() }).union(offBoardHoldingSymbols)
+        let definitions = requested.filter {
+            missing.contains($0.symbol.uppercased())
+                && ($0.market != Self.userMarketLabel || personal.contains($0.symbol.uppercased()))
+        }.map { StockSageSymbol(id: $0.id, symbol: $0.symbol.uppercased(), market: $0.market) }
+        let added = missing.isEmpty ? [] : Self.composeTrackedDefs(base: definitions,
             userSymbols: userSymbols.map { $0.uppercased() }.filter { missing.contains($0) },
             offBoardHoldings: offBoardHoldingSymbols.map { $0.uppercased() }.filter { missing.contains($0) })
         var stagedIndex = symbolIndex
@@ -646,9 +668,10 @@ final class StockSageStore: ObservableObject {
     nonisolated static let infraFXSymbols = ["USDSAR=X"]
 
     /// Best-effort infra FX refresh (1 request; failure keeps the last known rate).
-    private func refreshInfraFX() async {
+    private func refreshInfraFX(allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) async {
+        guard !Task.isCancelled, allowed() else { return }
         let quotes = await StockSageQuoteService.fetchQuotes(for: Self.infraFXSymbols)
-        guard !Task.isCancelled, ToolPolicy.isExternalAllowed else { return }
+        guard !Task.isCancelled, allowed() else { return }
         let merged = Self.mergedInfraFX(infraFX, incoming: quotes, now: Date())
         if merged != infraFX { infraFX = merged }
     }
@@ -683,6 +706,48 @@ final class StockSageStore: ObservableObject {
     /// only the two off-board inputs.
     private var offBoardHoldingSymbols: [String] {
         heldSymbols()
+    }
+
+    private nonisolated final class FirstQuoteRequest: Sendable {
+        let cancelled = Mutex(false)
+    }
+    private var firstQuoteRequests: [String: FirstQuoteRequest] = [:]
+
+    /// One targeted fetch when personal tracking changes, even while exchanges are closed.
+    func refreshMissingTrackedQuotes() async {
+        let access = StockSageMassive.Access().capture()
+        await refreshMissingTrackedQuotes(allowed: access.isCurrent,
+            fetch: { await StockSageQuoteService.fetchQuoteBatch(for: $0) })
+    }
+
+    func refreshMissingTrackedQuotes(allowed: () -> Bool,
+        fetch: ([String]) async -> StockSageQuoteService.QuoteBatch) async {
+        guard allowed(), !Task.isCancelled else { return }
+        let now = Date()
+        let requested = Set(Self.trackedSymbols(board: [], watchlist: userSymbols,
+            portfolio: offBoardHoldingSymbols, journalOpen: []).filter {
+                (firstQuoteRequests[$0]?.cancelled.withLock { $0 } ?? true)
+                    && latestQuote($0)?.usableHoldingPrice(isSampleData: isSampleData, now: now) == nil
+            })
+        guard !requested.isEmpty else { return }
+        let request = FirstQuoteRequest()
+        for symbol in requested { firstQuoteRequests[symbol] = request }
+        defer {
+            for symbol in requested where firstQuoteRequests[symbol] === request {
+                firstQuoteRequests.removeValue(forKey: symbol)
+            }
+        }
+        let batch = await withTaskCancellationHandler {
+            await fetch(requested.sorted())
+        } onCancel: {
+            // Native task replacement can dispatch before the cancelled transport returns.
+            request.cancelled.withLock { $0 = true }
+        }
+        guard allowed(), !Task.isCancelled, batch.stop != .invalidated else { return }
+        let current = Set(Self.trackedSymbols(board: [], watchlist: userSymbols,
+            portfolio: offBoardHoldingSymbols, journalOpen: []))
+        applyPolledQuotes(batch.quotes.filter { requested.contains($0.key.uppercased())
+            && current.contains($0.key.uppercased()) })
     }
 
     /// Pure rule `trackedDefs(scope:)` is a thin shell over: curated universe (`base`) ∪
@@ -777,9 +842,12 @@ final class StockSageStore: ObservableObject {
         func reject(_ reason: String) -> String { addSymbolError = reason; return reason }
         guard !Task.isCancelled else { return reject("Watchlist addition cancelled.") }
         let saved: [String]
-        do { saved = try backupSymbols() }
-        catch { return reject("Saved watchlist could not be read. It has not been changed.") }
-        let validation = Self.validateNewSymbol(raw, alreadyTracked: Set((userSymbols + saved).map { $0.uppercased() }))
+        do {
+            try StockSageRecordWriter.require(defaults)
+            saved = try backupSymbols()
+            watchlistPersistenceError = nil
+        } catch { return reject(recordWatchlistFailure(error)) }
+        let validation = Self.validateNewSymbol(raw, alreadyTracked: Set(saved.map { $0.uppercased() }))
         guard let symbol = validation.symbol else { return reject(validation.error ?? "Enter a ticker.") }
         let known = symbols.first { $0.symbol.uppercased() == symbol }
             ?? StockSageUniverse.catalog.first { $0.symbol == symbol }
@@ -798,8 +866,8 @@ final class StockSageStore: ObservableObject {
             // Re-read after any await; an import may already have added this ticker.
             let update = try prepareBackupImport([symbol])
             guard update.added > 0 else { return reject("\(symbol) is already in your watchlist.") }
-            update.apply()
-        } catch { return reject("Saved watchlist could not be read. It has not been changed.") }
+            try update.apply()
+        } catch { return reject(recordWatchlistFailure(error)) }
         // Existing rows retain their market label, quote history and provenance.
         if !symbols.contains(where: { $0.symbol.uppercased() == symbol }) {
             symbols.append(known ?? StockSageSymbol(symbol: symbol, market: Self.userMarketLabel))
@@ -811,9 +879,16 @@ final class StockSageStore: ObservableObject {
 
     /// Read the saved preference, not a possibly stale or failed-load in-memory fallback.
     func backupSymbols() throws -> [String] {
-        guard let stored = defaults.object(forKey: Self.userSymbolsKey) else { return [] }
+        guard let stored = try StockSageRecordStorage.object(forKey: Self.userSymbolsKey, defaults: defaults) else { return [] }
         guard let symbols = stored as? [String] else { throw StockSageBackup.BackupError.sourceReadFailed("watchlist") }
         return symbols
+    }
+
+    @discardableResult private func recordWatchlistFailure(_ error: Error) -> String {
+        let message = error is StockSageFileLock.Failure || error is StockSageRecordStorage.Failure ? error.localizedDescription
+            : "Saved watchlist could not be read. It has not been changed."
+        watchlistPersistenceError = message
+        return message
     }
 
     /// Read committed alerts at export time; load's empty fallback must never become a false
@@ -825,24 +900,26 @@ final class StockSageStore: ObservableObject {
 
     /// Backup tickers were validated/normalized by the decoder. Restore the preference,
     /// not a quote: no network or invented prices, even when the app is offline.
-    func prepareBackupImport(_ incoming: [String]) throws -> (added: Int, apply: () -> Void) {
-        let stored = defaults.object(forKey: Self.userSymbolsKey)
-        guard stored == nil || stored is [String] else { throw CocoaError(.fileReadCorruptFile) }
-        var merged = userSymbols
+    func prepareBackupImport(_ incoming: [String]) throws -> StockSageRecordStorage.PreparedImport {
+        try StockSageRecordWriter.require(defaults)
+        // Only explicit additions may restore a removed ticker. Memory can predate another
+        // store's deletion, so the committed preference is the base for this mutation.
+        var merged = try backupSymbols()
         var known = Set(merged.map { $0.uppercased() })
-        for symbol in (stored as? [String] ?? []) where known.insert(symbol.uppercased()).inserted { merged.append(symbol) }
         let additions = incoming.filter { known.insert($0.uppercased()).inserted }
         merged.append(contentsOf: additions)
         let symbols = merged
-        return (additions.count, {
-            self.defaults.set(symbols, forKey: Self.userSymbolsKey)
+        return .init(defaults: defaults, added: additions.count,
+            changes: [.init(key: Self.userSymbolsKey, value: .strings(symbols))], publish: { warning in
             self.userSymbols = symbols
+            self.watchlistPersistenceError = warning
         })
     }
 
     /// Committed alerts win by immutable one-shot ID; only explicit backup records may be added.
     /// Memory-only IDs may have been deleted/rearmed by another writer, so never resurrect them.
-    func preparePriceAlertBackupImport(_ incoming: [PriceAlert]) throws -> (added: Int, apply: () -> Void) {
+    func preparePriceAlertBackupImport(_ incoming: [PriceAlert]) throws -> StockSageRecordStorage.PreparedImport {
+        try StockSageRecordWriter.require(defaults)
         let disk = try Self.readPriceAlerts(from: defaults)
         var merged = applyingPendingTriggers(to: disk)
         var ids = Set(merged.map(\.id))
@@ -850,20 +927,25 @@ final class StockSageStore: ObservableObject {
         merged.append(contentsOf: additions)
         let data = try JSONEncoder().encode(merged)
         let records = merged
-        return (additions.count, {
-            self.defaults.set(data, forKey: Self.priceAlertsKey)
+        return .init(defaults: defaults, added: additions.count,
+            changes: [.init(key: Self.priceAlertsKey, value: .data(data))], publish: { warning in
             self.priceAlerts = records
             self.pendingPriceAlertTriggers = [:]
-            self.priceAlertsPersistenceError = nil
+            self.priceAlertsPersistenceError = warning
         })
     }
 
     /// Remove a watchlist entry; curated/held instruments remain tracked.
     func removeSymbol(_ symbol: String) {
         let up = symbol.uppercased()
-        guard userSymbols.contains(where: { $0.uppercased() == up }) else { return }
-        userSymbols.removeAll { $0.uppercased() == up }
-        defaults.set(userSymbols, forKey: Self.userSymbolsKey)
+        do {
+            try StockSageRecordWriter.require(defaults)
+            var saved = try backupSymbols()
+            saved.removeAll { $0.uppercased() == up }
+            let warning = try StockSageRecordStorage.set(saved, forKey: Self.userSymbolsKey, defaults: defaults)
+            userSymbols = saved
+            watchlistPersistenceError = warning
+        } catch { recordWatchlistFailure(error); return }
         // Removing a watchlist preference must not untrack an actual holding (or a
         // curated name from a legacy/imported watchlist). Otherwise remove its quote/idea rows.
         guard !trackedDefs().contains(where: { $0.symbol.uppercased() == up }) else { return }
@@ -1178,7 +1260,7 @@ final class StockSageStore: ObservableObject {
                 }, uniquingKeysWith: { _, latest in latest })
 
             let priorAttempted = attemptedSoFar + cachedHistories.count
-            let chunkWork = Task { () -> (histories: [String: StockSagePriceHistory], built: [StockSageIdea]) in
+            let chunkWork = Task { [weak self] () -> (histories: [String: StockSagePriceHistory], built: [StockSageIdea]) in
                 // Tests can supply a suspended chunk while exercising this real loop's
                 // cancellation, merge and publication. Production keeps the path below.
                 if let fetchAndBuild { return await fetchAndBuild(chunkDefs) }
@@ -2640,83 +2722,6 @@ final class StockSageStore: ObservableObject {
         }.value
     }
 
-    /// Allow small device/SIP clock skew, never an unbounded future freshness stamp.
-    nonisolated static func acceptsLiveTick(_ incoming: Date?, after current: Date?,
-        massiveTradeSequence: Int64? = nil, afterMassiveTradeSequence: Int64? = nil,
-        priceSource: StockSagePriceSource? = nil, afterPriceSource: StockSagePriceSource? = nil,
-        now: Date = Date()) -> Bool {
-        guard incoming != nil else { return false }
-        return acceptsQuote(incoming, after: current, massiveTradeSequence: massiveTradeSequence,
-                            afterMassiveTradeSequence: afterMassiveTradeSequence,
-                            priceSource: priceSource, afterPriceSource: afterPriceSource, now: now)
-    }
-
-    /// Shared by streams, polls, targeted fetches and full-refresh commits. Unknown timestamps
-    /// may seed an unknown row, but cannot erase a known price's ordering/freshness evidence.
-    nonisolated static func acceptsQuote(_ incoming: Date?, after current: Date?,
-        massiveTradeSequence: Int64? = nil, afterMassiveTradeSequence: Int64? = nil,
-        priceSource: StockSagePriceSource? = nil, afterPriceSource: StockSagePriceSource? = nil,
-        now: Date = Date()) -> Bool {
-        // Demo clocks are not market observations: never ingest one, and never let the
-        // startup seed's Date() block a genuine (e.g. Friday-close) quote on a weekend.
-        guard priceSource != .sample else { return false }
-        let current = afterPriceSource == .sample ? nil : current
-        guard let incoming else { return current == nil }
-        guard incoming.timeIntervalSince1970.isFinite,
-              incoming.timeIntervalSince1970 > 0, incoming <= now.addingTimeInterval(60) else { return false }
-        guard let current, current.timeIntervalSince1970.isFinite,
-              current.timeIntervalSince1970 > 0, current <= now.addingTimeInterval(60) else { return true }
-        if incoming != current { return incoming > current }
-        // Only compare the SAME symbol's Massive T sequence. Unknown/provider/quote ties
-        // remain rejected; later dates win regardless of sequence (including daily resets).
-        guard let sequence = massiveTradeSequence, let old = afterMassiveTradeSequence else { return false }
-        return sequence >= 0 && old >= 0 && sequence > old
-    }
-
-    /// A scan computes advice against history while quotes continue arriving. Publish its NEW
-    /// advice with the latest observed price, without changing its stop/target or analysis date.
-    nonisolated static func ideasWithLatestPrices(
-        _ fresh: [StockSageIdea], symbols: [StockSageSymbol], previous: [StockSageIdea], now: Date = Date()
-    ) -> [StockSageIdea] {
-        var latest: [String: (price: Double, at: Date, sequence: Int64?, source: StockSagePriceSource?)] = [:]
-        for symbol in symbols {
-            guard let quote = symbol.quotes.last, quote.price > 0, quote.price.isFinite,
-                  let at = quote.marketTime,
-                  acceptsLiveTick(at, after: nil, priceSource: quote.priceSource, now: now) else { continue }
-            latest[symbol.symbol.uppercased()] = (quote.price, at, quote.massiveTradeSequence, quote.priceSource)
-        }
-        for idea in previous {
-            let key = idea.symbol.uppercased()
-            guard idea.price > 0, idea.price.isFinite, let at = idea.priceAsOf,
-                  acceptsLiveTick(at, after: latest[key]?.at, massiveTradeSequence: idea.massiveTradeSequence,
-                                  afterMassiveTradeSequence: latest[key]?.sequence,
-                                  priceSource: idea.priceSource, afterPriceSource: latest[key]?.source, now: now) else { continue }
-            latest[key] = (idea.price, at, idea.massiveTradeSequence, idea.priceSource)
-        }
-        let books = Dictionary(previous.compactMap { idea in idea.nbbo.map { (idea.symbol, $0) } },
-                               uniquingKeysWith: { first, _ in first })
-        return fresh.map { original in
-            let book = books[original.symbol] ?? original.nbbo
-            let idea = original.withNBBO(book?.isFresh(at: now) == true ? book : nil)
-            guard let quote = latest[idea.symbol.uppercased()],
-                  acceptsLiveTick(quote.at, after: idea.priceAsOf, massiveTradeSequence: quote.sequence,
-                                  afterMassiveTradeSequence: idea.massiveTradeSequence,
-                                  priceSource: quote.source, afterPriceSource: idea.priceSource, now: now) else { return idea }
-            return idea.withLivePrice(quote.price, asOf: quote.at, massiveTradeSequence: quote.sequence,
-                                      priceSource: quote.source)
-        }
-    }
-
-    /// Only the authenticated, coalesced stream calls this. Withdrawals/auth loss replace
-    /// the entire input set; the one-second timer expires quiet books without per-card polling.
-    nonisolated static func ideasWithNBBO(_ ideas: [StockSageIdea], quotes: [String: StockSageNBBO],
-                                          now: Date = Date()) -> [StockSageIdea] {
-        ideas.map { idea in
-            let quote = StockSageLiveStream.displayQuote(for: idea.symbol, in: quotes)
-            return idea.withNBBO(quote?.costConditionVerified == true && quote?.spreadBps(at: now) != nil ? quote : nil)
-        }
-    }
-
     func applyLiveNBBO(_ quotes: [String: StockSageNBBO], now: Date = Date()) {
         let updated = Self.ideasWithNBBO(ideas, quotes: quotes, now: now)
         if updated != ideas { ideas = updated }
@@ -2982,7 +2987,9 @@ final class StockSageStore: ObservableObject {
         return Array(candidates.prefix(cap).map(\.symbol))
     }
 
-    private func healStaleQuotes(scopedTo scope: Set<String>) async {
+    private func healStaleQuotes(scopedTo scope: Set<String>,
+                                 allowed: () -> Bool = { ToolPolicy.isExternalAllowed }) async {
+        guard !Task.isCancelled, allowed() else { return }
         let now = Date()
         let tradingSymbols = symbols.filter { Self.marketIsTrading(symbol: $0.symbol, at: now) }
         let staleSymbols = Self.healCandidates(
@@ -2990,7 +2997,7 @@ final class StockSageStore: ObservableObject {
         )
         guard !staleSymbols.isEmpty else { return }
         let recovered = await StockSageQuoteService.fetchQuotes(for: staleSymbols)
-        guard !recovered.isEmpty else { return }
+        guard !Task.isCancelled, allowed(), !recovered.isEmpty else { return }
         for (sym, q) in recovered {
             let key = sym.uppercased()
             let before = symbols.first { $0.symbol.uppercased() == key }?.latest?.marketTime
@@ -3082,84 +3089,6 @@ final class StockSageStore: ObservableObject {
         applyPolledQuotes(quotes)
     }
 
-    /// Pure merge step behind `applyPolledQuotes` (W3, owner: "seamless … update automatically").
-    /// Given the current board rows, idea rows, and the `symbolIndex` lookup, applies each
-    /// PRICED quote (`price > 0`) to the matching board row AND the matching idea's price/asOf —
-    /// the same mirror `applyLiveTicks`/`mergeLiveQuote` already do for a streamed tick, so a
-    /// polled row and its card can never disagree — leaving every OTHER row, and both arrays'
-    /// order/count/identity, byte-identical. `asOf: q.marketTime` is passed straight through
-    /// (never `?? Date()`): an undated quote only seeds an undated row, never overwrites a
-    /// dated observation. Existing row identity is preserved. Returns the updated
-    /// arrays plus the newest market time actually observed (nil if none did) so the caller can
-    /// stamp `quoteAsOf` honestly. `nonisolated static` and side-effect-free — testable without
-    /// the `@MainActor` singleton, a live stream, or the network (MarketsPolledQuoteMergeTests).
-    /// Price ordering and previous-close evidence have distinct clocks. A REST observation
-    /// may repair the latter without replacing a newer streamed trade or refreshing its age.
-    nonisolated static func mergedQuote(_ q: StockSageQuoteService.LiveQuote, after current: StockSageQuote?,
-                                       symbol: String, acceptPrice: Bool, now: Date) -> StockSageQuote? {
-        let incoming = StockSageQuote(price: q.price, previousPrice: q.previousClose, time: now,
-            marketTime: q.marketTime, massiveTradeSequence: q.massiveTradeSequence, priceSource: q.priceSource,
-            previousCloseSource: q.previousCloseSource, previousCloseQuoteTime: q.previousCloseQuoteTime)
-        let destination = acceptPrice ? incoming : current
-        guard let destination else { return nil }
-        let previousValid = current?.hasSessionBaseline(symbol: symbol, at: destination.marketTime) == true
-        let incomingValid = incoming.hasSessionBaseline(symbol: symbol, at: q.marketTime)
-            && incoming.hasSessionBaseline(symbol: symbol, at: destination.marketTime)
-        let newer = (incoming.previousCloseQuoteTime ?? .distantPast) > (current?.previousCloseQuoteTime ?? .distantPast)
-        let baseline = incomingValid && (!previousValid || newer) ? incoming : (previousValid ? current : nil)
-        guard acceptPrice || baseline != nil else { return current }
-        return StockSageQuote(id: destination.id, price: destination.price,
-            previousPrice: baseline?.previousPrice ?? q.previousClose, time: destination.time,
-            marketTime: destination.marketTime, massiveTradeSequence: destination.massiveTradeSequence,
-            priceSource: destination.priceSource, previousCloseSource: baseline?.previousCloseSource,
-            previousCloseQuoteTime: baseline?.previousCloseQuoteTime)
-    }
-
-    nonisolated static func mergedPolledQuotes(
-        symbols: [StockSageSymbol], ideas: [StockSageIdea], symbolIndex: [String: Int],
-        quotes: [String: StockSageQuoteService.LiveQuote], now: Date = Date()
-    ) -> (symbols: [StockSageSymbol], ideas: [StockSageIdea], newestMarketTime: Date?, acceptedKeys: Set<String>, baselineKeys: Set<String>) {
-        var symbols = symbols
-        var ideas = ideas
-        var newestMarketTime: Date?
-        var acceptedKeys: Set<String> = []
-        var baselineKeys: Set<String> = []
-        let ideaIndex = Dictionary(ideas.enumerated().map { ($0.element.symbol.uppercased(), $0.offset) },
-                                   uniquingKeysWith: { first, _ in first })
-        for (key, q) in quotes {
-            guard q.price > 0, q.price.isFinite, q.previousClose.isFinite else { continue }
-            let upper = key.uppercased()
-            guard q.symbol.uppercased() == upper else { continue }
-            let i = symbolIndex[upper].flatMap { index in
-                symbols.indices.contains(index) && symbols[index].symbol.uppercased() == upper ? index : nil
-            }
-            let j = ideaIndex[upper]
-            guard i != nil || j != nil else { continue }
-            let row = i.flatMap { symbols[$0].quotes.last }
-            let idea = j.map { ideas[$0] }
-            let accepted = acceptsQuote(q.marketTime, after: row?.marketTime, massiveTradeSequence: q.massiveTradeSequence,
-                               afterMassiveTradeSequence: row?.massiveTradeSequence,
-                               priceSource: q.priceSource, afterPriceSource: row?.priceSource, now: now)
-                && acceptsQuote(q.marketTime, after: idea?.priceAsOf, massiveTradeSequence: q.massiveTradeSequence,
-                               afterMassiveTradeSequence: idea?.massiveTradeSequence,
-                               priceSource: q.priceSource, afterPriceSource: idea?.priceSource, now: now)
-            if let i, let updated = mergedQuote(q, after: row, symbol: upper, acceptPrice: accepted, now: now) {
-                if !accepted, updated != row { baselineKeys.insert(upper) }
-                if accepted { symbols[i].quotes = [StockSageQuote(price: updated.previousPrice,
-                    previousPrice: updated.previousPrice, time: now.addingTimeInterval(-86_400)), updated] }
-                else if !symbols[i].quotes.isEmpty { symbols[i].quotes[symbols[i].quotes.count - 1] = updated }
-            }
-            guard accepted else { continue }
-            if let j {
-                ideas[j] = ideas[j].withLivePrice(q.price, asOf: q.marketTime, massiveTradeSequence: q.massiveTradeSequence,
-                                                priceSource: q.priceSource)
-            }
-            acceptedKeys.insert(upper)
-            if let mt = q.marketTime, newestMarketTime == nil || mt > newestMarketTime! { newestMarketTime = mt }
-        }
-        return (symbols, ideas, newestMarketTime, acceptedKeys, baselineKeys)
-    }
-
     /// Apply a batch of polled quotes — the `.streamGap` timer's 30s top-up (MarketsView) for
     /// tracked symbols the live stream doesn't carry (Tadawul, or a name mid-(re)connect) — via
     /// the in-place merge above. Stamps `lastUpdated`/`quoteAsOf` (a poll IS a live observation)
@@ -3178,9 +3107,20 @@ final class StockSageStore: ObservableObject {
     }
 
     func refresh(scope: TrackedScope = .full) async {
-        guard !isRefreshing else { return }
-        if let reason = ToolPolicy.webToolsDisabledReason() {
-            feedError = reason
+        let isCurrent = StockSageMassive.Access().capture().isCurrent
+        await refresh(universe: trackedDefs(scope: scope), allowed: isCurrent,
+            fetchQuotes: { await StockSageQuoteService.fetchQuoteBatch(for: $0) },
+            refreshFX: { await self.refreshInfraFX(allowed: isCurrent) },
+            heal: { await self.healStaleQuotes(scopedTo: $0, allowed: isCurrent) })
+    }
+
+    /// The production refresh boundary, with provider work replaceable by isolated fixtures.
+    func refresh(universe: [StockSageSymbol], allowed: () -> Bool,
+                 fetchQuotes: ([String]) async -> StockSageQuoteService.QuoteBatch,
+                 refreshFX: () async -> Void, heal: (Set<String>) async -> Void) async {
+        guard !isRefreshing, !Task.isCancelled else { return }
+        if !allowed() {
+            feedError = ToolPolicy.webToolsDisabledReason() ?? "Quote refresh unavailable."
             return
         }
 
@@ -3188,10 +3128,16 @@ final class StockSageStore: ObservableObject {
         // Held for the WHOLE cycle (review 2026-07-28 Q3): releasing it before the merge/heal/
         // commit below let a second refresh() interleave with this one's writes.
         defer { isRefreshing = false }
-        feedError = nil
-        let universe = trackedDefs(scope: scope)
-        let quotes = await StockSageQuoteService.fetchQuotes(for: universe.map(\.symbol))
-        await refreshInfraFX()   // SAR rate for .SR conversions (infra — FX left the universe 2026-07-16)
+        let batch = await fetchQuotes(universe.map(\.symbol))
+        guard !Task.isCancelled, allowed(), batch.stop != .invalidated else { return }
+        if batch.stop == .yahooThrottled {
+            if mergeLiveQuotes(batch.quotes, including: universe) { lastUpdated = Date() }
+            feedError = "Partial market data — Yahoo limited quote requests. Accepted quotes were updated; previous prices were kept for the rest."
+            return
+        }
+        let quotes = batch.quotes
+        await refreshFX()   // SAR rate for .SR conversions (infra — FX left the universe 2026-07-16)
+        guard !Task.isCancelled, allowed() else { return }
 
         // Merge each curated symbol (keeps the friendly market label) with its
         // live quote; drop any the feed couldn't price.
@@ -3225,7 +3171,7 @@ final class StockSageStore: ObservableObject {
         // [:] on Task.isCancelled (five sites), which lands here as an empty board and used to
         // assert a feed failure that never happened — the app blaming the network for its own
         // cancellation. Leave the previous state and message untouched instead.
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, allowed() else { return }
         guard !live.isEmpty else {
             feedError = "Couldn't reach the market feed — showing the last data."
             return
@@ -3236,7 +3182,7 @@ final class StockSageStore: ObservableObject {
         // bails instead of silently truncating the board with feedError left nil), keep it.
         let coverage = Double(live.count) / Double(max(universe.count, 1))
         if Self.coverageGuardShouldBail(coverage: coverage, hasExistingSymbols: !symbols.isEmpty) {
-            feedError = "Partial market data this refresh — keeping the last full snapshot."
+            feedError = "Partial market data this refresh — keeping the previous snapshot."
             return
         }
         // Preserve user-added tickers this refresh's pre-await snapshot may have
@@ -3314,7 +3260,9 @@ final class StockSageStore: ObservableObject {
         // STALE SELF-HEAL (owner directive 2026-07-27: "fix all stale stocks"): any row still
         // MATERIALLY stale after this refresh (beyond the weekend-tolerant freshness window) is
         // exactly what a throttled/partial sweep left behind — retry those alone, once.
-        await healStaleQuotes(scopedTo: scopedKeys)
+        await heal(scopedKeys)
+        guard !Task.isCancelled, allowed() else { return }
+        feedError = nil
         lastUpdated = Date()
         lastFullRefreshAt = Date()
         // Newest MARKET time across the priced quotes — the banner uses this (not fetch time) to

@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import Foundation
 import SwiftUI
 import Testing
@@ -9,6 +10,129 @@ import UIKit
 @MainActor
 struct StockSageIOSPresentationTests {
     private let now = Date(timeIntervalSince1970: 1_788_739_200)
+
+    @Test(arguments: [false, true])
+    func prospectiveEvaluationRequiresCostAndFitsPhone(accessibility: Bool) async throws {
+        let suite = "stocksage.ios.evaluation.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let evaluation = StockSageResearchEvaluation(defaults: defaults)
+        let config = StockSageLocalModelServer.Config(baseURL: URL(string: "http://127.0.0.1:18080")!,
+            model: StockSageLocalModelServer.gemmaModel)
+        let view = StockSageResearchEvaluationView(store: store, history: history, evaluation: evaluation,
+            configuration: { config }).defaultAppStorage(defaults)
+        try await capture(view, name: "prospective-evaluation", accessibility: accessibility,
+                          viewportHeight: 812, shellPadding: 0) { host, window in
+            let initial = try await reveal(in: window, identifier: "research.evaluation.start")
+            #expect(initial.accessibilityTraits.contains(.notEnabled))
+            #expect(evaluation.studies.isEmpty && !evaluation.isChecking)
+            _ = try await reveal(in: window, identifier: "research.evaluation.cost")
+            try await editField("Required, e.g. 25", value: "25", host: host, window: window)
+            let start = try await reveal(in: window, identifier: "research.evaluation.start")
+            try #require(!start.accessibilityTraits.contains(.notEnabled))
+            try #require(start.accessibilityActivate(), "Use the real Start action; rendering must never freeze a study")
+            try await waitUntil("The explicit Start action must freeze exactly one study") { evaluation.studies.count == 1 }
+            let study = try #require(evaluation.studies.first)
+            #expect(study.contract.roundTripCostBPS == 25 && study.contract.model == config.model)
+            let readiness = try await reveal(in: window, identifier: "research.evaluation.readiness.7")
+            #expect(readiness.accessibilityLabel?.contains("Not enough evidence") == true,
+                    "A newly started study must not imply measured skill or manufacture performance")
+            let check = try await reveal(in: window, identifier: "research.evaluation.check")
+            #expect(check.accessibilityTraits.contains(.notEnabled), "Offline fixtures cannot start provider requests")
+            #expect(!evaluation.isChecking && !store.isRefreshing && history.runs.isEmpty)
+            try await saveViewport(window, name: "prospective-evaluation-study", accessibility: accessibility)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func prospectiveEvaluationCoverageCannotHideMissingWindows(accessibility: Bool) async throws {
+        var summary = StockSageResearchEvaluation.HorizonSummary(horizon: .fortnight)
+        summary.selectedWindows = 25; summary.measuredWindows = 2
+        summary.waitingWindows = 5; summary.uncheckedWindows = 10; summary.unavailableWindows = 8
+        summary.expectedPredictions = 125; summary.measuredPredictions = 10
+        summary.eligibleRuns = 29; summary.excludedRuns = 7; summary.sameDateRuns = 1; summary.overlappingRuns = 3
+        summary.meanNetReturn = 0.025; summary.meanBenchmarkNetReturn = 0.015; summary.meanExcessReturn = 0.01
+        try await capture(StockSageResearchEvaluationView.HorizonSummaryCard(summary: summary),
+                          name: "prospective-evaluation-coverage", accessibility: accessibility) { _, window in
+            let texts = nativeElements(window).compactMap(\.accessibilityLabel).joined(separator: "\n")
+            #expect(texts.contains("2 of 25 selected windows measured"))
+            #expect(texts.contains("10 of 125 selected picks measured"))
+            #expect(texts.contains("Waiting: 5") && texts.contains("Not checked: 10") && texts.contains("Data unavailable: 8"))
+            #expect(texts.contains("+2.50%") && texts.contains("+1.50%") && texts.contains("+1.00%"))
+            #expect(texts.contains("Not enough evidence"), "Positive partial results cannot hide the sample warning")
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func holdingsKeepValuesSourcesAndRemovalAccessibleOnPhone(accessibility: Bool) async throws {
+        let suite = "stocksage.ios.holdings.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        try #require(portfolio.add(symbol: "AAPL", shares: 1234.5, costBasis: 100))
+        try #require(portfolio.add(symbol: "LLOY.L", shares: 250, costBasis: 500))
+        let original = portfolio.positions
+        let store = StockSageStore(defaults: defaults, heldSymbols: { portfolio.positions.map(\.symbol) })
+        let at = Date().addingTimeInterval(-60)
+        store.applyPolledQuotes([
+            "AAPL": .init(symbol: "AAPL", price: 120, previousClose: 119, marketTime: at, priceSource: .massiveSIP),
+            "LLOY.L": .init(symbol: "LLOY.L", price: 520, previousClose: 519, marketTime: at, priceSource: .yahoo)
+        ])
+        try #require(store.latestPrice("AAPL") == 120 && store.latestPrice("LLOY.L") == 520)
+        let draft = StockSagePortfolioHoldingsView.EntryDraft()
+        let view = ScrollView { StockSagePortfolioHoldingsView(store: store, portfolio: portfolio, draft: draft) }
+        try await capture(view.defaultAppStorage(defaults), name: "holding-values-actions", accessibility: accessibility,
+                          viewportHeight: 812) { host, window in
+            let identity = try await reveal(in: window, identifier: "portfolio.identity.AAPL")
+            #expect(identity.accessibilityLabel?.contains("1234.50 shares") == true)
+            #expect(identity.accessibilityLabel?.contains("Massive") == true,
+                    "VoiceOver must expose the holding's quote attribution with its identity")
+            for (symbol, value, profit) in [("AAPL", "148140.00 USD", "+24690.00 USD"),
+                                           ("LLOY.L", "1300.00 GBP", "+50.00 GBP")] {
+                let mark = try await reveal(in: window, identifier: "portfolio.value.\(symbol)")
+                #expect(mark.accessibilityLabel == "\(symbol) holding value" && mark.accessibilityValue == value)
+                let result = try await reveal(in: window, identifier: "portfolio.profit.\(symbol)")
+                #expect(result.accessibilityLabel == "\(symbol) profit or loss" && result.accessibilityValue == profit,
+                        "Spoken values must distinguish valuation, profit/loss and the local currency")
+                for element in [mark, result] {
+                    let frame = window.convert(element.accessibilityFrame, from: nil)
+                    #expect(frame.width > 0 && frame.minX >= -1 && frame.maxX <= window.bounds.width + 1)
+                }
+            }
+            let remove = try await reveal(in: window, identifier: "portfolio.remove.AAPL")
+            #expect(remove.accessibilityLabel == "Remove AAPL" && remove.accessibilityTraits.contains(.button))
+            #expect(remove.accessibilityFrame.width >= 44 && remove.accessibilityFrame.height >= 44)
+            try #require(remove.accessibilityActivate(), "The actual accessible Remove action must open confirmation")
+            let confirmation = try await element(in: window, identifier: "portfolio.confirmRemove")
+            #expect(confirmation.accessibilityLabel == "Remove AAPL" && confirmation.accessibilityTraits.contains(.button))
+            #expect(portfolio.positions == original)
+            if let cancel = nativeElements(window).first(where: { $0.accessibilityLabel == "Cancel" }) {
+                if !cancel.accessibilityActivate() {
+                    let control = try #require(cancel as? UIControl)
+                    try #require(control.isEnabled)
+                    control.sendActions(for: .touchUpInside)
+                }
+            } else {
+                // Native popovers omit Cancel: VoiceOver dismisses through the backdrop
+                // or escape action. Exercise that installed action, never set SwiftUI state.
+                let dismiss = try await element(in: window, identifier: "PopoverDismissRegion")
+                var presenter: UIViewController = host
+                while let presented = presenter.presentedViewController { presenter = presented }
+                print("HOLDING_CONFIRMATION presenter=\(type(of: presenter)) horizontalSizeClass=\(presenter.traitCollection.horizontalSizeClass.rawValue) dismiss=\(nativeDescription(dismiss))")
+                let dismissed = dismiss.accessibilityActivate() || dismiss.accessibilityPerformEscape()
+                    || presenter.accessibilityPerformEscape() || presenter.view.accessibilityPerformEscape()
+                try #require(dismissed, "Cancel through the actual native popover accessibility action")
+            }
+            try await waitUntil("Cancel must dismiss the actual holding confirmation") {
+                !nativeElements(window).contains { nativeIdentifier($0) == "portfolio.confirmRemove" }
+            }
+        }
+        let saved = try portfolio.backupRecords()
+        #expect(portfolio.positions == original && saved == original)
+        #expect(draft.symbol.isEmpty && draft.shares.isEmpty && draft.cost.isEmpty && !store.isRefreshing)
+    }
 
     @Test(arguments: [false, true])
     func chatReceiptAndEvidenceFitThePhone(accessibility: Bool) async throws {
@@ -98,6 +222,11 @@ struct StockSageIOSPresentationTests {
             presentation: Binding(get: { presentation }, set: { presentation = $0; presentationChanges += 1 }))
         let suffix = horizon == .week ? "" : "-fortnight"
         try await capture(panel.defaultAppStorage(defaults), name: "research-results\(suffix)", accessibility: accessibility) { _, window in
+            #expect(nativeElements(window).contains {
+                nativeIdentifier($0) == "research.filter" && $0.accessibilityTraits.contains(.button)
+                    && $0.accessibilityLabel?.contains("Research result filter") == true
+            },
+                    "iPhone must offer the existing All checks, opinion and incomplete filters")
             let rows = nativeElements(window).compactMap(nativeIdentifier).filter { $0.hasPrefix("research.result.") }
             #expect(Set(rows) == Set(["RKLB", "AAPL", "MSFT", "NVDA", "AMD"].map { "research.result.\($0)" }),
                     "The native main list must show only the top five, excluding the sixth Buy, Sell and incomplete check")
@@ -108,6 +237,47 @@ struct StockSageIOSPresentationTests {
                           name: "research-detail\(suffix)", accessibility: accessibility)
         #expect(presentationChanges == 0 && presentation.selected == nil && presentation.search.isEmpty
                 && presentation.horizon == horizon)
+        if horizon == .week {
+            let model = PhoneResearchPresentationModel(horizon: horizon)
+            let interactive = PhoneResearchPresentationFixture(model: model, store: store, research: research)
+                .defaultAppStorage(defaults)
+            try await capture(interactive, name: "research-filter-actions", accessibility: accessibility,
+                              viewportHeight: 812) { _, window in
+                for filter in [StockSageResearchModesPanel.ResultFilter.all, .incomplete] {
+                    let picker = try await reveal(in: window, identifier: "research.filter")
+                    try #require(picker.accessibilityActivate(), "The native research filter must open")
+                    let owner = try #require(picker as? UIButton)
+                    let choice = try await element(in: window, label: filter.rawValue)
+                    try await activateMenuChoice(filter.rawValue, rendered: choice, owner: owner)
+                    try await waitUntil("The selected research filter must update") { model.presentation.filter == filter }
+                    if filter == .all {
+                        _ = try await reveal(in: window, identifier: "research.result.ORCL")
+                        #expect(model.presentation.selected == nil,
+                                "Showing All checks must expose the original Sell without opening or changing it")
+                    }
+                }
+                let incomplete = try await reveal(in: window, identifier: "research.result.FAIL")
+                let rows = nativeElements(window).compactMap(nativeIdentifier).filter { $0.hasPrefix("research.result.") }
+                #expect(Set(rows) == ["research.result.FAIL"], "Incomplete must exclude the completed opinions")
+                try #require(incomplete.accessibilityActivate(), "The incomplete row must open its captured explanation")
+                try await waitUntil("The native row must select the incomplete check") { model.presentation.selected == "FAIL" }
+                _ = try await reveal(in: window, labelContaining: "No verified opinion. Synthetic incomplete result.")
+                let close = try await element(in: window, label: "Close details")
+                if !close.accessibilityActivate() {
+                    let control = try #require(close as? UIControl, "Close details must expose the rendered native toolbar control")
+                    try #require(control.isEnabled && control.window === window)
+                    control.sendActions(for: .touchUpInside)
+                }
+                try await waitUntil("Closing evidence must dismiss the sheet and return to the same incomplete filter") {
+                    func presented(_ controller: UIViewController) -> Bool {
+                        controller.presentedViewController != nil || controller.children.contains(where: presented)
+                    }
+                    return model.presentation.selected == nil
+                        && (window.rootViewController.map { !presented($0) } ?? false)
+                }
+                #expect(model.presentation.filter == .incomplete && model.presentation.search.isEmpty)
+            }
+        }
         #expect(research.running == nil && analyses == listings.count && research.scans[horizon]?.at == captured.at)
         #expect(research.scans[horizon]?.selection == receipt && research.scans[horizon]?.results.count == listings.count)
         #expect(store.userSymbols.isEmpty, "Rendering cannot change the isolated watchlist")
@@ -1373,6 +1543,22 @@ struct StockSageIOSPresentationTests {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         try #require(condition(), Comment(rawValue: message), sourceLocation: sourceLocation)
+    }
+}
+
+@MainActor private final class PhoneResearchPresentationModel: ObservableObject {
+    @Published var presentation: StockSageResearchModesPanel.Presentation
+    init(horizon: StockSageHorizonResearch.Horizon) { presentation = .init(horizon: horizon) }
+}
+
+@MainActor private struct PhoneResearchPresentationFixture: View {
+    @ObservedObject var model: PhoneResearchPresentationModel
+    let store: StockSageStore
+    let research: StockSageHorizonResearch
+    var body: some View {
+        ScrollView {
+            StockSageResearchModesPanel(store: store, research: research, presentation: $model.presentation)
+        }
     }
 }
 

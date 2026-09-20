@@ -39,13 +39,25 @@ if [ "$result" -eq 0 ] && [ "$action" = test ]; then
   xcrun xcresulttool get test-results summary --path "$OUT/result.xcresult" --format json >"$OUT/summary.json"
   result=$?
   if [ "$result" -eq 0 ]; then
-    python3 - "$OUT/summary.json" <<'PY'
+    python3 - "$OUT/summary.json" "$OUT/run.log" <<'PY'
 import json, sys
 with open(sys.argv[1]) as source:
     summary = json.load(source)
 passed, failed = summary.get("passedTests", 0), summary.get("failedTests", 0)
 print(f"[runtests] {passed} passed, {failed} failed, {summary.get('skippedTests', 0)} skipped")
-sys.exit(0 if summary.get("result") == "Passed" and passed > 0 and failed == 0 else 1)
+with open(sys.argv[2], errors="replace") as source:
+    log = source.read()
+# These native warnings are not included in xcresult's runtimeWarnings summary.
+diagnostics = [message for message in (
+    "It's not legal to call -layoutSubtreeIfNeeded",
+    "NSHostingView is being laid out reentrantly",
+    "Application performed a reentrant operation in its NSTableView delegate",
+    "Publishing changes from within view updates",
+    "Unable to simultaneously satisfy constraints",
+) if message in log]
+for message in diagnostics:
+    print(f"[runtests] native UI diagnostic: {message}")
+sys.exit(0 if summary.get("result") == "Passed" and passed > 0 and failed == 0 and not diagnostics else 1)
 PY
     result=$?
   fi

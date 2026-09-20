@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StockSage
 
 // MARK: - Quote feed parsing — only-real-data validity guards
@@ -103,4 +104,160 @@ struct StockSageQuoteServiceParsingTests {
         """
         #expect(StockSageQuoteService.parseHistory(Data(bad.utf8), symbol: "X") == nil)
     }
+}
+
+
+struct StockSageQuoteTransportTests {
+    typealias Q = StockSageQuoteService
+
+    nonisolated private static func response(_ request: URLRequest, status: Int = 200,
+        symbol: String = "AAPL", url: URL? = nil, headers: [String: String]? = nil,
+        body: Data? = nil) -> (Data, URLResponse) {
+        let json = "{\"chart\":{\"result\":[{\"meta\":{\"symbol\":\"\(symbol)\",\"regularMarketPrice\":101,\"previousClose\":100,\"regularMarketTime\":1700000000}}]}}"
+        return (body ?? Data(json.utf8), HTTPURLResponse(url: url ?? request.url!, statusCode: status,
+            httpVersion: nil, headerFields: headers)!)
+    }
+
+    @Test(arguments: [429, 503])
+    func providerThrottleStopsTheSweepWithinItsFirstBatch(status: Int) async {
+        let calls = Mutex([String]()), sleeps = Mutex(0)
+        let names = (0..<19).map { "TEST\($0)" }
+        let result = await Q.fetchQuoteBatch(for: names, concurrency: 6, keyPresent: false,
+            allowed: { true }, massive: { _ in [:] }, transport: { request in
+                calls.withLock { $0.append(request.url!.lastPathComponent) }
+                return Self.response(request, status: status)
+            }, sleep: { _ in sleeps.withLock { $0 += 1 } })
+        #expect(result.stop == .yahooThrottled && result.quotes.isEmpty)
+        let requested = calls.withLock { $0 }
+        #expect(!requested.isEmpty && requested.count <= 6)
+        #expect(Set(requested).isSubset(of: Set(names.prefix(6))))
+        #expect(sleeps.withLock { $0 } == 0, "Do not retry each symbol during a provider-wide throttle")
+    }
+
+    @Test func aThrottleRetainsValidPrimaryAndEarlierFallbackQuotes() async {
+        let calls = Mutex([String]())
+        let primary = Q.LiveQuote(symbol: "AAPL", price: 100, previousClose: 99, priceSource: .massiveSIP)
+        let result = await Q.fetchQuoteBatch(for: ["AAPL", "MSFT", "NVDA", "AMD"], concurrency: 1,
+            keyPresent: true, allowed: { true }, massive: { _ in ["AAPL": primary] },
+            transport: { request in
+                let symbol = request.url!.lastPathComponent
+                calls.withLock { $0.append(symbol) }
+                return Self.response(request, status: symbol == "NVDA" ? 429 : 200, symbol: symbol)
+            }, sleep: { _ in })
+        #expect(result.stop == .yahooThrottled)
+        #expect(Set(result.quotes.keys) == ["AAPL", "MSFT"])
+        #expect(result.quotes["AAPL"] == primary && result.quotes["MSFT"]?.priceSource == .yahoo)
+        #expect(calls.withLock { $0 } == ["MSFT", "NVDA"])
+    }
+
+    @Test(arguments: ["primary", "fallback"])
+    func invalidatedSweepDropsAccumulatedQuotesAndStopsRouting(at phase: String) async {
+        let allowed = Mutex(true), calls = Mutex([String]())
+        let result = await Q.fetchQuoteBatch(for: ["AAPL", "MSFT", "NVDA"], concurrency: 1,
+            keyPresent: true, allowed: { allowed.withLock { $0 } }, massive: { _ in
+                if phase == "primary" { allowed.withLock { $0 = false } }
+                return ["AAPL": .init(symbol: "AAPL", price: 100, previousClose: 99)]
+            }, transport: { request in
+                calls.withLock { $0.append(request.url!.lastPathComponent) }
+                allowed.withLock { $0 = false }
+                return Self.response(request, symbol: request.url!.lastPathComponent)
+            }, sleep: { _ in })
+        #expect(result.stop == .invalidated && result.quotes.isEmpty)
+        #expect(calls.withLock { $0 }.count == (phase == "primary" ? 0 : 1))
+    }
+
+    @Test(arguments: ["different-url", "declared-too-large", "actual-too-large", "redirect"])
+    func yahooRejectsUntrustedOrOversizedResponses(mode: String) async {
+        let request = URLRequest(url: URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1d")!)
+        let result = await Q.yahooResponse(for: request, allowed: { true }, transport: { request in
+            Self.response(request, status: mode == "redirect" ? 302 : 200,
+                url: mode == "different-url" ? URL(string: "https://example.invalid/replaced") : nil,
+                headers: mode == "declared-too-large" ? ["Content-Length": String(Q.maximumYahooBytes + 1)] : nil,
+                body: mode == "actual-too-large" ? Data(repeating: 32, count: Q.maximumYahooBytes + 1) : nil)
+        }, sleep: { _ in })
+        guard case .unavailable = result else { Issue.record("Unsafe response was accepted: \(mode)"); return }
+    }
+
+    @Test(arguments: ["credential", "policy"])
+    func capturedGenerationRejectsRoundTripsDuringFallback(kind: String) async {
+        let revision = Mutex(0), calls = Mutex(0)
+        let access = StockSageMassive.Access(key: { "fixture" },
+            credentialRevision: { kind == "credential" ? String(revision.withLock { $0 }) : "fixed" },
+            policyRevision: { kind == "policy" ? String(revision.withLock { $0 }) : "fixed" }, allowed: { true }).capture()
+        let result = await Q.fetchQuoteBatch(for: ["AAPL", "MSFT", "NVDA"], concurrency: 1,
+            keyPresent: true, allowed: access.isCurrent,
+            massive: { _ in ["AAPL": .init(symbol: "AAPL", price: 100, previousClose: 99)] },
+            transport: { request in
+                calls.withLock { $0 += 1 }
+                revision.withLock { $0 += 2 } // Original key/access restored, generation still changed.
+                return Self.response(request, symbol: request.url!.lastPathComponent)
+            }, sleep: { _ in })
+        #expect(result.stop == .invalidated && result.quotes.isEmpty && calls.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: [0, -1])
+    func nonpositiveConcurrencyStillProcessesTheRequestedSymbols(concurrency: Int) async {
+        let result = await Q.fetchQuoteBatch(for: ["AAPL"], concurrency: concurrency, keyPresent: false,
+            allowed: { true }, massive: { _ in [:] }, transport: { Self.response($0) }, sleep: { _ in })
+        #expect(result.stop == .finished && result.quotes["AAPL"]?.price == 101)
+    }
+
+    @Test(arguments: ["exact", "overflow", "declared"])
+    func nativeYahooTransportEnforcesStreamingBounds(mode: String) async throws {
+        #expect(Q.yahooSession.delegate is StockSageHTTP.NoRedirect)
+        let configuration = Q.yahooSession.configuration
+        #expect(configuration.timeoutIntervalForResource == 30 && configuration.urlCache == nil
+                && configuration.urlCredentialStorage == nil && configuration.httpCookieStorage == nil)
+        configuration.protocolClasses = [QuoteBodyProtocol.self]
+        let session = URLSession(configuration: configuration, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let request = URLRequest(url: URL(string: "https://query1.finance.yahoo.com/\(mode)")!)
+        do {
+            let (data, _) = try await Q.yahooTransport(request, session: session)
+            #expect(mode == "exact" && data.count == Q.maximumYahooBytes)
+        } catch {
+            #expect(mode != "exact" && (error as? URLError)?.code == .dataLengthExceedsMaximum)
+        }
+    }
+
+    @Test func aCredentialChangeStopsHistoryRetriesAtTheOriginalGeneration() async {
+        let revision = Mutex(0), calls = Mutex(0), sleeps = Mutex(0)
+        let captured = StockSageMassive.Access(key: { "fixture" },
+            credentialRevision: { String(revision.withLock { $0 }) }, policyRevision: { "fixed" }, allowed: { true }).capture()
+        let request = URLRequest(url: URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1y&interval=1d")!)
+        let result = await Q.yahooResponse(for: request, allowed: captured.isCurrent, transport: { request in
+            calls.withLock { $0 += 1 }
+            revision.withLock { $0 += 2 }
+            return Self.response(request, status: 503)
+        }, sleep: { _ in sleeps.withLock { $0 += 1 } })
+        guard case .unavailable = result else { Issue.record("Obsolete retries must fail closed"); return }
+        #expect(calls.withLock { $0 } == 1 && sleeps.withLock { $0 } == 0)
+    }
+
+    @Test func standaloneHistoryTransportKeepsItsBoundedRetryPolicy() async {
+        let calls = Mutex(0), sleeps = Mutex([Duration]())
+        let request = URLRequest(url: URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1y&interval=1d")!)
+        let result = await Q.yahooResponse(for: request, allowed: { true }, transport: { request in
+            let attempt = calls.withLock { $0 += 1; return $0 }
+            return Self.response(request, status: attempt < 3 ? 503 : 200)
+        }, sleep: { delay in sleeps.withLock { $0.append(delay) } })
+        guard case .data = result else { Issue.record("A successful bounded retry should retain the body"); return }
+        #expect(calls.withLock { $0 } == 3 && sleeps.withLock { $0 } == [.seconds(1), .seconds(2)])
+    }
+}
+
+
+private nonisolated final class QuoteBodyProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let url = request.url!, maximum = StockSageQuoteService.maximumYahooBytes
+        let headers = url.lastPathComponent == "declared" ? ["Content-Length": String(maximum + 1)] : [:]
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200,
+            httpVersion: "HTTP/1.1", headerFields: headers)!, cacheStoragePolicy: .notAllowed)
+        let count = url.lastPathComponent == "overflow" ? maximum + 1 : maximum
+        client?.urlProtocol(self, didLoad: Data(repeating: 32, count: count))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

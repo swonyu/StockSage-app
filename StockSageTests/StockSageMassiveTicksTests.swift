@@ -8,6 +8,39 @@ struct StockSageMassiveTicksTests {
     let from = Date(timeIntervalSince1970: 1_517_561_900)
     let to = Date(timeIntervalSince1970: 1_517_562_100)
 
+    @Test func sameDayQuoteDoesNotFallBackPastNewerWithdrawalOrMalformedRow() throws {
+        var valid = StockSageNBBO(symbol: "AAPL", bid: 100, ask: 100.1, bidSize: 10, askSize: 10,
+            bidExchange: 1, askExchange: 1, timestamp: to.addingTimeInterval(-1), sequence: 1)
+        valid.conditions = [701]
+        let page = T.Page(quotes: [valid])
+        #expect(T.researchQuote(page, symbol: "AAPL", regularConditions: [701], at: to) != nil)
+        #expect(T.researchQuote(page, symbol: "MSFT", regularConditions: [701], at: to) == nil)
+        #expect(T.researchQuote(page, symbol: "AAPL", regularConditions: [], at: to) == nil)
+        #expect(T.researchQuote(page, symbol: "AAPL", regularConditions: [701], at: to.addingTimeInterval(6)) == nil)
+        var withdrawn = StockSageNBBO(symbol: "AAPL", bid: 0, ask: 0, bidSize: 0, askSize: 0,
+            bidExchange: 1, askExchange: 1, timestamp: to, sequence: 2)
+        withdrawn.conditions = [701]
+        #expect(T.researchQuote(.init(quotes: [valid, withdrawn]), symbol: "AAPL", regularConditions: [701], at: to) == nil)
+        #expect(T.researchQuote(.init(quotes: [valid], rejected: 1), symbol: "AAPL", regularConditions: [701], at: to) == nil)
+    }
+
+    @Test func sameDayQuoteRejectsConflictingLatestTiesWithoutSequenceProof() {
+        func value(_ bid: Double, sequence: Int64?) -> StockSageNBBO {
+            var q = StockSageNBBO(symbol: "AAPL", bid: bid, ask: bid + 0.1, bidSize: 10, askSize: 10,
+                bidExchange: 1, askExchange: 1, timestamp: to, sequence: sequence)
+            q.conditions = [701]
+            return q
+        }
+        for sequence in [nil, Int64(1), Int64(-1)] {
+            for pair in [[value(100, sequence: sequence), value(101, sequence: sequence)],
+                         [value(101, sequence: sequence), value(100, sequence: sequence)]] {
+                #expect(T.researchQuote(.init(quotes: pair), symbol: "AAPL", regularConditions: [701], at: to) == nil)
+            }
+        }
+        let same = value(100, sequence: nil)
+        #expect(T.researchQuote(.init(quotes: [same, same]), symbol: "AAPL", regularConditions: [701], at: to) != nil)
+    }
+
     @Test @MainActor func paperTradeTiesUseSIPThenSequenceRegardlessOfResponseOrder() throws {
         func row(_ price: Int, sipAge: Int64, sequence: Int64) -> [String: Any] {
             ["price": price, "size": 10, "conditions": [701], "correction": 0,
@@ -34,13 +67,17 @@ struct StockSageMassiveTicksTests {
         func row(_ seconds: Int64, high: Double = 102) -> [String: Any] {
             ["t": seconds * 1_000, "o":100, "h":high, "l":99, "c":101, "v":20]
         }
-        func parse(_ rows: [[String: Any]], ticker: String = "AAPL", next: Bool = false) throws -> T.Intraday? {
+        func parse(_ rows: [[String: Any]], ticker: String = "AAPL", next: Bool = false, verified: Bool = false) throws -> T.Intraday? {
             var root: [String: Any] = ["status":"OK", "ticker":ticker, "results":rows]
             if next { root["next_url"] = "more" }
+            if verified { root["adjusted"] = true; root["resultsCount"] = rows.count }
             return T.parseIntradayFacts(try JSONSerialization.data(withJSONObject: root), symbol: "AAPL", from: from, now: now)
         }
         let valid = try #require(try parse([row(1_799_999_880), row(1_799_999_940), row(1_800_000_000)]))
         #expect(valid.facts.count == 3 && valid.asOf == Date(timeIntervalSince1970: 1_800_000_000), "Current incomplete bar excluded")
+        #expect(valid.bars.count == 2, "Retain typed completed bars; never reconstruct prices from prose")
+        #expect(!valid.verifiedMinutes, "Missing adjustment/count metadata cannot qualify a same-day pick")
+        #expect(try parse([row(1_799_999_880), row(1_799_999_940)], verified: true)?.verifiedMinutes == true)
         #expect(valid.fresh(at: now) && !valid.fresh(at: now.addingTimeInterval(181)))
         #expect(try parse([row(1_799_999_880), row(1_799_999_940)], ticker: "MSFT") == nil)
         #expect(try parse([row(1_799_999_880), row(1_799_999_940)], next: true) == nil)

@@ -1079,7 +1079,6 @@ final class StockSageJournalStore: ObservableObject {
         let before = trades
         trades.insert(t, at: 0)
         guard save() else { trades = before; return false }
-        lastError = nil
         return true
     }
 
@@ -1107,7 +1106,7 @@ final class StockSageJournalStore: ObservableObject {
 
     /// Backup has already validated every incoming record. Prepare a single batch without
     /// changing memory/defaults, so a later portfolio/watchlist failure changes nothing.
-    func prepareBackupImport(_ incoming: [TradeRecord]) throws -> (added: Int, apply: () throws -> Void) {
+    func prepareBackupImport(_ incoming: [TradeRecord]) throws -> StockSageRecordStorage.PreparedImport {
         try StockSageRecordWriter.require(defaults)
         if let error = incoming.compactMap(\.ownerJournalError).first {
             throw StockSageBackup.BackupError.restoreFailed(error)
@@ -1121,12 +1120,12 @@ final class StockSageJournalStore: ObservableObject {
         merged.insert(contentsOf: additions, at: 0)
         let data = try JSONEncoder().encode(merged)
         let records = merged
-        return (additions.count, {
-            try self.deletions.restore(Set(additions.map(\.id)))
-            self.defaults.set(data, forKey: self.key)
+        let changes = deletions.restorationChanges(Set(additions.map(\.id)))
+            + [StockSageRecordStorage.Change(key: key, value: .data(data))]
+        return .init(defaults: defaults, added: additions.count, changes: changes, publish: { warning in
             self.trades = records
             self.hasLoadedRecords = true
-            self.lastError = nil
+            self.lastError = warning
         })
     }
 
@@ -1147,13 +1146,12 @@ final class StockSageJournalStore: ObservableObject {
         let before = trades
         trades[i] = candidate
         guard save(replacing: before[i]) else { trades = before; return false }
-        lastError = nil
         return true
     }
 
     // Preserve foreign records while committing a durable deletion for this ID.
     func remove(_ id: UUID) {
-        if save(removing: [id]) { lastError = nil }
+        _ = save(removing: [id])
     }
 
     private func load() {
@@ -1189,11 +1187,15 @@ final class StockSageJournalStore: ObservableObject {
             return false
         }
         // Encode first: a failed save must not leave a deletion marker behind.
-        do { try deletions.mark(removing) }
+        let warning: String?
+        do {
+            warning = try StockSageRecordStorage.update(deletions.deletionChanges(removing)
+                + [.init(key: key, value: .data(data))], defaults: defaults)
+        }
         catch { lastError = error.localizedDescription; return false }
-        defaults.set(data, forKey: key)
         trades = records
         hasLoadedRecords = true
+        lastError = warning
         return true
     }
 

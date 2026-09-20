@@ -1,3 +1,42 @@
+## All-branch integration — 19 September 2026
+
+Owner explicitly requested merging all branches and pushing StockSage. Integration
+starts from `e170c1e` in an isolated checkout; publication targets only
+`swonyu/StockSage-app` main. Other worktrees' uncommitted files are excluded.
+
+The news, bounded-diagnostics and whole-market-feed branch tips were exact
+cherry-pick equivalents already on main, so their ancestry is recorded without
+reapplying old source. Coverage fixes were already integrated by `d13ab2b`;
+retain the newer fail-closed Form 4 parser and accessible idea footer while adding
+the missing historical review/specification records. Tradier planning remains
+historical documentation, with no broker or service activation.
+
+The reevaluation branch adds issuer-aware news excerpts and full-row provenance,
+typed analyst capture, instrument applicability, fresh provider capture, visible
+research ages, and bounded cyclic-output rejection. Reconcile these with main's
+Gemma profiles, exact schema ordering, typed insider packets, qualification/ranking,
+parallel research and durable diagnostics/history. Main's next-session earnings
+window remains authoritative. The incoming calendar helper is independently
+available; it does not replace that production horizon policy.
+
+The incoming per-scan receipt manifest remains explicitly injected for tools/tests;
+production keeps its existing diagnostics and history stores. Production-wide
+not-started/interrupted manifest coverage is not enabled by this merge. The legacy
+LM Studio replay remains explicitly invoked and lease-gated; its offline compiler
+now supports current and historical contracts. It excludes earnings-window checks,
+collection/retries and generation-order benchmarking.
+
+Verification: Xcode 27.0 native tests passed on the final integrated source:
+Mac 2,892 passed / 0 failed / 3 skipped; iPhone 17 Pro iOS 27 simulator
+2,828 passed / 0 failed / 2 skipped. The canonical calibration-persistence,
+live-universe and strategy-baseline suites remain excluded. Python continuation
+and replay checks: 19 passed. Result bundles are under the integration task's
+`work/integrated-mac-4.xcresult` and `work/integrated-ios-1.xcresult`; the task is
+`/Users/saleh/Documents/Codex/2026-09-19/me`. The source manifest was unchanged
+through both final gates. Installed Mac/physical-iPhone apps were not replaced
+or restarted; only test hosts ran. No live model generation, provider probe,
+or broker action was performed.
+
 ## Relaunch checkpoint — 19 September 2026
 
 Short stop point for a new session. Full question list: `agent-docs/UNANSWERED.md`.
@@ -80,6 +119,68 @@ remains on its own branch; `main` is currently exactly at the merge-base with
 it (`aeb9dab`), so nothing to reconcile yet on that front. Full detail, exact
 commit-by-commit receipts and the live handoff for this workstream:
 `/Users/saleh/.claude/projects/-Users-saleh/memory/salehman-gemma-research-quality-plan.md`.
+## Current reevaluation checkpoint - 15 September 2026
+
+The current task explicitly requested latest `main`, a new branch named
+`revaluating`, reconciliation of unmerged research fixes, and renewed throughput
+research. Local `main` was fast-forwarded to `4a18b17`; `revaluating` integrates
+the research branch through `107731a`. This section supersedes older task scope
+and completion statements below. Publish this integration to `revaluating`.
+
+Keep upstream native Mac/iOS presentation, local watchlist commands, saved
+research, completed-session daily-bar validation and incomplete-response refusal.
+Keep research-branch news relevance/deduplication, horizon/ETF applicability,
+per-listing/per-attempt receipts, typed analyst evidence, mandatory evidence
+coverage and freshness details. The old panel/schema overrides were superseded.
+The unused target comparison helper from `107731a` and its mirror test were
+removed; it was not integrated into assessment acceptance and inferred adjustment
+basis from field names. `.research/ROADMAP.md` returns to ignored local metadata.
+
+Completion is **10/27**, correcting the prior unsupported **12/27** claim.
+R05 and R07 remain open; R08/R27 remain partial. Upstream now supplies completed
+research snapshots and later adjusted-price direction checks, so R18 does not
+need a duplicate persistence implementation. It still needs matched baselines,
+costs, uncertainty and prospective outcome evidence. R25 retains interruption
+receipts but still lacks exact partial-scan resume.
+
+Request JSON now has stable nested schema/property order, permitting identical
+requests to reuse backend grammar state where supported. A regression verifies
+equivalent schemas produce identical request bytes. No live tok/s gain is claimed.
+The replay helper compiles upstream's actual Unicode guard and hashes uncommitted
+worktree extraction explicitly. All 499 archived final-answer validation results
+match latest main: 467 accepted, 31 numeric-prose refusals, one malformed JSON.
+
+Final macOS gate: **2,549 unique passed / 2,982 parameterized executions / one
+existing skip / zero failures**, 233 suites. The first gate exposed one obsolete
+schema expectation, corrected before the final pass. iPhone runtime testing is
+unavailable because CoreSimulator 1155.4.0 is older than Xcode's required 1171.7.0;
+the separate iOS app-module compile passed in 65 seconds. Its receipt is under the
+evidence directory below; this is not an iPhone runtime test.
+
+Historical 13 September baseline: 22.47 generation tok/s, 11.19 request-output
+tok/s, 9.26 whole-scan tok/s and 87.48 minutes. Conditional balanced target:
+25% less prompt processing plus 25% faster decoding gives 28.09 generation tok/s,
+11.37 whole-scan tok/s and 71.29 minutes (+22.72% throughput). Stretch assumptions
+of 50% less prompt processing and 50% faster decoding give 33.71 generation tok/s,
+14.09 whole-scan tok/s and 57.49 minutes (+52.17%). These are timing-model estimates
+with fixed output count/quality and collection overhead, not measured improvements.
+
+Fresh [LM Studio MLX engine research](https://lmstudio.ai/blog/mlx-engine-agentic-workloads)
+documents cache reuse and continuous batching for its vision runner, superseding
+older blanket statements that MLX cannot batch. Local selected engines are MLX
+NAX 1.11.0 and llama.cpp 2.38.0. Other tasks were generating on local GGUF and
+remote Qwen MLX instances, so no isolated live A/B inference was possible here.
+Next experiment order: exact device/model/context/thinking profile; cached-prefix
+reuse at 8K/16K with mandatory evidence intact; one versus two concurrent requests;
+same-model quantization comparison; compatible speculative decoding. Score accepted
+answers per second alongside decode speed. Do not treat vendor benchmarks as ours.
+
+Receipts: ignored `.research/revaluating-20260915/`, including final native summaries,
+production-validator replay, source hashes, reconciliation and throughput estimates.
+The single colored HTML report is refreshed with this dated technical checkpoint;
+the original stock table and original research timestamps remain historical.
+
+---
 
 ## Publication authorized — 15 September 2026
 
@@ -243,6 +344,295 @@ verified; selected inspector caption contrast is not installed-pixel verified wi
 new scan. Native900 inspector window can expand to1260; no900 three-pane fit claim.
 Gate simulator shut down. Full receipt/screenshots:
 `/Users/saleh/Documents/Codex/2026-09-14/cp/outputs/StockSage-native-redesign-2026-09-14.md`.
+
+## Historical research branch checkpoints
+
+# Latest checkpoint — 2026-09-14T01:58:53.941743+00:00 — R26 completed
+
+This checkpoint supersedes older completion counts. **10/27 recommendations complete
+(37.0%)**, including existing R17; R08/R27 remain partial. R26 corrected source comments
+and marked historical documents as dated snapshots. No executable Swift text changed:
+line-comment-stripped before/after source matched exactly. Fresh macOS build passed
+in8.941s; full native results remain2,481 unique passed/2,836 executions/skip1/fail0
+from the immediately preceding `2e37fd8` implementation checkpoint.
+
+Verified local metadata: `mlx-community/Qwen3.5-9B-6bit`, config SHA256
+`6d92400233a58e9ea0e61198aeaee4ef671e9ad2bed4658066a547e3149edbe8`,32text layers,
+8full-attention layers,4KV heads,256head dimension. Host is Apple M5 Pro/24GB.
+Idealized bf16 growing KV estimate is32KiB/token;4K→16K increment384MiB
+(hypothetical8-bit192MiB; uniform32-layer bf16 allocation1.5GiB). These are
+config-derived estimates, NOT actual allocations or measured memory savings.
+The artifact's6-bit weight quantization does not identify KV cache precision.
+Historical Saleh-host document measurements remain unchanged and labelled as dated.
+
+Receipts: `.research/fix-benchmarks/resume-20260914/r26-metadata-verification.json`
+and `r26-build-gate.json`. Report/changelog/roadmap updates must keep this distinction.
+Latest sent report before this checkpoint is revision34, Gmail message
+`1a09d9e2e31fee98`,5,738,412-byte attachment verified. Check newer ignored email receipts
+for delivery updates. Keep the single colored HTML; no main merge or app installation.
+Source/build/test work remains on `codex/research-quality-fixes`.
+
+Next: R05 exact record/field/currency/date/basis comparisons, R07 semantic claim support,
+and R14 actual context/reasoning profile verification. The other LM Studio setup task
+confirmed no new verified MLX context fix or distinct non-thinking profile. A prior remote
+27B benign arithmetic probe with zero reasoning tokens did not prove reasoning-mode control.
+No local GPU lease remains; preserve all remote instances and FaceTime/Safari.
+
+---
+
+# Latest checkpoint — 2026-09-14T01:47:00.898629+00:00
+
+Continue on `codex/research-quality-fixes`; do not merge main. This checkpoint supersedes
+older current-state paragraphs below. Current primary task remains
+`01a09652-9a4a-7260-82a6-e949fe0c3dbc`; use the ownership helper before work.
+
+- Completion remains **9/27 (33.3%)**. R08 and R27 have tested partial work, not completed
+  claim support. The pre-existing R17 guard is included in the nine.
+- This commit adds one typed evidence compiler, required source-state retention in
+  Horizon/Paper packing, hashed supplemental news identifiers, exact fitter omission
+  keys, separate earlier Benzinga omission counts, per-symbol reference coverage, and
+  backward-compatible Paper decision receipts. Intraday citations exclude both the
+  summary caveat and following daily facts. Coverage is reference presence, not semantic
+  validation. R27 still needs claim support and broader persisted coverage across consumers.
+- **Full macOS gate: 2,481 unique passed / 2,836 executions / one existing skip / zero
+  failures**, 231 suites, Swift Testing 90.335 s; command 201.846 s including compilation.
+  The log's 2,482 count includes the skip. Input hashes remained unchanged during the gate.
+  Built current macOS app/test targets; no installed-app replacement/launch or iOS runtime
+  claim. Receipt: `.research/fix-benchmarks/resume-20260914/r27-full-gate.json` and
+  `r27-full-summary.json`. Initial focused gate exposed a fixture error: company names
+  were clipped before its intended over-budget test. Replaced with oversized injected
+  source status; final full gate passes. Two review corrections landed before the final gate.
+- Synthetic six-budget production fitter checkpoint: all required facts retained in
+  **4/6 before → 6/6 after**. At 2K and 3K: **11/12 → 12/12**; at 4K/6K/8K/16K already12/12.
+  Before uses the original all-Context-facts-optional caller policy at `c724389`; after
+  uses typed required facts. No model calls, speed or investment accuracy claim.
+  Full rows: `.research/fix-benchmarks/resume-20260914/r27-paired-coverage.json`.
+- Latest delivered email before this commit: **revision32**, message `1a09d89cb8a5dd65`,
+  verified SENT with 5,505,297-byte HTML attachment; `email-delivery-r32.json` records hash.
+  The next report checkpoint must include this gate and values; check newer delivery
+  receipts before claiming a later revision was sent. One colored HTML remains authoritative.
+- Latest read-only model check: zero local instances; two remote instances owned by the
+  remote setup were preserved. StockSage broker remains released/logged out. Last GPU
+  benchmark still0/6 usable before/after; this source checkpoint did not rerun inference.
+- Spark fallback remains ACTIVE, first defer observed; no actual quota-exhaustion takeover
+  yet. Ordinary Codex usage was still allowed (19% remaining at this checkpoint).
+  Keep explicit file staging, normal fix-branch push and verified remote equality; report,
+  roadmap and receipts remain unstaged. Changelog contains completed improvements only.
+- Next: R05 exact typed comparisons and R07 claim/source support, plus R14 model capability
+  preflight needed after the reasoning-only failure. A typed amount match is insufficient:
+  require exact record/field, currency/date and adjustment basis; unknown basis must abstain.
+
+---
+
+# Current handoff — resumed September 14, 2026
+
+This checkpoint supersedes the paused September 13 section below. Salman resumed
+implementation and authorized local GPU tests, branch commits/pushes, and emailed
+colored report checkpoints. Do not merge main. Primary task:
+`01a09652-9a4a-7260-82a6-e949fe0c3dbc`.
+
+- Earlier application batch is `c74d553`; pushed helper checkpoint is `41e893c`.
+  This checkpoint adds tested R08 typed analyst evidence, still partial. Inspect
+  Git for the resulting source revision. Main remains `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`.
+- Completion: **9/27 implemented (33.3%)**, including the pre-existing R17 guard;
+  eight newly finished recommendations plus separate APP-FRESHNESS. No new
+  recommendation is complete in this resumption yet.
+- Private report-delivery details omitted.
+- The changelog-only heartbeat is **ACTIVE**; the app updater remains **PAUSED**.
+  Standalone `stocksage-spark-fallback-continuation` is ACTIVE every 30 minutes on
+  `gpt-5.3-codex-spark` high. It defers while ordinary usage is available or the
+  primary task runs. At 01:03 UTC ordinary usage was still allowed (23% remaining).
+- Read `agent-docs/SPARK_CONTINUATION.md` for the concrete ownership, automatic
+  commit/push and email procedure. All providers must use
+  `tools/research_continuation.py` on `.research/continuation-state.json`.
+  Eleven ownership tests and seven replay guards passed. Spark recorded its first
+  correct defer while Astra remained active; actual exhausted-quota takeover is unproven.
+- `tools/research_model_replay.py` prepared six frozen cases by compiling the actual
+  before/after Swift prompt/schema/validator. Preparation and twelve bounded GPU
+  calls completed; all failed to return final JSON, as detailed below. Device and
+  context checks fail closed; frozen input and
+  generated artifacts stay under `.research/fix-benchmarks/resume-20260914/`.
+- GPU setup found remote preferred-device routing and ignored requested context.
+  The temporary remote instance from our first attempt was explicitly removed;
+  no inference was sent to it. An explicitly selected local copy reported 71,680
+  context instead of 16,384 and was unloaded. A later SDK attempt failed with LM
+  Link keepalive errors. Recheck broker/model state before proceeding; do not use
+  saved instance names blindly. Existing remote 27B remains owned by the other task.
+- R08 typed analyst evidence is integrated and native-tested; its target-claim
+  validator remains dependent on R05. Worker source remains in isolated worktree
+  `/Users/salman/StockSage-worktrees/research-analyst` for review until cleanup.
+- Next implementation order remains R08, R27, R05, R07. Local roadmap:
+  `.research/ROADMAP.md`. Do not count prepared code or synthetic acceptance as
+  completed financial accuracy. No full-universe research or training.
+
+Prior macOS 2,464 unique tests /2,816 executions, iOS module compile and 5.263-second
+closeout build below remain dated September 13 on unchanged application source.
+The new full native gate below supersedes the macOS test count. The app was not
+installed or launched. Preserve all unrelated user files and the one HTML report.
+
+## Verified checkpoint — 2026-09-14 01:21 UTC
+
+- `41e893c` is pushed and remote-ref equality verified. Spark's first scheduled
+  cycle correctly deferred because ordinary usage remained available and Astra
+  was active. Its note mislabeled Riyadh time as UTC; the automation now explicitly
+  requires tool-derived UTC timestamps. A true exhausted-quota takeover is not yet
+  observed; the helper's race/takeover tests pass.
+- This subsequent source checkpoint adds typed R08 analyst fields and six regressions.
+  Full macOS gate: **2,470 passed, one existing skip, zero failures**, 230 suites,
+  85.817 seconds in Swift Testing; total command wall time 105.896 seconds.
+  This builds the latest macOS app/test targets; no app install or launch. An initial
+  run had one new test wording mismatch; it was corrected and the full gate reran.
+  R08 remains **partial** because record-bound target-claim checking depends on R05.
+  Completion remains **9/27 (33.3%)**, including the pre-existing R17 safeguard.
+- Native receipt: `.research/fix-benchmarks/resume-20260914/r08-validation.json`;
+  results: `/Users/salman/Library/Logs/StockSageAuditFixes/r08-full-v2-20260914-0118.xcresult`.
+- Completed a separate local Q5 GGUF 9B paired benchmark, six frozen cases in each
+  phase, actual 16,384 context and one parallel slot. Original-source contract
+  `62d99cf` versus fixed contract `41e893c`: **0/6 usable answers in BOTH phases**.
+  All twelve 192-token replies were reasoning-only and truncated. Median whole-request
+  output throughput 20.068 vs20.174 tok/s includes reasoning, not useful final JSON or
+  isolated decode speed. No speed/accuracy improvement is established. Prioritize
+  model reasoning/capability preflight (R14); do not increase claimed completion.
+- Original MLX9B ignored 16K context (reported71,680) via CLI and REST; temporary
+  remote preferred-device routing was restored. All StockSage-created temporary
+  instances were removed. At01:14:52 UTC **zero local model instances** remained,
+  and only the existing remote `saudi-27b-fast-32k-vision` remained. Broker released
+  and StockSage logged out. This is runtime unload verification, not forensic GPU erasure.
+- New paired receipt, raw requests/responses, load discrepancy and unload evidence:
+  `.research/fix-benchmarks/resume-20260914/`. The single colored report will embed
+  this checkpoint and be emailed; check its delivery receipt before claiming a newer
+  email than revision30. Report and metadata remain unstaged.
+- Next: R27 required evidence coverage is being prepared in isolated worktree
+  `/Users/salman/StockSage-worktrees/research-coverage`, branch
+  `codex/r27-evidence-coverage`; no worker native builds/inference. Root owns
+  integration, benchmarks, report and serial gates. Then R05/R07 target/claim support.
+
+---
+
+# Current handoff — paused September 13, 2026
+
+Salman requested stopping work for today, committing this handoff and continuing later.
+This checkpoint is for `/Users/salman/Stocksage Project`. Older sections below describe
+other dates and machines; use this checkpoint and current Git state when resuming here.
+
+## Historical saved state
+
+- Branch: `codex/research-quality-fixes`.
+- Latest application-source commit: `c74d553b72b98973a77d95e6061dddabec3fb9cf`, pushed.
+- Earlier fix batch: `ca53ed0f78c119b3b2c23cc7a9231f8799475ee2`, pushed.
+- Remote branch matched local source when checked on September 13. Local and remote
+  `main` remain `62d99cf5ba3055d7f23b5a2f95c34a65fefedeb3`; no merge to main.
+- This closing commit changes the handoff only. No application-source edits since the gates.
+- Both Codex automations are **PAUSED**: `refresh-stocksage-research-audit`
+  (changelog only) and `watch-incoming-stocksage-version` (app updater).
+  Resume the changelog monitor when active fixing resumes; leave the updater paused
+  until explicitly authorized. No implementation or model work should run while paused.
+- Only the root worktree remains. Worker handoffs were archived and hash-checked in
+  ignored `.research/worker-handoff-20260913.tar.gz` and
+  `.research/worker-handoff-batch2-20260913.tar.gz` before cleanup.
+
+## Completed fixes
+
+The report's IDs are the canonical recommendation identities:
+
+- R06: aligned prompt, response schema and numeric/reference validator.
+- R13: bounded retries for clearly degenerate output.
+- R09/R10: durable per-listing coverage and model-call/validation/display receipts.
+- R01/R02: company-relevant news passages before clipping, markup cleanup and
+  conservative duplicate merging with source/revision provenance retained.
+- R04: dated events classified against the research holding window; certainty and
+  unsupported-calendar states remain explicit.
+- R03: provider instrument type in facts and conservative ETF applicability checks.
+- APP-FRESHNESS: Run Again fetches fresh bounded evidence; attempt/result/news times,
+  retained old results and prior-run differences are explicit. The UI identifies the
+  US stock/ETF market, USD/no OTC scope, New York clock and colored/text-labeled session state.
+
+These changes are compiled and tested branch code. The installed app was not replaced,
+and visual QA has not been performed for these two batches.
+
+## Verified build and tests
+
+Fresh closeout build, September 13 at 22:56 Riyadh: **BUILD SUCCEEDED**, exit 0,
+macOS arm64 Debug, Xcode 26.6 (17F113), two build jobs. Incremental wall time: 5.263 s.
+Bundle metadata is version **1.0**, build **1**; use the source commit to distinguish updates.
+Signing was disabled for this build check; it was not installed or launched.
+All 374 files in the final source/test/project snapshot matched the earlier native gate
+before and after this build. The gate's aggregate SHA256 is
+`3e876d1461fbd8b53cc659ae8d7c0323b4e97f4fe26a5f9b436ee01e03ed13f6`.
+
+Reproducible build (choose a new result bundle for each invocation):
+
+```bash
+cd '/Users/salman/Stocksage Project'
+xcodebuild -project StockSage.xcodeproj -scheme StockSage \
+  -destination 'platform=macOS,arch=arm64' -configuration Debug \
+  -derivedDataPath '/Users/salman/Library/Caches/StockSageAuditFixes/DerivedData' \
+  -resultBundlePath '/Users/salman/Library/Logs/StockSageAuditFixes/next-build.xcresult' \
+  -jobs 2 'OTHER_SWIFT_FLAGS=$(inherited) -j2' CODE_SIGNING_ALLOWED=NO build
+```
+
+- Built app: `/Users/salman/Library/Caches/StockSageAuditFixes/DerivedData/Build/Products/Debug/StockSageX.app`.
+- Executable SHA256: `d779e544a4e1badc66bc6f99a9f0b01c99940aabe8e7594a74c437f3276127e8`.
+- Fresh build log/result: `/Users/salman/Library/Logs/StockSageAuditFixes/pause-build-20260913.log`
+  and matching `.xcresult` bundle. Machine-readable receipt:
+  `.research/fix-benchmarks/pause-20260913/build-verification.json`.
+- Earlier final full macOS gate on the same source: **2,464 unique tests passed,
+  2,816 parameterized executions passed, one existing opt-in skip, zero failures**.
+  Evidence: `batch2-full-v2-20260913.xcresult` and `.log` in the same log directory;
+  `.research/fix-benchmarks/batch2/full-macos-summary.json`.
+- Only README's three optional suites were excluded: `CalibrationPersistRunTests`,
+  `LiveUniverseVerificationTests`, `StrategyBaselineMeasurementTests`.
+- Earlier iOS app-module compile passed in 88 s. iPhone runtime tests were unavailable:
+  Xcode 26.6 reported iOS 26.5 not installed and no eligible iPhone destination.
+  Compilation is not runtime verification. Do not install a platform incidentally.
+- No tests were rerun for this documentation-only closeout; the new verification is a build.
+
+## Report, measurements and local skills
+
+Keep the single colored report at
+`/Users/salman/Library/Application Support/StockSage Updater/Reports/2026-09-13-live-research-audit/report.html`.
+It contains the summary, source/model baseline, exact original research evidence,
+implementation ledger, one recommended-stock comparison table, measured checkpoints
+and improvement-only changelog. Do not create parallel PDF/Markdown audit reports.
+Full measurements belong in its benchmark sections; the changelog holds deltas only.
+Report, ignored `.research` receipts and other generated metadata remain unstaged.
+
+Synthetic guards and historical replay do not establish investment accuracy, live
+research speed or model-training benefit. This batch used no new local inference,
+training or full research scan. LM Studio logs may belong to another task.
+
+Validated skills live under `/Users/salman/bin/system-files/codex/skills/`, discoverable
+through the existing `~/.codex/skills` symlink:
+`stocksage-research-audit`, `stocksage-benchmark`, `stocksage-news-freshness`.
+These canonical workflow files are local, outside the StockSage Git commit.
+The report maintainer is `/Users/salman/bin/system-files/stocksage-updater/report_audit.py`;
+read its adjacent `REPORT_MAINTENANCE.md` before report changes. Do not rerun the archived
+one-shot `.research/finalize-batch2-report.py`; it is not idempotent.
+
+## Resume from here
+
+1. Confirm this branch/HEAD, source hashes and current toolchain. Read the report's
+   current ledger plus `.research/research-quality-fixes-plan.md`; do not restart
+   completed batches or infer current state from the older handoffs below.
+2. Next recorded order: **R08** analyst action versus consensus typing; **R27**
+   missing-fact/evidence coverage; **R05** typed price/target comparisons; **R07**
+   claim-to-citation support. Recheck acceptance criteria before editing. Other
+   model/training/hardware ideas retain the report's evidence gates.
+3. Freeze a baseline, implement one bounded recommendation batch and run appropriate
+   deterministic checks, with one native test owner and serial builds. Add benchmark
+   checkpoints after major progress. Honor branch-only commits; do not merge to main.
+4. Before any authorized local LM Studio experiment, read
+   `/Users/salman/bin/system-files/lmstudio/skills/resource-trade/SKILL.md`.
+   Log in as `stocksage`, save our session UUID, request the exact downloaded model key
+   with an honest task/reason/estimate, and wait for our own held instance. Preserve
+   other holders/FIFO; use broker heartbeats/release/logout as documented. Never edit
+   `queue.json`, impersonate another task, or unload a model owned by another session.
+   No StockSage broker session/reservation was created by this closeout.
+5. Preserve FaceTime/Safari and user records. Existing unrelated untracked files remain:
+   `.claude/`, `Astra_Trading_Master_Prompt.md`, `Astra_Trading_Plan.pdf`,
+   `Trading_Roadmap.md`, `Trading_Roadmap.pdf`. Do not include them in the handoff commit.
+
+---
 
 # HANDOFF — StockSage-app (written 2026-09-06 05:55 +03, session fe29f7aa, Claude Fable 5.1)
 
@@ -3101,6 +3491,147 @@ First cycle18:46:18–18:46:30UTC completed with an evidence-referenced ORCL Hol
 saved account has10K cash, zero trades and zero pending requests.
 See `agent-docs/QWEN_RESEARCH_PAPER_2026-09-08.md` for operation,
 policy, limitations and exact account/artifact paths. No push.
+## Combined integration verified — 2026-09-08 23:44 +03
+
+Installation owner task01a0822f-6195-7f81-b4dc-6a0402fcaa4b completed the combined
+app in commit d13ab2b on `codex/qwen-chat-context`, clean worktree at
+`/Users/saleh/StockSage-wt/qwen-context`. Independently compared: Form4 parser/tests
+match377a447 and all eight R3 Swift/test files (including MarketsView) match
+c6c65b7 byte-for-byte. Inspected its final gate logs:1848 macOS tests in56.356s
+and1845 iPhone tests in65.856s, both TEST SUCCEEDED. These are that task's fresh
+combined runs, not additional reruns here. Artifacts:
+`/private/tmp/stocksage-ibkr-ready-20260908/{macos-final,ios-final}.log`.
+
+Independently verified installedPID79003, strict/deep codesign and debug dylibSHA:
+86dffdb335fa559264c6f980c167199ff538e2716fa6e494a25748be5e840afa.
+The integration task reports its native paper flag/ledger lease active and14
+offline relay checks passed; Qwen61562 unchanged. The IBKR relay remains OFF:
+the owner's free-trial login is diagnostic-only; approved-account paper access
+and actual broker acceptance remain pending. No real-order readiness is claimed.
+
+KEEP THE INSTALL HOLD. Future app builds must preserve d13ab2b's combined Qwen
+paper/chat changes and274aee4's paper relay; coverage-only output omits them.
+Do not reinstall this branch's staged artifact. Coordinate future integration
+with that existing task. This entry records evidence only: no source merge,
+model/settings changes, app replacement, new test run or push from this task.
+
+## Copied-plan freshness fixed; installation handed off — 2026-09-08 23:38 +03
+
+Owner approved R3 at23:15: one shared rule for copied order plans. Missing,
+future, nonfinite or older-than60second quote timestamps yield "Draft only —
+refresh price" instead of entry/stop/target/size ticket text. Exactly60seconds
+passes this check only, not all risk/broker checks. Sample data is draft-only.
+Today, detail, ranked and allocation exports use the same pure status helper;
+ranked/allocation checks are per row. Existing copy risk-block reasons remain.
+Native Share uses a String proxy that checks at transfer time; Save checks after
+the modal panel closes. Expired shared/saved text becomes draft status. External
+clipboard strings cannot be revoked later. Research summaries are labelled as
+research, while on-screen Qwen analysis, badges, sizing/ranking and journal/CSV
+data remain unchanged. No automatic orders, repricing or new dependencies.
+Spec/plan: `docs/superpowers/specs/2026-09-08-plan-freshness-design.md`.
+
+Actual red run:21 tests,22 issues, exit65. The earlier method-filter command
+selected ZERO tests and is not counted as a pass. Focused six-suite regression
+passed100 tests. Final unchanged Swift source passed1840 macOS tests in56.534s
+and1837 iPhone17Pro(gate) tests in55.592s, exit0, serial, using the established
+CalibrationPersistRunTests/LiveUniverseVerificationTests/
+StrategyBaselineMeasurementTests exclusions. Boundaries cover nil, future,
+NaN/infinite, exactly60seconds,60.001seconds, mixed rows, sample and delayed
+share/save data. Logs/xcresults:
+`/private/tmp/stocksage-plan-freshness-20260908.XPKRvp/`.
+Self-review traced all scoped clipboard/share consumers; diff check passed.
+
+INSTALL HOLD: task01a0822f-6195-7f81-b4dc-6a0402fcaa4b is preparing the owner's
+combined Qwen/paper build in `/Users/saleh/StockSage-wt/qwen-context`. It reported
+that the Form4 installation omitted its earlier6536e6b changes. Do not replace
+`/Applications/StockSageX.app` with this coverage-only artifact. Send this isolated
+commit and results to that task; the combined source needs independent gates.
+Private staged Mac artifact (not installed):
+`/private/tmp/stocksage-plan-freshness-20260908.XPKRvp/verified-mac/StockSageX.app`.
+Strict deep codesign passed; checksum-aware dry-run comparison matched the tested
+product. Staged debug dylibSHA256:
+d6c2e2ad390bd9a0179f279eea7d748ab0b2ccaac8d61571b9417f6b2aeb7f03.
+Installed app58089 and Qwen61562 were left untouched. No native visual acceptance,
+live-API certification, model-quality improvement or integrated-build pass claimed.
+Other worktrees preserved; explicit local commit only, no merge/push/new agents.
+
+46 research tests freshly passed in2.522s; frozen sources/recipe unchanged, SHA
+46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+The finite tick returned waiting/no actions, next signal Sep9 at18:10 Riyadh.
+Day1 remains6 captured/12 missed batches with no backfill or early promotion;
+four sessions remain. Existing15-minute heartbeat retains :10/:25/:40/:55.
+R1/R4–R7 and the four feature proposals remain separate and approval-gated.
+
+## Form 4 isolation fixed and installed — 2026-09-08 23:09 +03
+
+Owner's "continue" at23:01 approved the parser-first R2 slice and aligning the
+existing15-minute heartbeat. Shared parser now reads fields inside each Table I
+transaction: absent price/date cannot shift a later trade's values; missing
+code/invalid shares skip only that row. Derivative contracts are not share rows.
+Missing A/D retains the existing code-derived fallback. Prices/amounts must be
+finite; shares must fit the Int conversion used by catalyst citations. The UI's
+net dollar amount is nil when any surfaced trade is unpriced, rather than a
+misleading partial subtotal. No caller, model, freshness or trading-gate changes.
+Design/plan:`docs/superpowers/specs/2026-09-08-form4-parser.md`.
+
+Actual-parser red regression: six missing-field cases,15 issues, exit65. Then
+focused14-test suite passed; final source adds the zero/share-bound test and
+passes1835 macOS tests and1832 iPhone17Pro(gate) tests, exit0, serial, with the
+established CalibrationPersistRunTests/LiveUniverseVerificationTests/
+StrategyBaselineMeasurementTests exclusions. Full suites include15 insider tests.
+Logs/xcresults:`/private/tmp/stocksage-form4-20260908.tqHZxS/`.
+Self-review traced both MarketsView and catalyst citation consumers; diff check
+passed. Parser remains limited to the existing unprefixed SEC element format.
+
+Normal quit confirmed oldPID46019 exited. Tested bundle staged, installed and
+reopened asPID58089; strict deep codesign verification passed and checksum-aware
+dry-run comparison found no differences. Debug dylibSHA256:
+ff45c5e89da2074a6ea9dafc998dc8dd120a8d4a7d1aee13f3460ec178c3608e.
+Previous app recoverable at
+`/Users/saleh/.Trash/StockSageX-before-form4-20260908-2310.app`.
+Qwen61562 remains on. No native visual acceptance or live-API certification is
+claimed. Other worktrees preserved; no merge/push or new agents/tasks.
+
+Day1 prospective outcomes scored once after close at20:02UTC, exit0. Six of18
+batches captured,12 missed. Of2160 model/symbol/delay records:590 scored,
+130 late,1440 missing forecasts. Scored counts:230 at1min,360 at6min; common
+six-candidate panel90 symbol/delay events (30 at1min,60 at6min). Missing/late
+records stay in the denominator; no backfill or early model promotion. These are
+forecast errors, NOT fills or portfolio returns; four sessions remain. Private
+scores:`.research/prospective/20260908-five-session-v1/outcomes-2026-09-08/scores.json`.
+46 research tests freshly passed in2.320s; frozen source files unchanged and
+recipeSHA remains46d72e280a3ef2d4d715ce03c2979170de8217b4c4b9c58735cde9576196525a.
+Existing heartbeat successfully updated/verified ACTIVE at :10/:25/:40/:55,
+same15-minute frequency. This improves alignment, not sleep/busy-time guarantees.
+Both review peers remain idle. R1/R3–R7 and the four feature proposals are NOT
+implemented; new behavioral designs still require approval.
+
+## Three-session review consolidated — 2026-09-08 21:35 +03
+
+Owner-authorized three-session local review completed at source7e6e7aa. Report:
+`agent-docs/FULL_REVIEW_2026-09-08.md`. Both read-only reviewers are idle; this
+task remains the only shared-worktree writer. Findings include Form4 optional-field
+misalignment, unknown-age copied plans, date-misaligned/indefinitely cached
+correlation evidence, and the compiled legacy EODHD credential fallback (value
+not printed). Reviewer overclaims were corrected: the owner's saved MLX settings
+work; blindly wiring current precheck data into the gate is unsafe; credential
+validity/misuse is unverified, not an established universal outage.
+
+Fresh checks:exact local model ID found by /v1/models; tiny synthetic JSON
+generation returned status ok/finish_reason stop/six tokens; existing server
+arguments disable thinking and retain concurrency1. No stock-quality benchmark,
+new Xcode gate, visual acceptance or live broker/API certification claimed.
+No app/source/model settings changed. Focused parser-fix design approval was
+requested; do not implement new behavior until the owner answers. The report
+covers proposals for all four requested areas, not four shipped features.
+
+Prospective18:10UTC batch:all six candidates eligible at both delays.18:25UTC
+slot missed because the next heartbeat arrived18:33; this new miss is not
+attributed to sleep without evidence. Current14-slot totals:six captured/eight
+missed. Misses remain in denominator; no backfill. Existing15-minute heartbeat
+has no fixed clock-minute alignment. Scheduling alignment needs owner direction;
+no cadence, scheduler, frozen recipe/source or sleep setting changed. Qwen61562
+and StockSage99055 remain on. This is documentation-only; no merge or push.
 
 ## Sleep interrupted prospective timing — 2026-09-08 19:41 +03
 
@@ -3497,6 +4028,30 @@ Next research milestone: larger predeclared multi-archive walk-forward experimen
 with point-in-time/calendar/actual-cost controls; then Kronos/Chronos comparisons
 and prospective paper evaluation. This delivery does NOT add those models to the
 app or certify broker execution. Do not optimize this already-seen test day.
+## Codex — 2026-09-08 23:41 +03 — waiting-period verification
+
+- Standalone feature branch advanced to **2467069** in private `Salman-bot/tradier-lab`. Added a cached offline installed-wheel verifier; final evidence passes **167 tests and eight loopback API assertions**, with two dependency warnings and zero failed/skipped tests. Private report: `/Users/salman/Workspace/Codespace/tradier-lab/reports/verification-233c0280-d392-4b9c-a9fd-af7306e232e9/report.json`. Missing-uv negative check correctly exits 1/FAIL. Source/revision/wheel hashes and private logs are retained.
+- Focused review plus six pre-fix failing/post-fix passing interruption cases found/fixed cancellation uncertainty disappearing from public responses after restart/OPEN. API/CLI now expose an unconfirmed outcome and broker-review action. No schema change or automatic cancellation retry; crash delivery ambiguity stays explicit. This is standalone tool work only.
+- Safari inspection confirmed Tradier application Verified/document receipt, while expanded instructions still require account-open email confirmation. Account opening/API access and G1 external acceptance remain unconfirmed. Keep broker credentials out of chat. No VPS, real orders or StockSage integration; no main merge. The original four brief files are preserved, and this checkout still has planning/handoff changes only.
+- User asks always to verify and test; heartbeat now carries that instruction and the installed-wheel command. Use fresh evidence after relevant changes, handle concrete failures/gaps, and avoid speculative additions or unchanged repeat loops while access is missing. Same deadline 2026-09-09 21:48 +03. One focused Terra worker completed; no test server left running, no paid API/infrastructure charge, actual Codex dollars unknown. Read standalone HANDOFF.md for the next gate.
+
+## Codex — 2026-09-08 23:01 +03 — offline broker acceptance
+
+- Standalone safety/recovery continuation pushed as **ef08135** to private `Salman-bot/tradier-lab`, `codex/phase-1-standalone`. The local tool's docs/OFFLINE_ACCEPTANCE.md maps D01–D20 evidence/dispositions. **161 offline tests PASS**, zero failed/skipped, two dependency warnings; the explicit offline loopback smoke passes eight assertions and stops its server.
+- Added active account/group/completeness and clock/calendar gates, rate-reset tests, bounded stream failure handling, separate-process crash/recovery and SQLite FULL cases, protected restore/schema validation and private rotating logs. Independent schema review found a recovery-trigger risk; the fix rejects altered objects/constraints before recovery. No known critical defect remains in the scoped offline checks; this does not claim bug-free or real broker acceptance.
+- Fresh sandbox/live presence-only doctor checks confirm no account/token/API key configured. **G1 external, G2 and G3 remain BLOCKED on broker onboarding/access**. No account, order, host purchase or integration occurred. No source/test/project file in this StockSage checkout changed. The original four user brief files remain untracked and unchanged.
+- Current next step is owner signup and local credential configuration, then required real S01–S04 and L01–L03. Do not keep expanding the offline application or rerunning unchanged tests while access is absent. Honor later IBKR/Tradier steering. One VPS up to $20/month is authorized after G1; never merge main without separate final permission.
+- good-spender continuation: $4 API-equivalent raw planning allowance, actual Codex dollars UNKNOWN; 26.30 minutes against a 25-minute estimate. Two existing workers reused, all completed; three unique workers total across this task. Report's agent actual3 reflects the thread scope. Context snapshot196,175/256,000, headroom59,825. No paid model API calls. Heartbeat continues meaningful progress checks until 2026-09-09 21:48 +03; quiet while this access blocker is unchanged.
+
+## Codex — 2026-09-08 22:32 +03 — independent trading tool checkpoint
+
+- Latest owner rule: commits, pushes and tests allowed; **never merge main without separate final permission**. Earlier historical merge authorizations below do not authorize this task's merge. One VPS up to $20/month total is approved after G1, within $200/month overall. No real orders authorized.
+- Planning commit `8ab7e2f` is on `codex/tradier-plan-only`. Independent tool implementation `d1666285437d5a73a55673b1908ac4e47392640d` is pushed to private [Salman-bot/tradier-lab](https://github.com/Salman-bot/tradier-lab), branch `codex/phase-1-standalone`; GitHub privacy and SHA verified. Local root `/Users/salman/Workspace/Codespace/tradier-lab`. No app integration/source/test/project changes.
+- Standalone CLI, local hidden-input setup, authenticated loopback offline/sandbox API, durable paper coordinator and separate production read-only observer exist. **101 synthetic tests pass**, zero failed/skipped, two dependency warnings. Earlier real loopback offline HTTP smoke passed six assertions and stopped. No authenticated broker request, account signup, fill, live observation or VPS deployment occurred.
+- G1/G2/G3 remain BLOCKED. Full deterministic fault/coverage gaps are listed in standalone `docs/VALIDATION.md`; actual sandbox lifecycle and 30-minute production observation require approved access. G2 then requires two complete regular market sessions. Never infer external acceptance from test counts.
+- Owner asked about IBKR; standalone `docs/BROKER_DECISION.md` records the official auth/gateway comparison. Tradier was brief-based, no switch has been requested and no account has been created. Follow later owner steering.
+- Hourly heartbeat `tradier-api-implementation-follow-up` remains active with latest spend/no-main rules until 2026-09-09 21:48 +03. Three workers completed. good-spender report closed the active run at 46.50 minutes; task Codex dollars unknown, no paid model API calls. Resume via standalone HANDOFF.md; keep this application untouched until G2. At deadline save final status and pause the heartbeat.
+
 ## Main integration and publication gate — 2026-09-08 13:36 +03
 
 Owner explicitly requested "merge everything to main and fix issues and push to
@@ -3541,6 +4096,14 @@ This is a source integration, not a new app installation or full live-service
 acceptance. The installed80df123 app was left running; Qwen stays OFF. The native
 helper failure and remaining Chat/window-size visual checks below remain open.
 No broker orders, model startup, credential changes, or native-control retries.
+
+## Codex — 2026-09-08 21:58 +03 — Tradier standalone planning and continuation
+
+- Fetched/pulled main safely at fc455ccf67415a9e45493a6471e4c6d28da52f00; created `codex/tradier-plan-only`. Added PLAN.md, ROADMAP.md, TEST_MATRIX.md and docs/SOURCES.md. All four original supplied brief/roadmap files remain unchanged and untracked. No application source/test/project change.
+- G0 document review, relative-link/fence/whitespace checks and application-diff check passed. Public official broker/library/hosting docs checked; no authenticated broker request, order, signup, funding or VPS purchase. Historical app tests were not rerun.
+- Later owner messages supersede PLAN_ONLY: implement and progress when gates pass, keep reporting for 24 hours. Tradier Lite selected; owner has no approved brokerage/API account yet and is willing to sign up. One VPS up to $20/month total approved within overall $200/month. Commits, pushes and tests authorized; **never merge to main without separate owner permission as final step**. Real orders remain unapproved.
+- Next: create independent `/Users/salman/Workspace/Codespace/tradier-lab` (checked absent), build/test Phase 1 offline core then private API/CLI, and save evidence. G1 remains blocked on actual sandbox/live access; G2 requires G1 plus two complete regular-market sessions; StockStage integration deferred until G2 and target confirmation.
+- Hourly heartbeat `tradier-api-implementation-follow-up` active until 2026-09-09 21:48 +03; save final report and pause it at deadline. good-spender monitor activated from `/tmp/stocksage-tradier-plan-monitor` to avoid writing harness settings into StockSage. No paid model APIs; one bounded Luna requirements-review worker completed.
 
 ## Desktop installation, route acceptance and Journal-tab copy — 2026-09-08 03:06 +03
 
@@ -6274,3 +6837,9 @@ Owner directives recorded today, applied going forward:
 Still open from pipeline 2 (honesty-scoped, not defects): Yahoo `earningsHistory` for `.SR` names unverified (429s);
 EODHD tier now known to be unauthorized (see above); `notApplicable` is driven by `assetClass != "Equity"` only —
 no ETF classifier exists in the codebase and none was invented.
+
+## Typed analyst target checkpoint — 2026-09-14T11:12:00Z
+
+R05 is now implemented for the analyst target path, and the R08 target-validation slice is complete. `AnalystEvidence.TargetComparison` derives a deterministic current-versus-previous target direction from the typed record; `validateTargetClaim` fails closed unless record identity, revision, field, amount, currency, date, basis, and optional direction all match. Split-adjusted, wrong-currency, wrong-date, wrong-field, wrong-record, and contradictory-direction claims are covered by regression tests. R07 semantic claim-to-citation support remains open.
+
+Benchmark: focused Benzinga suite passed 25 Swift Testing tests with zero failures. Full macOS gate passed 2,483 tests in 231 suites with zero failures in 90.424 seconds, with the three established optional suites excluded. Standalone Debug build passed and produced `/Users/salman/Library/Caches/StockSageAuditFixes/DerivedData-r05-full/Build/Products/Debug/StockSageX.app`; executable SHA-256 is `d779e544a4e1badc66bc6f99a9f0b01c99940aabe8e7594a74c437f3276127e8`. No iOS gate, live data run, or investment-accuracy claim was made.

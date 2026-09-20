@@ -1391,12 +1391,27 @@ struct StockSageAIAssessmentTests {
         for horizon in StockSageHorizonResearch.Horizon.allCases {
             let text = horizon.instructions
             #expect(text.contains(horizon.rawValue))
-            #expect(text.contains("Longer historical windows are background evidence, not a holding horizon."))
-            #expect(text.contains("A catalyst must have a dated source"))
+            #expect(text.contains("No plans beyond 14 trading days"))
+            #expect(text.contains("longer history is background, not a holding horizon"))
+            #expect(text.contains("Catalysts need dated sources and event timing within this horizon"))
+            #expect(text.contains("Undated, past or distant events are context"))
+            #expect(text.contains("recent publication does not change event timing"))
+            #expect(text.contains("Manual only; no scheduled picks or automatic trading"))
             #expect(text.contains("Do not propose intraday or same-session day-trading strategies"))
+            #expect(text.contains("earnings holding-window check is authoritative"))
+            #expect(text.contains("no relative earnings dates, durations, month parts or event probabilities"))
+            #expect(text.contains("unknown dates prove neither timing nor absence of risk"))
+            #expect(text.contains("Projected dates are not announcements; past results are not the next report"))
+            #expect(text.contains("Never omit an insider record because it conflicts with your action."))
+            #expect(text.contains("report a purchase as a purchase and a sale as a sale"))
+            #expect(text.contains("Do not infer motive"))
+            #expect(horizon.assessmentInstructions(qualify: false) == text)
+            let qualified = horizon.assessmentInstructions(qualify: true)
+            #expect(qualified.hasPrefix(text))
+            #expect(qualified.contains("no critical unresolved data gap"))
+            #expect(qualified.contains("Never invent catalysts or override the app's authoritative measured screen"))
         }
-        // The shared focus statement names BOTH horizons on purpose; what must differ is the
-        // horizon this assessment is actually for.
+        // Each assessment names only its requested holding horizon; Chat has a separate overview.
         let week = StockSageHorizonResearch.Horizon.week.instructions
         let fortnight = StockSageHorizonResearch.Horizon.fortnight.instructions
         #expect(week != fortnight)
@@ -1533,4 +1548,213 @@ struct StockSageAIAssessmentTests {
         #expect(rejected.acceptedAction == nil)
     }
 
+
+    @Test func providerIdentityControlsETFApplicabilityWithoutTickerGuessing() {
+        let etf = StockSageResearchInstrument(symbol: "ORCL", name: "Synthetic fund", providerType: "ETF")
+        let facts = A.Context(idea: idea(), earnings: earnings, company: [:], at: now, instrument: etf).facts
+        #expect(facts.contains { $0.contains("Corporate earnings: not applicable") })
+        #expect(!facts.contains { $0.contains("Earnings: ") && $0.contains("confirmed") })
+        #expect(facts.contains { $0.contains("Massive/Benzinga ratings: not applicable") })
+        let mistaken = A.Context(idea: idea(), earnings: earnings, company: [:], at: now,
+                                instrument: .init(symbol: "SPY", name: "Other listing", providerType: "ETF")).facts
+        #expect(!mistaken.contains { $0.contains("Corporate earnings: not applicable") })
+        for type in [nil, "CS", "ETN", "OTHER"] as [String?] {
+            let identity = StockSageResearchInstrument(symbol: "ETN", name: "Eaton", providerType: type)
+            #expect(!identity.isETF)
+            #expect(identity.excludedProducts.isEmpty)
+        }
+        #expect(StockSageResearchInstrument(symbol: "SPY", name: "Unknown", providerType: nil).fact.contains("unconfirmed"))
+    }
+
+    @Test(arguments: ["Earnings will beat expectations", "EPS growth is strong", "Company guidance supports gains", "Analyst consensus is positive", "Price target suggests upside"])
+    func etfCorporateOutputContractDeclinesInapplicableLanguage(_ reason: String) {
+        let verdict = A.Verdict(action: .hold, reason: reason, risk: "Market risk", evidence: ["F1"])
+        let etf = StockSageResearchInstrument(symbol: "SPY", name: "Fund", providerType: "ETF")
+        #expect(!etf.allows(verdict))
+        #expect(StockSageResearchInstrument(symbol: "ETN", name: "Eaton", providerType: "CS").allows(verdict))
+        #expect(etf.allows(.init(action: .hold, reason: "Diversified exposure", risk: "Tracking error", evidence: ["F1"])))
+    }
+
+    @Test func instrumentApplicabilityCheckpointUsesUnchangedFormatValidatorAsBaseline() throws {
+        let cases = ["Earnings will beat expectations", "EPS growth is strong", "Company guidance supports gains",
+                     "Analyst consensus is positive", "Price target suggests upside", "Diversified exposure", "Tracking error remains"]
+        let instrument = StockSageResearchInstrument(symbol: "SPY", name: "Fixture fund", providerType: "ETF")
+        var beforeCorrect = 0, afterCorrect = 0, rows: [[String: Any]] = []
+        for (index, reason) in cases.enumerated() {
+            let data = try JSONSerialization.data(withJSONObject: ["action": "Hold", "reason": reason,
+                "risk": "Market risk", "evidence": ["F1"]])
+            let verdict = try #require(A.parse(String(decoding: data, as: UTF8.self), facts: ["Symbol: SPY."]))
+            let before = true // The unchanged pre-R03 format/reference validator accepted this actual fixture.
+            let after = instrument.allows(verdict), expected = index >= 5
+            beforeCorrect += before == expected ? 1 : 0
+            afterCorrect += after == expected ? 1 : 0
+            rows.append(["reason": reason, "expected_accept": expected, "before_accept": before, "after_accept": after])
+        }
+        #expect(beforeCorrect == 2 && afterCorrect == 7)
+        let payload: [String: Any] = ["fixture_kind": "synthetic ETF applicability contract; not investment accuracy",
+            "before_correct": beforeCorrect, "after_correct": afterCorrect, "total": cases.count, "cases": rows]
+        print("R03_BENCHMARK " + String(decoding: try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]), as: UTF8.self))
+    }
+
+    @Test func responseSchemaRetainsUpstreamUnicodeGuardAndEvidenceContract() throws {
+        let data = try #require(A.responseSchema(facts: ["first", "second"]))
+        let schema = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        #expect(schema["additionalProperties"] as? Bool == false)
+        #expect(Set(schema["required"] as? [String] ?? []) == ["evidence", "action", "reason", "risk"])
+        for key in ["reason", "risk"] {
+            let prose = try #require(properties[key] as? [String: Any])
+            #expect(prose["type"] as? String == "string")
+            #expect(prose["minLength"] as? Int == 1)
+            #expect(prose["maxLength"] as? Int == 600)
+            #expect(prose["pattern"] as? String == A.qualitativeProsePattern)
+        }
+        let evidence = try #require(properties["evidence"] as? [String: Any])
+        let items = try #require(evidence["items"] as? [String: Any])
+        #expect(evidence["minItems"] as? Int == 1)
+        #expect(evidence["maxItems"] as? Int == 2)
+        #expect(items["enum"] as? [String] == ["F1", "F2"])
+        let action = try #require(properties["action"] as? [String: Any])
+        #expect(action["enum"] as? [String] == ["Strong Buy", "Buy", "Hold", "Avoid", "Reduce", "Sell"])
+        #expect(A.instructions.contains("do not write numerals in ANY script"))
+        #expect(A.instructions.contains("Put F-reference IDs only in evidence"))
+        #expect(A.instructions.contains("refer to the company by name in prose"))
+    }
+
+    @Test func numericOutputContractAllowsOnlyValidatedReferencesAndExactListingSymbol() throws {
+        let facts = Array(repeating: "Dated source says uncertainty remains.", count: 16)
+        let accepted = #"{"action":"Hold","reason":"The outlook for 2222.SR is mixed (F13).","risk":"Research groups W1/W3 remain unverified.","evidence":["F13"]}"#
+        let verdict = try #require(A.parse(accepted, facts: facts, leadCount: 3, symbol: "2222.SR"))
+        #expect(verdict.evidence == ["F13"])
+        let unicodeListing = accepted.replacingOccurrences(of: "2222.SR", with: "٢٢٢٢.س")
+        #expect(A.parse(unicodeListing, facts: facts, leadCount: 3, symbol: "٢٢٢٢.س") != nil)
+        #expect(A.parse(unicodeListing.replacingOccurrences(of: "٢٢٢٢.س", with: "X٢٢٢٢.سY"),
+                        facts: facts, leadCount: 3, symbol: "٢٢٢٢.س") == nil)
+        #expect(A.parse(accepted, facts: facts, leadCount: 3) == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "2222.SR", with: "2222"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "2222.SR", with: "X2222.SRY"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "W3", with: "W4"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "[\"F13\"]", with: "[\"W1\"]"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+        #expect(A.parse(accepted.replacingOccurrences(of: "mixed (F13)", with: "mixed (F99)"),
+                        facts: facts, leadCount: 3, symbol: "2222.SR") == nil)
+    }
+
+    @Test func numericOutputContractRejectsNumeralScriptsOutsideIdentifiersAndUnsupportedClaims() throws {
+        let facts = ["SPY tracks the S&P 500 benchmark; the outlook is uncertain."]
+        let replies = [
+            #"{"action":"Hold","reason":"SPY may move over ۷–۱۴ sessions.","risk":"Uncertainty remains.","evidence":["F1"]}"#,
+            #"{"action":"Hold","reason":"The S&P ۵۰۰ outlook is mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#,
+            #"{"action":"Hold","reason":"SPY may move over ٧–١٤ sessions.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        ]
+        for reply in replies {
+            let result = A.validate(reply, facts: facts, symbol: "SPY")
+            guard case .failure(let failure) = result else {
+                Issue.record("A Unicode numeral reply was accepted")
+                continue
+            }
+            #expect(failure == .nonASCIINumber)
+        }
+
+        let repeatedFactNumber = #"{"action":"Hold","reason":"The S&P 500 outlook is mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        let inventedNumber = repeatedFactNumber.replacingOccurrences(of: "S&P 500", with: "SPY may reach 999")
+        guard case .failure(let repeatedFailure) = A.validate(repeatedFactNumber, facts: facts, symbol: "SPY"),
+              case .failure(let inventedFailure) = A.validate(inventedNumber, facts: facts, symbol: "SPY") else {
+            Issue.record("An unsupported ASCII numerical claim was accepted")
+            return
+        }
+        #expect(repeatedFailure == .unboundNumber)
+        #expect(inventedFailure == .foreignNumber)
+        #expect(A.parse(repeatedFactNumber, facts: facts, symbol: "SPY") == nil)
+        #expect(A.parse(inventedNumber, facts: facts, symbol: "SPY") == nil)
+    }
+
+    @Test func sharedCompletionLabelsInitialAndEvidenceRepairAttempts() async throws {
+        typealias S = StockSageLocalModelServer
+        let draft = #"{"action":"Hold","reason":"The outlook is mixed.","risk":"Uncertainty remains."}"#
+        let repaired = #"{"action":"Hold","reason":"The outlook is mixed.","risk":"Uncertainty remains.","evidence":["F1"]}"#
+        let config = self.config
+        var calls = 0
+        actor Recorder {
+            var events: [S.ModelAttemptEvent] = []
+            func append(_ event: S.ModelAttemptEvent) { events.append(event) }
+            func all() -> [S.ModelAttemptEvent] { events }
+        }
+        let recorder = Recorder()
+        let result = await A.complete(config, isOllama: true, system: A.instructions,
+            user: A.prompt(facts: ["The supplied evidence is mixed."]),
+            facts: ["The supplied evidence is mixed."], maxTokens: 240,
+            attemptObserver: { await recorder.append($0) }, stillValid: { true }, transport: { request in
+                calls += 1
+                let content = calls == 1 ? draft : repaired
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "model": config.model,
+                    "message": ["content": content],
+                    "done_reason": "stop"
+                ])
+                let response = try #require(HTTPURLResponse(url: request.url!, statusCode: 200,
+                                                            httpVersion: nil, headerFields: nil))
+                return (body, response)
+            })
+        let events = await recorder.all()
+        let completion = try #require(try? result.get())
+        #expect(completion.text == repaired)
+        #expect(calls == 2)
+        try #require(events.count == 4)
+        #expect(events.map(\.phase) == ["initial", "initial", "evidence-repair", "evidence-repair"])
+        #expect(events.map(\.stage) == [.started, .finished, .started, .finished])
+        #expect(events.map(\.ordinal) == [1, 1, 1, 1])
+        #expect(Set(events.map(\.callID)).count == 2)
+        #expect(events[0].callID == events[1].callID)
+        #expect(events[2].callID == events[3].callID)
+        #expect(events[0].callID != events[2].callID)
+    }
+
+    @Test func recordProseCannotChangeTypedNewsAvailabilityOrLeakIntoKeys() throws {
+        let item = StockSageNewsService.NewsItem(date: now, title: "Unknown outlook with empty shelves",
+            snippet: "The company discussed unavailable products.", link: nil, sentiment: nil, source: "Fixture")
+        let observation = StockSageNewsService.Observation(attempts: [.init(provider: .massive, checkedAt: now,
+            status: .answered, items: [item])])
+        let packet = A.Context(idea: idea(), earnings: nil, company: [:], at: now, newsObservation: observation).evidencePacket()
+        #expect(packet.facts.first { $0.key == "news.status" }?.availability == .available)
+        let record = try #require(packet.facts.first { $0.key.hasPrefix("news.item.") })
+        #expect(record.key.count == "news.item.".count + 64)
+        #expect(!record.key.contains("shelves"))
+        #expect(!record.required)
+    }
+
+    @Test func budgetOmissionsDoNotBecomeMissingProviderEvidence() {
+        typealias B = StockSageBenzinga
+        let pages = B.Product.allCases.map { product in B.Page(query: .init(product: product, subject: "ORCL", from: nil, through: nil),
+            checkedAt: now, credentialGeneration: nil, status: .answered, records: [], excludedCount: 0, hasMore: false) }
+        let snapshot = B.Snapshot(symbol: "ORCL", capturedAt: now, credentialGeneration: nil, pages: pages, omittedRecordCount: 2)
+        let packet = A.Context(idea: idea(), earnings: nil, company: [:], at: now, benzinga: snapshot).evidencePacket()
+        #expect(packet.prePromptOmittedRecordCount == 2)
+        #expect(packet.facts.first { $0.key == "benzinga.status" }?.availability == .unknown)
+    }
+
+    @Test func sourceStateCoverageKeepsPublicFactTextAndUnknownStates() {
+        let captured = A.Context(idea: idea(), earnings: nil, company: [:], at: now)
+        let packet = captured.evidencePacket()
+        let covered = packet.facts
+        #expect(captured.facts == covered.map(\.text) && packet.prePromptOmittedRecordCount == 0)
+        let required = covered.filter(\.required)
+        #expect(required.contains { $0.key == "earnings" && $0.availability == .unknown })
+        #expect(required.contains { $0.key == "news.status" && $0.availability == .unknown })
+        #expect(captured.coverage(offered: covered).missingOrUnknownRequiredKeys.contains("earnings"))
+    }
+
+    @Test func coverageRejectsModelEvidenceForFactRemovedBeforeAI() {
+        let offered = [A.EvidenceFact(key: "quote", text: "Observed quote", required: true, availability: .available)]
+        let removed = #"{"action":"Hold","reason":"Evidence remains mixed.","risk":"Uncertainty remains.","evidence":["F2"]}"#
+        #expect(A.parse(removed, facts: offered.map(\.text)) == nil)
+        let accepted = A.Verdict(action: .hold, reason: "Evidence remains mixed.", risk: "Uncertainty remains.", evidence: ["F1"])
+        let coverage = A.Context(idea: idea(), earnings: nil, company: [:], at: now)
+            .coverage(offered: offered, omittedKeys: ["news.item.1"], prePromptOmittedRecordCount: 2, verdict: accepted)
+        #expect(coverage.symbol == "ORCL" && coverage.citedKeys == ["quote"]
+                    && coverage.omittedKeys == ["news.item.1"] && coverage.prePromptOmittedRecordCount == 2)
+    }
 }

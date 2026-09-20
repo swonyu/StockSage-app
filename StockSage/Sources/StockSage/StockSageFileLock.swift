@@ -35,8 +35,11 @@ nonisolated final class StockSageFileLock: Sendable {
     private final class Profile {
         let defaults: UserDefaults
         let lease: Result<StockSageFileLock, Error>
-        init(defaults: UserDefaults, acquire: () throws -> StockSageFileLock) {
+        let afterRecordReplace: (() throws -> Void)?
+        init(defaults: UserDefaults, afterRecordReplace: (() throws -> Void)? = nil,
+             acquire: () throws -> StockSageFileLock) {
             self.defaults = defaults
+            self.afterRecordReplace = afterRecordReplace
             lease = Result(catching: acquire)
         }
     }
@@ -54,13 +57,13 @@ nonisolated final class StockSageFileLock: Sendable {
 
     /// Test-only capability: creates and registers a UUID-named isolated suite with a real
     /// temporary lease. An arbitrary UserDefaults object never implies owner-write authority.
-    static func fixtureDefaults(suiteName: String) -> UserDefaults? {
+    static func fixtureDefaults(suiteName: String, afterRecordReplace: (() throws -> Void)? = nil) -> UserDefaults? {
         guard StockSageStore.isRunningTests, !suiteName.contains("/"),
               suiteName.range(of: #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#,
                               options: .regularExpression) != nil else { return nil }
         if let fixture = fixtures[suiteName] { return fixture.defaults }
         guard let defaults = UserDefaults(suiteName: suiteName) else { return nil }
-        let profile = Profile(defaults: defaults) {
+        let profile = Profile(defaults: defaults, afterRecordReplace: afterRecordReplace) {
             try StockSageFileLock(url: fixtureRoot.appendingPathComponent(suiteName + ".lock"))
         }
         guard (try? profile.lease.get()) != nil else { return nil }
@@ -70,6 +73,36 @@ nonisolated final class StockSageFileLock: Sendable {
 
     static func mayRead(_ defaults: UserDefaults) -> Bool {
         !StockSageStore.isRunningTests || fixtures.values.contains { $0.defaults === defaults }
+    }
+
+    static func manages(_ defaults: UserDefaults) -> Bool {
+        StockSageStore.isRunningTests ? fixtures.values.contains { $0.defaults === defaults }
+            : defaults === UserDefaults.standard
+    }
+
+    /// An isolated fixture may interrupt after rename; production has no runtime activation.
+    static func afterRecordReplace(_ defaults: UserDefaults) throws {
+        guard StockSageStore.isRunningTests else { return }
+        guard let fixture = fixtures.values.first(where: { $0.defaults === defaults }) else {
+            throw StockSageFileLock.Failure.unavailable
+        }
+        try fixture.afterRecordReplace?()
+    }
+
+    /// The record image shares the writer's profile and isolated fixture directory.
+    static func recordsURL(_ defaults: UserDefaults) throws -> URL {
+        if StockSageStore.isRunningTests {
+            guard let fixture = fixtures.first(where: { $0.value.defaults === defaults }) else {
+                throw StockSageFileLock.Failure.unavailable
+            }
+            return fixtureRoot.appendingPathComponent(fixture.key + ".records.json")
+        }
+        guard defaults === UserDefaults.standard, let domain = Bundle.main.bundleIdentifier else {
+            throw StockSageFileLock.Failure.unavailable
+        }
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: false)
+        return root.appendingPathComponent("StockSage/SharedRecords").appendingPathComponent(domain + ".records.json")
     }
 
     static func require(_ defaults: UserDefaults) throws {

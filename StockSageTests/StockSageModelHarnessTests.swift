@@ -132,8 +132,8 @@ struct StockSageModelHarnessTests {
     // count -- it sends `config.reservedOutputTokens(for:)`, which DOUBLES any initial value in
     // 1...512 once `requiresStrictOutput` is true. After Step 7 the strict Gemma profile is the
     // DEFAULT path, so this guard must model that doubling, not the pre-doubling raw value, or a
-    // caller could pass this test while failing on every real request. Also adds the previously
-    // uncovered `qualify` binding caller (outputTokens: 384, StockSageHorizonResearch.swift).
+    // caller could pass this test while trimming evidence on real requests. Qualified research
+    // must include its production suffix for BOTH horizons and the larger 384-token retry.
     @Test func everyEvidenceHeavyCallerFitsItsDeclaredWindow() {
         let research = S.researchContextTokens
         let strictConfig = try! #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
@@ -146,20 +146,52 @@ struct StockSageModelHarnessTests {
              StockSageHorizonResearch.researchOutputTokens, research),
             ("horizon-fortnight", StockSageHorizonResearch.Horizon.fortnight.instructions,
              StockSageHorizonResearch.researchOutputTokens, research),
-            ("horizon-qualify", StockSageHorizonResearch.Horizon.week.instructions, 384, research),
+            ("same-day", StockSageSameDayResearch.instructions, StockSageHorizonResearch.researchOutputTokens, research),
             ("narrator", StockSageCatalystNarrator.instructions, 170, research),
-        ]
+        ] + StockSageHorizonResearch.Horizon.allCases.flatMap { horizon in
+            [StockSageHorizonResearch.researchOutputTokens, 384].map { output in
+                ("qualified-\(horizon.rawValue)-\(output)", horizon.assessmentInstructions(qualify: true), output, research)
+            }
+        }
         for caller in callers {
             let reserved = strictConfig.reservedOutputTokens(for: caller.outputTokens)
             let allowance = S.maximumUserBytes(system: caller.system, outputTokens: reserved,
                                                contextTokens: caller.context)
             // Each of these callers caps its compiled facts at 12,000 UTF-8 bytes. If the
-            // allowance drops below that, the caller starts failing on every real request.
+            // allowance drops below that, a full packet requires disclosed evidence omissions.
             // Measured, not guessed: print the actual headroom above the 12,000-byte floor.
             print("[everyEvidenceHeavyCallerFitsItsDeclaredWindow] \(caller.name): raw=\(caller.outputTokens) reserved=\(reserved) allowance=\(allowance) headroom=\(allowance - 12_000)")
             #expect(allowance >= 12_000,
                     "\(caller.name) allows only \(allowance) bytes (reserved output \(reserved), doubled from \(caller.outputTokens)) but compiles up to 12,000")
         }
+    }
+
+    @Test(arguments: StockSageHorizonResearch.Horizon.allCases, [StockSageHorizonResearch.researchOutputTokens, 384])
+    func qualifiedResearchFitsFullTwelveKilobyteEvidence(horizon: StockSageHorizonResearch.Horizon,
+                                                        outputTokens: Int) throws {
+        let config = try #require(S.config(url: S.lmStudioURL, model: S.gemmaModel))
+        let reserved = config.reservedOutputTokens(for: outputTokens)
+        let system = horizon.assessmentInstructions(qualify: true)
+        let mandatory = [
+            "Requested holding horizon: \(horizon.rawValue). Research only, no orders or position management.",
+            "Earnings holding-window check: unknown; next report date unavailable.",
+            "Strict screen: no critical unresolved data gap is allowed for Buy / Strong Buy.",
+        ]
+        var optional = (1...40).map { "Evidence record \($0): " + String(repeating: "e", count: 240) }
+        let padding = 12_000 - StockSageAIAssessment.prompt(facts: optional + mandatory).utf8.count
+        try #require(padding > 0)
+        optional[optional.count - 1] += String(repeating: "e", count: padding)
+        let fullPrompt = StockSageAIAssessment.prompt(facts: optional + mandatory)
+        #expect(fullPrompt.utf8.count == 12_000, "the fixture includes numbering and mandatory facts")
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: optional, mandatory: mandatory, system: { _ in system },
+            outputTokens: reserved, contextTokens: S.researchContextTokens))
+        #expect(fitted.isComplete)
+        #expect(fitted.omitted == 0)
+        #expect(fitted.facts == optional + mandatory)
+        #expect(fitted.user == fullPrompt)
+        #expect(S.promptFits(system: fitted.system, user: fitted.user,
+                             outputTokens: reserved, contextTokens: S.researchContextTokens))
     }
 
     // Chat's own prompt budget must stay strictly inside the seam's, or every Chat turn
@@ -248,6 +280,23 @@ struct StockSageModelHarnessTests {
         #expect(StockSageAIAssessment.fittedResearchPrompt(
             optional: Self.evidence, mandatory: huge, system: { _ in "instructions" },
             outputTokens: 64, contextTokens: 1_024) == nil)
+    }
+
+    @Test func fittedPromptRetainsExactOmittedSupplementalKeys() throws {
+        let optional = (1...12).map { "Optional \($0): " + String(repeating: "x", count: 260) }
+        let keys = (1...12).map { "news.item.\($0)" }
+        let mandatory = ["Required quote and source state.", "Required earnings state."]
+        let fitted = try #require(StockSageAIAssessment.fittedResearchPrompt(
+            optional: optional, mandatory: mandatory, system: { _ in "instructions" }, optionalKeys: keys,
+            outputTokens: 64, contextTokens: 1_024))
+        #expect(fitted.facts.suffix(mandatory.count) == mandatory[...])
+        #expect(fitted.omittedKeys == Array(keys.dropFirst(fitted.optionalKept)))
+    }
+
+    @Test func malformedCoverageKeysFailBeforeAnyModelPrompt() {
+        #expect(StockSageAIAssessment.fittedResearchPrompt(
+            optional: ["optional"], mandatory: ["required"], system: { _ in "instructions" },
+            optionalKeys: [], outputTokens: 64, contextTokens: S.researchContextTokens) == nil)
     }
 
     // Paper research names its intraday facts by F-number in the system string. If trimming
@@ -481,12 +530,13 @@ struct StockSageModelHarnessTests {
 
     // MARK: Failures stay distinguishable on every surface
 
-    // Sixteen of eighteen diagnostic categories used to collapse into one message per surface,
+    // Diagnostic categories used to collapse into one message per surface,
     // so a server that WAS reached and answered still told the user to check their connection.
     @Test func everyDiagnosticCategoryKeepsADistinguishableCause() {
         let categories: [S.FailureCategory] = [.invalidConfig, .unavailable, .modelMissing, .unsupportedModel,
             .nonHTTP, .http, .malformedJSON, .responseShape, .missingContent, .emptyContent, .timeout,
-            .cancelled, .network, .obsoleteRequest, .policyDenied, .responseTooLarge, .contextBudget, .incompleteOutput]
+            .cancelled, .network, .obsoleteRequest, .policyDenied, .responseTooLarge, .contextBudget,
+            .incompleteOutput, .degenerateOutput]
         var seen: Set<S.FailureCause> = []
         for category in categories {
             seen.insert(S.cause(for: .init(category: category)))
@@ -500,7 +550,7 @@ struct StockSageModelHarnessTests {
     // The reached-and-answered failures must never be described as connection problems.
     @Test func reachedAndAnsweredFailuresAreNotCalledConnectionProblems() {
         // These are the categories that mean the server was reached and answered.
-        for category in [S.FailureCategory.http, .responseTooLarge, .incompleteOutput,
+        for category in [S.FailureCategory.http, .responseTooLarge, .incompleteOutput, .degenerateOutput,
                          .emptyContent, .malformedJSON, .responseShape, .modelMissing] {
             let message = StockSageChat.unavailableMessage(for: .init(category: category))
             #expect(!message.lowercased().contains("could not be reached"),
@@ -700,5 +750,69 @@ struct StockSageModelHarnessTests {
         #expect(summary.contains("elapsedMs=1234"))
         // No free-form server text may ever be interpolated into a user-visible summary.
         #expect(!summary.contains("\""))
+    }
+}
+
+
+@Suite("Evidence coverage checkpoint", .serialized)
+@MainActor
+struct StockSageCoverageCheckpointTests {
+    @Test(arguments: [0, 1, 2, 6])
+    func intradayCitationsExcludeCaveatAndFollowingDailyFact(_ count: Int) {
+        let indices = StockSagePaperAutomation.intradayObservationIndices(precedingFactCount: 9, intradayFactCount: count)
+        #expect(indices.count == max(0, count - 1))
+        #expect(!StockSagePaperAutomation.hasIntradayEvidence(["F10"], factIndices: indices))
+        #expect(!StockSagePaperAutomation.hasIntradayEvidence(["F\(10 + count)"], factIndices: indices))
+        if count > 1 {
+            #expect(StockSagePaperAutomation.hasIntradayEvidence(["F11"], factIndices: indices))
+            #expect(StockSagePaperAutomation.hasIntradayEvidence(["F\(9 + count)"], factIndices: indices))
+        }
+    }
+
+    @Test func oldPaperDecisionsDecodeAndNewCoverageRoundTrips() throws {
+        typealias P = StockSagePaperAutomation
+        let old = P.Decision(id: UUID(), at: Date(timeIntervalSince1970: 1), symbol: "ACME", action: "Hold",
+                             reason: "Mixed", risk: "Uncertain", facts: [], evidence: [], model: "fixture")
+        let legacyData = try JSONEncoder().encode(old)
+        #expect(try JSONDecoder().decode(P.Decision.self, from: legacyData).evidenceCoverage == nil)
+        var current = old
+        current.evidenceCoverage = .init(symbol: "ACME", requiredKeys: ["earnings"],
+            missingOrUnknownRequiredKeys: ["earnings"], offeredKeys: ["earnings"], omittedKeys: ["news.item.fixture"],
+            prePromptOmittedRecordCount: 2, citedKeys: ["earnings"])
+        #expect(try JSONDecoder().decode(P.Decision.self, from: JSONEncoder().encode(current)) == current)
+    }
+
+    @Test func frozenPackingCheckpoint() throws {
+        typealias A = StockSageAIAssessment
+        let at = Date(timeIntervalSince1970: 1_789_344_000)
+        let idea = StockSageIdea(symbol: "ACME", market: "US", price: 50,
+            advice: TradeAdvice(action: .hold, conviction: 0, regime: .range,
+                rationale: ["Mixed technical direction."], stopPrice: nil,
+                targetPrice: nil, suggestedWeight: 0, caveat: "Rules only."),
+            spark: [49, 50], realizedVol: 0.2, generatedAt: at, priceAsOf: at, priceSource: .massiveSIP)
+        let news = (0..<3).map { index in StockSageNewsService.NewsItem(date: at,
+            title: "Synthetic coverage fixture \(index)", snippet: String(repeating: "Attributed news context. ", count: 18),
+            link: nil, sentiment: nil, source: "Fixture") }
+        let context = A.Context(idea: idea, earnings: nil, company: [:], news: news, at: at, quotedInUSD: true)
+        let all = context.facts
+        let required = all.filter { !$0.hasPrefix("Historical annualized volatility:") && !$0.hasPrefix("Attributed news,") }
+        let mandatory = ["Requested holding horizon: 7–14 days. Research only."]
+        for budget in [2_048, 3_072, 4_096, 6_144, 8_192, 16_384] {
+            let compiled = context.evidencePacket().facts
+            let optional = compiled.filter { !$0.required }
+            let fitted = A.fittedResearchPrompt(optional: optional.map(\.text), mandatory: compiled.filter(\.required).map(\.text) + mandatory,
+                system: { _ in "Frozen evidence packing fixture. Cite only offered facts." }, optionalKeys: optional.map(\.key),
+                outputTokens: 192, contextTokens: budget)
+            let accepted = try #require(fitted)
+            #expect(required.allSatisfy(accepted.facts.contains))
+            #expect(accepted.omittedKeys.count == accepted.omitted)
+            let row: [String: Any] = ["context": budget, "required_total": required.count,
+                "required_retained": required.filter { fitted?.facts.contains($0) == true }.count,
+                "fit": fitted != nil, "omitted": fitted?.omitted ?? -1,
+                "prompt_bytes": fitted?.user.utf8.count ?? 0]
+            let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
+            print("R27_BENCH " + String(decoding: data, as: UTF8.self))
+            if let fitted { #expect(StockSageLocalModelServer.promptFits(system: fitted.system, user: fitted.user, outputTokens: 192, contextTokens: budget)) }
+        }
     }
 }

@@ -224,6 +224,7 @@ struct MarketsView: View {
     @ObservedObject private var store: StockSageStore
     @ObservedObject private var aiAssessments: StockSageAIAssessments
     @ObservedObject private var portfolio: StockSagePortfolio
+    @State private var holdingEntry = StockSagePortfolioHoldingsView.EntryDraft()
     @ObservedObject private var journal: StockSageJournalStore
     @ObservedObject private var paperStore: StockSagePaperTradeStore
     // Fixup (2026-09-06, Q5 reviewer finding): the LIVE dot below must observe the stream
@@ -232,9 +233,6 @@ struct MarketsView: View {
     // isStreaming=false on a silent/half-open socket never redraws this view — the dot stays
     // lit until an unrelated re-render. Without this, Q5's "clears within ~45s" is not real.
     @ObservedObject private var live: StockSageLiveStream
-    @State private var newSymbol = ""
-    @State private var newShares = ""
-    @State private var newCost = ""
     /// Watchlist add-symbol field (track any global ticker beyond the universe).
     @State private var newWatchSymbol = ""
     /// Local error for the watchlist add box only. Populated from store.addSymbolError after
@@ -284,6 +282,18 @@ struct MarketsView: View {
     /// and lets the guard below make the real decision.
     private var streamSubscriptionKey: String {
         liveStreamEnabled ? massiveCredentialRevision + "|" + policyRevision : ""
+    }
+
+    private struct PersonalQuoteRefreshKey: Hashable {
+        let symbols: Set<String>
+        let policyRevision: String
+        let credentialRevision: String
+    }
+
+    private var personalQuoteRefreshKey: PersonalQuoteRefreshKey {
+        .init(symbols: Set(StockSageStore.trackedSymbols(board: [], watchlist: store.userSymbols,
+            portfolio: portfolio.positions.map(\.symbol), journalOpen: journal.open.map(\.symbol))),
+            policyRevision: policyRevision, credentialRevision: massiveCredentialRevision)
     }
 
     /// Auto-refresh while the app is open (B3, 2026-09-06: split from one 285s sweep into a 30s
@@ -356,8 +366,6 @@ struct MarketsView: View {
     private var parsedRiskFraction: Double? { StockSageInput.percent(sizerRiskPct).map { $0 / 100 } }
     /// Focus identity for the three add-holding fields → accent focus glow,
     /// matching the app's other primary inputs.
-    private enum AddField: Hashable { case symbol, shares, cost }
-    @FocusState private var focusedAddField: AddField?
     // Observe the live task, not an onAppear snapshot that misses launch/foreground changes.
     @ObservedObject private var monitor: StockSageMonitor
     private var monitoring: Bool { monitor.isRunning }
@@ -385,7 +393,6 @@ struct MarketsView: View {
     @State private var lastScanExamined = 0
     // Hover states — one per interactive surface type.
     @State private var hoveredSignalID: String?
-    @State private var hoveredPositionID: UUID?
     @State private var hoveredAlertSymbol: String?
     @State private var hoveredHeatID: UUID?
     @State private var hoveredIdeaID: String?
@@ -526,6 +533,12 @@ struct MarketsView: View {
             .task(id: StockSageMassiveSplits.RefreshKey(trades: journal.open, refreshedAt: store.lastFullRefreshAt)) {
                 guard !StockSageStore.isRunningTests, !CommandLine.arguments.contains("--qa") else { return }
                 await store.refreshJournalSplits(journal.open)
+            }
+            // Personal tracking needs an initial real quote even when the market is closed.
+            // The store owns provider access, cancellation, deduplication and quote acceptance.
+            .task(id: personalQuoteRefreshKey) {
+                guard !StockSageStore.isRunningTests, !CommandLine.arguments.contains("--qa") else { return }
+                await store.refreshMissingTrackedQuotes()
             }
             // One whole-market T.*,Q.* socket. Board changes only select the UI projection.
             .task(id: streamSubscriptionKey) {
@@ -1646,7 +1659,11 @@ struct MarketsView: View {
     // MARK: Portfolio
 
     private func currentPrice(_ symbol: String) -> Double? {
-        store.latestPrice(symbol)
+        Self.portfolioMarkPrice(store.latestQuote(symbol), isSampleData: store.isSampleData, now: Date())
+    }
+
+    static func portfolioMarkPrice(_ quote: StockSageQuote?, isSampleData: Bool, now: Date) -> Double? {
+        quote?.usableHoldingPrice(isSampleData: isSampleData, now: now)
     }
 
     /// THE one true holding value: per-share price × shares, with the symbol's quote unit applied.
@@ -1681,21 +1698,6 @@ struct MarketsView: View {
             if let r = fxRateToUSD(ccy) { rates[ccy] = r }
         }
         return rates
-    }
-
-    /// Currencies in the book with NO tracked FX rate — EXCLUDED from the USD total (never summed 1:1).
-    private var untrackedFXCurrencies: [String] {
-        let rates = fxRatesToUSD
-        return Set(portfolio.positions.map { conversionCurrencyForSymbol($0.symbol) })
-            .filter { rates[$0] == nil }.sorted()
-    }
-
-    /// Warn about the SAME rate used in valuation, including the infra quote and unknown clocks.
-    private var unverifiedFXCurrencies: [String] {
-        let now = Date()
-        return Set(portfolio.positions.map { conversionCurrencyForSymbol($0.symbol) })
-            .filter { $0 != "USD" && store.fxConversionToUSD($0, now: now)?.isFresh == false }
-            .sorted()
     }
 
     /// For an FX pair symbol (ending "=X"), returns the QUOTE (trailing) currency, which is the
@@ -1795,37 +1797,6 @@ struct MarketsView: View {
         return rates
     }
 
-    /// Portfolio cost & value in USD. Each holding's value AND cost go through holdingValue (so the
-    /// .L-pence ÷100 is applied to BOTH — the P&L unit matches) then × its CCY→USD rate, so we never
-    /// sum GBP + USD at 1:1. Holdings whose currency has no tracked rate are EXCLUDED (see
-    /// untrackedFXCurrencies), not counted at par. (Cost uses the selected FX rate; P&L blends asset + FX.)
-    ///
-    /// FX-pair positions (…=X): price×shares is already denominated in the pair's QUOTE currency
-    /// (e.g. EURUSD=X price is in USD), so we convert by the quote leg, not the exposure leg that
-    /// currencyForSymbol returns. Using the exposure leg for …USD=X pairs would multiply an
-    /// already-USD amount by the EURUSD rate again → rate², inflating value ~8–27%.
-    private var portfolioTotals: (cost: Double, value: Double) {
-        var cost = 0.0, value = 0.0
-        let rates = fxRatesToUSD
-        for p in portfolio.positions {
-            // Exclude untracked-FX AND unpriced holdings. Crucially, NO `?? costBasis` fallback for
-            // value — substituting cost basis would fabricate value == cost ⇒ a fake green $0 P&L.
-            // Use the quote-leg currency for =X pairs (already-USD when quote = "USD"),
-            // and the exposure-based currencyForSymbol for all other instruments.
-            let ccyKey = conversionCurrencyForSymbol(p.symbol)
-            guard let rate = rates[ccyKey], let px = currentPrice(p.symbol) else { continue }
-            cost += holdingValue(p.symbol, perShare: p.costBasis, shares: p.shares) * rate
-            value += holdingValue(p.symbol, perShare: px, shares: p.shares) * rate
-        }
-        return (cost, value)
-    }
-
-    /// Held symbols with NO live price — EXCLUDED from the USD total (never valued at cost basis),
-    /// surfaced in the summary so the headline value/P&L is honestly "priced holdings only".
-    private var unpricedHoldings: [String] {
-        portfolio.positions.filter { currentPrice($0.symbol) == nil }.map(\.symbol)
-    }
-
     private var portfolioSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             #if os(macOS)
@@ -1845,7 +1816,8 @@ struct MarketsView: View {
             Divider()
             #endif
             switch desktopPortfolioPage {
-            case .holdings: portfolioHoldings
+            case .holdings:
+                StockSagePortfolioHoldingsView(store: store, portfolio: portfolio, draft: holdingEntry)
             case .journal: tradeJournalPanel
             case .paper: forwardScoreboardPanel
             case .analytics:
@@ -1870,227 +1842,7 @@ struct MarketsView: View {
         }
     }
 
-    private var portfolioHoldings: some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            if let error = portfolio.lastError {
-                Text(error).font(.callout).foregroundStyle(DS.Palette.warningSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if portfolio.hasLoadedRecords { portfolioSummary }
-            addPositionForm
-            if !portfolio.hasLoadedRecords {
-                Text("Holdings and totals unavailable until the saved portfolio can be read. This is not an empty account.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if portfolio.positions.isEmpty {
-                Text("No holdings yet — add one above to track value & P&L.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 18)
-                    .transition(.opacity)
-            } else {
-                VStack(spacing: 1) {
-                    ForEach(portfolio.positions) {
-                        positionRow($0)
-                            .transition(.opacity.combined(with: .move(edge: .leading)))
-                    }
-                }
-                .animation(DS.Motion.smooth, value: portfolio.positions.count)
-                .background(
-                    RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                        .fill(DS.Bezel.cardFill)
-                        .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-                )
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                    .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-                .transition(.opacity)
-            }
-        }
-    }
-
-    private var portfolioSummary: some View {
-        let t = portfolioTotals
-        let pl = t.value - t.cost
-        let plPct = t.cost > 0 ? pl / t.cost * 100 : 0
-        let up = pl >= 0
-        let summaryLayout = workspaceTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
-            : AnyLayout(HStackLayout(spacing: 12))
-        return VStack(alignment: .leading, spacing: 6) {
-            summaryLayout {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Portfolio value (USD)").font(.caption).foregroundStyle(.secondary)
-                    Text(String(format: "$%.2f", t.value))
-                        .font(.system(size: mvFont22, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                        .contentTransition(.numericText())
-                        .animation(DS.Motion.smooth, value: t.value)
-                }
-                if !workspaceTypeSize.isAccessibilitySize { Spacer() }
-                VStack(alignment: workspaceTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 2) {
-                    Text("Total P&L (USD)").font(.caption).foregroundStyle(.secondary)
-                    if portfolio.positions.isEmpty {
-                        Text("No holdings yet").font(.callout).foregroundStyle(.secondary)
-                    } else if t.value == 0, t.cost == 0 {
-                        // Nothing priced/convertible → don't paint a fake green +$0.00 P&L.
-                        Text("— no priced holdings").font(.system(size: mvFont15, weight: .semibold)).foregroundStyle(.secondary)
-                    } else {
-                        // Percent return is undefined when cost basis is 0 (e.g. gifted/0-cost lots) —
-                        // show the real dollar P&L but "—%" instead of a fabricated +0.0%.
-                        Text((up ? "+" : "") + String(format: "$%.2f", pl)
-                             + (t.cost > 0 ? String(format: " (%+.1f%%)", plPct) : " (—%)"))
-                            .font(.system(size: mvFont15, weight: .semibold))
-                            .foregroundStyle(Self.signedMetricColor(positive: up))
-                            .contentTransition(.numericText())
-                            .animation(DS.Motion.smooth, value: pl)
-                    }
-                }
-            }
-            if !unpricedHoldings.isEmpty {
-                Text("\(unpricedHoldings.count) holding\(unpricedHoldings.count == 1 ? "" : "s") with no live price (\(unpricedHoldings.prefix(3).joined(separator: ", "))) — excluded; value/P&L is priced holdings only.")
-                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !untrackedFXCurrencies.isEmpty {
-                Text("Excludes \(untrackedFXCurrencies.joined(separator: ", ")) holdings — no usable FX rate to convert to USD. Refresh market data and verify the FX feed. P&L at the selected rate blends asset and currency moves.")
-                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !unverifiedFXCurrencies.isEmpty {
-                Text("FX valuation for \(unverifiedFXCurrencies.joined(separator: ", ")) uses an old or unverified rate (over \(Int(StockSageCurrency.maxSizingFXAge / 3600))h old, or market time/source unknown). The total may be off; this rate cannot size a new trade.")
-                    .font(.system(size: mvFont9)).foregroundStyle(DS.Palette.warningSoft)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(DS.Space.sm)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(DS.Bezel.cardFill)
-                .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
-        )
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-            .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
-    }
-
-    private var addPositionForm: some View {
-        // Persistent field labels stay legible after entry; narrow layouts stack naturally.
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Add a holding").font(.headline)
-            #if os(iOS)
-            VStack(alignment: .leading, spacing: 12) { addPositionFormFields }
-            #else
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .bottom, spacing: 12) { addPositionFormFields }
-                VStack(alignment: .leading, spacing: 12) { addPositionFormFields }
-            }
-            #endif
-        }
-        .padding(.vertical, 12)
-    }
-
-    @ViewBuilder private var addPositionFormFields: some View {
-        field($newSymbol, "Symbol", width: 84, focus: .symbol)
-        field($newShares, "Shares", width: 66, focus: .shares, numeric: true)
-        field($newCost, "Cost per share", width: 112, focus: .cost, numeric: true)
-        Button {
-            // Validated parse — an unparseable cost ("1,234.56" pasted from a broker, a blank
-            // field) must never default to $0 basis: that renders the ENTIRE value as fake
-            // green profit and inflates the headline Total P&L. The disabled gate below makes
-            // this unreachable with invalid input; the guard is belt-and-suspenders.
-            guard let sh = StockSageInput.positiveAmount(newShares),
-                  let cost = StockSageInput.nonNegativeAmount(newCost) else { return }
-            guard portfolio.add(symbol: newSymbol, shares: sh, costBasis: cost) else { return }
-            newSymbol = ""; newShares = ""; newCost = ""
-        } label: {
-            Label("Add holding", systemImage: "plus")
-                #if os(iOS)
-                .frame(minHeight: 32)
-                #endif
-        }
-        .buttonStyle(.borderedProminent).controlSize(.large)
-        .help("Add holding").accessibilityLabel("Add holding")
-        .disabled(newSymbol.trimmingCharacters(in: .whitespaces).isEmpty
-                  || StockSageInput.positiveAmount(newShares) == nil
-                  || StockSageInput.nonNegativeAmount(newCost) == nil)
-    }
-
-    private func field(_ text: Binding<String>, _ placeholder: String, width: CGFloat, focus: AddField, numeric: Bool = false) -> some View {
-        let active = focusedAddField == focus
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(placeholder).font(.caption).foregroundStyle(.secondary)
-            TextField(placeholder, text: text)
-            .textFieldStyle(.plain).font(.body)
-            .decimalKeyboardOnIOS(numeric)
-            .focused($focusedAddField, equals: focus)
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            #if os(iOS)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            #else
-            .frame(minWidth: width, maxWidth: width * 1.8)
-            #endif
-            .background(Color.white.opacity(active ? 0.11 : 0.09), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
-                .stroke(active
-                        ? AnyShapeStyle(LinearGradient(colors: [DS.Palette.accent.opacity(0.55), DS.Palette.accent.opacity(0.15)],
-                                                       startPoint: .top, endPoint: .bottom))
-                        : AnyShapeStyle(DS.Palette.surfaceStroke), lineWidth: 1))
-            .shadow(color: DS.Palette.accent.opacity(active ? 0.15 : 0.0), radius: 8, y: 2)
-            .animation(DS.Motion.lux, value: active)
-            .accessibilityLabel(placeholder)
-        }
-    }
-
-    private func positionRow(_ p: PortfolioPosition) -> some View {
-        let price = currentPrice(p.symbol)
-        let value = holdingValue(p.symbol, perShare: price ?? p.costBasis, shares: p.shares)
-        // Cost through holdingValue too, so a .L holding's P&L isn't £value − pence-cost (per-row
-        // stays in the LOCAL currency; the headline total does the USD conversion).
-        let pl = value - holdingValue(p.symbol, perShare: p.costBasis, shares: p.shares)
-        let up = pl >= 0
-        let hovered = hoveredPositionID == p.id
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(p.symbol).font(.system(size: mvFont14, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                Text("\(numString(p.shares)) sh @ \(adaptivePrice(p.costBasis))")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(price == nil ? "— no price" : adaptivePrice(value))
-                    .font(.system(size: mvFont14, weight: .semibold)).foregroundStyle(.white)
-                    .contentTransition(.numericText())
-                    .animation(DS.Motion.smooth, value: value)
-                    // Keyed on the underlying quote price, not `value` (= price × shares) — the
-                    // spec's "keyed on the price value's direction", not the scaled holding value.
-                    .priceFlash(price)
-                if price != nil {
-                    Text((up ? "+" : "") + adaptivePrice(pl))
-                        .font(.caption).foregroundStyle(Self.signedMetricColor(positive: up))
-                        .contentTransition(.numericText())
-                        .animation(DS.Motion.smooth, value: pl)
-                        .priceFlash(price)
-                }
-            }
-            .animation(DS.Motion.smooth, value: up)
-            Button { portfolio.remove(p.id) } label: {
-                Image(systemName: "trash").font(.system(size: mvFont12))
-                    .foregroundStyle(hovered ? DS.Palette.danger.opacity(0.7) : Color.secondary)
-            }
-            .buttonStyle(LuxPressStyle()).touchHitArea().help("Remove holding").accessibilityLabel("Remove \(p.symbol)")
-        }
-        .padding(.horizontal, DS.Space.sm).padding(.vertical, 10)
-        .background(hovered ? DS.Palette.accent.opacity(0.06) : Color.clear)
-        .contentShape(Rectangle())
-        .onHover { over in
-            withAnimation(DS.Motion.smooth) {
-                if over { hoveredPositionID = p.id }
-                else if hoveredPositionID == p.id { hoveredPositionID = nil }
-            }
-        }
-    }
-
     private func numString(_ d: Double) -> String {
-        // %.0f, not String(Int(d)) — Int(Double) TRAPS past Int.max (~9.22e18), and a persisted
-        // pathological share count would then crash every Portfolio render (an in-app-unrecoverable
-        // crash loop, since positions live in UserDefaults).
         d == d.rounded() ? String(format: "%.0f", d) : String(format: "%.2f", d)
     }
 
@@ -2677,7 +2429,11 @@ struct MarketsView: View {
                         case .success(let summary):
                             journalDataFeedback = summary.message
                         case .failure(let err):
-                            journalDataFeedback = "Restore failed: \(err.localizedDescription)"
+                            if case .restoreDurabilityUnconfirmed = err {
+                                journalDataFeedback = err.localizedDescription
+                            } else {
+                                journalDataFeedback = "Restore failed: \(err.localizedDescription)"
+                            }
                         }
                     }
                     #endif
@@ -2750,7 +2506,11 @@ struct MarketsView: View {
                     case .success(let summary):
                         journalDataFeedback = summary.message
                     case .failure(let err):
-                        journalDataFeedback = "Restore failed: \(err.localizedDescription)"
+                        if case .restoreDurabilityUnconfirmed = err {
+                            journalDataFeedback = err.localizedDescription
+                        } else {
+                            journalDataFeedback = "Restore failed: \(err.localizedDescription)"
+                        }
                     }
                 }
                 #endif
@@ -4185,11 +3945,19 @@ struct MarketsView: View {
                                       uniquingKeysWith: { first, _ in first })
         return VStack(alignment: .leading, spacing: 16) {
             addSymbolBar
+            if let error = store.watchlistPersistenceError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("watchlist.persistenceError")
+            }
             if !watchlistOnly && store.symbols.isEmpty {
                 emptyState
                     .transition(.opacity)
             } else if watchlistOnly && displayed.isEmpty {
-                Text("Your watchlist is empty — add a ticker above or in Browse.")
+                Text(store.watchlistPersistenceError == nil
+                     ? "Your watchlist is empty — add a ticker above or in Browse."
+                     : "The saved watchlist is unavailable. Resolve the storage error above before editing it.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, DS.Space.sm)
@@ -8398,11 +8166,14 @@ struct MarketsView: View {
         // so the exported concentration % isn't distorted by a 1:1 multi-currency sum.
         let exportFX = fxRatesToUSD
         let exportHoldings = portfolio.positions.compactMap { p -> (symbol: String, value: Double)? in
-            guard let rate = exportFX[conversionCurrencyForSymbol(p.symbol)] else { return nil }
+            guard let rate = exportFX[conversionCurrencyForSymbol(p.symbol)],
+                  let mark = currentPrice(p.symbol) else { return nil }
             return (symbol: p.symbol,
-                    value: holdingValue(p.symbol, perShare: currentPrice(p.symbol) ?? p.costBasis, shares: p.shares) * rate)
+                    value: holdingValue(p.symbol, perShare: mark, shares: p.shares) * rate)
         }
-        if !exportHoldings.isEmpty {
+        if exportHoldings.count != portfolio.positions.count {
+            plan += "\nConcentration unavailable: some holdings lack a usable real quote or FX rate."
+        } else if !exportHoldings.isEmpty {
             let bookTotal = exportHoldings.reduce(0) { $0 + $1.value }
             let sizedNotional = size.map { StockSageCurrency.majorUnitValue(symbol: idea.symbol, rawValue: $0.notional) }
             let addValue = StockSageWhatIf.proposedAddValue(sizedNotional: sizedNotional, account: parsedAccount, bookTotal: bookTotal)
@@ -9340,11 +9111,15 @@ struct MarketsView: View {
                 // Untracked-FX holdings are excluded (no rate) rather than summed 1:1 — same as allocation.
                 let whatIfFX = fxRatesToUSD
                 let whatIfHoldings = portfolio.positions.compactMap { p -> (symbol: String, value: Double)? in
-                    guard let rate = whatIfFX[conversionCurrencyForSymbol(p.symbol)] else { return nil }
+                    guard let rate = whatIfFX[conversionCurrencyForSymbol(p.symbol)],
+                          let mark = currentPrice(p.symbol) else { return nil }
                     return (symbol: p.symbol,
-                            value: holdingValue(p.symbol, perShare: currentPrice(p.symbol) ?? p.costBasis, shares: p.shares) * rate)
+                            value: holdingValue(p.symbol, perShare: mark, shares: p.shares) * rate)
                 }
-                if !whatIfHoldings.isEmpty {
+                if whatIfHoldings.count != portfolio.positions.count {
+                    Text("Concentration unavailable: some holdings lack a usable real quote or FX rate.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if !whatIfHoldings.isEmpty {
                     let bookTotal = whatIfHoldings.reduce(0) { $0 + $1.value }
                     let sizedNotional: Double? = {
                         if let stop = a.stopPrice, let acct = parsedAccount, let rf = parsedRiskFraction,

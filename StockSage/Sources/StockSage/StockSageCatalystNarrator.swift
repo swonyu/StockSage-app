@@ -102,18 +102,22 @@ enum StockSageCatalystNarrator {
         /// Filing/transaction dates can be day-only; only parsed news supplies a publication instant.
         let publicationTime: String?
         let updatedTime: String?
+        let provenance: [StockSageNewsService.NewsProvenance]
 
-        init(date: Date, source: String, title: String, snippet: String, link: URL?, insight: String? = nil, publicationTime: String? = nil, updatedTime: String? = nil) {
+        init(date: Date, source: String, title: String, snippet: String, link: URL?, insight: String? = nil, publicationTime: String? = nil, updatedTime: String? = nil,
+             provenance: [StockSageNewsService.NewsProvenance] = []) {
             self.date = date; self.source = source; self.title = title
             self.snippet = snippet; self.link = link; self.insight = insight
             self.publicationTime = publicationTime
             self.updatedTime = updatedTime
+            self.provenance = provenance
         }
 
         init(news: StockSageNewsService.NewsItem) {
             self.init(date: news.date, source: news.source, title: news.title,
                       snippet: news.snippet, link: news.link, insight: news.insight,
-                      publicationTime: news.publicationTime ?? StockSageNewsService.instant(news.date), updatedTime: news.updatedTime)
+                      publicationTime: news.publicationTime ?? StockSageNewsService.instant(news.date), updatedTime: news.updatedTime,
+                      provenance: news.provenance)
         }
     }
 
@@ -203,7 +207,17 @@ enum StockSageCatalystNarrator {
         let linkPart = source.link?.absoluteString ?? "no link"
         let insightPart = source.insight.map { "\n   sentiment: \($0)" } ?? ""
         let updatePart = source.updatedTime.map { " · updated \($0)" } ?? ""
-        return "[\(number)] \(sourceDate(source))\(updatePart) \(source.source): \(source.title)\(snippetPart) (\(linkPart))\(insightPart)"
+        let provenancePart: String
+        if source.provenance.count > 1 {
+            let references = source.provenance.prefix(3).map { item in
+                let id = String(item.id.prefix(64))
+                let revision = String(item.revision.prefix(12))
+                return "\(id)#\(revision)@\(item.publicationTime ?? sourceDay(item.date))"
+            }.joined(separator: ", ")
+            provenancePart = " · merged sources: \(references)"
+                + (source.provenance.count > 3 ? " (+\(source.provenance.count - 3) more)" : "")
+        } else { provenancePart = "" }
+        return "[\(number)] \(sourceDate(source))\(updatePart) \(source.source): \(source.title)\(snippetPart) (\(linkPart))\(insightPart)\(provenancePart)"
     }
 
     /// System instructions for the session — fixed, never per-idea (the facts carry everything
