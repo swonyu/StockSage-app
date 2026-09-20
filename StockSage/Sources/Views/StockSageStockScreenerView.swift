@@ -96,6 +96,8 @@ struct StockSageStockScreenerView: View {
     private var filterControls: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
+                // Keep the heading in the content: the native GroupBox label crashes CUA traversal.
+                Text("Your filters").font(.headline).accessibilityAddTraits(.isHeader)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 8) {
                     Text("Size presets").font(.subheadline.weight(.medium))
                     Button("Micro cap · $50–300M") { minimumCap = "50"; maximumCap = "300" }
@@ -128,7 +130,7 @@ struct StockSageStockScreenerView: View {
                     Spacer(minLength: 0)
                 }
             }.padding(6)
-        } label: { Text("Your filters").font(.headline) }
+        }
     }
 
     private func field(_ title: String, text: Binding<String>, id: String) -> some View {
