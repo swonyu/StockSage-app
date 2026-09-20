@@ -1736,7 +1736,7 @@ struct StockSageIOSPresentationTests {
             // a single initial PNG only contains the run's introduction.
             let states = [
                 ("purchase", "P. Buyer"),
-                ("uncited-warning", "An offered insider record was not mentioned in the answer."),
+                ("uncited-warning", "An offered insider record was not cited in the evidence list."),
                 ("uncited-source", "Insider records offered but not cited: F2"),
                 ("sale", "S. Seller"),
                 // Supplied plan disclosure, without interpreting the owner's intent.

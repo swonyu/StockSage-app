@@ -367,7 +367,7 @@ enum StockSageAIAssessment {
             case unresolvableCitation
             /// A cited fact whose own source reported it missing or unknown.
             case citedUnavailableFact
-            /// An offered insider record that the answer never mentions.
+            /// An offered insider record that the answer did not cite.
             case uncitedInsiderRecord
             /// Buying language while every cited insider record is a sale.
             case insiderSaleFramedAsBuying
