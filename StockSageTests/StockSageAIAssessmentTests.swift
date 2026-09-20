@@ -15,6 +15,11 @@ struct StockSageAIAssessmentTests {
         #expect(profile.endpointProfile == .runPodGemma && profile.packetDigest == packet.digest)
         #expect(profile.initialOutputTokens == 192 && profile.maxOutputTokens == 384)
         #expect(profile.topP == nil && profile.seed == nil)
+        let expanded = A.InferenceProfile(config: config, isOllama: false, packet: packet,
+            outputTokens: 192, diagnostic: .init(finish: .stop), contextTokens: 24_576)
+        #expect(profile.contextTokens == 16_384 && expanded.contextTokens == 24_576)
+        #expect(expanded.valid(model: S.gemmaModel) && !profile.comparableCohort(with: expanded))
+        #expect(expanded.packetDigest == profile.packetDigest && expanded.maxOutputTokens == profile.maxOutputTokens)
         let bytes = try JSONEncoder().encode(profile)
         #expect(!String(decoding: bytes, as: UTF8.self).contains("127.0.0.1"))
         #expect(!String(decoding: bytes, as: UTF8.self).contains("18080"))

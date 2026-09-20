@@ -554,13 +554,14 @@ enum StockSageAIAssessment {
         let retryReason: String?
 
         init(config: StockSageLocalModelServer.Config, isOllama: Bool, packet: EvidencePacket,
-             outputTokens: Int, diagnostic: StockSageLocalModelServer.Diagnostic) {
+             outputTokens: Int, diagnostic: StockSageLocalModelServer.Diagnostic,
+             contextTokens: Int = StockSageLocalModelServer.researchContextTokens) {
             version = 1; model = config.model
             promptVersion = PromptVersion.current.rawValue; schemaVersion = PromptVersion.current.rawValue
             packetVersion = packet.version; packetDigest = packet.digest
             temperature = StockSageLocalModelServer.researchTemperature
             topP = nil; seed = nil
-            contextTokens = StockSageLocalModelServer.researchContextTokens
+            self.contextTokens = contextTokens
             initialOutputTokens = outputTokens; maxOutputTokens = config.reservedOutputTokens(for: outputTokens)
             endpointProfile = isOllama ? .ollama : config.isRunPodGemma ? .runPodGemma
                 : config.isLMStudioGemma ? .lmStudioGemma : .generic
@@ -660,6 +661,7 @@ enum StockSageAIAssessment {
     /// A failed/changed repair returns the original rejected answer, never a replacement opinion.
     @MainActor static func complete(_ config: StockSageLocalModelServer.Config, isOllama: Bool,
         system: String, user: String, facts: [String], maxTokens: Int,
+        contextTokens: Int = StockSageLocalModelServer.researchContextTokens,
         attemptObserver: (@Sendable (StockSageLocalModelServer.ModelAttemptEvent) async -> Void)? = nil,
         stillValid: @escaping @MainActor () -> Bool,
         transport: ((URLRequest) async throws -> (Data, URLResponse))? = nil) async -> StockSageLocalModelServer.CompletionResult {
@@ -670,7 +672,7 @@ enum StockSageAIAssessment {
             guard seconds > 0 else { return .failure(.init(diagnostic: .init(category: .timeout))) }
             return await StockSageLocalModelServer.completeDetailed(config, isOllama: isOllama,
                 system: system, user: prompt, maxTokens: maxTokens,
-                contextTokens: StockSageLocalModelServer.researchContextTokens, timeout: seconds,
+                contextTokens: contextTokens, timeout: seconds,
                 jsonSchema: responseSchema(facts: facts), phase: phase, attemptObserver: attemptObserver,
                 stillValid: stillValid, transport: transport)
         }

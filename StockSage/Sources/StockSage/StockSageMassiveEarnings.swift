@@ -42,11 +42,7 @@ enum StockSageMassiveEarnings {
                 fact = Self.factPrefix + "unknown; verified trading calendar unavailable. Do not infer event timing or absence of earnings risk."
                 return
             }
-            let ny = DateFormatter()
-            ny.calendar = Calendar(identifier: .gregorian)
-            ny.locale = Locale(identifier: "en_US_POSIX")
-            ny.timeZone = TimeZone(identifier: "America/New_York")
-            ny.dateFormat = "yyyy-MM-dd"
+            let ny = newYorkDayFormatter
             let start = ny.string(from: first), end = ny.string(from: last)
             let basis = Self.factPrefix + "snapshot \(asOf.ISO8601Format()); \(horizon.rawValue); next-session window \(start) through \(end) (New York dates). "
             guard let observation, let checked = observation.checkedAt,
@@ -79,6 +75,14 @@ enum StockSageMassiveEarnings {
         }
     }
     private nonisolated enum Failure: Error { case invalidPayload }
+    private nonisolated static let newYorkDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "America/New_York")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
     private nonisolated static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)

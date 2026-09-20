@@ -1089,6 +1089,8 @@ extension StockSageResearchHistory {
         var newsCheckedAt: Date? = nil
         var newestNewsAt: Date? = nil
         var newsCheckSummary: String? = nil
+        var priorAssessment: StockSageHorizonResearch.PriorAssessment? = nil
+        var priorAssessmentNote: String? = nil
         var hasRecordedInsiderTransactions: Bool { includesInsiderTransactions }
 
         init(listing: StockSageHorizonResearch.Listing, result: StockSageHorizonResearch.Result) {
@@ -1110,6 +1112,7 @@ extension StockSageResearchHistory {
             validationFailure = result.validationFailure
             newsCheckedAt = result.newsCheckedAt; newestNewsAt = result.newestNewsAt
             newsCheckSummary = result.newsCheckSummary
+            priorAssessment = result.priorAssessment; priorAssessmentNote = result.priorAssessmentNote
             includesInsiderTransactions = result.hasRecordedInsiderTransactions
             if insiderEvidence != nil || qualityReport != nil {
                 insiderCoverage = coverage.first { $0.source == StockSageMassiveEvents.Feed.insider.source }
@@ -1124,6 +1127,7 @@ extension StockSageResearchHistory {
             case evidenceReceipt, diagnosticID, diagnosticsComplete, qualification, insiderTransactions
             case factClasses, inferenceProfile, qualityReport, insiderEvidence, insiderCoverage
             case validationOutcome, validationFailure, newsCheckedAt, newestNewsAt, newsCheckSummary
+            case priorAssessment, priorAssessmentNote
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1153,6 +1157,8 @@ extension StockSageResearchHistory {
             newsCheckedAt = try c.decodeIfPresent(Date.self, forKey: .newsCheckedAt)
             newestNewsAt = try c.decodeIfPresent(Date.self, forKey: .newestNewsAt)
             newsCheckSummary = try c.decodeIfPresent(String.self, forKey: .newsCheckSummary)
+            priorAssessment = try c.decodeIfPresent(StockSageHorizonResearch.PriorAssessment.self, forKey: .priorAssessment)
+            priorAssessmentNote = try c.decodeIfPresent(String.self, forKey: .priorAssessmentNote)
         }
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -1180,6 +1186,8 @@ extension StockSageResearchHistory {
             try c.encodeIfPresent(newsCheckedAt, forKey: .newsCheckedAt)
             try c.encodeIfPresent(newestNewsAt, forKey: .newestNewsAt)
             try c.encodeIfPresent(newsCheckSummary, forKey: .newsCheckSummary)
+            try c.encodeIfPresent(priorAssessment, forKey: .priorAssessment)
+            try c.encodeIfPresent(priorAssessmentNote, forKey: .priorAssessmentNote)
         }
 
         static func == (lhs: Self, rhs: Self) -> Bool {
@@ -1195,6 +1203,7 @@ extension StockSageResearchHistory {
                 && lhs.validationOutcome == rhs.validationOutcome && lhs.validationFailure == rhs.validationFailure
                 && lhs.newsCheckedAt == rhs.newsCheckedAt && lhs.newestNewsAt == rhs.newestNewsAt
                 && lhs.newsCheckSummary == rhs.newsCheckSummary
+                && lhs.priorAssessment == rhs.priorAssessment && lhs.priorAssessmentNote == rhs.priorAssessmentNote
         }
 
         var result: StockSageHorizonResearch.Result? {
@@ -1213,7 +1222,8 @@ extension StockSageResearchHistory {
                 qualification: qualification, insiderTransactions: insiderTransactions, factClasses: factClasses,
                 inferenceProfile: inferenceProfile, qualityReport: qualityReport, insiderEvidence: insiderEvidence,
                 hasRecordedInsiderTransactions: includesInsiderTransactions,
-                newsCheckedAt: newsCheckedAt, newestNewsAt: newestNewsAt, newsCheckSummary: newsCheckSummary)
+                newsCheckedAt: newsCheckedAt, newestNewsAt: newestNewsAt, newsCheckSummary: newsCheckSummary,
+                priorAssessment: priorAssessment, priorAssessmentNote: priorAssessmentNote)
         }
 
         var prediction: Prediction? {
@@ -1237,6 +1247,7 @@ extension StockSageResearchHistory {
         let startedAt: Date
         let checks: [CompletedCheck]
         var qualificationPolicyVersion: Int? = nil
+        var configurationID: String? = nil
     }
 
     static func captureChecks(scan: StockSageHorizonResearch.Scan, horizon: StockSageHorizonResearch.Horizon,
@@ -1245,7 +1256,7 @@ extension StockSageResearchHistory {
               scan.listings.count == scan.results.count else { return nil }
         let archive = CompletedChecks(version: 1, horizon: horizon == .week ? .week : .fortnight,
             startedAt: startedAt, checks: scan.listings.map { .init(listing: $0, result: scan.results[$0.ticker]!) },
-            qualificationPolicyVersion: scan.qualificationPolicyVersion)
+            qualificationPolicyVersion: scan.qualificationPolicyVersion, configurationID: scan.resumeConfigurationID)
         guard capturedSince == nil || scan.retainedFromRunID != nil else { return nil }
         return validChecks(archive, through: completedAt, capturedSince: capturedSince) ? archive : nil
     }
@@ -1266,6 +1277,7 @@ extension StockSageResearchHistory {
         scan.at = archive.startedAt
         scan.retainedFromRunID = run.retainedFromRunID
         scan.qualificationPolicyVersion = archive.qualificationPolicyVersion
+        scan.resumeConfigurationID = archive.configurationID
         scan.ranking = run.ranking; scan.rankingFailure = run.rankingFailure
         scan.deterministicRanking = run.deterministicRanking; scan.completedAt = run.completedAt
         scan.selection = run.coverage.selection.map {
@@ -1281,6 +1293,7 @@ extension StockSageResearchHistory {
         let earliest = capturedSince ?? archive.startedAt
         guard validDate(earliest), earliest <= archive.startedAt, archive.version == 1, validDate(archive.startedAt), validDate(completedAt), archive.startedAt <= completedAt,
               archive.qualificationPolicyVersion == nil || archive.qualificationPolicyVersion == 1,
+              archive.configurationID.map({ $0.count == 64 && $0.allSatisfy({ "0123456789abcdef".contains($0) }) }) ?? true,
               archive.checks.count <= StockSageHorizonResearch.scanLimit,
               Set(archive.checks.map { $0.listing.ticker }).count == archive.checks.count,
               let bytes = try? JSONEncoder().encode(archive), bytes.count <= maximumCompletedChecksBytes else { return false }
@@ -1294,6 +1307,15 @@ extension StockSageResearchHistory {
                 model: check.model, symbol: listing.ticker, factCount: check.facts.count,
                 citations: check.verdict?.evidence ?? []) else { return false }
             guard check.factClasses.isEmpty || check.factClasses.count == check.facts.count else { return false }
+            if let prior = check.priorAssessment {
+                guard archive.horizon == .fortnight, prior.model == check.model,
+                      prior.sourceScanAt <= archive.startedAt,
+                      prior.valid(for: listing.ticker, through: check.at) else { return false }
+            }
+            if let note = check.priorAssessmentNote {
+                guard archive.horizon == .fortnight, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      note.utf8.count <= 2_000 else { return false }
+            }
             if let quality = check.qualityReport,
                !quality.valid(action: check.verdict?.action, evidenceCount: check.verdict?.evidence.count ?? 0, factCount: check.facts.count) { return false }
             guard validInsiderEvidence(check.insiderEvidence, coverage: check.insiderCoverage,
@@ -1492,7 +1514,8 @@ extension StockSageResearchHistory {
                 } else { original.append(check) }
             }
             let restored = CompletedChecks(version: 1, horizon: source.horizon, startedAt: source.startedAt, checks: original,
-                qualificationPolicyVersion: source.coverage.qualifiedBuyCount == nil ? nil : 1)
+                qualificationPolicyVersion: source.coverage.qualifiedBuyCount == nil ? nil : 1,
+                configurationID: archive.configurationID)
             guard checksMatch(restored, run: source, capturedSince: source.retainedFromRunID == nil ? nil : sourceStart),
                   (try? checksDigest(restored)) == receipt.sourceChecksDigest else { return false }
             archive = restored; run = source
@@ -1720,6 +1743,7 @@ extension StockSageResearchHistory {
               validChecks(archive, through: checkpoint.updatedAt),
               archive.checks.count <= symbols.count,
               checkpoint.configurationID.map({ $0.count == 64 && $0.allSatisfy({ "0123456789abcdef".contains($0) }) }) ?? true,
+              archive.configurationID == nil || archive.configurationID == checkpoint.configurationID,
               checkpoint.listings.allSatisfy({ listing in
                   StockSageResearchUniverse.eligibleListing(listing, through: checkpoint.updatedAt)
                     && (listing.sp500Membership.map { $0.provenance == checkpoint.selection?.sp500 } ?? true)
@@ -1768,7 +1792,7 @@ extension StockSageResearchHistory {
             let h: Horizon = horizon == .week ? .week : .fortnight
             let archive = CompletedChecks(version: 1, horizon: h, startedAt: started,
                 checks: scan.listings.compactMap { listing in scan.results[listing.ticker].map { CompletedCheck(listing: listing, result: $0) } },
-                qualificationPolicyVersion: scan.qualificationPolicyVersion)
+                qualificationPolicyVersion: scan.qualificationPolicyVersion, configurationID: scan.resumeConfigurationID)
             let selection = scan.selection.map { SelectionReceipt(session: $0.session, requestedAt: $0.requestedAt,
                 returnedCount: $0.returnedCount, eligibleCount: $0.eligibleCount, directoryCount: $0.directoryCount,
                 partialSession: $0.partialSession, fallback: $0.fallback, dollarVolume: $0.dollarVolume, sp500: $0.sp500) }

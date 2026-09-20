@@ -24,6 +24,167 @@ struct StockSageHorizonAnalyzeTests {
     typealias Research = StockSageHorizonResearch
     typealias Server = StockSageLocalModelServer
 
+    @Test func priorWeekOpinionRequiresMatchingValidatedCanonicalSource() throws {
+        let at = Date().addingTimeInterval(-2)
+        var source = StockSageResearchHistoryTests().qualifiedResult("ACME", at: at, qualified: false, horizon: .week)
+        source.model = Server.gemmaModel; source.validationOutcome = .validated; source.diagnosticID = UUID()
+        let prior = try #require(Research.PriorAssessment.capture(symbol: "ACME", result: source,
+            sourceScanAt: at.addingTimeInterval(-1), through: Date()))
+        #expect(prior.symbol == "ACME" && prior.action == source.verdict?.action.rawValue)
+        #expect(prior.reason == source.verdict?.reason && prior.risk == source.verdict?.risk)
+        #expect(prior.sourceCaptureAt == at && prior.diagnosticID == source.diagnosticID)
+        #expect(prior.strictQualified == false && prior.strictFailureReasons == source.qualification?.reasons)
+        #expect(Research.PriorAssessment.capture(symbol: "OTHER", result: source, sourceScanAt: at, through: Date()) == nil)
+        #expect(Research.PriorAssessment.capture(symbol: "ACME", result: source, sourceScanAt: at, through: at.addingTimeInterval(-1)) == nil)
+        #expect(Research.PriorAssessment.capture(symbol: "ACME", result: source, sourceScanAt: at.addingTimeInterval(1), through: Date()) == nil)
+        var wrong = source; wrong.model = "another-model"
+        #expect(Research.PriorAssessment.capture(symbol: "ACME", result: wrong, sourceScanAt: at, through: Date()) == nil)
+        wrong = source; wrong.validationOutcome = .unknown
+        #expect(Research.PriorAssessment.capture(symbol: "ACME", result: wrong, sourceScanAt: at, through: Date()) == nil)
+        wrong = source; wrong.verdict = nil
+        #expect(Research.PriorAssessment.capture(symbol: "ACME", result: wrong, sourceScanAt: at, through: Date()) == nil)
+    }
+
+    // Process-local policy only; every provider/model transport below is injected.
+    private func injectedHostedPolicy() -> () -> Void {
+        ToolPolicyTestLock.lock.lock()
+        let old = ToolPolicy.override
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        ToolPolicyTestLock.set(false, forKey: AppSettings.Keys.offlineOnly)
+        ToolPolicy.override = .allowExternalTools
+        return {
+            ToolPolicy.override = old
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            ToolPolicyTestLock.lock.unlock()
+        }
+    }
+
+    @Test(arguments: [192, 384])
+    func priorFortnightPreservesBaselineFactsAndSchemaWithVerifiedExpandedContext(outputTokens: Int) async throws {
+        let restorePolicy = injectedHostedPolicy(); defer { restorePolicy() }
+        let name = "stocksage.prior-context.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: name))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: directory) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let gathered = await Research.gather(Self.listing(), store: store, key: "fixture", allowed: { true },
+            historyTransport: { Self.ok(Self.historyPayload(), $0) },
+            benzingaSnapshot: { symbol, at in .init(symbol: symbol, capturedAt: at, credentialGeneration: nil, pages: []) },
+            newsObservation: { _, _, _ in .init(attempts: []) },
+            nextEarnings: { _, at in .init(outcome: .answered(nil), checkedAt: at, recordedAt: at) },
+            filingsObservation: { _, at in .init(checkedAt: at, outcome: .answered, filings: []) },
+            insiderObservation: { symbol, at in .init(symbol: symbol, feed: .insider, checkedAt: at, outcome: .answered, event: nil) },
+            evidenceIsCurrent: { _ in true })
+        guard case .captured(var capture) = gathered else { Issue.record("Expected synthetic capture"); return }
+        let original = try #require(capture.evidencePacket)
+        capture.evidencePacket = .init(facts: original.facts + (0..<50).map {
+            .init(key: "extra.\($0)", text: "Synthetic source background " + String(repeating: "a", count: 380),
+                  required: false, availability: .available)
+        }, prePromptOmittedRecordCount: original.prePromptOmittedRecordCount)
+        let config = try #require(Server.config(url: Server.runPodURL, model: Server.gemmaModel))
+        var bodies: [Data] = [], truncateNext = false
+        func transport(_ request: URLRequest) throws -> (Data, URLResponse) {
+            if request.httpMethod == "GET" {
+                #expect(request.url?.path == "/props")
+                return Self.ok(Data(#"{"default_generation_settings":{"n_ctx":24576},"total_slots":4}"#.utf8), request)
+            }
+            bodies.append(try #require(request.httpBody))
+            let truncated = truncateNext; truncateNext = false
+            let content = truncated ? #"{"reason":"A partial"#
+                : #"{"reason":"The supplied case remains uncertain.","risk":"Missing confirmation can undermine the setup.","action":"Hold","evidence":["F1"]}"#
+            return Self.ok(try JSONSerialization.data(withJSONObject: ["model": config.model,
+                "choices": [["message": ["content": content], "finish_reason": truncated ? "length" : "stop"]]]), request)
+        }
+        let week = await Research.assess(capture, horizon: .week, config: config, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true)
+        let prior = try #require(Research.PriorAssessment.capture(symbol: "ACME", result: week,
+            sourceScanAt: capture.at.addingTimeInterval(-1), through: Date()))
+        let baseline = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true)
+        try #require(baseline.verdict != nil && baseline.note.contains("optional evidence records were omitted"))
+        let baselineBody = try #require(bodies.last)
+        let baselineObject = try #require(JSONSerialization.jsonObject(with: baselineBody) as? [String: Any])
+        let baselineMessages = try #require(baselineObject["messages"] as? [[String: String]])
+        bodies.removeAll(); truncateNext = true
+        let diagnostics = StockSageResearchDiagnostics(directory: directory)
+        let informed = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, diagnostics: diagnostics,
+            qualify: true, priorAssessment: prior, servingContext: 24_576)
+        #expect(informed.verdict != nil && informed.priorAssessment == prior)
+        #expect(informed.facts == baseline.facts && informed.evidenceReceipt == baseline.evidenceReceipt)
+        #expect(informed.inferenceProfile?.packetDigest == baseline.inferenceProfile?.packetDigest)
+        #expect(baseline.inferenceProfile?.contextTokens == 16_384 && informed.inferenceProfile?.contextTokens == 24_576)
+        #expect(informed.inferenceProfile?.initialOutputTokens == outputTokens && informed.inferenceProfile?.maxOutputTokens == outputTokens * 2)
+        try #require(bodies.count == 2)
+        var decoded: [[String: Any]] = []
+        let schema = try #require(StockSageAIAssessment.responseSchema(facts: baseline.facts))
+        for (index, bytes) in bodies.enumerated() {
+            var body = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: String]])
+            #expect(messages[0]["content"]?.hasPrefix(baselineMessages[0]["content"]!) == true)
+            #expect(messages[1]["content"]?.hasPrefix(baselineMessages[1]["content"]! + "\n\n") == true)
+            #expect(messages[1]["content"]?.contains("Prior week model opinion") == true)
+            #expect(bytes.range(of: schema) != nil && body["top_p"] == nil && body["seed"] == nil)
+            #expect(body["max_tokens"] as? Int == outputTokens * (index + 1))
+            body.removeValue(forKey: "max_tokens"); decoded.append(body)
+        }
+        #expect(try JSONSerialization.data(withJSONObject: decoded[0], options: [.sortedKeys])
+            == JSONSerialization.data(withJSONObject: decoded[1], options: [.sortedKeys]))
+        let entries = await diagnostics.entries(for: try #require(informed.diagnosticID))
+        #expect(!entries.compactMap(\.attempt).isEmpty && entries.compactMap(\.attempt).allSatisfy { $0.contextTokens == 24_576 })
+        bodies.removeAll()
+        let blocked = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true,
+            priorAssessment: prior, servingContext: 16_384)
+        #expect(blocked.verdict == nil && bodies.isEmpty && blocked.facts == baseline.facts)
+        #expect(blocked.priorAssessmentNote?.contains("context") == true)
+        let localConfig = try #require(Server.config(url: Server.lmStudioURL, model: Server.gemmaModel))
+        try #require(prior.valid(for: "ACME", through: capture.at))
+        let localBlocked = await Research.assess(capture, horizon: .fortnight, config: localConfig, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true,
+            priorAssessment: prior, servingContext: 24_576)
+        #expect(localBlocked.verdict == nil && bodies.isEmpty && localBlocked.facts == baseline.facts)
+        #expect(localBlocked.priorAssessmentNote?.contains("exceed the verified context budget") == true,
+                "A valid prior must not silently expand the managed-local 16K request contract")
+        let historySuite = name + ".blocked-history"
+        let historyDefaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: historySuite))
+        defer { historyDefaults.removePersistentDomain(forName: historySuite) }
+        let historyURL = directory.appendingPathComponent("blocked-history/history.json")
+        var interrupted = Research.Scan()
+        interrupted.at = capture.at; interrupted.listings = [Self.listing()]; interrupted.results = ["ACME": blocked]
+        interrupted.resumeConfigurationID = StockSageResearchHistory.configurationIdentity(config)
+        let history = StockSageResearchHistory(storageURL: historyURL, defaults: historyDefaults)
+        try #require(history.saveInterruptedChecks(interrupted, horizon: .fortnight))
+        let restored = try #require(StockSageResearchHistory(storageURL: historyURL, defaults: historyDefaults)
+            .interruptedScan(horizon: .fortnight)?.results["ACME"])
+        #expect(StockSageResearchHistory.CompletedCheck(listing: Self.listing(), result: restored)
+            == StockSageResearchHistory.CompletedCheck(listing: Self.listing(), result: blocked))
+        #expect(restored.verdict == nil && restored.priorAssessment == nil
+            && restored.priorAssessmentNote?.contains("no model request was sent") == true)
+        for (key, value) in [("symbol", "OTHER"), ("model", "other-model"), ("reason", String(repeating: "x", count: 9_000))] {
+            var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(prior)) as? [String: Any])
+            object[key] = value
+            let invalid = try JSONDecoder().decode(Research.PriorAssessment.self, from: JSONSerialization.data(withJSONObject: object))
+            let rejected = await Research.assess(capture, horizon: .fortnight, config: config, isOllama: false, allowed: { true },
+                modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true,
+                priorAssessment: invalid, servingContext: 24_576)
+            #expect(rejected.verdict == nil && bodies.isEmpty && rejected.facts == baseline.facts)
+            #expect(rejected.priorAssessmentNote?.contains("No model request was sent") == true)
+        }
+        var invocationPrior: Research.PriorAssessment?, priorLookups = 0
+        let prepared = Research.preparedAnalysis(.captured(capture), config: config, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true,
+            priorAssessment: { priorLookups += 1; return invocationPrior }, servingContext: 24_576)
+        #expect(priorLookups == 0)
+        invocationPrior = prior
+        let lateBound = await prepared(.fortnight)
+        #expect(priorLookups == 1 && lateBound.priorAssessment == prior && lateBound.facts == baseline.facts)
+        let unaffected = await Research.assess(capture, horizon: .week, config: config, isOllama: false, allowed: { true },
+            modelTransport: transport, evidenceIsCurrent: { _ in true }, outputTokens: outputTokens, qualify: true,
+            priorAssessment: prior, servingContext: 24_576)
+        #expect(unaffected.priorAssessment == nil && unaffected.facts == week.facts && unaffected.inferenceProfile?.contextTokens == 16_384)
+    }
+
     /// Opt-in synthetic model benchmark. Every provider/model call stays injected here.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["STOCKSAGE_THROUGHPUT_DIR"] != nil))
     func syntheticThroughputPayloadExportAndValidation() async throws {

@@ -10,6 +10,42 @@ struct StockSageResearchHistoryTests {
 
     private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
 
+    @Test func priorAssessmentAndConfigurationSurviveColdHistoryWithoutInventingLegacyMemory() throws {
+        let (history, url, defaults, suite) = try fileStore("prior-assessment")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (originalRun, originalScan) = checkpointFixture(count: 2, horizon: .fortnight)
+        var scan = originalScan
+        scan.resumeConfigurationID = String(repeating: "a", count: 64)
+        let listing = scan.listings[0]
+        var result = try #require(scan.results[listing.ticker])
+        var source = qualifiedResult(listing.ticker, at: result.at, qualified: false, horizon: .week)
+        source.model = StockSageLocalModelServer.gemmaModel; source.validationOutcome = .validated
+        result.model = source.model
+        result.priorAssessment = try #require(StockSageHorizonResearch.PriorAssessment.capture(symbol: listing.ticker,
+            result: source, sourceScanAt: originalRun.startedAt, through: originalRun.completedAt))
+        result.priorAssessmentNote = "Earlier validated week opinion supplied as context, not evidence."
+        scan.results[listing.ticker] = result
+        let run = History.snapshot(startedAt: originalRun.startedAt, completedAt: originalRun.completedAt,
+            horizon: .fortnight, scan: scan)
+        try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+        let restored = try #require(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight))
+        #expect(restored.scan.resumeConfigurationID == scan.resumeConfigurationID)
+        #expect(restored.scan.results[listing.ticker]?.priorAssessment == result.priorAssessment)
+        #expect(restored.scan.results[listing.ticker]?.priorAssessmentNote == result.priorAssessmentNote)
+        let saved = History.CompletedCheck(listing: listing, result: result)
+        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
+        legacy.removeValue(forKey: "priorAssessment"); legacy.removeValue(forKey: "priorAssessmentNote")
+        let old = try JSONDecoder().decode(History.CompletedCheck.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(old.priorAssessment == nil && old.priorAssessmentNote == nil && old.result?.priorAssessment == nil)
+        var invalid = scan
+        var tampered = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(result.priorAssessment)) as? [String: Any])
+        tampered["symbol"] = "OTHER"
+        invalid.results[listing.ticker]?.priorAssessment = try JSONDecoder().decode(StockSageHorizonResearch.PriorAssessment.self,
+            from: JSONSerialization.data(withJSONObject: tampered))
+        #expect(!history.saveCompletedChecks(run, scan: invalid), "Mismatched prior identity cannot replace original saved evidence")
+        #expect(History(storageURL: url, defaults: defaults).completedScan(horizon: .fortnight)?.scan.results[listing.ticker]?.priorAssessment == result.priorAssessment)
+    }
+
     func qualifiedResult(_ symbol: String, at: Date, qualified: Bool,
                          horizon: StockSageHorizonResearch.Horizon = .fortnight) -> StockSageHorizonResearch.Result {
         typealias R = StockSageHorizonResearch
@@ -1117,16 +1153,30 @@ extension StockSageResearchHistoryTests {
         try #require(history.saveCompletedChecks(first, scan: original) && history.record(first))
         let (sparseRun, sparseScan) = checkpointFixture(count: 1_500, start: first.completedAt.addingTimeInterval(60), horizon: horizon)
         var replacement = sparseScan
+        replacement.resumeConfigurationID = String(repeating: "a", count: 64)
         for listing in replacement.listings {
             var result = try #require(replacement.results[listing.ticker])
             result.facts[1] += String(repeating: "x", count: 12_000 - result.facts.joined(separator: "\n").utf8.count)
+            if horizon == .fortnight {
+                result.model = StockSageLocalModelServer.gemmaModel
+                result.priorAssessment = .init(symbol: listing.ticker, model: result.model,
+                    sourceCaptureAt: result.at, sourceScanAt: sparseRun.startedAt, diagnosticID: UUID(),
+                    action: "Hold", reason: String(repeating: "Retained qualitative case. ", count: 20),
+                    risk: String(repeating: "Retained qualitative risk. ", count: 20),
+                    qualityReport: .init(version: 1, state: .unverified, findings: [.citedUnavailableFact],
+                        citedCount: 1, offeredCount: 1, classCounts: ["market": 1], insiderPurchases: 0,
+                        insiderSales: 0, uncitedInsiderIDs: [], acceptedAction: "Hold", rejectionReason: nil),
+                    strictQualified: false, strictFailureReasons: ["Synthetic missing evidence gate."])
+                result.priorAssessmentNote = "Earlier week opinion supplied as context, not evidence."
+            }
             replacement.results[listing.ticker] = result
         }
         #expect(replacement.results.values.allSatisfy { $0.facts.joined(separator: "\n").utf8.count == 12_000 })
         let later = History.snapshot(startedAt: sparseRun.startedAt, completedAt: sparseRun.completedAt,
             horizon: horizon, scan: replacement)
         let expectedLater = History.CompletedChecks(version: 1, horizon: later.horizon, startedAt: later.startedAt,
-            checks: replacement.listings.map { .init(listing: $0, result: replacement.results[$0.ticker]!) })
+            checks: replacement.listings.map { .init(listing: $0, result: replacement.results[$0.ticker]!) },
+            configurationID: replacement.resumeConfigurationID)
         let encoded = try JSONEncoder().encode(expectedLater)
         #expect(encoded.count > 16 * 1_024 * 1_024 && encoded.count <= 48 * 1_024 * 1_024)
         #expect(encoded.count <= History.maximumCompletedChecksBytes)

@@ -163,6 +163,19 @@ struct StockSageResearchModesPanel: View {
                 Button("Retry save", systemImage: "square.and.arrow.down") { research.retrySave(horizon) }
                     .help("Save the same completed research and dates without another model request.")
             }
+            #if os(macOS)
+            if research.canResumeBoth {
+                Button("Resume both horizons", systemImage: "rectangle.split.2x1") {
+                    if research.resumeRemainingBoth(store: store) {
+                        selected = nil; search = ""; presentation.filter = .all
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(research.running != nil || sameDay.isRunning)
+                .accessibilityIdentifier("research.resumeBoth")
+                .help("Preserve completed checks. Retain or complete each stock’s 1–7 check before its pending 7–14 check, carrying its usable prior opinion as historical context.")
+            }
+            #endif
             if remaining > 0 {
                 VStack(alignment: .leading, spacing: 8) {
                     Button("Resume \(remaining) remaining", systemImage: "play.fill") {
@@ -301,12 +314,25 @@ struct StockSageResearchModesPanel: View {
             if research.start(StockSageHorizonResearch.Horizon.allCases, store: store) { selected = nil }
         }
         .disabled(research.running != nil || sameDay.isRunning)
-        .help("Gather evidence once per stock, then run a separate AI assessment for each horizon. Both completed runs are saved. No orders.")
+        .help("Gather fresh evidence once per stock. Assess 1–7 days first, then 7–14 days with the matching prior opinion when available. Each horizon has separate results and qualification checks. Both completed runs are saved. No orders.")
     }
 
     private func scanSummary(_ scan: StockSageHorizonResearch.Scan, isRunning: Bool) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Self.scanStatus(scan.status, isRunning: isRunning)
+            #if os(macOS)
+            if research.runningHorizons.count > 1 {
+                ForEach(StockSageHorizonResearch.Horizon.allCases) { horizon in
+                    if let paired = research.scans[horizon], !paired.listings.isEmpty {
+                        Text("\(horizon.rawValue): \(paired.results.count)/\(paired.listings.count) checks finished")
+                            .font(.caption).monospacedDigit()
+                    }
+                }
+                Text("Each stock retains or completes its 1–7 check before its 7–14 check. Counts include incomplete opinions.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            #endif
             if let selection = scan.selection {
                 Text(selection.summary).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -815,6 +841,45 @@ struct StockSageResearchModesPanel: View {
                         .foregroundStyle(isBuy(verdict.action) ? DS.Palette.successSoft : .primary)
                     Text(verdict.reason).font(.body).lineSpacing(3)
                     Text("Risk: \(verdict.risk)").foregroundStyle(.secondary)
+                }
+                if let priorNote = result.priorAssessmentNote {
+                    Label(priorNote, systemImage: "clock.arrow.circlepath")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let prior = result.priorAssessment {
+                    DisclosureGroup("Prior 1–7 assessment · " + prior.action) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Saved earlier model opinion. Its delivery status is recorded above. It is separate from the current evidence and does not transfer its qualification to 7–14 days.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(verbatim: prior.reason).font(.callout)
+                            Text("Prior risk: " + prior.risk).font(.callout)
+                            Text("Captured: \(prior.sourceCaptureAt.formatted(date: .abbreviated, time: .standard))")
+                            Text("Original run requested: \(prior.sourceScanAt.formatted(date: .abbreviated, time: .standard))")
+                            Text("Model: " + prior.model)
+                            if let report = prior.qualityReport {
+                                let quality = StockSageResearchQualityPresentation.assessed(report, captured: nil)
+                                Text("Prior quality: " + quality.badge).font(.callout.weight(.semibold))
+                                Text(quality.explanation)
+                                ForEach(Array(quality.findingDescriptions.enumerated()), id: \.offset) { _, finding in
+                                    Text(finding)
+                                }
+                                if !quality.uncitedInsiderIDs.isEmpty {
+                                    Text("Uncited prior insider references: " + quality.uncitedInsiderIDs.joined(separator: ", "))
+                                }
+                            } else { Text("Prior evidence checks were not recorded.") }
+                            Text(prior.strictQualified.map { $0 ? "Prior strict screen: passed" : "Prior strict screen: did not pass" }
+                                ?? "Prior strict screen: not recorded")
+                                .font(.callout.weight(.semibold))
+                            ForEach(Array(prior.strictFailureReasons.enumerated()), id: \.offset) { _, reason in
+                                Text(reason)
+                            }
+                            if let id = prior.diagnosticID {
+                                Text("Prior diagnostic reference: " + id.uuidString).font(.caption.monospaced())
+                            }
+                        }.font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 if let qualification = result.qualification {
                     Text(qualification.isQualified ? "Passed strict screen" : "Did not pass strict screen")

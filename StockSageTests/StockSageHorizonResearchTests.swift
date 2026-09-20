@@ -4,6 +4,111 @@ import Testing
 
 @Suite(.serialized) @MainActor struct StockSageHorizonResearchTests {
     typealias R = StockSageHorizonResearch
+
+    @Test(arguments: [false, true])
+    func pairedResumePreservesUnequalCapturedChecksAndRunsOnlyPendingHorizonsInOrder(weekAlreadyComplete: Bool) async throws {
+        let suite = "stocksage.research.paired-resume.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let names = ["AAA", "BBB", "CCC", "DDD"].map { listing($0) }
+        let began = Date().addingTimeInterval(-60)
+        let identity = String(repeating: "a", count: 64)
+        var originals: [R.Horizon: [String: StockSageResearchHistory.CompletedCheck]] = [:]
+        for horizon in R.Horizon.allCases {
+            var scan = R.Scan()
+            scan.at = began; scan.listings = names; scan.resumeConfigurationID = identity
+            for item in names.prefix(horizon == .week ? (weekAlreadyComplete ? names.count : 2) : 1) {
+                let result = R.Result(facts: ["Original \(item.ticker) \(horizon.rawValue)"],
+                    note: "Original incomplete opinion stays a completed check", at: began.addingTimeInterval(1))
+                scan.results[item.ticker] = result
+                originals[horizon, default: [:]][item.ticker] = .init(listing: item, result: result)
+            }
+            if horizon == .week && weekAlreadyComplete {
+                scan.rankingFailure = "Original strict comparison unavailable."
+                scan.freezeTopFive(horizon: horizon, at: Date())
+                let run = StockSageResearchHistory.snapshot(startedAt: began, completedAt: scan.completedAt!, horizon: horizon, scan: scan)
+                try #require(history.saveCompletedChecks(run, scan: scan) && history.record(run))
+            } else {
+                try #require(history.saveInterruptedChecks(scan, horizon: horizon))
+            }
+        }
+        let reopened = StockSageResearchHistory(storageURL: url, defaults: defaults)
+        let research = R(history: reopened)
+        let completedWeek = reopened.completedScan(horizon: .week)?.run
+        defer { research.stop() }
+        var prepared: [String] = [], calls: [String] = []
+        let resumed = research.start([.week, .fortnight], allowed: { true }, universe: { .init(names) },
+            configurationID: identity, resuming: try #require(research.scans[.week]), makeAnalysis: { item in
+                prepared.append(item.ticker)
+                return { horizon in
+                    calls.append(item.ticker + ":" + horizon.rawValue)
+                    if horizon == .fortnight {
+                        #expect(research.scans[.week]?.results[item.ticker] != nil,
+                                "The same stock's week result must be published before its fortnight call")
+                    }
+                    return .init(facts: ["Fresh \(item.ticker) \(horizon.rawValue)"], note: "Fresh check")
+                }
+            })
+        try #require(resumed, "Both restored horizons must resume without replacing their unequal completed prefixes")
+        for _ in 0..<200 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(research.running == nil)
+        #expect(prepared == ["BBB", "CCC", "DDD"])
+        let pendingCalls = weekAlreadyComplete ? ["BBB", "CCC", "DDD"].map { $0 + ":" + R.Horizon.fortnight.rawValue }
+            : ["BBB:" + R.Horizon.fortnight.rawValue,
+                          "CCC:" + R.Horizon.week.rawValue, "CCC:" + R.Horizon.fortnight.rawValue,
+                          "DDD:" + R.Horizon.week.rawValue, "DDD:" + R.Horizon.fortnight.rawValue]
+        #expect(calls == pendingCalls)
+        if weekAlreadyComplete { #expect(reopened.completedScan(horizon: .week)?.run == completedWeek) }
+        let cold = R(history: StockSageResearchHistory(storageURL: url, defaults: defaults))
+        for horizon in R.Horizon.allCases {
+            let scan = try #require(cold.scans[horizon])
+            #expect(scan.at == began && scan.listings == names && scan.results.count == names.count)
+            for item in names where originals[horizon]?[item.ticker] != nil {
+                let restored = StockSageResearchHistory.CompletedCheck(listing: item, result: try #require(scan.results[item.ticker]))
+                #expect(restored == originals[horizon]?[item.ticker], "Existing results, including old incomplete checks, remain exact")
+            }
+        }
+    }
+
+    @Test func pairedResearchAlwaysAssessesWeekBeforeFortnightEvenWhenRequestedInReverse() async throws {
+        let research = R()
+        defer { research.stop() }
+        var calls: [R.Horizon] = []
+        let started = research.start([.fortnight, .week], allowed: { true }, universe: { .init([listing("AAA")]) },
+            analyze: { _, horizon in calls.append(horizon); return .init(note: "Synthetic opinion") })
+        try #require(started)
+        for _ in 0..<100 where research.running != nil { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(research.running == nil && calls == [.week, .fortnight])
+    }
+
+    @Test(arguments: ["configuration", "listings", "capture", "legacy"])
+    func pairedResumeRejectsMismatchedCapturesWithoutReplacingChecks(mismatch: String) throws {
+        let history = StockSageResearchHistory(storageURL: nil)
+        let began = Date().addingTimeInterval(-60), identity = String(repeating: "a", count: 64)
+        var week = R.Scan(), fortnight = R.Scan()
+        week.at = began; week.listings = [listing("AAA"), listing("BBB")]; week.resumeConfigurationID = identity
+        week.results["AAA"] = .init(facts: ["Original week evidence"], note: "Retained", at: began.addingTimeInterval(1))
+        fortnight = week
+        if mismatch == "configuration" { fortnight.resumeConfigurationID = String(repeating: "b", count: 64) }
+        if mismatch == "listings" { fortnight.listings[1] = listing("CCC") }
+        if mismatch == "capture" { fortnight.at = began.addingTimeInterval(-1) }
+        if mismatch == "legacy" { week.resumeConfigurationID = nil; fortnight.resumeConfigurationID = nil }
+        try #require(history.saveInterruptedChecks(week, horizon: .week) && history.saveInterruptedChecks(fortnight, horizon: .fortnight))
+        let research = R(history: history)
+        #expect(!research.canResumeBoth)
+        let original = try #require(research.scans[.week])
+        let started = research.start([.week, .fortnight], allowed: { true }, universe: { Issue.record("No universe call expected"); return .init([]) },
+            configurationID: original.resumeConfigurationID, resuming: original, makeAnalysis: { _ in
+                Issue.record("No evidence capture expected"); return { _ in .init(note: "Must not execute") }
+            })
+        #expect(!started)
+        #expect(research.running == nil && research.scans[.week]?.results["AAA"]?.facts == ["Original week evidence"])
+        #expect(research.scans[.fortnight]?.at == fortnight.at && research.scans[.fortnight]?.listings == fortnight.listings)
+    }
+
     @Test func bothHorizonsFreezeAndPersistFiveBeforeStrictComparisonFailure() async throws {
         let history = StockSageResearchHistory()
         let research = R(history: history)
