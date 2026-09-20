@@ -418,13 +418,16 @@ struct MarketsView: View {
     /// construction site) is byte-identical to today's body; never set outside QASnapshots.
     private let qaDetailSymbol: String?
     private let chatSession: StockSageChatSession
+    private let horizonResearch: StockSageHorizonResearch
     init(chatSession: StockSageChatSession, qaSection: MarketSection = .sameDay, qaDetailSymbol: String? = nil,
          store: StockSageStore = .shared, aiAssessments: StockSageAIAssessments = .shared,
          portfolio: StockSagePortfolio = .shared, journal: StockSageJournalStore = .shared,
          paperStore: StockSagePaperTradeStore = .shared, live: StockSageLiveStream = .shared,
          velocityHistory: StockSageVelocityHistoryStore = .shared, monitor: StockSageMonitor = .shared,
-         researchHistory: StockSageResearchHistory = .shared) {
+         researchHistory: StockSageResearchHistory = .shared,
+         horizonResearch: StockSageHorizonResearch = .shared) {
         self.chatSession = chatSession
+        self.horizonResearch = horizonResearch
         _store = ObservedObject(wrappedValue: store)
         _aiAssessments = ObservedObject(wrappedValue: aiAssessments)
         _portfolio = ObservedObject(wrappedValue: portfolio)
@@ -658,13 +661,13 @@ struct MarketsView: View {
     }
 
     private func researchPanel(_ horizon: StockSageHorizonResearch.Horizon) -> StockSageResearchModesPanel {
-        StockSageResearchModesPanel(store: store,
+        StockSageResearchModesPanel(store: store, research: horizonResearch,
             presentation: horizon == .week ? $weekPresentation : $fortnightPresentation,
             showHorizon: { openSection(.researchDestination($0)) })
     }
 
     private var researchActivity: some View {
-        StockSageResearchActivityNavigation(destination: section, open: openSection)
+        StockSageResearchActivityNavigation(destination: section, horizons: horizonResearch, open: openSection)
     }
 
     private var libraryWorkspace: some View {
@@ -755,7 +758,8 @@ struct MarketsView: View {
                     else if section.researchHorizon != nil { panel }
                     else { desktopSupportingPage(section) }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // The window owns the minimum size; changing research content must not enlarge its split pane.
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
                 // Native split panes avoid the macOS 27 inspector constraint loop and
                 // delayed close callback that otherwise clears a newly selected stock.
                 if section.researchHorizon != nil && panel.detailPresented.wrappedValue {

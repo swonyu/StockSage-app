@@ -69,8 +69,15 @@ enum StockSageDesktop {
 struct StockSageResearchActivityNavigation: View {
     let destination: MarketSection
     let open: (MarketSection) -> Void
-    @ObservedObject private var horizons = StockSageHorizonResearch.shared
+    @ObservedObject private var horizons: StockSageHorizonResearch
     @ObservedObject private var sameDay = StockSageSameDayResearch.shared
+
+    init(destination: MarketSection, horizons: StockSageHorizonResearch = .shared,
+         open: @escaping (MarketSection) -> Void) {
+        self.destination = destination
+        self.open = open
+        _horizons = ObservedObject(wrappedValue: horizons)
+    }
 
     var body: some View {
         Group {

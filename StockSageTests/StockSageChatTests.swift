@@ -1432,6 +1432,200 @@ struct StockSageChatTests {
         #expect(!window.isKeyWindow)
     }
 
+    @Test(.serialized, arguments: [900, 1301])
+    func actualResearchWorkspaceKeepsConstraintsStableWhileResultsArrive(width: Int) async throws {
+        try #require(StockSageStore.isRunningTests)
+        typealias R = StockSageHorizonResearch
+        let suite = "stocksage.research.streaming-window.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "stocksage.liveStream")
+        defaults.set(false, forKey: "stocksage.autoRefresh")
+        defaults.set("off", forKey: StockSageLocalModelServer.backendKey)
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        let history = StockSageResearchHistory(storageURL: nil, defaults: defaults)
+        let research = R(history: history)
+        let journal = StockSageJournalStore(defaults: defaults)
+        let portfolio = StockSagePortfolio(userDefaults: defaults)
+        let paper = StockSagePaperTradeStore(defaults: defaults)
+        let live = StockSageLiveStream()
+        let monitor = StockSageMonitor(defaults: defaults)
+        let listings = (0..<1500).map(ResearchTableProbe.listing)
+        var waiting: [String: CheckedContinuation<Void, Never>] = [:]
+        var active = 0, peak = 0
+        defer {
+            research.stop()
+            let pending = Array(waiting.values); waiting.removeAll()
+            for continuation in pending { continuation.resume() }
+        }
+        let started = research.start(R.Horizon.allCases, allowed: { true }, universe: { .init(listings) },
+            rank: { _, _ in .failure(.unavailable) },
+            parallelism: { 4 }, concurrentGathering: true, makeAnalysis: { item in
+                return { horizon in
+                    active += 1; peak = max(peak, active)
+                    await withCheckedContinuation { waiting["\(horizon.rawValue)/\(item.ticker)"] = $0 }
+                    active -= 1
+                    var result = StockSageLayoutFixtures.result(symbol: item.ticker, horizon: horizon)
+                    if let verdict = result.verdict {
+                        result.verdict = .init(action: verdict.action,
+                            reason: "Synthetic arriving interpretation for \(item.ticker) in \(horizon.rawValue). " + String(repeating: "Captured evidence remains uncertain. ", count: 8),
+                            risk: verdict.risk, evidence: verdict.evidence)
+                    }
+                    return result
+                }
+            })
+        try #require(started)
+        @MainActor func waitFor(_ ready: @MainActor () -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !ready(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready())
+        }
+        try await waitFor {
+            waiting.count == 4 && R.Horizon.allCases.allSatisfy { research.scans[$0]?.listings.count == 1500 }
+        }
+        let viewport = CGSize(width: CGFloat(width), height: width == 900 ? 700 : 841)
+        let view = MarketsView(chatSession: StockSageChatSession(historyURL: nil), qaSection: .weekResearch,
+            store: store, aiAssessments: StockSageAIAssessments(), portfolio: portfolio, journal: journal,
+            paperStore: paper, live: live, velocityHistory: StockSageVelocityHistoryStore(defaults: defaults),
+            monitor: monitor, researchHistory: history, horizonResearch: research)
+            .frame(minWidth: 900, minHeight: 700)
+            .defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
+        _ = try await capture(view, name: "stocksage-streaming-window-\(width)", viewport: viewport,
+            usesIntrinsicSizing: true, usesCompactToolbar: true, contentMinimumSize: CGSize(width: 900, height: 700)) { root in
+            let window = try #require(root.window)
+            @MainActor func tables(_ view: NSView) -> [NSTableView] {
+                if let table = view as? NSTableView { return [table] }
+                return view.subviews.flatMap { tables($0) }
+            }
+            @MainActor func researchTable() -> NSTableView? {
+                tables(root).first { $0.numberOfColumns == 6 && $0.numberOfRows == 1500 }
+            }
+            @MainActor func elements() -> [AnyObject] {
+                nativeAccessibilityElements(in: root, excludingResearchTableDescendants: true)
+            }
+            @MainActor func text() -> String {
+                nativeAccessibilityText(in: root, excludingResearchTableDescendants: true)
+            }
+            @MainActor func visible(_ element: AnyObject) -> Bool {
+                guard let frame = element.accessibilityFrame?(), frame.width > 0, frame.height > 0 else { return false }
+                return window.convertToScreen(window.contentLayoutRect).insetBy(dx: -1, dy: -1).contains(frame)
+            }
+            @MainActor func settle(_ phase: String) async throws {
+                // Let native transactions finish; never force a layout from a publication callback.
+                try await Task.sleep(for: .milliseconds(300))
+                let before = window.frame
+                try await Task.sleep(for: .milliseconds(150))
+                let content = window.contentLayoutRect
+                #expect(window.frame == before, "The window must settle after \(phase)")
+                #expect(content.width.isFinite && content.height.isFinite)
+                #expect(content.width >= 899 && content.width <= CGFloat(width) + 2
+                        && content.height >= 699 && content.height <= viewport.height + 2,
+                        "Streaming must not grow or collapse the content-sized workspace: \(phase)")
+                #expect(elements().contains {
+                    $0.accessibilityIdentifier?() == "desktop.nav.\(MarketSection.sameDay.rawValue)" && visible($0)
+                })
+            }
+            var expected: [R.Horizon: Int] = [.week: 0, .fortnight: 0]
+            @MainActor func publish(_ index: Int, _ horizon: R.Horizon) async throws {
+                let key = "\(horizon.rawValue)/T\(index)"
+                try await waitFor { waiting[key] != nil }
+                let pending = waiting.removeValue(forKey: key)
+                let continuation = try #require(pending)
+                expected[horizon, default: 0] += 1
+                continuation.resume()
+                try await waitFor { research.scans[horizon]?.results["T\(index)"] != nil }
+                for checkedHorizon in R.Horizon.allCases {
+                    #expect(research.scans[checkedHorizon]?.results.count == expected[checkedHorizon])
+                }
+                #expect(research.scans[horizon]?.rankedTopFive(horizon: horizon, now: Date()) == nil,
+                        "Partial research must not publish the final deterministic Top 5")
+                try await settle("\(horizon.rawValue) result \(index + 1)")
+            }
+            @MainActor func navigate(_ destination: MarketSection) throws {
+                for sidebar in tables(root) where sidebar.numberOfColumns != 6 {
+                    for row in 0..<sidebar.numberOfRows {
+                        guard let view = sidebar.rowView(atRow: row, makeIfNecessary: true) else { continue }
+                        if nativeAccessibilityElements(in: view, excludingResearchTableDescendants: true).contains(where: {
+                            $0.accessibilityIdentifier?() == "desktop.nav.\(destination.rawValue)"
+                        }) {
+                            sidebar.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                            return
+                        }
+                    }
+                }
+                Issue.record("The actual sidebar destination was not found: \(destination.rawValue)")
+            }
+            try await settle("mount")
+            let table = try #require(researchTable())
+            #expect(table.selectedRow == -1)
+            #expect(elements().contains {
+                $0.accessibilityLabel?() == "Stop \(R.Horizon.week.rawValue) research scan" && visible($0)
+            }, "The running scan must retain a visible Stop control")
+            // Each of the four stock workers interprets week, then fortnight. Preserve the
+            // observed closed-detail 24/20 state through both counter-width transitions.
+            for index in 0..<20 {
+                try await publish(index, .week)
+                try await publish(index, .fortnight)
+            }
+            for index in 20..<24 { try await publish(index, .week) }
+            #expect(research.scans[.week]?.results.count == 24 && research.scans[.fortnight]?.results.count == 20)
+            #expect(researchTable() === table && table.selectedRow == -1,
+                    "The live crash occurred with details closed; publications must preserve that state")
+            // Reveal the native table without asking AX to materialize its 1,500 rows.
+            let tableScroll = try #require(table.enclosingScrollView)
+            var ancestor = tableScroll.superview
+            while ancestor != nil && !(ancestor is NSScrollView) { ancestor = ancestor?.superview }
+            let pageScroll = try #require(ancestor as? NSScrollView)
+            let document = try #require(pageScroll.documentView)
+            document.scrollToVisible(document.convert(tableScroll.bounds, from: tableScroll).insetBy(dx: 0, dy: -70))
+            try await settle("reveal table and filter")
+            #expect(tableScroll.visibleRect.height > 100 && tableScroll.visibleRect.width > 250)
+            #expect(tableScroll.hasHorizontalScroller)
+            #expect(elements().contains { $0.accessibilityIdentifier?() == "research.filter" && visible($0) })
+            try navigate(.fortnightResearch)
+            try await waitFor {
+                elements().contains { $0.accessibilityLabel?() == "Stop \(R.Horizon.fortnight.rawValue) research scan" }
+            }
+            try await settle("populated fortnight")
+            let fortnightTable = try #require(researchTable())
+            #expect(fortnightTable.selectedRow == -1)
+            fortnightTable.selectRowIndexes(IndexSet(integer: 20), byExtendingSelection: false)
+            try await waitFor { text().contains("Captured research") }
+            let clip = try #require(fortnightTable.enclosingScrollView?.contentView)
+            fortnightTable.scrollRowToVisible(20)
+            try await settle("pending fortnight detail")
+            let origin = clip.bounds.origin
+            try await publish(20, .fortnight)
+            for index in 21..<24 { try await publish(index, .fortnight) }
+            try await publish(24, .week)
+            #expect(researchTable() === fortnightTable && fortnightTable.selectedRow == 20 && clip.bounds.origin == origin)
+            #expect(text().contains("Synthetic arriving interpretation for T20 in \(R.Horizon.fortnight.rawValue)"))
+            try navigate(.weekResearch)
+            try await settle("return week")
+            try await waitFor { researchTable() != nil }
+            let returned = try #require(researchTable())
+            #expect(returned.selectedRow == -1, "Leaving a horizon clears only its presentation selection")
+            returned.selectRowIndexes(IndexSet(integer: 24), byExtendingSelection: false)
+            try await waitFor { text().contains("Synthetic arriving interpretation for T24 in \(R.Horizon.week.rawValue)") }
+            let close = try #require(elements().first {
+                $0.accessibilityRole?() == .button && $0.accessibilityLabel?() == "Close details"
+            })
+            try #require(close.accessibilityPerformPress?() == true)
+            try await waitFor { returned.selectedRow == -1 }
+            returned.selectRowIndexes(IndexSet(integer: 24), byExtendingSelection: false)
+            try await waitFor { text().contains("Captured research") }
+            try await settle("close and reopen")
+            for index in 25..<28 { try await publish(index, .week) }
+            for index in 24..<28 { try await publish(index, .fortnight) }
+            for horizon in R.Horizon.allCases {
+                #expect(research.scans[horizon]?.results.count == 28 && research.scans[horizon]?.listings == listings)
+            }
+            #expect(research.runningHorizons == R.Horizon.allCases && peak == 4)
+        }
+        #expect(!live.isStreaming && !monitor.isRunning && !store.isRefreshing)
+        #expect(journal.trades.isEmpty && portfolio.positions.isEmpty && paper.trades.isEmpty)
+    }
+
     @Test func researchTableRetainsBrowsingStateWhileResultsArrive() async throws {
         let model = ResearchTableProbe()
         let host = NSHostingController(rootView: ResearchTableFixture(model: model))
@@ -2387,13 +2581,19 @@ struct StockSageChatTests {
 
     // SwiftUI's native AX proxies can implement these public Objective-C methods
     // without declaring NSAccessibilityProtocol conformance.
-    private func nativeAccessibilityElements(in root: Any) -> [AnyObject] {
+    private func nativeAccessibilityElements(in root: Any, excludingResearchTableDescendants: Bool = false) -> [AnyObject] {
         var elements: [AnyObject] = []
         var seen: Set<ObjectIdentifier> = []
         func visit(_ value: Any) {
             let object = value as AnyObject
             guard seen.insert(ObjectIdentifier(object)).inserted else { return }
             elements.append(object)
+
+            // Asking NSTableView for AX children creates every row. The streaming fixture
+            // checks the 1,500-row table natively and only needs AX for surrounding controls.
+            if excludingResearchTableDescendants,
+               ((object as? NSTableView)?.numberOfColumns == 6
+                || object.accessibilityIdentifier?() == "research.results.table") { return }
 
             for child in object.accessibilityChildren?() ?? [] { visit(child) }
             if let native = object as? NSObject {
@@ -2418,8 +2618,8 @@ struct StockSageChatTests {
         return elements
     }
 
-    private func nativeAccessibilityText(in root: Any) -> String {
-        nativeAccessibilityElements(in: root).flatMap { element -> [String] in
+    private func nativeAccessibilityText(in root: Any, excludingResearchTableDescendants: Bool = false) -> String {
+        nativeAccessibilityElements(in: root, excludingResearchTableDescendants: excludingResearchTableDescendants).flatMap { element -> [String] in
             let selector = NSSelectorFromString("accessibilityValue")
             let value = (element as? NSObject).flatMap { object -> String? in
                 guard object.responds(to: selector) else { return nil }
@@ -2492,6 +2692,7 @@ struct StockSageChatTests {
 
     private func capture(_ view: some View, name: String, viewport: CGSize? = nil,
                          usesIntrinsicSizing: Bool = false, usesCompactToolbar: Bool = false,
+                         contentMinimumSize: CGSize? = nil,
                          inspect: (@MainActor (NSView) async throws -> Void)? = nil) async throws -> CGSize {
         let previousAppearance = NSApp.appearance
         let previousApplication = NSWorkspace.shared.frontmostApplication
@@ -2506,8 +2707,8 @@ struct StockSageChatTests {
         let host = NSHostingController(rootView: view.onAppear { appeared = true })
         // A split-view workspace is viewport-sized, not an intrinsic-size leaf. Do not let its
         // transient mount measurements replace the fixture window's explicit dimensions.
-        if let viewport, !usesIntrinsicSizing {
-            disableIntrinsicSizing(host)
+        if let viewport {
+            if !usesIntrinsicSizing { disableIntrinsicSizing(host) }
             // NavigationStack installs its native toolbar during attachment. Give its
             // content the real viewport first, so it cannot negotiate a zero-width title.
             host.view.frame = NSRect(origin: .zero, size: viewport)
@@ -2518,7 +2719,9 @@ struct StockSageChatTests {
         window.isReleasedWhenClosed = false
         window.title = name
         window.allowsFixtureFocus = viewport != nil
-        if let viewport {
+        if let contentMinimumSize {
+            window.contentMinSize = contentMinimumSize
+        } else if let viewport {
             // Native constraints fix only the viewport height while SwiftUI negotiates
             // inspector width. Never re-enter frame conversion from a setFrame override.
             window.contentMinSize.height = viewport.height

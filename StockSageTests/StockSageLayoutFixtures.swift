@@ -38,7 +38,7 @@ import Testing
         return research
     }
 
-    private static func result(symbol: String, horizon: StockSageHorizonResearch.Horizon) -> StockSageHorizonResearch.Result {
+    static func result(symbol: String, horizon: StockSageHorizonResearch.Horizon) -> StockSageHorizonResearch.Result {
         typealias R = StockSageHorizonResearch
         typealias A = StockSageAIAssessment
         typealias E = StockSageMassiveEvents
