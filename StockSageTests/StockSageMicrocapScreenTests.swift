@@ -238,6 +238,12 @@ import Testing
         ]])
         let page = try S.parseFloats(data)
         #expect(page.count == 4 && page.records.count == 1 && page.records["MICRO"]?.shares == 12_000_000)
+        let unassignable = try S.parseFloats(JSONSerialization.data(withJSONObject: ["status": "OK", "results": [
+            ["ticker": true, "free_float": 1000, "effective_date": "2026-09-17"],
+            ["ticker": 42, "free_float": 1000, "effective_date": "2026-09-17"]
+        ]]))
+        #expect(unassignable.count == 2 && unassignable.unidentifiedCount == 2)
+        #expect(unassignable.records.isEmpty && unassignable.identities.isEmpty)
         for url in ["https://evil.example/stocks/vX/float?cursor=a", "https://api.massive.com/v3/reference/tickers?cursor=a",
                     "https://api.massive.com/stocks/vX/float?apiKey=secret", "https://user@api.massive.com/stocks/vX/float?cursor=a",
                     "http://api.massive.com/stocks/vX/float?cursor=a", "https://api.massive.com/stocks/vX/float?cursor=a#fragment"] {
@@ -347,6 +353,67 @@ import Testing
         #expect(result.receipt.facts(for: "MA").isEmpty)
         let restored = try JSONDecoder().decode(S.Result.self, from: JSONEncoder().encode(result.receipt))
         #expect(restored == result.receipt)
+    }
+    @Test(arguments: [false, true])
+    func unidentifiedFloatRowOnLaterPageDoesNotAbortIdentifiedCandidates(unsupportedTicker: Bool) async throws {
+        let window = try S.window(at: now)
+        var bodies = try fixtureBodies(symbols: ["MICRO", "NOFLOAT"], window: window)
+        bodies["/stocks/vX/float"] = try JSONSerialization.data(withJSONObject: [
+            "status": "OK", "next_url": "https://api.massive.com/stocks/vX/float?cursor=second",
+            "results": [["ticker": "MICRO", "free_float": 10_000_000, "effective_date": "2026-09-17"]]
+        ])
+        // The live second page contained a dated float with no ticker. Unsupported
+        // identities must also remain unassignable, never guessed or used as zero.
+        var unidentified: [String: Any] = ["free_float": 3_950_100, "effective_date": "2026-01-29"]
+        if unsupportedTicker { unidentified["ticker"] = "BAD/IDENTITY" }
+        let second = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": [unidentified]])
+        let fixture = FixtureTransport(bodies)
+        let captured = now
+        let result = await S.select(key: "fixture", allowed: { true }, now: captured, clock: { captured }, transport: { request in
+            if request.url?.query == "cursor=second", let url = request.url {
+                return (second, try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+            }
+            return try await fixture.reply(request)
+        })
+        #expect(result.receipt.blocker == nil)
+        #expect(result.listings.map(\.ticker) == ["MICRO"])
+        #expect(result.receipt.rows.count == 2 && result.receipt.detailedCount == 1)
+        #expect(result.receipt.unidentifiedFloatRows == 1)
+        #expect(result.receipt.floatCoverageNote?.contains("1 provider float record") == true)
+        let missing = try #require(result.receipt.rows.first { $0.symbol == "NOFLOAT" })
+        #expect(missing.status == .unavailable && missing.freeFloat == nil)
+        let (requests, _) = await fixture.recorded()
+        #expect(!requests.contains { $0.url?.path == "/v3/reference/tickers/NOFLOAT" })
+        let restored = try JSONDecoder().decode(S.Result.self, from: JSONEncoder().encode(result.receipt))
+        #expect(restored == result.receipt)
+        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(result.receipt)) as? [String: Any])
+        legacy.removeValue(forKey: "unidentifiedFloatRows")
+        let previous = try JSONDecoder().decode(S.Result.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(previous.unidentifiedFloatRows == nil && previous.floatCoverageNote == nil)
+    }
+    @Test(arguments: [false, true])
+    func duplicateFloatIdentityAcrossPagesCannotRecoverFromMissingFields(firstMissingFields: Bool) async throws {
+        let captured = now, window = try S.window(at: now)
+        var bodies = try fixtureBodies(symbols: ["MICRO"], window: window)
+        let valid: [String: Any] = ["ticker": "MICRO", "free_float": 10_000_000, "effective_date": "2026-09-17"]
+        let first: [String: Any] = firstMissingFields ? ["ticker": "MICRO"] : valid
+        bodies["/stocks/vX/float"] = try JSONSerialization.data(withJSONObject: [
+            "status": "OK", "next_url": "https://api.massive.com/stocks/vX/float?cursor=second", "results": [first]
+        ])
+        let second = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": [valid]])
+        let fixture = FixtureTransport(bodies)
+        let result = await S.select(key: "fixture", allowed: { true }, now: captured, clock: { captured }, transport: { request in
+            if request.url?.query == "cursor=second", let url = request.url {
+                return (second, try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+            }
+            return try await fixture.reply(request)
+        })
+        #expect(result.receipt.blocker?.contains("repeats a ticker across pages") == true)
+        #expect(result.listings.isEmpty && result.receipt.detailedCount == 0)
+        let (requests, _) = await fixture.recorded()
+        #expect(!requests.contains { $0.url?.path.hasPrefix("/v3/reference/tickers/") == true })
+        let samePage = try JSONSerialization.data(withJSONObject: ["status": "OK", "results": [first, valid]])
+        #expect(throws: (any Error).self) { try S.parseFloats(samePage) }
     }
     @Test func largeCapCollectorSkipsFloatRetainsMembershipAndMeasuresWithoutMicrocapThresholds() async throws {
         let symbols = (65...90).map { "L" + String(UnicodeScalar($0)!) } + ["BELOW", "BADVENUE", "BIG"]

@@ -155,7 +155,7 @@ struct StockSageMicrocapActivityView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Label("Screening coverage", systemImage: "line.3.horizontal.decrease.circle")
                     .font(DS.Typography.titleM).accessibilityAddTraits(.isHeader)
-                Text("\(screen.rows.count) classified · \(screen.detailedCount) detailed screens · \(screen.unassessedCount) unassessed")
+                Text("\(screen.rows.count) reference rows · \(screen.detailedCount) detailed screens · \(screen.unassessedCount) unassessed")
                     .font(.callout).monospacedDigit()
                 Text("Recorded cutoff: \(screen.cutoff.formatted(date: .abbreviated, time: .standard)). Screen values stay frozen; incoming prints do not recalculate RVOL or create a new opinion.")
                     .font(.caption).foregroundStyle(DS.Palette.textSecondary)
@@ -164,6 +164,12 @@ struct StockSageMicrocapActivityView: View {
                     Label(blocker, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(DS.Palette.warningSoft)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = screen.floatCoverageNote {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(identifier + ".float.coverage")
                 }
             }
             TimelineView(.periodic(from: .now, by: 1)) { tick in

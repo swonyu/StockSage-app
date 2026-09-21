@@ -97,6 +97,11 @@ nonisolated enum StockSageMicrocapScreen {
         let rows: [Row]
         let blocker: String?
         var sp500: StockSageSP500Constituents.Provenance? = nil
+        var unidentifiedFloatRows: Int? = nil
+        var floatCoverageNote: String? {
+            guard let count = unidentifiedFloatRows, count > 0 else { return nil }
+            return "\(count) provider float record(s) had no usable ticker identity and could not be matched. Listings without valid dated float remain unavailable."
+        }
         var profile: Profile? { Profile.allCases.first { $0.policyVersion == policyVersion } }
         func facts(for symbol: String) -> [StockSageAIAssessment.EvidenceFact] {
             guard let profile, let row = rows.first(where: { $0.symbol == symbol && $0.status == .passed }),
@@ -347,7 +352,7 @@ nonisolated enum StockSageMicrocapScreen {
         guard let url = URL(string: StockSageMassive.host + "/v2/aggs/ticker/\(symbol)/range/1/minute/\(from)/\(to)?adjusted=true&sort=asc&limit=50000") else { return nil }
         return authorized(url, key: key)
     }
-    static func parseFloats(_ data: Data) throws -> (records: [String: FloatRecord], next: String?, count: Int) {
+    static func parseFloats(_ data: Data) throws -> (records: [String: FloatRecord], next: String?, count: Int, unidentifiedCount: Int, identities: Set<String>) {
         guard data.count <= 8_000_000, let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               root["status"] as? String == "OK", let rows = root["results"] as? [[String: Any]], rows.count <= 5000 else {
             throw Failure.unavailable("Float coverage payload is malformed or exceeds the page bound.")
@@ -357,15 +362,22 @@ nonisolated enum StockSageMicrocapScreen {
         else if let value = root["next_url"] as? String, !value.isEmpty { next = value }
         else { throw Failure.unavailable("Float pagination is malformed.") }
         var records: [String: FloatRecord] = [:], seen: Set<String> = []
+        var unidentifiedCount = 0
         for row in rows {
-            guard let symbol = row["ticker"] as? String, StockSageHorizonResearch.validTicker(symbol),
-                  seen.insert(symbol).inserted else { throw Failure.unavailable("Float records have missing or duplicate ticker identity.") }
+            // The all-market endpoint can include a row with no ticker. It cannot
+            // supply any listing's float, but must not invalidate identified rows.
+            guard let symbol = row["ticker"] as? String, StockSageHorizonResearch.validTicker(symbol) else {
+                unidentifiedCount += 1; continue
+            }
+            guard seen.insert(symbol).inserted else {
+                throw Failure.unavailable("Float coverage repeats a ticker within one page; no ambiguous float was accepted.")
+            }
             // Missing fields remain unavailable for that ticker, never outstanding shares or zero.
             guard let shares = number(row["free_float"]), shares > 0, shares.rounded(.towardZero) == shares,
                   let text = row["effective_date"] as? String, let effective = date(text) else { continue }
             records[symbol] = .init(shares: shares, effectiveDate: effective)
         }
-        return (records, next, rows.count)
+        return (records, next, rows.count, unidentifiedCount, seen)
     }
     static func parseReference(_ data: Data, listing: Listing, requestedDate: String, retrievedAt: Date,
                                profile: Profile = .microcap) throws -> Reference {
@@ -452,6 +464,7 @@ nonisolated enum StockSageMicrocapScreen {
         transport: StockSageMassive.Transport? = nil, profile: Profile = .microcap) async -> Selection {
         let started = now.timeIntervalSince1970.isFinite ? now : Date(timeIntervalSince1970: 0)
         var cutoff = started, directory: [Listing] = [], rows: [Row] = [], activity: [String: Double] = [:], detailed = 0
+        var unidentifiedFloatRows = 0
         var membership: StockSageSP500Constituents.Snapshot?
         @MainActor func checkAccess() throws {
             try Task.checkCancellation()
@@ -476,7 +489,7 @@ nonisolated enum StockSageMicrocapScreen {
             let receipt = Result(policyVersion: profile.policyVersion, startedAt: started, cutoff: cutoff,
                 finishedAt: validEnd ? end : started, directoryCount: directory.count, detailedCount: detailed,
                 unassessedCount: rows.filter { $0.status == .unassessed }.count, rows: rows, blocker: issue,
-                sp500: membership?.provenance)
+                sp500: membership?.provenance, unidentifiedFloatRows: unidentifiedFloatRows > 0 ? unidentifiedFloatRows : nil)
             let passed = Set(issue == nil ? rows.filter { $0.status == .passed }.map(\.symbol) : [])
             return .init(listings: directory.filter { passed.contains($0.ticker) }.sorted {
                 let a = activity[$0.ticker] ?? 0, b = activity[$1.ticker] ?? 0
@@ -508,6 +521,7 @@ nonisolated enum StockSageMicrocapScreen {
             rows = directory.map { .init(symbol: $0.ticker, name: $0.name, status: .unavailable,
                 note: "Reference classification has not completed; eligibility is unknown.", observedAt: started) }
             var floats: [String: FloatRecord] = [:], next: String?, pages: Set<URL> = [], floatCount = 0
+            var floatIdentities: Set<String> = []
             if profile == .microcap {
                 repeat {
                     guard let request = floatRequest(key: key, next: next), let url = request.url,
@@ -515,10 +529,14 @@ nonisolated enum StockSageMicrocapScreen {
                         throw Failure.unavailable("Float coverage pagination is unsafe, repeated or exceeds ten pages; no partial classification was accepted.")
                     }
                     let page = try parseFloats(await load(request, maximum: 8_000_000))
+                    unidentifiedFloatRows += page.unidentifiedCount
                     floatCount += page.count
                     guard floatCount <= maximumDirectoryCount else { throw Failure.unavailable("Float directory exceeds fifty thousand records.") }
+                    guard floatIdentities.isDisjoint(with: page.identities) else {
+                        throw Failure.unavailable("Float coverage repeats a ticker across pages.")
+                    }
+                    floatIdentities.formUnion(page.identities)
                     for (symbol, value) in page.records {
-                        guard floats[symbol] == nil else { throw Failure.unavailable("Float coverage repeats a ticker across pages.") }
                         floats[symbol] = value
                     }
                     next = page.next

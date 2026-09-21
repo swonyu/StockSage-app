@@ -2350,6 +2350,39 @@ struct StockSageChatTests {
         }
     }
 
+    @Test(arguments: [660.0, 1000.0])
+    func nativeMicrocapFloatCoverageWarningSurvivesSavedReceipt(width: Double) async throws {
+        let suite = "stocksage.float-coverage.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let receipts = StockSageResearchReceiptStore(directory: directory, sameDayLabel: "microcap")
+        let at = Date(timeIntervalSince1970: 1_790_002_800)
+        let id = receipts.beginSameDay(at: at)
+        let screen = StockSageMicrocapScreen.Result(policyVersion: StockSageMicrocapScreen.policyVersion,
+            startedAt: at, cutoff: at, finishedAt: at, directoryCount: 2, detailedCount: 1,
+            unassessedCount: 0, rows: [
+                .init(symbol: "MICRO", name: "Synthetic identified listing", status: .passed, note: "Synthetic screen", observedAt: at),
+                .init(symbol: "NOFLOAT", name: "Synthetic missing float", status: .unavailable, note: "Dated float unavailable", observedAt: at)
+            ], blocker: nil, unidentifiedFloatRows: 1)
+        let receipt = StockSageSameDayResearch.Receipt(id: id, startedAt: at, finishedAt: at,
+            selection: "Synthetic saved coverage", checks: [], mode: .microcap, microcapScreen: screen)
+        #expect(receipts.saveSameDay(receipt))
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] }, journalTrades: { [] })
+        let research = StockSageSameDayResearch(receiptStore: receipts, mode: .microcap)
+        let view = ScrollView {
+            StockSageMicrocapActivityView(store: store, research: research).padding(16)
+        }.frame(width: width, height: 1500)
+        _ = try await capture(view, name: "microcap-float-coverage-\(Int(width))") { root in
+            let text = nativeAccessibilityText(in: root)
+            #expect(text.contains("2 reference rows") && !text.contains("2 classified"))
+            #expect(text.contains("1 provider float record") && text.contains("Listings without valid dated float remain unavailable"))
+            #expect(nativeAccessibilityElements(in: root).contains { $0.accessibilityIdentifier?() == "microcap.float.coverage" })
+        }
+        #expect(research.receipt?.microcapScreen?.unidentifiedFloatRows == 1 && !research.isRunning)
+    }
+
     @Test(arguments: [StockSageSameDayResearch.Mode.microcap, .largecap], [393.0, 900.0])
     func nativeMomentumActivitySeparatesDetectionCoverageFromConfirmedDetails(mode: StockSageSameDayResearch.Mode, width: Double) async throws {
         let suite = "stocksage.momentum.activity.\(UUID())"

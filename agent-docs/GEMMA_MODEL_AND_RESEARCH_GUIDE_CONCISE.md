@@ -2,9 +2,9 @@
 
 Prepared for **Saleh**
 
-**Living edition 36 · Updated 21 September 2026, 19:56 Asia/Riyadh.**
+**Living edition 37 · Updated 21 September 2026, 20:24 Asia/Riyadh.**
 
-This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. Scanner-linked news is **installed in f578733**; its panel was inspected, but **live headline loading remains unverified**. The SEC contact setting is retained. Earlier evidence remains dated; the installation does not establish new model or market readiness. iOS and widgets remain on hold.
+This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **f578733 remains installed**; the Micro cap float repair passed focused checks; release and installation are pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. iOS and widgets remain on hold.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
 
@@ -194,6 +194,7 @@ The published trading calendar covers 2026; unsupported years remain unavailable
 
 | Current addition | Verification status |
 | --- | --- |
+| Micro cap float repair: not installed | Massive HTTP 200 pages contained 5,000 clean rows, then 1,856 with one missing ticker and no duplicates; that row formerly aborted the screen before details. The source repair discloses unmatched rows, retains valid floats and rejects duplicate identities across pages. Missing/invalid floats remain unavailable; thresholds are unchanged. The screen count uses reference rows; the optional saved unmatched-row count supports older records. Both regressions reproduced the old failures. Focused Mac verification passed **65 definitions / 93 executions / zero failures or skips**, direct exit 0 with unchanged source hashes; saved-warning views passed at 660 and 1,000 points. Release build and installation are pending. |
 | Scanner-linked news: installed | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls/narrow layouts and signed Release/ZIP passed; five excessive-window-count warnings remain. **`f578733` installed 21 September 19:50:42 Riyadh, reopened 19:50:51**. All **20 runs / 3,068 compared files** were byte-identical and preferences unchanged before tracking was restored. The readable matched-news panel showed 526 matches / 0 processed; **Load matched news was not clicked**, so live headline access remains unverified. |
 
 **Earlier installed builds:** `92be0b2` passed **3,216 definitions / 4,135 executions** on 20 September; `d0e42cb` passed **3,217 / 4,146** on 21 September. Both recorded zero failures, five skips, successful builds and targeted diagnostic guards, and preserved **20 runs / 3,068 saved files**. The latter improved SEC failure diagnostics, but its installed check still returned **HTTP 403**. Detailed regression and installation receipts remain in the full reference; earlier test results do not verify later releases.
