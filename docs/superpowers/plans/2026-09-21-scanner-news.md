@@ -25,7 +25,7 @@
 - [x] Build and verify the signed Mac Release and ZIP.
 - [x] Update living guides and verify/publish the concise 12-page PDF, preserving the previous edition. Candidate, installed and live-provider status remain distinct.
 
-Reviewed changes are committed. Integration follows the existing owner instruction to merge to main and push; the final receipt is `work/scanner-news/push-receipt.json`. Installation awaits the pending restart answer.
+Reviewed changes are committed and pushed to main; the original candidate receipt is `work/scanner-news/push-receipt.json`. The owner then authorized reopening. Runtime `f578733` was installed on 21 September at 19:50 Asia/Riyadh, reopened, and verified against the signed candidate. All 20 saved runs and 3,068 compared files were unchanged before tracking resumed. Daily ratios were reloaded, both cap trackers restored, and the prior record-lock warning was absent. The installed Matched news sheet was inspected; live headline loading remains unverified. Installation and UI receipts are `work/scanner-news/installation.json` and `work/scanner-news/installed-ui-verification.json`.
 
 ## Following milestones
 
