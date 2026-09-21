@@ -14,6 +14,7 @@ struct StockSageStockScreenerView: View {
     @State private var ascending = true
     @State private var page = 0
     @State private var showingQuality = false
+    @State private var newsReloadRevision = 0
 
     init(store: StockSageStore, screener: StockSageStockScreener = .shared) { self.screener = screener }
 
@@ -39,6 +40,11 @@ struct StockSageStockScreenerView: View {
         return StockSageStockScreener.sorted(rows, by: sort, ascending: ascending)
     }
     private var filterIdentity: String { [minimumCap, maximumCap, maximumPE, minimumROA, maximumDebt, search, String(includeOther), sort.rawValue, String(ascending)].joined(separator: "|") }
+    // News follows every financial/search match, regardless of table sort, pagination or excluded rows.
+    private var newsSelection: [StockSageStockScreener.Row] {
+        StockSageScreenerNews.matchingRows(screener.snapshot?.rows ?? [], filters: filters, search: search)
+    }
+    private var newsFilterIdentity: [String] { [minimumCap, maximumCap, maximumPE, minimumROA, maximumDebt, search] }
 
     var body: some View {
         ScrollView {
@@ -47,6 +53,8 @@ struct StockSageStockScreenerView: View {
                 filterControls
                 if let snapshot = screener.snapshot {
                     coverage(snapshot)
+                    StockSageScreenerNewsView(rows: newsSelection, selectionID: newsFilterIdentity + [String(newsReloadRevision)],
+                        ratiosAt: snapshot.retrievedAt, isReloading: screener.isLoading)
                     results
                 } else {
                     ContentUnavailableView("Load a daily company screen", systemImage: "line.3.horizontal.decrease.circle",
@@ -80,7 +88,10 @@ struct StockSageStockScreenerView: View {
             Text("Explore company size and reported financial quality. These editable filters are separate from the Micro cap and Large cap same-day qualification rules.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
-                Button(screener.snapshot == nil ? "Load daily ratios" : "Reload daily ratios") { Task { await screener.load() } }
+                Button(screener.snapshot == nil ? "Load daily ratios" : "Reload daily ratios") {
+                    newsReloadRevision += 1
+                    Task { await screener.load() }
+                }
                     .buttonStyle(.borderedProminent).disabled(screener.isBusy)
                     .accessibilityIdentifier("screener.load")
                 if screener.isBusy {

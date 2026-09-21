@@ -2244,6 +2244,112 @@ struct StockSageChatTests {
         #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 
+    @Test func nativeScreenerNewsLoadsOnlyOnRequestAndExposesEveryMatchedSymbol() async throws {
+        typealias News = StockSageScreenerNews
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        let rows: [StockSageStockScreener.Row] = (0..<65).map { index in
+            .init(symbol: "T\(letters[index / 26])\(letters[index % 26])", name: "Synthetic company \(index)",
+                  date: "2026-09-20", marketCap: 100_000_000, metrics: [], note: "")
+        }
+        var calls: [String] = []
+        let model = News(access: .init(key: { "fixture" }, credentialRevision: { "fixture" },
+            policyRevision: { "fixture" }, allowed: { true }), clock: { now }, loader: { row, at in
+                calls.append(row.symbol)
+                let index = rows.firstIndex { $0.symbol == row.symbol } ?? 0
+                if index == 1 { return .init(attempts: [.init(provider: .benzinga, checkedAt: at, status: .unavailable(.entitlement))]) }
+                if index == 2 { return .init(attempts: [.init(provider: .benzinga, checkedAt: at, status: .notChecked(.throttled))]) }
+                let items: [StockSageNewsService.NewsItem] = index == 3 ? [] : [
+                    .init(date: at.addingTimeInterval(-Double(index + 1) * 60),
+                        title: "\(row.symbol) cuts outlook", snippet: "Adverse evidence remains visible.",
+                        link: nil, sentiment: -1, source: "Offline fixture",
+                        publicationTime: at.addingTimeInterval(-Double(index + 1) * 60).ISO8601Format(),
+                        updatedTime: at.ISO8601Format())
+                ]
+                return .init(attempts: [.init(provider: .benzinga, checkedAt: at, status: .answered, items: items)])
+            })
+        let view = StockSageScreenerNewsView(rows: rows, selectionID: ["synthetic"], ratiosAt: now,
+            isReloading: false, news: model).padding(24)
+        _ = try await capture(view, name: "stocksage-screener-news-panel", viewport: .init(width: 900, height: 700)) { root in
+            let window = try #require(root.window)
+            defer {
+                model.cancel()
+                for sheet in window.sheets { window.endSheet(sheet); sheet.orderOut(nil); sheet.close() }
+            }
+            @MainActor func waitFor(_ condition: @MainActor () -> Bool) async throws {
+                let limit = ContinuousClock.now.advanced(by: .seconds(3))
+                while !condition(), ContinuousClock.now < limit { try await Task.sleep(for: .milliseconds(10)) }
+                try #require(condition())
+            }
+            @MainActor func button(_ identifier: String, in surface: NSView) throws -> AnyObject {
+                try #require(nativeAccessibilityElements(in: surface).first {
+                    $0.accessibilityIdentifier?() == identifier && $0.accessibilityRole?() == .button
+                        && $0.isAccessibilityEnabled?() == true
+                }, "Expected enabled native button: \(identifier)")
+            }
+            @MainActor func press(_ identifier: String, in surface: NSView) throws {
+                let control = try button(identifier, in: surface)
+                let pressed = control.accessibilityPerformPress?() == true
+                try #require(pressed, "Use the real native news action: \(identifier)")
+            }
+            #expect(calls.isEmpty, "Mounting the screener must not request news")
+            try press("screener.news.open", in: root)
+            try await waitFor { window.attachedSheet?.contentView != nil }
+            var sheet = try #require(window.attachedSheet?.contentView)
+            try await waitFor { nativeAccessibilityElements(in: sheet).contains { $0.accessibilityIdentifier?() == "screener.news.load" } }
+            #expect(calls.isEmpty, "Opening the panel must not request news")
+            // Cache controls before pressing: AX traversal can service the run loop itself.
+            let queuedLoad = try button("screener.news.load", in: sheet)
+            let queuedDone = try button("screener.news.done", in: sheet)
+            try #require(queuedLoad.accessibilityPerformPress?() == true)
+            try #require(queuedLoad.accessibilityPerformPress?() == true)
+            try #require(queuedDone.accessibilityPerformPress?() == true)
+            try await waitFor { window.attachedSheet == nil }
+            #expect(calls.isEmpty, "Done must cancel every queued button task before any provider admission")
+            try press("screener.news.open", in: root)
+            try await waitFor { window.attachedSheet?.contentView != nil }
+            sheet = try #require(window.attachedSheet?.contentView)
+            try await waitFor { nativeAccessibilityElements(in: sheet).contains { $0.accessibilityIdentifier?() == "screener.news.load" } }
+            try press("screener.news.load", in: sheet)
+            try await waitFor { model.observations.count == 65 && !model.isLoading }
+            #expect(calls.count == 65 && Set(calls).count == 65, "Display pagination must not cap requested symbols")
+            try await waitFor { nativeAccessibilityText(in: sheet).contains("TAA cuts outlook") }
+            let headlines = nativeAccessibilityText(in: sheet)
+            #expect(headlines.contains("Adverse evidence remains visible.") && headlines.contains("Article date:") && headlines.contains("Provider check:"))
+            #expect(headlines.contains("Provider publication timestamp:") && headlines.contains("Provider update timestamp:"))
+            try saveNativeViewport(sheet, name: "stocksage-screener-news-headlines")
+            let sheetWindow = try #require(sheet.window)
+            sheetWindow.setContentSize(.init(width: 520, height: 760))
+            try await Task.sleep(for: .milliseconds(100))
+            try saveNativeViewport(sheet, name: "stocksage-screener-news-headlines-520")
+            sheetWindow.setContentSize(.init(width: 840, height: 760))
+            try await Task.sleep(for: .milliseconds(100))
+            let picker = try #require(nativeAccessibilityElements(in: sheet).compactMap { $0 as? NSSegmentedControl }.first {
+                $0.segmentCount == 2 && $0.label(forSegment: 0) == "Headlines" && $0.label(forSegment: 1) == "Coverage"
+            })
+            let coverage = try #require(nativeAccessibilityElements(in: picker).first {
+                $0.accessibilityLabel?() == "Coverage" && $0.accessibilityRole?() == .radioButton
+            } as? NSObject)
+            try #require(coverage.accessibilityActionNames().contains(.press))
+            coverage.accessibilityPerformAction(.press)
+            _ = try await revealFormContent("screener.news.coverage.TAB", in: sheet)
+            #expect(nativeAccessibilityText(in: sheet).contains("unavailable (entitlement)"))
+            _ = try await revealFormContent("screener.news.coverage.TAC", in: sheet)
+            #expect(nativeAccessibilityText(in: sheet).contains("not checked (throttled)"))
+            _ = try await revealFormContent("screener.news.coverage.TAD", in: sheet)
+            #expect(nativeAccessibilityText(in: sheet).contains("No usable excerpts"))
+            try saveNativeViewport(sheet, name: "stocksage-screener-news-coverage")
+            try press("screener.news.next", in: sheet)
+            try await waitFor { nativeAccessibilityText(in: sheet).contains("51–65 of 65") }
+            _ = try await revealFormContent("screener.news.coverage.\(rows[64].symbol)", in: sheet)
+            #expect(nativeAccessibilityText(in: sheet).contains(rows[64].name), "The final matched symbol must remain reachable")
+            try saveNativeViewport(sheet, name: "stocksage-screener-news-coverage-last")
+            try press("screener.news.done", in: sheet)
+            try await waitFor { window.attachedSheet == nil }
+            #expect(model.rows.count == 65 && model.observations.count == 65, "Done retains the captured sample without refetching")
+            #expect(calls.count == 65)
+        }
+    }
+
     @Test(arguments: [StockSageSameDayResearch.Mode.microcap, .largecap], [393.0, 900.0])
     func nativeMomentumActivitySeparatesDetectionCoverageFromConfirmedDetails(mode: StockSageSameDayResearch.Mode, width: Double) async throws {
         let suite = "stocksage.momentum.activity.\(UUID())"

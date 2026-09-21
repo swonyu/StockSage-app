@@ -2,9 +2,9 @@
 
 Prepared for **Saleh**
 
-**Living edition 34 · Updated 21 September 2026, 02:48 Asia/Riyadh.**
+**Living edition 35 · Updated 21 September 2026, 05:08 Asia/Riyadh.**
 
-This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. It records the **21 September installed Mac build** and SEC contact setting. Earlier evidence remains dated; the installation does not establish new model or market readiness. iOS and widgets remain on hold.
+This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. Scanner-linked news is **implemented and verified offline**; **9861561 remains installed** with the SEC contact setting. Earlier evidence remains dated; the installation does not establish new model or market readiness. iOS and widgets remain on hold.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
 
@@ -86,6 +86,8 @@ Source wiring, successful access, facts offered after fitting and facts actually
 Chat uses selected symbols and its own bounded enrichment, not an entire universe scan. Broker/account/journal/credential fields are excluded from app-created research snapshots. User-entered text is a separate boundary; selected excerpts can leave the device with hosted inference.
 
 Stock screener offers editable cap, P/E, ROA and debt/equity filters, with Micro cap and Large cap presets. Those display filters do not change the fixed cap-tracking qualification rules. Fifty displayed rows per page and twenty-four detailed setup candidates are separate from all-eligible-symbol momentum coverage.
+
+**Scanner-linked news — verified offline; not installed:** **Open matched news → Load matched news** requests up to five selected excerpts within seven days for every financial/search match, beyond displayed rows. Four rolling symbol workers share the existing three-request HTTP limit. Adverse headlines remain; source/article dates, check times and per-symbol Coverage distinguish captured, partial, unavailable, pending and not-checked results. This is a bounded sample, not a complete news census. Filter/search changes and ratios reload invalidate the in-memory capture. No model assessment, watcher or trade starts. Morning briefing and richer live filters remain next-stage work; no macro calendar, live cumulative-volume input, paid Pro AI, squawk or Chat integration is added. [Matched-news source](../StockSage/Sources/StockSage/StockSageScreenerNews.swift).
 
 Company quality preserves dated provider P/E, P/S, P/B, ROA, ROE and debt/equity. Annual app-calculated ROCE/ROIC require consistent, explicitly USD-tagged SEC inputs and valid capital denominators; they are not shareholder returns or automatic one-off adjustments. Missing inputs remain unavailable. The previous build's AAPL Company quality check on 21 September at 01:28:45 Riyadh explicitly showed **SEC returned HTTP 403** for both annual ROCE and ROIC. Successful Massive responses do not prove successful SEC calculations. The installed diagnostic update distinguishes rejected requests, timeouts, oversized responses and cancellation; unavailable values remain unavailable.
 
@@ -189,6 +191,10 @@ A later hosted request can transmit selected private excerpts, questions and con
 The published trading calendar covers 2026; unsupported years remain unavailable. Daily-bar completeness can lag regular close. Semantic correctness, comprehensive API coverage, definitive earlier crash causality, a financial edge and a general 30-second guarantee remain unproven. A faster replay or valid JSON is not quality validation.
 
 ## 13. Existing tests and the verification boundary
+
+| Current addition | Verification status |
+| --- | --- |
+| Scanner-linked news: verified offline | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls and narrow-layout captures passed; five excessive-window-count warnings remain in the full suite. Release/ZIP pending; no installation or live news access claim. Installed `9861561` remains separate. |
 
 **Historical installed baseline, verified 20 September 2026.** Signed arm64 Release **92be0b2** passed **3,216 test definitions / 4,135 parameter executions / zero failures / five skips**, with build/test exit 0 and targeted native diagnostic guard 0. The source manifest matched before and after testing. Installation/reopening checks preserved **20 saved runs and 3,068 compared saved files**, preferences, IDs and the active record image.
 
