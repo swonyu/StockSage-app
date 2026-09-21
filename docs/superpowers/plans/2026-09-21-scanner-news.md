@@ -22,7 +22,7 @@
 - [x] Add `StockSageScreenerNews.swift`: `matchingRows(_:filters:search:)`, `load(rows:)`, `cancel()`, `clear()`; observable rows, observations, status, start time and loading state.
 - [x] Connect `StockSageStockScreenerView.swift` and a small news view, preserving financial filters and per-symbol failures.
 - [x] Review source and exercise focused offline tests, Mac UI fixtures and full Mac gate.
-- [ ] Build and verify the signed Mac Release and ZIP.
+- [x] Build and verify the signed Mac Release and ZIP.
 - [ ] Update living guides and verify/publish the concise PDF; commit reviewed changes, merge to main and push. Keep candidate, installed and live-provider status distinct.
 
 ## Following milestones

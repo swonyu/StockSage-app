@@ -2,7 +2,7 @@
 
 Prepared for **Saleh**
 
-**Living edition 35 · Updated 21 September 2026, 05:08 Asia/Riyadh.**
+**Living edition 35 · Updated 21 September 2026, 05:12 Asia/Riyadh.**
 
 This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. Scanner-linked news is **implemented and verified offline**; **9861561 remains installed** with the SEC contact setting. Earlier evidence remains dated; the installation does not establish new model or market readiness. iOS and widgets remain on hold.
 
@@ -194,7 +194,7 @@ The published trading calendar covers 2026; unsupported years remain unavailable
 
 | Current addition | Verification status |
 | --- | --- |
-| Scanner-linked news: verified offline | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls and narrow-layout captures passed; five excessive-window-count warnings remain in the full suite. Release/ZIP pending; no installation or live news access claim. Installed `9861561` remains separate. |
+| Scanner-linked news: verified offline | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls and narrow-layout captures passed; five excessive-window-count warnings remain in the full suite. Signed Release **`f578733`** and its matching ZIP are verified; installation and live news access remain unverified. Installed `9861561` remains separate. |
 
 **Historical installed baseline, verified 20 September 2026.** Signed arm64 Release **92be0b2** passed **3,216 test definitions / 4,135 parameter executions / zero failures / five skips**, with build/test exit 0 and targeted native diagnostic guard 0. The source manifest matched before and after testing. Installation/reopening checks preserved **20 saved runs and 3,068 compared saved files**, preferences, IDs and the active record image.
 
