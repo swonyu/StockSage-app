@@ -23,7 +23,9 @@
 - [x] Connect `StockSageStockScreenerView.swift` and a small news view, preserving financial filters and per-symbol failures.
 - [x] Review source and exercise focused offline tests, Mac UI fixtures and full Mac gate.
 - [x] Build and verify the signed Mac Release and ZIP.
-- [ ] Update living guides and verify/publish the concise PDF; commit reviewed changes, merge to main and push. Keep candidate, installed and live-provider status distinct.
+- [x] Update living guides and verify/publish the concise 12-page PDF, preserving the previous edition. Candidate, installed and live-provider status remain distinct.
+
+Reviewed changes are committed. Integration follows the existing owner instruction to merge to main and push; the final receipt is `work/scanner-news/push-receipt.json`. Installation awaits the pending restart answer.
 
 ## Following milestones
 
