@@ -2,7 +2,7 @@
 
 Prepared for **Saleh**
 
-**Living edition 37 · Updated 21 September 2026, 20:29 Asia/Riyadh.**
+**Living edition 38 · Updated 21 September 2026, 20:52 Asia/Riyadh.**
 
 This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **f578733 remains installed**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. iOS and widgets remain on hold.
 
@@ -65,7 +65,7 @@ Heavy momentum requires an absolute five-minute return of at least **3% for Micr
 
 Heavy-momentum alerts and Astra reviews can occur during premarket within that window. They are descriptive: missing news, fundamentals and eligible quotes remain explicit; checks stay **unqualified with no trade levels**. Telegram observation and review-summary attempts are separately deduplicated; unknown delivery outcomes do not automatically retry.
 
-Codex verifies authentication/configuration/catalog and restricts permissions/tools; it can inherit owner instructions, so this is not a context-free or zero-file-access guarantee. The app copies no OAuth credential. A synthetic adapter succeeded; installed stock Astra research and Telegram delivery remain unverified. On 21 September at 19:55 Riyadh, both trackers were restored and paired; each was warming with zero ready symbols at enable. [Codex boundary](../StockSage/Sources/StockSage/StockSageCodexResearch.swift), [watcher](../StockSage/Sources/StockSage/StockSageMicrocapMonitor.swift).
+Codex verifies authentication/configuration/catalog and restricts permissions/tools; it can inherit owner instructions, so this is not a context-free or zero-file-access guarantee. The app copies no OAuth credential. A synthetic adapter succeeded. The owner later supplied received CBRS, SHOP and GRAB observation alerts; installed SHOP/GRAB follow-ups failed with “Codex research isolation could not be verified. No opinion was accepted.” A separate metadata-only check passed without reproducing the failure; no accepted stock opinion or review-summary delivery is established. [Codex boundary](../StockSage/Sources/StockSage/StockSageCodexResearch.swift), [watcher](../StockSage/Sources/StockSage/StockSageMicrocapMonitor.swift).
 
 ## 5. API-to-Gemma wiring: what can reach each request
 
@@ -201,7 +201,7 @@ Earlier release and SEC-contact regression receipts remain in the full guide. Th
 
 The completed Gemma scans retained **1,500 checks each**, not 1,500 accepted opinions: week **1,475 accepted/25 incomplete**, one strict-qualified candidate and comparison pick BWIN; fortnight **1,436 accepted/64 incomplete**, eleven strict-qualified candidates but a failed comparison because complete candidate context could not fit. Both deterministic Top 5 records remain saved. Scan completion does not turn a raw Buy into a qualified setup.
 
-Installed **f578733** reloaded ratios at **19:51:29 Riyadh**: **4,986 rows / 314 invalid / 3,680 supported**, with Micro **526 matched / 2,110 excluded / 1,044 unavailable**. Micro tracking was restored at **19:55:10** for **526 eligible** symbols, Large at **19:55:25** for **584**; both were **warming / 0 ready** and Telegram paired. Automatic checks began under prior owner authorization; no manual Gemma, pod, broker, SEC or Telegram test was run. The earlier Watchlist record-owner warning was absent after restart; its root cause is unproven. This does not establish ready coverage, a completed stock assessment or delivery. iOS/widget work remains paused.
+Installed **f578733** reloaded ratios at **19:51:29 Riyadh**: **4,986 rows / 314 invalid / 3,680 supported**, with Micro **526 matched / 2,110 excluded / 1,044 unavailable**. Micro tracking was restored at **19:55:10** for **526 eligible** symbols, Large at **19:55:25** for **584**; both were **warming / 0 ready** and Telegram paired. Automatic checks began under prior owner authorization; no manual Gemma, pod, broker, SEC or Telegram test was run. The earlier Watchlist record-owner warning was absent after restart; its root cause is unproven. At 20:49 Riyadh, Large cap showed 610 dated eligible symbols: 385 ready and 225 stale or gapped. This bounded snapshot and owner-reported observation delivery do not establish complete gap recovery or a completed Astra assessment. iOS/widget work remains paused.
 
 Source review, offline tests, synthetic inference, installed UI, actual stock research and successful delivery are separate evidence. Targeted guard success does not establish absence of every framework warning.
 
@@ -211,4 +211,4 @@ Preserve original evidence and dates, offered/omitted/cited facts, model profile
 
 Installed runtime **f578733** identifies the verified current Mac build; **9861561**, **d0e42cb** and **92be0b2** are historical. The quit flow reported model unloading unconfirmed, so successful unloading is not established. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
 
-Still unverified: live all-matching warm-up/gap handling, an installed stock Astra assessment, Telegram event delivery, and successful live SEC annual ROCE/ROIC calculations. Pairing is not delivery; a delivery test needs explicit approval. The completed Gemma scans and stopped pod do not prove prediction accuracy, final billing or storage disposition. No 4× speed, universal latency or profitability claim follows.
+Unresolved: installed SHOP/GRAB Astra isolation failures. Successful stock opinions and review-summary delivery remain unverified, alongside comprehensive gap recovery and live SEC annual ROCE/ROIC calculations. The preliminary metadata diagnostic did not reproduce or repair the installed failure. A new manual research or delivery test needs explicit approval. The completed Gemma scans and stopped pod do not prove prediction accuracy, final billing or storage disposition. No 4× speed, universal latency or profitability claim follows.
