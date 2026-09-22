@@ -4329,7 +4329,7 @@ struct MarketsView: View {
         // its Buy/Sell + strength% isn't acted on as a live signal — matching the heatmap's treatment.
         let stale = sym.isStale(asOf: displayDate)
         let source = sym.latest == nil ? "Quote unavailable" : Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache,
-            priceAsOf: sym.latest?.marketTime, now: displayDate, priceSource: sym.latest?.priceSource)
+            priceAsOf: sym.latest?.marketTime, now: displayDate, priceSource: sym.latest?.priceSource, symbol: sym.symbol)
         let identity = VStack(alignment: .leading, spacing: detailSpacing) {
                 HStack(spacing: DS.Space.xs) {
                     Text(sym.symbol)
@@ -5516,7 +5516,7 @@ struct MarketsView: View {
             // ("Yahoo · 31m" / "cached · 3h" / "sample") is pixels-only — this .combine element's
             // explicit label replaces every child label, so VoiceOver never heard it. Reuses the
             // SAME call the render site makes (~3746) so it can never desync from the pixels.
-            if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: displayDate, priceSource: idea.priceSource) {
+            if let src = Self.sourceTagLabel(isSampleData: store.isSampleData, loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf, now: displayDate, priceSource: idea.priceSource, symbol: idea.symbol) {
                 label += " (\(src))"
             }
             if let stop = a.stopPrice, idea.price > 0 {
@@ -5604,7 +5604,7 @@ struct MarketsView: View {
     private func ideaPrice(_ idea: StockSageIdea) -> some View {
         IdeaPriceContent(source: Self.sourceTagLabel(isSampleData: store.isSampleData,
                 loadedFromCache: store.loadedFromCache, priceAsOf: idea.priceAsOf,
-                now: displayDate, priceSource: idea.priceSource)) { source in
+                now: displayDate, priceSource: idea.priceSource, symbol: idea.symbol)) { source in
             if let source {
                 ideaMetric("Price", adaptivePrice(idea.price), sub: source, subColor: .secondary, flash: idea.price)
             } else {
@@ -9779,9 +9779,11 @@ struct MarketsView: View {
     }
 
     static func sourceTagLabel(isSampleData: Bool, loadedFromCache: Bool, priceAsOf: Date?, now: Date,
-                               priceSource: StockSagePriceSource? = nil) -> String? {
+                               priceSource: StockSagePriceSource? = nil, symbol: String? = nil) -> String? {
         if isSampleData || priceSource == .sample { return "sample" }
-        let source = (loadedFromCache ? "cached · " : "") + (priceSource?.label ?? "source unknown")
+        let session = symbol.flatMap { priceSessionLabel(symbol: $0, at: priceAsOf, now: now,
+            source: priceSource, cached: loadedFromCache) }.map { $0 + " · " } ?? ""
+        let source = session + (loadedFromCache ? "cached · " : "") + (priceSource?.label ?? "source unknown")
         guard let priceAsOf else {
             return loadedFromCache || priceSource != nil ? "\(source) · time unknown" : nil
         }
@@ -9793,6 +9795,33 @@ struct MarketsView: View {
         else if secs < 86_400 { age = "\(Int(secs / 3600))h" }
         else { age = "\(Int(secs / 86_400))d" }
         return "\(source) · \(age)"
+    }
+
+    /// Date the selected observation, not just the connection. A regular close cannot become
+    /// a pre/post-market price merely because the wall clock entered an extended session.
+    nonisolated static func priceSessionLabel(symbol: String, at observed: Date?, now: Date,
+                                             source: StockSagePriceSource?, cached: Bool) -> String? {
+        guard StockSageMassive.covers(symbol), now.timeIntervalSince1970.isFinite,
+              source != .sample else { return nil }
+        func label(_ phase: StockSageMarketHours.Phase) -> String? {
+            switch phase { case .preMarket: "Pre-market"; case .afterHours: "Post-market"; default: nil }
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let current = StockSageMarketHours.nasdaqState(at: now, calendar: calendar).phase
+        guard let observed, observed.timeIntervalSince1970.isFinite, observed <= now else {
+            return label(current).map { $0 + " awaiting price" }
+        }
+        let captured = StockSageMarketHours.nasdaqState(at: observed, calendar: calendar).phase
+        let matching = captured == current && calendar.isDate(observed, inSameDayAs: now)
+        let quoteSource = source == .massiveSIP || source == .yahoo
+        if let currentLabel = label(current) {
+            guard matching, quoteSource else { return currentLabel + " awaiting price" }
+            if cached { return currentLabel + " last" }
+            if source == .yahoo { return currentLabel + " delayed" }
+            return currentLabel + (now.timeIntervalSince(observed) <= StockSageLiveStream.maximumLiveAge ? " live" : " last")
+        }
+        return quoteSource ? label(captured).map { $0 + " last" } : nil
     }
 
     private func signalBlocks(_ value: Double, color: Color) -> some View {

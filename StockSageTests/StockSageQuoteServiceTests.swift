@@ -8,6 +8,42 @@ import Synchronization
 // which covers signal recommendations; this one covers history JSON parsing.)
 
 struct StockSageQuoteServiceParsingTests {
+    @Test func extendedPricesKeepTheirOwnClockAndDoNotOverrideNewerRegularPrices() throws {
+        let f = ISO8601DateFormatter()
+        let regular = try #require(f.date(from: "2026-09-21T20:00:00Z"))
+        let pre = try #require(f.date(from: "2026-09-22T12:00:00Z"))
+        let post = try #require(f.date(from: "2026-09-22T21:00:00Z"))
+        func payload(regularAt: Date = regular, extended: Date = pre, price: Any = 105,
+                     symbol: String = "AAPL", bars: Bool = false) throws -> Data {
+            var meta: [String: Any] = ["symbol": symbol, "regularMarketPrice": 100,
+                "regularMarketTime": regularAt.timeIntervalSince1970, "previousClose": 99]
+            var result: [String: Any] = [:]
+            if bars {
+                result["timestamp"] = [regularAt.timeIntervalSince1970, extended.timeIntervalSince1970]
+                result["indicators"] = ["quote": [["close": [100, price]]]]
+            } else {
+                meta["preMarketPrice"] = price; meta["preMarketTime"] = extended.timeIntervalSince1970
+            }
+            result["meta"] = meta
+            return try JSONSerialization.data(withJSONObject: ["chart": ["result": [result]]])
+        }
+        for at in [pre, post] {
+            for bars in [false, true] {
+                let q = try #require(StockSageQuoteService.parseChart(payload(extended: at, bars: bars), now: at))
+                #expect(q.price == 105 && q.marketTime == at)
+                #expect(q.previousClose == 99 && q.previousCloseSource == .yahoo && q.priceSource == .yahoo)
+                #expect(!q.paperTradeQualified)
+            }
+        }
+        let newerRegular = try #require(f.date(from: "2026-09-22T14:00:00Z"))
+        #expect(try StockSageQuoteService.parseChart(payload(regularAt: newerRegular), now: newerRegular)?.price == 100)
+        #expect(try StockSageQuoteService.parseChart(payload(extended: post), now: pre)?.price == 100)
+        #expect(try StockSageQuoteService.parseChart(payload(extended: newerRegular), now: newerRegular)?.price == 100)
+        #expect(try StockSageQuoteService.parseChart(payload(symbol: "2222.SR"), now: pre)?.price == 100)
+        for bad: Any in [0, -1, true, NSNull()] {
+            #expect(try StockSageQuoteService.parseChart(payload(price: bad, bars: true), now: pre)?.price == 100)
+        }
+    }
 
     @Test func requestedQuoteIdentityMustMatchAndNumericStringsRemainSupported() {
         let data = Data(#"{"chart":{"result":[{"meta":{"symbol":"AAPL","regularMarketPrice":"150.25","previousClose":"148.50"}}]}}"#.utf8)
@@ -109,6 +145,17 @@ struct StockSageQuoteServiceParsingTests {
 
 struct StockSageQuoteTransportTests {
     typealias Q = StockSageQuoteService
+
+    @Test func quoteFallbackRequestsExtendedMinuteObservations() async {
+        let result = await Q.fetchQuoteBatch(for: ["AAPL"], keyPresent: false, allowed: { true },
+            massive: { _ in [:] }, transport: { request in
+                let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                #expect(items.contains(URLQueryItem(name: "includePrePost", value: "true")))
+                #expect(items.contains(URLQueryItem(name: "interval", value: "1m")))
+                return Self.response(request)
+            })
+        #expect(result.quotes["AAPL"]?.price == 101)
+    }
 
     nonisolated private static func response(_ request: URLRequest, status: Int = 200,
         symbol: String = "AAPL", url: URL? = nil, headers: [String: String]? = nil,

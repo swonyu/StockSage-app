@@ -34,7 +34,7 @@ enum StockSageQuoteService {
         let symbol: String
         let price: Double
         let previousClose: Double
-        /// The quote's own MARKET timestamp (Yahoo `regularMarketTime`), not our fetch time — so the
+        /// The selected quote's MARKET timestamp (including extended hours), not our fetch time — so the
         /// UI can tell "live" from a days-old weekend/holiday close. nil when the feed omits it.
         let marketTime: Date?
         /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
@@ -145,7 +145,7 @@ enum StockSageQuoteService {
 
     nonisolated private static func quoteRequest(_ symbol: String) -> URLRequest? {
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
-        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=1d&interval=1d") else { return nil }
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=1d&interval=1m&includePrePost=true") else { return nil }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
         request.setValue(ua, forHTTPHeaderField: "User-Agent")
         return request
@@ -240,7 +240,7 @@ enum StockSageQuoteService {
     /// with a `chartPreviousClose` fallback (indices often carry only the latter).
     /// A non-positive or non-finite previousClose is treated exactly like a MISSING
     /// one (falls back to `price`, sets `isNewListing`) — never fabricated as a real 0%.
-    nonisolated static func parseChart(_ data: Data, requestedSymbol: String? = nil) -> LiveQuote? {
+    nonisolated static func parseChart(_ data: Data, requestedSymbol: String? = nil, now: Date = Date()) -> LiveQuote? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let chart = root["chart"] as? [String: Any],
               let results = chart["result"] as? [[String: Any]],
@@ -248,7 +248,28 @@ enum StockSageQuoteService {
               let symbol = meta["symbol"] as? String else { return nil }
         if let requestedSymbol, symbol.uppercased() != requestedSymbol.uppercased() { return nil }
 
-        guard let price = number(meta["regularMarketPrice"]), price > 0 else { return nil }
+        guard var price = number(meta["regularMarketPrice"]), price > 0 else { return nil }
+        var marketTime = number(meta["regularMarketTime"]).map { Date(timeIntervalSince1970: $0) }
+        // Yahoo remains labelled delayed. Pair each extended price with its own clock; never
+        // relabel the regular close using a newer fetch/market timestamp.
+        if StockSageMassive.covers(symbol), let regularTime = marketTime, regularTime <= now {
+            func consider(_ value: Any?, _ timestamp: Any?) {
+                guard let candidate = number(value), candidate > 0, let seconds = number(timestamp) else { return }
+                let at = Date(timeIntervalSince1970: seconds)
+                guard at > (marketTime ?? regularTime), at <= now,
+                      StockSageMassiveTicks.isExtendedSession(at: at) else { return }
+                price = candidate; marketTime = at
+            }
+            consider(meta["preMarketPrice"], meta["preMarketTime"])
+            consider(meta["postMarketPrice"], meta["postMarketTime"])
+            if let result = results.first,
+               let stamps = result["timestamp"] as? [Any],
+               let indicators = result["indicators"] as? [String: Any],
+               let quotes = indicators["quote"] as? [[String: Any]],
+               let closes = quotes.first?["close"] as? [Any], stamps.count == closes.count {
+                for (stamp, close) in zip(stamps, closes) { consider(close, stamp) }
+            }
+        }
         // A non-positive previousClose (a feed row carrying 0, or corrupt negative data) is exactly
         // as unusable as a missing one — L3-08: fabricates a flat 0.00% move / poisons %-change math
         // instead of an honest "can't judge yet." Route it through the SAME missing-previousClose
@@ -259,7 +280,6 @@ enum StockSageQuoteService {
         // NOT a genuine 0%-move hold signal).
         let previousClose = realPreviousClose ?? price
         // The quote's market time (Unix seconds) — lets the UI distinguish live from a stale close.
-        let marketTime = number(meta["regularMarketTime"]).map { Date(timeIntervalSince1970: $0) }
         return LiveQuote(symbol: symbol, price: price, previousClose: previousClose, marketTime: marketTime,
                          isNewListing: realPreviousClose == nil, priceSource: .yahoo,
                          previousCloseSource: realPreviousClose == nil ? nil : .yahoo,

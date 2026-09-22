@@ -253,6 +253,11 @@ enum StockSageMassive {
               conditions.allSatisfy(allowedTradeConditions.contains) else { return nil }
         let realPreviousClose = finite((row["prevDay"] as? [String: Any])?["c"]).flatMap { $0 > 0 ? $0 : nil }
         let marketTime = int64(lastTrade["t"]).map(date(fromNanoseconds:))
+        // Form T is display-only extended-hours evidence, never an undated/regular-session price.
+        if conditions.contains(12) {
+            guard let marketTime, StockSageMassiveTicks.qualifiesDisplayTrade(conditions: conditions,
+                allowed: allowedTradeConditions, sip: marketTime, participant: nil) else { return nil }
+        }
         return StockSageQuoteService.LiveQuote(symbol: requestedSymbol, price: price,
                                                previousClose: realPreviousClose ?? price,
                                                marketTime: marketTime,

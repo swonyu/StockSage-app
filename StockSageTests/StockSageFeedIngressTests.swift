@@ -5,6 +5,30 @@ import Synchronization
 @testable import StockSage
 
 extension StockSageFeedIngressTests {
+    @Test @MainActor func extendedTradesReachDisplayWithoutChangingRawOrderingOrResearch() async throws {
+        let at = try #require(ISO8601DateFormatter().date(from: "2026-09-22T21:00:00Z"))
+        let ingress = I(), live = L()
+        defer { ingress.invalidate(); live.stop(clearNBBO: {}) }
+        await live.refreshReferences(now: at, stillValid: { true }, displayConditions: { [0, 12] },
+            conditions: { [] }, exchangeList: { [:] })?.value
+        #expect(ingress.offer(auth, at: at))
+        _ = try await drained(ingress)
+        let policy = live.displayTradePolicy(at: at)
+        _ = await ingress.snapshot(symbols: ["AAPL"], now: at,
+            displayConditions: policy.conditions, displayConditionGeneration: policy.generation)
+        let milliseconds = Int64(at.timeIntervalSince1970 * 1_000)
+        let bytes = Data("[{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":105,\"t\":\(milliseconds),\"pt\":\(milliseconds),\"c\":[12],\"q\":1},{\"ev\":\"T\",\"sym\":\"AAPL\",\"p\":999,\"t\":\(milliseconds),\"pt\":\(milliseconds),\"c\":[12,13],\"q\":2}]".utf8)
+        #expect(ingress.offer(bytes, at: at))
+        let snapshot = try await drained(ingress, symbols: ["AAPL"])
+        #expect(snapshot.trades["AAPL"]?.price == 999)
+        #expect(snapshot.displayTrades["AAPL"]?.price == 105)
+        let published = live.publish(snapshot, from: ingress, now: at) { ticks, _, _ in
+            #expect(ticks["AAPL"]?.price == 105)
+            #expect(ticks["AAPL"]?.timestamp == at)
+        }
+        #expect(published)
+    }
+
     typealias M = StockSageMomentumStream
     private var minuteNow: Date { Date(timeIntervalSince1970: 1_700_006_400) }
 

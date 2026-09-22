@@ -4,6 +4,35 @@ import Testing
 
 /// In-memory fixtures only: no Store singleton, credentials, disk or provider requests.
 @MainActor struct StockSagePriceSourceTests {
+    @Test func extendedPriceLabelsNeverCallRegularDelayedOrCachedPricesLive() throws {
+        let f = ISO8601DateFormatter()
+        let pre = try #require(f.date(from: "2026-09-22T12:00:00Z"))
+        let post = try #require(f.date(from: "2026-09-22T21:00:00Z"))
+        let regular = try #require(f.date(from: "2026-09-22T19:59:00Z"))
+        for (now, title) in [(pre, "Pre-market"), (post, "Post-market")] {
+            func label(at: Date?, source: StockSagePriceSource? = .massiveSIP, cached: Bool = false) -> String? {
+                MarketsView.priceSessionLabel(symbol: "AAPL", at: at, now: now, source: source, cached: cached)
+            }
+            #expect(label(at: now) == title + " live")
+            #expect(label(at: now.addingTimeInterval(-11)) == title + " last")
+            #expect(label(at: now, source: .yahoo) == title + " delayed")
+            #expect(label(at: now, cached: true) == title + " last")
+            #expect(label(at: nil) == title + " awaiting price")
+            #expect(label(at: now.addingTimeInterval(1)) == title + " awaiting price")
+            #expect(label(at: now, source: .massiveDaily) == title + " awaiting price")
+            #expect(label(at: now, source: .sample) == nil)
+            let rendered = MarketsView.sourceTagLabel(isSampleData: false, loadedFromCache: false,
+                priceAsOf: now, now: now, priceSource: .massiveSIP, symbol: "AAPL")
+            #expect(rendered == title + " live · Massive SIP · just now")
+        }
+        #expect(MarketsView.priceSessionLabel(symbol: "AAPL", at: regular, now: post,
+            source: .massiveSIP, cached: false) == "Post-market awaiting price")
+        let closed = try #require(f.date(from: "2026-09-23T01:00:00Z"))
+        #expect(MarketsView.priceSessionLabel(symbol: "AAPL", at: post, now: closed,
+            source: .massiveSIP, cached: false) == "Post-market last")
+        #expect(MarketsView.priceSessionLabel(symbol: "2222.SR", at: pre, now: pre,
+            source: .yahoo, cached: false) == nil)
+    }
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func row(_ symbol: String = "AAPL", source: StockSagePriceSource?, at: Date) -> StockSageSymbol {

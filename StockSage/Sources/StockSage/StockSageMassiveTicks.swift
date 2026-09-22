@@ -221,8 +221,9 @@ enum StockSageMassiveTicks {
         return try parseRegularQuoteConditions(await data(for: request, captured: captured, transport: transport))
     }
 
-    /// Ordinary last prices follow the provider's consolidated price-update rules, not the
-    /// separate quote-condition or paper-simulation policies. Unknown/mixed conditions fail closed.
+    /// Display prices include referenced Form T trades during extended hours. They do not
+    /// update the official regular-session last sale, but are real extended-hours observations.
+    /// Quote-condition and paper-simulation policies remain separate. Unknown codes fail closed.
     /// https://massive.com/docs/rest/stocks/market-operations/condition-codes
     nonisolated static func parseDisplayTradeConditions(_ data: Data) throws -> Set<Int64> {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -238,7 +239,12 @@ enum StockSageMassiveTicks {
                   let rules = row["update_rules"] as? [String: Any],
                   let consolidated = rules["consolidated"] as? [String: Any],
                   let updates = consolidated["updates_open_close"] as? NSNumber,
-                  CFGetTypeID(updates) == CFBooleanGetTypeID(), updates.boolValue else { continue }
+                  CFGetTypeID(updates) == CFBooleanGetTypeID() else { continue }
+            let formT = id == 12 && row["name"] as? String == "Form T"
+                && (consolidated["updates_volume"] as? NSNumber).map {
+                    CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue
+                } == true
+            guard updates.boolValue || formT else { continue }
             allowed.insert(id)
         }
         guard !allowed.isEmpty else { throw Failure.invalidPayload }
@@ -249,12 +255,21 @@ enum StockSageMassiveTicks {
                                                    sip: Date, participant: Date?) -> Bool {
         guard let conditions, !conditions.isEmpty, conditions.allSatisfy(allowed.contains),
               sip.timeIntervalSince1970.isFinite else { return false }
+        if conditions.contains(12) {
+            guard isExtendedSession(at: sip), participant.map(isExtendedSession(at:)) ?? true else { return false }
+        }
         // Snapshot schema provides SIP time only. When the participant clock is supplied,
         // a newly reported old trade must not refresh an ordinary current-price observation.
         if let participant {
             guard (0...StockSageLiveStream.maximumLiveAge).contains(sip.timeIntervalSince(participant)) else { return false }
         }
         return true
+    }
+
+    nonisolated static func isExtendedSession(at date: Date) -> Bool {
+        guard date.timeIntervalSince1970.isFinite else { return false }
+        let phase = StockSageMarketHours.nasdaqState(at: date, calendar: Calendar(identifier: .gregorian)).phase
+        return phase == .preMarket || phase == .afterHours
     }
 
     static func displayTradeConditions(access: StockSageMassive.Access = .init(),

@@ -317,6 +317,35 @@ extension StockSageMassiveTicksTests {
 
 
 extension StockSageMassiveTicksTests {
+    @Test func formTDisplaysOnlyInVerifiedExtendedSessions() throws {
+        let reference = Data(#"{"status":"OK","results":[{"id":0,"asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":true}}},{"id":12,"name":"Form T","asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":false,"updates_volume":true}}},{"id":13,"name":"Extended Trading Hours (Sold Out of Sequence)","asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":false,"updates_volume":true}}},{"id":2,"name":"Average Price Trade","asset_class":"stocks","data_types":["trade"],"update_rules":{"consolidated":{"updates_open_close":false,"updates_volume":true}}}]}"#.utf8)
+        let allowed = try T.parseDisplayTradeConditions(reference)
+        #expect(allowed == [0, 12])
+        let formatter = ISO8601DateFormatter()
+        for (iso, expected) in [
+            ("2026-09-22T08:01:00Z", true), ("2026-09-22T13:29:00Z", true),
+            ("2026-09-22T13:30:00Z", false), ("2026-09-22T20:01:00Z", true),
+            ("2026-09-23T00:00:00Z", false), ("2026-09-20T10:00:00Z", false),
+            ("2026-09-07T10:00:00Z", false), ("2027-01-05T10:00:00Z", false),
+            ("2026-11-27T18:01:00Z", true), ("2026-11-27T22:00:00Z", false),
+            ("2026-12-01T09:01:00Z", true)
+        ] {
+            let at = try #require(formatter.date(from: iso))
+            #expect(T.qualifiesDisplayTrade(conditions: [12], allowed: allowed, sip: at, participant: at) == expected)
+            #expect(!T.qualifiesDisplayTrade(conditions: [12,13], allowed: allowed, sip: at, participant: at))
+            #expect(!T.qualifiesDisplayTrade(conditions: [12,2], allowed: allowed, sip: at, participant: at))
+            let row: [String: Any] = ["lastTrade": ["p": 103.0, "c": [12], "t": Int64(at.timeIntervalSince1970 * 1_000_000_000)], "prevDay": ["c": 99.0]]
+            let quote = StockSageMassive.parseTicker(row, requestedSymbol: "AAPL", allowedTradeConditions: allowed)
+            #expect((quote != nil) == expected)
+            if let quote {
+                #expect(quote.price == 103 && quote.marketTime == at && quote.previousClose == 99)
+                #expect(!quote.paperTradeQualified)
+            }
+        }
+        let unknown = Data(String(decoding: reference, as: UTF8.self).replacingOccurrences(of: "Form T", with: "Unknown").utf8)
+        #expect(try !T.parseDisplayTradeConditions(unknown).contains(12))
+    }
+
     @Test @MainActor func streamRestartCannotRenewAnOlderSharedReferenceWithoutTransport() async throws {
         let savedExchanges = T.exchangeCache, savedTrades = T.tradeReferenceCache
         let live = StockSageLiveStream()
