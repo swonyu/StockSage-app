@@ -4,12 +4,53 @@ import Foundation
 import SwiftUI
 import Testing
 import UIKit
+import UserNotifications
 @testable import StockSage
 
 @Suite("iPhone Chat and Research presentation", .serialized)
 @MainActor
 struct StockSageIOSPresentationTests {
     private let now = Date(timeIntervalSince1970: 1_788_739_200)
+
+    @Test func notificationTapBeforeWorkspaceLaunchOpensSavedResearch() async throws {
+        let router = StockSageNotificationRouter()
+        router.receive(action: UNNotificationDefaultActionIdentifier, userInfo: ["stocksage.research.ready": true])
+        try await captureWorkspace(section: .sameDay, name: "notification-cold-launch", accessibility: false,
+            notificationRouter: router, inspect: { _, window in
+            _ = try await reveal(in: window, identifier: "home.research.outcomes")
+            #expect(router.pending == nil, "The installed workspace consumes the pending tap exactly once")
+            try await saveViewport(window, name: "notification-cold-launch-routed", accessibility: false)
+        })
+    }
+
+    @Test(arguments: [DynamicTypeSize.large, .accessibility5], [false, true])
+    func notificationSettingsRemainReachableAndRetainGain(size: DynamicTypeSize, rtl: Bool) async throws {
+        let suite = "stocksage.ios.notification-settings.\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        typealias P = StockSageNotificationAudioPreferences
+        defaults.set(-9.0, forKey: P.Key.gain)
+        defaults.set(false, forKey: P.Key.chime)
+        let name = "notification-settings-\(rtl ? "rtl" : "ltr")-\(size)"
+        for pass in 0..<2 {
+            try await capture(Form { StockSageNotificationAudioSettings() }.defaultAppStorage(defaults),
+                name: "\(name)-\(pass)", accessibility: size.isAccessibilitySize, dynamicTypeSize: size,
+                layoutDirection: rtl ? .rightToLeft : .leftToRight,
+                viewportHeight: 812, shellPadding: 0) { _, window in
+                _ = try await reveal(in: window, identifier: "settings.audio.permission")
+                _ = try await reveal(in: window, labelContaining: "Gain: -9 dB")
+                #expect(defaults.double(forKey: P.Key.gain) == -9,
+                        "Opening Settings must retain the injected store's gain rather than reading standard defaults")
+                #expect(!defaults.bool(forKey: P.Key.chime))
+                for id in ["mixing", "voice", "previewBuy", "previewSell", "previewResearch", "stop",
+                           "testNotification", "clearTestNotification"] {
+                    _ = try await reveal(in: window, identifier: "settings.audio.\(id)")
+                }
+                _ = try await reveal(in: window, labelContaining: "background notifications use the chosen chime and gain")
+                try await saveViewport(window, name: "\(name)-bottom-\(pass)", accessibility: size.isAccessibilitySize)
+            }
+        }
+    }
 
     @Test(arguments: [false, true])
     func prospectiveEvaluationRequiresCostAndFitsPhone(accessibility: Bool) async throws {
@@ -576,7 +617,7 @@ struct StockSageIOSPresentationTests {
         try await capture(StockSageResearchHistoryView(store: store, history: history).defaultAppStorage(defaults),
             name: "research-terminal-outcomes", accessibility: accessibility, viewportHeight: 812, shellPadding: 0) { _, window in
             let check = try await reveal(in: window, identifier: "research.history.check")
-            #expect(check.accessibilityLabel?.contains("Check active results") == true)
+            #expect(check.accessibilityLabel?.contains("Review strict comparison picks") == true)
             #expect(check.accessibilityTraits.contains(.notEnabled), "Native fixture outcome checks stay disabled")
             let link = try await reveal(in: window, identifier: "research.history.run.\(stopped.id)")
             try #require(link.accessibilityActivate())
@@ -623,7 +664,8 @@ struct StockSageIOSPresentationTests {
             #expect(label.contains("1 target hit") && label.contains("1 stop hit")
                     && label.contains("1 horizon close") && label.contains("3 outcomes recorded"), "\(label)")
             #expect(!label.lowercased().contains("win rate"))
-            _ = try await reveal(in: window, labelContaining: "Separate counts, not a win rate.")
+            _ = try await reveal(in: window, labelContaining: "They are not a win rate")
+            _ = try await reveal(in: window, labelContaining: "still-active or unavailable predictions are excluded")
             #expect(!nativeElements(window).contains { $0.accessibilityLabel?.contains("Earlier endpoint-only checks") == true },
                     "No legacy endpoint receipts exist in this fixture, so that line stays absent")
             try await saveViewport(window, name: "home-terminal-outcome-counts", accessibility: accessibility)
@@ -1813,6 +1855,7 @@ struct StockSageIOSPresentationTests {
 
     private func captureWorkspace(section: MarketSection, name: String, accessibility: Bool,
                                   researchHistory: StockSageResearchHistory? = nil,
+                                  notificationRouter: StockSageNotificationRouter = StockSageNotificationRouter(),
                                   configureRecords: (@MainActor (StockSagePortfolio, StockSageJournalStore, StockSagePaperTradeStore) throws -> Void)? = nil,
                                   inspect: (@MainActor (UIHostingController<AnyView>, UIWindow) async throws -> Void)? = nil) async throws {
         try #require(StockSageStore.isRunningTests)
@@ -1846,7 +1889,8 @@ struct StockSageIOSPresentationTests {
         let originalRuns = history.runs
         let view = MarketsView(chatSession: chat, qaSection: section,
             store: store, aiAssessments: ai, portfolio: portfolio, journal: journal,
-            paperStore: paper, live: live, velocityHistory: velocity, monitor: monitor, researchHistory: history)
+            paperStore: paper, live: live, velocityHistory: velocity, monitor: monitor, researchHistory: history,
+            notificationRouter: notificationRouter)
         try await capture(view.defaultAppStorage(defaults), name: name,
                           accessibility: accessibility, viewportHeight: 812, shellPadding: 0, inspect: inspect)
         #expect(store.isSampleData && store.userSymbols == ["AAPL", "MSFT", "RKLB"])
@@ -1979,6 +2023,7 @@ struct StockSageIOSPresentationTests {
 
     private func capture(_ view: some View, name: String, accessibility: Bool,
                          dynamicTypeSize: DynamicTypeSize? = nil,
+                         layoutDirection: LayoutDirection = .leftToRight,
                          viewportHeight: CGFloat? = nil,
                          shellPadding: CGFloat = 16,
                          inspect: (@MainActor (UIHostingController<AnyView>, UIWindow) async throws -> Void)? = nil) async throws {
@@ -1990,6 +2035,7 @@ struct StockSageIOSPresentationTests {
         let host = UIHostingController(rootView: AnyView(view.padding(shellPadding)
             .environment(\.colorScheme, .dark)
             .environment(\.dynamicTypeSize, textSize)
+            .environment(\.layoutDirection, layoutDirection)
             .tint(DS.Palette.accent)
             // Intrinsic component captures measure full content; real phone viewports
             // retain the device's safe areas and keyboard avoidance.

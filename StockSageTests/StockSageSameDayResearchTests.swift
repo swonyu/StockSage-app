@@ -391,9 +391,15 @@ import AppKit
             let output = "{\"action\":\"Buy\",\"reason\":\"The observed setup has public support.\",\"risk\":\"A reversal would invalidate the setup.\",\"evidence\":[\"\(minute)\",\"\(catalyst)\"]}"
             return .success(.init(text: output, audit: .init(requestedModel: "gpt-6-astra", requestedEffort: "ultra", reportedModel: nil, cliVersion: "fixture", terminalStatus: "completed", systemSHA256: "fixture", userSHA256: "fixture", schemaSHA256: "fixture", inputTokens: nil, outputTokens: nil, elapsedMilliseconds: 1)))
         })
+        #if os(macOS)
         #expect(calls == 1 && result.qualified, "\(result.note)")
-        #expect(result.expiresAt == now.addingTimeInterval(10))
         #expect(result.profile == nil && result.codexAudit != nil && result.rawModelOutput != nil)
+        #else
+        #expect(calls == 0 && !result.qualified)
+        #expect(result.note == "Codex same-day assessment requires macOS.")
+        #expect(result.setupID == nil && result.codexAudit == nil && result.rawModelOutput == nil)
+        #endif
+        #expect(result.expiresAt == now.addingTimeInterval(10))
         #expect(result.fundamentals == fundamentals)
         #expect(result.packet?.facts.filter { $0.key.hasPrefix("technical." + mode.rawValue + ".") }.count == 4)
         #expect(result.packet?.facts.contains { $0.key.hasPrefix("technical." + (mode == .largecap ? "microcap" : "largecap") + ".") } == false)

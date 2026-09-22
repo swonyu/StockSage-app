@@ -2,9 +2,12 @@
 import SwiftUI
 import AVFoundation
 import AVKit
+import UIKit
 
 struct StockSageNotificationAudioSettings: View {
     private typealias Preferences = StockSageNotificationAudioPreferences
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @ObservedObject private var handler = StockSageNotificationHandler.shared
     @AppStorage(Preferences.Key.chime) private var chime = true
     @AppStorage(Preferences.Key.speech) private var speech = true
@@ -19,6 +22,17 @@ struct StockSageNotificationAudioSettings: View {
 
     var body: some View {
         Section {
+            Text(handler.permissionSummary).font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.audio.permission")
+            if handler.authorization == .notDetermined {
+                Button("Allow notifications", systemImage: "bell.badge") {
+                    Task { await handler.requestPermission() }
+                }.accessibilityIdentifier("settings.audio.allow")
+            }
+            Button("Open iOS notification settings", systemImage: "gearshape") {
+                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+            }.accessibilityIdentifier("settings.audio.systemSettings")
             Toggle("Research completion alerts", isOn: $research)
                 .accessibilityIdentifier("settings.audio.research")
             Toggle("Play chimes", isOn: $chime)
@@ -59,16 +73,28 @@ struct StockSageNotificationAudioSettings: View {
             Button("Preview research ready", systemImage: "sparkles") { handler.preview(.research) }
                 .accessibilityIdentifier("settings.audio.previewResearch")
             Button("Stop preview", systemImage: "stop.circle") { handler.stopAudio() }
+                .accessibilityIdentifier("settings.audio.stop")
+            Button("Send test notification in 5 seconds", systemImage: "bell.badge") {
+                Task { await handler.scheduleTestNotification() }
+            }.accessibilityIdentifier("settings.audio.testNotification")
+            Button("Clear test notification", systemImage: "bell.slash") { handler.cancelTestNotification() }
+                .accessibilityIdentifier("settings.audio.clearTestNotification")
+            if !handler.notificationTestStatus.isEmpty {
+                Text(handler.notificationTestStatus).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !handler.status.isEmpty { Text(handler.status).font(.caption).foregroundStyle(.secondary) }
         } header: { Text("Notification audio") }
         footer: {
             Text("Short, playful chimes and quick briefs. Previews make no trade or research request. Voice, mixing and output selection apply while StockSage is open; background notifications use the chosen chime and gain. Silent mode, phone volume and notification sound settings still apply. Research alerts announce completed checks, never placed orders.")
         }
-        .onAppear { handler.refreshOutput(); gain = Double(Preferences().gainDB) }
+        .onAppear { handler.refreshOutput(); gain = Double(Preferences.clampedGain(gain)) }
+        .task(id: scenePhase) { if scenePhase == .active { await handler.refreshPermission() } }
         .onChange(of: chime) { handler.stopAudio() }
         .onChange(of: speech) { handler.stopAudio() }
         .onChange(of: mixing) { handler.stopAudio() }
         .onChange(of: gain) { handler.stopAudio() }
+        .onChange(of: [buyTone, sellTone, priceTone, researchTone, voice]) { handler.stopAudio() }
         .onDisappear { handler.stopAudio() }
     }
 

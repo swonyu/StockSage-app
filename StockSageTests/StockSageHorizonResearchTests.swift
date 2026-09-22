@@ -1848,6 +1848,7 @@ import Testing
     @Test(arguments: R.Horizon.allCases)
     func manualRunCapsDirectoryAt1500BeforeResearch(_ horizon: R.Horizon) async throws {
         let r = R()
+        defer { r.stop() }
         let names = (0..<13_000).map { listing(String(format: "S%05d", $0)) }
         var seen: [String] = []
         let started = r.start(horizon, allowed: { true }, universe: { .init(names) }, analyze: { item in
@@ -1855,8 +1856,11 @@ import Testing
             return .init(note: "Synthetic research only")
         })
         #expect(started)
-        for _ in 0..<100 where r.running != nil { try await Task.sleep(for: .milliseconds(5)) }
-        #expect(r.running == nil)
+        // This exercises 1,500 checks, not a half-second performance budget.
+        // Allow loaded device/simulator hosts to finish while retaining a hard deadline.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while r.running != nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(r.running == nil)
         #expect(seen.count == 1500 && Set(seen).count == 1500)
         #expect(Array(seen.prefix(1500)) == names.prefix(1500).map(\.ticker))
         #expect(r.scans[horizon]?.listings.count == 1500)

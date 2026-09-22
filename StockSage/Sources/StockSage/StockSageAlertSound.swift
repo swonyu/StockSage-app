@@ -41,7 +41,7 @@ nonisolated enum StockSageAlertSound: String, CaseIterable, Sendable {
 }
 
 nonisolated struct StockSageNotificationAudioPreferences {
-    enum Mixing: String, CaseIterable { case mix, duck, pause
+    enum Mixing: String, CaseIterable, Sendable { case mix, duck, pause
         var title: String {
             switch self { case .mix: "Mix with music"; case .duck: "Lower other audio"; case .pause: "Pause other audio" }
         }
@@ -68,7 +68,7 @@ nonisolated struct StockSageNotificationAudioPreferences {
         speech = defaults.object(forKey: Key.speech) as? Bool ?? true
         research = defaults.object(forKey: Key.research) as? Bool ?? true
         let gain = defaults.object(forKey: Key.gain) as? Double ?? 0
-        gainDB = gain.isFinite ? Int(min(0, max(-24, gain)).rounded()) : 0
+        gainDB = Self.clampedGain(gain)
         mixing = Mixing(rawValue: defaults.string(forKey: Key.mixing) ?? "") ?? .mix
         voice = defaults.string(forKey: Key.voice) ?? ""
         tones = Dictionary(uniqueKeysWithValues: StockSageAlertSound.allCases.map { event in
@@ -77,6 +77,9 @@ nonisolated struct StockSageNotificationAudioPreferences {
     }
     var amplitude: Float { Float(pow(10, Double(gainDB) / 20)) }
     func tone(for event: StockSageAlertSound) -> StockSageAlertSound { tones[event] ?? event }
+    static func clampedGain(_ value: Double) -> Int {
+        value.isFinite ? Int(min(0, max(-24, value)).rounded()) : 0
+    }
 }
 
 /// Only accepts the repository's bounded PCM16 mono WAV format. Used to bake the

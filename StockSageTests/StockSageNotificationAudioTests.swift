@@ -1,9 +1,80 @@
 import Testing
 import Foundation
 import AVFoundation
+import UserNotifications
 @testable import StockSage
 
 struct StockSageNotificationAudioTests {
+    @Test @MainActor func notificationTapSurvivesLateAttachmentAndStaleAcknowledgement() throws {
+        let router = StockSageNotificationRouter()
+        router.receive(action: UNNotificationDefaultActionIdentifier,
+                       userInfo: ["stocksage.research.ready": true])
+        let cold = try #require(router.pending)
+        #expect(cold.destination == .research)
+        router.receive(action: UNNotificationDefaultActionIdentifier, userInfo: ["symbol": " AAPL\n"])
+        let newer = try #require(router.pending)
+        #expect(newer.destination == .symbol("AAPL") && newer.id != cold.id)
+        router.acknowledge(cold.id)
+        #expect(router.pending == newer)
+        router.acknowledge(newer.id)
+        #expect(router.pending == nil)
+    }
+
+    @Test @MainActor func dismissedAndMalformedNotificationsNeverNavigate() {
+        let router = StockSageNotificationRouter()
+        for action in [UNNotificationDismissActionIdentifier, "unregistered-action"] {
+            router.receive(action: action, userInfo: ["stocksage.research.ready": true, "symbol": "AAPL"])
+            #expect(router.pending == nil)
+        }
+        let payloads: [[AnyHashable: Any]] = [[:], ["symbol": "  "], ["symbol": 42],
+                                           ["symbol": String(repeating: "A", count: 33)]]
+        for payload in payloads {
+            router.receive(action: UNNotificationDefaultActionIdentifier, userInfo: payload)
+            #expect(router.pending == nil)
+        }
+    }
+
+    @Test func rejectedResearchDeliveryCanRetryButAnAcceptedOneCannotRepeat() {
+        let now = Date(), id = UUID()
+        var gate = StockSageResearchNotificationGate(observedFrom: now)
+        let first = gate.accept(id: id, startedAt: now, finishedAt: now, now: now)
+        let duplicate = gate.accept(id: id, startedAt: now, finishedAt: now, now: now)
+        #expect(first && !duplicate)
+        gate.deliveryFailed(id: id)
+        let retry = gate.accept(id: id, startedAt: now, finishedAt: now, now: now)
+        let repeated = gate.accept(id: id, startedAt: now, finishedAt: now, now: now)
+        #expect(retry && !repeated)
+        gate.deliveryFailed(id: id)
+        let expired = gate.accept(id: id, startedAt: now, finishedAt: now, now: now.addingTimeInterval(121))
+        #expect(!expired)
+    }
+
+    #if os(iOS)
+    @Test func allMixingConfigurationsAreAcceptedByTheNativeAudioSession() async throws {
+        // Category configuration only: no sound, permission request or activation.
+        try await Task.detached {
+            let session = AVAudioSession.sharedInstance()
+            let category = session.category, mode = session.mode, options = session.categoryOptions
+            defer { try? session.setCategory(category, mode: mode, options: options) }
+            for mixing in StockSageNotificationAudioPreferences.Mixing.allCases {
+                try StockSageNotificationHandler.configureSession(mixing)
+                #expect(session.category == (mixing == .pause ? .soloAmbient : .ambient))
+                #expect(session.categoryOptions.contains(.duckOthers) == (mixing == .duck))
+            }
+        }.value
+    }
+
+    @Test func disconnectedOutputStopsBriefButNormalRouteChangesDoNot() {
+        typealias R = AVAudioSession.RouteChangeReason
+        for reason in [R.oldDeviceUnavailable, .noSuitableRouteForCategory] {
+            #expect(StockSageNotificationHandler.shouldStopForRouteChange(reason.rawValue))
+        }
+        for reason in [R.newDeviceAvailable, .categoryChange, .override, .wakeFromSleep, .unknown] {
+            #expect(!StockSageNotificationHandler.shouldStopForRouteChange(reason.rawValue))
+        }
+        #expect(!StockSageNotificationHandler.shouldStopForRouteChange(nil))
+    }
+    #endif
     @Test(arguments: StockSageAlertSound.allCases)
     func shippedChimesAreAudibleShortPCMResources(_ sound: StockSageAlertSound) throws {
         let url = try #require(sound.resourceURL, "A missing bundled sound silently becomes the OS default")

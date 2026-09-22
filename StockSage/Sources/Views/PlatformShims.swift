@@ -112,13 +112,9 @@ final class StockSageNotificationDelegate: NSObject, UNUserNotificationCenterDel
     /// the symbol's idea sheet (or the Alerts section when no idea is on the board).
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
-        if response.notification.request.content.userInfo["stocksage.research.ready"] as? Bool == true {
-            await MainActor.run { NotificationCenter.default.post(name: .stockSageResearchReady, object: nil) }
-            return
-        }
-        guard let symbol = response.notification.request.content.userInfo["symbol"] as? String else { return }
         await MainActor.run {
-            NotificationCenter.default.post(name: .stockSageOpenSymbol, object: symbol)
+            StockSageNotificationRouter.shared.receive(action: response.actionIdentifier,
+                userInfo: response.notification.request.content.userInfo)
         }
     }
 }

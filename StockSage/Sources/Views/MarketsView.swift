@@ -230,6 +230,7 @@ struct MarketsView: View {
     // isStreaming=false on a silent/half-open socket never redraws this view — the dot stays
     // lit until an unrelated re-render. Without this, Q5's "clears within ~45s" is not real.
     @ObservedObject private var live: StockSageLiveStream
+    @ObservedObject private var notificationRouter: StockSageNotificationRouter
     /// Watchlist add-symbol field (track any global ticker beyond the universe).
     @State private var newWatchSymbol = ""
     /// Local error for the watchlist add box only. Populated from store.addSymbolError after
@@ -425,10 +426,12 @@ struct MarketsView: View {
          paperStore: StockSagePaperTradeStore = .shared, live: StockSageLiveStream = .shared,
          velocityHistory: StockSageVelocityHistoryStore = .shared, monitor: StockSageMonitor = .shared,
          researchHistory: StockSageResearchHistory = .shared,
-         horizonResearch: StockSageHorizonResearch = .shared) {
+         horizonResearch: StockSageHorizonResearch = .shared,
+         notificationRouter: StockSageNotificationRouter = .shared) {
         self.chatSession = chatSession
         self.horizonResearch = horizonResearch
         _store = ObservedObject(wrappedValue: store)
+        _notificationRouter = ObservedObject(wrappedValue: notificationRouter)
         _aiAssessments = ObservedObject(wrappedValue: aiAssessments)
         _portfolio = ObservedObject(wrappedValue: portfolio)
         _journal = ObservedObject(wrappedValue: journal)
@@ -578,6 +581,24 @@ struct MarketsView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .stockSageResearchReady)) { _ in
                 openSection(.briefing)
+            }
+            .onChange(of: notificationRouter.pending, initial: true) { _, route in
+                guard let route else { return }
+                showIOSSettings = false
+                showFeedDiagnostics = false
+                switch route.destination {
+                case .research:
+                    selectedIdea = nil
+                    openSection(.briefing)
+                case .symbol(let symbol):
+                    if let idea = store.ideas.first(where: { $0.symbol.caseInsensitiveCompare(symbol) == .orderedSame }) {
+                        selectedIdea = idea
+                    } else {
+                        selectedIdea = nil
+                        openSection(.alerts)
+                    }
+                }
+                notificationRouter.acknowledge(route.id)
             }
 
         }
