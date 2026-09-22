@@ -2,9 +2,9 @@
 
 Prepared for **Saleh**
 
-**Living edition 41 · Updated 22 September 2026, Asia/Riyadh.**
+**Living edition 42 · Updated 22 September 2026, Asia/Riyadh.**
 
-This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **Saleh’s last recorded installation is f578733 (21 September)**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. The owner resumed iPhone build/install work on 22 September; widget feature work remains on hold.
+This concise guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **Saleh’s last recorded installation is f578733 (21 September)**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. The owner resumed iPhone build/install work on 22 September; widget feature work remains on hold.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
 
@@ -19,13 +19,21 @@ The PDF is limited to **20 pages including the cover and contents**. Detailed re
 
 **Live API check:** Mac Settings passed its AAPL snapshot test, and **22 read-only endpoint checks returned HTTP 200**, covering Massive market data, filings, fundamentals and all nine integrated Benzinga products. Median sample latency: **0.55 seconds**; this is not a throughput benchmark or proof of complete coverage. Telegram has no saved token; direct SEC access remains unverified with no saved contact. RunPod authentication works, but no Gemma server is connected. Keys were not logged.
 
-**iPhone:** the owner requested a physical-phone build. Release **8df6d22** compiled, passed signature verification and is installed on the connected iPhone 16 Pro Max. Launch is awaiting device unlock. Existing app identity is preserved; phone credentials and widget behavior are not verified by the Mac checks. [Verification receipt](../docs/reviews/2026-09-22-api-and-iphone.md).
+**iPhone:** notification-audio Release **8744624** is installed and running on the connected iPhone 16 Pro Max (verified main PID **8843**). The earlier **8df6d22** launch also succeeded after unlock. App identity is preserved; phone credentials and widget behavior remain unverified. [Build and audio receipt](../docs/reviews/2026-09-22-notification-audio.md).
 
 Salman is running the verified Mac Release **2f711da** from its mounted DMG. His Applications copy still identifies **b0ca7ac**. Three native Gemma/RunPod suites passed **60 tests / 137 executions**, zero failures or skips. These use synthetic transports.
 
 Gemma is **not connected on this Mac**: the selected port 18080 has no tunnel, LM Studio has no Gemma model, and the accessible RunPod account has no Gemma GPU pod. Saleh's historical pod is not verified by this account check.
 
 A Linux amd64 CUDA 13 container is built and exported with pinned weights/template identities, SSH-only access and checksum checks. Its newer llama.cpp **c550d2f60** passed startup checks; **GPU inference and speed remain untested**. Registry publication, pod deployment and the tunnel remain pending. No paid compute was started. The older handoff's inference-profile and quality-report work is already integrated.
+
+### iPhone: playful research notifications
+
+**New completed research → fresh-run check → one chime → short spoken brief.** Restored history and duplicate completions stay quiet. Stopped research gets an attention cue. Four original 1.45-second bell tunes cover Buy, Sell, saved-price and research-ready events; ordinary refresh vibration is removed.
+
+Open **Settings → Notification audio** for research/chime/speech switches, gain (−24 to 0 dB), mixing, speaker/output, voice, sound choices and previews. Foreground speech is limited to twenty words with one newest pending alert. Background notifications use the chosen chime and gain; they do not speak or keep research running. Silent mode, volume and notification permissions apply.
+
+**Checked:** full Mac/iOS/test-source compile gate, **46 native test definitions / 53 executions / zero failures**, signed Release, all four bundled sounds, physical-phone installation and launch. Actual phone audibility remains a separate pending check. No live research, model load or trade was started. [Details](../docs/reviews/2026-09-22-notification-audio.md).
 
 ### Extended-hours prices
 
@@ -215,7 +223,7 @@ The published trading calendar covers 2026; unsupported years remain unavailable
 
 | Current addition | Verification status |
 | --- | --- |
-| Extended-hours display: tested, not installed | Source `256f838`. Mac compile and test-source checks passed; the serial native gate passed **158 definitions / 256 executions / zero failures or skips** across ten suites. The normal test build first stopped because this Mac lacks the project development certificate; a temporary external xcconfig used ad hoc test-host signing without changing project settings. No installed app or live-provider verification was performed. |
+| Extended-hours display: running from Salman’s DMG | Source `256f838`. Mac compile and test-source checks passed; the serial native gate passed **158 definitions / 256 executions / zero failures or skips** across ten suites. The normal test build first stopped because this Mac lacks the project development certificate; a temporary external xcconfig used ad hoc test-host signing without changing project settings. Those offline checks preceded the verified DMG launch and Mac API checks recorded at the start of this guide. |
 | Micro cap float repair: not installed | Massive HTTP 200 pages contained 5,000 clean rows, then 1,856 with one missing ticker and no duplicates; that row formerly aborted the screen before details. The source repair discloses unmatched rows, retains valid floats and rejects duplicate identities across pages. Missing/invalid floats remain unavailable; thresholds are unchanged. The screen count uses reference rows; the optional saved unmatched-row count supports older records. Both regressions reproduced the old failures. Focused Mac verification passed **65 definitions / 93 executions / zero failures or skips**, direct exit 0 with unchanged source hashes; saved-warning views passed at 660 and 1,000 points. Signed arm64 Release **71cf39e** and its extracted ZIP passed identity/signature checks; installation is pending. This focused gate does not replace the earlier full-suite receipt. |
 | Scanner-linked news: installed | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls/narrow layouts and signed Release/ZIP passed; five excessive-window-count warnings remain. **`f578733` installed 21 September 19:50:42 Riyadh, reopened 19:50:51**. All **20 runs / 3,068 compared files** were byte-identical and preferences unchanged before tracking was restored. The readable matched-news panel showed 526 matches / 0 processed; **Load matched news was not clicked**, so live headline access remains unverified. |
 

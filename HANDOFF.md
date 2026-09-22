@@ -1,8 +1,15 @@
 ## API verification and iPhone request — 22 September 2026
 
+## iPhone notification audio — 22 September 2026
+
+Owner resumed iPhone scope and requested playful/comedic game-style chimes plus short spoken briefs. A shared notification handler, Settings controls and fresh research-completion observers are implemented. Four original 1.45-second sounds; gain, mixing, output route, voice and previews. Foreground speech only; background uses custom sound/gain. Restored/duplicate/partial research stays quiet; no new research polling or model/broker requests.
+
+Focused serial native checks: 46 definitions / 53 executions, no failures/skips/runtime warnings. Full `tools/gate.sh . all` passed (Mac, iOS and test sources). Source commit `8744624`. Signed physical-phone Release installed and launched after owner unlock; new main PID 8843 verified in its installed container. Device audibility remains pending owner preview. Source and bundled sounds match receipts in `/Users/salman/Documents/Codex/StockSage-Builds-2026-09-22/notification-audio/`. See [audio verification](docs/reviews/2026-09-22-notification-audio.md). Living/concise guide edition 42 has an eleven-page local PDF candidate; all rendered pages reviewed. Previous local PDFs are preserved. Saleh's exact PDF path remains absent; do not replace the unrelated Salman attachment.
+
+
 Owner launched the Mac DMG build and requested all API keys checked, then explicitly requested building/running the phone app. This resumes iPhone build/install for this task. Mac `2f711da` executable hash matches its artifact, native Massive test returns HTTP 200, and the SIP stream receives trades/quotes. All 22 bounded market-data endpoint checks returned HTTP 200 (including nine Benzinga products). Telegram is unconfigured, SEC contact absent/direct access untested, and RunPod account authentication works but no Gemma pod/tunnel is connected. No model generation, paid GPU or broker action started.
 
-Physical iPhone Release from `8df6d22` built, signature passed, and installed over existing `com.salman.StockSageX`. Launch is pending owner unlock. External local signing overrides preserve the existing identity; tracked signing/source files are unchanged. Required widget dependency compiled; widget behavior is not verified. See [receipt](docs/reviews/2026-09-22-api-and-iphone.md). Guide edition 41 separates Mac API checks from phone credentials; owner PDF replacement on Saleh's absent path remains pending.
+Physical iPhone Release from `8df6d22` built, signature passed, and installed over existing `com.salman.StockSageX`. Its launch succeeded after owner unlock (main PID 8670); the later notification build above supersedes it. External local signing overrides preserve the existing identity; tracked signing/source files are unchanged. Required widget dependency compiled; widget behavior is not verified. See [receipt](docs/reviews/2026-09-22-api-and-iphone.md). Guide edition 41 separates Mac API checks from phone credentials; owner PDF replacement on Saleh's absent path remains pending.
 
 ## Mac and Gemma images — 22 September 2026
 

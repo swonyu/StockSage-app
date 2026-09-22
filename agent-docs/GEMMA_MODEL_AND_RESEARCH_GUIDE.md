@@ -2,7 +2,17 @@
 
 Prepared for **Saleh**
 
-**Living edition 41 · Updated 22 September 2026, Asia/Riyadh.** Salman launched the new Mac build from its DMG; the Applications copy is unchanged. The physical iPhone build is installed, with launch awaiting device unlock. Previous Saleh installation observations retain their dates.
+**Living edition 42 · Updated 22 September 2026, Asia/Riyadh.** Salman is running the verified Mac DMG build; the Applications copy is unchanged. The iPhone notification-audio update is built, installed and launched on the connected physical phone. Previous Saleh installation observations retain their dates.
+
+### iPhone research notifications and audio — 22 September 2026
+
+The owner requested light, comedic game-style chimes and chose **chime + short spoken brief**. A shared iPhone handler now serves existing price/Buy/Sell notifications and fresh research completions. Four original 1.45-second bell motifs replace default notification audio; routine full-refresh vibration is removed. New saved horizon results and terminal same-day/cap receipts ring once per fresh run; restored history, repeated outcome reviews and unfinished progress stay quiet. Briefs distinguish completed, incomplete and stopped checks without claiming an executed order. Tapping research notifications opens Saved research.
+
+**Settings → Notification audio** exposes research alerts, chime/speech toggles, gain from −24 to 0 dB, mixing/ducking/pausing other audio, current speaker/output with the system route picker, voice selection, event-specific sounds and local previews. Foreground audio plays a chime followed by at most twenty words; only the newest pending brief is retained, with a ten-second cleanup bound. Background iOS notifications use the selected chime with gain baked into bounded local sound files. Background speech, continuous research execution and remote research pushes are not implemented by this handler. Silent mode, system volume and iOS notification permission still apply.
+
+**Verified source `8744624`:** the complete `tools/gate.sh . all` passed (macOS, iOS and all test-source compilation); the focused serial native suites passed **46 definitions / 53 executions / zero failures or skips**, no xcresult runtime warnings, and the targeted UI diagnostic guard. The signed physical-phone Release passed strict signature checking, contains all four byte-matching sound resources and matches an unchanged 458-file source manifest. It was installed over the existing app and launched after owner unlock; process inspection matched main PID **8843** to the new container. The existing widget dependency compiled; widget behavior remains unverified. Hearing the actual phone output is a separate pending check, not established by the asset decoding tests. [Detailed receipt](../docs/reviews/2026-09-22-notification-audio.md).
+
+No model prompt, model output schema, numeric arithmetic, qualification or ranking changed. No live research, model inference, paid GPU or broker action was used for this verification. The Mac UI retains its previous sound behavior. API connectivity findings below remain separate from this audio milestone.
 
 ### Current API and iPhone verification — 22 September 2026
 
@@ -12,7 +22,7 @@ With the owner's one-time Keychain approval, **22 bounded endpoint checks return
 
 **Remaining gaps on Salman's Mac:** Telegram has no saved bot token. SEC contact is unset and direct SEC access was not retested. RunPod account authentication works, but no running GPU/Gemma pod exists in that accessible account; port 18080 remains unreachable and local LM Studio has no Gemma. No model loading, generation, research run, paid compute or broker action was started. Mac credentials do not prove iPhone credential availability.
 
-**iPhone:** Release source `8df6d22` compiled and passed strict signature validation; the app was installed over the existing `com.salman.StockSageX` on the connected iPhone 16 Pro Max, iOS 27. Local external signing overrides preserved its app/team identity and left repository settings unchanged. The required existing widget dependency compiled; widget behavior was not verified. Device launch was blocked by the locked screen and is awaiting owner unlock. [Endpoint and build receipts](../docs/reviews/2026-09-22-api-and-iphone.md).
+**iPhone:** Release source `8df6d22` compiled and passed strict signature validation; the app was installed over the existing `com.salman.StockSageX` on the connected iPhone 16 Pro Max, iOS 27. Local external signing overrides preserved its app/team identity and left repository settings unchanged. The required existing widget dependency compiled; widget behavior was not verified. The initial locked-screen block was resolved after owner unlock: the main app launched as PID 8670. The later notification update above supersedes that build. [Endpoint and build receipts](../docs/reviews/2026-09-22-api-and-iphone.md).
 
 ### Mac and Gemma image build — 22 September 2026
 
@@ -952,6 +962,8 @@ Historical Release `3476847` introduced paired processing, prior safeguards and 
 ### Maintaining the owner's PDF
 
 **Edition 40 local export — 22 September 2026:** ten pages, all rendered pages reviewed. Concise source SHA-256 `d1485a409669fa4fb96483fe6cecd313c3e62a0dba98a0ccb7063227c4675d7a`; PDF SHA-256 `15a72b0e7b2421229f4eb5980bf9a138636de26d25d595f606cb527e9cc25e85`. Local candidate and receipt: `/Users/salman/Documents/Codex/StockSage-Builds-2026-09-22/`. The prior edition-39 local export is preserved in its separate directory. The designated owner attachment under `/Users/saleh` is still absent; exact-path replacement remains pending and no PDF attachment was sent.
+
+**Edition 42 local export — 22 September 2026:** eleven pages, concise source SHA-256 `18004568ff4ee6c4b4d967764dfb1161f8ac4d557a8cdcf53486f5e08f1b8656`, PDF SHA-256 `d8f2d0947cd900a63393eae74a8ddf96d2a98dd70c1a32949afc9fd81f31b163`. All rendered pages reviewed; changed pages inspected at full size. Verified app source `8744624`; native 46 definitions / 53 executions and complete compile gate passed; physical phone installed and launched. Actual phone audibility remains unverified. Earlier local PDFs are preserved. Candidate and receipts: `/Users/salman/Documents/Codex/StockSage-Builds-2026-09-22/notification-audio/`. The exact owner attachment path under `/Users/saleh` remains absent; no replacement there or PDF transmission is claimed.
 
 **Edition 39 local export — 22 September 2026:** concise source SHA-256 `0893d5d085dc3248f8feb1bf2d37c0e039e101bc7b8a86bb4bf1e11f39201332`; ten-page PDF SHA-256 `a0fd0ad041d68afc35c0306862ad8eb4ad7b9af7e375f2930aeb97bfc0edcd69`. All ten pages passed visual review, with the changed opening/status pages also inspected at full size. Application links are pinned to tested code `256f838`; living-document links use `main`. Local candidate and receipt: `/Users/salman/Documents/Codex/StockSage-Extended-Hours-2026-09-22/`. The exact designated `/Users/saleh` attachment path does not exist on this Mac, so **owner-path replacement remains pending**. The previous owner PDF was not altered, and no PDF attachment was sent.
 
