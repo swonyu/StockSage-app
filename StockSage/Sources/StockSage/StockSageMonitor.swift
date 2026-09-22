@@ -506,10 +506,10 @@ final class StockSageMonitor: ObservableObject {
             content.body = alert.reason
         }
         content.userInfo = ["symbol": alert.symbol]   // tap deep-link (2026-07-27)
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        do { try await UNUserNotificationCenter.current().add(request); await bumpBadge(); return true }
-        catch { return false }
+        let delivered = await StockSageNotificationDelivery.enqueue(content,
+            event: .forIdea(alert.kind), brief: "\(alert.kind.rawValue) alert for \(alert.symbol). Review the details.")
+        if delivered { await bumpBadge() }
+        return delivered
     }
 
     /// Returns whether the push was ACCEPTED for delivery — the caller latches the
@@ -525,15 +525,10 @@ final class StockSageMonitor: ObservableObject {
         content.title = "Price alert: \(alert.symbol) \(alert.direction.symbol) \(StockSageCurrency.adaptivePrice(alert.target))"
         content.userInfo = ["symbol": alert.symbol]   // tap deep-link (2026-07-27)
         content.body = "Now \(StockSageCurrency.adaptivePrice(price))."
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        do {
-            try await UNUserNotificationCenter.current().add(request)
-            await bumpBadge()
-            return true
-        } catch {
-            return false
-        }
+        let delivered = await StockSageNotificationDelivery.enqueue(content, event: .price,
+            brief: "Price alert for \(alert.symbol). Your saved level was reached.")
+        if delivered { await bumpBadge() }
+        return delivered
     }
 
     /// Returns whether the push was ACCEPTED for delivery — runCycle latches dedup only on true.
@@ -543,10 +538,11 @@ final class StockSageMonitor: ObservableObject {
         content.title = "\(signal.recommendation.rawValue): \(signal.symbol) (\(market))"
         content.body = signal.reason
         content.userInfo = ["symbol": signal.symbol]   // tap deep-link (2026-07-27)
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        do { try await UNUserNotificationCenter.current().add(request); await bumpBadge(); return true }
-        catch { return false }
+        let delivered = await StockSageNotificationDelivery.enqueue(content,
+            event: .forRecommendation(signal.recommendation),
+            brief: "\(signal.recommendation.rawValue) alert for \(signal.symbol). Research only. No order placed.")
+        if delivered { await bumpBadge() }
+        return delivered
     }
 
     private func requestNotificationPermission() {

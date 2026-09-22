@@ -111,6 +111,7 @@ struct StockSageApp: App {
         #if os(iOS)
         // Set delegate BEFORE the app finishes launching so foreground banners work
         UNUserNotificationCenter.current().delegate = StockSageNotificationDelegate.shared
+        StockSageNotificationHandler.shared.startObservingResearch()
         // MetricKit field telemetry (external-report item 10) — local-only, nothing transmitted.
         StockSageTelemetry.shared.start()
         #endif
@@ -179,7 +180,9 @@ struct StockSageApp: App {
                         case .active:
                             StockSageMonitor.shared.resumeForegroundMonitoring()
                             StockSageMonitor.shared.clearBadge()   // alerts read on return — badge honest again
-                        case .background: StockSageMonitor.shared.stop() // pause; retain the user's choice
+                        case .background:
+                            StockSageMonitor.shared.stop() // pause; retain the user's choice
+                            StockSageNotificationHandler.shared.stopAudio()
                         default: break
                         }
                     }

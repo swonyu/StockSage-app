@@ -105,6 +105,9 @@ struct StockSageIOSSettingsSheet: View {
                 }
                 .listRowBackground(DS.Bezel.cardFill)
 
+                StockSageNotificationAudioSettings()
+                    .listRowBackground(DS.Bezel.cardFill)
+
                 Section {
                     Toggle("My price alerts", isOn: $notifyPrice)
                         .accessibilityIdentifier("settings.ios.priceAlerts")

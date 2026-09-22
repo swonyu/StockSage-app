@@ -498,12 +498,8 @@ struct MarketsView: View {
             // button — stdlib .refreshable, replacing the unwired custom PullToRefresh file.
             .refreshable { await store.refresh() }
             #endif
-            // Refresh-landed tick (iOS haptic; silent no-op on macOS). Keyed to the FULL-REFRESH
-            // clock, NOT lastUpdated: every accepted live tick stamps lastUpdated (applyLiveTicks
-            // -> applyPolledQuotes -> StockSageStore.swift:3147), and the stream publishes at 4 Hz,
-            // so keying the haptic there buzzed the phone several times a second all session and
-            // destroyed the signal that a refresh had actually landed.
-            .sensoryFeedback(.success, trigger: store.lastFullRefreshAt)
+            // Routine refreshes stay quiet. Audible cues belong to delivered alerts,
+            // not market-data polling or individual price ticks.
             // Catalyst rescan. (The stale "4.75 minutes = 285s" cadence note that used to sit here
             // was deleted 2026-09-12: it described the auto-refresh loop, which now runs on
             // `refreshIntervals`, and this task is the catalyst rescan, which has no timer at all.)
@@ -579,6 +575,9 @@ struct MarketsView: View {
                 } else {
                     openSection(.alerts)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .stockSageResearchReady)) { _ in
+                openSection(.briefing)
             }
 
         }
