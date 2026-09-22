@@ -1,3 +1,13 @@
+## Mac and Gemma images — 22 September 2026
+
+Salman requested both the latest Mac app image and a Gemma RunPod container. The Mac Release from `2f711da` built and its local ad hoc signature, ZIP and DMG passed verification. It is not installed; Salman's current app metadata still identifies `b0ca7ac`. Model integration tests passed 60 definitions / 137 executions / zero failures or skips across three serial suites. No live inference was run.
+
+`deploy/gemma-runpod/` now contains the pinned CUDA 13 Linux amd64 build and private SSH launcher. Binary build 11096 (`c550d2f60`) is newer than the historical benchmark. The pinned GGUF's embedded template matches the recorded SHA-256. The image rejects missing SSH keys, no GPU and corrupt weights; it was exported locally. Registry publication and deployment remain pending. Do not report historical throughput as this image's performance.
+
+Connection check: StockSage selects canonical Gemma at 18080, but that listener/tunnel is absent. Local LM Studio has no Gemma inventory; the accessible RunPod account has no Gemma pod or running GPU pod. The old 16 September core handoff is superseded: inference profiles/cohort comparison and production quality reporting are already wired.
+
+Local artifacts and sanitized receipts: `/Users/salman/Documents/Codex/StockSage-Builds-2026-09-22/`. See [verification](docs/reviews/2026-09-22-gemma-images.md) and [container instructions](deploy/gemma-runpod/README.md). Guide edition 40 distinguishes built, tested and connected states. The owner's exact PDF attachment path remains absent on this Mac.
+
 ## Extended-hours prices for Saleh — 22 September 2026
 
 Implemented and committed as `256f838` on top of `948aa41`, in an isolated checkout. Publication target is only `swonyu/StockSage-app` main under Salman's explicit request to test, commit, push and notify Saleh. Other worktrees' edits are excluded.

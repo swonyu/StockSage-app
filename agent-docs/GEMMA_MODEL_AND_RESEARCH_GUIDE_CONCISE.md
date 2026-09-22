@@ -2,9 +2,9 @@
 
 Prepared for **Saleh**
 
-**Living edition 39 · Updated 22 September 2026, Asia/Riyadh.**
+**Living edition 40 · Updated 22 September 2026, Asia/Riyadh.**
 
-This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **f578733 remains installed**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. iOS and widgets remain on hold.
+This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **Saleh’s last recorded installation is f578733 (21 September)**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. iOS and widgets remain on hold.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
 
@@ -14,6 +14,14 @@ The PDF is limited to **20 pages including the cover and contents**. Detailed re
 2. For Gemma, inspect the model connection in Library → Events & model setup, then explicitly run the desired research horizon.
 3. For Micro cap or Large cap, load Stock screener’s daily ratios, pair Telegram, and enable each tracker. Recheck those controls after restarting.
 4. Read the captured date, missing evidence and qualification status. Saved rankings and model labels do not automatically authorize a trade.
+
+### Latest builds and actual connection status
+
+The Mac Release from **2f711da** is built, locally signed and packaged as a verified DMG/ZIP; **not installed**. Salman's installed copy identifies **b0ca7ac**. Three native Gemma/RunPod suites passed **60 tests / 137 executions**, zero failures or skips. These use synthetic transports.
+
+Gemma is **not connected on this Mac**: the selected port 18080 has no tunnel, LM Studio has no Gemma model, and the accessible RunPod account has no Gemma GPU pod. Saleh's historical pod is not verified by this account check.
+
+A Linux amd64 CUDA 13 container is built and exported with pinned weights/template identities, SSH-only access and checksum checks. Its newer llama.cpp **c550d2f60** passed startup checks; **GPU inference and speed remain untested**. Registry publication, pod deployment and the tunnel remain pending. No paid compute was started. The older handoff's inference-profile and quality-report work is already integrated.
 
 ### Extended-hours prices
 
@@ -219,6 +227,6 @@ Source review, offline tests, synthetic inference, installed UI, actual stock re
 
 Preserve original evidence and dates, offered/omitted/cited facts, model profile and raw attempts, validation/quality flags, strict policy, saved scoring clock, comparison protocol, numeric basis and outcome policy. Prior-context delivery requires its own transport record. Today's API responses cannot recreate yesterday's capture, and model text is not promised byte-identical.
 
-Installed runtime **f578733** identifies the verified current Mac build; **9861561**, **d0e42cb** and **92be0b2** are historical. The quit flow reported model unloading unconfirmed, so successful unloading is not established. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
+Saleh’s last verified installed runtime is **f578733**, dated 21 September. Salman’s installed copy is **b0ca7ac**; the new **2f711da** build is not installed. **9861561**, **d0e42cb** and **92be0b2** remain historical. The quit flow reported model unloading unconfirmed, so successful unloading is not established. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
 
 Unresolved: installed SHOP/GRAB Astra isolation failures. Successful stock opinions and review-summary delivery remain unverified, alongside comprehensive gap recovery and live SEC annual ROCE/ROIC calculations. The preliminary metadata diagnostic did not reproduce or repair the installed failure. A new manual research or delivery test needs explicit approval. The completed Gemma scans and stopped pod do not prove prediction accuracy, final billing or storage disposition. No 4× speed, universal latency or profitability claim follows.
