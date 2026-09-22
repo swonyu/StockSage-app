@@ -1,4 +1,10 @@
-## API verification and iPhone request — 22 September 2026
+## iPhone audit and tested release — 22 September 2026
+
+Source `5188ae1` fixes launch-time notification routing, audio-session UI blocking, output disconnect/cancellation, gain persistence and rejected-delivery retry. Settings now exposes OS permission and a five-second local notification test. Full iOS: **3,140 definitions / 3,960 executions / zero failures / four existing skips**, no runtime warnings. Focused Mac: **97 / 223 / zero failures or skips**. Full compile gate passed; 463 source/project/resource files match the manifest. See [audit and retained failures](docs/reviews/2026-09-22-iphone-heavy-verification.md).
+
+The signed physical Release and sound assets passed verification; binary `4136b5d9…a097f`. **Not installed:** the phone disconnected (CoreDevice 4016/unavailable). Existing phone baseline `8744624` passed its native HTTP 200 AAPL snapshot test before disconnecting; sustained streaming remains unverified. Mac/Mirroring authentication and reconnection are needed for installation, live audio/notification checks and notifying Saleh. Previous app archive and private data backup are preserved under `/Users/salman/Documents/Codex/StockSage-iPhone-Audit-2026-09-22/`. Do not report physical audio or final installation as tested.
+
+Living/concise guide edition 43 separates implemented, tested, built and pending work. Owner's exact PDF path remains absent; the new local candidate preserves prior exports and is not sent. No model loading/research, GPU spend or broker action occurred. The one-day deadline remains 23 September 2026, Asia/Riyadh.
 
 ## iPhone notification audio — 22 September 2026
 
@@ -6,6 +12,8 @@ Owner resumed iPhone scope and requested playful/comedic game-style chimes plus 
 
 Focused serial native checks: 46 definitions / 53 executions, no failures/skips/runtime warnings. Full `tools/gate.sh . all` passed (Mac, iOS and test sources). Source commit `8744624`. Signed physical-phone Release installed and launched after owner unlock; new main PID 8843 verified in its installed container. Device audibility remains pending owner preview. Source and bundled sounds match receipts in `/Users/salman/Documents/Codex/StockSage-Builds-2026-09-22/notification-audio/`. See [audio verification](docs/reviews/2026-09-22-notification-audio.md). Living/concise guide edition 42 has an eleven-page local PDF candidate; all rendered pages reviewed. Previous local PDFs are preserved. Saleh's exact PDF path remains absent; do not replace the unrelated Salman attachment.
 
+
+## API verification and iPhone request — 22 September 2026
 
 Owner launched the Mac DMG build and requested all API keys checked, then explicitly requested building/running the phone app. This resumes iPhone build/install for this task. Mac `2f711da` executable hash matches its artifact, native Massive test returns HTTP 200, and the SIP stream receives trades/quotes. All 22 bounded market-data endpoint checks returned HTTP 200 (including nine Benzinga products). Telegram is unconfigured, SEC contact absent/direct access untested, and RunPod account authentication works but no Gemma pod/tunnel is connected. No model generation, paid GPU or broker action started.
 
