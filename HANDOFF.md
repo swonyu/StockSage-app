@@ -1,3 +1,9 @@
+## API verification and iPhone request — 22 September 2026
+
+Owner launched the Mac DMG build and requested all API keys checked, then explicitly requested building/running the phone app. This resumes iPhone build/install for this task. Mac `2f711da` executable hash matches its artifact, native Massive test returns HTTP 200, and the SIP stream receives trades/quotes. All 22 bounded market-data endpoint checks returned HTTP 200 (including nine Benzinga products). Telegram is unconfigured, SEC contact absent/direct access untested, and RunPod account authentication works but no Gemma pod/tunnel is connected. No model generation, paid GPU or broker action started.
+
+Physical iPhone Release from `8df6d22` built, signature passed, and installed over existing `com.salman.StockSageX`. Launch is pending owner unlock. External local signing overrides preserve the existing identity; tracked signing/source files are unchanged. Required widget dependency compiled; widget behavior is not verified. See [receipt](docs/reviews/2026-09-22-api-and-iphone.md). Guide edition 41 separates Mac API checks from phone credentials; owner PDF replacement on Saleh's absent path remains pending.
+
 ## Mac and Gemma images — 22 September 2026
 
 Salman requested both the latest Mac app image and a Gemma RunPod container. The Mac Release from `2f711da` built and its local ad hoc signature, ZIP and DMG passed verification. It is not installed; Salman's current app metadata still identifies `b0ca7ac`. Model integration tests passed 60 definitions / 137 executions / zero failures or skips across three serial suites. No live inference was run.

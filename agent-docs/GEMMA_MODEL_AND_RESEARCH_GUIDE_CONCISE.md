@@ -2,9 +2,9 @@
 
 Prepared for **Saleh**
 
-**Living edition 40 · Updated 22 September 2026, Asia/Riyadh.**
+**Living edition 41 · Updated 22 September 2026, Asia/Riyadh.**
 
-This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **Saleh’s last recorded installation is f578733 (21 September)**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. iOS and widgets remain on hold.
+This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **Saleh’s last recorded installation is f578733 (21 September)**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. The owner resumed iPhone build/install work on 22 September; widget feature work remains on hold.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
 
@@ -17,7 +17,11 @@ The PDF is limited to **20 pages including the cover and contents**. Detailed re
 
 ### Latest builds and actual connection status
 
-The Mac Release from **2f711da** is built, locally signed and packaged as a verified DMG/ZIP; **not installed**. Salman's installed copy identifies **b0ca7ac**. Three native Gemma/RunPod suites passed **60 tests / 137 executions**, zero failures or skips. These use synthetic transports.
+**Live API check:** Mac Settings passed its AAPL snapshot test, and **22 read-only endpoint checks returned HTTP 200**, covering Massive market data, filings, fundamentals and all nine integrated Benzinga products. Median sample latency: **0.55 seconds**; this is not a throughput benchmark or proof of complete coverage. Telegram has no saved token; direct SEC access remains unverified with no saved contact. RunPod authentication works, but no Gemma server is connected. Keys were not logged.
+
+**iPhone:** the owner requested a physical-phone build. Release **8df6d22** compiled, passed signature verification and is installed on the connected iPhone 16 Pro Max. Launch is awaiting device unlock. Existing app identity is preserved; phone credentials and widget behavior are not verified by the Mac checks. [Verification receipt](../docs/reviews/2026-09-22-api-and-iphone.md).
+
+Salman is running the verified Mac Release **2f711da** from its mounted DMG. His Applications copy still identifies **b0ca7ac**. Three native Gemma/RunPod suites passed **60 tests / 137 executions**, zero failures or skips. These use synthetic transports.
 
 Gemma is **not connected on this Mac**: the selected port 18080 has no tunnel, LM Studio has no Gemma model, and the accessible RunPod account has no Gemma GPU pod. Saleh's historical pod is not verified by this account check.
 
@@ -29,7 +33,7 @@ The 22 September source update supports pre-market and post-market prices on Mac
 
 Watchlist and idea prices show **Pre-market / Post-market** with **live**, **delayed**, **last** or **awaiting price**. Only a current-session, uncached Massive observation within ten seconds is labelled live. Yahoo remains delayed; missing evidence never becomes a fresh quote. Existing session polling and streaming continue to supply updates. Research levels and paper-trade qualification remain unchanged.
 
-This update is **not installed**. The focused native gate passed; section 13 records its scope. The owner-designated PDF path is absent on this Mac, so its replacement remains pending; a separate local candidate is prepared. No live-provider observation or performance benchmark is established by offline tests.
+This update is active in Salman’s DMG-launched Mac build; his Applications copy is unchanged. The focused native gate passed; section 13 records its scope. The owner-designated PDF path is absent on this Mac, so its replacement remains pending; a separate local candidate is prepared. No live-provider observation or performance benchmark is established by offline tests.
 
 ## 1. What the model names actually identify
 
@@ -219,7 +223,7 @@ Earlier release and SEC-contact regression receipts remain in the full guide. Th
 
 The completed Gemma scans retained **1,500 checks each**, not 1,500 accepted opinions: week **1,475 accepted/25 incomplete**, one strict-qualified candidate and comparison pick BWIN; fortnight **1,436 accepted/64 incomplete**, eleven strict-qualified candidates but a failed comparison because complete candidate context could not fit. Both deterministic Top 5 records remain saved. Scan completion does not turn a raw Buy into a qualified setup.
 
-Installed **f578733** reloaded ratios at **19:51:29 Riyadh**: **4,986 rows / 314 invalid / 3,680 supported**, with Micro **526 matched / 2,110 excluded / 1,044 unavailable**. Micro tracking was restored at **19:55:10** for **526 eligible** symbols, Large at **19:55:25** for **584**; both were **warming / 0 ready** and Telegram paired. Automatic checks began under prior owner authorization; no manual Gemma, pod, broker, SEC or Telegram test was run. The earlier Watchlist record-owner warning was absent after restart; its root cause is unproven. At 20:49 Riyadh, Large cap showed 610 dated eligible symbols: 385 ready and 225 stale or gapped. This bounded snapshot and owner-reported observation delivery do not establish complete gap recovery or a completed Astra assessment. iOS/widget work remains paused.
+Installed **f578733** reloaded ratios at **19:51:29 Riyadh**: **4,986 rows / 314 invalid / 3,680 supported**, with Micro **526 matched / 2,110 excluded / 1,044 unavailable**. Micro tracking was restored at **19:55:10** for **526 eligible** symbols, Large at **19:55:25** for **584**; both were **warming / 0 ready** and Telegram paired. Automatic checks began under prior owner authorization; no manual Gemma, pod, broker, SEC or Telegram test was run. The earlier Watchlist record-owner warning was absent after restart; its root cause is unproven. At 20:49 Riyadh, Large cap showed 610 dated eligible symbols: 385 ready and 225 stale or gapped. This bounded snapshot and owner-reported observation delivery do not establish complete gap recovery or a completed Astra assessment. Those historical checks occurred during the iOS/widget pause; the 22 September iPhone request supersedes that pause for this build/install.
 
 Source review, offline tests, synthetic inference, installed UI, actual stock research and successful delivery are separate evidence. Targeted guard success does not establish absence of every framework warning.
 
@@ -227,6 +231,6 @@ Source review, offline tests, synthetic inference, installed UI, actual stock re
 
 Preserve original evidence and dates, offered/omitted/cited facts, model profile and raw attempts, validation/quality flags, strict policy, saved scoring clock, comparison protocol, numeric basis and outcome policy. Prior-context delivery requires its own transport record. Today's API responses cannot recreate yesterday's capture, and model text is not promised byte-identical.
 
-Saleh’s last verified installed runtime is **f578733**, dated 21 September. Salman’s installed copy is **b0ca7ac**; the new **2f711da** build is not installed. **9861561**, **d0e42cb** and **92be0b2** remain historical. The quit flow reported model unloading unconfirmed, so successful unloading is not established. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
+Saleh’s last verified installed runtime is **f578733**, dated 21 September. Salman’s Applications copy is **b0ca7ac**; he is running **2f711da** from the DMG, and the new iPhone build is installed. **9861561**, **d0e42cb** and **92be0b2** remain historical. The quit flow reported model unloading unconfirmed, so successful unloading is not established. The [full technical guide](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md) retains detailed receipts, source links and historical failures omitted here. PDF publication needs its own source/PDF-bound receipt and preserved previous copy.
 
 Unresolved: installed SHOP/GRAB Astra isolation failures. Successful stock opinions and review-summary delivery remain unverified, alongside comprehensive gap recovery and live SEC annual ROCE/ROIC calculations. The preliminary metadata diagnostic did not reproduce or repair the installed failure. A new manual research or delivery test needs explicit approval. The completed Gemma scans and stopped pod do not prove prediction accuracy, final billing or storage disposition. No 4× speed, universal latency or profitability claim follows.
