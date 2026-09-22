@@ -1,3 +1,16 @@
+## Extended-hours prices for Saleh — 22 September 2026
+
+Implemented and committed as `256f838` on top of `948aa41`, in an isolated checkout. Publication target is only `swonyu/StockSage-app` main under Salman's explicit request to test, commit, push and notify Saleh. Other worktrees' edits are excluded.
+
+- Mac display accepts referenced Form T trades in verified pre/post-market sessions. Unknown mixed conditions and old participant clocks still fail closed.
+- Yahoo fallback requests extended minute observations and preserves the selected price's timestamp and previous-close provenance.
+- Watchlist/idea labels distinguish pre/post-market live, delayed, last and awaiting prices. Research numerical references and paper eligibility are unchanged.
+- Verification: Mac compile/test-source gate passed. Ten serial native suites passed 158 definitions / 256 executions / zero failures or skips; targeted native diagnostic guard passed. The test host used an external ad hoc signing override because this Mac lacks the project certificate. No project signing setting changed.
+- Not installed. No live-provider, model, pod, broker or iOS action was performed. Live prices still depend on the configured feed and available observations.
+- Living/concise guides advance to edition 39. The exact owner PDF path under `/Users/saleh` is absent on this Mac; replacement there remains pending. A local candidate is prepared separately and is not sent as an attachment.
+
+Receipt and commands: [extended-hours verification](docs/reviews/2026-09-22-extended-hours-prices.md).
+
 ## All-branch integration — 19 September 2026
 
 Owner explicitly requested merging all branches and pushing StockSage. Integration

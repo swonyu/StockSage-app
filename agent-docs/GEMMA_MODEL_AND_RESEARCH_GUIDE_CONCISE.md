@@ -2,7 +2,7 @@
 
 Prepared for **Saleh**
 
-**Living edition 38 · Updated 21 September 2026, 20:52 Asia/Riyadh.**
+**Living edition 39 · Updated 22 September 2026, Asia/Riyadh.**
 
 This concise Mac guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **f578733 remains installed**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. iOS and widgets remain on hold.
 
@@ -14,9 +14,18 @@ The PDF is limited to **20 pages including the cover and contents**. Detailed re
 2. For Gemma, inspect the model connection in Library → Events & model setup, then explicitly run the desired research horizon.
 3. For Micro cap or Large cap, load Stock screener’s daily ratios, pair Telegram, and enable each tracker. Recheck those controls after restarting.
 4. Read the captured date, missing evidence and qualification status. Saved rankings and model labels do not automatically authorize a trade.
+
+### Extended-hours prices
+
+The 22 September source update supports pre-market and post-market prices on Mac. Referenced Massive Form T trades can update displayed prices during verified extended sessions. Yahoo fallback requests minute observations including extended hours and selects a newer valid price with its own timestamp. The original previous-close baseline is preserved.
+
+Watchlist and idea prices show **Pre-market / Post-market** with **live**, **delayed**, **last** or **awaiting price**. Only a current-session, uncached Massive observation within ten seconds is labelled live. Yahoo remains delayed; missing evidence never becomes a fresh quote. Existing session polling and streaming continue to supply updates. Research levels and paper-trade qualification remain unchanged.
+
+This update is **not installed**. The focused native gate passed; section 13 records its scope. The owner-designated PDF path is absent on this Mac, so its replacement remains pending; a separate local candidate is prepared. No live-provider observation or performance benchmark is established by offline tests.
+
 ## 1. What the model names actually identify
 
-This edition is dated **21 September 2026**. Section 13 separates historical checks from the current installation and UI verification; neither establishes new model or delivery readiness.
+This edition is dated **22 September 2026**. Section 13 separates historical checks from the current installation and UI verification; neither establishes new model or delivery readiness.
 
 | Name | Meaning |
 | --- | --- |
@@ -194,6 +203,7 @@ The published trading calendar covers 2026; unsupported years remain unavailable
 
 | Current addition | Verification status |
 | --- | --- |
+| Extended-hours display: tested, not installed | Source `256f838`. Mac compile and test-source checks passed; the serial native gate passed **158 definitions / 256 executions / zero failures or skips** across ten suites. The normal test build first stopped because this Mac lacks the project development certificate; a temporary external xcconfig used ad hoc test-host signing without changing project settings. No installed app or live-provider verification was performed. |
 | Micro cap float repair: not installed | Massive HTTP 200 pages contained 5,000 clean rows, then 1,856 with one missing ticker and no duplicates; that row formerly aborted the screen before details. The source repair discloses unmatched rows, retains valid floats and rejects duplicate identities across pages. Missing/invalid floats remain unavailable; thresholds are unchanged. The screen count uses reference rows; the optional saved unmatched-row count supports older records. Both regressions reproduced the old failures. Focused Mac verification passed **65 definitions / 93 executions / zero failures or skips**, direct exit 0 with unchanged source hashes; saved-warning views passed at 660 and 1,000 points. Signed arm64 Release **71cf39e** and its extracted ZIP passed identity/signature checks; installation is pending. This focused gate does not replace the earlier full-suite receipt. |
 | Scanner-linked news: installed | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls/narrow layouts and signed Release/ZIP passed; five excessive-window-count warnings remain. **`f578733` installed 21 September 19:50:42 Riyadh, reopened 19:50:51**. All **20 runs / 3,068 compared files** were byte-identical and preferences unchanged before tracking was restored. The readable matched-news panel showed 526 matches / 0 processed; **Load matched news was not clicked**, so live headline access remains unverified. |
 
