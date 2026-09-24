@@ -34,3 +34,5 @@ The smallest correction is state-neutral startup guidance pointing to tracking c
 ## Boundaries
 
 No new model assessment, model startup, paid compute, manual provider connection probe, Telegram test message or broker action was performed. Existing automatic market-feed activity continued. The stored Gemma warning and dated Micro cap float-identity failure remain visible. Live research acceptance/delivery and provider completeness were not established. No iOS build, test or deployment ran.
+
+**Published retest guide — 25 September:** edition 46, **15 pages**, prepared for Saleh. All 199 source content blocks and all links/outline sections passed export checks; all pages were visually reviewed. PDF SHA-256 `9a0009b4ec99be604ccc54e85c32daa035cc9733fa7f08861a4445a601a0ec87`; concise source commit `8618804ac887e1b1057fcc0c20a46a619f7157af`. The designated owner PDF and output copy match. The prior edition was backed up and no copy was sent. Receipt: `work/gemma-pdf/update-receipt.json`.

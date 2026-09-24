@@ -4,6 +4,8 @@ Prepared for **Saleh**
 
 **Living edition 46 · Updated 25 September 2026, Asia/Riyadh.** Saleh’s final design/recovery Release `f1ac1f7` is signed, installed and reopened with saved records preserved. Installed repeated Saved research and Same-day → Settings → model setup checks passed; native Back returned to Library. Both paired cap trackers are enabled and waiting outside their schedule. The earlier Mac candidates and Salman’s separate iPhone/API observations retain their dates and scope.
 
+**Published retest guide — 25 September:** edition 46, **15 pages**, prepared for Saleh. All 199 source content blocks and all links/outline sections passed export checks; all pages were visually reviewed. PDF SHA-256 `9a0009b4ec99be604ccc54e85c32daa035cc9733fa7f08861a4445a601a0ec87`; concise source commit `8618804ac887e1b1057fcc0c20a46a619f7157af`. The designated owner PDF and output copy match. The prior edition was backed up and no copy was sent. Receipt: `work/gemma-pdf/update-receipt.json`.
+
 ### Installed Mac retest · 25 September
 
 Fresh verification passed **3,263 definitions / 4,253 executions / zero failures / five existing skips**. All 479 tested source/resource files match the installed signed build; all 3,381 saved files remained unchanged. All nine main routes, saved-history disclosure and repeated Settings → model setup → Back passed. Both paired trackers remain enabled and wait outside their weekday schedule.
