@@ -1,3 +1,21 @@
+## Mac design and recovery audit — 24 September 2026 (Saleh’s Mac)
+
+All 25 verified findings in the [plan](docs/superpowers/plans/2026-09-24-mac-design-audit.md) are implemented: calmer rose/opaque charcoal, readable hierarchy and contrast, single-scroll cap/screener pages, immediate request-owned company-quality sheets, visible retained-result warnings, clearer setup/recovery, native history disclosure and safe existing-window model navigation. Initial cap-receipt failures terminate truthfully; writer recovery and bounded isolation-stage diagnostics remain fail-closed.
+
+Final canonical serial Mac gate: **3,263 definitions / 4,247 executions / zero failures / five existing skips**, direct exit 0; all 479 source/project/resource hashes unchanged. Targeted native diagnostic guard clean; five existing excessive-window-count warnings remain. Independent final review found no additional release blocker. No iOS gate ran in this task. The separate iPhone/device receipts below keep their own scope.
+
+Source commit `154c302` is integrated with origin’s documentation-only `e8dc7ab`. Signed Release/ZIP, guide edition 45/PDF and installation are tracked in the [audit receipt](docs/reviews/2026-09-24-mac-design-audit.md). At this checkpoint they remain pending. Saleh’s running installed binary was `f578733`; no restart has occurred. A concrete tested candidate and action-time approval are required before interruption, temporary buffer reset, backup, replacement and reopening. Unrelated dirty worktrees are preserved; all committed branch tips were already represented in origin/main before this change.
+
+No new provider probe, model run, stock research, Telegram test, broker action or paid compute was requested. The running app’s pre-existing automatic trackers were left active. Feed gaps, prior SHOP/GRAB isolation failures and successful stock Astra review/delivery are not proven repaired by this UI/diagnostic work.
+
+## Physical iPhone retest — 24 September 2026
+
+Remote main and checked source were `7b16b12` (application `5188ae1`). Signed release installed and launched on the connected phone; all 463 source hashes unchanged. Full iOS: **3,140 definitions / 3,960 executions / zero failures / four existing skips**. Focused Mac: **315 / 616 / zero failures or skips**. No runtime warnings. Native phone AAPL check and all 22 bounded Mac-key probes returned HTTP 200.
+
+Owner heard Buy chime + brief during Mirroring. **Direct physical phone test appeared and opened Saved research** after Mirroring closed. Mirrored delivery did not appear even with permissions/forwarding enabled. The approved temporary Mac forwarding setting was restored to off and verified; other user changes were retained. No app-code defect or new application fix is claimed. Physical cold-launch/accessory checks, sustained/extended-hours stream, widgets and live Gemma remain unverified. Gemma 18080 is unavailable; no model/research/GPU/broker action was started. Test simulator and local Colima were stopped.
+
+Package/hash checks and five offline container checks passed. Saved preferences/Documents unchanged; all support files retained, three provider caches refreshed. The external consensus probe URL was corrected; the app was already correct. [All nine commits, exact results and limitations](docs/reviews/2026-09-24-iphone-retest.md). Guide edition 44 supersedes the older pending-install state. Exact owner PDF path remains absent; prior exports remain preserved. The one-day deadline passed before this retest; do not claim on-time completion.
+
 ## iPhone audit and tested release — 22 September 2026
 
 Source `5188ae1` fixes launch-time notification routing, audio-session UI blocking, output disconnect/cancellation, gain persistence and rejected-delivery retry. Settings now exposes OS permission and a five-second local notification test. Full iOS: **3,140 definitions / 3,960 executions / zero failures / four existing skips**, no runtime warnings. Focused Mac: **97 / 223 / zero failures or skips**. Full compile gate passed; 463 source/project/resource files match the manifest. See [audit and retained failures](docs/reviews/2026-09-22-iphone-heavy-verification.md).
