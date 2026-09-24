@@ -61,7 +61,7 @@ This update was active in Salman’s DMG-launched Mac build on 22 September; his
 
 ## 1. What the model names actually identify
 
-This edition is dated **24 September 2026**. Section 13 separates historical checks from the current installation and UI verification; neither establishes new model or delivery readiness.
+This edition is dated **25 September 2026**. Section 13 separates historical checks from the current installation and UI verification; neither establishes new model or delivery readiness.
 
 | Name | Meaning |
 | --- | --- |
