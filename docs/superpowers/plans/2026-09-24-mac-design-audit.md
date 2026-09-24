@@ -47,7 +47,7 @@ The owner requested the critique, plan and implementation together. This plan re
 
 ## Verified implementation
 
-All 25 findings above are implemented and covered by the final Mac review and regression run. The serial canonical suite passed **3,263 definitions / 4,247 executions / zero failures / five existing skips**, direct exit 0. All 479 source/project/resource hashes stayed unchanged. The native layout/constraint/reentrant/publication/geometry diagnostic guard is clean; five existing excessive-window-count warnings remain. Independent final source review found no additional release blockers.
+All 25 findings above are implemented and covered by the final Mac review and regression run. The serial canonical suite passed **3,263 definitions / 4,251 executions / zero failures / five existing skips**, direct exit 0. All 479 source/project/resource hashes stayed unchanged. The native layout/constraint/reentrant/publication/geometry diagnostic guard is clean; five existing excessive-window-count warnings remain. Independent final source review found no additional release blockers. Installed verification of the first build exposed an L10 native path-reset defect; the shared five-line correction passed the expanded six-case route regression and this corrected full gate. Existing SwiftUI navigation-update warnings remain separately recorded.
 
 Build, publication and installation are tracked separately in the [audit receipt](../../reviews/2026-09-24-mac-design-audit.md); checked implementation items do not imply an installed candidate.
 

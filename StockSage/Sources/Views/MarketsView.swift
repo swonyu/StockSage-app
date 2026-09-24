@@ -686,6 +686,11 @@ struct MarketsView: View {
         Binding(get: { section.libraryPath }, set: { path in
             // A dismissed stack must not steal selection from a newly opened research tab.
             guard section.primaryDestination == .library else { return }
+            // Mounting/revealing Library can write back an empty or previous native
+            // path. Keep the explicit model route until its existing reveal task
+            // has mounted the destination; normal Back handling resumes afterward.
+            if pendingModelSettingsReveal != nil, section == .catalysts,
+               path != [.catalysts] { return }
             openSection(path.last ?? .library)
         })
     }

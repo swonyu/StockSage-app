@@ -883,8 +883,8 @@ struct StockSageChatTests {
         }
     }
 
-    @Test(arguments: [900, 1300])
-    func chatModelSettingsButtonRevealsActualCatalystsControls(width: Int) async throws {
+    @Test(arguments: [900, 1300], [MarketSection.chat, .sameDay, .briefing])
+    func chatModelSettingsButtonRevealsActualCatalystsControls(width: Int, initialSection: MarketSection) async throws {
         try #require(StockSageStore.isRunningTests)
         let suite = "stocksage.audit.mac.model-navigation.\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
@@ -911,16 +911,33 @@ struct StockSageChatTests {
         var expectedDefaults = defaults.persistentDomain(forName: suite) ?? [:]
         expectedDefaults["marketsCatalystsModelSettingsExpanded"] = true
         let viewport = CGSize(width: CGFloat(width), height: width == 900 ? 700 : 840)
-        let view = MarketsView(chatSession: chat, qaSection: .chat,
+        let view = MarketsView(chatSession: chat, qaSection: initialSection,
             store: store, aiAssessments: ai, portfolio: portfolio, journal: journal,
             paperStore: paper, live: live, velocityHistory: velocity, monitor: monitor)
             .defaultAppStorage(defaults).environment(\.colorScheme, .dark).preferredColorScheme(.dark)
-        let size = try await capture(view, name: "stocksage-audit-mac-model-settings-\(width)", viewport: viewport, usesCompactToolbar: true) { root in
-            let button = try #require(nativeAccessibilityElements(in: root).first {
-                $0.accessibilityRole?() == .button &&
-                    ($0.accessibilityLabel?() == "Model settings" || $0.accessibilityTitle?() == "Model settings")
-            })
-            try #require(button.accessibilityPerformPress?() == true, "Use the actual Chat navigation action")
+        let size = try await capture(view, name: "stocksage-audit-mac-model-settings-\(initialSection.rawValue)-\(width)", viewport: viewport, usesCompactToolbar: true) { root in
+            let window = try #require(root.window)
+            var fallbackWindowOpens = 0
+            if initialSection == .chat {
+                let button = try #require(nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityRole?() == .button &&
+                        ($0.accessibilityLabel?() == "Model settings" || $0.accessibilityTitle?() == "Model settings")
+                })
+                try #require(button.accessibilityPerformPress?() == true, "Use the actual Chat navigation action")
+            } else {
+                // Exercise Settings' actual native marker callback through the complete
+                // MarketsView, including initial and replacement Library path writebacks.
+                StockSageModelSetupWindowRoute.shared.request(in: [window]) { fallbackWindowOpens += 1 }
+            }
+            @MainActor func visibleServerField(in controls: [AnyObject]) -> Bool {
+                controls.compactMap { $0 as? NSTextField }.contains { field in
+                    guard field.placeholderString == "Server URL", field.window === window, !field.isHiddenOrHasHiddenAncestor,
+                          let scroll = field.enclosingScrollView else { return false }
+                    let frame = field.convert(field.bounds, to: scroll.contentView)
+                    return frame.width > 0 && frame.height > 0 && field.visibleRect.height > 0
+                        && scroll.contentView.bounds.contains(frame)
+                }
+            }
             let deadline = ContinuousClock.now.advanced(by: .seconds(3))
             var controls: [AnyObject] = []
             var visible = false
@@ -929,16 +946,19 @@ struct StockSageChatTests {
                 // SwiftUI can replace native fields while the destination mounts. Rediscover
                 // the live Catalysts control instead of retaining a transient layout object.
                 controls = nativeAccessibilityElements(in: root)
-                visible = controls.compactMap { $0 as? NSTextField }.contains { field in
-                    guard field.placeholderString == "Server URL", field.window === root.window, !field.isHiddenOrHasHiddenAncestor,
-                          let scroll = field.enclosingScrollView else { return false }
-                    let frame = field.convert(field.bounds, to: scroll.contentView)
-                    return frame.width > 0 && frame.height > 0 && field.visibleRect.height > 0
-                        && scroll.contentView.bounds.contains(frame)
-                }
+                visible = visibleServerField(in: controls)
                 if visible { break }
                 try await Task.sleep(for: .milliseconds(10))
             }
+            #expect(visible, "The expanded Server URL control must be inside the actual scroll viewport")
+            // A transient correct frame must not pass if native navigation later restores
+            // the old destination or initializes the new Library stack with an empty path.
+            try await Task.sleep(for: .milliseconds(200))
+            root.layoutSubtreeIfNeeded()
+            controls = nativeAccessibilityElements(in: root)
+            #expect(visibleServerField(in: controls), "Model settings must remain visible after native navigation settles")
+            #expect(root.window === window, "Model setup must reuse the existing Markets window")
+            #expect(fallbackWindowOpens == 0, "An attached Markets window must not open a fallback window")
             try #require(defaults.bool(forKey: "marketsCatalystsModelSettingsExpanded"))
             let selectedRows = controls.flatMap { object -> [Any] in
                 let selector = NSSelectorFromString("accessibilitySelectedRows")
@@ -950,7 +970,6 @@ struct StockSageChatTests {
                     $0.accessibilityIdentifier?() == "desktop.nav.library"
                 }
             }, "The native sidebar must select Library while model settings are open")
-            #expect(visible, "The expanded Server URL control must be inside the actual scroll viewport")
         }
         #expect(size == viewport)
         #expect(NSDictionary(dictionary: defaults.persistentDomain(forName: suite) ?? [:]).isEqual(to: expectedDefaults),
