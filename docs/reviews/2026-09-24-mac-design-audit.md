@@ -33,7 +33,9 @@ The canonical serial Mac run deliberately excludes the existing opt-in `Calibrat
 
 Source baseline: `7b16b12`. The incoming `e8dc7ab` branch adds documentation and another device's iPhone/API receipts only; those remain separately attributed. All committed worktree branches were already represented in origin/main. Unrelated uncommitted work was left in its original worktrees.
 
-The installed Saleh Mac executable matched the older `f578733` release during the audit. Installation/reopening of this candidate is pending a tested signed build and action-time approval because a restart clears in-memory screener/news/momentum buffers and can interrupt active research. Saved records and settings require a fresh backup and preservation comparison.
+Signed arm64 Release **`e898716`** built with exit 0 and passed deep/strict code-signature verification. Its executable SHA-256 is `1b1318e6a0ec11989f0e16b6b381cec745c502ac2846342acf1bcd2f8a41ad93`. The ZIP is `outputs/StockSageX-macOS-e898716.zip`, **9729996 bytes**, SHA-256 `b76e4d3b121c265718d0c9450b3cc5f11f490b4f68b09e57c2631bd2f8945d27`; extraction preserved all file contents/modes and the signature. Local receipt: `work/design-audit/release-identity.json`.
+
+The installed Saleh Mac executable matched the older `f578733` release during the audit. Installation/reopening of this verified candidate awaits action-time approval because a restart clears in-memory screener/news/momentum buffers and can interrupt active research. Saved records and settings require a fresh backup and preservation comparison.
 
 The installed app also showed repeated feed gaps, a timestamp warning and active Large cap research. This UI/diagnostic repair does **not** prove those live issues resolved. Earlier SHOP/GRAB isolation failures remain unexplained; the additional stage fields improve a future authorized investigation. No provider probe, new model inference, manual stock research, Telegram delivery test, broker action or paid compute was performed. This task did not build, test or deploy iOS.
 
