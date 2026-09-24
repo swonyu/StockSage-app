@@ -103,6 +103,25 @@ through both final gates. Installed Mac/physical-iPhone apps were not replaced
 or restarted; only test hosts ran. No live model generation, provider probe,
 or broker action was performed.
 
+## Relaunch checkpoint — 19 September 2026
+
+Short stop point for a new session. Full question list: `agent-docs/UNANSWERED.md`.
+Feedback check-ins are now short (1–3 sentences, at most one question). Extra questions go on that list, not into the feedback prompt.
+
+**Done tonight**
+- StockSage rebuilt and installed at `~/Applications/StockSageX.app` (`fc8940e`). Checkout `main` later moved to `e170c1e` (even with origin). Massive Keychain present. LM Studio `:1234` HTTP 200.
+- good-spender skill and loaders removed; history/keys kept under `~/.claude/good-spender`.
+- Owner asked to restart only after a green RunPod probe.
+
+**Current state**
+- App still PID 62402. Settings already `localModelServerURL=http://127.0.0.1:18080`, model `google/gemma-4-31b-qat`, backend `localServerOnly`.
+- Historical Gemma pods `x5urnqm3zpxkme` / `f8q26muzsmw8us` are 404. `:18080` down (HTTP 000). App was not restarted.
+
+**Relaunch**
+1. Read `agent-docs/UNANSWERED.md`. Do not re-ask U1–U4.
+2. Continue from U1 (new Gemma pod vs LM Studio `:1234`), then probe, then restart only if green.
+3. Do not place real trades. Do not start training. No push.
+
 ## Message from Salman: watchlist wiped after an update — 17 September 2026
 
 Saleh, my StockSage watchlist got wiped after an update. When I tried to re-add a
