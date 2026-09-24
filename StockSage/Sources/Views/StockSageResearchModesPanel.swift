@@ -996,6 +996,15 @@ struct StockSageResearchModesPanel: View {
                         Text("Coverage records checks, not predictive quality. The exact facts below show the prepared evidence. Diagnostics record whether a model request began.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                #if os(macOS)
+                if let short = result.shortInterest {
+                    DisclosureGroup("Short interest and short volume · display only") {
+                        ForEach(short.lines, id: \.self) { Text($0).font(.callout) }
+                        Text("Shown for context only. Not sent to the model and not used by the strict screen or ranking.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                #endif
                 if !result.facts.isEmpty {
                     DisclosureGroup("Evidence captured \(result.at.formatted(date: .abbreviated, time: .shortened))") {
                         Text("Model: \(result.model.isEmpty ? "no verified model answer" : result.model) · References: \(result.verdict?.evidence.joined(separator: ", ") ?? "none")")

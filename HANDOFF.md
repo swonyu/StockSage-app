@@ -20,6 +20,24 @@ Owner heard Buy chime + brief during Mirroring. **Direct physical phone test app
 
 Package/hash checks and five offline container checks passed. Saved preferences/Documents unchanged; all support files retained, three provider caches refreshed. The external consensus probe URL was corrected; the app was already correct. [All nine commits, exact results and limitations](docs/reviews/2026-09-24-iphone-retest.md). Guide edition 44 supersedes the older pending-install state. Exact owner PDF path remains absent; prior exports remain preserved. The one-day deadline passed before this retest; do not claim on-time completion.
 
+## Massive feature branch — merged into main 25 September 2026
+
+Owner direction 2026-09-25: merge all branches. `claude/massive-features-20260924` (base `7b16b12`) was merged into `main` after the full test run recorded below. It contains:
+
+- **Analyst & guidance watchlist feed** — `Views/StockSageAnalystFeedView.swift`, a pure projection over the cached company-event checks (Benzinga ratings + guidance) for watchlist symbols; hooked into `MarketsView`. Tests: `StockSageTests/StockSageAnalystFeedTests.swift`.
+- **Short interest + short volume shadow evidence** — `StockSageMassiveShortInterest.swift` (Bearer header, denial gate, `settlement_date.desc` / `date.desc`), injected into horizon research as optional display evidence that must never change qualification, ranking or TopFive. Tests: `StockSageTests/StockSageMassiveShortInterestTests.swift`.
+- **Live watchlist alerts + day-volume alerts** — see the next section.
+
+Skipped on purpose: options/IV (Massive answers 403 — no options plan), `/v1/indicators/*` (duplicates `StockSageTechnical`). Still open: `StockSageVolumeAlertForm` is not mounted in `MarketsView` yet. The uncommitted 14 September edits in the `codex/r08` and `codex/r27` worktrees were already on `main` in a later form, so they were not merged.
+
+## Live watchlist alerts and day-volume alerts — 24 September 2026 (merged 25 September 2026)
+
+`StockSageMonitor` now also checks armed price alerts from the Massive trade stream: `StockSageStore.applyLiveTicks` calls `noteStreamedTicks`, which runs only while Price-alert monitoring is on and at most once per symbol per `streamCheckInterval` (5 s). Every check (180 s loop and stream) shares one single-flight guard inside `checkPriceAlerts`, so the double-push described there cannot recur; the hourly cap, still-armed identity check and latch-after-accepted-delivery are unchanged. Streamed trades fire only when live (≤ 10 s) and priced.
+
+**Owner decision pending, default = regular session only:** a streamed pre-market, after-hours or Form T (condition 12) trade never fires an alert. The existing 180 s REST price loop is unchanged and can still fire on an extended-hours quote; say whether both paths should follow one rule.
+
+`PriceAlert` gained an optional `metric` (`price` default, `dayVolume`). Stored alerts and backups without the field decode as price alerts, and price alerts are still written without it. Day-volume alerts are `≥` only and fire only on a Massive REST snapshot `day.v` whose last trade is a regular-session print ≤ 15 min old; the stream only nominates (REST confirmation at most once per symbol per 60 s). Whether `day.v` includes pre-market volume is unverified. Both gates read `StockSageMarketHours.nasdaqDay`, which covers 2026 only: from 1 January 2027 stream alerts and day-volume confirmations stop firing (fail-closed, no message) until the calendar is extended. UI: `Views/StockSageVolumeAlertForm.swift` (macOS), not yet mounted in `MarketsView`. Tests: `StockSageTests/StockSageLiveAlertTests.swift` (not yet run).
+
 ## iPhone audit and tested release — 22 September 2026
 
 Source `5188ae1` fixes launch-time notification routing, audio-session UI blocking, output disconnect/cancellation, gain persistence and rejected-delivery retry. Settings now exposes OS permission and a five-second local notification test. Full iOS: **3,140 definitions / 3,960 executions / zero failures / four existing skips**, no runtime warnings. Focused Mac: **97 / 223 / zero failures or skips**. Full compile gate passed; 463 source/project/resource files match the manifest. See [audit and retained failures](docs/reviews/2026-09-22-iphone-heavy-verification.md).

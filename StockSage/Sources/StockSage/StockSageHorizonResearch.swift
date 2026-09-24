@@ -164,6 +164,9 @@ final class StockSageHorizonResearch: ObservableObject {
         var newsCheckSummary: String? = nil
         var priorAssessment: PriorAssessment? = nil
         var priorAssessmentNote: String? = nil
+        /// Shadow display evidence from the same capture. Never a model fact, coverage row,
+        /// qualification, ranking or Top-5 input; nil when not requested.
+        var shortInterest: StockSageMassiveShortInterest.Snapshot? = nil
     }
     struct Scan {
         var listings: [Listing] = []
@@ -1126,6 +1129,7 @@ final class StockSageHorizonResearch: ObservableObject {
             }
             guard modelReady else { return { _ in .init(note: "Local model unavailable; original check retained.") } }
             let gathered = await Self.gather(item, store: store, key: key, allowed: allowed,
+                shortInterestObservation: { symbol, _ in await StockSageMassiveShortInterest.fetch(symbol: symbol, allowed: allowed) },
                 selectionFact: self.scans[horizon]?.selection?.detail(for: item.ticker))
             return Self.preparedAnalysis(gathered, config: config, isOllama: isOllama, allowed: allowed,
                 outputTokens: 384, qualify: self.scans[horizon]?.qualificationPolicyVersion == 1,
@@ -1220,6 +1224,7 @@ final class StockSageHorizonResearch: ObservableObject {
         }, parallelism: { parallelism }, concurrentGathering: config.isRunPodGemma, qualificationPolicyVersion: 1,
             configurationID: identity, resuming: resuming, makeAnalysis: { item in
             let gathered = await Self.gather(item, store: store, key: key, allowed: allowed,
+                shortInterestObservation: { symbol, _ in await StockSageMassiveShortInterest.fetch(symbol: symbol, allowed: allowed) },
                 selectionFact: selection?.detail(for: item.ticker))
             let analyze = Self.preparedAnalysis(gathered, config: config, isOllama: isOllama, allowed: allowed, qualify: true,
                 priorAssessment: { self.priorAssessment(for: item.ticker, config: config) }, servingContext: servingContext)
@@ -1253,6 +1258,8 @@ final class StockSageHorizonResearch: ObservableObject {
         let blockedByThrottle: Bool
         var evidencePacket: StockSageAIAssessment.EvidencePacket? = nil
         var nextEarnings: StockSageMassiveEarnings.Observation? = nil
+        /// Display-only; deliberately outside `facts`, `coverage` and `evidencePacket`.
+        var shortInterest: StockSageMassiveShortInterest.Snapshot? = nil
         var referenceClose: (value: Double, at: Date) { (history.closes.last!, history.dates.last!) }
         func isFresh(at now: Date) -> Bool {
             (0...300).contains(now.timeIntervalSince(at))
@@ -1297,6 +1304,7 @@ final class StockSageHorizonResearch: ObservableObject {
         filingsObservation: ((String, Date) async -> StockSageDisclosureService.FilingsObservation)? = nil,
         insiderObservation: ((String, Date) async -> StockSageMassiveEvents.Observation)? = nil,
         evidenceIsCurrent: ((StockSageBenzinga.Snapshot) -> Bool)? = nil,
+        shortInterestObservation: ((String, Date) async -> StockSageMassiveShortInterest.Snapshot)? = nil,
         selectionFact: String? = nil) async -> Gathered {
         func failed(_ note: String) -> Gathered { .failed(.init(note: note)) }
         func active() -> Bool { allowed() && !Task.isCancelled }
@@ -1359,6 +1367,12 @@ final class StockSageHorizonResearch: ObservableObject {
             company[.insider] = await (insiderObservation ?? {
                 await StockSageMassiveEvents.fetch(.insider, symbol: $0, now: $1, allowed: evidenceAllowed)
             })(item.ticker, Date())
+            guard evidenceAllowed() else { return failed("Analysis interrupted.") }
+        }
+        // Shadow evidence: never appended to `extra`, `coverage` or the packet (prompt v1 is frozen).
+        var shortInterest: StockSageMassiveShortInterest.Snapshot?
+        if let shortInterestObservation {
+            shortInterest = await shortInterestObservation(item.ticker, Date())
             guard evidenceAllowed() else { return failed("Analysis interrupted.") }
         }
         let capturedAt = Date()
@@ -1461,7 +1475,7 @@ final class StockSageHorizonResearch: ObservableObject {
         return .captured(.init(history: history, context: context, facts: evidence.map(\.text),
             coverage: coverage, at: began, blockedByThrottle: blocked,
             evidencePacket: .init(facts: evidence, prePromptOmittedRecordCount: packet.prePromptOmittedRecordCount),
-            nextEarnings: instrument.isETF ? nil : earnings))
+            nextEarnings: instrument.isETF ? nil : earnings, shortInterest: shortInterest))
     }
 
     nonisolated static func historicalFacts(_ history: StockSagePriceHistory) -> [StockSageAIAssessment.EvidenceFact] {
@@ -1606,7 +1620,7 @@ final class StockSageHorizonResearch: ObservableObject {
                     ?? StockSageAIAssessment.quality(nil, offered: [], symbol: context.idea.symbol),
                 insiderEvidence: insiderEvidence, newsCheckedAt: news?.latestCheckAt,
                 newestNewsAt: news?.items.map(\.date).max(), newsCheckSummary: news?.summary,
-                priorAssessment: usedPrior, priorAssessmentNote: priorNote)
+                priorAssessment: usedPrior, priorAssessmentNote: priorNote, shortInterest: capture.shortInterest)
         }
         guard [researchOutputTokens, 384].contains(outputTokens) else { return result("Unsupported research output budget; no opinion.") }
         guard evidenceAllowed() else { return result("Evidence exceeded the age limit or access changed; no opinion.") }
@@ -1717,6 +1731,6 @@ final class StockSageHorizonResearch: ObservableObject {
             qualityReport: StockSageAIAssessment.quality(verdict, offered: offered, symbol: context.idea.symbol),
             insiderEvidence: insiderEvidence, newsCheckedAt: news?.latestCheckAt,
             newestNewsAt: news?.items.map(\.date).max(), newsCheckSummary: news?.summary,
-            priorAssessment: usedPrior, priorAssessmentNote: priorNote)
+            priorAssessment: usedPrior, priorAssessmentNote: priorNote, shortInterest: capture.shortInterest)
     }
 }
