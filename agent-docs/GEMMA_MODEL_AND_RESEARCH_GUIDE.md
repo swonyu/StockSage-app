@@ -12,6 +12,8 @@ Writer failures preserve their safe recovery instructions. Codex isolation failu
 
 [Finding ledger and implementation plan](../docs/superpowers/plans/2026-09-24-mac-design-audit.md).
 
+**Published owner PDF — 24 September:** living edition 45, **15 pages** including cover and contents, prepared for Saleh. All 196 source content blocks, fourteen sections and 42 internal links passed export checks; every rendered page was visually reviewed. Concise source commit `233d9a90ae2d80fff2be98a1eb781052b85009e0`, SHA-256 `34b18c3d899ff5ecd5e4aec91fb60203de4068cd97bd2a7984c3b8c73aded12c`; PDF SHA-256 `4ae832a1c7fefc3dc3c3f0b558038d58dc1f9e60639dfe8816c8e68db87ee7d5`. The designated Messages-attachment file was atomically replaced after preserving its previous copy; output `outputs/GEMMA_MODEL_AND_RESEARCH_GUIDE.pdf` has identical bytes. This update was not sent to anyone. Publication receipt: `work/gemma-pdf/update-receipt.json`.
+
 ### Physical iPhone retest from Salman’s Mac — 24 September 2026
 
 This retest used the iPhone connected to **Salman’s Mac**; its device, API, signing and model observations do not describe Saleh’s Mac. At that retest, `main` was already `7b16b12`; all 463 source/project/resource hashes match signed source `5188ae1`. The existing signed Release was installed over the phone app and launched with matching process identity. Native Settings passed the AAPL snapshot check with HTTP 200. Thirteen saved preferences and the Documents file were unchanged; all eight Application Support files survived, with three provider caches refreshed. Private backups are retained.
