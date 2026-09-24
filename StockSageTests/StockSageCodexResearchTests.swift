@@ -73,6 +73,49 @@ import Testing
         }
     }
 
+    @Test(arguments: ["initialProcess", "initialEnvelope", "restrictedProcess", "catalogEnvelope",
+        "enabledShell", "providerOverride", "enabledMCP", "changedInstructions"])
+    func isolationRejectionRetainsOnlyClosedDiagnosticCodes(scenario: String) async throws {
+        var configurationReads = 0, inferenceCalls = 0
+        let marker = "SYNTHETIC_PRIVATE_CONFIG_VALUE"
+        let result = await C.complete(system: system, user: user, schema: schema,
+            deadline: Date().addingTimeInterval(30), allowed: { true }, executor: { call in
+                if call.rpcMethod == "config/read" { configurationReads += 1 }
+                if (scenario == "initialProcess" && configurationReads == 1 && call.rpcMethod == "config/read")
+                    || (scenario == "restrictedProcess" && configurationReads == 2 && call.rpcMethod == "config/read") {
+                    return .init(status: 1, stderr: Data(marker.utf8))
+                }
+                if (scenario == "initialEnvelope" && configurationReads == 1 && call.rpcMethod == "config/read")
+                    || (scenario == "catalogEnvelope" && call.rpcMethod == "model/list") {
+                    return .init(status: 0, stdout: try JSONSerialization.data(withJSONObject: ["id": 2, "error": ["message": marker]]))
+                }
+                if let output = try metadata(call, scenario: scenario) { return output }
+                inferenceCalls += 1
+                return .init(status: 0)
+            })
+        #expect(inferenceCalls == 0)
+        guard case .failure(let failure) = result else { Issue.record("Isolation must fail closed"); return }
+        let audit = try #require(failure.audit)
+        let data = try JSONEncoder().encode(audit)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let stage = ["restrictedProcess": "restrictedConfiguration", "enabledMCP": "restrictedConfiguration",
+            "catalogEnvelope": "modelCatalog", "changedInstructions": "inputIntegrity"][scenario] ?? "initialConfiguration"
+        let check = ["initialProcess": "metadataProcess", "restrictedProcess": "metadataProcess",
+            "initialEnvelope": "metadataResponse", "catalogEnvelope": "metadataResponse",
+            "enabledShell": "effectiveSettings", "providerOverride": "providerConfiguration",
+            "enabledMCP": "mcpConfiguration", "changedInstructions": "inputIntegrity"][scenario]
+        #expect(object["isolationStage"] as? String == stage)
+        #expect(object["isolationCheck"] as? String == check)
+        #expect(audit.terminalStatus == "rejected")
+        #expect(!String(decoding: data, as: UTF8.self).contains(marker) && !failure.message.contains(marker))
+        #expect(try JSONDecoder().decode(C.Audit.self, from: data) == audit)
+        var legacy = object
+        legacy.removeValue(forKey: "isolationStage"); legacy.removeValue(forKey: "isolationCheck")
+        let restored = try JSONDecoder().decode(C.Audit.self, from: JSONSerialization.data(withJSONObject: legacy))
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(restored)) as? [String: Any])
+        #expect(encoded["isolationStage"] == nil && encoded["isolationCheck"] == nil)
+    }
+
     @Test func subscriptionOnlyCompletionPreservesPublicBytesAndTruthfulAudit() async throws {
         var calls: [C.Invocation] = []
         let answer = text, events = try stream(text)
@@ -121,6 +164,7 @@ import Testing
         #expect(completion.audit.inputTokens == 123 && completion.audit.outputTokens == 42)
         #expect(completion.audit.elapsedMilliseconds >= 0)
         #expect(try JSONDecoder().decode(C.Audit.self, from: JSONEncoder().encode(completion.audit)) == completion.audit)
+        #expect(completion.audit.isolationStage == nil && completion.audit.isolationCheck == nil)
         #expect(!FileManager.default.fileExists(atPath: generation.directory.path), "Private scratch must be removed")
     }
 

@@ -163,6 +163,82 @@ import Testing
         }
     }
 
+    @Test func busyCompanyQualityAdmissionCannotReturnAnEarlierCapture() async throws {
+        let blockReload = Revision(), gate = Gate()
+        let bytes = try payload([raw("TEST")])
+        let model = S(access: access, transport: { request in
+            if request.url?.path == S.ratiosPath, blockReload.get() == "two" { await gate.wait() }
+            return (bytes, HTTPURLResponse(url: request.url!, statusCode: request.url?.path == S.ratiosPath ? 200 : 403,
+                httpVersion: nil, headerFields: nil)!)
+        }, clock: { now }, universe: { _, _, _ in .init(listings: [listing("TEST")], membership: nil) })
+        await model.load()
+        let row = try #require(model.snapshot?.rows.first)
+        try #require(await model.companyQuality(for: row) != nil)
+        blockReload.replace()
+        let reload = Task { await model.load() }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await gate.started), ContinuousClock.now < deadline { await Task.yield() }
+        #expect(await gate.started)
+        #expect(model.quality != nil && model.isLoading)
+        #expect(await model.companyQuality(for: row) == nil, "A rejected request must never return a previous result")
+        model.cancel()
+        await gate.release()
+        await reload.value
+    }
+
+    @Test(arguments: ["previous", "notAdmitted", "owner"])
+    func companyQualityCancellationBelongsToItsAdmittedOperation(canceller: String) async throws {
+        let blockQuality = Revision(), gate = Gate()
+        let bytes = try payload([raw("TEST")])
+        let model = S(access: access, transport: { request in
+            if request.url?.path == S.ratiosPath, blockQuality.get() == "two" { await gate.wait() }
+            return (bytes, HTTPURLResponse(url: request.url!, statusCode: request.url?.path == S.ratiosPath ? 200 : 403,
+                httpVersion: nil, headerFields: nil)!)
+        }, clock: { now }, universe: { _, _, _ in .init(listings: [listing("TEST")], membership: nil) })
+        await model.load()
+        let row = try #require(model.snapshot?.rows.first)
+        let previous = UUID(), owner = UUID(), notAdmitted = UUID()
+        try #require(await model.companyQuality(for: row, operation: previous) != nil)
+        blockQuality.replace()
+        let request = Task { await model.companyQuality(for: row, operation: owner) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await gate.started), ContinuousClock.now < deadline { await Task.yield() }
+        guard await gate.started else {
+            model.cancel(); await gate.release(); _ = await request.value
+            Issue.record("The synthetic company-quality request did not reach its hold point"); return
+        }
+        if canceller == "notAdmitted" {
+            #expect(await model.companyQuality(for: row, operation: notAdmitted) == nil)
+        }
+        let loadingStatus = model.status
+        model.cancelCompanyQuality(operation: canceller == "previous" ? previous : canceller == "owner" ? owner : notAdmitted)
+        if canceller != "owner" { #expect(model.status == loadingStatus && model.qualitySymbol == row.symbol) }
+        await gate.release()
+        let result = await request.value
+        #expect((result != nil) == (canceller != "owner"))
+        #expect((model.quality != nil) == (canceller != "owner"))
+        #expect(!model.isBusy)
+        if canceller == "owner" { #expect(model.status.contains("Cancelled")) }
+    }
+
+    @Test func deniedCompanyQualityRetryCannotShowEarlierDetailAsNew() async throws {
+        let permission = Revision()
+        let bytes = try payload([raw("TEST")])
+        let model = S(access: .init(key: { "fixture" }, credentialRevision: { nil }, policyRevision: { nil },
+            allowed: { permission.get() == "one" }), transport: { request in
+                (bytes, HTTPURLResponse(url: request.url!, statusCode: request.url?.path == S.ratiosPath ? 200 : 403,
+                    httpVersion: nil, headerFields: nil)!)
+            }, clock: { now }, universe: { _, _, _ in .init(listings: [listing("TEST")], membership: nil) })
+        await model.load()
+        let selected = try #require(model.snapshot?.rows.first)
+        await model.companyQuality(for: selected)
+        try #require(model.quality != nil)
+        permission.replace()
+        await model.companyQuality(for: selected)
+        #expect(model.quality == nil && !model.isBusy)
+        #expect(model.status.contains("unavailable"))
+    }
+
     @Test func companyQualityIsExplicitAndInjectedCollectionCannotEscapeToSEC() async throws {
         var ratio = raw("TEST"); ratio["cik"] = "0000001234"
         let bytes = try payload([ratio])

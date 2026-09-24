@@ -28,20 +28,25 @@ enum DS {
 
     // MARK: Semantic colors
     enum Palette {
-        // Owner-selected magenta. The asset is shared with native control tint.
+        // Muted rose-magenta. The asset is shared with native control tint.
         // Keep white-label fills dark enough for AA; use the lighter sibling for
         // text/icons on dark surfaces. Financial/status colors remain separate.
         static let accent        = Color("AccentColor")
-        static let accentText    = Color(.sRGB, red: 244 / 255.0, green: 123 / 255.0, blue: 222 / 255.0)
+        static let accentText    = Color(.sRGB, red: 214 / 255.0, green: 163 / 255.0, blue: 191 / 255.0)
         // One charcoal canvas on Mac and iPhone; magenta belongs to controls.
         static let bgTop         = Color(red: 0.094, green: 0.094, blue: 0.102)
         static let bgBottom      = bgTop
-        static let surface       = Color.white.opacity(0.07)
-        static let surfaceAlt    = Color.white.opacity(0.06)
-        static let surfaceStroke = Color.white.opacity(0.12)
-        static let hairline      = Color.white.opacity(0.12)
-        static let textPrimary   = Color.white
-        static let textSecondary = Color.white.opacity(0.66)
+        static let surface       = Color(.sRGB, red: 41 / 255.0, green: 41 / 255.0, blue: 45 / 255.0)
+        static let surfaceAlt    = Color(.sRGB, red: 36 / 255.0, green: 36 / 255.0, blue: 40 / 255.0)
+        static let surfaceStroke = Color(.sRGB, red: 69 / 255.0, green: 69 / 255.0, blue: 75 / 255.0)
+        static let hairline      = surfaceStroke
+        nonisolated static let textPrimary   = Color.white
+        nonisolated static let textSecondary = Color(.sRGB, red: 184 / 255.0, green: 184 / 255.0, blue: 194 / 255.0)
+        /// Interactive boundaries are stronger than decorative card separators.
+        static func inputStroke(increasedContrast: Bool) -> Color {
+            increasedContrast ? textSecondary
+                : Color(.sRGB, red: 133 / 255.0, green: 133 / 255.0, blue: 142 / 255.0)
+        }
         static let success       = Color.green
         static let danger        = Color.red
         static let successSoft   = Color(red: 0.45, green: 0.85, blue: 0.55)
@@ -100,15 +105,14 @@ enum DS {
         static let outerRadius:  CGFloat = 22
         static let innerRadius:  CGFloat = 17
         static let shellPadding: CGFloat = 5
-        static let shellFill        = Color.white.opacity(0.04)
+        static let shellFill        = Palette.surfaceAlt
         static let shellStroke      = Color.white.opacity(0.09)
-        static let coreFill         = Color.white.opacity(0.06)
+        static let coreFill         = Palette.surface
         static let coreInnerHighlight = LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)],
             startPoint: .top, endPoint: .bottom)
         /// Subtle fill for machined card containers — the background layer under
         /// the coreInnerHighlight stroke. Matches all per-view inline cards.
-        /// 0.035 → 0.045 (macOS 27 overhaul): the darker canvas needs cards a
-        /// step more present to keep the same perceived layering.
+        /// Opaque charcoal keeps the card stable across different parent surfaces.
         /// Card sites chain .fill(cardFill).strokeBorder(coreInnerHighlight) on ONE
         /// shape view (goal-2 merge, 2026-07-16): identical pixels to the old
         /// 2-shape ZStack, one less view+layer per card — switch-commit work.
@@ -129,6 +133,37 @@ enum DS {
 struct DSCanvasBackground: View {
     var body: some View {
         DS.Palette.bgTop
+    }
+}
+
+/// Applied outside value animations so children cannot reintroduce motion.
+struct DSReducedMotion: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
+    }
+}
+
+/// Opaque custom-field chrome, including a stronger Increase Contrast boundary.
+struct DSInputSurface: ViewModifier {
+    var cornerRadius: CGFloat = DS.Radius.small
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .background(DS.Palette.surface, in: RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(DS.Palette.inputStroke(increasedContrast: contrast == .increased),
+                            lineWidth: contrast == .increased ? 2 : 1)
+                    .allowsHitTesting(false)
+            }
     }
 }
 
@@ -337,7 +372,7 @@ struct DSSegmentPicker<T: Hashable>: View {
             }
         }
         .padding(3)
-        .background(Color.white.opacity(0.07), in: Capsule())
+        .background(DS.Palette.surface, in: Capsule())
         .overlay(Capsule().stroke(
             LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)],
                            startPoint: .top, endPoint: .bottom), lineWidth: 1))

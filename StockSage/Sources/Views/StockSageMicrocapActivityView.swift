@@ -55,25 +55,35 @@ struct StockSageMicrocapActivityView: View {
                     watchButton
                 }
             }
+            Text(Self.statusMessage(monitor.status, telegramReady: telegram.isReady))
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(identifier + ".watch.status")
+            if monitor.isEnabled, let next = monitor.nextCheck {
+                Text("Next regular-session setup check: \(next.formatted(date: .abbreviated, time: .standard))")
+                    .font(.callout).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
+            }
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 Text("Momentum detection coverage").font(.subheadline.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text(monitor.momentumStatus).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("When enabled, detection covers all matching symbols with a current dated \(research.title) cap classification concurrently. Missing or stale classifications are not eligible. Confirmed observations below are recent event details, not the coverage list.")
-                    .font(.caption).foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("After connection or a feed gap, each symbol needs twenty consecutive completed minutes with positive volume before detection is ready. Missing minutes are unavailable, not zero. Prospective events are checked against Massive REST minute bars before alerts or Astra reviews.")
-                    .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                Text(monitor.momentumStatus).font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityIdentifier(identifier + ".momentum.coverage")
-            Text(monitor.momentumAlertStatus).font(.caption).foregroundStyle(.secondary)
+            Text(Self.statusMessage(monitor.momentumAlertStatus, telegramReady: telegram.isReady)).font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(identifier + ".momentum.alertStatus")
-            Text(monitor.momentumWorkStatus).font(.caption).foregroundStyle(.secondary)
+            Text(monitor.momentumWorkStatus).font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
-            if let market = monitor.marketMomentum { StockSageMomentumView(market: market) }
+            Button {
+                showTelegram = true
+            } label: {
+                Label(telegram.isReady ? "Telegram · paired" : "Set up Telegram alerts", systemImage: "paperplane")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier(identifier + ".telegram.setup")
+            .sheet(isPresented: $showTelegram) { StockSageTelegramSetupView(telegram: telegram) }
+            if let market = monitor.marketMomentum { marketContext(market) }
             if !monitor.stockMomentum.isEmpty {
                 DisclosureGroup("Confirmed momentum observations · \(monitor.stockMomentum.count) symbols") {
                     LazyVStack(alignment: .leading, spacing: DS.Space.md) {
@@ -83,32 +93,22 @@ struct StockSageMicrocapActivityView: View {
                 .accessibilityIdentifier(identifier + ".momentum.observations")
             } else {
                 Text("No confirmed momentum observations. See detection coverage for connection, warm-up or missing-data status; an empty detail list does not establish that every symbol was quiet.")
-                    .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier(identifier + ".momentum.observations.empty")
             }
-            Text(monitor.status)
-                .font(.callout).fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(identifier + ".watch.status")
-            if monitor.isEnabled, let next = monitor.nextCheck {
-                Text("Next regular-session setup check: \(next.formatted(date: .abbreviated, time: .standard))")
-                    .font(.caption).monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
+            DisclosureGroup("How tracking and alerts work") {
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    Text("When enabled, detection covers all matching symbols with a current dated \(research.title) cap classification concurrently. Missing or stale classifications are not eligible. Confirmed observations above are recent event details, not the coverage list.")
+                    Text("After connection or a feed gap, each symbol needs twenty consecutive completed minutes with positive volume before detection is ready. Missing minutes are unavailable, not zero. Prospective events are checked against Massive REST minute bars before alerts or Astra reviews.")
+                    Text("Monday–Friday · 11:00 AM–11:00 PM Riyadh, including premarket, while StockSage is open and your Mac is awake. Confirmed heavy momentum can send a descriptive Telegram alert and queue a fresh-event Astra review. Reviews wait for research capacity and may expire before they run. A queued event is not a completed review or confirmed delivery.")
+                    Text("New trade setups require the regular US session. Automatic setup checks wait 2.5 minutes after each completed check and run when research capacity is available. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
+                }
+                .font(.callout).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, DS.Space.sm)
             }
-            Text("Monday–Friday · 11:00 AM–11:00 PM Riyadh, including premarket, while StockSage is open and your Mac is awake. Confirmed heavy momentum can send a descriptive Telegram alert and queue a fresh-event Astra review. Reviews wait for research capacity and may expire before they run. A queued event is not a completed review or confirmed delivery.")
-                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("New trade setups require the regular US session. Automatic setup checks wait 2.5 minutes after each completed check and run when research capacity is available. A separately qualified setup can send a trade-research pick. Both use your paired chat; Astra uses your Codex subscription. Watching does not place orders or guarantee a same-day exit.")
-                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Divider()
-            Button {
-                showTelegram = true
-            } label: {
-                Label(telegram.isReady ? "Telegram · paired" : "Set up Telegram alerts", systemImage: "paperplane")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .accessibilityIdentifier(identifier + ".telegram.setup")
-            .sheet(isPresented: $showTelegram) { StockSageTelegramSetupView(telegram: telegram) }
+            .font(.callout)
+            .accessibilityIdentifier(identifier + ".watch.method")
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -116,12 +116,37 @@ struct StockSageMicrocapActivityView: View {
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card).stroke(DS.Bezel.coreInnerHighlight, lineWidth: 1))
     }
 
+    private func marketContext(_ market: StockSageMomentum.Market) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            TimelineView(.periodic(from: .now, by: 30)) { tick in
+                ForEach([market.spy, market.qqq], id: \.symbol) { series in
+                    let current = series.asOf.map { (0...StockSageMomentum.maximumAge).contains(tick.date.timeIntervalSince($0)) } ?? false
+                    let available = series.verifiedMinutes && series.asOf != nil
+                    let summary = !available ? "Verified completed-minute coverage unavailable"
+                        : !current ? "Historical snapshot · not eligible for a fresh momentum alert"
+                        : series.status == .available ? "Completed-minute snapshot" : series.note
+                    Text("\(series.symbol) · \(summary)")
+                        .font(.callout)
+                        .foregroundStyle(available && current && series.status == .available ? DS.Palette.textSecondary : DS.Palette.warningSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text("Market context captured \(market.capturedAt.formatted(date: .abbreviated, time: .standard)) · not live quotes")
+                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("SPY / QQQ market context") {
+                StockSageMomentumView(market: market).padding(.top, DS.Space.sm)
+            }.font(.callout)
+        }
+        .accessibilityIdentifier(identifier + ".momentum.marketContext")
+    }
+
     private var watchTitle: some View {
         VStack(alignment: .leading, spacing: 4) {
             Label("Momentum & setup alerts", systemImage: "waveform.path.ecg")
                 .font(DS.Typography.titleM).accessibilityAddTraits(.isHeader)
             Text(monitor.isEnabled ? "Automatic checks enabled" : "Automatic checks stopped")
-                .font(.caption.weight(.medium))
+                .font(.callout.weight(.medium))
                 .foregroundStyle(monitor.isEnabled ? DS.Palette.accentText : DS.Palette.textSecondary)
         }
     }
@@ -133,10 +158,27 @@ struct StockSageMicrocapActivityView: View {
                 .accessibilityIdentifier(identifier + ".watch.stop")
         } else {
             Button("Enable tracking", systemImage: "play.fill") { monitor.start(store: store) }
-                .buttonStyle(.borderedProminent).controlSize(.large)
+                .buttonStyle(.bordered).controlSize(.large)
                 .disabled(research.isRunning)
-                .help("Track momentum during your Riyadh schedule. Pair Telegram to enable momentum alerts, Astra reviews and fresh-setup assessments.")
+                .help(telegram.isReady
+                    ? "Track momentum during your Riyadh schedule. Your paired Telegram chat can receive qualified research and descriptive alerts when fresh evidence permits."
+                    : "Track momentum during your Riyadh schedule. Pair Telegram to enable momentum alerts, Astra reviews and fresh-setup assessments.")
                 .accessibilityIdentifier(identifier + ".watch.start")
+        }
+    }
+
+    /// Reconcile only fixed setup guidance; preserve every actual request, error and delivery status.
+    static func statusMessage(_ message: String, telegramReady: Bool) -> String {
+        guard telegramReady else { return message }
+        switch message {
+        case "Tracking is off. Enable weekday momentum tracking; pair Telegram for fresh-setup assessments.":
+            return "Tracking is off. Telegram is paired; enable weekday momentum tracking for fresh-setup assessments."
+        case "Pair Telegram for heavy-momentum observations and Astra reviews.":
+            return "Telegram paired · alerts and Astra reviews require a fresh confirmed observation while tracking is enabled."
+        case "Momentum tracking is enabled. Pair Telegram to enable automatic Astra fresh-setup and momentum assessments and alerts.":
+            return "Momentum tracking is enabled. Telegram is paired; automatic assessments and alerts remain subject to the tracking window and fresh evidence."
+        default:
+            return message
         }
     }
 

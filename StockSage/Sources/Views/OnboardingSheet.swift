@@ -21,7 +21,7 @@ struct OnboardingSheet: View {
 
     private let steps: [Step] = [
         .init(id: 1, icon: "magnifyingglass", title: "Choose your trading window",
-              detail: "Open Same-day pick for one intraday candidate with a buy entry, stop and target, or choose the separate 1–7 and 7–14 trading-day Top 5 pages. Every research run starts with your explicit action; switching tabs does not run research."),
+              detail: "Open Same-day pick for one intraday candidate with a buy entry, stop and target, or choose the separate 1–7 and 7–14 trading-day Top 5 pages. These runs start manually. Separately enabled Micro cap and Large cap watching can request automatic reviews; switching tabs does not start a manual run."),
         .init(id: 2, icon: "list.number", title: "Separate rankings from qualified picks",
               detail: "Each trading-day page shows its own deterministic ranked five when enough completed research exists. Ranked stocks can fail the strict screen; only Qualified stocks passed it. The separate model comparison selects from eligible Buy / Strong Buy opinions. Same-day research can return no pick when its checks fail."),
         .init(id: 3, icon: "doc.text.magnifyingglass", title: "Read the evidence and uncertainty",
@@ -44,7 +44,7 @@ struct OnboardingSheet: View {
                         Text("Welcome to StockSage")
                             .font(.title2.weight(.bold))
                             .accessibilityAddTraits(.isHeader)
-                        Text("One same-day pick and separate Top 5 research for 1–7 and 7–14 trading days. Start each run manually; find saved research, Chat and your records in Library.")
+                        Text("One same-day pick and separate Top 5 research for 1–7 and 7–14 trading days. Find automatic cap watching on its own pages, and saved research, Chat and your records in Library.")
                             .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -99,7 +99,7 @@ struct OnboardingSheet: View {
         }
         #if os(macOS)
         .padding(24)
-        .frame(width: 560, height: 640)
+        .frame(minWidth: 420, idealWidth: 560, minHeight: 400, idealHeight: 640)
         #else
         .padding(16)
         .frame(maxWidth: 560, maxHeight: .infinity)

@@ -207,12 +207,17 @@ struct CatalystsSection: View {
     }
 
     #if os(macOS)
-    @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11
+    @ScaledMetric(relativeTo: .callout) private var metadataSize: CGFloat = 13
     #else
     @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 12
     #endif
+    #if os(macOS)
+    @ScaledMetric(relativeTo: .callout) private var font11: CGFloat = 13
+    @ScaledMetric(relativeTo: .callout) private var font11_5: CGFloat = 13
+    #else
     @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
     @ScaledMetric(relativeTo: .caption2) private var font11_5: CGFloat = 11.5
+    #endif
     @ScaledMetric(relativeTo: .caption2) private var font12: CGFloat = 12
     @ScaledMetric(relativeTo: .caption2) private var font13: CGFloat = 13
     @ScaledMetric(relativeTo: .caption2) private var font15: CGFloat = 15
@@ -454,7 +459,7 @@ struct CatalystsSection: View {
         }
         .padding(DS.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Palette.surface))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }
 
@@ -513,7 +518,7 @@ struct CatalystsSection: View {
                         .font(.system(.body, design: .monospaced)).autocorrectionDisabled()
                 }
                 Button(probing ? "Testing…" : "Test connection") { testConnection() }
-                    .buttonStyle(.plain).touchHitArea().disabled(probing)
+                    .buttonStyle(.bordered).touchHitArea().disabled(probing)
                     .font(.system(size: font11)).foregroundStyle(DS.Palette.accentText)
                 Text("On-device: \(onDeviceStatusLine(availability)) Model server: \(probe?.detail ?? "not tested yet.")")
                     .font(.system(size: font11)).foregroundStyle(probeStatusColor)
@@ -588,7 +593,7 @@ struct CatalystsSection: View {
             narrationPanel(brief)
         }
         .padding(DS.Space.lg)
-        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Palette.surface))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
     }
 
@@ -1060,7 +1065,7 @@ struct CatalystsSection: View {
             }
             .padding(DS.Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+            .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Palette.surface))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
         }
 
@@ -1077,7 +1082,7 @@ struct CatalystsSection: View {
                             }
                         }
                         .padding(DS.Space.md)
-                        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Palette.surface))
                         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                         DisclosureGroup("Full stock context — all dates") {
                             VStack(alignment: .leading, spacing: DS.Space.xs) {
@@ -1107,7 +1112,7 @@ struct CatalystsSection: View {
                     }
                 }
                 .padding(DS.Space.lg)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+                .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Palette.surface))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
             }
             if !matching.isEmpty {
@@ -1162,7 +1167,7 @@ struct CatalystsSection: View {
                         }
                     }
                     .padding(DS.Space.lg)
-                    .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(Color.white.opacity(0.04)))
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).fill(DS.Palette.surface))
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                 }
             }
@@ -1179,11 +1184,15 @@ struct CatalystsSection: View {
         let now: Date?
         let onSelect: (StockSageIdea) -> Void
         #if os(macOS)
-        @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11
+        @ScaledMetric(relativeTo: .callout) private var metadataSize: CGFloat = 13
         #else
         @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 12
         #endif
+        #if os(macOS)
+        @ScaledMetric(relativeTo: .callout) private var font11: CGFloat = 13
+        #else
         @ScaledMetric(relativeTo: .caption2) private var font11: CGFloat = 11
+        #endif
         @ScaledMetric(relativeTo: .caption2) private var font12: CGFloat = 12
 
         var body: some View {
@@ -1493,12 +1502,10 @@ struct CatalystsSection: View {
     }
 
     /// A5: dims a negative-record calendar row so it reads as a checked-and-empty record, never
-    /// mistaken for a real catalyst at a glance. `Color.white` / `.opacity(0.66)` are
-    /// `DS.Palette.textPrimary` / `.textSecondary` copied as literals — same nonisolated-cannot-
-    /// read-a-MainActor-static constraint as `actionFill` above (`CatalystsSectionTests` pins
-    /// both sides). Never `DS.Palette.danger`/`.dangerSoft` — an empty catalyst record is neutral
+    /// mistaken for a real catalyst at a glance. Use the shared immutable text tokens so
+    /// palette changes remain consistent. Never `DS.Palette.danger`/`.dangerSoft` — an empty catalyst record is neutral
     /// information, not a warning, so a danger tint would misrepresent it as one.
     nonisolated static func calendarRowColor(isNegativeRecord: Bool) -> Color {
-        isNegativeRecord ? Color.white.opacity(0.66) : Color.white   // DS.Palette.textSecondary / .textPrimary
+        isNegativeRecord ? DS.Palette.textSecondary : DS.Palette.textPrimary
     }
 }

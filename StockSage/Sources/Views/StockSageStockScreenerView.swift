@@ -13,7 +13,7 @@ struct StockSageStockScreenerView: View {
     @State private var sort: StockSageStockScreener.Sort = .marketCap
     @State private var ascending = true
     @State private var page = 0
-    @State private var showingQuality = false
+    @State private var qualityRow: StockSageStockScreener.Row?
     @State private var newsReloadRevision = 0
 
     init(store: StockSageStore, screener: StockSageStockScreener = .shared) { self.screener = screener }
@@ -65,26 +65,15 @@ struct StockSageStockScreenerView: View {
         .background(DS.Palette.bgTop)
         .onChange(of: filterIdentity) { _, _ in page = 0 }
         .onChange(of: screener.snapshot?.retrievedAt) { _, _ in page = 0 }
-        .sheet(isPresented: $showingQuality) {
-            if let snapshot = screener.quality {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Company quality · \(snapshot.symbol)").font(.title2.bold())
-                        Spacer()
-                        Button("Done") { showingQuality = false }.keyboardShortcut(.cancelAction)
-                    }
-                    ScrollView { StockSageFundamentalsView(snapshot: snapshot, initiallyExpanded: true).frame(maxWidth: .infinity, alignment: .leading) }
-                    Text("This on-demand detail is held in memory and is lost when StockSage closes. It does not save a research run or start a model.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }.padding(24).frame(minWidth: 520, idealWidth: 740, minHeight: 480, idealHeight: 720)
-                    .background(DS.Palette.bgTop)
-            }
+        .sheet(item: $qualityRow) { row in
+            CompanyQualitySheet(row: row, screener: screener)
+                .presentationSizing(.fitted)
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Stock screener", systemImage: "line.3.horizontal.decrease.circle").font(.largeTitle.bold())
+            Label("Stock screener", systemImage: "line.3.horizontal.decrease.circle").font(.title.weight(.semibold))
             Text("Explore company size and reported financial quality. These editable filters are separate from the Micro cap and Large cap same-day qualification rules.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
@@ -123,8 +112,11 @@ struct StockSageStockScreenerView: View {
                     field("ROA minimum · % · optional", text: $minimumROA, id: "screener.minimumROA")
                     field("Debt/equity ceiling · optional", text: $maximumDebt, id: "screener.maximumDebt")
                 }
-                Text("A blank maximum cap has no upper ceiling. Size presets keep your quality filters. Blank quality filters are disabled. P/E requires positive earnings; ROA is shown as a percentage; debt/equity is a multiple. Missing values never become zero. Ratios more than seven calendar days old cannot match. ROCE and ROIC are available only where supported in Company quality; they are not bulk filters.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("How the filters treat missing and dated values") {
+                    Text("A blank maximum cap has no upper ceiling. Size presets keep your quality filters. Blank quality filters are disabled. P/E requires positive earnings; ROA is shown as a percentage; debt/equity is a multiple. Missing values never become zero. Ratios more than seven calendar days old cannot match. ROCE and ROIC are available only where supported in Company quality; they are not bulk filters.")
+                        .font(.callout).foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                }.font(.callout)
                 if filters == nil {
                     Label("Enter finite numbers, a nonnegative cap range in ascending order, positive P/E and nonnegative debt/equity.", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -157,8 +149,11 @@ struct StockSageStockScreenerView: View {
         return VStack(alignment: .leading, spacing: 8) {
             Text("\(matches) matches · \(snapshot.rows.count - matches - missing) excluded · \(missing) unavailable")
                 .font(.headline).accessibilityIdentifier("screener.coverage")
-            Text("Captured \(snapshot.retrievedAt.formatted(date: .abbreviated, time: .standard)). Latest daily snapshots, not live prices or historical-as-of fundamentals. Coverage is limited to active US USD common shares on Nasdaq plus supported reported S&P 500 members; this is not the entire market.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Captured \(snapshot.retrievedAt.formatted(date: .abbreviated, time: .standard)) · Daily snapshots, not live prices.")
+                .font(.callout).foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("Coverage and source records") {
+            Text("Latest daily snapshots, not historical-as-of fundamentals. Coverage is limited to active US USD common shares on Nasdaq plus supported reported S&P 500 members; this is not the entire market.")
+                .font(.callout).foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
             if let membership = snapshot.membership {
                 Text("S&P membership: DataHub/Wikipedia-derived reported list, \(membership.reportedCount) symbols, retrieved \(membership.retrievedAt.formatted(date: .abbreviated, time: .standard)). No official effective date. Source SHA-256 \(membership.sha256).")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -168,6 +163,7 @@ struct StockSageStockScreenerView: View {
                 Link("Massive ratio documentation", destination: URL(string: "https://massive.com/docs/rest/stocks/fundamentals/ratios")!)
                 Link("Reported S&P membership", destination: URL(string: StockSageSP500Constituents.sourceURL)!)
             }.font(.caption)
+            }.font(.callout)
         }
     }
 
@@ -209,12 +205,8 @@ struct StockSageStockScreenerView: View {
                     }
                     Spacer()
                     Text(match?.status.rawValue ?? "Unavailable").font(.caption.bold())
-                    Button("Company quality") {
-                        Task {
-                            await screener.companyQuality(for: row)
-                            showingQuality = screener.quality?.symbol == row.symbol
-                        }
-                    }.disabled(screener.isBusy).accessibilityIdentifier("screener.quality.\(row.symbol)")
+                    Button("Company quality") { qualityRow = row }
+                        .disabled(screener.isBusy).accessibilityIdentifier("screener.quality.\(row.symbol)")
                 }
                 Text("Ratio date: \(row.date ?? "unavailable") · Market cap: \(row.marketCap.map { $0.formatted(.currency(code: "USD").precision(.fractionLength(0))) } ?? "unavailable")")
                     .font(.callout).monospacedDigit().fixedSize(horizontal: false, vertical: true)
@@ -233,6 +225,69 @@ struct StockSageStockScreenerView: View {
                 }
             }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
         }.accessibilityIdentifier("screener.row.\(row.symbol)")
+    }
+}
+
+private struct CompanyQualitySheet: View {
+    let row: StockSageStockScreener.Row
+    @ObservedObject var screener: StockSageStockScreener
+    @Environment(\.dismiss) private var dismiss
+    @State private var finished = false
+    @State private var cancelled = false
+    @State private var operation = UUID()
+    @State private var snapshot: StockSageFundamentals.Snapshot?
+    @State private var status = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Company quality · \(row.symbol)").font(.title2.weight(.semibold))
+                    Text(row.name).font(.callout).foregroundStyle(DS.Palette.textSecondary)
+                }
+                Spacer()
+                Button("Done") { cancel(); dismiss() }.keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("screener.quality.done")
+            }
+            if !finished && !cancelled {
+                HStack(spacing: 12) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading company quality for \(row.symbol)…").font(.callout)
+                    Spacer()
+                    Button("Cancel") { cancel() }.accessibilityIdentifier("screener.quality.cancel")
+                }
+            } else {
+                Text(cancelled ? "Company quality cancelled. No new detail was published." : status)
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("screener.quality.status")
+            }
+            ScrollView {
+                if finished, !cancelled, let snapshot {
+                    StockSageFundamentalsView(snapshot: snapshot, initiallyExpanded: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.frame(maxHeight: .infinity)
+            Text("This detail stays in memory until StockSage closes. It does not save a research run or start a model. Closing stops an unfinished request.")
+                .font(.callout).foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24).frame(minWidth: 520, idealWidth: 740, minHeight: 480, idealHeight: 720)
+        .background(DS.Palette.bgTop)
+        .task {
+            guard !cancelled, !Task.isCancelled else { return }
+            let captured = await screener.companyQuality(for: row, operation: operation)
+            guard !cancelled, !Task.isCancelled else { return }
+            snapshot = captured
+            status = screener.isBusy
+                ? "Company quality did not start because another data request is running. Close this panel and retry when it finishes."
+                : screener.status
+            finished = true
+        }
+        .onDisappear { cancel() }
+    }
+
+    private func cancel() {
+        cancelled = true
+        screener.cancelCompanyQuality(operation: operation)
     }
 }
 #endif

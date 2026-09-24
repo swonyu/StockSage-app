@@ -47,18 +47,21 @@ struct StockSageScreenerNewsView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 // Keep headings inside unlabeled GroupBoxes for native accessibility traversal.
-                Text("Matched news").font(.headline).accessibilityAddTraits(.isHeader)
-                Text("News for all \(rows.count) symbols matching your financial filters and search. These matches are not trade-qualified setups. Table sorting and showing excluded listings do not change this set.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
+                    Text("Matched news").font(.headline).accessibilityAddTraits(.isHeader)
+                    Spacer()
                     Button("Open matched news") { showingNews = true }
                         .accessibilityIdentifier("screener.news.open")
                     if news.isLoading { ProgressView().controlSize(.small) }
                 }
+                Text("News for all \(rows.count) matching symbols. These matches are not trade-qualified setups.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text(progressText).font(.callout).monospacedDigit()
                     .accessibilityIdentifier("screener.news.progress")
-                Text("Nothing is fetched until you choose Load matched news. Every matched symbol is included; pages limit display only.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("News capture scope") {
+                    Text("Nothing is fetched until you choose Load matched news. Every symbol matching your financial filters and search is included; pages limit display only. Table sorting and showing excluded listings do not change this set.")
+                        .font(.callout).foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }.font(.callout)
             }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
         }
         .onChange(of: selectionID) { _, _ in clear() }

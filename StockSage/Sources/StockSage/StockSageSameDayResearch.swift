@@ -16,9 +16,9 @@ import Combine
             switch self { case .sameDay: nil; case .microcap: .microcap; case .largecap: .largecap }
         }
     }
-    static let shared = StockSageSameDayResearch(receiptStore: productionReceipts())
-    static let microcap = StockSageSameDayResearch(receiptStore: productionReceipts(mode: .microcap), mode: .microcap)
-    static let largecap = StockSageSameDayResearch(receiptStore: productionReceipts(mode: .largecap), mode: .largecap)
+    static let shared = production(mode: .sameDay)
+    static let microcap = production(mode: .microcap)
+    static let largecap = production(mode: .largecap)
     static var anyRunning: Bool { shared.isRunning || microcap.isRunning || largecap.isRunning }
     let mode: Mode
     var isMicrocap: Bool { mode == .microcap }
@@ -77,20 +77,54 @@ import Combine
     @Published private(set) var status = "Press Run to check up to 24 activity-selected stocks for one same-day pick."
     private(set) var restored = false
     private let receiptStore: StockSageResearchReceiptStore?
+    private let requireWriter: () throws -> Void
     private var task: Task<Void, Never>?
     private var generation = UUID()
-    init(receiptStore: StockSageResearchReceiptStore? = nil, mode: Mode = .sameDay) {
+    init(receiptStore: StockSageResearchReceiptStore? = nil, mode: Mode = .sameDay,
+         requireWriter: @escaping () throws -> Void = { try StockSageRecordWriter.require(.standard) }) {
         self.mode = mode
         self.receiptStore = receiptStore
+        self.requireWriter = requireWriter
         savedReceipts = receiptStore?.sameDayHistory ?? []
         receipt = savedReceipts.first
         restored = receipt != nil
         if mode.isAstra { status = "Set up Telegram and enable watching, or run a manual \(mode.title) check. Uses GPT-6 Astra through your Codex subscription." }
     }
-    private static func productionReceipts(mode: Mode = .sameDay) -> StockSageResearchReceiptStore? {
-        guard !StockSageStore.isRunningTests, (try? StockSageRecordWriter.require(.standard)) != nil else { return nil }
-        return StockSageResearchReceiptStore(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("StockSage/" + mode.directoryName, isDirectory: true), sameDayLabel: mode.rawValue)
+    private static func production(mode: Mode) -> StockSageSameDayResearch {
+        guard !StockSageStore.isRunningTests else { return .init(mode: mode) }
+        do {
+            try StockSageRecordWriter.require(.standard)
+            let receipts = StockSageResearchReceiptStore(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("StockSage/" + mode.directoryName, isDirectory: true), sameDayLabel: mode.rawValue)
+            return .init(receiptStore: receipts, mode: mode)
+        } catch {
+            let research = StockSageSameDayResearch(mode: mode)
+            research.status = writerFailure(error)
+            return research
+        }
+    }
+
+    /// Only the fixed lock descriptions are safe to show; other errors can contain private paths.
+    static func writerFailure(_ error: Error) -> String {
+        (error as? StockSageFileLock.Failure ?? .unavailable).localizedDescription
+    }
+
+    /// Shared durable admission before model preparation, cap screening or descriptive momentum collection.
+    func prepareReceipt(at requested: Date, selection: String, marketMomentum: StockSageMomentum.Market? = nil) -> Receipt? {
+        do { try requireWriter() }
+        catch { status = Self.writerFailure(error); return nil }
+        guard let receiptStore else {
+            status = StockSageFileLock.Failure.unavailable.localizedDescription; return nil
+        }
+        let id = receiptStore.beginSameDay(at: requested)
+        var initial = Receipt(id: id, startedAt: requested, selection: selection, checks: [])
+        initial.mode = mode.isAstra ? mode : nil; initial.marketMomentum = marketMomentum
+        guard receiptStore.saveSameDay(initial) else {
+            initial.blocker = Self.receiptFailure
+            finishReceipt(initial, at: requested, status: Self.receiptFailure)
+            return nil
+        }
+        return initial
     }
 
     func stop() {
@@ -116,19 +150,9 @@ import Combine
         if let reason = StockSageMassive.credentialAccessBlocker() {
             status = reason + " No research started."; return false
         }
-        guard let receiptStore, (try? StockSageRecordWriter.require(.standard)) != nil else {
-            status = "The same-day research writer is unavailable. No research started; existing records preserved."; return false
-        }
-        let requested = Date(), id = receiptStore.beginSameDay(at: requested)
-        let initial = Receipt(id: id, startedAt: requested, selection: "Preparing Gemma and the dated activity shortlist.", checks: [])
-        guard receiptStore.saveSameDay(initial) else {
-            let reason = "The initial same-day receipt could not be saved. No model preparation or market collection started."
-            var failure = initial
-            failure.finishedAt = Date(); failure.blocker = reason
-            receiptStore.finish(scanID: id, status: reason)
-            receipt = failure; status = reason; restored = false; savedReceipts = receiptStore.sameDayHistory
-            return false
-        }
+        guard let initial = prepareReceipt(at: Date(), selection: "Preparing Gemma and the dated activity shortlist."),
+              let receiptStore else { return false }
+        let id = initial.id
         receipt = initial; restored = false; savedReceipts = receiptStore.sameDayHistory
         let run = UUID(), key = StockSageMassive.apiKey
         let credentials = StockSageMassive.credentialRevision(), revision = StockSageLocalModelServer.settingsRevision()
@@ -174,14 +198,9 @@ import Combine
             status = "\(title) requires current public market access; sample data cannot trigger research."; return false
         }
         if let reason = StockSageMassive.credentialAccessBlocker() { status = reason; return false }
-        guard let receiptStore, (try? StockSageRecordWriter.require(.standard)) != nil else {
-            status = "\(title) cannot start because its research record cannot be saved."; return false
-        }
-        let id = receiptStore.beginSameDay(at: requested)
-        var initial = Receipt(id: id, startedAt: requested,
-            selection: "Classifying supported common shares before the bounded \(title) screen.", checks: [])
-        initial.mode = mode
-        guard receiptStore.saveSameDay(initial) else { status = Self.receiptFailure; return false }
+        guard var initial = prepareReceipt(at: requested,
+            selection: "Classifying supported common shares before the bounded \(title) screen."), let receiptStore else { return false }
+        let id = initial.id
         let access = StockSageMassive.Access().capture(), run = UUID()
         generation = run; isRunning = true; restored = false; receipt = initial
         status = "Screening dated market evidence; Astra uses your Codex subscription only after a setup qualifies…"
@@ -247,16 +266,14 @@ import Combine
               StockSageMicrocapMonitor.trackingWindow(at: now) != nil,
               StockSageMicrocapMonitor.momentumID(trigger, mode: mode, purpose: .review) == setupID,
               !savedReceipts.contains(where: { $0.checks.contains { $0.setupID == setupID } }),
-              ToolPolicy.isExternalAllowed, !store.isSampleData,
-              let receiptStore, (try? StockSageRecordWriter.require(.standard)) != nil else { return false }
+              ToolPolicy.isExternalAllowed, !store.isSampleData else { return false }
         if let reason = StockSageMassive.credentialAccessBlocker() { status = reason; return false }
         let access = StockSageMassive.Access().capture()
         guard access.isCurrent() else { return false }
-        let id = receiptStore.beginSameDay(at: now)
-        var initial = Receipt(id: id, startedAt: now,
-            selection: "Heavy momentum in \(trigger.symbol) · descriptive Astra review, not a qualified trade setup.", checks: [])
-        initial.mode = mode; initial.marketMomentum = market
-        guard receiptStore.saveSameDay(initial) else { status = Self.receiptFailure; return false }
+        guard var initial = prepareReceipt(at: now,
+            selection: "Heavy momentum in \(trigger.symbol) · descriptive Astra review, not a qualified trade setup.",
+            marketMomentum: market), let receiptStore else { return false }
+        let id = initial.id
         guard admitSetup?(setupID) ?? true else {
             initial.finishedAt = now; initial.blocker = "This momentum review was already attempted or admission was unavailable."
             _ = receiptStore.saveSameDay(initial); receiptStore.finish(scanID: id, status: initial.blocker!, at: now)

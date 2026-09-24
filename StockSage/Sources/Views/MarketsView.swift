@@ -454,15 +454,25 @@ struct MarketsView: View {
     }
 
     var body: some View {
-        if let sym = qaDetailSymbol {
-            if let idea = store.ideas.first(where: { $0.symbol.uppercased() == sym.uppercased() }) {
-                ideaDetailSheet(idea)
+        Group {
+            if let sym = qaDetailSymbol {
+                if let idea = store.ideas.first(where: { $0.symbol.uppercased() == sym.uppercased() }) {
+                    ideaDetailSheet(idea)
+                } else {
+                    Text("QA: no such idea — \(sym)").foregroundStyle(DS.Palette.dangerSoft)
+                }
             } else {
-                Text("QA: no such idea — \(sym)").foregroundStyle(DS.Palette.dangerSoft)
+                normalBody
             }
-        } else {
-            normalBody
         }
+        .modifier(DSReducedMotion())
+        #if os(macOS)
+        .background {
+            StockSageModelSetupWindowLink(openModelSettings: openModelSettings)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        #endif
     }
 
     /// iOS 27-beta runtime dodge (2026-07-27): the runtime SIGSEGVs in
@@ -733,7 +743,11 @@ struct MarketsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(destination.workspaceTitle).font(.headline)
                         Text(StockSageDesktop.subtitle(for: destination))
+                            #if os(macOS)
+                            .font(.callout).foregroundStyle(DS.Palette.textSecondary)
+                            #else
                             .font(.caption).foregroundStyle(.secondary)
+                            #endif
                             .fixedSize(horizontal: false, vertical: true)
                     }.padding(.vertical, 8)
                 } icon: {
@@ -741,9 +755,13 @@ struct MarketsView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(DS.Palette.accentText)
                         .frame(width: 30, height: 30)
-                        .background(DS.Palette.accent.opacity(0.10), in: .rect(cornerRadius: DS.Radius.small))
+                        .background(DS.Palette.surface, in: .rect(cornerRadius: DS.Radius.small))
                 }
-            }.accessibilityIdentifier("library.open.\(destination.rawValue)")
+            }
+            #if os(macOS)
+            .listRowBackground(DS.Palette.surfaceAlt)
+            #endif
+            .accessibilityIdentifier("library.open.\(destination.rawValue)")
         }
     }
 
@@ -795,14 +813,16 @@ struct MarketsView: View {
     }
 
     @ViewBuilder private func desktopSupportingPage(_ destination: MarketSection) -> some View {
-        if destination == .chat {
+        // These pages own their scrolling and padding. A second vertical ScrollView
+        // makes their inner viewport unbounded and consumes wheel/keyboard navigation.
+        if destination == .chat || destination == .microcap || destination == .largecap || destination == .screener {
             page(for: destination).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     page(for: destination)
                         .padding(24).frame(maxWidth: 1200, alignment: .leading)
-                        .frame(maxWidth: .infinity, alignment: .top)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                         .id("desktop-page-top")
                 }
                 .task(id: pendingModelSettingsReveal) {
@@ -3160,7 +3180,7 @@ struct MarketsView: View {
     private func healthColor(_ v: SystemHealth.Verdict) -> Color {
         switch v {
         case .strong: return DS.Palette.successSoft
-        case .developing: return DS.Palette.accent
+        case .developing: return DS.Palette.accentText
         case .unproven: return DS.Palette.textSecondary
         case .negative: return DS.Palette.danger
         }
@@ -3345,7 +3365,7 @@ struct MarketsView: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Palette.surfaceAlt))
     }
 
     @ViewBuilder private var draftIdentityFields: some View {
@@ -3397,8 +3417,12 @@ struct MarketsView: View {
             #else
             .frame(minWidth: width, maxWidth: width * 1.8)
             #endif
+            #if os(macOS)
+            .modifier(DSInputSurface())
+            #else
             .background(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).fill(Color.white.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous).stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+            #endif
         }
     }
 
@@ -3849,7 +3873,7 @@ struct MarketsView: View {
                 LazyVGrid(columns: financialMetricColumns, alignment: .leading, spacing: DS.Space.md) {
                     ideaMetric("Full Kelly", String(format: "%.1f%%", k.fullKelly * 100))
                     ideaMetric("Half", String(format: "%.1f%%", k.halfKelly * 100), color: DS.Palette.successSoft)
-                    ideaMetric("Suggested", String(format: "%.1f%%", k.suggestedFraction * 100), color: DS.Palette.accent)
+                    ideaMetric("Suggested", String(format: "%.1f%%", k.suggestedFraction * 100), color: DS.Palette.accentText)
                     ideaMetric("Allocate $", String(format: "%.0f", k.dollarsToAllocate))
                 }
                 Text(k.note).font(.caption2)
@@ -3896,9 +3920,13 @@ struct MarketsView: View {
                 .frame(minWidth: width, maxWidth: width * 1.8)
                 .decimalKeyboardOnIOS()
                 .padding(.horizontal, 8).padding(.vertical, 5)
+                #if os(macOS)
+                .modifier(DSInputSurface())
+                #else
                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
                     .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+                #endif
                 .accessibilityLabel(label)
         }
     }
@@ -3965,7 +3993,7 @@ struct MarketsView: View {
                     ideaMetric("Avg corr", String(format: "%.2f", a.avgCorrelation))
                     if let beta = store.portfolioBeta {
                         ideaMetric("β vs S&P", String(format: "%.2f", beta),
-                                   color: beta > 1.15 ? DS.Palette.warningSoft : (beta < 0 ? DS.Palette.accent : .white))
+                                   color: beta > 1.15 ? DS.Palette.warningSoft : (beta < 0 ? DS.Palette.accentText : .white))
                             .help(StockSageGlossary.betaHelp)
                     }
                 }
@@ -4258,10 +4286,14 @@ struct MarketsView: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
+            #if os(macOS)
+            .modifier(DSInputSurface())
+            #else
             .background(Color.white.opacity(0.08),
                         in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
+            #endif
 
             // Catalog autocomplete — search the full directory (incl. names not yet on
             // the board) and one-tap add. Hidden once the query already matches a tracked row.
@@ -4290,7 +4322,7 @@ struct MarketsView: View {
                         .accessibilityLabel("Add \(sug.symbol), \(sug.market)")
                     }
                 }
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
+                .background(DS.Palette.surface, in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
                     .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
             }
@@ -4528,7 +4560,7 @@ struct MarketsView: View {
             #endif
         }
         .padding(.vertical, 10)
-        .background(hovered ? Color.white.opacity(0.035) : Color.clear)
+        .background(hovered ? DS.Palette.surfaceAlt : Color.clear)
         .overlay(alignment: .bottom) {
             #if os(macOS)
             Divider().padding(.horizontal, 16)
@@ -4680,7 +4712,11 @@ struct MarketsView: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
+        #if os(macOS)
+        .modifier(DSInputSurface(cornerRadius: DS.Radius.field))
+        #else
         .background(.white.opacity(0.06), in: Capsule())
+        #endif
         .accessibilityLabel("Search ideas by symbol")
         .frame(maxWidth: .infinity)
     }
@@ -4807,7 +4843,7 @@ struct MarketsView: View {
                 .lineLimit(1)
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(.white.opacity(0.05), in: Capsule())
+        .background(DS.Palette.surface, in: Capsule())
         if let action {
             Button(action: action) { chip }.buttonStyle(.plain).help("Filter to \(label)")
         } else if let help {
@@ -5408,7 +5444,7 @@ struct MarketsView: View {
                 } ?? "Signal strength — a rules-based score, not a probability. Estimated win-rate range ~\(StockSageExpectedValue.assumedWinBandLabel), not a forecast.")
             if idea.spark.count >= 2 {
                 Sparkline(values: idea.spark)
-                    .stroke(sparkColor(idea.spark),
+                    .stroke(Self.sparkColor(idea.spark),
                             style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
                     .frame(height: 22)
                     .opacity(0.9)
@@ -5460,7 +5496,7 @@ struct MarketsView: View {
         .opacity(boardIsStale ? 0.85 : 1.0)   // dim stale cards — 0.85 keeps .secondary text ≥4.5:1 AA (was 0.75 → 3.84:1); clock badge + a11y label + help still carry staleness
         .background(
             RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(hovered ? Color.white.opacity(0.055) : DS.Bezel.cardFill)
+                .fill(hovered ? DS.Palette.surface : DS.Bezel.cardFill)
                 .strokeBorder(DS.Bezel.coreInnerHighlight, lineWidth: 0.5)
         )
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
@@ -6837,7 +6873,7 @@ struct MarketsView: View {
             .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(Color.white.opacity(0.03)))
+                .fill(DS.Palette.surfaceAlt))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
             .accessibilityElement(children: .combine)
@@ -6918,7 +6954,7 @@ struct MarketsView: View {
             }
             .padding(DS.Space.lg)
             .background(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
-                .fill(Color.white.opacity(0.04)))
+                .fill(DS.Palette.surfaceAlt))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.card, style: .continuous)
                 .stroke(DS.Palette.surfaceStroke, lineWidth: 1))
         }
@@ -8014,7 +8050,7 @@ struct MarketsView: View {
                     explainer("Correlation de-weighting and the heat cap apply at the portfolio level, not shown per-idea. Each brake is shown applied to Base independently — they compound in the Deploy plan. " + Self.sizeMetricHelp)
                 }
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Palette.surfaceAlt))
         }
     }
 
@@ -8069,7 +8105,7 @@ struct MarketsView: View {
                     let leveraged = pctOfAccountUSD > 100
                     if ps.shares >= 1 {
                         HStack(spacing: DS.Space.sm) {
-                            ideaMetric("Shares", "\(ps.shares)", color: DS.Palette.accent)
+                            ideaMetric("Shares", "\(ps.shares)", color: DS.Palette.accentText)
                             ideaMetric("At risk", StockSageCurrency.approxAmount(ps.dollarsAtRisk, symbol: idea.symbol), color: DS.Palette.dangerSoft)
                             ideaMetric("Notional", StockSageCurrency.approxAmount(ps.notional, symbol: idea.symbol))
                             ideaMetric("% acct", String(format: "%.0f%%", pctOfAccountUSD),
@@ -8142,7 +8178,7 @@ struct MarketsView: View {
                 }
             }
             .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.04)))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(DS.Palette.surfaceAlt))
         }
     }
 
@@ -8500,7 +8536,7 @@ struct MarketsView: View {
                             }
                         }
                         .foregroundStyle(.white).padding(.horizontal, 11).padding(.vertical, 6)
-                        .background(Color.white.opacity(0.10), in: Capsule())
+                        .background(DS.Palette.surface, in: Capsule())
                         .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                     }
                     .buttonStyle(LuxPressStyle())
@@ -8526,7 +8562,7 @@ struct MarketsView: View {
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 11).padding(.vertical, 6)
-                        .background(Color.white.opacity(0.10), in: Capsule())
+                        .background(DS.Palette.surface, in: Capsule())
                         .overlay(Capsule().stroke(DS.Palette.surfaceStroke, lineWidth: 1))
                     }
                     .buttonStyle(LuxPressStyle()).disabled(store.isBacktesting)
@@ -8683,7 +8719,7 @@ struct MarketsView: View {
 
                 // Sparkline
                 if idea.spark.count >= 2 {
-                    let trendWord = (idea.spark.last ?? 0) >= (idea.spark.first ?? 0) ? "up" : "down"
+                    let trend = Self.sparkTrend(idea.spark)
                     // Registration fix (OSS-borrow B2 review): compute the extended domain ONCE
                     // and hand the SAME value to the Shape and the overlay — two independent
                     // normalizations (spark's own min/max vs. the overlay's extended domain)
@@ -8696,7 +8732,7 @@ struct MarketsView: View {
                         return SparkSeries.domain(idea.spark, extending: [stop, target, idea.price])
                     }()
                     Sparkline(values: idea.spark, domain: overlayDomain)
-                        .stroke(sparkColor(idea.spark), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        .stroke(Self.sparkColor(idea.spark), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                         .frame(height: 64)
                         .overlay(tradePlanOverlay(idea, domain: overlayDomain))
                         // L4 dedup (critique fleet #1): the trade-plan overlay itself is
@@ -8710,7 +8746,7 @@ struct MarketsView: View {
                               ? "Trade plan overlay: stop/target lines and the latest-close marker — see \u{201C}Stop & Target computed\u{201D} below."
                               : "")
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Price sparkline, trending \(trendWord), high \(adaptivePrice(idea.spark.max() ?? 0)), low \(adaptivePrice(idea.spark.min() ?? 0))")
+                        .accessibilityLabel("Price sparkline, \(trend.summary), high \(adaptivePrice(idea.spark.max() ?? 0)), low \(adaptivePrice(idea.spark.min() ?? 0))")
                     // At-the-extreme chip (OSS-borrow B3, Ghostfolio min/max highlight; L1 honesty
                     // fix 2026-07-07): same idea.recentExtreme predicate as the ranked card (raw
                     // last-N-day closes, not the downsampled spark), rendered right under the
@@ -9472,6 +9508,7 @@ struct MarketsView: View {
             proxy.scrollTo("sheetTopAnchor", anchor: .top)
         }
         } // end ScrollViewReader (house pattern — proxy stays in scope for .onChange)
+        .modifier(DSReducedMotion())
         #if os(macOS)
         .frame(minWidth: 440, maxWidth: 680, minHeight: 480)   // mac sheet floor — fenced: iPhones are 375-440pt (review 2026-07-27)
         #else
@@ -9900,13 +9937,35 @@ struct MarketsView: View {
             : (d == .caution ? DS.Palette.warningSoft.opacity(0.85) : DS.Palette.successSoft.opacity(0.85))
     }
 
-    /// Sparkline tint by net direction over the shown window.
-    private func sparkColor(_ spark: [Double]) -> Color {
-        guard let first = spark.first, let last = spark.last, first != 0 else { return DS.Palette.accent }
+    enum SparkTrend: String, Sendable {
+        case up, down, flat, unavailable
+
+        var summary: String {
+            switch self {
+            case .up: "up from first to last close"
+            case .down: "down from first to last close"
+            case .flat: "approximately flat from first to last close"
+            case .unavailable: "trend unavailable"
+            }
+        }
+    }
+
+    /// Visual and spoken direction use the same existing neutral band.
+    static func sparkTrend(_ spark: [Double]) -> SparkTrend {
+        guard spark.count >= 2, spark.allSatisfy(\.isFinite),
+              let first = spark.first, let last = spark.last, first != 0 else { return .unavailable }
         let change = (last - first) / abs(first)
-        if change > 0.001 { return DS.Palette.successSoft }   // up >0.1%
-        if change < -0.001 { return DS.Palette.danger }       // down >0.1%
-        return DS.Palette.textSecondary                        // effectively flat → neutral, not a fake "green gain"
+        if change > 0.001 { return .up }
+        if change < -0.001 { return .down }
+        return .flat
+    }
+
+    static func sparkColor(_ spark: [Double]) -> Color {
+        switch sparkTrend(spark) {
+        case .up: DS.Palette.successSoft
+        case .down: DS.Palette.danger
+        case .flat, .unavailable: DS.Palette.textSecondary
+        }
     }
 
     /// OSS-borrow B2 (TradingView lightweight-charts "plot a trade" price-lines + series
@@ -9956,8 +10015,8 @@ struct MarketsView: View {
                     let stopLabelY = SparkSeries.clampedLabelY(stopY * h, height: h, labelHeight: labelH)
                     let targetLabelY = SparkSeries.clampedLabelY(targetY * h, height: h, labelHeight: labelH)
                     let (stopFinalY, targetFinalY) = SparkSeries.deconflictedLabelYs(stopLabelY, targetLabelY, labelHeight: labelH, height: h)
-                    tradePlanLine(y: stopY * h, labelY: stopFinalY, width: w, color: DS.Palette.dangerSoft, label: adaptivePrice(stop))
-                    tradePlanLine(y: targetY * h, labelY: targetFinalY, width: w, color: DS.Palette.successSoft, label: adaptivePrice(target))
+                    tradePlanLine(y: stopY * h, labelY: stopFinalY, width: w, color: DS.Palette.dangerSoft, label: "Stop \(adaptivePrice(stop))")
+                    tradePlanLine(y: targetY * h, labelY: targetFinalY, width: w, color: DS.Palette.successSoft, label: "Target \(adaptivePrice(target))")
 
                     // Last-bar marker: the price the plan was computed against.
                     // L4 dedup (critique fleet #1): this whole overlay is .accessibilityHidden +

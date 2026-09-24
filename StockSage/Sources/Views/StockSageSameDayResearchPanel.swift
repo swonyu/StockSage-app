@@ -22,9 +22,6 @@ struct StockSageSameDayResearchPanel: View {
                     Text(research.isAstra ? "Track market and \(research.title.lowercased()) momentum Monday–Friday, 11 AM–11 PM Riyadh. Fresh regular-session setups go to Astra through your Codex subscription; a qualified pick can reach your phone." : "A fresh, manual check during the regular US session. One app-ranked, Gemma-qualified candidate when its evidence and observed scenario pass.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                #if os(macOS)
-                if research.isAstra { StockSageMicrocapActivityView(store: store, research: research) }
-                #endif
                 let actions = dynamicTypeSize.isAccessibilitySize
                     ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
                     : AnyLayout(HStackLayout(spacing: 12))
@@ -54,11 +51,19 @@ struct StockSageSameDayResearchPanel: View {
                         }
                         Text(research.status).font(.callout).textSelection(.enabled)
                             .accessibilityIdentifier(identifier + ".status")
+                        if let blocker = research.receipt?.blocker {
+                            Label("Displayed run: \(blocker)", systemImage: "exclamationmark.triangle")
+                                .font(.callout).foregroundStyle(DS.Palette.warningSoft)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .padding(DS.Space.md)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(DS.Bezel.cardFill, in: .rect(cornerRadius: DS.Radius.card))
                 }
+                #if os(macOS)
+                if research.isAstra { StockSageMicrocapActivityView(store: store, research: research) }
+                #endif
                 if let receipt = research.receipt {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(receipt.selection)
@@ -109,7 +114,6 @@ struct StockSageSameDayResearchPanel: View {
                                 .stroke(DS.Bezel.coreInnerHighlight, lineWidth: 1))
                         }
                     }
-                    if let blocker = receipt.blocker { Label(blocker, systemImage: "info.circle").foregroundStyle(.secondary) }
                     evidence(receipt)
                 }
                 let history = research.savedReceipts.filter { $0.id != research.receipt?.id }
@@ -137,14 +141,25 @@ struct StockSageSameDayResearchPanel: View {
                     }
                     .accessibilityIdentifier(identifier + ".history")
                 }
+                #if os(macOS)
+                DisclosureGroup("Research method and limits") {
+                    Text(StockSageSameDayResearch.policy).font(.callout)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, DS.Space.sm)
+                }.font(.callout)
+                #else
                 Text(StockSageSameDayResearch.policy).font(.caption).foregroundStyle(.secondary)
+                #endif
             }
             #if os(macOS)
             .padding(24)
+            .frame(maxWidth: 1200, alignment: .leading)
             #else
             .padding(16)
+            .frame(maxWidth: 1000, alignment: .leading)
             #endif
-            .frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

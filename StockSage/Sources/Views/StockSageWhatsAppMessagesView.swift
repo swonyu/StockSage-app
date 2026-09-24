@@ -67,33 +67,18 @@ struct StockSageWhatsAppMessagesView: View {
                                 .fixedSize()
                         }.font(.caption).foregroundStyle(.secondary)
                     }
-                    HStack(alignment: .top, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Source · optional").font(.headline)
-                            TextField("Group or sender label", text: $source)
-                                .textFieldStyle(.roundedBorder)
-                                .accessibilityIdentifier("whatsapp.source")
-                            Text(sourceCount > 300 ? "Source is too long: \(sourceCount.formatted()) / 300 characters."
-                                 : "Up to 300 characters. The sender is not verified.")
-                                .font(.caption).foregroundStyle(sourceCount > 300 ? .red : .secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 6) {
-                            DatePicker("Message date", selection: $messageDate, in: ...Date(),
-                                       displayedComponents: .date)
-                                .accessibilityIdentifier("whatsapp.date")
-                            Text("Set the original date; it is not read from the pasted text. Only the last 30 days are eligible for retrieval.")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 20) { sourceField; dateField }
+                        VStack(alignment: .leading, spacing: 16) { sourceField; dateField }
                     }
                     Label {
                         Text("Unverified context. Saving stays on this Mac. When you ask Chat about a ticker or assess one stock, matching excerpts may be sent to your configured model server. Remote servers receive those excerpts. No live WhatsApp connection or training.")
-                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
                     } icon: { Image(systemName: "info.circle").foregroundStyle(DS.Palette.accentText) }
                     .padding(12).background(DS.Palette.surface, in: .rect(cornerRadius: 8))
                     if let issue {
                         Label(issue, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                            .foregroundStyle(DS.Palette.dangerSoft).fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("whatsapp.issue")
                     }
                     if let saved {
@@ -122,7 +107,7 @@ struct StockSageWhatsAppMessagesView: View {
                 }.padding(24)
             }
         }
-        .frame(width: 660, height: 700)
+        .frame(minWidth: 480, idealWidth: 660, minHeight: 480, idealHeight: 700)
         .background(DS.Palette.bgTop)
         .interactiveDismissDisabled(hasDraft)
         .confirmationDialog("Discard this unsaved excerpt?", isPresented: $confirmDiscard) {
@@ -130,6 +115,29 @@ struct StockSageWhatsAppMessagesView: View {
             Button("Keep editing", role: .cancel) { }
         } message: { Text("Previously saved messages will stay on this Mac.") }
         .onAppear { reload() }
+    }
+
+    private var sourceField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Source · optional").font(.headline)
+            TextField("Group or sender label", text: $source)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("whatsapp.source")
+            Text(sourceCount > 300 ? "Source is too long: \(sourceCount.formatted()) / 300 characters."
+                 : "Up to 300 characters. The sender is not verified.")
+                .font(.caption).foregroundStyle(sourceCount > 300 ? DS.Palette.dangerSoft : DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }.frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dateField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            DatePicker("Message date", selection: $messageDate, in: ...Date(), displayedComponents: .date)
+                .accessibilityIdentifier("whatsapp.date")
+            Text("Set the original date; it is not read from the pasted text. Only the last 30 days are eligible for retrieval.")
+                .font(.caption).foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }.frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
     }
 
     private func reload() {

@@ -139,13 +139,14 @@ import CoreFoundation
         }
     }
 
-    func companyQuality(for row: Row) async {
-        guard !isBusy, snapshot?.rows.contains(where: { $0.symbol == row.symbol }) == true else { return }
-        guard !StockSageStore.isRunningTests || transport != nil else { return }
-        let operation = UUID(); generation = operation
+    @discardableResult func companyQuality(for row: Row, operation: UUID = UUID()) async -> StockSageFundamentals.Snapshot? {
+        guard !isBusy, snapshot?.rows.contains(where: { $0.symbol == row.symbol }) == true else { return nil }
+        guard !StockSageStore.isRunningTests || transport != nil else { return nil }
+        quality = nil
+        generation = operation
         let captured = access.capture()
-        guard !captured.key.isEmpty, captured.isCurrent() else { status = "Company quality unavailable: check data access."; return }
-        qualitySymbol = row.symbol; quality = nil
+        guard !captured.key.isEmpty, captured.isCurrent() else { status = "Company quality unavailable: check data access."; return nil }
+        qualitySymbol = row.symbol
         status = "Loading company quality for \(row.symbol)…"
         let at = clock()
         let capturedAccess = StockSageMassive.Access(key: { captured.key }, credentialRevision: { nil },
@@ -157,10 +158,17 @@ import CoreFoundation
         let value = await task.value
         guard generation == operation, captured.isCurrent(), !Task.isCancelled else {
             if generation == operation { status = "Company quality cancelled or access changed; no new detail was published." }
-            return
+            return nil
         }
         quality = value
         status = "Company quality captured for \(row.symbol). Read its source status and missing-data notes."
+        return value
+    }
+
+    /// A closed or rejected sheet cannot cancel another window's request for the same ticker.
+    func cancelCompanyQuality(operation: UUID) {
+        guard qualitySymbol != nil, generation == operation else { return }
+        cancel()
     }
 
     func cancel() {

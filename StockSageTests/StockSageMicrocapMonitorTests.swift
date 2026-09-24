@@ -5,6 +5,28 @@ import Testing
 
 @Suite("Micro cap setup identity", .serialized)
 @MainActor struct StockSageMicrocapMonitorTests {
+    #if os(macOS)
+    @Test(arguments: [StockSageSameDayResearch.Mode.microcap, .largecap], [false, true])
+    func trackingWriterFailureExplainsSafeRelaunch(mode: StockSageSameDayResearch.Mode, busy: Bool) {
+        let failure = busy ? StockSageFileLock.Failure.busy : .unavailable
+        var checks = 0
+        let monitor = StockSageMicrocapMonitor(mode: mode, requireWriter: { checks += 1; throw failure })
+        #expect(!monitor.writerIsAvailable())
+        #expect(monitor.status == failure.localizedDescription)
+        #expect(checks == 1 && !monitor.isEnabled && monitor.nextCheck == nil)
+    }
+
+    @Test func trackingWriterRecoveryNeverDisplaysUnknownStorageDetails() {
+        let marker = "SYNTHETIC_PRIVATE_STORAGE_PATH"
+        let monitor = StockSageMicrocapMonitor(requireWriter: {
+            throw NSError(domain: marker, code: 1, userInfo: [NSLocalizedDescriptionKey: marker])
+        })
+        #expect(!monitor.writerIsAvailable())
+        #expect(monitor.status == StockSageFileLock.Failure.unavailable.localizedDescription)
+        #expect(!monitor.status.contains(marker) && !monitor.isEnabled)
+    }
+    #endif
+
     @Test(arguments: [
         ("2026-09-21T07:59:59Z", false), ("2026-09-21T08:00:00Z", true),
         ("2026-09-21T19:59:59Z", true), ("2026-09-21T20:00:00Z", false),

@@ -19,26 +19,40 @@ struct StockSageTelegramSetupView: View {
                 Button("Done") { token = ""; dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
+            VStack(alignment: .leading, spacing: 8) {
+                Label {
+                    Text(telegram.status).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: telegram.isReady ? "checkmark.circle" : "info.circle")
+                }
+                .font(.callout)
+                .accessibilityIdentifier("telegram.status")
+                if telegram.isBusy { ProgressView("Contacting Telegram…") }
+            }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(DS.Palette.surfaceAlt, in: .rect(cornerRadius: 10))
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("Connect a bot to your own Telegram account for Micro cap / Large cap research alerts. This setup does not enable monitoring or place orders.")
                         .fixedSize(horizontal: false, vertical: true)
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
+                            Text("1. Create your bot").font(.headline).accessibilityAddTraits(.isHeader)
                             Text("In Telegram, open the official BotFather, send /newbot, and follow its instructions. Create a dedicated bot for StockSage; do not share its token.")
                                 .fixedSize(horizontal: false, vertical: true)
                             Button("Open BotFather", systemImage: "arrow.up.right.square") {
                                 openURL(URL(string: "https://t.me/BotFather")!)
                             }.accessibilityIdentifier("telegram.botFather")
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-                    } label: { Text("1. Create your bot").font(.headline) }
+                    }
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
+                            Text("2. Save and verify the token").font(.headline).accessibilityAddTraits(.isHeader)
                             SecureField("Bot token from BotFather", text: $token)
                                 .textFieldStyle(.roundedBorder)
                                 .accessibilityIdentifier("telegram.token")
                             Text("The token is saved only in this Mac’s Keychain. It is sent to Telegram to verify your bot and deliver alerts; it is never sent to the analyst model.")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Button("Save token and verify bot") {
                                 let entered = token
@@ -53,9 +67,10 @@ struct StockSageTelegramSetupView: View {
                                     .font(.callout).textSelection(.enabled)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-                    } label: { Text("2. Save and verify the token").font(.headline) }
+                    }
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
+                            Text("3. Pair your own phone").font(.headline).accessibilityAddTraits(.isHeader)
                             Text("Open the pairing link in your own Telegram account and press Start. Then return here and verify. Keep this one-time link private; it expires after ten minutes.")
                                 .fixedSize(horizontal: false, vertical: true)
                             if let url = telegram.pairingURL {
@@ -71,18 +86,12 @@ struct StockSageTelegramSetupView: View {
                                 Text("Verify the bot above to create a pairing link.").foregroundStyle(.secondary)
                             }
                             Text("Verification reads recent bot updates without deleting them or changing webhooks. An existing webhook or busy shared bot may prevent pairing.")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-                    } label: { Text("3. Pair your own phone").font(.headline) }
-                    Label {
-                        Text(telegram.status).fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: telegram.isReady ? "checkmark.circle" : "info.circle")
-                    }.accessibilityIdentifier("telegram.status")
-                    if telegram.isBusy { ProgressView("Contacting Telegram…") }
+                    }
                     Text("Public research alerts leave this Mac for Telegram. Local delivery records prevent automatic retries when receipt is uncertain. Telegram acceptance does not prove a notification appeared on your phone or that you read it. Research alerts are not orders or guaranteed outcomes.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.callout).foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Remove token and disable alerts", role: .destructive) { confirmRemoval = true }
                         .accessibilityIdentifier("telegram.remove")

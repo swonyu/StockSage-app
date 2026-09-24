@@ -391,6 +391,14 @@ struct StockSageChatTests {
             #expect(scroll.contentView.bounds.width >= 600 && scroll.contentView.bounds.height >= 450)
             #expect(document.bounds.width <= scroll.contentView.bounds.width + 2,
                     "Saved research must fit its native sheet viewport without horizontal overflow")
+            if page == "list" {
+                let elements = nativeAccessibilityElements(in: root)
+                let method = try #require(elements.first { $0.accessibilityIdentifier?() == "research.history.method" })
+                try #require(method.accessibilityPerformPress?() == true, "Outcome method must expose a native disclosure action")
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(nativeAccessibilityText(in: root).contains("Daily bars cannot establish intraday order"))
+                try saveNativeViewport(root, name: "stocksage-history-method-expanded")
+            }
         }
         #expect(size == viewport && history.runs == originalRuns && !history.isChecking && history.lastError == nil)
         #expect(!store.isRefreshing && !store.isLoadingIdeas && store.lastFullRefreshAt == nil)
@@ -488,7 +496,7 @@ struct StockSageChatTests {
         #expect(reopened.opinionOutcomes(runID: run.id)?.isEmpty == true)
     }
 
-    @Test(.serialized, arguments: ["sameDay", "week", "fortnight", "library", "research", "chat", "home", "ideas", "markets", "watchlist", "portfolio", "alerts", "catalysts", "heatmap", "paper"], [900, 1300])
+    @Test(.serialized, arguments: ["sameDay", "microcap", "largecap", "screener", "week", "fortnight", "library", "research", "chat", "home", "ideas", "markets", "watchlist", "portfolio", "alerts", "catalysts", "heatmap", "paper"], [900, 1300])
     func renderActualMacWorkspaceWithoutStartingServices(page: String, width: Int) async throws {
         try #require(StockSageStore.isRunningTests)
         let section = try #require([
@@ -496,7 +504,7 @@ struct StockSageChatTests {
             "watchlist": .watchlist, "portfolio": .portfolio, "alerts": .alerts,
             "catalysts": .catalysts, "research": .research, "chat": .chat,
             "sameDay": .sameDay, "week": .weekResearch, "fortnight": .fortnightResearch, "library": .library,
-            "heatmap": .heatmap, "paper": .paper
+            "heatmap": .heatmap, "paper": .paper, "microcap": .microcap, "largecap": .largecap, "screener": .screener
         ][page])
         let suite = "stocksage.audit.mac.workspace.\(UUID().uuidString)"
         let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
@@ -561,6 +569,10 @@ struct StockSageChatTests {
                     "The actual desktop page must retain a usable viewport beside its sidebar")
             #expect(document.bounds.width <= scroll.contentView.bounds.width + 2,
                     "The page must fit its native scroll viewport without horizontal overflow")
+            if ["microcap", "largecap", "screener"].contains(page) {
+                #expect(scrollViews(in: document).filter { $0.hasVerticalScroller && $0.bounds.width > 400 }.isEmpty,
+                        "Self-scrolling pages must not be nested inside another vertical page scroller")
+            }
             if page == "alerts" {
                 #expect(!defaults.bool(forKey: "marketsWatchlistOnly"))
                 #expect(nativeAccessibilityText(in: root).contains("Check now scans the tracked market board"),
@@ -1391,6 +1403,90 @@ struct StockSageChatTests {
         let size = try await capture(content, name: "stocksage-catalyst-recovery-\(width)-\(state)")
         #expect(size.width == CGFloat(width) && size.height > 40)
         #expect(navigations == 0, "Rendering must not navigate, clear filters, or start a scan")
+    }
+
+    @Test func retainedResearchWarningIsVisibleWithoutOpeningFreshnessDetails() async throws {
+        typealias R = StockSageHorizonResearch
+        let research = R()
+        let suite = "stocksage.retained.warning.\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite); research.stop() }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        func finish() async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while research.running != nil, ContinuousClock.now < deadline { await Task.yield() }
+            try #require(research.running == nil)
+        }
+        let started = research.start(.week, allowed: { true }, universe: {
+            .init([.init(ticker: "AAPL", name: "Synthetic company", market: "stocks", locale: "us",
+                active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")])
+        }, analyze: { _ in .init(note: "Synthetic earlier result", at: now) })
+        try #require(started)
+        try await finish()
+        let retried = research.start(.week, allowed: { true }, universe: { throw URLError(.notConnectedToInternet) },
+            analyze: { _ in Issue.record("Failed admission must not analyze"); return .init(note: "unexpected") })
+        try #require(retried)
+        try await finish()
+        try #require(research.scans[.week]?.retainsEarlierResults == true)
+        let view = StockSageResearchModesPanel(store: store, research: research,
+            presentation: .constant(.init(horizon: .week))).defaultAppStorage(defaults)
+        _ = try await capture(view, name: "stocksage-retained-warning-visible", viewport: .init(width: 900, height: 700)) { root in
+            let warning = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityIdentifier?() == "research.retainedResults"
+            })
+            let window = try #require(root.window)
+            let visible = window.convertToScreen(root.convert(root.bounds, to: nil))
+            #expect(visible.contains(try #require(warning.accessibilityFrame?())))
+            #expect(nativeAccessibilityText(in: root).contains("Displayed run completed:"))
+        }
+    }
+
+    @Test func pairedTrackingCopyPreservesErrorsAndOnlyUpdatesSetupHints() {
+        let instruction = "Pair Telegram for heavy-momentum observations and Astra reviews."
+        #expect(StockSageMicrocapActivityView.statusMessage(instruction, telegramReady: false) == instruction)
+        #expect(StockSageMicrocapActivityView.statusMessage(instruction, telegramReady: true).contains("Telegram paired"))
+        for message in ["Review expired; no opinion accepted.", "Telegram delivery unavailable.", "Feed has gaps."] {
+            #expect(StockSageMicrocapActivityView.statusMessage(message, telegramReady: true) == message)
+        }
+    }
+
+    @Test func compactSheetsKeepTheirDismissalControlsReachable() async throws {
+        let suite = "stocksage.compact.sheets.\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for (name, view, identifier) in [
+            ("welcome", AnyView(OnboardingSheet(isPresented: .constant(true))), "onboarding.getStarted"),
+            ("whatsapp", AnyView(StockSageWhatsAppMessagesView(url: nil)), "whatsapp.done")
+        ] {
+            let size = try await capture(view.defaultAppStorage(defaults), name: "stocksage-compact-\(name)",
+                viewport: .init(width: 480, height: 480)) { root in
+                let action = try #require(nativeAccessibilityElements(in: root).first { $0.accessibilityIdentifier?() == identifier })
+                let window = try #require(root.window)
+                let visible = window.convertToScreen(root.convert(root.bounds, to: nil))
+                #expect(visible.contains(try #require(action.accessibilityFrame?())))
+            }
+            #expect(size == CGSize(width: 480, height: 480))
+        }
+    }
+
+    @Test func telegramSetupKeepsStatusVisibleAndDoesNotRequestOnPresentation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("telegram-layout-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var requests = 0
+        let telegram = StockSageTelegram(credentials: .init(read: { nil }, write: { _ in }), directory: directory,
+            transport: { _ in requests += 1; throw URLError(.notConnectedToInternet) }, requireWriter: {})
+        _ = try await capture(StockSageTelegramSetupView(telegram: telegram), name: "stocksage-telegram-setup",
+            viewport: .init(width: 520, height: 600)) { root in
+            let status = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityIdentifier?() == "telegram.status"
+            })
+            let window = try #require(root.window)
+            let visible = window.convertToScreen(root.convert(root.bounds, to: nil))
+            #expect(visible.contains(try #require(status.accessibilityFrame?())))
+            _ = try await revealFormContent("telegram.remove", in: root)
+            #expect(visible.contains(try #require(status.accessibilityFrame?())), "Status stays visible while setup steps scroll")
+        }
+        #expect(requests == 0 && !telegram.isBusy)
     }
 
     @Test func researchRetryStatusWrapsTheRetainedDataExplanation() async throws {
@@ -2244,6 +2340,52 @@ struct StockSageChatTests {
         #expect(try pixels() != before, "An open inspector must update when the result arrives in the same host")
     }
 
+    @Test func companyQualityOpensBeforeCollectionAndCanCancelInsideItsSheet() async throws {
+        let model = StockSageStockScreener(access: .init(key: { "fixture" }, credentialRevision: { "fixture" },
+            policyRevision: { "fixture" }, allowed: { true }), transport: { request in
+                let url = try #require(request.url)
+                if url.path != StockSageStockScreener.ratiosPath {
+                    try await Task.sleep(for: .seconds(30))
+                }
+                let bytes = Data(#"{"status":"OK","results":[{"ticker":"TEST","date":"2026-09-20","market_cap":100000000}]}"#.utf8)
+                return (bytes, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }, clock: { ISO8601DateFormatter().date(from: "2026-09-20T12:00:00Z")! }, universe: { _, _, _ in
+                .init(listings: [.init(ticker: "TEST", name: "Synthetic company", market: "stocks", locale: "us",
+                    active: true, type: "CS", currency_name: "usd", primary_exchange: "XNAS")], membership: nil)
+            })
+        await model.load()
+        defer { model.cancel() }
+        let suite = "stocksage.quality.sheet.\(UUID())"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSageStore(defaults: defaults, heldSymbols: { [] })
+        _ = try await capture(StockSageStockScreenerView(store: store, screener: model),
+            name: "stocksage-quality-loading", viewport: .init(width: 900, height: 700)) { root in
+            let window = try #require(root.window)
+            defer { for sheet in window.sheets { window.endSheet(sheet); sheet.orderOut(nil); sheet.close() } }
+            let open = try await revealFormContent("screener.quality.TEST", in: root)
+            try #require(open.accessibilityPerformPress?() == true)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while window.attachedSheet?.contentView == nil, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let sheet = try #require(window.attachedSheet?.contentView, "Progress must appear at the initiating action before the provider completes")
+            // Progress and cancellation live in the fixed header, above the scroll area.
+            // Let native sheet attachment finish before querying its virtual AX controls.
+            try await Task.sleep(for: .milliseconds(150))
+            let cancel = try #require(nativeAccessibilityElements(in: sheet).first {
+                $0.accessibilityIdentifier?() == "screener.quality.cancel" && $0.isAccessibilityEnabled?() == true
+            })
+            #expect(nativeAccessibilityText(in: sheet).contains("TEST"))
+            try saveNativeViewport(sheet, name: "stocksage-quality-pending")
+            try #require(cancel.accessibilityPerformPress?() == true)
+            let finish = ContinuousClock.now.advanced(by: .seconds(3))
+            while model.isBusy, ContinuousClock.now < finish { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(!model.isBusy && model.quality == nil)
+            #expect(nativeAccessibilityText(in: sheet).localizedCaseInsensitiveContains("cancelled"))
+        }
+    }
+
     @Test func nativeScreenerNewsLoadsOnlyOnRequestAndExposesEveryMatchedSymbol() async throws {
         typealias News = StockSageScreenerNews
         let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -2397,9 +2539,8 @@ struct StockSageChatTests {
         }.frame(width: size.width, height: size.height)
         let rendered = try await capture(view, name: "momentum-activity-\(mode.rawValue)-\(Int(width))") { root in
             let text = nativeAccessibilityText(in: root)
-            for required in ["Momentum detection coverage", "all matching symbols", "twenty consecutive",
-                             "REST", "No confirmed momentum observations", "expire", "Enable tracking"] {
-                #expect(text.contains(required), "Coverage, confirmation, warm-up and review expiry must remain visible")
+            for required in ["Momentum detection coverage", "No confirmed momentum observations", "Enable tracking"] {
+                #expect(text.contains(required), "Current coverage and confirmation status must remain visible")
             }
             #expect(!text.contains("Tracked stock momentum"))
             #expect(!text.contains("every five minutes") && !text.contains("24-symbol"))
@@ -2407,6 +2548,15 @@ struct StockSageChatTests {
             #expect(identifiers.contains(mode.rawValue + ".momentum.coverage"))
             #expect(identifiers.contains(mode.rawValue + ".momentum.observations.empty"))
             #expect(identifiers.contains(mode.rawValue + ".watch.start"))
+            let method = try #require(nativeAccessibilityElements(in: root).first {
+                $0.accessibilityLabel?() == "How tracking and alerts work" && $0.accessibilityRole?() == .disclosureTriangle
+            })
+            try #require(method.accessibilityPerformPress?() == true)
+            try await Task.sleep(for: .milliseconds(100))
+            let expanded = nativeAccessibilityText(in: root)
+            for required in ["all matching symbols", "twenty consecutive", "REST", "expire"] {
+                #expect(expanded.contains(required), "Method, warm-up and expiry details must remain reachable")
+            }
         }
         #expect(abs(rendered.width - width) < 1)
         #expect(abs(rendered.height - size.height) < 1)
@@ -3145,7 +3295,7 @@ struct StockSageChatTests {
             }
         }
         var appeared = false
-        let host = NSHostingController(rootView: view.onAppear { appeared = true })
+        let host = NSHostingController(rootView: view.tint(DS.Palette.accent).onAppear { appeared = true })
         // A split-view workspace is viewport-sized, not an intrinsic-size leaf. Do not let its
         // transient mount measurements replace the fixture window's explicit dimensions.
         if let viewport {

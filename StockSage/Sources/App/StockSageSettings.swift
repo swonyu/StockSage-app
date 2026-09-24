@@ -19,6 +19,9 @@ struct StockSageSettingsView: View {
     @ObservedObject private var settings: AppSettings
     @AppStorage("stocksage.monitor.autostart") private var monitorAutostart = false
     @AppStorage("stocksage.onboarding.done") private var onboardingDone = false
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     @State private var loginItemOn = false
     @State private var loginItemRequiresApproval = false
@@ -50,7 +53,7 @@ struct StockSageSettingsView: View {
                 #endif
 
                 Toggle("Check saved price alerts on launch", isOn: $monitorAutostart)
-                Text("Checks only your saved price levels while StockSage is open. Research always requires an explicit action.")
+                Text("Checks your saved price levels while StockSage is open. Separately enabled Micro cap and Large cap watching can request automatic reviews; manual research controls remain on their own pages.")
                     .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -78,6 +81,13 @@ struct StockSageSettingsView: View {
             }
 
             Section("Explanation model") {
+                #if os(macOS)
+                Button("Open model setup", systemImage: "slider.horizontal.3") {
+                    StockSageModelSetupWindowRoute.shared.request(in: NSApp.orderedWindows + NSApp.windows) {
+                        openWindow(id: "main")
+                    }
+                }.accessibilityIdentifier("settings.openModelSetup")
+                #endif
                 Text("Configure your model in Library → Events & model setup → Explanation model. Opening Settings does not start a model server.")
                     .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
@@ -86,7 +96,7 @@ struct StockSageSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
+        .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 700)
         .navigationTitle("StockSage settings")
         #if os(macOS)
         .onAppear { refreshLoginItemStatus() }

@@ -102,6 +102,79 @@ import AppKit
         return check
     }
 
+    @Test(arguments: [S.Mode.microcap, .largecap])
+    func initialCapReceiptFailurePublishesTheFailedAttempt(mode: S.Mode) throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let directory = folder.appendingPathComponent("receipts")
+        let receipts = StockSageResearchReceiptStore(directory: directory, sameDayLabel: mode.rawValue)
+        let previousID = receipts.beginSameDay(at: now.addingTimeInterval(-60))
+        let previous = S.Receipt(id: previousID, startedAt: now.addingTimeInterval(-60), finishedAt: now,
+            selection: "Earlier saved result", checks: [try check("AAPL")], selectedSymbol: "AAPL", mode: mode)
+        try #require(receipts.saveSameDay(previous))
+        receipts.finish(scanID: previousID, status: "Earlier completed result", at: now)
+        let engine = S(receiptStore: receipts, mode: mode, requireWriter: {})
+        // Preserve the earlier file bytes while denying writes to the receipt directory.
+        let manifest = "scan-" + previousID.uuidString + "/manifest.json"
+        let before = try Data(contentsOf: directory.appendingPathComponent(manifest))
+        let preserved = folder.appendingPathComponent("preserved")
+        try FileManager.default.moveItem(at: directory, to: preserved)
+        try Data("Synthetic storage denial".utf8).write(to: directory)
+        let result = engine.prepareReceipt(at: now.addingTimeInterval(1), selection: "New cap attempt")
+        #expect(result == nil && !engine.isRunning)
+        let failed = try #require(engine.receipt)
+        #expect(failed.id != previousID && failed.startedAt == now.addingTimeInterval(1))
+        #expect(failed.finishedAt != nil && failed.selectedSymbol == nil && failed.checks.isEmpty)
+        #expect(failed.blocker?.contains("could not be saved") == true)
+        #expect(engine.savedReceipts.contains(where: { $0.id == failed.id }))
+        #expect(receipts.receipt(scanID: failed.id)?.endedAt != nil)
+        #expect(engine.savedReceipts.contains(previous))
+        #expect(try Data(contentsOf: preserved.appendingPathComponent(manifest)) == before)
+    }
+
+    @Test(arguments: [S.Mode.sameDay, .microcap, .largecap], [false, true])
+    func initialResearchAdmissionExplainsWriterRecovery(mode: S.Mode, busy: Bool) throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let receipts = StockSageResearchReceiptStore(directory: folder, sameDayLabel: mode.rawValue)
+        let failure = busy ? StockSageFileLock.Failure.busy : .unavailable
+        var checks = 0
+        let engine = S(receiptStore: receipts, mode: mode, requireWriter: { checks += 1; throw failure })
+        #expect(engine.prepareReceipt(at: now, selection: "Must not start") == nil)
+        #expect(engine.status == failure.localizedDescription)
+        #expect(checks == 1 && engine.receipt == nil && !engine.isRunning)
+        #expect(receipts.sameDayHistory.isEmpty)
+        let noStore = S(mode: mode, requireWriter: { throw failure })
+        #expect(noStore.prepareReceipt(at: now, selection: "Startup lease was denied") == nil)
+        #expect(noStore.status == failure.localizedDescription)
+    }
+
+    @Test func writerRecoveryDoesNotExposeAnUnknownErrorOrCreateAReceiptWithoutAStore() {
+        let marker = "SYNTHETIC_PRIVATE_STORAGE_PATH"
+        let error = NSError(domain: marker, code: 1, userInfo: [NSLocalizedDescriptionKey: marker])
+        let engine = S(mode: .microcap, requireWriter: { throw error })
+        #expect(engine.prepareReceipt(at: now, selection: "Must not start") == nil)
+        #expect(engine.status == StockSageFileLock.Failure.unavailable.localizedDescription)
+        #expect(!engine.status.contains(marker) && engine.receipt == nil && !engine.isRunning)
+        let missingStore = S(mode: .largecap, requireWriter: {})
+        #expect(missingStore.prepareReceipt(at: now, selection: "Must not start") == nil)
+        #expect(missingStore.status == StockSageFileLock.Failure.unavailable.localizedDescription)
+    }
+
+    @Test(arguments: [S.Mode.sameDay, .microcap, .largecap])
+    func initialReceiptAdmissionKeepsItsModeAndRemainsPendingUntilTheCallerStarts(mode: S.Mode) throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let receipts = StockSageResearchReceiptStore(directory: folder, sameDayLabel: mode.rawValue)
+        let engine = S(receiptStore: receipts, mode: mode, requireWriter: {})
+        let initial = try #require(engine.prepareReceipt(at: now, selection: "Prepared synthetic research"))
+        #expect(initial.startedAt == now && initial.finishedAt == nil && initial.blocker == nil)
+        #expect(initial.mode == (mode.isAstra ? mode : nil))
+        #expect(receipts.receipt(scanID: initial.id)?.horizon == mode.rawValue)
+        #expect(!receipts.persistenceFailed(scanID: initial.id))
+        #expect(engine.receipt == nil && !engine.isRunning, "Admission does not start a task or publish before setup claims")
+    }
+
     @Test func manualRunPersistsEveryCheckAndOnlyOneFrozenWinner() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

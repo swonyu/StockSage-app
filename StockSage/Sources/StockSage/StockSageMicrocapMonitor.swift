@@ -535,11 +535,16 @@ import Combine
         }
     }
 
+    func writerIsAvailable() -> Bool {
+        do { try requireWriter(); return true }
+        catch { status = StockSageSameDayResearch.writerFailure(error); return false }
+    }
+
     func start(store: StockSageStore) {
         guard mode.isAstra, !isEnabled, !StockSageStore.isRunningTests else { return }
         guard ToolPolicy.isExternalAllowed, !store.isSampleData else { status = "Enable current market access before watching."; return }
         if let blocker = StockSageMassive.credentialAccessBlocker() { status = blocker; return }
-        guard (try? requireWriter()) != nil else { status = "The research writer is unavailable."; return }
+        guard writerIsAvailable() else { return }
         let access = StockSageMassive.Access().capture(), run = UUID()
         generation = run; isEnabled = true
         let research = self.research

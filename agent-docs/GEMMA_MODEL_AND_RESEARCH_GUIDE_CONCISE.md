@@ -2,28 +2,34 @@
 
 Prepared for **Saleh**
 
-**Living edition 43 · Updated 22 September 2026, Asia/Riyadh.**
+**Living edition 44 · Updated 24 September 2026, Asia/Riyadh.**
 
-This concise guide covers how Gemma works in StockSage, which data reaches it, how picks qualify, and what remains unverified. **Saleh’s last recorded installation is f578733 (21 September)**; the Micro cap float repair passed focused checks; signed Release **71cf39e** and ZIP passed; installation is pending. Scanner-linked news was inspected without loading headlines; live access remains unverified. Earlier evidence remains dated; installation does not establish model or market readiness. The owner resumed iPhone build/install work on 22 September; widget feature work remains on hold.
+This guide explains Gemma’s evidence, qualification and saved research, with a separate Mac UI and recovery update. **Saleh’s running Mac binary matched f578733 during the 24 September inspection.** A newer design/recovery candidate is under verification and has not replaced it. Earlier provider, model and iPhone observations remain tied to their own devices and dates; they do not establish current readiness. This task changes and verifies the Mac app; the separate 22 September iPhone work is preserved as history.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
+
+### Mac design and recovery update · 24 September
+
+The candidate uses a calmer rose accent, opaque charcoal layers and more readable secondary text. Cap and screener pages have one scroll area; status, capture dates and recovery actions come first. Company quality opens immediately with progress and request-owned cancellation. Retained-result warnings stay visible, setup sheets keep status near their controls, and Settings can reveal model setup in the existing window.
+
+Writer failures preserve their safe recovery instructions. Codex isolation failures retain a bounded stage and category; admission is still strict. These changes do not establish the cause or repair of earlier SHOP/GRAB failures. Combined Mac tests, Release and installation verification are pending. No new model-readiness, provider-access or Telegram-delivery result is claimed.
 
 ### Start here on Mac
 
 1. Save the Massive key in Settings and check source freshness before using a quote or result.
-2. For Gemma, inspect the model connection in Library → Events & model setup, then explicitly run the desired research horizon.
+2. For Gemma, inspect Library → Events & model setup, then explicitly run the desired research horizon. The new candidate also provides Settings → Open model setup.
 3. For Micro cap or Large cap, load Stock screener’s daily ratios, pair Telegram, and enable each tracker. Recheck those controls after restarting.
 4. Read the captured date, missing evidence and qualification status. Saved rankings and model labels do not automatically authorize a trade.
 
-### Latest builds and actual connection status
+### Dated builds and device-specific connection checks
 
-**Live API check:** Mac Settings passed its AAPL snapshot test, and **22 read-only endpoint checks returned HTTP 200**, covering Massive market data, filings, fundamentals and all nine integrated Benzinga products. Median sample latency: **0.55 seconds**; this is not a throughput benchmark or proof of complete coverage. Telegram has no saved token; direct SEC access remains unverified with no saved contact. RunPod authentication works, but no Gemma server is connected. Keys were not logged.
+**Salman’s Mac · 22 September API check:** Settings passed its AAPL snapshot test, and **22 bounded read-only endpoint checks returned HTTP 200**, including Massive data, filings, fundamentals and nine integrated Benzinga products. Median sample latency was **0.55 seconds**, not a throughput or completeness benchmark. On Salman’s Mac, Telegram had no saved token, SEC contact was unset, and no Gemma server was connected. Keys were not logged. These findings do not describe Saleh’s Mac, where Telegram pairing was separately verified.
 
 **iPhone:** installed baseline **8744624** passed its live **HTTP 200 AAPL snapshot** check. The newer audit Release **5188ae1** is signed and verified but **not installed**: Xcode reports the physical phone unavailable. Sustained streaming, actual audio and widget behavior remain unverified. [Audit receipt](../docs/reviews/2026-09-22-iphone-heavy-verification.md).
 
 Salman is running the verified Mac Release **2f711da** from its mounted DMG. His Applications copy still identifies **b0ca7ac**. Three native Gemma/RunPod suites passed **60 tests / 137 executions**, zero failures or skips. These use synthetic transports.
 
-Gemma is **not connected on this Mac**: the selected port 18080 has no tunnel, LM Studio has no Gemma model, and the accessible RunPod account has no Gemma GPU pod. Saleh's historical pod is not verified by this account check.
+**On Salman’s Mac, as checked on 22 September, Gemma was not connected:** port 18080 had no tunnel, LM Studio’s inventory contained no Gemma, and the accessible RunPod account contained no Gemma GPU pod. That check did not inspect Saleh’s separate account or establish its current state.
 
 A Linux amd64 CUDA 13 container is built and exported with pinned weights/template identities, SSH-only access and checksum checks. Its newer llama.cpp **c550d2f60** passed startup checks; **GPU inference and speed remain untested**. Registry publication, pod deployment and the tunnel remain pending. No paid compute was started. The older handoff's inference-profile and quality-report work is already integrated.
 
@@ -43,11 +49,11 @@ The 22 September source update supports pre-market and post-market prices on Mac
 
 Watchlist and idea prices show **Pre-market / Post-market** with **live**, **delayed**, **last** or **awaiting price**. Only a current-session, uncached Massive observation within ten seconds is labelled live. Yahoo remains delayed; missing evidence never becomes a fresh quote. Existing session polling and streaming continue to supply updates. Research levels and paper-trade qualification remain unchanged.
 
-This update is active in Salman’s DMG-launched Mac build; his Applications copy is unchanged. The focused native gate passed; section 13 records its scope. The owner-designated PDF path is absent on this Mac, so its replacement remains pending; a separate local candidate is prepared. No live-provider observation or performance benchmark is established by offline tests.
+This update is active in Salman’s DMG-launched Mac build; his Applications copy is unchanged. The focused native gate passed; section 13 records its scope. The owner-designated PDF path was unavailable on Salman’s Mac during that packaging task; this does not describe publication status on Saleh’s Mac. No live-provider observation or performance benchmark is established by offline tests.
 
 ## 1. What the model names actually identify
 
-This edition is dated **22 September 2026**. Section 13 separates historical checks from the current installation and UI verification; neither establishes new model or delivery readiness.
+This edition is dated **24 September 2026**. Section 13 separates historical checks from the current installation and UI verification; neither establishes new model or delivery readiness.
 
 | Name | Meaning |
 | --- | --- |
@@ -226,7 +232,7 @@ The published trading calendar covers 2026; unsupported years remain unavailable
 | Current addition | Verification status |
 | --- | --- |
 | iPhone notification audit: signed, awaiting installation | Full iOS regression and focused Mac checks passed as recorded above. Private backups and the earlier signed app are preserved. Physical audio, notification delivery and headphone disconnect remain unverified. |
-| Extended-hours display: running from Salman’s DMG | Source `256f838`. Mac compile and test-source checks passed; the serial native gate passed **158 definitions / 256 executions / zero failures or skips** across ten suites. The normal test build first stopped because this Mac lacks the project development certificate; a temporary external xcconfig used ad hoc test-host signing without changing project settings. Those offline checks preceded the verified DMG launch and Mac API checks recorded at the start of this guide. |
+| Extended-hours display: running from Salman’s DMG | Source `256f838`. Mac compile and test-source checks passed; the serial native gate passed **158 definitions / 256 executions / zero failures or skips** across ten suites. The normal test build first stopped because Salman’s Mac lacked the project development certificate during that run; a temporary external xcconfig used ad hoc test-host signing without changing project settings. Those offline checks preceded the verified DMG launch and Mac API checks recorded at the start of this guide. |
 | Micro cap float repair: not installed | Massive HTTP 200 pages contained 5,000 clean rows, then 1,856 with one missing ticker and no duplicates; that row formerly aborted the screen before details. The source repair discloses unmatched rows, retains valid floats and rejects duplicate identities across pages. Missing/invalid floats remain unavailable; thresholds are unchanged. The screen count uses reference rows; the optional saved unmatched-row count supports older records. Both regressions reproduced the old failures. Focused Mac verification passed **65 definitions / 93 executions / zero failures or skips**, direct exit 0 with unchanged source hashes; saved-warning views passed at 660 and 1,000 points. Signed arm64 Release **71cf39e** and its extracted ZIP passed identity/signature checks; installation is pending. This focused gate does not replace the earlier full-suite receipt. |
 | Scanner-linked news: installed | Full Mac gate: **3,224 definitions / 4,167 executions / zero failures / five skips**, direct exit 0 and unchanged source manifest. Native controls/narrow layouts and signed Release/ZIP passed; five excessive-window-count warnings remain. **`f578733` installed 21 September 19:50:42 Riyadh, reopened 19:50:51**. All **20 runs / 3,068 compared files** were byte-identical and preferences unchanged before tracking was restored. The readable matched-news panel showed 526 matches / 0 processed; **Load matched news was not clicked**, so live headline access remains unverified. |
 

@@ -1,0 +1,40 @@
+# Mac design and reliability audit — 24 September 2026
+
+## Assessment
+
+The original Mac interface gave too much visual weight to magenta controls, repeated explanations and translucent low-contrast layers. It made users work to find the current state and the next useful action. The more serious problems were behavioral: a company-detail window could present an earlier request's capture, its dismissal could cancel another window's work, and an initial receipt failure could leave the latest scan unfinished while older results remained visible.
+
+The repair uses the existing SwiftUI/AppKit design system. It adds no dependency or alternate UI framework. The [25-finding plan and checklist](../superpowers/plans/2026-09-24-mac-design-audit.md) is the acceptance ledger.
+
+| Area | Critique | Implemented change |
+| --- | --- | --- |
+| Color and opacity | Saturated magenta, weak translucent fields and small dim text compete with the research itself. | Muted rose fill `#A35C88`, lighter rose text `#D6A3BF`, opaque charcoal surfaces, stronger secondary text and contrast-aware input boundaries. Gain, loss and warning colors retain their meanings. |
+| Layout | Duplicate scroll containers and padding waste space; explanations displace controls and results. | One scroll owner on cap/screener pages; compact summaries; named disclosures for methodology; status, timestamps and the primary recovery action stay prominent. |
+| Research state | Older retained results and competing Run/Retry/Resume actions obscure what is current. | Always-visible retained-result warning and capture date; one state-appropriate primary recovery action. No evidence or failure data is deleted. |
+| Loading and cancellation | Company quality appears only after collection and can inherit stale or another window's state. | Immediate sheet with progress, cancellation and explicit unavailable states. The view displays only its returned snapshot, and cancellation matches its own request identifier. |
+| Setup and navigation | Feedback is distant from controls; fixed sheets fit poorly; model setup requires textual directions. | Status under Telegram's heading, flexible onboarding/WhatsApp/Settings layouts, adaptive metadata fields, direct model setup navigation to the existing main window. |
+| History and controls | Search counts imply unfiltered results; the method disclosure lacks a clear affordance; Stop understates its effects. | Matching/total counts, saved records first, a native actionable disclosure row, and controls explicitly stating that research and watching stop. |
+| Accessibility | Flat charts announce a rise; target/stop rely on color; live animations ignore Reduce Motion. | Shared spoken/visual trend classification, visible Stop/Target labels, Reduce Motion support and Increase Contrast input borders. |
+| Recovery and diagnostics | Initial save failures and cached writer errors lose useful state/recovery; isolation errors erase their verification stage. | Terminal failed current receipt, retained earlier records, safe typed relaunch instructions and closed non-sensitive isolation-stage identifiers. Admission remains strict. |
+
+## Verification and follow-up
+
+The audit includes read-only inspection of all nine main destinations in Saleh's installed app. Synthetic native fixtures cover 18 workspace pages at 900 and 1,300 points, plus the expanded Home and model-setup routes, compact sheets, loading/cancellation, saved history and setup states. Screenshot cache limitations for native sidebar/toolbar rendering were not treated as missing application UI. Original-resolution captures were inspected for clipping, overlap, hierarchy and readability.
+
+The shared fill gives white labels approximately **4.73:1** contrast. The lighter accent text gives approximately **5.93:1** on the lightest checked dark panel; secondary text gives approximately **6.42:1**. These measurements apply to those token/background pairs, not every pixel in the app.
+
+Native tests exposed a recursive resize during company-quality sheet creation. A debugger attached only to the isolated test host traced it to SwiftUI sheet presentation sizing. Explicit native fitted sizing removed the warning. Further regressions cover an existing model-setup window, one-shot creation, a retained closed window, rejected/stale quality requests and cancellation ownership. The history disclosure is verified by actually pressing its native accessibility control and observing expanded content.
+
+The first complete Mac run passed 3,262 definitions but failed one calendar-color assertion: the nonisolated helper had copied the old secondary-color literal. The fix reuses immutable Sendable palette tokens. The final complete Mac run passed **3,263 definitions / 4,247 executions / zero failures / five existing skips** in **410.595 seconds**, with direct `xcodebuild test` exit 0. The 479-file source/project/resource manifest was identical before and after: `214f1e814debdf90cf6f7069a6dae8d79bbd7b983bab715c23ef6d973f29c3df`. The native layout, reentrant, publication-during-update, constraint and invalid-geometry guard is clean. Five existing excessive-window-count warnings remain; this is not an all-warning-free claim. Independent final source review found no additional release blocker.
+
+The canonical serial Mac run deliberately excludes the existing opt-in `CalibrationPersistRunTests`, `LiveUniverseVerificationTests` and `StrategyBaselineMeasurementTests`. The local immutable result bundle and receipt are `work/scanner-news/design-audit-full2-20260924.xcresult` and `work/scanner-news/design-audit-full2-20260924-receipt.json` in the task workspace. No iOS gate was run by this task.
+
+## Delivery and limits
+
+Source baseline: `7b16b12`. The incoming `e8dc7ab` branch adds documentation and another device's iPhone/API receipts only; those remain separately attributed. All committed worktree branches were already represented in origin/main. Unrelated uncommitted work was left in its original worktrees.
+
+The installed Saleh Mac executable matched the older `f578733` release during the audit. Installation/reopening of this candidate is pending a tested signed build and action-time approval because a restart clears in-memory screener/news/momentum buffers and can interrupt active research. Saved records and settings require a fresh backup and preservation comparison.
+
+The installed app also showed repeated feed gaps, a timestamp warning and active Large cap research. This UI/diagnostic repair does **not** prove those live issues resolved. Earlier SHOP/GRAB isolation failures remain unexplained; the additional stage fields improve a future authorized investigation. No provider probe, new model inference, manual stock research, Telegram delivery test, broker action or paid compute was performed. This task did not build, test or deploy iOS.
+
+The full and concise Gemma guides and owner's PDF are part of delivery. The PDF retains Saleh's name and a maximum of 20 pages. Publication and installed verification need their own artifact receipts.

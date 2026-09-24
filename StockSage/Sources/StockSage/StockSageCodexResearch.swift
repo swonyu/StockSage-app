@@ -10,6 +10,30 @@ import Darwin
 /// Scheduling belongs to the caller. This boundary never retries or starts a background turn.
 @MainActor enum StockSageCodexResearch {
     static let model = "gpt-6-astra"
+    nonisolated enum IsolationStage: String, Codable, Sendable {
+        case initialConfiguration, restrictedConfiguration, modelCatalog, inputIntegrity
+        var description: String {
+            switch self {
+            case .initialConfiguration: "initial safety settings"
+            case .restrictedConfiguration: "restricted safety settings"
+            case .modelCatalog: "model availability"
+            case .inputIntegrity: "research input integrity"
+            }
+        }
+    }
+    nonisolated enum IsolationCheck: String, Codable, Sendable {
+        case metadataProcess, metadataResponse, effectiveSettings, providerConfiguration, mcpConfiguration, inputIntegrity
+        var description: String {
+            switch self {
+            case .metadataProcess: "the safety-check process did not finish successfully"
+            case .metadataResponse: "the safety-check response could not be verified"
+            case .effectiveSettings: "the required safety settings did not match"
+            case .providerConfiguration: "an unsupported provider override was present"
+            case .mcpConfiguration: "the external-tool restrictions could not be verified"
+            case .inputIntegrity: "the bounded research input files could not be verified"
+            }
+        }
+    }
     nonisolated struct Audit: Codable, Equatable, Sendable {
         let requestedModel: String
         let requestedEffort: String
@@ -22,6 +46,8 @@ import Darwin
         let inputTokens: Int?
         let outputTokens: Int?
         let elapsedMilliseconds: Int
+        var isolationStage: IsolationStage? = nil
+        var isolationCheck: IsolationCheck? = nil
     }
     nonisolated struct Completion: Sendable { let text: String; let audit: Audit }
     nonisolated struct Failure: Error, Sendable {
@@ -61,7 +87,7 @@ import Darwin
     private static let maximumStream = 262_144
     private static let maximumFinal = 8_192
 
-    private enum Rejection: Error { case unavailable, auth, isolation, model, output, overflow, interrupted }
+    private enum Rejection: Error { case unavailable, auth, isolation(IsolationCheck), model, output, overflow, interrupted }
     private static func digest(_ value: Data) -> String { SHA256.hash(data: value).map { String(format: "%02x", $0) }.joined() }
     private static func quoted(_ value: String) -> String {
         String(decoding: try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes]), as: UTF8.self)
@@ -90,9 +116,10 @@ import Darwin
         return try data.split(separator: 10).filter { !$0.isEmpty }.map { try object(Data($0)) }
     }
     private static func rpcResult(_ output: ProcessOutput) throws -> [String: Any] {
-        guard output.status == 0, output.stderr.count <= 32_768 else { throw Rejection.isolation }
-        let replies = try rows(output.stdout).filter { ($0["id"] as? Int) == 2 }
-        guard replies.count == 1, replies[0]["error"] == nil, let result = replies[0]["result"] as? [String: Any] else { throw Rejection.isolation }
+        guard output.status == 0, output.stderr.count <= 32_768 else { throw Rejection.isolation(.metadataProcess) }
+        guard let messages = try? rows(output.stdout) else { throw Rejection.isolation(.metadataResponse) }
+        let replies = messages.filter { ($0["id"] as? Int) == 2 }
+        guard replies.count == 1, replies[0]["error"] == nil, let result = replies[0]["result"] as? [String: Any] else { throw Rejection.isolation(.metadataResponse) }
         return result
     }
     private static func flag(_ value: Any?, is expected: Bool) -> Bool {
@@ -121,16 +148,16 @@ import Darwin
               profile["workspace_roots"] == nil || profile["workspace_roots"] is NSNull,
               let filesystem = profile["filesystem"] as? [String: Any],
               nonnull(filesystem) as NSDictionary == [":minimal": "read", ":workspace_roots": "read"] as NSDictionary,
-              let network = profile["network"] as? [String: Any], flag(network["enabled"], is: false) else { throw Rejection.isolation }
+              let network = profile["network"] as? [String: Any], flag(network["enabled"], is: false) else { throw Rejection.isolation(.effectiveSettings) }
         let providers = value["model_providers"] as? [String: [String: Any]] ?? [:]
         // The built-in provider needs no custom URL, bearer source, headers or auth command.
-        guard nonnull(providers["openai"] ?? [:]).isEmpty else { throw Rejection.isolation }
+        guard nonnull(providers["openai"] ?? [:]).isEmpty else { throw Rejection.isolation(.providerConfiguration) }
         let servers = value["mcp_servers"] as? [String: [String: Any]] ?? [:]
         // This CLI splits override keys on dots; quoted table components become literal quote characters.
         let nameCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
         guard servers.count <= 64, servers.keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128
                 && $0.unicodeScalars.allSatisfy(nameCharacters.contains) }),
-              !requireDisabledMCP || servers.values.allSatisfy({ flag($0["enabled"], is: false) }) else { throw Rejection.isolation }
+              !requireDisabledMCP || servers.values.allSatisfy({ flag($0["enabled"], is: false) }) else { throw Rejection.isolation(.mcpConfiguration) }
         return servers.keys.sorted()
     }
 
@@ -150,7 +177,8 @@ import Darwin
         defer { busy = false }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stocksage-codex-" + UUID().uuidString, isDirectory: true)
         var version = "unverified"
-        func audit(_ status: String, reported: String? = nil, usage: [String: Any] = [:]) -> Audit {
+        var isolationStage: IsolationStage?
+        func audit(_ status: String, reported: String? = nil, usage: [String: Any] = [:], isolationCheck: IsolationCheck? = nil) -> Audit {
             let duration = began.duration(to: .now).components
             let milliseconds = max(0, min(86_400_000, Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15))
             func count(_ key: String) -> Int? {
@@ -160,7 +188,8 @@ import Darwin
             }
             return .init(requestedModel: model, requestedEffort: "ultra", reportedModel: reported, cliVersion: version,
                 terminalStatus: status, systemSHA256: digest(Data(system.utf8)), userSHA256: digest(Data(user.utf8)), schemaSHA256: digest(schema),
-                inputTokens: count("input_tokens"), outputTokens: count("output_tokens"), elapsedMilliseconds: Int(milliseconds))
+                inputTokens: count("input_tokens"), outputTokens: count("output_tokens"), elapsedMilliseconds: Int(milliseconds),
+                isolationStage: isolationCheck == nil ? nil : isolationStage, isolationCheck: isolationCheck)
         }
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
@@ -187,19 +216,23 @@ import Darwin
             version = supportedVersion
             let login = try await execute(["login", "status", "-c", "forced_login_method=\"chatgpt\""])
             guard login.status == 0, String(data: login.stdout + login.stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "Logged in using ChatGPT" else { throw Rejection.auth }
+            isolationStage = .initialConfiguration
             let initial = try rpcResult(await execute(["app-server"] + overrides(in: directory, disabledMCP: []), rpc: "config/read"))
-            guard let initialConfig = initial["config"] as? [String: Any] else { throw Rejection.isolation }
+            guard let initialConfig = initial["config"] as? [String: Any] else { throw Rejection.isolation(.metadataResponse) }
             let names = try verifyConfiguration(initialConfig, directory: directory, requireDisabledMCP: false)
             let settings = overrides(in: directory, disabledMCP: names)
+            isolationStage = .restrictedConfiguration
             let verified = try rpcResult(await execute(["app-server"] + settings, rpc: "config/read"))
-            guard let verifiedConfig = verified["config"] as? [String: Any] else { throw Rejection.isolation }
+            guard let verifiedConfig = verified["config"] as? [String: Any] else { throw Rejection.isolation(.metadataResponse) }
             _ = try verifyConfiguration(verifiedConfig, directory: directory, requireDisabledMCP: true)
+            isolationStage = .modelCatalog
             let catalog = try rpcResult(await execute(["app-server"] + settings, rpc: "model/list"))
             guard let models = catalog["data"] as? [[String: Any]], models.contains(where: {
                 $0["model"] as? String == model && ($0["supportedReasoningEfforts"] as? [[String: Any]])?.contains(where: { $0["reasoningEffort"] as? String == "ultra" }) == true
             }) else { throw Rejection.model }
-            guard try boundedFile(systemFile, maximum: 32_768) == Data(system.utf8),
-                  try boundedFile(schemaFile, maximum: 32_768) == schema else { throw Rejection.isolation }
+            isolationStage = .inputIntegrity
+            guard (try? boundedFile(systemFile, maximum: 32_768)) == Data(system.utf8),
+                  (try? boundedFile(schemaFile, maximum: 32_768)) == schema else { throw Rejection.isolation(.inputIntegrity) }
             let final = directory.appendingPathComponent("final.json")
             // exec omits owner config, so the disabled MCP names need inert transport definitions.
             // Never copy owner commands, URLs, headers or credentials into the research invocation.
@@ -252,16 +285,19 @@ import Darwin
             return .success(.init(text: text, audit: audit("completed", reported: reported, usage: completed[0]["usage"] as? [String: Any] ?? [:])))
         } catch {
             let reason: String
+            var isolationCheck: IsolationCheck?
             switch error is CancellationError ? Rejection.interrupted : error as? Rejection {
             case .auth: reason = "Codex requires an existing ChatGPT subscription sign-in. No API-key fallback was used."
-            case .isolation: reason = "Codex research isolation could not be verified. No opinion was accepted."
+            case .isolation(let check):
+                isolationCheck = check
+                reason = "Codex research isolation could not be verified during \(isolationStage?.description ?? "safety verification"): \(check.description). No opinion was accepted."
             case .model: reason = "Codex did not verify the requested GPT-6 Astra Ultra model contract."
             case .overflow: reason = "Codex exceeded the bounded research output size. No opinion was accepted."
             case .interrupted: reason = "Codex research was cancelled or its request deadline expired."
             case .output: reason = "Codex did not finish one usable structured research response."
             default: reason = "The supported Codex CLI could not complete this research request."
             }
-            return .failure(.init(message: reason, audit: audit("rejected")))
+            return .failure(.init(message: reason, audit: audit("rejected", isolationCheck: isolationCheck)))
         }
     }
 
@@ -365,7 +401,7 @@ import Darwin
                     for line in lines {
                         guard let value = try? object(Data(line)) else { continue }
                         if value["id"] as? Int == 1 {
-                            guard value["error"] == nil, value["result"] != nil else { throw Rejection.isolation }
+                            guard value["error"] == nil, value["result"] != nil else { throw Rejection.isolation(.metadataResponse) }
                             initialized = true
                         }
                         if value["id"] as? Int == 2 { finishedRPC = true }

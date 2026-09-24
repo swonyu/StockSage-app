@@ -269,64 +269,19 @@ struct StockSageResearchHistoryView: View {
         NavigationStack {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Label("Every opinion, preserved", systemImage: "clock.arrow.circlepath")
+                            .foregroundStyle(DS.Palette.textPrimary)
                             .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
                         Text("Original opinions and evidence stay unchanged. Review every accepted opinion against later prices, including stocks outside the Top 5. Failed and incomplete checks remain in their original run.")
                             .font(.callout)
                             .fixedSize(horizontal: false, vertical: true)
-                        DisclosureGroup("How outcome checks work") {
-                            Text("Sessions use the verified Nasdaq calendar, including holidays and early closes. Only New York dates that have wholly ended are examined, so each split-adjusted daily aggregate is settled. Older runs retain their original endpoint-only schedule, shown in each saved run.")
-                            Text("Daily bars cannot establish intraday order or an actual fill. New runs check opening gaps first; if the open is between the levels and a daily bar reaches both, the conservative stop-first rule applies. Older runs retain their recorded policy. This is a measured research scenario, not realized trading profit.")
-                            Text(Self.directionOnlyDisclosure)
-                        }
-                        .font(.callout).foregroundStyle(.secondary)
                         if let error = history.lastError {
                             Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                         }
-                        if let reason = accessReason {
-                            Text(reason).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Button {
-                            checkAllOpinions = true
-                            checkRequest += 1
-                        } label: {
-                            Label(history.isChecking ? "Checking settled sessions…" : "Review all saved opinions",
-                                  systemImage: "chart.xyaxis.line")
-                                .frame(minHeight: 44)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(history.isChecking || accessReason != nil || history.runs.isEmpty)
-                        .accessibilityIdentifier("research.history.checkAllOpinions")
-                        Text("Each press reviews up to \(StockSageResearchHistory.maximumChecksPerRequest) due opinions and continues with the least recently checked next time. No scheduled checks. Open a completed run to inspect each result.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button {
-                            checkAllOpinions = false
-                            checkRequest += 1
-                        } label: {
-                            Label("Review strict comparison picks",
-                                  systemImage: "arrow.clockwise")
-                                .frame(minHeight: 44)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(history.isChecking || accessReason != nil || history.runs.isEmpty)
-                        .accessibilityIdentifier("research.history.check")
                         if let summary = history.lastCheckSummary {
                             Text(summary).font(.callout).foregroundStyle(.secondary)
                         }
-                    }.padding(.vertical, 6)
-                }
-                Section("Prospective model evaluation") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Separate studies compare future saved picks with SPY using a frozen setup and explicit modeled costs.")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button { showEvaluation = true } label: {
-                            Label("Open prospective evaluations", systemImage: "chart.bar.xaxis")
-                                .frame(minHeight: 44)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("research.history.evaluation")
                     }.padding(.vertical, 6)
                 }
                 if history.runs.isEmpty {
@@ -398,6 +353,57 @@ struct StockSageResearchHistoryView: View {
                             }
                         }
                     }
+                }
+                Section("Outcome reviews") {
+                    DisclosureGroup("How outcome checks work") {
+                        Text("Sessions use the verified Nasdaq calendar, including holidays and early closes. Only New York dates that have wholly ended are examined, so each split-adjusted daily aggregate is settled. Older runs retain their original endpoint-only schedule, shown in each saved run.")
+                        Text("Daily bars cannot establish intraday order or an actual fill. New runs check opening gaps first; if the open is between the levels and a daily bar reaches both, the conservative stop-first rule applies. Older runs retain their recorded policy. This is a measured research scenario, not realized trading profit.")
+                        Text(Self.directionOnlyDisclosure)
+                    }
+                    .font(.callout).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("research.history.method")
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let reason = accessReason {
+                            Text(reason).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Button {
+                            checkAllOpinions = true
+                            checkRequest += 1
+                        } label: {
+                            Label(history.isChecking ? "Checking settled sessions…" : "Review all saved opinions",
+                                  systemImage: "chart.xyaxis.line")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(history.isChecking || accessReason != nil || history.runs.isEmpty)
+                        .accessibilityIdentifier("research.history.checkAllOpinions")
+                        Text("Each press reviews up to \(StockSageResearchHistory.maximumChecksPerRequest) due opinions and continues with the least recently checked next time. No scheduled checks. Open a completed run to inspect each result.")
+                            .font(.callout).foregroundStyle(DS.Palette.textSecondary)
+                        Button {
+                            checkAllOpinions = false
+                            checkRequest += 1
+                        } label: {
+                            Label("Review strict comparison picks",
+                                  systemImage: "arrow.clockwise")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(history.isChecking || accessReason != nil || history.runs.isEmpty)
+                        .accessibilityIdentifier("research.history.check")
+                    }.padding(.vertical, 6)
+                }
+                Section("Prospective model evaluation") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Separate studies compare future saved picks with SPY using a frozen setup and explicit modeled costs.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button { showEvaluation = true } label: {
+                            Label("Open prospective evaluations", systemImage: "chart.bar.xaxis")
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("research.history.evaluation")
+                    }.padding(.vertical, 6)
                 }
             }
             .navigationTitle("Saved research")
@@ -486,6 +492,7 @@ struct StockSageResearchHistoryDetail: View {
     @State private var fullChecks: StockSageResearchHistory.FullChecksAvailability?
     @State private var opinionOutcomes: [String: StockSageResearchHistory.OpinionOutcome]?
     @State private var checkQuery = ""
+    @State private var showFullChecks = false
 
     var body: some View {
         if let run = history.runs.first(where: { $0.id == runID }) {
@@ -586,13 +593,17 @@ struct StockSageResearchHistoryDetail: View {
                             TextField("Find a saved symbol or company", text: $checkQuery)
                                 .textFieldStyle(.roundedBorder)
                                 .accessibilityIdentifier("research.history.checkSearch")
+                                .onChange(of: checkQuery) { _, query in
+                                    if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { showFullChecks = true }
+                                }
                             let query = checkQuery.trimmingCharacters(in: .whitespacesAndNewlines)
                             let visibleChecks = checks.checks.filter {
                                 query.isEmpty || $0.listing.ticker.localizedCaseInsensitiveContains(query)
                                     || $0.listing.name.localizedCaseInsensitiveContains(query)
                             }
                             if visibleChecks.isEmpty { Text("No original checks match this search.").foregroundStyle(.secondary) }
-                            DisclosureGroup("Inspect all \(checks.checks.count) original checks") {
+                            DisclosureGroup(query.isEmpty ? "Inspect all \(checks.checks.count) original checks"
+                                : "\(visibleChecks.count) of \(checks.checks.count) original checks", isExpanded: $showFullChecks) {
                                 ForEach(visibleChecks, id: \.listing.ticker) { check in
                                     DisclosureGroup("\(check.listing.ticker) · \(check.verdict?.action ?? "Incomplete opinion")") {
                                         opinionReview(check, run: run)

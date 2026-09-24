@@ -63,6 +63,26 @@ struct DesignSystemMotionTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func updatingQuoteSuppressesNestedAnimationsOnlyWhenMotionIsReduced(reduceMotion: Bool) async throws {
+        let model = MotionQuoteModel()
+        let root = MotionQuoteFixture(model: model)
+            .environment(\._accessibilityReduceMotion, reduceMotion)
+        let fixture = mount(root, size: NSSize(width: 180, height: 60))
+        defer { fixture.close() }
+        try await waitUntil { model.observedReduceMotion == reduceMotion }
+
+        withAnimation(.linear(duration: 1)) { model.price = 20 }
+        try await waitUntil { model.updateTransaction != nil }
+        let transaction = try #require(model.updateTransaction)
+        if reduceMotion {
+            #expect(transaction.animation == nil && transaction.disablesAnimations,
+                    "The shared boundary must suppress nested value animations, not only its own animation")
+        } else {
+            #expect(transaction.animation != nil && !transaction.disablesAnimations)
+        }
+    }
+
     private func mount(_ root: some View, size: NSSize) -> MotionFixture {
         let host = NSHostingController(rootView: AnyView(root))
         let window = MotionFixtureWindow(
@@ -106,6 +126,31 @@ struct DesignSystemMotionTests {
 }
 
 private enum MotionSegment: String, CaseIterable { case one = "One", two = "Two" }
+
+@MainActor private final class MotionQuoteModel: ObservableObject {
+    @Published var price = 10
+    var observedReduceMotion: Bool?
+    var updateTransaction: Transaction?
+
+    func record(_ transaction: Transaction) {
+        guard price == 20, updateTransaction == nil else { return }
+        updateTransaction = transaction
+    }
+}
+
+@MainActor private struct MotionQuoteFixture: View {
+    @ObservedObject var model: MotionQuoteModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Text(model.price.formatted())
+            .contentTransition(.numericText())
+            .transaction { model.record($0) }
+            .animation(.easeOut(duration: 0.18), value: model.price)
+            .modifier(DSReducedMotion())
+            .onAppear { model.observedReduceMotion = reduceMotion }
+    }
+}
 
 @MainActor private final class MotionSegmentModel: ObservableObject {
     @Published var selection = MotionSegment.one

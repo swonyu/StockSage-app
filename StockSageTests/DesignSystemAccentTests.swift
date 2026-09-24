@@ -9,17 +9,37 @@ import UIKit
 
 @Suite("Magenta brand accent")
 struct DesignSystemAccentTests {
-    @Test @MainActor func sharedAndNativeAccentsUseMagentaWithoutChangingStatusColors() throws {
+    @Test @MainActor func sharedAndNativeAccentsUseMutedRoseWithoutChangingStatusColors() throws {
         for color in [DS.Palette.accent, DS.Palette.accentText, Color("AccentColor")] {
             let rgb = try components(color)
-            #expect(rgb[0] > 0.65 && rgb[2] > 0.6)
-            #expect(rgb[1] < min(rgb[0], rgb[2]) * 0.6, "Magenta has strong red/blue, not an indigo or red-only accent")
+            #expect(rgb[0] > rgb[2] && rgb[2] > rgb[1], "Keep the owner-selected rose-magenta hue")
+            #expect(rgb[0] - rgb[1] <= 0.30, "The accent must be muted rather than highly saturated")
         }
         #expect(DS.Palette.success == Color.green)
         #expect(DS.Palette.danger == Color.red)
         #if os(macOS)
         #expect(StockSageDesktop.berry == DS.Palette.accentText, "Navigation must use the shared accent")
         #endif
+    }
+
+    @Test @MainActor func secondaryTextAndLayeredSurfacesAreOpaque() throws {
+        for surface in [DS.Palette.surface, DS.Palette.surfaceAlt, DS.Palette.surfaceStroke,
+                        DS.Bezel.shellFill, DS.Bezel.coreFill] {
+            #expect(try components(surface)[3] == 1, "Shared surfaces must not depend on content behind them")
+        }
+        let text = try components(DS.Palette.textSecondary)
+        #expect(text[3] == 1)
+        #expect(contrast(text, [0.2, 0.2, 0.2]) >= 4.5)
+    }
+
+    @Test @MainActor func inputBoundariesRemainVisibleAndStrengthenWithIncreasedContrast() throws {
+        let background = try components(DS.Palette.surface)
+        let standard = try components(DS.Palette.inputStroke(increasedContrast: false))
+        let increased = try components(DS.Palette.inputStroke(increasedContrast: true))
+        #expect(standard[3] == 1 && increased[3] == 1)
+        #expect(contrast(standard, background) >= 3)
+        #expect(contrast(increased, background) >= 7)
+        #expect(contrast(increased, background) > contrast(standard, background))
     }
 
     @Test @MainActor func whiteButtonLabelsAndAccentTextRetainAAContrast() throws {
@@ -83,7 +103,7 @@ struct DesignSystemAccentTests {
         let content = HStack(spacing: 0) {
             StockSageDesktopNavigation(selection: .constant(.research)).frame(width: 235)
             VStack(alignment: .leading, spacing: 24) {
-                Text("Magenta accent").font(.largeTitle.bold())
+                Text("Muted rose accent").font(.largeTitle.bold())
                 Text("Synthetic component fixture · no services or account data")
                     .foregroundStyle(.secondary)
                 Button("Run research") {}.buttonStyle(.borderedProminent)
