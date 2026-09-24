@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Massive short interest and short volume (shadow evidence)")
 struct StockSageMassiveShortInterestTests {
-    private typealias S = StockSageMassiveShortInterest
+    typealias S = StockSageMassiveShortInterest
     private let now = Date(timeIntervalSince1970: 1_788_696_000) // 2026-09-06 12:00 UTC
 
     private func body(_ rows: String, status: String = "OK") -> Data {

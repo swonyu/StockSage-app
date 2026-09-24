@@ -28,7 +28,7 @@ Owner direction 2026-09-25: merge all branches. `claude/massive-features-2026092
 - **Short interest + short volume shadow evidence** — `StockSageMassiveShortInterest.swift` (Bearer header, denial gate, `settlement_date.desc` / `date.desc`), injected into horizon research as optional display evidence that must never change qualification, ranking or TopFive. Tests: `StockSageTests/StockSageMassiveShortInterestTests.swift`.
 - **Live watchlist alerts + day-volume alerts** — see the next section.
 
-Skipped on purpose: options/IV (Massive answers 403 — no options plan), `/v1/indicators/*` (duplicates `StockSageTechnical`). Still open: `StockSageVolumeAlertForm` is not mounted in `MarketsView` yet. The uncommitted 14 September edits in the `codex/r08` and `codex/r27` worktrees were already on `main` in a later form, so they were not merged.
+Skipped on purpose: options/IV (Massive answers 403 — no options plan), `/v1/indicators/*` (duplicates `StockSageTechnical`). Still open: `StockSageVolumeAlertForm` is not mounted in `MarketsView` yet. The uncommitted 14 September edits in the `codex/r08` and `codex/r27` worktrees were already on `main` in a later form, so they were not merged. Merge gate on Salman's Mac, 25 September 2026: `tools/runtests.sh` with `CODE_SIGNING_ALLOWED=NO` (this Mac has no certificate for team `WY272L3F3N`) — **3,287 passed, 0 failed, 5 skipped**, exit 0, no native UI diagnostics. The new short-interest test file needed its `S` typealias made internal before the test target compiled.
 
 ## Live watchlist alerts and day-volume alerts — 24 September 2026 (merged 25 September 2026)
 
