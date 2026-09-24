@@ -1405,7 +1405,15 @@ struct MarketsView: View {
 
     @ViewBuilder private func page(for destination: MarketSection) -> some View {
         switch destination {
-        case .watchlist: signalListView(watchlistOnly: true)
+        case .watchlist:
+            #if os(macOS)
+            VStack(alignment: .leading, spacing: 24) {
+                signalListView(watchlistOnly: true)
+                StockSageAnalystFeedView(store: store)
+            }
+            #else
+            signalListView(watchlistOnly: true)
+            #endif
         case .all:       signalListView(watchlistOnly: false)
         case .ideas:           ideasSection
         case .catalysts:       catalystsSection

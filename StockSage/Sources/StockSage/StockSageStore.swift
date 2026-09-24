@@ -480,15 +480,19 @@ final class StockSageStore: ObservableObject {
         }
     }
 
-    @discardableResult func addPriceAlert(symbol: String, target: Double, direction: PriceAlert.Direction) -> Bool {
+    @discardableResult func addPriceAlert(symbol: String, target: Double, direction: PriceAlert.Direction,
+                                          metric: PriceAlert.Metric = .price) -> Bool {
         let up = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !up.isEmpty, target > 0, target.isFinite else { return false }
+        let alert = PriceAlert(symbol: up, target: target, direction: direction, metric: metric)
+        guard alert.validationError == nil else { return false }
         // Dedupe: don't stack an identical armed alert (a card's bell can be tapped twice).
         return mutatePriceAlerts { records in
             guard !records.contains(where: {
                 $0.isArmed && $0.symbol == up && $0.target == target && $0.direction == direction
+                    && $0.resolvedMetric == metric
             }) else { return false }
-            records.append(PriceAlert(symbol: up, target: target, direction: direction))
+            records.append(alert)
             return true
         }
     }
@@ -2746,6 +2750,7 @@ final class StockSageStore: ObservableObject {
                 previousCloseQuoteTime: carry ? prior?.previousCloseQuoteTime : nil)
         }
         applyPolledQuotes(quotes)
+        StockSageMonitor.shared.noteStreamedTicks(ticks) // Armed alerts only; no-op while monitoring is off.
     }
 
     // Volume-confirmed catalysts (external-report item 9) — computed from the SAME on-disk

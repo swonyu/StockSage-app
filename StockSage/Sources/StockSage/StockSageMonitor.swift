@@ -171,10 +171,15 @@ final class StockSageMonitor: ObservableObject {
     func stop() {
         task?.cancel()
         task = nil
+        streamCheckTask?.cancel()
+        streamCheckTask = nil
         isRunning = false
     }
 
-    deinit { task?.cancel() }
+    deinit {
+        task?.cancel()
+        streamCheckTask?.cancel()
+    }
 
     /// One evaluation pass: derive a signal per tracked symbol and fire a
     /// notification for strong buy/sell. Returns the strong signals it found
@@ -353,24 +358,40 @@ final class StockSageMonitor: ObservableObject {
             currentAlerts: { StockSageStore.shared.priceAlertsForMonitoring() },
             fetchQuotes: { await StockSageQuoteService.fetchQuotes(for: $0) },
             enqueue: { await self.sendPriceAlert($0, price: $1) },
-            markTriggered: { StockSageStore.shared.markPriceAlertsTriggered($0) })
+            markTriggered: { StockSageStore.shared.markPriceAlertsTriggered($0) },
+            fetchDayVolumes: { await Self.fetchDayVolumes(for: $0) })
     }
 
     /// The actual fetch/check/send path with live state read at call time. Closures keep the
     /// asynchronous boundaries replayable without loading the shared board or sending pushes.
+    /// Price alerts read `fetchQuotes`; day-volume alerts read only `fetchDayVolumes` (REST `day.v`).
+    /// `now` drives only the quote-staleness filter; the hourly cap stays on the wall clock.
     func checkPriceAlerts(
         currentAlerts: @MainActor () -> [PriceAlert],
         fetchQuotes: @MainActor ([String]) async -> [String: StockSageQuoteService.LiveQuote],
         enqueue: @MainActor (PriceAlert, Double) async -> Bool,
-        markTriggered: @MainActor ([UUID]) -> Void
+        markTriggered: @MainActor ([UUID]) -> Void,
+        fetchDayVolumes: @MainActor ([String]) async -> [String: Double] = { _ in [:] },
+        now: @MainActor () -> Date = { Date() }
     ) async {
         // Muted type: check nothing, consume nothing — the user's armed alerts stay armed.
         guard StockSageNotifyPrefs.enabled(StockSageNotifyPrefs.priceAlertsKey, defaults: defaults) else { return }
+        // SINGLE-FLIGHT across the 180 s loop and stream-triggered checks. Two overlapping checks
+        // could each push the same one-shot alert before either latched it — the double-push
+        // described below. A check that finds another in flight skips; the next tick or cycle retries.
+        guard !priceAlertCheckInFlight else { return }
+        priceAlertCheckInFlight = true
+        defer { priceAlertCheckInFlight = false }
         let armed = currentAlerts().filter { $0.isArmed }
         // One process owns both delivery and its persisted one-shot latch. Checking only
         // when saving would let another copy deliver the same alert before its write fails.
         guard (try? StockSageRecordWriter.require(defaults)) != nil, !armed.isEmpty else { return }
-        let q = await fetchQuotes(Array(Set(armed.map { $0.symbol })))
+        let priceSymbols = Set(armed.filter { $0.resolvedMetric == .price }.map { $0.symbol })
+        let volumeSymbols = Set(armed.filter { $0.resolvedMetric == .dayVolume }.map { $0.symbol })
+        var q: [String: StockSageQuoteService.LiveQuote] = [:]
+        if !priceSymbols.isEmpty { q = await fetchQuotes(Array(priceSymbols)) }
+        var volumes: [String: Double] = [:]
+        if !volumeSymbols.isEmpty, !Task.isCancelled { volumes = await fetchDayVolumes(Array(volumeSymbols)) }
         // CONCURRENCY #2 (L3-09): a stop() during the fetch await above must not let this cycle
         // push a one-shot price alert — same idiom as runCycle's post-await guards. Without this,
         // a stop()→start() overlap could double-push the SAME alert: the cancelled cycle's fetch
@@ -386,10 +407,13 @@ final class StockSageMonitor: ObservableObject {
         // user would need to manually re-arm the alert.
         guard !Task.isCancelled else { return }
         var prices: [String: Double] = [:]
-        for (k, v) in q where v.price > 0 && !StockSageQuoteFreshness.isStale(symbol: k, marketTime: v.marketTime) {
+        let checkedAt = now()
+        for (k, v) in q where v.price > 0 && !StockSageQuoteFreshness.isStale(symbol: k, marketTime: v.marketTime, asOf: checkedAt) {
             prices[k.uppercased()] = v.price
         }
-        let fired = StockSagePriceAlertEngine.newlyTriggered(armed, prices: prices)
+        var confirmedVolumes: [String: Double] = [:]
+        for (k, v) in volumes where v.isFinite && v >= 0 { confirmedVolumes[k.uppercased()] = v }
+        let fired = StockSagePriceAlertEngine.newlyTriggered(armed, prices: prices, volumes: confirmedVolumes)
         guard !fired.isEmpty else { return }
         // Review fix 2026-07-17: latch ONLY alerts whose push was ACCEPTED for delivery.
         // The no-guard-between-push-and-latch invariant above still holds (no cancellation
@@ -409,18 +433,173 @@ final class StockSageMonitor: ObservableObject {
             // A user-set price alert is a ONE-SHOT the owner explicitly armed and it disarms on
             // trigger, so it is exempt from hysteresis and cooldown. It still respects the GLOBAL
             // hourly cap so a market-wide move cannot produce a flood.
-            // Uppercased to match the key `prices` is built with (:371) — see
-            // StockSagePriceAlertEngine.newlyTriggered. Without it a legacy lowercase alert fell
-            // through to `?? a.target` and PUSHED ITS OWN TARGET as the observed price: a
-            // fabricated market observation, which is the worst failure this file can produce.
-            let px = prices[a.symbol.uppercased()] ?? a.target
+            // The same uppercased, metric-specific lookup as StockSagePriceAlertEngine.newlyTriggered.
+            // Never fall back to `a.target`: that once PUSHED THE ALERT'S OWN TARGET as the observed
+            // price, a fabricated market observation — the worst failure this file can produce.
+            guard let px = StockSagePriceAlertEngine.observed(a, prices: prices, volumes: confirmedVolumes) else { continue }
             guard StockSageNotificationBudget.countWithinHour(budget.recentAlerts, now: Date())
                     < StockSageNotificationBudget.hourlyCap else { break }
             if await enqueue(a, px) {
-                budgetRecord(symbol: a.symbol, price: px)
+                // A volume is not a price: 0 records the push without seeding price hysteresis.
+                budgetRecord(symbol: a.symbol, price: a.resolvedMetric == .price ? px : 0)
                 markTriggered([a.id]) // Record accepted delivery before the next suspension.
             }
         }
+    }
+
+    // MARK: - Stream-triggered price alerts
+
+    /// At most one stream-triggered alert check per symbol per this many seconds. The 180 s loop
+    /// still runs; the stream only shortens latency for armed symbols that are trading.
+    nonisolated static let streamCheckInterval: TimeInterval = 5
+    /// A stream-nominated day-volume alert costs one REST snapshot to confirm, so each symbol is
+    /// confirmed at most this often. Streamed per-minute volume is provisional and never fires.
+    nonisolated static let volumeConfirmInterval: TimeInterval = 60
+    /// A REST `day.v` confirms only when its `lastTrade.t` is a regular-session print this recent.
+    nonisolated static let volumeConfirmMaximumTradeAge: TimeInterval = 15 * 60
+
+    /// Shared by EVERY price-alert check (see the single-flight note in `checkPriceAlerts`).
+    private(set) var priceAlertCheckInFlight = false
+    private var streamCheckTask: Task<Void, Never>?
+    /// Latest alertable trade per ARMED symbol only, so the whole-market feed is never retained.
+    private var streamedTicks: [String: StockSageLiveStream.Tick] = [:]
+    private var lastStreamCheck: [String: Date] = [:]
+    private var lastVolumeConfirm: [String: Date] = [:]
+
+    /// Live-tick hook (`StockSageStore.applyLiveTicks`). Runs only while monitoring is on — the
+    /// same switch that owns the 180 s loop — and spawns a check only when an armed symbol ticks.
+    func noteStreamedTicks(_ ticks: [String: StockSageLiveStream.Tick], now: Date = Date()) {
+        guard isRunning, !ticks.isEmpty else { return }
+        let due = nominateStreamedTicks(ticks, armed: StockSageStore.shared.priceAlerts, now: now)
+        guard !due.isEmpty, !priceAlertCheckInFlight else { return }
+        // A spawned check that has not started yet is superseded; one in flight was excluded above.
+        streamCheckTask?.cancel()
+        streamCheckTask = Task { [weak self] in await self?.checkStreamedPriceAlerts() }
+    }
+
+    /// Record alertable trades for armed symbols and return the symbols whose throttle allows a check.
+    func nominateStreamedTicks(_ ticks: [String: StockSageLiveStream.Tick], armed: [PriceAlert],
+                               now: Date) -> [String] {
+        let symbols = Set(armed.filter { $0.isArmed }.map { $0.symbol.uppercased() })
+        streamedTicks = streamedTicks.filter { symbols.contains($0.key) }
+        var due: [String] = []
+        for symbol in symbols.sorted() {
+            guard let tick = ticks[symbol], Self.isAlertableStreamTrade(tick, now: now) else { continue }
+            streamedTicks[symbol] = tick
+            if let last = lastStreamCheck[symbol], now.timeIntervalSince(last) < Self.streamCheckInterval { continue }
+            lastStreamCheck[symbol] = now
+            due.append(symbol)
+        }
+        return due
+    }
+
+    /// Regular-session default (owner decision pending): a streamed trade can fire an alert only
+    /// when it is a live observation, priced, not Form T (condition 12) and inside the scheduled
+    /// NASDAQ regular session. Pre/post-market prints never fire from the stream.
+    nonisolated static func isAlertableStreamTrade(_ tick: StockSageLiveStream.Tick, now: Date) -> Bool {
+        tick.price > 0 && tick.price.isFinite
+            && StockSageLiveStream.isLiveObservation(tick.timestamp, at: now)
+            && isRegularSessionPrint(at: tick.timestamp, conditions: tick.conditions)
+    }
+
+    nonisolated static func isRegularSessionPrint(at time: Date, conditions: [Int64]?) -> Bool {
+        !(conditions ?? []).contains(12)
+            && StockSageMarketHours.nasdaqState(at: time, calendar: Calendar(identifier: .gregorian)).phase == .open
+    }
+
+    private func checkStreamedPriceAlerts() async {
+        await checkStreamedPriceAlerts(
+            currentAlerts: { StockSageStore.shared.priceAlertsForMonitoring() },
+            confirmDayVolumes: { await Self.fetchDayVolumes(for: $0) },
+            enqueue: { await self.sendPriceAlert($0, price: $1) },
+            markTriggered: { StockSageStore.shared.markPriceAlertsTriggered($0) })
+    }
+
+    /// The stream-triggered check: the same `checkPriceAlerts` rules (single-flight, still-armed
+    /// identity, hourly cap, latch only after accepted delivery), with prices from recorded live
+    /// trades instead of a REST quote fetch. A day-volume alert is nominated by a live trade and
+    /// fires only on a REST-confirmed `day.v`.
+    func checkStreamedPriceAlerts(
+        currentAlerts: @MainActor () -> [PriceAlert],
+        confirmDayVolumes: @MainActor ([String]) async -> [String: Double],
+        enqueue: @MainActor (PriceAlert, Double) async -> Bool,
+        markTriggered: @MainActor ([UUID]) -> Void,
+        now: @MainActor () -> Date = { Date() }
+    ) async {
+        await checkPriceAlerts(
+            currentAlerts: currentAlerts,
+            fetchQuotes: { symbols in self.streamedQuotes(for: symbols, now: now()) },
+            enqueue: enqueue,
+            markTriggered: markTriggered,
+            fetchDayVolumes: { symbols in
+                let nominated = self.dueVolumeConfirmations(symbols, now: now())
+                if nominated.isEmpty { return [:] }
+                return await confirmDayVolumes(nominated)
+            },
+            now: now)
+    }
+
+    private func streamedQuotes(for symbols: [String], now: Date) -> [String: StockSageQuoteService.LiveQuote] {
+        var quotes: [String: StockSageQuoteService.LiveQuote] = [:]
+        for symbol in symbols {
+            let key = symbol.uppercased()
+            // Re-check at read time: a trade recorded as live may have aged out before this check ran.
+            guard let tick = streamedTicks[key], Self.isAlertableStreamTrade(tick, now: now) else { continue }
+            quotes[key] = .init(symbol: key, price: tick.price, previousClose: tick.price, marketTime: tick.timestamp,
+                                massiveTradeSequence: tick.sequence, priceSource: .massiveSIP)
+        }
+        return quotes
+    }
+
+    private func dueVolumeConfirmations(_ symbols: [String], now: Date) -> [String] {
+        var due: [String] = []
+        for symbol in symbols {
+            let key = symbol.uppercased()
+            guard let tick = streamedTicks[key], Self.isAlertableStreamTrade(tick, now: now) else { continue }
+            if let last = lastVolumeConfirm[key], now.timeIntervalSince(last) < Self.volumeConfirmInterval { continue }
+            lastVolumeConfirm[key] = now
+            due.append(key)
+        }
+        return due
+    }
+
+    /// REST `day.v` per requested ticker, parsed by `parseDayVolumes`. Same request as
+    /// `StockSageMassive.fetchSnapshots`: pinned host, Bearer header, 2 MB cap, access generation.
+    static func fetchDayVolumes(for symbols: [String], access: StockSageMassive.Access = .init(),
+                                transport: StockSageMassive.Transport? = nil) async -> [String: Double] {
+        let covered = symbols.filter(StockSageMassive.covers)
+        guard access.allowed(), !Task.isCancelled, !covered.isEmpty else { return [:] }
+        let captured = access.capture()
+        guard !captured.key.isEmpty, captured.isCurrent() else { return [:] }
+        var out: [String: Double] = [:]
+        for chunk in StockSageMassive.chunks(covered) {
+            guard let request = StockSageMassive.request(for: chunk, key: captured.key) else { continue }
+            let result = try? await StockSageMassive.response(for: request,
+                maximumBytes: StockSageMassive.snapshotMaximumBytes, transport: transport)
+            guard captured.isCurrent() else { return [:] }
+            guard let (data, response) = result, response.statusCode == 200 else { continue }
+            out.merge(parseDayVolumes(data, requested: chunk, now: Date())) { _, new in new }
+        }
+        return captured.isCurrent() ? out : [:]
+    }
+
+    /// `day.v` for requested tickers whose `lastTrade.t` is a regular-session print no older than
+    /// `volumeConfirmMaximumTradeAge`. Every field is optional; a missing one yields no entry.
+    nonisolated static func parseDayVolumes(_ data: Data, requested: [String], now: Date) -> [String: Double] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = root["tickers"] as? [[String: Any]] else { return [:] }
+        let wanted = Set(requested.map { $0.uppercased() })
+        var volumes: [String: Double] = [:]
+        for row in rows {
+            guard let ticker = row["ticker"] as? String, wanted.contains(ticker),
+                  let volume = StockSageMassive.finite((row["day"] as? [String: Any])?["v"]), volume >= 0,
+                  let ns = StockSageMassive.int64((row["lastTrade"] as? [String: Any])?["t"]) else { continue }
+            let traded = StockSageMassive.date(fromNanoseconds: ns)
+            guard (0...volumeConfirmMaximumTradeAge).contains(now.timeIntervalSince(traded)),
+                  isRegularSessionPrint(at: traded, conditions: nil) else { continue }
+            volumes[ticker] = volume
+        }
+        return volumes
     }
 
     /// Drive stop-breach/target-hit pushes for TRACKED IDEAS via the tested
@@ -517,6 +696,15 @@ final class StockSageMonitor: ObservableObject {
     /// notifications-denied error and the alert consumed its shot on nothing).
     private func sendPriceAlert(_ alert: PriceAlert, price: Double) async -> Bool {
         let content = UNMutableNotificationContent()
+        if alert.resolvedMetric == .dayVolume {
+            content.title = "Volume alert: \(alert.symbol) \(alert.levelText)"
+            content.userInfo = ["symbol": alert.symbol]
+            content.body = "Day volume now \(PriceAlert.volumeText(price)) (Massive snapshot)."
+            let delivered = await StockSageNotificationDelivery.enqueue(content, event: .price,
+                brief: "Volume alert for \(alert.symbol). Your saved level was reached.")
+            if delivered { await bumpBadge() }
+            return delivered
+        }
         // ALERT-FMT-1 (round-3 honesty hunt): was bare `.formatted()` (locale grouping, dropped
         // trailing zeros, full float precision) — the ONE alert surface ALERT-FMT-1 missed when it
         // unified the idea-alert path onto the shared adaptive formatter. Same
