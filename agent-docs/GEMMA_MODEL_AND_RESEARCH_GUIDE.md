@@ -2,7 +2,13 @@
 
 Prepared for **Saleh**
 
-**Living edition 45 · Updated 24 September 2026, Asia/Riyadh.** Saleh’s final design/recovery Release `f1ac1f7` is signed, installed and reopened with saved records preserved. Installed repeated Saved research and Same-day → Settings → model setup checks passed; native Back returned to Library. Both paired cap trackers are enabled and waiting outside their schedule. The earlier Mac candidates and Salman’s separate iPhone/API observations retain their dates and scope.
+**Living edition 46 · Updated 25 September 2026, Asia/Riyadh.** Saleh’s final design/recovery Release `f1ac1f7` is signed, installed and reopened with saved records preserved. Installed repeated Saved research and Same-day → Settings → model setup checks passed; native Back returned to Library. Both paired cap trackers are enabled and waiting outside their schedule. The earlier Mac candidates and Salman’s separate iPhone/API observations retain their dates and scope.
+
+### Installed Mac retest · 25 September
+
+Fresh verification passed **3,263 definitions / 4,253 executions / zero failures / five existing skips**. All 479 tested source/resource files match the installed signed build; all 3,381 saved files remained unchanged. All nine main routes, saved-history disclosure and repeated Settings → model setup → Back passed. Both paired trackers remain enabled and wait outside their weekday schedule.
+
+**One low-severity wording issue remains:** the generic cap-research headline can still ask to set up Telegram even though pairing is complete; the tracker card reports the correct state. Application code was not changed or reinstalled. Five existing window-count warnings remain. No new model research or Telegram delivery test ran. [Dated test report and limits](../docs/reviews/2026-09-25-mac-retest.md).
 
 ### Mac design and recovery update · 24 September
 

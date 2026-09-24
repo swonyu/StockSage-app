@@ -2,11 +2,17 @@
 
 Prepared for **Saleh**
 
-**Living edition 45 · Updated 24 September 2026, Asia/Riyadh.**
+**Living edition 46 · Updated 25 September 2026, Asia/Riyadh.**
 
 This guide explains Gemma’s evidence, qualification and saved research, with a separate Mac UI and recovery update. **Saleh’s final signed Mac Release f1ac1f7 is installed and reopened, with all 3,381 compared files and twenty manual runs preserved.** Repeated model setup navigation and Back passed; both paired cap trackers are enabled and waiting outside their schedule. Earlier candidates and Salman’s separate 22–24 September iPhone/API observations remain dated evidence, not current model or market readiness.
 
 The PDF is limited to **20 pages including the cover and contents**. Detailed release history, stock case studies, source identities and verification receipts remain in the [full technical reference](../agent-docs/GEMMA_MODEL_AND_RESEARCH_GUIDE.md). The shorter guide preserves the important operating rules and limitations; it is not an investment recommendation.
+
+### Installed Mac retest · 25 September
+
+Fresh verification passed **3,263 definitions / 4,253 executions / zero failures / five existing skips**. All 479 tested source/resource files match the installed signed build; all 3,381 saved files remained unchanged. All nine main routes, saved-history disclosure and repeated Settings → model setup → Back passed. Both paired trackers remain enabled and wait outside their weekday schedule.
+
+**One low-severity wording issue remains:** the generic cap-research headline can still ask to set up Telegram even though pairing is complete; the tracker card reports the correct state. Application code was not changed or reinstalled. Five existing window-count warnings remain. No new model research or Telegram delivery test ran. [Dated test report and limits](../docs/reviews/2026-09-25-mac-retest.md).
 
 ### Mac design and recovery update · 24 September
 

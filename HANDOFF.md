@@ -1,3 +1,7 @@
+## Installed Mac retest — 25 September 2026
+
+Fresh test run: **3,263 definitions / 4,253 executions / zero failures / five existing skips**, exit 0, 333.391 seconds, all 479 hashes unchanged. The installed signed `f1ac1f7` identity still matches; all 3,381 saved files unchanged. Nine routes, saved-history disclosure and repeated model setup/Back passed. Both paired trackers remain enabled outside schedule. One low-severity generic cap setup hint remains misleading; actual pairing/tracking state is correct. No app-code edit, reinstall, new model run or Telegram test occurred. See [retest report](docs/reviews/2026-09-25-mac-retest.md). Guide edition 46 publication is pending.
+
 ## Mac design and recovery audit — 24 September 2026 (Saleh’s Mac)
 
 All 25 verified findings in the [plan](docs/superpowers/plans/2026-09-24-mac-design-audit.md) are implemented: calmer rose/opaque charcoal, readable hierarchy and contrast, single-scroll cap/screener pages, immediate request-owned company-quality sheets, visible retained-result warnings, clearer setup/recovery, native history disclosure and safe existing-window model navigation. Initial cap-receipt failures terminate truthfully; writer recovery and bounded isolation-stage diagnostics remain fail-closed.
