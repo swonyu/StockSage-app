@@ -1,3 +1,11 @@
+## Physical iPhone retest — 24 September 2026
+
+Remote main and checked source were `7b16b12` (application `5188ae1`). Signed release installed and launched on the connected phone; all 463 source hashes unchanged. Full iOS: **3,140 definitions / 3,960 executions / zero failures / four existing skips**. Focused Mac: **315 / 616 / zero failures or skips**. No runtime warnings. Native phone AAPL check and all 22 bounded Mac-key probes returned HTTP 200.
+
+Owner heard Buy chime + brief during Mirroring. **Direct physical phone test appeared and opened Saved research** after Mirroring closed. Mirrored delivery did not appear even with permissions/forwarding enabled. The approved temporary Mac forwarding setting was restored to off and verified; other user changes were retained. No app-code defect or new application fix is claimed. Physical cold-launch/accessory checks, sustained/extended-hours stream, widgets and live Gemma remain unverified. Gemma 18080 is unavailable; no model/research/GPU/broker action was started. Test simulator and local Colima were stopped.
+
+Package/hash checks and five offline container checks passed. Saved preferences/Documents unchanged; all support files retained, three provider caches refreshed. The external consensus probe URL was corrected; the app was already correct. [All nine commits, exact results and limitations](docs/reviews/2026-09-24-iphone-retest.md). Guide edition 44 supersedes the older pending-install state. Exact owner PDF path remains absent; prior exports remain preserved. The one-day deadline passed before this retest; do not claim on-time completion.
+
 ## iPhone audit and tested release — 22 September 2026
 
 Source `5188ae1` fixes launch-time notification routing, audio-session UI blocking, output disconnect/cancellation, gain persistence and rejected-delivery retry. Settings now exposes OS permission and a five-second local notification test. Full iOS: **3,140 definitions / 3,960 executions / zero failures / four existing skips**, no runtime warnings. Focused Mac: **97 / 223 / zero failures or skips**. Full compile gate passed; 463 source/project/resource files match the manifest. See [audit and retained failures](docs/reviews/2026-09-22-iphone-heavy-verification.md).
