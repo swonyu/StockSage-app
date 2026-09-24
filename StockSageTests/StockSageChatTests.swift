@@ -883,7 +883,7 @@ struct StockSageChatTests {
         }
     }
 
-    @Test(arguments: [900, 1300], [MarketSection.chat, .sameDay, .briefing])
+    @Test(arguments: [900, 1300], [MarketSection.chat, .sameDay, .briefing, .library])
     func chatModelSettingsButtonRevealsActualCatalystsControls(width: Int, initialSection: MarketSection) async throws {
         try #require(StockSageStore.isRunningTests)
         let suite = "stocksage.audit.mac.model-navigation.\(UUID().uuidString)"
@@ -918,6 +918,29 @@ struct StockSageChatTests {
         let size = try await capture(view, name: "stocksage-audit-mac-model-settings-\(initialSection.rawValue)-\(width)", viewport: viewport, usesCompactToolbar: true) { root in
             let window = try #require(root.window)
             var fallbackWindowOpens = 0
+            if initialSection == .library {
+                // Push Saved research through the real NavigationLink rather than
+                // preseeding its destination; retain the same MarketsView and window.
+                let savedResearch = nativeAccessibilityElements(in: root).first {
+                    $0.accessibilityIdentifier?() == "library.open.briefing"
+                }
+                let savedResearchLink = try #require(savedResearch, "Library must expose its native Saved research link")
+                let openedSavedResearch = savedResearchLink.accessibilityPerformPress?() == true
+                if !openedSavedResearch { printNativeActions(in: root, context: "Library Saved research link") }
+                try #require(openedSavedResearch, "Open Saved research through the actual native Library link")
+                let savedDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+                var savedResearchVisible = false
+                while ContinuousClock.now < savedDeadline {
+                    root.layoutSubtreeIfNeeded()
+                    // This detail belongs to Home's Watchlist action, not the
+                    // Library row or navigation title that also says Saved research.
+                    savedResearchVisible = nativeAccessibilityText(in: root).contains("Tracked tickers: 1")
+                    if savedResearchVisible { break }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                try #require(savedResearchVisible, "The actual Saved research body must appear before opening setup")
+                try await Task.sleep(for: .milliseconds(200))
+            }
             if initialSection == .chat {
                 let button = try #require(nativeAccessibilityElements(in: root).first {
                     $0.accessibilityRole?() == .button &&

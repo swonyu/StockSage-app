@@ -23,7 +23,11 @@ struct MarketsView: View {
     private static let worldwideEquityCount = StockSageUniverse.worldwide
         .filter { StockSageAllocation.assetClass($0.symbol) == "Equity" }.count
 
-    @State private var section: MarketSection
+    @State private var selectedPrimarySection: MarketSection
+    @State private var libraryNavigationPath: [MarketSection]
+    private var section: MarketSection {
+        selectedPrimarySection == .library ? (libraryNavigationPath.last ?? .library) : selectedPrimarySection
+    }
     @State private var weekPresentation = StockSageResearchModesPanel.Presentation(horizon: .week)
     @State private var fortnightPresentation = StockSageResearchModesPanel.Presentation(horizon: .fortnight)
     @ObservedObject private var researchHistory: StockSageResearchHistory
@@ -444,12 +448,15 @@ struct MarketsView: View {
         // from the command line so the iOS-simulator sweep can screenshot every section
         // without UI scripting. Absent argument = byte-identical to today.
         let args = ProcessInfo.processInfo.arguments
+        let initialSection: MarketSection
         if let i = args.firstIndex(of: "--section"), i + 1 < args.count,
            let s = MarketSection(rawValue: args[i + 1]) {
-            _section = State(initialValue: Self.resolvedSection(s))
+            initialSection = Self.resolvedSection(s)
         } else {
-            _section = State(initialValue: Self.resolvedSection(qaSection))
+            initialSection = Self.resolvedSection(qaSection)
         }
+        _selectedPrimarySection = State(initialValue: initialSection.primaryDestination)
+        _libraryNavigationPath = State(initialValue: initialSection.libraryPath)
         self.qaDetailSymbol = qaDetailSymbol
     }
 
@@ -466,6 +473,9 @@ struct MarketsView: View {
             }
         }
         .modifier(DSReducedMotion())
+        .onChange(of: section) { _, current in
+            if current != .catalysts { pendingModelSettingsReveal = nil }
+        }
         #if os(macOS)
         .background {
             StockSageModelSetupWindowLink(openModelSettings: openModelSettings)
@@ -672,27 +682,15 @@ struct MarketsView: View {
         if resolved != .weekResearch { weekPresentation.selected = nil }
         if resolved != .fortnightResearch { fortnightPresentation.selected = nil }
         if resolved != .catalysts { pendingModelSettingsReveal = nil }
-        section = resolved
+        selectedPrimarySection = resolved.primaryDestination
+        libraryNavigationPath = resolved.libraryPath
         if let horizon = resolved.researchHorizon, !StockSageStore.isRunningTests {
             StockSageResearchModesPanel.Presentation.save(horizon, to: .standard)
         }
     }
 
     private var primarySelection: Binding<MarketSection> {
-        Binding(get: { section.primaryDestination }, set: openSection)
-    }
-
-    private var libraryPath: Binding<[MarketSection]> {
-        Binding(get: { section.libraryPath }, set: { path in
-            // A dismissed stack must not steal selection from a newly opened research tab.
-            guard section.primaryDestination == .library else { return }
-            // Mounting/revealing Library can write back an empty or previous native
-            // path. Keep the explicit model route until its existing reveal task
-            // has mounted the destination; normal Back handling resumes afterward.
-            if pendingModelSettingsReveal != nil, section == .catalysts,
-               path != [.catalysts] { return }
-            openSection(path.last ?? .library)
-        })
+        Binding(get: { selectedPrimarySection }, set: openSection)
     }
 
     private func researchPanel(_ horizon: StockSageHorizonResearch.Horizon) -> StockSageResearchModesPanel {
@@ -705,10 +703,25 @@ struct MarketsView: View {
         StockSageResearchActivityNavigation(destination: section, horizons: horizonResearch, open: openSection)
     }
 
-    private var libraryWorkspace: some View {
-        NavigationStack(path: libraryPath) {
-            libraryList
-                .navigationTitle("Library")
+    private var workspaceNavigation: some View {
+        // Let native navigation own its path. Projecting every write through a single
+        // section loses stack state and can restore a previously displayed destination.
+        NavigationStack(path: $libraryNavigationPath) {
+            Group {
+                #if os(macOS)
+                if selectedPrimarySection == .library {
+                    libraryList.navigationTitle("Library")
+                } else if section == .sameDay {
+                    StockSageSameDayResearchPanel(store: store)
+                } else if let horizon = section.researchHorizon {
+                    researchPanel(horizon)
+                } else {
+                    desktopSupportingPage(section)
+                }
+                #else
+                libraryList.navigationTitle("Library")
+                #endif
+            }
                 .navigationDestination(for: MarketSection.self) { destination in
                     #if os(macOS)
                     desktopSupportingPage(destination)
@@ -796,10 +809,9 @@ struct MarketsView: View {
                     feedBanner.padding(.horizontal, 24).padding(.vertical, 6)
                     researchActivity
                     Divider()
-                    if section.primaryDestination == .library { libraryWorkspace }
-                    else if section == .sameDay { StockSageSameDayResearchPanel(store: store) }
-                    else if section.researchHorizon != nil { panel }
-                    else { desktopSupportingPage(section) }
+                    // Keep the native stack mounted when switching sidebar destinations.
+                    // A newly mounted stack can otherwise initialize over a requested path.
+                    workspaceNavigation
                 }
                 // The window owns the minimum size; changing research content must not enlarge its split pane.
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
@@ -1385,7 +1397,7 @@ struct MarketsView: View {
             ForEach(MarketSection.phoneSections) { destination in
                 Tab(value: destination) {
                     if destination == .library {
-                        libraryWorkspace
+                        workspaceNavigation
                             .toolbar {
                                 ToolbarItem(placement: .topBarTrailing) {
                                     Button("Settings", systemImage: "gearshape") { showIOSSettings = true }
