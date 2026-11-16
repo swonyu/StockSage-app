@@ -328,7 +328,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageX.Widget;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.Widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -357,7 +357,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageX.Widget;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.Widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -534,8 +534,8 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSageX;
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSageX;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSage;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSage;
 				PRODUCT_MODULE_NAME = StockSage;
 				PRODUCT_NAME = StockSageX;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -576,8 +576,8 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSageX;
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSageX;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSage;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSage;
 				PRODUCT_MODULE_NAME = StockSage;
 				PRODUCT_NAME = StockSageX;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
