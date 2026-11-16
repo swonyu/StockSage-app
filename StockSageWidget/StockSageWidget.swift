@@ -162,12 +162,9 @@ struct StockSageWidgetView: View {
     }
 
     @ViewBuilder private func heatLabels(_ s: StockSageWidgetSnapshot) -> some View {
-        // Heat only prints when an account size made it computable — see the snapshot's
-        // own note on why a 0 here would be a false reassurance.
-        if let heat = s.portfolioHeatPct {
-            Text("Paper heat \(String(format: "%.1f", heat))% of \(String(format: "%.0f", s.heatCapPct))%")
-                .font(.caption2).foregroundStyle(s.isAtHeatCap ? .red : .secondary)
-        }
+        // Unknown or incomplete risk stays explicit; it never renders a zero total.
+        Text(s.paperHeatText)
+            .font(.caption2).foregroundStyle(s.isAtHeatCap ? .red : .secondary)
         Text(s.paperPositionsText).font(.caption2).foregroundStyle(.secondary)
     }
 
@@ -215,7 +212,8 @@ private let widgetPreviewSnapshot = StockSageWidgetSnapshot(
     asOf: widgetPreviewDate.addingTimeInterval(-7 * 3600),
     bestSymbol: "SYNWGT", bestAction: "Rules: Strong Buy", bestStrength: 4,
     openPositions: 2, portfolioHeatPct: 4, heatCapPct: 8,
-    forwardCloses: 1, forwardNeeded: 4, isSampleData: true, isCachedData: false)
+    forwardCloses: 1, forwardNeeded: 4, isSampleData: true, isCachedData: false,
+    portfolioHeatIsComplete: true)
 private let widgetFuturePreviewSnapshot = StockSageWidgetSnapshot(
     asOf: widgetPreviewDate.addingTimeInterval(3_600),
     bestSymbol: "SYNTHETIC-LONG", bestAction: "Rules: Wait for a complete qualifying setup", bestStrength: 4,

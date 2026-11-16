@@ -1,5 +1,17 @@
 import Foundation
 
+/// Shared by the app and its widget: format a known percentage without trapping
+/// on Double-to-Int conversion or printing a non-finite/unknown value as zero.
+nonisolated enum StockSageRiskDisplay {
+    static func percentageText(_ percentage: Double) -> String? {
+        guard percentage.isFinite, percentage >= 0 else { return nil }
+        if percentage == 0 { return "0.0" }
+        if percentage < 0.1 { return "<0.1" }
+        if percentage >= 1_000_000 { return String(format: "%.2e", percentage) }
+        return String(format: "%.1f", percentage)
+    }
+}
+
 /// What the home-screen widget shows — written by the app, read by the widget extension.
 ///
 /// WHY A SNAPSHOT AND NOT A LIVE READ: a widget process is given a few seconds and a few tens of
@@ -34,7 +46,7 @@ nonisolated struct StockSageWidgetSnapshot: Codable, Sendable, Equatable {
     ///
     /// `portfolioHeatPct` is OPTIONAL because heat is only meaningful against an account size the
     /// owner has actually entered. Writing 0 when it is unknown would render "0.0% of 8%" — a
-    /// specific, reassuring, and false claim. nil renders nothing instead.
+    /// specific, reassuring, and false claim. nil renders an explicit unavailable status.
     let openPositions: Int?
     let portfolioHeatPct: Double?
     let heatCapPct: Double
@@ -45,6 +57,9 @@ nonisolated struct StockSageWidgetSnapshot: Codable, Sendable, Equatable {
     let isSampleData: Bool
     /// nil for older snapshots that did not capture cache provenance.
     var isCachedData: Bool? = nil
+    /// Only corrected, complete calculations set this true. Older snapshots may
+    /// contain partial FX totals, so their numeric heat alone is not trustworthy.
+    var portfolioHeatIsComplete: Bool? = nil
 
     /// Beyond this, the widget stops presenting the figures as current.
     nonisolated static let staleAfter: TimeInterval = 3600 * 6
@@ -92,16 +107,27 @@ nonisolated struct StockSageWidgetSnapshot: Codable, Sendable, Equatable {
     /// than a misleading 0 when the cap is absent or degenerate — a full bar and an undrawable
     /// bar must not look the same.
     nonisolated var heatFractionOfCap: Double? {
-        guard let heat = portfolioHeatPct, heat.isFinite, heat >= 0,
+        guard portfolioHeatIsComplete == true,
+              let heat = portfolioHeatPct, heat.isFinite, heat >= 0,
               heatCapPct.isFinite, heatCapPct > 0 else { return nil }
         return Swift.min(1, heat / heatCapPct)
     }
 
-    /// True once total heat has reached the cap — the moment sizing another position is the
-    /// wrong move.
+    /// Whether a known, complete total has reached the displayed reference cap.
     nonisolated var isAtHeatCap: Bool {
-        guard let heat = portfolioHeatPct, heatCapPct.isFinite, heatCapPct > 0 else { return false }
+        guard portfolioHeatIsComplete == true,
+              let heat = portfolioHeatPct, heat.isFinite, heat >= 0,
+              heatCapPct.isFinite, heatCapPct > 0 else { return false }
         return heat >= heatCapPct
+    }
+
+    nonisolated var paperHeatText: String {
+        guard portfolioHeatIsComplete == true, let heat = portfolioHeatPct,
+              let percentage = StockSageRiskDisplay.percentageText(heat),
+              let cap = StockSageRiskDisplay.percentageText(heatCapPct), heatCapPct > 0 else {
+            return "Paper stop risk unavailable"
+        }
+        return "Paper stop risk \(percentage)% of account; cap \(cap)%"
     }
 
     // MARK: - Shared storage

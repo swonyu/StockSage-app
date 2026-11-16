@@ -24,7 +24,7 @@ struct StockSageWidgetSnapshotTests {
         StockSageWidgetSnapshot(asOf: asOf, bestSymbol: "AAPL", bestAction: "Rules: Buy",
                                 bestStrength: 3, openPositions: 2, portfolioHeatPct: heat,
                                 heatCapPct: cap, forwardCloses: 1, forwardNeeded: 4,
-                                isSampleData: sample)
+                                isSampleData: sample, portfolioHeatIsComplete: heat != nil)
     }
 
     // MARK: The property the widget's frozen-clock fix depends on
@@ -97,6 +97,7 @@ struct StockSageWidgetSnapshotTests {
         #expect(unknown.heatFractionOfCap == nil)
         let zero = snapshot(heat: 0)
         #expect(zero.heatFractionOfCap == 0, "a genuine zero is drawable and must not be confused with unknown")
+        #expect(zero.paperHeatText == "Paper stop risk 0.0% of account; cap 8.0%")
     }
 
     @Test func unavailablePaperBookAndCacheProvenanceRemainExplicitAfterRoundTrip() throws {
@@ -120,5 +121,21 @@ struct StockSageWidgetSnapshotTests {
         let restored = try JSONDecoder().decode(StockSageWidgetSnapshot.self, from: old)
         #expect(restored.openPositions == 2 && restored.forwardCloses == 1)
         #expect(restored.isCachedData == nil && restored.sourceText == "SNAPSHOT")
+        #expect(restored.portfolioHeatPct == 4, "Preserve the old stored value as evidence; do not repair it silently")
+        #expect(restored.portfolioHeatIsComplete == nil)
+        #expect(restored.paperHeatText == "Paper stop risk unavailable")
+        #expect(restored.heatFractionOfCap == nil && !restored.isAtHeatCap)
+    }
+
+    @Test func correctedCompleteHeatRemainsKnownAfterRoundTrip() throws {
+        let complete = snapshot(heat: 4)
+        let restored = try JSONDecoder().decode(StockSageWidgetSnapshot.self, from: JSONEncoder().encode(complete))
+        #expect(restored == complete && restored.portfolioHeatIsComplete == true)
+        #expect(restored.paperHeatText == "Paper stop risk 4.0% of account; cap 8.0%")
+        #expect(restored.heatFractionOfCap == 0.5)
+        var incomplete = complete
+        incomplete.portfolioHeatIsComplete = false
+        #expect(incomplete.paperHeatText == "Paper stop risk unavailable")
+        #expect(incomplete.heatFractionOfCap == nil && !incomplete.isAtHeatCap)
     }
 }

@@ -18,13 +18,18 @@ struct PortfolioHeat: Sendable, Equatable {
     /// <5% cool, <10% warm, ≥10% hot.
     nonisolated var level: Level { heatPct < 0.05 ? .cool : (heatPct < 0.10 ? .warm : .hot) }
 
+    nonisolated var percentageText: String? {
+        StockSageRiskDisplay.percentageText(heatPct * 100)
+    }
+
     nonisolated var verdict: String {
-        let p = Int((heatPct * 100).rounded())
-        switch level {
-        case .cool: return "\(p)% of account at open risk — room to add."
-        case .warm: return "\(p)% of account at open risk — getting full; add carefully."
-        case .hot:  return "\(p)% of account at open risk — heavy; one bad day hits hard, consider trimming."
-        }
+        guard let percentageText else { return "Stop-risk percentage unavailable." }
+        return "\(percentageText)% of the entered account at planned stop risk."
+    }
+
+    nonisolated var accessibilitySummary: String {
+        guard let percentageText else { return "Portfolio stop-risk percentage unavailable." }
+        return "Portfolio stop risk: \(percentageText) percent of the entered account across \(openCount) trades."
     }
     nonisolated var caveat: String {
         "Assumes each stop fills AT its level; a correlated gap can hit several at once for more than this."
@@ -32,18 +37,45 @@ struct PortfolioHeat: Sendable, Equatable {
 }
 
 enum StockSagePortfolioHeat {
-    /// Total open risk ÷ account. Each tuple is one OPEN trade (shares, entry, stop).
-    /// nil only when there's no account to measure against; zero open trades → 0% heat.
+    /// Complete finite open risk divided by a finite positive account value.
+    /// An invalid leg or arithmetic overflow makes the whole total unavailable;
+    /// an omitted leg must never become a reassuring partial/zero total.
     nonisolated static func compute(openTrades: [(shares: Double, entry: Double, stop: Double)],
                                     accountSize: Double) -> PortfolioHeat? {
-        guard accountSize > 0 else { return nil }
-        // Non-finite legs (e.g. a fat-fingered "inf" typed into the journal form) are excluded
-        // from the risk sum rather than trusted — otherwise `verdict`'s Int(heatPct * 100) traps
-        // on a non-finite heatPct, crashing every future render of this screen.
-        let atRisk = openTrades.reduce(0.0) { sum, t in
-            guard t.shares.isFinite, t.entry.isFinite, t.stop.isFinite else { return sum }
-            return sum + Swift.max(0, t.shares) * abs(t.entry - t.stop)
+        guard accountSize.isFinite, accountSize > 0 else { return nil }
+        var atRisk = 0.0
+        for trade in openTrades {
+            guard trade.shares.isFinite, trade.shares > 0,
+                  trade.entry.isFinite, trade.entry > 0,
+                  trade.stop.isFinite, trade.stop > 0 else { return nil }
+            let distance = abs(trade.entry - trade.stop)
+            let risk = trade.shares * distance
+            guard risk.isFinite, risk >= 0, distance == 0 || risk > 0 else { return nil }
+            let total = atRisk + risk
+            guard total.isFinite else { return nil }
+            atRisk = total
         }
+        let percentage = atRisk / accountSize * 100
+        guard percentage.isFinite, atRisk == 0 || percentage > 0 else { return nil }
         return PortfolioHeat(dollarsAtRisk: atRisk, accountSize: accountSize, openCount: openTrades.count)
+    }
+
+    /// Convert EVERY recorded trade to USD before calculating a total. Missing,
+    /// invalid or overflowing FX leaves the entire result unknown, including the
+    /// paper-book value written to the widget. No network or shared state is used.
+    nonisolated static func compute(trades: [TradeRecord], accountSize: Double,
+                                    ratesToUSD: [String: Double]) -> PortfolioHeat? {
+        var legs: [(shares: Double, entry: Double, stop: Double)] = []
+        legs.reserveCapacity(trades.count)
+        for trade in trades {
+            let currency = StockSageCurrency.conversionCurrencyForSymbol(trade.symbol)
+            guard let rate = currency == "USD" ? 1 : ratesToUSD[currency],
+                  rate.isFinite, rate > 0 else { return nil }
+            let entry = StockSageCurrency.majorUnitValue(symbol: trade.symbol, rawValue: trade.entry) * rate
+            let stop = StockSageCurrency.majorUnitValue(symbol: trade.symbol, rawValue: trade.stop) * rate
+            guard trade.entry == trade.stop || entry != stop else { return nil }
+            legs.append((shares: trade.shares, entry: entry, stop: stop))
+        }
+        return compute(openTrades: legs, accountSize: accountSize)
     }
 }
