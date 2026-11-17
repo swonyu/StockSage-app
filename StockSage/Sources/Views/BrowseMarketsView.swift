@@ -1,0 +1,284 @@
+import SwiftUI
+
+// MARK: - Browse all markets
+//
+// The discovery surface over the full `StockSageUniverse.catalog` — this is the SAME set as
+// `worldwide`, the analyzed universe (no separate un-scanned long-tail remains). Since the
+// 2026-07-16 Tadawul+NASDAQ restriction that set is ~901 names (29 .SR + 872 NASDAQ); the
+// displayed count reads `StockSageUniverse.catalog.count` live, so it never goes stale like this
+// comment did. Sectioned by market group,
+// searchable, asset-class filterable, with one-tap add-to-watchlist (a UI/tracking action
+// distinct from the scan itself). Catalog additions are local and preserve existing quotes;
+// the bulk history/ideas scan covers the full catalog regardless
+// of whether a symbol has been individually added.
+
+struct BrowseMarketsView: View {
+    @ObservedObject var store: StockSageStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var asset: AssetFilter = .all
+    /// The symbol currently being added (nil when idle). Drives the per-row spinner so
+    /// only the tapped row shows a ProgressView, not every untracked row simultaneously.
+    @State private var addingSymbol: String? = nil
+    /// Local copy of the add-symbol error, seeded only from adds performed in THIS sheet.
+    /// Prevents stale errors from the watchlist add box in MarketsView (which shares the
+    /// same store.addSymbolError) from appearing on sheet open (and vice versa on dismiss).
+    @State private var localAddError: String? = nil
+
+    // Dynamic-Type-aware small fonts: each equals its base size at the default text
+    // setting (bmFont13 == 13), so the dense layout is unchanged, but they scale up when
+    // the user enlarges system text — fixing the "tiny fixed size" a11y finding.
+    // (Matches MarketsView's mvFont7/8/9 / RuneScapeMarketView's rsFont8/9 convention.)
+    @ScaledMetric(relativeTo: .caption2) private var bmFont11: CGFloat = 11
+    @ScaledMetric(relativeTo: .caption2) private var bmFont12: CGFloat = 12
+    @ScaledMetric(relativeTo: .caption2) private var bmFont13: CGFloat = 13
+    @ScaledMetric(relativeTo: .caption2) private var bmFont14: CGFloat = 14
+    @ScaledMetric(relativeTo: .caption2) private var bmFont15: CGFloat = 15
+
+    enum AssetFilter: String, CaseIterable, Identifiable {
+        // No `crypto` case: the owner removed crypto from the app entirely (2026-07-28), and
+        // `StockSageStore.validateNewSymbol` now refuses `-USD` outright, so the segment could
+        // never match a row again.
+        case all = "All", stocks = "Stocks", etf = "ETFs", fx = "Forex", index = "Indices"
+        var id: String { rawValue }
+    }
+
+    /// Pure classifier (static so the data-driven filter list below is testable — the instance
+    /// method delegates). One rule per asset class, mirroring StockSageAllocation's suffix rules.
+    static func matches(_ s: StockSageSymbol, filter: AssetFilter) -> Bool {
+        let sym = s.symbol.uppercased()
+        switch filter {
+        case .all:    return true
+        case .fx:     return sym.hasSuffix("=X")
+        case .index:  return sym.hasPrefix("^")
+        case .etf:    return s.market.localizedCaseInsensitiveContains("ETF")
+        case .stocks: return !sym.hasSuffix("-USD") && !sym.hasSuffix("=X") && !sym.hasPrefix("^")
+                          && !s.market.localizedCaseInsensitiveContains("ETF")
+        }
+    }
+
+    private func matches(_ s: StockSageSymbol) -> Bool { Self.matches(s, filter: asset) }
+
+    /// Post-restriction (2026-07-16, "only keep Tadawul and NASDAQ"): offer ONLY the asset-class
+    /// filters that match ≥1 catalog name — the Crypto/Forex segments became permanently empty
+    /// when those markets left the universe, and a filter that can never match is a stale
+    /// affordance. Data-driven (computed once off the static catalog): if the universe changes
+    /// again, the filter row follows automatically.
+    static let availableFilters: [AssetFilter] = AssetFilter.allCases.filter { f in
+        f == .all || StockSageUniverse.catalog.contains { matches($0, filter: f) }
+    }
+
+    private var sections: [(market: String, rows: [StockSageSymbol])] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        // Review fix 2026-07-17: limit == the catalog size, so search can never
+        // silently truncate. The old `limit: 500` dropped 350+ matches on broad
+        // queries ("US" matches every 🇺🇸-labeled market row) with no notice, under
+        // a header claiming the full analyzed universe is browsable.
+        let base = q.isEmpty ? StockSageUniverse.catalog
+                             : StockSageUniverse.search(q, limit: StockSageUniverse.catalog.count)
+        let filtered = base.filter(matches)
+        return Dictionary(grouping: filtered, by: { $0.market })
+            .map { (market: $0.key, rows: $0.value.sorted { $0.symbol < $1.symbol }) }
+            .sorted { $0.market < $1.market }
+    }
+
+    var body: some View {
+        VStack(spacing: DS.Space.sm) {
+            #if os(iOS)
+            HStack {
+                Spacer(minLength: 0)
+                dismissButton
+            }
+            // Keep the close action available while all variable-height content scrolls.
+            // Large text and add errors must not consume the results viewport.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DS.Space.sm) {
+                        introduction
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        browseControls
+                        marketResults
+                    }
+                    .id("browse.contentTop")
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: query) { _, value in
+                    if value.trimmingCharacters(in: .whitespaces).isEmpty {
+                        // Clearing a short result list restores a much larger catalog.
+                        // Keep navigation at its beginning rather than retaining an
+                        // arbitrary offset into newly expanded lazy content.
+                        proxy.scrollTo("browse.contentTop", anchor: .top)
+                    }
+                }
+            }
+            #else
+            HStack(alignment: .top, spacing: 16) {
+                introduction
+                Spacer(minLength: 0)
+                dismissButton
+            }
+            browseControls
+            ScrollView { marketResults }
+            #endif
+        }
+        .padding(DS.Space.lg)
+        #if os(macOS)
+        .frame(minWidth: 420, idealWidth: 560, minHeight: 520, idealHeight: 600)
+        #endif
+        // System sheet chrome (macOS 27 overhaul): the opaque modalBG panel fought
+        // the native sheet material and mismatched OnboardingSheet, which already
+        // (correctly) defers to the system background. Dark is guaranteed by the
+        // app-level .preferredColorScheme(.dark).
+        // localAddError is seeded only by adds performed inside this sheet (see row Task),
+        // so it never shows a stale error from the watchlist box in MarketsView.
+        // Reset on appear so reopening the sheet starts clean.
+        .onAppear { localAddError = nil }
+    }
+
+    private var introduction: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Browse markets").font(.title2.weight(.semibold)).foregroundStyle(DS.Palette.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+            Text("\(StockSageUniverse.catalog.count) instruments · add companies to your watchlist.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var dismissButton: some View {
+        Button { dismiss() } label: {
+            Text("Done")
+                .foregroundStyle(Color.primary)
+                #if os(iOS)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
+        }
+            .buttonStyle(.bordered).tint(DS.Palette.accent)
+            .keyboardShortcut(.cancelAction).help("Close (Esc)")
+            .accessibilityIdentifier("browse.done")
+    }
+
+    private var browseControls: some View {
+        VStack(spacing: DS.Space.sm) {
+            Text("Search markets")
+                .font(.caption).foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: bmFont12)).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("Search markets", text: $query,
+                          prompt: Text("Symbol or market name").foregroundStyle(Color.primary))
+                    #if os(iOS)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .textFieldStyle(.plain).font(.system(size: bmFont13))
+                    .accessibilityLabel("Search markets")
+                    .accessibilityIdentifier("browse.search")
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            #if os(iOS)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                            #endif
+                    }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear market search")
+                        .accessibilityIdentifier("browse.clear")
+                }
+            }
+            #if os(iOS)
+            .frame(minHeight: 44)
+            .padding(.horizontal, 10).padding(.vertical, 2)
+            #else
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            #endif
+            .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Asset class").font(.caption2).foregroundStyle(.secondary)
+                DSSegmentPicker(cases: Self.availableFilters, selection: $asset) { $0.rawValue }
+                    .accessibilityLabel("Asset class")
+            }
+
+            if let err = localAddError {
+                Text(err).font(.caption2).foregroundStyle(DS.Palette.warningSoft).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var marketResults: some View {
+        LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+            ForEach(sections, id: \.market) { section in
+                Section {
+                    ForEach(section.rows) { row(_for: $0) }
+                } header: {
+                    Text(section.market).font(.system(size: bmFont11, weight: .semibold)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 3).padding(.horizontal, 4)
+                        .background(.ultraThinMaterial)
+                }
+            }
+            if sections.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No matching markets").font(.headline)
+                    Text("Try another symbol or market name, or clear your search.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 24)
+                .accessibilityIdentifier("browse.empty")
+            }
+        }
+    }
+
+    @ViewBuilder private func row(_for s: StockSageSymbol) -> some View {
+        let isTracked = store.isWatchlisted(s.symbol)
+        let isAdding = addingSymbol == s.symbol
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.symbol).font(.headline).foregroundStyle(DS.Palette.textPrimary)
+                Text(s.market).font(.caption).foregroundStyle(.secondary)
+                if let name = StockSageTadawulNames.displayLine(for: s.symbol) {
+                    Text(name).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("browse.identity.\(s.symbol)")
+            if isTracked {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: bmFont14)).foregroundStyle(DS.Palette.successSoft)
+                    .frame(width: 44, height: 44)
+                    .accessibilityLabel("\(s.symbol) is in your watchlist")
+            } else if isAdding {
+                // Per-row spinner: only the symbol being added shows a ProgressView.
+                // Other untracked rows show a disabled '+' while an add is in flight, so
+                // tapping '+' on AAPL no longer spins hundreds of unrelated rows.
+                ProgressView().controlSize(.small)
+                    .frame(width: 44, height: 44)
+                    .accessibilityLabel("Adding \(s.symbol)")
+            } else {
+                Button {
+                    Task {
+                        localAddError = nil
+                        addingSymbol = s.symbol
+                        localAddError = await store.addSymbol(s.symbol)
+                        addingSymbol = nil
+                    }
+                } label: {
+                    Image(systemName: "plus.circle.fill").font(.system(size: bmFont15)).foregroundStyle(DS.Palette.accentText)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isAddingSymbol)   // disable other '+' buttons while one add is in flight
+                .accessibilityLabel("Add \(s.symbol), \(s.market)")
+            }
+        }
+        .padding(.vertical, 8).padding(.horizontal, 6)
+        .background(DS.Palette.surfaceAlt, in: RoundedRectangle(cornerRadius: DS.Radius.small))
+    }
+}

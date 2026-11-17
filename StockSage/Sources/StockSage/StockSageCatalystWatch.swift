@@ -1,0 +1,559 @@
+import Foundation
+
+// MARK: - StockSageCatalystWatch
+//
+// Owner request (2026-09-06): a new tab that shows, for the same ideas as the Ideas tab, the
+// KEY catalyst to watch and explains WHY — per-idea catalyst cards plus a date-ordered catalyst
+// calendar. This file is the pure brief engine behind that tab (build step C1-engine): it never
+// fetches anything itself, it only reads what the store already computed (earnings proximity +
+// raw date, the volume-confirmed catalyst detector, the regime gauge, monthly seasonality) and
+// turns the single most relevant one into idea-specific, deterministic copy. The "why" here is
+// always engine rationale (this file, always present); an OPTIONAL on-device model-written
+// paragraph is a later, separate step and is purely additive in the view layer.
+//
+// PRECEDENCE (first applicable wins as `primary`; every other applicable one becomes
+// `secondary`, in this same order — a brief never gets re-sorted by "importance" after the
+// fact, so it stays reproducible from its inputs alone):
+//   Urgent known earnings → urgent projected earnings → 8-K (7d) → ratings (7d)
+//   → guidance (14d) → volume → clear known/projected earnings → ex-dividend (30d)
+//   → Form 4 (14d) → extreme → risk-off regime for long ideas → seasonality → none.
+//   Company feeds only affect this attention order, never trading scores or sizing.
+//
+// Every string a viewer can read lives HERE, never assembled in a view, so a test can pin it
+// verbatim (STYLE: "copy is the product"). Nothing here forecasts direction — every kind's copy
+// describes what is scheduled or what already happened, per the house honesty floor.
+enum StockSageCatalystWatch {
+
+    // MARK: Kind / Weight
+
+    enum Kind: String, Sendable, CaseIterable {
+        case earnings, volumeMove, regime, extreme, seasonality, none
+        case filing8K, ratingChange, guidanceChange, exDividend, insiderTrade
+        /// W1 (2026-09-06): a next-earnings date PROJECTED from the company's own report-date
+        /// history — never an announced date. Urgent projections precede volume; clear ones
+        /// follow known clear earnings (see `brief(for:inputs:)`).
+        case projectedEarnings
+    }
+
+    /// Attention weight — how urgently this item deserves a look. NOT a position-size signal.
+    enum Weight: Int, Sendable, Comparable {
+        case low, medium, high
+        nonisolated static func < (lhs: Weight, rhs: Weight) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+
+    // MARK: Item / Brief
+
+    /// Dated events retain the provider's calendar day; undated technical readings stay nil.
+    struct Item: Sendable, Equatable, Identifiable {
+        let symbol: String
+        let kind: Kind
+        let headline: String
+        let date: Date?
+        /// 1–3 idea-specific bullets — the engine's rationale, always present.
+        let why: [String]
+        /// What would confirm or invalidate this catalyst.
+        let watch: String
+        let weight: Weight
+        /// Where this reading comes from, so a viewer can judge how much to trust it.
+        let source: String
+        let caveat: String?
+        var sourceURL: URL? = nil
+        nonisolated var id: String { symbol + "|" + kind.rawValue }
+    }
+
+    /// The one catalyst to watch for an idea, plus every other one that also applied.
+    struct Brief: Sendable, Equatable, Identifiable {
+        let idea: StockSageIdea
+        let primary: Item
+        let secondary: [Item]
+        nonisolated var id: String { idea.symbol }
+        nonisolated var all: [Item] { [primary] + secondary }
+    }
+
+    // MARK: Inputs
+    //
+    // Everything the store already knows about ONE idea, gathered so `brief(for:inputs:)` stays
+    // pure (no store access, no I/O). The store keeps a raw `earningsDates` dict and a derived
+    // `earnings` proximity dict separately, so the caller forwards both; when only a date is
+    // known (`earnings` nil), the engine derives severity itself via `StockSageEarnings`.
+    struct Inputs: Sendable {
+        let earnings: EarningsProximity?
+        let earningsDate: Date?
+        /// When the store's chain last checked this symbol and got no usable date back (nil =
+        /// never asked). Feeds the honesty-floor-required dated "none known as of <date>" record
+        /// in `noneItem` — never invented, only ever the time we actually checked, and only ever
+        /// rendered when `catalystSourcesAsked` (below) proves something was actually asked.
+        let earningsCheckedAt: Date?
+        let volumeMove: StockSageCatalyst.Signal?
+        let regime: MarketRegime?
+        let regimeGaugedAt: Date?
+        let seasonality: MonthlySeasonality?
+        let now: Date
+        // W1 (2026-09-06) additions — all default nil so every pre-W1 call site (and every
+        // existing pinned test) keeps compiling and rendering byte-identical output.
+        /// The provider's own confirmation flag for `earningsDate` above (Yahoo's
+        /// `isEarningsDateEstimate`, inverted) — nil when no source supplied one at all, in which
+        /// case `earningsItem` appends no suffix (byte-identical to the pre-W1 headline).
+        let catalystConfirmed: Bool?
+        let catalystSource: String
+        /// Set ONLY when the store's chain landed on `.notApplicable` (an index/fund has no
+        /// earnings to report) — changes ONLY the no-other-catalyst fallback text; every other
+        /// slot (volume/extreme/regime/seasonality) is unaffected.
+        let catalystNotApplicable: Bool
+        /// A PROJECTED next-earnings date (never announced) — nil unless the chain's status is
+        /// `.projected`, in which case `catalystProjectionBasis` is also non-nil.
+        let catalystProjectedDate: Date?
+        let catalystProjectionBasis: String?
+        /// Every source the store's chain actually asked for this symbol (e.g. `["eodhd
+        /// calendar", "yahoo calendarEvents"]`), empty when never asked — major fix 2026-09-06:
+        /// `noneItem` used to hard-code "Yahoo calendarEvents" as the source of every dated
+        /// negative, which stopped being true once the chain could ALSO answer "none" from an
+        /// EODHD 200-with-no-row or a failed projection (or, post the sibling blocker fix, could
+        /// never reach a dated negative with an empty list at all). Plumbed through so the
+        /// rendered provenance always matches what the engine can actually prove.
+        let catalystSourcesAsked: [String]
+        let companyEvents: [StockSageMassiveEvents.Event]
+
+        init(earnings: EarningsProximity? = nil, earningsDate: Date? = nil, earningsCheckedAt: Date? = nil,
+             volumeMove: StockSageCatalyst.Signal? = nil, regime: MarketRegime? = nil,
+             regimeGaugedAt: Date? = nil, seasonality: MonthlySeasonality? = nil, now: Date,
+             catalystConfirmed: Bool? = nil, catalystSource: String = "Yahoo calendarEvents", catalystNotApplicable: Bool = false,
+             catalystProjectedDate: Date? = nil, catalystProjectionBasis: String? = nil,
+             catalystSourcesAsked: [String] = [], companyEvents: [StockSageMassiveEvents.Event] = []) {
+            self.earnings = earnings; self.earningsDate = earningsDate; self.earningsCheckedAt = earningsCheckedAt
+            self.volumeMove = volumeMove; self.regime = regime
+            self.regimeGaugedAt = regimeGaugedAt; self.seasonality = seasonality; self.now = now
+            self.catalystConfirmed = catalystConfirmed; self.catalystNotApplicable = catalystNotApplicable
+            self.catalystSource = catalystSource
+            self.catalystProjectedDate = catalystProjectedDate; self.catalystProjectionBasis = catalystProjectionBasis
+            self.catalystSourcesAsked = catalystSourcesAsked
+            self.companyEvents = companyEvents
+        }
+    }
+
+    /// English month names, fixed — never the viewer's locale (a French/Arabic device must not
+    /// change what a pinned test string reads).
+    private nonisolated static let monthNames = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+
+    /// Fixed-locale, fixed-timezone (UTC) date formatting — every date string this file (and the
+    /// view, which calls this too) renders MUST use this, never the viewer's local time zone.
+    /// `bucket(for:)` below buckets a date's "today/tomorrow/this week" by UTC calendar day, so a
+    /// headline formatted in local time can read "7 Sep" under a "Today" bucket that was decided
+    /// against UTC's "6 Sep" (fix pass 2026-09-06: a Riyadh, UTC+3, viewer saw exactly this for an
+    /// after-close US earnings timestamp). One shared style keeps bucketing and display in sync,
+    /// and keeps the string locale-independent for pinned tests (mirrors `monthNames` above).
+    private nonisolated static let dateFormatStyle = Date.FormatStyle(
+        date: .abbreviated, time: .omitted,
+        locale: Locale(identifier: "en_US_POSIX"), timeZone: TimeZone(identifier: "UTC")!)
+
+    nonisolated static func dateStr(_ date: Date) -> String { date.formatted(dateFormatStyle) }
+
+    nonisolated static let caveat =
+        "Rules-based: earnings dates from the attributed calendar provider, volume moves from cached history, the regime "
+        + "gauge and multi-year monthly seasonality, plus attributed company-event reports. Describes what is scheduled or just happened "
+        + "— never what happens next. Educational, not financial advice."
+
+    // MARK: brief(for:inputs:)
+
+    nonisolated static func brief(for idea: StockSageIdea, inputs: Inputs) -> Brief {
+        var earningsSlot1: Item?
+        var earningsSlot3: Item?
+        // Guard mirrors the store's own F32 eviction boundary (StockSageStore.deriveEarningsProximity):
+        // a date more than 24h in the past is a report that already happened, not a catalyst to
+        // watch. Without this guard, once the store's DERIVED `earnings` dict evicts a stale date
+        // (F32), this engine falls back to the raw, never-pruned `earningsDates` and re-derives via
+        // `StockSageEarnings.proximity`, whose `max(0, days)` floor turns "3 days ago" back into
+        // "0 days" / `.imminent` — resurrecting exactly the bug F32 fixed (fix pass 2026-09-06).
+        if let date = inputs.earningsDate, date.timeIntervalSince(inputs.now) >= -86_400 {
+            let daysUntil = inputs.earnings?.daysUntil
+                ?? StockSageEarnings.proximity(now: inputs.now, earnings: date).daysUntil
+            let severity = inputs.earnings?.severity ?? StockSageEarnings.severity(daysUntil: daysUntil)
+            let age = inputs.earningsCheckedAt.map { inputs.now.timeIntervalSince($0) }
+            let current = age.map { $0 >= 0 && $0 < StockSageStore.earningsCheckTTL } ?? false
+            let item = earningsItem(idea: idea, date: date, daysUntil: daysUntil, severity: severity,
+                                    confirmed: current ? inputs.catalystConfirmed : nil, source: inputs.catalystSource,
+                                    caveat: current ? nil : "Schedule check is missing or out of date; recheck before relying on its confirmation.")
+            switch severity {
+            case .imminent, .soon: earningsSlot1 = item
+            case .clear:           earningsSlot3 = item
+            }
+        }
+
+        let volumeSlot = inputs.volumeMove.map { volumeMoveItem(idea: idea, signal: $0, now: inputs.now) }
+
+        // W1 (2026-09-06): a PROJECTED date only applies when there's no genuinely known one
+        // (`inputs.earningsDate` above is nil in that case — dateKnown and projected are mutually
+        // exclusive per the store's chain). A valid known date suppresses contradictory projections.
+        let projectedSlot: Item? = {
+            guard case nil = earningsSlot1, case nil = earningsSlot3,
+                  let date = inputs.catalystProjectedDate, let basis = inputs.catalystProjectionBasis,
+                  // Defense in depth (major fix 2026-09-06): the chain itself now refuses to
+                  // return a lapsed projection, but a record written before that fix could still
+                  // be sitting on disk — this mirrors the SAME `> -86_400` staleness boundary the
+                  // known-earnings slot above already enforces, so a stale cached projection can
+                  // never resurrect itself as "Today"'s catalyst after a relaunch.
+                  date.timeIntervalSince(inputs.now) >= -86_400
+            else { return nil }
+            return projectedEarningsItem(idea: idea, date: date, basis: basis)
+        }()
+
+        let extremeSlot: Item? = {
+            // `SparkSeries.Extreme` has no raw value, so its synthesized Equatable conformance is
+            // MainActor-isolated under this module's default isolation — switch/pattern-match
+            // instead of `==` so this stays callable from a nonisolated context.
+            guard let extreme = idea.recentExtreme else { return nil }
+            switch extreme {
+            case .atHigh, .atLow: return extremeItem(idea: idea, extreme: extreme)
+            case .neither:        return nil
+            }
+        }()
+
+        let regimeSlot: Item? = {
+            guard let regime = inputs.regime,
+                  regime.state == .crisis || regime.state == .trendingBear else { return nil }
+            let action = idea.advice.action
+            guard action == .buy || action == .strongBuy || action == .hold else { return nil }
+            return regimeItem(idea: idea, regime: regime, gaugedAt: inputs.regimeGaugedAt)
+        }()
+
+        let seasonalitySlot: Item? = {
+            guard let seasonality = inputs.seasonality else { return nil }
+            let month = StockSageSeasonality.currentMonth(asOf: inputs.now)
+            guard let stat = StockSageSeasonality.stat(seasonality, month: month),
+                  stat.isReliable, abs(stat.avgReturn) >= 0.01 else { return nil }
+            return seasonalityItem(idea: idea, month: month, stat: stat)
+        }()
+
+        let projectedUrgent = projectedSlot?.date.map {
+            StockSageEarnings.proximity(now: inputs.now, earnings: $0).severity != .clear
+        } ?? false
+        func company(_ feed: StockSageMassiveEvents.Feed) -> Item? {
+            guard !inputs.companyEvents.isEmpty else { return nil }
+            let events = inputs.companyEvents.filter {
+                $0.symbol == idea.symbol.uppercased() && $0.feed == feed
+                    && StockSageMassiveEvents.inWindow($0.date, feed: feed, now: inputs.now)
+            }.sorted {
+                if $0.date != $1.date { return feed == .dividends ? $0.date < $1.date : $0.date > $1.date }
+                return ($0.id + $0.headline + $0.details.joined()) < ($1.id + $1.headline + $1.details.joined())
+            }
+            guard let event = events.first else { return nil }
+            return Item(symbol: idea.symbol, kind: feed.kind, headline: event.headline, date: event.date,
+                why: event.details, watch: "Read the attributed record and verify subsequent updates; no direction is implied.",
+                weight: feed == .filing8K ? .medium : .low, source: feed.source, caveat: feed.caveat, sourceURL: event.link)
+        }
+        let candidates = [earningsSlot1, projectedUrgent ? projectedSlot : nil,
+                          company(.filing8K), company(.ratings), company(.guidance),
+                          volumeSlot, earningsSlot3, projectedUrgent ? nil : projectedSlot,
+                          company(.dividends), company(.insider), extremeSlot, regimeSlot, seasonalitySlot]
+            .compactMap { $0 }
+        guard let primary = candidates.first else {
+            // notApplicable changes ONLY this no-other-catalyst fallback — an index/fund can
+            // still show a volume-move/extreme/regime/seasonality catalyst above, unaffected.
+            let fallback = inputs.catalystNotApplicable
+                ? notApplicableItem(idea: idea)
+                : lapsedScheduleItem(idea: idea, inputs: inputs)
+                    ?? noneItem(idea: idea, checkedAt: inputs.earningsCheckedAt, sourcesAsked: inputs.catalystSourcesAsked)
+            return Brief(idea: idea, primary: fallback, secondary: [])
+        }
+        return Brief(idea: idea, primary: primary, secondary: Array(candidates.dropFirst()))
+    }
+
+    // MARK: Per-kind copy — every string lives here so a test can pin it verbatim.
+
+    private nonisolated static func earningsItem(idea: StockSageIdea, date: Date, daysUntil: Int,
+                                                 severity: EarningsProximity.Severity,
+                                                 confirmed: Bool?, source: String, caveat: String?) -> Item {
+        let dateStr = Self.dateStr(date)
+        // W1 (2026-09-06): nil (no source supplied a flag) appends NOTHING — byte-identical to
+        // the pre-W1 headline, which every existing pinned test still checks.
+        let suffix = confirmed.map { $0 ? " (confirmed)" : " (estimated)" } ?? ""
+        let headline = "Earnings in ~\(daysUntil) day\(daysUntil == 1 ? "" : "s") (\(dateStr))\(suffix)"
+        let action = idea.advice.action
+        let isLongBiased = action == .buy || action == .strongBuy || action == .hold
+        let stop = idea.advice.stopPrice
+        var why: [String] = []
+        if isLongBiased {
+            if let stop {
+                let pct = (stop - idea.price) / idea.price * 100
+                why.append(
+                    "A protective stop is an intraday promise — an earnings gap can open straight "
+                    + "through the stop at \(StockSageCurrency.adaptivePrice(stop)) "
+                    + "(\(String(format: "%.1f%%", pct)) from \(StockSageCurrency.adaptivePrice(idea.price))), "
+                    + "so the risk sized at entry is not the risk held through the report.")
+                if let target = idea.advice.targetPrice {
+                    why.append(
+                        "Stop \(StockSageCurrency.adaptivePrice(stop)) and target "
+                        + "\(StockSageCurrency.adaptivePrice(target)) are fixed levels; after the print, "
+                        + "re-check reward:risk at the new price.")
+                }
+            } else {
+                why.append("No stop is attached to this idea, so an overnight gap has no defined exit — size for that or wait.")
+            }
+        } else {
+            why.append("A report can reverse a weak tape as easily as extend it; the \(action.rawValue) read describes the trend, not the print.")
+        }
+        let watch = (isLongBiased && stop != nil)
+            ? "Before \(dateStr): decide to hold through with reduced size or step aside. After: does the first close respect the stop?"
+            : "Before \(dateStr): decide to hold through with reduced size or step aside. After: read the first close for direction — there is no stop level to test it against."
+        let weight: Weight
+        switch severity {
+        case .imminent: weight = .high
+        case .soon:     weight = .medium
+        case .clear:    weight = .low
+        }
+        return Item(symbol: idea.symbol, kind: .earnings, headline: headline, date: date, why: why,
+                   watch: watch, weight: weight, source: source, caveat: caveat)
+    }
+
+    private nonisolated static func volumeMoveItem(idea: StockSageIdea, signal: StockSageCatalyst.Signal,
+                                                   now: Date) -> Item {
+        // "on the latest cached bar" said WHERE the bar came from but never WHEN. A freshly
+        // fetched history whose newest bar is weeks old (a halted or thinly traded name) produced
+        // a present-tense headline about a move that finished a month ago — and, being a .major
+        // tier, outranked a clear upcoming earnings date for the primary slot.
+        let stale = StockSageCatalyst.isStaleBar(signal.barDate, now: now)
+        let whenPart = signal.barDate == nil ? "on the latest cached bar" : "on the bar below"
+        let headline = "\(String(format: "%.1f", signal.rvol))× volume, "
+            + "\(String(format: "%+.1f%%", signal.priceChangePct)) \(whenPart) — "
+            + "\(signal.tier.rawValue.capitalized)"
+        var why = ["Order flow confirmed that something happened; the direction is a description, not a forecast — the same spike marks a takeover and a collapse."]
+        switch signal.likelyMechanicalFlow {
+        case .some(true):
+            why.append("Average dollar volume is large enough that this may be passive/index flow rather than information.")
+        case .none:
+            // Silence here would read as "checked, and it is information" — the flag's whole point
+            // is that a mega-cap spike is often mechanical, so an unknown must say so.
+            why.append("Average dollar volume is not known for this name, so whether this is passive/index flow rather than information was not checked.")
+        case .some(false):
+            break
+        }
+        let watch = idea.advice.stopPrice != nil
+            ? "Follow-through next session versus a reversal; a close through the stop invalidates the idea, not the catalyst."
+            : "Follow-through next session versus a reversal."
+        var weight: Weight
+        switch signal.tier {
+        case .major:       weight = .high
+        case .significant: weight = .medium
+        case .notable:     weight = .low
+        }
+        var caveat = StockSageCatalyst.caveat
+        if stale, let barDate = signal.barDate {
+            let days = Int(now.timeIntervalSince(barDate) / 86_400)
+            caveat = "This spike is \(days) days old — history, not a move happening now. " + caveat
+            // Demoted so a stale spike cannot outrank a dated, upcoming catalyst for the primary
+            // slot. It is still SHOWN: it happened, and hiding it would be its own dishonesty.
+            weight = .low
+        }
+        return Item(symbol: idea.symbol, kind: .volumeMove, headline: headline, date: signal.barDate,
+                   why: why, watch: watch, weight: weight,
+                   source: "on-disk history (latest bar)", caveat: caveat)
+    }
+
+    private nonisolated static func extremeItem(idea: StockSageIdea, extreme: SparkSeries.Extreme) -> Item {
+        let spanPart = idea.recentExtremeSpan.map { "\($0)-day" } ?? "recent"
+        var why = ["Price sits at the edge of its recent range."]
+        if let q = idea.momentumQuality {
+            why.append("Short-horizon momentum quality \(String(format: "%.2f", q))/1 — a read on how hot the move is, not a probability.")
+        }
+        // Structural switch, not `==` — see the note at the `extremeSlot` call site.
+        let label: String
+        let watch: String
+        switch extreme {
+        case .atHigh:
+            label = "high"
+            watch = "A new high extends the setup; a close back inside the range, or through the stop, ends it."
+        default:
+            label = "low"
+            watch = "A new low extends the setup; a close back inside the range, or through the stop, ends it."
+        }
+        return Item(symbol: idea.symbol, kind: .extreme, headline: "At the \(spanPart) \(label)",
+                   date: nil, why: why, watch: watch, weight: .medium, source: "1-year history", caveat: nil)
+    }
+
+    private nonisolated static func regimeItem(idea: StockSageIdea, regime: MarketRegime, gaugedAt: Date?) -> Item {
+        let why = ["A board-wide risk gauge, not a read on this name: it biases size ×\(String(format: "%.2f", regime.sizingBias)); it does not predict direction."]
+        let gaugedStr = gaugedAt.map { Self.dateStr($0) } ?? "not yet"
+        let watch = "A change in the gauge (last read \(gaugedStr)) changes the size, not the idea."
+        let weight: Weight = regime.state == .crisis ? .high : (regime.state == .trendingBear ? .medium : .low)
+        return Item(symbol: idea.symbol, kind: .regime, headline: regime.state.rawValue, date: nil, why: why,
+                   watch: watch, weight: weight, source: "regime gauge", caveat: regime.caveat)
+    }
+
+    private nonisolated static func seasonalityItem(idea: StockSageIdea, month: Int, stat: MonthlySeasonality.MonthStat) -> Item {
+        let name = monthNames[month - 1]
+        let headline = "\(name) tendency \(String(format: "%+.1f%%", stat.avgReturn * 100)) (n=\(stat.samples))"
+        return Item(symbol: idea.symbol, kind: .seasonality, headline: headline, date: nil,
+                   why: [stat.note(monthName: name)],
+                   watch: "A weak, backward-looking tilt; do not size on it.", weight: .low,
+                   source: "1-year+ history", caveat: "Not a forecast.")
+    }
+
+    /// W1 (2026-09-06): a next-earnings date PROJECTED from the company's own report-date
+    /// history (never announced) — `date` is that projection, `basis` is the derivation string
+    /// from `StockSageCatalystProjection` (e.g. "median gap of last 6 reports = 91 d from
+    /// 2026-07-30"), surfaced verbatim as the single why-bullet and folded into `source`.
+    private nonisolated static func projectedEarningsItem(idea: StockSageIdea, date: Date, basis: String) -> Item {
+        let dateStr = Self.dateStr(date)
+        let headline = "Earnings expected ~\(dateStr) (projected from recorded history, not announced)"
+        return Item(symbol: idea.symbol, kind: .projectedEarnings, headline: headline, date: date,
+                   why: [basis], watch: "Not an announced date — re-check after the next full refresh.",
+                   weight: .low, source: "projection: \(basis)", caveat: nil)
+    }
+
+    /// W1 (2026-09-06): the no-other-catalyst fallback for a symbol the store's chain classified
+    /// as `.notApplicable` (an index or fund — no company earnings to ever report). Undated by
+    /// design: there's no date to wait for, only a reason nothing will ever appear here.
+    private nonisolated static func notApplicableItem(idea: StockSageIdea) -> Item {
+        Item(symbol: idea.symbol, kind: .none, headline: "No earnings: index/fund", date: nil,
+            why: ["This symbol is an index or fund — it has no company earnings to report."],
+            watch: "N/A", weight: .low, source: "—", caveat: nil)
+    }
+
+    /// Two honest shapes, never a middle ground: `checkedAt == nil` OR `sourcesAsked` empty means
+    /// this symbol was never (provably) asked, so the copy says exactly that; both present means
+    /// the named sources WERE asked (at `checkedAt`) and returned nothing, so it becomes a real,
+    /// DATED record (`date: checkedAt`, never `Date()`) naming its true provenance — a negative
+    /// result, not an absence of information. Major fix 2026-09-06: before `sourcesAsked` was
+    /// plumbed through, this hard-coded "Yahoo calendarEvents" as the source of EVERY dated
+    /// negative — no longer true once the chain can also answer "none" via EODHD or a failed
+    /// projection (`Record.sourcesAsked` is the one field that actually knows). The
+    /// `!sourcesAsked.isEmpty` half of the guard also makes the undated branch the fail-closed
+    /// default for a `checkedAt` with no provable source — independently blunting the blocker
+    /// that used to stamp a dated negative for a question nobody ever actually answered.
+    private nonisolated static func lapsedScheduleItem(idea: StockSageIdea, inputs: Inputs) -> Item? {
+        let prior: (Date, String)?
+        if let date = inputs.earningsDate, date.timeIntervalSince(inputs.now) < -86_400 {
+            prior = (date, "Previously returned earnings schedule")
+        } else if let date = inputs.catalystProjectedDate, date.timeIntervalSince(inputs.now) < -86_400 {
+            prior = (date, "Previous projection (not a confirmed date)")
+        } else { prior = nil }
+        guard let prior else { return nil }
+        let source = inputs.catalystSource.isEmpty ? inputs.catalystSourcesAsked.joined(separator: ", ") : inputs.catalystSource
+        let checked = inputs.earningsCheckedAt.map { "Prior check: " + dateStr($0) } ?? "Prior check time unavailable"
+        return Item(symbol: idea.symbol, kind: .none, headline: "Previous schedule passed — next date unavailable", date: nil,
+            why: ["\(prior.1): \(dateStr(prior.0)). Passing the scheduled date does not confirm an event occurred.",
+                  checked + ". The earlier positive result is not an answered-empty calendar check."],
+            watch: "Request a new calendar check before relying on the next schedule.", weight: .low,
+            source: source.isEmpty ? "Prior schedule; source unavailable" : source,
+            caveat: inputs.catalystProjectionBasis)
+    }
+
+    private nonisolated static func noneItem(idea: StockSageIdea, checkedAt: Date?, sourcesAsked: [String]) -> Item {
+        guard let checkedAt, !sourcesAsked.isEmpty else {
+            return Item(symbol: idea.symbol, kind: .none, headline: "No dated catalyst on file", date: nil,
+                why: ["Next earnings date not available for this name — not fetched yet, or the source declined.",
+                      "No volume-confirmed move on the latest cached bar."],
+                watch: "Re-check after the next full refresh.", weight: .low, source: "—", caveat: nil)
+        }
+        let asked = sourcesAsked.joined(separator: ", ")
+        return Item(symbol: idea.symbol, kind: .none,
+            headline: "No known catalyst as of \(Self.dateStr(checkedAt))", date: checkedAt,
+            why: ["Next earnings date requested from \(asked) — none returned"],
+            watch: "Re-check after the next full refresh.", weight: .low,
+            source: "\(asked) (no date returned)", caveat: nil)
+    }
+
+    // MARK: - Catalyst calendar
+
+    enum Bucket: String, CaseIterable, Sendable {
+        case recent, today, tomorrow, thisWeek, later, undated
+        /// A dated "none known as of <checkedAt>" negative record — major fix 2026-09-06.
+        /// `checkedAt` is WHEN WE ASKED, not an event date, so it must never share `.today` (or
+        /// any real-event bucket) with an actual catalyst: since `checkedAt` ≈ now for every
+        /// freshly-swept symbol, `refreshEarningsForTracked`'s ~901-name daily sweep used to
+        /// flood `.today` with negative records that sorted (ascending date) AHEAD of every real
+        /// catalyst due today. Ordered last in `allCases` so it always renders as its own
+        /// trailing section, never interleaved with the real-event buckets above it.
+        case checkedNoCatalyst
+        nonisolated var title: String {
+            switch self {
+            case .recent:            return "Recently reported"
+            case .today:             return "Today"
+            case .tomorrow:          return "Tomorrow"
+            case .thisWeek:          return "This week"
+            case .later:             return "Later"
+            case .undated:           return "No date on file"
+            case .checkedNoCatalyst: return "Checked — no catalyst"
+            }
+        }
+    }
+
+    struct CalendarEntry: Sendable, Equatable, Identifiable {
+        let bucket: Bucket
+        let item: Item
+        let idea: StockSageIdea
+        /// True only for a dated "none known as of <date>" record (`item.kind == .none`) — pure
+        /// data so the view can style it apart from a real catalyst without re-deriving `kind`.
+        let isNegativeRecord: Bool
+        /// True only for a `.projectedEarnings` item (W1, 2026-09-06) — flagged distinct from a
+        /// real, scheduled catalyst the same way `isNegativeRecord` flags a dated negative.
+        let isProjected: Bool
+        nonisolated var id: String { item.id }
+
+        nonisolated init(bucket: Bucket, item: Item, idea: StockSageIdea, isNegativeRecord: Bool, isProjected: Bool = false) {
+            self.bucket = bucket; self.item = item; self.idea = idea
+            self.isNegativeRecord = isNegativeRecord; self.isProjected = isProjected
+        }
+    }
+
+    /// UTC gregorian — bucketing must not shift with the viewer's time zone (a trader in Tokyo
+    /// and one in New York should see the same "today"/"tomorrow" split for the same date).
+    private nonisolated static var utcCalendar: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }
+
+    private nonisolated static func bucket(for date: Date, now: Date, calendar: Calendar) -> Bucket {
+        let startNow = calendar.startOfDay(for: now)
+        let startDate = calendar.startOfDay(for: date)
+        let days = calendar.dateComponents([.day], from: startNow, to: startDate).day ?? 0
+        switch days {
+        case ..<1:  return .today
+        case 1:     return .tomorrow
+        case 2...7: return .thisWeek
+        default:    return .later
+        }
+    }
+
+    /// Every DATED item of every brief, earliest first (ties broken by symbol) and bucketed vs
+    /// `now`; then each brief's UNDATED primary — when it's an actual catalyst, not `.none` —
+    /// at the end, strongest weight first. Two passes over `briefs`, never re-sorted after —
+    /// deterministic for the same input every time.
+    nonisolated static func calendar(_ briefs: [Brief], now: Date, calendar: Calendar = utcCalendar) -> [CalendarEntry] {
+        var dated: [(date: Date, entry: CalendarEntry)] = []
+        var undated: [(weight: Weight, entry: CalendarEntry)] = []
+        for brief in briefs {
+            // A dated "none known as of <date>" record (checkedAt set) IS a real, dated entry —
+            // included below — but its date is WHEN WE ASKED, not an event, so it routes to the
+            // dedicated `.checkedNoCatalyst` bucket instead of `bucket(for:)`'s real-event
+            // buckets (major fix 2026-09-06). Only an UNDATED `.none` (below) is excluded
+            // entirely, since it says nothing was ever checked.
+            for item in brief.all {
+                if let date = item.date {
+                    let isNegative = item.kind == .none
+                    let isProjected = item.kind == .projectedEarnings
+                    // A projected date IS a real (if unannounced) event date — bucket it normally,
+                    // never into `.checkedNoCatalyst` (that bucket is only for "we asked and got
+                    // nothing", the opposite of "we derived a date from history").
+                    let isPastReport = [.filing8K, .ratingChange, .guidanceChange, .insiderTrade].contains(item.kind)
+                        && calendar.startOfDay(for: date) < calendar.startOfDay(for: now)
+                    let b = isNegative ? Bucket.checkedNoCatalyst
+                        : (isPastReport ? .recent : bucket(for: date, now: now, calendar: calendar))
+                    dated.append((date, CalendarEntry(bucket: b, item: item, idea: brief.idea,
+                                                      isNegativeRecord: isNegative, isProjected: isProjected)))
+                }
+            }
+            if brief.primary.date == nil, brief.primary.kind != .none {
+                undated.append((brief.primary.weight,
+                                CalendarEntry(bucket: .undated, item: brief.primary, idea: brief.idea, isNegativeRecord: false)))
+            }
+        }
+        dated.sort { $0.date != $1.date ? $0.date < $1.date : $0.entry.item.symbol < $1.entry.item.symbol }
+        undated.sort { $0.weight != $1.weight ? $0.weight > $1.weight : $0.entry.item.symbol < $1.entry.item.symbol }
+        return dated.map(\.entry) + undated.map(\.entry)
+    }
+}

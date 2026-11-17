@@ -1,0 +1,348 @@
+import Testing
+import Foundation
+@testable import StockSage
+
+/// Pins the Markets Portfolio holdings store: the cost math, the input guards
+/// (a fat-fingered form submit must not store garbage), and JSON persistence.
+/// Each test uses its OWN UserDefaults suite (cleared first) so the parallel
+/// runner never races on a shared key.
+@MainActor
+struct StockSagePortfolioTests {
+
+    @Test func portfolioMarksExcludeSyntheticInvalidAndFutureObservations() {
+        let now = Date(timeIntervalSince1970: 1_789_812_000)
+        let real = StockSageQuote(price: 100, previousPrice: 99, marketTime: now, priceSource: .massiveSIP)
+        #expect(MarketsView.portfolioMarkPrice(real, isSampleData: false, now: now) == 100)
+        #expect(MarketsView.portfolioMarkPrice(real, isSampleData: true, now: now) == 100,
+                "An accepted real row remains usable while other rows still contain samples")
+        let unknown = StockSageQuote(price: 100, previousPrice: 99, marketTime: now)
+        #expect(MarketsView.portfolioMarkPrice(unknown, isSampleData: true, now: now) == nil)
+        let sample = StockSageQuote(price: 100, previousPrice: 99, marketTime: now, priceSource: .sample)
+        #expect(MarketsView.portfolioMarkPrice(sample, isSampleData: false, now: now) == nil)
+        for price in [0, -1, Double.infinity, Double.nan] {
+            let invalid = StockSageQuote(price: price, previousPrice: 99, marketTime: now, priceSource: .massiveSIP)
+            #expect(MarketsView.portfolioMarkPrice(invalid, isSampleData: false, now: now) == nil)
+        }
+        let future = StockSageQuote(price: 100, previousPrice: 99,
+            marketTime: now.addingTimeInterval(61), priceSource: .massiveSIP)
+        #expect(MarketsView.portfolioMarkPrice(future, isSampleData: false, now: now) == nil)
+        let old = StockSageQuote(price: 98, previousPrice: 99,
+            marketTime: now.addingTimeInterval(-7 * 86_400), priceSource: .massiveSIP)
+        #expect(MarketsView.portfolioMarkPrice(old, isSampleData: false, now: now) == 98,
+                "A last-known real mark remains useful when the UI discloses its date")
+        let undated = StockSageQuote(price: 97, previousPrice: 99, priceSource: .yahoo)
+        #expect(MarketsView.portfolioMarkPrice(undated, isSampleData: false, now: now) == 97)
+    }
+
+    private func freshStore(_ tag: String) -> StockSagePortfolio {
+        let name = "test.portfolio.\(tag).\(UUID().uuidString)"
+        UserDefaults().removePersistentDomain(forName: name)
+        let ud = StockSageRecordWriter.fixtureDefaults(suiteName: name)!
+        ud.removePersistentDomain(forName: name)
+        return StockSagePortfolio(userDefaults: ud)
+    }
+
+    @Test func totalCostMultipliesSharesByBasis() {
+        #expect(PortfolioPosition(symbol: "X", shares: 10, costBasis: 5).totalCost == 50)
+    }
+
+    @Test(arguments: [false, true])
+    func corruptPortfolioLoadReportsFailureAndMutationsPreserveRecords(wrongType: Bool) throws {
+        let suite = "portfolio.corrupt.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = "stocksage_portfolio_v1"
+        let store = StockSagePortfolio(userDefaults: defaults)
+        #expect(store.positions.isEmpty && store.lastError == nil) // Missing key is a valid empty book.
+        #expect(store.hasLoadedRecords)
+        #expect(store.add(symbol: "AAPL", shares: 2, costBasis: 100))
+        #expect(store.hasLoadedRecords && store.lastError == nil)
+        let retained = store.positions
+        let id = try #require(retained.first?.id)
+        #expect(!store.add(symbol: " ", shares: 1, costBasis: 100))
+        #expect(store.hasLoadedRecords && store.lastError != nil && store.positions == retained,
+                "Input validation must not mark a successfully read book unavailable")
+        let validBytes = try #require(defaults.data(forKey: key))
+        let corrupt = Data("{broken".utf8)
+        if wrongType { defaults.set("not record data", forKey: key) }
+        else { defaults.set(corrupt, forKey: key) }
+        let loaded = StockSagePortfolio(userDefaults: defaults)
+        #expect(loaded.lastError != nil, "A corrupt saved portfolio must not masquerade as empty success")
+        #expect(!loaded.hasLoadedRecords && loaded.positions.isEmpty)
+        for operation in 0..<3 {
+            switch operation {
+            case 0: #expect(!store.add(symbol: "MSFT", shares: 1, costBasis: 100))
+            case 1: store.remove(id)
+            default: store.clear()
+            }
+            #expect(!store.hasLoadedRecords && store.lastError != nil && store.positions == retained)
+            #expect(!defaults.bool(forKey: key + ".deleted." + id.uuidString))
+            if wrongType { #expect(defaults.string(forKey: key) == "not record data") }
+            else { #expect(defaults.data(forKey: key) == corrupt) }
+        }
+        defaults.set(validBytes, forKey: key) // Synthetic repair; never an owner preference.
+        let recovered = StockSagePortfolio(userDefaults: defaults)
+        #expect(recovered.hasLoadedRecords && recovered.positions == retained && recovered.lastError == nil)
+        #expect(store.add(symbol: "MSFT", shares: 1, costBasis: 100))
+        #expect(store.hasLoadedRecords && store.lastError == nil && store.positions.count == 2)
+    }
+
+    @Test func addUppercasesAndTrimsSymbol() {
+        let p = freshStore("trim")
+        p.add(symbol: "  aapl ", shares: 10, costBasis: 100)
+        #expect(p.positions.map(\.symbol) == ["AAPL"])
+    }
+
+    @Test func addRejectsBlankSymbolAndNonPositiveShares() {
+        let p = freshStore("reject")
+        p.add(symbol: "", shares: 10, costBasis: 100)
+        p.add(symbol: "   ", shares: 10, costBasis: 100)
+        p.add(symbol: "X", shares: 0, costBasis: 100)
+        p.add(symbol: "Y", shares: -3, costBasis: 100)
+        #expect(p.positions.isEmpty)
+    }
+
+    @Test func addRejectsNonFiniteSharesAndCostBasis() {
+        let p = freshStore("nonfinite")
+        p.add(symbol: "X", shares: .infinity, costBasis: 100)
+        p.add(symbol: "Y", shares: -.infinity, costBasis: 100)
+        p.add(symbol: "Z", shares: .nan, costBasis: 100)
+        p.add(symbol: "W", shares: 10, costBasis: .infinity)
+        p.add(symbol: "V", shares: 10, costBasis: .nan)
+        #expect(p.positions.isEmpty)
+    }
+
+    @Test func addAllowsZeroCostBasis() {
+        let p = freshStore("zerocost")            // a gifted/vested lot can be free
+        p.add(symbol: "GIFT", shares: 5, costBasis: 0)
+        #expect(p.positions.count == 1)
+        #expect(p.positions[0].totalCost == 0)
+    }
+
+    @Test func overflowingPositionCostIsRejectedWithoutChangingSavedLots() throws {
+        let suite = "portfolio.overflow.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = StockSagePortfolio(userDefaults: defaults)
+        try #require(store.add(symbol: "KEPT", shares: 2, costBasis: 100))
+        let positions = store.positions
+        let bytes = try #require(defaults.data(forKey: "stocksage_portfolio_v1"))
+        // The actual form parser accepts each plain-decimal operand; only their product overflows.
+        let text = "1" + String(repeating: "0", count: 200)
+        let shares = try #require(StockSageInput.positiveAmount(text))
+        let cost = try #require(StockSageInput.nonNegativeAmount(text))
+        try #require(!(shares * cost).isFinite)
+        #expect(!store.add(symbol: "HUGE", shares: shares, costBasis: cost))
+        #expect(store.positions == positions && store.lastError != nil && store.hasLoadedRecords)
+        #expect(defaults.data(forKey: "stocksage_portfolio_v1") == bytes)
+        #expect(StockSagePortfolio(userDefaults: defaults).positions == positions)
+    }
+
+    @Test func removeDeletesByIdAndClearEmpties() {
+        let p = freshStore("remove")
+        p.add(symbol: "A", shares: 1, costBasis: 1)
+        p.add(symbol: "B", shares: 2, costBasis: 2)
+        p.remove(p.positions[0].id)
+        #expect(p.positions.map(\.symbol) == ["B"])
+        p.clear()
+        #expect(p.positions.isEmpty)
+    }
+
+    @Test func holdingsPersistAcrossInstances() {
+        let name = "test.portfolio.persist.\(UUID().uuidString)"
+        UserDefaults().removePersistentDomain(forName: name)
+        let ud = StockSageRecordWriter.fixtureDefaults(suiteName: name)!
+        ud.removePersistentDomain(forName: name)
+        StockSagePortfolio(userDefaults: ud).add(symbol: "AAPL", shares: 10, costBasis: 150)
+        let reloaded = StockSagePortfolio(userDefaults: ud)
+        #expect(reloaded.positions.map(\.symbol) == ["AAPL"])
+        #expect(reloaded.positions.first?.shares == 10)
+        #expect(reloaded.positions.first?.totalCost == 1500)
+    }
+
+    @Test func qaSeedAssignsInMemoryWithoutTouchingUserDefaults() {
+        let name = "test.portfolio.qaseed.\(UUID().uuidString)"
+        UserDefaults().removePersistentDomain(forName: name)
+        let ud = StockSageRecordWriter.fixtureDefaults(suiteName: name)!
+        ud.removePersistentDomain(forName: name)
+        let p = StockSagePortfolio(userDefaults: ud)
+        p.qaSeed([PortfolioPosition(symbol: "AAPL", shares: 30, costBasis: 100)])
+        #expect(p.positions.map(\.symbol) == ["AAPL"])
+        // Nothing persisted: a FRESH instance on the same suite sees nothing (qaSeed never calls save()).
+        let reloaded = StockSagePortfolio(userDefaults: ud)
+        #expect(reloaded.positions.isEmpty)
+    }
+}
+
+/// Pins the "own it" aggregation (sum shares + weighted-average cost basis across multi-lot
+/// books) and the unrealized-% math. Expected values are hand-derived in a standalone script
+/// (`swift /tmp/derive_ownit.swift`, NOT calling this code), pasted here as literals —
+/// gated-scope rule: never derive fixtures by calling the code under test.
+///
+/// Hand derivation (10sh@90 + 20sh@105):
+///   totalShares = 10 + 20 = 30
+///   weightedCost = (10*90 + 20*105) / 30 = (900 + 2100) / 30 = 3000 / 30 = 100.0 exactly
+///
+/// Hand derivation (pct = (price/costBasis − 1) × 100, one decimal):
+///   gain:  price=110, cost=100 → (110/100 − 1)×100 = +10.0
+///   loss:  price=90,  cost=100 → (90/100  − 1)×100 = −10.0
+@MainActor
+struct StockSagePortfolioAggregationTests {
+
+    @Test func multiLotAggregatesSharesAndWeightedAverageCost() {
+        let positions = [
+            PortfolioPosition(symbol: "AAPL", shares: 10, costBasis: 90),
+            PortfolioPosition(symbol: "AAPL", shares: 20, costBasis: 105),
+        ]
+        let held = StockSagePortfolio.holding(for: "AAPL", in: positions)
+        #expect(held?.shares == 30)
+        #expect(held?.costBasis == 100.0)   // hand-derived exact value above
+    }
+
+    @Test func aggregationIgnoresOtherSymbolsAndIsCaseInsensitive() {
+        let positions = [
+            PortfolioPosition(symbol: "AAPL", shares: 10, costBasis: 90),
+            PortfolioPosition(symbol: "MSFT", shares: 5, costBasis: 300),
+        ]
+        #expect(StockSagePortfolio.holding(for: "aapl", in: positions)?.shares == 10)
+        #expect(StockSagePortfolio.holding(for: "MSFT", in: positions)?.costBasis == 300)
+    }
+
+    @Test func aggregationReturnsNilWhenSymbolNotHeld() {
+        let positions = [PortfolioPosition(symbol: "AAPL", shares: 10, costBasis: 90)]
+        #expect(StockSagePortfolio.holding(for: "TSLA", in: positions) == nil)
+    }
+
+    // PERF-4: holdingBySymbol is a batch convenience for the ideas board (one O(P) pass instead
+    // of O(P) per card); holding(for:in:) stays the semantic source of truth. This proves the
+    // dict agrees with the per-symbol function for every symbol present, including a symbol whose
+    // only lot has zero shares (must be ABSENT, matching holding(for:in:) returning nil).
+    @Test func holdingBySymbolMatchesHoldingForEverySymbol() {
+        let zeroShareLot = PortfolioPosition(symbol: "TSLA", shares: 0, costBasis: 200)
+        let positions = [
+            PortfolioPosition(symbol: "AAPL", shares: 10, costBasis: 90),
+            PortfolioPosition(symbol: "AAPL", shares: 20, costBasis: 105),
+            PortfolioPosition(symbol: "MSFT", shares: 5, costBasis: 300),
+            zeroShareLot,
+        ]
+        let dict = StockSagePortfolio.holdingBySymbol(in: positions)
+        for sym in ["AAPL", "MSFT", "TSLA"] {
+            #expect(dict[sym] == StockSagePortfolio.holding(for: sym, in: positions))
+        }
+        #expect(dict["TSLA"] == nil)   // zero-share lot → nil, same as holding(for:in:)
+        #expect(dict.count == 2)       // AAPL + MSFT only
+    }
+
+    @Test func unrepresentableHoldingsNeverBecomePartialOrInfiniteAggregates() {
+        let cases = [
+            [PortfolioPosition(symbol: "HUGE", shares: -1, costBasis: 100)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: -100)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1e200, costBasis: 1e200)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1e308, costBasis: 0),
+             PortfolioPosition(symbol: "HUGE", shares: 1e308, costBasis: 0)],
+            [PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: 1e308),
+             PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: 1e308)]
+        ]
+        for invalidLots in cases {
+            let positions = invalidLots + [
+                PortfolioPosition(symbol: "HUGE", shares: 1, costBasis: 100),
+                PortfolioPosition(symbol: "GOOD", shares: 4, costBasis: 20)]
+            #expect(StockSagePortfolio.holding(for: "huge", in: positions) == nil)
+            let holdings = StockSagePortfolio.holdingBySymbol(in: positions)
+            #expect(holdings["HUGE"] == nil, "Dropping the invalid lots would fabricate a partial holding")
+            #expect(holdings["GOOD"] == AggregatedHolding(symbol: "GOOD", shares: 4, costBasis: 20))
+        }
+    }
+
+    @Test func unrealizedPercentRejectsNonfiniteInputsAndOverflow() {
+        for (basis, price) in [(Double.infinity, 100.0), (100.0, Double.infinity), (1e-200, 1e200)] {
+            let holding = AggregatedHolding(symbol: "HUGE", shares: 1, costBasis: basis, costDenomination: SageFix.fixtureDenomination(for: "X"))
+            #expect(holding.unrealizedPct(vs: price, denomination: SageFix.fixtureDenomination(for: "X")) == nil)
+        }
+    }
+
+    @Test func unrealizedPctPositiveCase() {
+        let held = AggregatedHolding(symbol: "X", shares: 1, costBasis: 100, costDenomination: SageFix.fixtureDenomination(for: "X"))
+        #expect(held.unrealizedPct(vs: 110, denomination: SageFix.fixtureDenomination(for: "X")) == 10.0)   // hand-derived above
+    }
+
+    @Test func unrealizedPctNegativeCase() {
+        let held = AggregatedHolding(symbol: "X", shares: 1, costBasis: 100, costDenomination: SageFix.fixtureDenomination(for: "X"))
+        #expect(held.unrealizedPct(vs: 90, denomination: SageFix.fixtureDenomination(for: "X")) == -10.0)   // hand-derived above
+    }
+
+    @Test func unrealizedPctNilOnNonPositiveCostOrPrice() {
+        let heldZeroCost = AggregatedHolding(symbol: "X", shares: 1, costBasis: 0, costDenomination: SageFix.fixtureDenomination(for: "X"))
+        #expect(heldZeroCost.unrealizedPct(vs: 100, denomination: SageFix.fixtureDenomination(for: "X")) == nil)
+        let heldPositiveCost = AggregatedHolding(symbol: "X", shares: 1, costBasis: 100, costDenomination: SageFix.fixtureDenomination(for: "X"))
+        #expect(heldPositiveCost.unrealizedPct(vs: 0, denomination: SageFix.fixtureDenomination(for: "X")) == nil)
+        #expect(heldPositiveCost.unrealizedPct(vs: -5, denomination: SageFix.fixtureDenomination(for: "X")) == nil)
+    }
+
+    // Hand derivation (pct = (price/costBasis − 1) × 100, one decimal), computed independently
+    // of the code under test:
+    //   cost=97.25, price=103.7 → (103.7/97.25 − 1)×100 = 6.632390... → rounds to 6.6
+    @Test func unrealizedPctRoundsToOneDecimalPin() {
+        let held = AggregatedHolding(symbol: "X", shares: 1, costBasis: 97.25, costDenomination: SageFix.fixtureDenomination(for: "X"))
+        #expect(held.unrealizedPct(vs: 103.7, denomination: SageFix.fixtureDenomination(for: "X")) == 6.6)
+    }
+
+    // -0.0 boundary: cost=100, price=99.96 → (99.96/100 − 1)×100 = −0.04 → rounds to −0.0 (IEEE),
+    // which unrealizedPct normalizes to 0. Also pins the rendered string never shows "+-0.0".
+    @Test func unrealizedPctNormalizesNegativeZero() {
+        let held = AggregatedHolding(symbol: "X", shares: 1, costBasis: 100, costDenomination: SageFix.fixtureDenomination(for: "X"))
+        let pct = held.unrealizedPct(vs: 99.96, denomination: SageFix.fixtureDenomination(for: "X"))
+        #expect(pct == 0.0)
+        let up = pct! >= 0
+        let rendered = "\(up ? "+" : "")\(String(format: "%.1f", pct!))% vs avg cost"
+        #expect(rendered == "+0.0% vs avg cost")
+        #expect(!rendered.contains("+-"))
+    }
+
+    // MARK: save() cross-process reconciliation (2026-07-09 C8 — the paper store's
+    // LIVE-evidenced lost-update class applied to the REAL position book. Lots are
+    // immutable once added, so the only hazard is a stale save DROPPING a foreign lot.)
+
+    @Test func foreignLotSurvivesAStaleProcessSave() {
+        let suite = "portfolio.test.\(UUID().uuidString)"
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let a = StockSagePortfolio(userDefaults: defaults)
+        let b = StockSagePortfolio(userDefaults: defaults)   // second instance, loads empty
+        a.add(symbol: "AAA", shares: 10, costBasis: 100)     // process A's lot lands on disk
+        b.add(symbol: "BBB", shares: 5, costBasis: 50)       // stale B saves — pre-fix this dropped AAA
+        let final = StockSagePortfolio(userDefaults: defaults)
+        #expect(Set(final.positions.map(\.symbol)) == ["AAA", "BBB"])
+    }
+
+    @Test func removeAndClearStillDeleteDespiteTheReconcilingSave() {
+        let suite = "portfolio.test.\(UUID().uuidString)"
+        let defaults = StockSageRecordWriter.fixtureDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let a = StockSagePortfolio(userDefaults: defaults)
+        a.add(symbol: "AAA", shares: 10, costBasis: 100)
+        let id = a.positions[0].id
+        a.remove(id)
+        #expect(StockSagePortfolio(userDefaults: defaults).positions.isEmpty)
+        a.add(symbol: "AAA", shares: 10, costBasis: 100)
+        a.clear()
+        #expect(StockSagePortfolio(userDefaults: defaults).positions.isEmpty)
+    }
+
+    @Test(arguments: [false, true]) func deletionSurvivesStalePortfolioSave(clearAll: Bool) throws {
+        let suite = "portfolio.deletion.\(UUID().uuidString)"
+        let defaults = try #require(StockSageRecordWriter.fixtureDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let a = StockSagePortfolio(userDefaults: defaults)
+        a.add(symbol: "GONE", shares: 1, costBasis: 100)
+        let gone = try #require(a.positions.first)
+        let b = StockSagePortfolio(userDefaults: defaults)
+        b.add(symbol: "FOREIGN", shares: 2, costBasis: 200)
+        if clearAll { a.clear() } else { a.remove(gone.id) }
+        let kept: Set<String> = clearAll ? [] : ["FOREIGN"]
+        #expect(Set(StockSagePortfolio(userDefaults: defaults).positions.map(\.symbol)) == kept)
+        b.add(symbol: "NEXT", shares: 3, costBasis: 300)
+        #expect(Set(b.positions.map(\.symbol)) == kept.union(["NEXT"]))
+        #expect(Set(StockSagePortfolio(userDefaults: defaults).positions.map(\.symbol)) == kept.union(["NEXT"]))
+    }
+}

@@ -1,0 +1,928 @@
+import Foundation
+import CoreFoundation
+import Synchronization
+
+// MARK: - StockSageQuoteService
+//
+// The live worldwide price feed the StockSage subsystem was always designed for
+// (see `StockSageStore`'s doc: "When Chat A's Phase-2 Yahoo Finance feed lands,
+// replace `seedSampleData()` with real fetches"). This is that feed.
+//
+// **Source:** Yahoo Finance's keyless `v8/finance/chart` endpoint — one of the
+// few quote sources that needs no API key and covers virtually every exchange on
+// Earth via symbol suffix (`.SR` Tadawul, `.L` LSE, `.T` Tokyo, `.HK` HKEX,
+// `.NS` NSE India, `.AX` ASX, `.SA` B3 Brazil, `.PA` Euronext, `.DE` XETRA,
+// `.SS` Shanghai, `.KS` KRX, `.TO` TSX, `^` = an index). Quotes are typically
+// delayed ~15 min — the UI says so; we don't claim real-time.
+//
+// API access, keyless access and a working credential do not establish display,
+// redistribution or exchange rights. This adapter is retained for the configured
+// Mac workspace; the phone edition blocks automatic external market-data calls
+// and uses personal recorded prices. Re-enabling a distributed feed requires
+// documented rights for its exact endpoints, fields, displays and caching.
+//
+// **Source order (pipeline-4 M1, 2026-09-06):** when a Massive key is set
+// (`StockSageMassive.isConfigured`), every US name goes to Massive's batched snapshot
+// first — ONE request per 250 tickers instead of one per symbol — then anything still
+// missing (and every non-US name) walks the explicit keyless Yahoo fallback below. Without a key,
+// all symbols use Yahoo, whose typically delayed quotes are labelled as such in the UI.
+enum StockSageQuoteService {
+
+    /// A single live observation: the current market price and the prior session's
+    /// close (the signal engine's % change is computed against this close, so a
+    /// move here is a real one-day move, not a tick).
+    nonisolated struct LiveQuote: Sendable, Equatable {
+        let symbol: String
+        let price: Double
+        let previousClose: Double
+        /// The selected quote's MARKET timestamp (including extended hours), not our fetch time — so the
+        /// UI can tell "live" from a days-old weekend/holiday close. nil when the feed omits it.
+        let marketTime: Date?
+        /// Set only by the Massive trade stream; snapshots/Yahoo have no comparable sequence.
+        let massiveTradeSequence: Int64?
+        let priceSource: StockSagePriceSource?
+        let denomination: StockSagePriceDenomination?
+        let previousCloseSource: StockSagePriceSource?
+        let previousCloseQuoteTime: Date?
+        /// Only the qualified tape adapter sets this after checking conditions, correction,
+        /// size and participant/SIP clocks. A display snapshot is not execution evidence.
+        let paperTradeQualified: Bool
+        /// True when Yahoo returned no real previousClose (a brand-new listing) and `previousClose`
+        /// was set to `price` as a flat placeholder. WITHOUT this flag that placeholder reads as a
+        /// genuine 0%-move "hold" signal — it's actually "unevaluated," not "no move." Set precisely
+        /// at the fallback site in `parseChart`, never inferred after the fact (a real ticker CAN
+        /// legitimately have previousClose == price on a truly flat session).
+        let isNewListing: Bool
+        init(symbol: String, price: Double, previousClose: Double, marketTime: Date? = nil,
+             isNewListing: Bool = false, massiveTradeSequence: Int64? = nil,
+             priceSource: StockSagePriceSource? = nil, paperTradeQualified: Bool = false,
+             previousCloseSource: StockSagePriceSource? = nil, previousCloseQuoteTime: Date? = nil,
+             denomination: StockSagePriceDenomination? = nil) {
+            self.symbol = symbol; self.price = price
+            self.previousClose = previousClose; self.marketTime = marketTime
+            self.isNewListing = isNewListing
+            self.massiveTradeSequence = massiveTradeSequence
+            self.priceSource = priceSource
+            self.denomination = denomination
+            self.paperTradeQualified = paperTradeQualified
+            self.previousCloseSource = previousCloseSource
+            self.previousCloseQuoteTime = previousCloseQuoteTime
+        }
+    }
+
+    /// Browser-like UA — Yahoo's public endpoints answer plain clients far more
+    /// reliably with one set (same rationale as `MediaSearch.ua`).
+    /// Internal (not private) so `StockSageEarnings` can share this single constant
+    /// rather than duplicate it — a future UA fix lands in exactly one place (F39 2026-07-02).
+    /// MediaSearch has its own copy outside the Markets fence; leave that untouched.
+    nonisolated static let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+
+    // MARK: Public fetch
+
+    nonisolated enum QuoteStop: Sendable, Equatable { case finished, yahooThrottled, invalidated }
+    nonisolated struct QuoteBatch: Sendable {
+        var quotes: [String: LiveQuote]
+        var stop: QuoteStop = .finished
+    }
+
+    /// Missing symbols remain absent; callers that show sweep status use fetchQuoteBatch.
+    static func fetchQuotes(for symbols: [String], concurrency: Int = 6) async -> [String: LiveQuote] {
+        await fetchQuoteBatch(for: symbols, concurrency: concurrency).quotes
+    }
+
+    static func fetchQuoteBatch(for symbols: [String], concurrency: Int = 6) async -> QuoteBatch {
+        let access = StockSageMassive.Access().capture()
+        return await fetchQuoteBatch(for: symbols, concurrency: concurrency,
+            keyPresent: !access.key.isEmpty, allowed: access.isCurrent,
+            massive: { await StockSageMassive.fetchSnapshots(for: $0, access: .init(allowed: access.isCurrent)) },
+            transport: { try await yahooTransport($0) }, cooldown: yahooCooldown)
+    }
+
+    /// The production routing loop; injected I/O keeps regression checks offline.
+    nonisolated static func fetchQuoteBatch(for symbols: [String], concurrency: Int = 6,
+        keyPresent: Bool, allowed: @escaping @Sendable () -> Bool,
+        massive: @Sendable ([String]) async -> [String: LiveQuote],
+        transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse),
+        cooldown: YahooCooldown? = nil,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) async -> QuoteBatch {
+        guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+        guard !symbols.isEmpty else { return .init(quotes: [:]) }
+        let route = StockSageMassive.partition(symbols, keyPresent: keyPresent)
+        var out = await massive(route.snapshot)
+        guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+        let remaining = route.perSymbol + route.snapshot.filter { out[$0.uppercased()] == nil }
+        let width = max(1, concurrency)
+        for start in stride(from: 0, to: remaining.count, by: width) {
+            guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+            let chunk = Array(remaining[start..<min(start + width, remaining.count)])
+            let results = await withTaskGroup(of: (quote: LiveQuote?, throttled: Bool).self) { group in
+                for symbol in chunk {
+                    group.addTask {
+                        guard let request = quoteRequest(symbol) else { return (nil, false) }
+                        let response = await yahooResponse(for: request, allowed: allowed,
+                            transport: transport, sleep: sleep, retryThrottles: false, cooldown: cooldown)
+                        if case .throttled = response { return (nil, true) }
+                        guard case .data(let data) = response,
+                              let parsed = parseChart(data, requestedSymbol: symbol) else { return (nil, false) }
+                        let quote = LiveQuote(symbol: symbol, price: parsed.price, previousClose: parsed.previousClose,
+                            marketTime: parsed.marketTime, isNewListing: parsed.isNewListing,
+                            priceSource: parsed.priceSource, previousCloseSource: parsed.previousCloseSource,
+                            previousCloseQuoteTime: parsed.previousCloseQuoteTime, denomination: parsed.denomination)
+                        return (quote, false)
+                    }
+                }
+                var quotes: [LiveQuote] = []
+                var throttled = false
+                for await result in group {
+                    if result.throttled { throttled = true; group.cancelAll() }
+                    if let quote = result.quote { quotes.append(quote) }
+                }
+                return (quotes: quotes, throttled: throttled)
+            }
+            guard allowed(), !Task.isCancelled else { return .init(quotes: [:], stop: .invalidated) }
+            for quote in results.quotes { out[quote.symbol.uppercased()] = quote }
+            if results.throttled { return .init(quotes: out, stop: .yahooThrottled) }
+        }
+        return .init(quotes: out)
+    }
+
+    nonisolated private static func quoteRequest(_ symbol: String) -> URLRequest? {
+        let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=1d&interval=1m&includePrePost=true") else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
+        request.setValue(ua, forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
+    nonisolated enum YahooResponse: Sendable { case data(Data), throttled, unavailable }
+    // The SDK does not mark UserDefaults Sendable, although Foundation explicitly permits
+    // sharing it across threads/tasks. Retain that framework-boundary assertion only;
+    // our mutable deadline and its ordered persistence are protected by Mutex.
+    // https://developer.apple.com/documentation/foundation/userdefaults
+    nonisolated final class YahooCooldown: @unchecked Sendable {
+        private let until: Mutex<Date?>
+        private let defaults: UserDefaults?
+        private static let key = "stocksage.yahoo.retryAfter"
+
+        init(defaults: UserDefaults? = nil) {
+            let seconds = defaults?.double(forKey: Self.key) ?? 0
+            until = Mutex(seconds.isFinite && seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil)
+            self.defaults = defaults
+        }
+        func permits(at now: Date = Date()) -> Bool {
+            guard now.timeIntervalSince1970.isFinite else { return false }
+            return until.withLock { $0.map { now >= $0 } ?? true }
+        }
+        func observe(_ response: HTTPURLResponse, now: Date = Date()) {
+            guard response.statusCode == 429 || response.statusCode == 503,
+                  now.timeIntervalSince1970.isFinite else { return }
+            let delay = StockSageBenzingaClient.retryDelay(response.value(forHTTPHeaderField: "Retry-After"),
+                now: now, maximumDelay: .greatestFiniteMagnitude)
+            let until = now.addingTimeInterval(max(1, delay))
+            guard until.timeIntervalSince1970.isFinite else { return }
+            self.until.withLock { current in
+                let deadline = max(current ?? until, until)
+                current = deadline
+                // Persist under the same lock so a shorter response cannot overwrite a later one.
+                defaults?.set(deadline.timeIntervalSince1970, forKey: Self.key)
+            }
+        }
+    }
+    nonisolated static let yahooCooldown = YahooCooldown(defaults: .standard)
+    nonisolated static let maximumYahooBytes = 2_000_000
+
+    nonisolated static let yahooSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        return URLSession(configuration: configuration, delegate: StockSageHTTP.NoRedirect(), delegateQueue: nil)
+    }()
+
+    nonisolated static func yahooTransport(_ request: URLRequest, session: URLSession = yahooSession) async throws -> (Data, URLResponse) {
+        try await StockSageHTTP.data(for: request, session: session, maximumBytes: maximumYahooBytes)
+    }
+
+    nonisolated static func yahooResponse(for request: URLRequest,
+        allowed: @Sendable () -> Bool,
+        transport: @Sendable (URLRequest) async throws -> (Data, URLResponse),
+        sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        retryThrottles: Bool = true, cooldown: YahooCooldown? = nil,
+        now: @Sendable () -> Date = Date.init
+    ) async -> YahooResponse {
+        for attempt in 0..<3 {
+            guard allowed(), !Task.isCancelled else { return .unavailable }
+            if let cooldown, !cooldown.permits(at: now()) { return .throttled }
+            guard let (data, response) = try? await transport(request) else { return .unavailable }
+            guard allowed(), !Task.isCancelled, let http = response as? HTTPURLResponse,
+                  response.url == request.url, data.count <= maximumYahooBytes,
+                  response.expectedContentLength <= Int64(maximumYahooBytes) else { return .unavailable }
+            if http.statusCode == 200 { return .data(data) }
+            if http.statusCode == 429 || http.statusCode == 503 {
+                cooldown?.observe(http, now: now())
+                if cooldown != nil { return .throttled }
+                guard retryThrottles, attempt < 2 else { return .throttled }
+                do { try await sleep(.seconds(1 << attempt)) }
+                catch { return .unavailable }
+                continue
+            }
+            return .unavailable
+        }
+        return .unavailable
+    }
+
+    // MARK: Parsing (pure — unit-tested without the network)
+
+    /// Decode Yahoo's `v8/chart` JSON into a `LiveQuote`. Best-effort and total:
+    /// any shape it doesn't recognize (an error payload, a missing price, a
+    /// zero/negative price) yields `nil` rather than throwing. Reads `previousClose`
+    /// with a `chartPreviousClose` fallback (indices often carry only the latter).
+    /// A non-positive or non-finite previousClose is treated exactly like a MISSING
+    /// one (falls back to `price`, sets `isNewListing`) — never fabricated as a real 0%.
+    nonisolated static func parseChart(_ data: Data, requestedSymbol: String? = nil, now: Date = Date()) -> LiveQuote? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let chart = root["chart"] as? [String: Any],
+              let results = chart["result"] as? [[String: Any]],
+              let meta = results.first?["meta"] as? [String: Any],
+              let symbol = meta["symbol"] as? String else { return nil }
+        if let requestedSymbol, symbol.uppercased() != requestedSymbol.uppercased() { return nil }
+
+        guard var price = number(meta["regularMarketPrice"]), price > 0 else { return nil }
+        var marketTime = number(meta["regularMarketTime"]).map { Date(timeIntervalSince1970: $0) }
+        // Yahoo remains labelled delayed. Pair each extended price with its own clock; never
+        // relabel the regular close using a newer fetch/market timestamp.
+        if StockSageMassive.covers(symbol), let regularTime = marketTime, regularTime <= now {
+            func consider(_ value: Any?, _ timestamp: Any?) {
+                guard let candidate = number(value), candidate > 0, let seconds = number(timestamp) else { return }
+                let at = Date(timeIntervalSince1970: seconds)
+                guard at > (marketTime ?? regularTime), at <= now,
+                      StockSageMassiveTicks.isExtendedSession(at: at) else { return }
+                price = candidate; marketTime = at
+            }
+            consider(meta["preMarketPrice"], meta["preMarketTime"])
+            consider(meta["postMarketPrice"], meta["postMarketTime"])
+            if let result = results.first,
+               let stamps = result["timestamp"] as? [Any],
+               let indicators = result["indicators"] as? [String: Any],
+               let quotes = indicators["quote"] as? [[String: Any]],
+               let closes = quotes.first?["close"] as? [Any], stamps.count == closes.count {
+                for (stamp, close) in zip(stamps, closes) { consider(close, stamp) }
+            }
+        }
+        // A non-positive previousClose (a feed row carrying 0, or corrupt negative data) is exactly
+        // as unusable as a missing one — L3-08: fabricates a flat 0.00% move / poisons %-change math
+        // instead of an honest "can't judge yet." Route it through the SAME missing-previousClose
+        // fallback rather than inventing a new sentinel.
+        let realPreviousClose = (number(meta["previousClose"]) ?? number(meta["chartPreviousClose"]))
+            .flatMap { $0 > 0 ? $0 : nil }
+        // brand-new listing with no prior close → flat placeholder (isNewListing marks it as such,
+        // NOT a genuine 0%-move hold signal).
+        let previousClose = realPreviousClose ?? price
+        // The quote's market time (Unix seconds) — lets the UI distinguish live from a stale close.
+        return LiveQuote(symbol: symbol, price: price, previousClose: previousClose, marketTime: marketTime,
+                         isNewListing: realPreviousClose == nil, priceSource: .yahoo,
+                         previousCloseSource: realPreviousClose == nil ? nil : .yahoo,
+                         previousCloseQuoteTime: realPreviousClose == nil ? nil : marketTime,
+                         denomination: StockSagePriceDenomination.yahooMetadata(meta, requestedSymbol: requestedSymbol ?? symbol))
+    }
+
+    // MARK: Candle history (for indicators / the advisor)
+
+    /// Fetch ~1 year of daily OHLC bars for one symbol — enough for the 200-day
+    /// trend and every indicator. `nil` on failure / when external access is off.
+    nonisolated static func fetchHistory(_ symbol: String, range: String = "1y", interval: String = "1d",
+        access: StockSageMassive.Access = .init()) async -> StockSagePriceHistory? {
+        let captured = access.capture()
+        let scopedAccess = StockSageMassive.Access(key: access.key, credentialRevision: access.credentialRevision,
+            policyRevision: access.policyRevision, allowed: captured.isCurrent)
+        return await fetchHistory(symbol, range: range, interval: interval, allowed: captured.isCurrent,
+            massive: { await StockSageMassive.fetchHistory(symbol: $0, range: $1, interval: $2, access: scopedAccess) },
+            yahoo: { request in
+                guard case .data(let data) = await yahooResponse(for: request, allowed: captured.isCurrent,
+                    transport: { try await yahooTransport($0) }, cooldown: yahooCooldown) else { return nil }
+                return data
+            })
+    }
+
+    /// Same provider routing as the public call; inject only external operations and permission.
+    nonisolated static func fetchHistory(_ symbol: String, range: String, interval: String,
+        allowed: @Sendable () -> Bool,
+        massive: @Sendable (String, String, String) async -> StockSagePriceHistory?,
+        yahoo: @Sendable (URLRequest) async -> Data?
+    ) async -> StockSagePriceHistory? {
+        guard !Task.isCancelled, allowed() else { return nil }
+        // Paid Massive aggregates are split-adjusted daily bars for covered US equities. Its nil
+        // contract is intentional: Yahoo remains the fallback for every unsupported shape and
+        // every provider miss, so an HTTP-200 malformed payload never becomes an empty history.
+        let primary = await massive(symbol, range, interval)
+        guard !Task.isCancelled, allowed() else { return nil }
+        if let primary { return primary }
+        // .urlHostAllowed for the same reason as fetchOne (F38 2026-07-02) — stricter set,
+        // path-safe for all curated symbols, consistent with StockSageEarnings.fetchNextEarningsOutcome.
+        let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? symbol
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=\(range)&interval=\(interval)") else { return nil }
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        req.setValue(ua, forHTTPHeaderField: "User-Agent")
+        guard !Task.isCancelled, allowed(), let data = await yahoo(req),
+              !Task.isCancelled, allowed() else { return nil }
+        return parseHistory(data, symbol: symbol)
+    }
+
+    /// Per-slot stagger inside `fetchHistories`' TaskGroup (PLAN_2026-07-08_equity2000.md
+    /// Stage 1 step 4): each task sleeps `slot index × historyPacingInterval` before firing
+    /// its request, spreading a batch's requests instead of bursting all `concurrency` of
+    /// them in the same instant. Tunable — raise it if a future universe size still draws
+    /// 429s at this spacing; applies ONLY to history fetches (`fetchQuotes` is untouched —
+    /// the plan scopes pacing to the heavier, more failure-prone bulk-history path).
+    nonisolated static let historyPacingInterval: Duration = .milliseconds(120)
+
+    /// Fetch candle histories for many symbols concurrently (bounded fan-out),
+    /// keyed by uppercased requested symbol. `[:]` when external access is off — INCLUDING a
+    /// revocation that lands mid-fan-out. `fetchHistory` starts returning nil the instant the
+    /// policy flips, so without the re-checks below this handed back a map that is a silent
+    /// SUBSET of the request, indistinguishable from "those names had no bars":
+    /// `StockSageRegime.breadth` drops un-priced names from its OWN denominator, so one surviving
+    /// name of the 14-name sample reads as "100% of names above their 200DMA". Same fail-closed
+    /// shape `fetchQuotes` already uses above.
+    ///
+    /// NOT cancellation, deliberately: `StockSageStore.runChunkedScan`'s 120s per-chunk watchdog
+    /// cancels on purpose and today keeps the bars it did get while raising `throttled` —
+    /// returning [:] there would flip a cold chunk 0 to `firstChunkTotallyFailed` and discard the
+    /// whole scan. Cancellation is handled at the consumers instead.
+    nonisolated static func fetchHistories(for symbols: [String], range: String = "1y", concurrency: Int = 6,
+                               onProgress: ((Int) async -> Void)? = nil) async -> [String: StockSagePriceHistory] {
+        let access = StockSageMassive.Access()
+        let key = access.key(), credential = access.credentialRevision(), policy = access.policyRevision()
+        // Preserve this fan-out's partial-on-cancel contract, but never mix access generations.
+        // Access.capture().isCurrent also rejects cancellation, so it is intentionally not used here.
+        let isCurrent: @Sendable () -> Bool = { access.allowed() && access.key() == key
+            && access.credentialRevision() == credential && access.policyRevision() == policy }
+        let scopedAccess = StockSageMassive.Access(key: access.key, credentialRevision: access.credentialRevision,
+            policyRevision: access.policyRevision, allowed: isCurrent)
+        return await fetchHistories(for: symbols, range: range, concurrency: concurrency, onProgress: onProgress,
+            allowed: isCurrent, fetch: { await fetchHistory($0, range: $1, access: scopedAccess) })
+    }
+
+    /// Same fan-out as the public call; inject only external operations and permission (mirrors
+    /// `fetchHistory`'s seam above — and is the only way to test the revocation re-checks without
+    /// mutating the `ToolPolicy` process globals).
+    nonisolated static func fetchHistories(for symbols: [String], range: String, concurrency: Int,
+                               onProgress: ((Int) async -> Void)?,
+                               allowed: @escaping @Sendable () -> Bool,
+                               fetch: @escaping @Sendable (String, String) async -> StockSagePriceHistory?
+    ) async -> [String: StockSagePriceHistory] {
+        guard allowed(), !symbols.isEmpty else { return [:] }
+        var out: [String: StockSagePriceHistory] = [:]
+        let chunks = stride(from: 0, to: symbols.count, by: max(1, concurrency)).map {
+            Array(symbols[$0 ..< min($0 + concurrency, symbols.count)])
+        }
+        var completed = 0
+        for chunk in chunks {
+            guard allowed() else { return [:] }
+            let results: [StockSagePriceHistory] = await withTaskGroup(of: StockSagePriceHistory?.self) { group in
+                for (slot, symbol) in chunk.enumerated() {
+                    group.addTask {
+                        if slot > 0 { try? await Task.sleep(for: historyPacingInterval * slot) }
+                        guard allowed() else { return nil }
+                        return await fetch(symbol, range)
+                    }
+                }
+                var acc: [StockSagePriceHistory] = []
+                for await h in group where h != nil { acc.append(h!) }
+                return acc
+            }
+            for h in results { out[h.symbol.uppercased()] = h }
+            completed += chunk.count
+            await onProgress?(completed)
+        }
+        guard allowed() else { return [:] }   // a flip inside the LAST chunk
+        return out
+    }
+
+    /// Decode Yahoo `v8/chart` time-series JSON into a candle history. Yahoo emits
+    /// `null` for non-trading gaps; those bars are dropped so the parallel arrays
+    /// stay aligned and indicator math never meets a NaN. Newest bar LAST.
+    nonisolated static func parseHistory(_ data: Data, symbol: String) -> StockSagePriceHistory? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let chart = root["chart"] as? [String: Any],
+              let result = (chart["result"] as? [[String: Any]])?.first,
+              let timestamps = result["timestamp"] as? [Any],
+              let indicators = result["indicators"] as? [String: Any],
+              let quote = (indicators["quote"] as? [[String: Any]])?.first,
+              let opens = quote["open"] as? [Any],
+              let highs = quote["high"] as? [Any],
+              let lows = quote["low"] as? [Any],
+              let closes = quote["close"] as? [Any] else { return nil }
+        // Legacy cached fixtures may omit identity; an explicit identity must never contradict
+        // the requested instrument before its bars are labelled with that request.
+        if let raw = (result["meta"] as? [String: Any])?["symbol"] {
+            guard let echoed = raw as? String, echoed.uppercased() == symbol.uppercased() else { return nil }
+        }
+        let volumes = (quote["volume"] as? [Any]) ?? []
+        let n = timestamps.count
+        guard n > 0, opens.count == n, highs.count == n, lows.count == n, closes.count == n else { return nil }
+
+        var dt: [Date] = [], o: [Double] = [], h: [Double] = [], l: [Double] = [], c: [Double] = [], v: [Double] = []
+        for i in 0..<n {
+            // Reject non-positive OHLC — a 0/negative close from the feed would become latestClose
+            // and feed price×shares / EV / sizing (mirrors parseChart's `price > 0`). Volume left
+            // unguarded: 0 volume is legitimate for FX and indices.
+            guard let ts = number(timestamps[i]),
+                  let oo = number(opens[i]), oo > 0,
+                  let hh = number(highs[i]), hh > 0,
+                  let ll = number(lows[i]), ll > 0,
+                  let cc = number(closes[i]), cc > 0 else { continue }
+            dt.append(Date(timeIntervalSince1970: ts))
+            o.append(oo); h.append(hh); l.append(ll); c.append(cc)
+            v.append(i < volumes.count ? (number(volumes[i]) ?? 0) : 0)
+        }
+        guard c.count >= 2 else { return nil }
+        return StockSagePriceHistory(symbol: symbol, dates: dt, opens: o, highs: h, lows: l, closes: c, volumes: v,
+                                    priceSource: .yahooBars,
+                                    analyticsBasis: StockSageHistoryBasis.yahooMetadata(result["meta"] as? [String: Any], requestedSymbol: symbol))
+    }
+
+    /// Coax a JSON numeric (Double / Int / NSNumber / numeric String) into a
+    /// Double — `JSONSerialization` hands numbers back as `NSNumber`, and a few
+    /// fields occasionally arrive as strings.
+    private nonisolated static func number(_ any: Any?) -> Double? {
+        if let number = any as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
+        let value: Double?
+        switch any {
+        case let d as Double:   value = d
+        case let i as Int:      value = Double(i)
+        case let n as NSNumber: value = n.doubleValue
+        case let s as String:   value = Double(s)
+        default:                value = nil
+        }
+        // Reject NaN / ±Inf so a non-finite field is dropped exactly like a null
+        // bar — preserves the "indicator math never meets a NaN" invariant.
+        guard let v = value, v.isFinite else { return nil }
+        return v
+    }
+}
+
+/// Metadata attached to the same history response as its prices. Ticker spelling
+/// is not a denomination or unit guarantee (for example, a .L listing can quote
+/// in USD, and a crypto pair can quote in EUR). Unknown metadata stays unavailable
+/// to weighted risk analytics while the original price history remains usable.
+nonisolated struct StockSageHistoryBasis: Codable, Sendable, Equatable {
+    enum RawUnitsPerMajor: Double, Codable, Sendable {
+        case major = 1
+        case hundredths = 100
+    }
+
+    enum DailySampling: Int, Codable, Sendable {
+        case tradingDays252 = 252
+        case continuousDays365 = 365
+
+        var description: String {
+            switch self {
+            case .tradingDays252: return "252 trading-day periods per year"
+            case .continuousDays365: return "365 calendar-day periods per year"
+            }
+        }
+    }
+
+    enum Provenance: String, Codable, Sendable {
+        case yahooChartMetadata
+        case massiveReferenceMetadata
+        case syntheticFixture
+    }
+
+    let currencyCode: String
+    let rawUnitsPerMajor: RawUnitsPerMajor
+    let sampling: DailySampling
+    let exchangeTimeZoneIdentifier: String
+    let provenance: Provenance
+
+    init?(currencyCode: String, rawUnitsPerMajor: RawUnitsPerMajor,
+          sampling: DailySampling, exchangeTimeZoneIdentifier: String,
+          provenance: Provenance) {
+        guard currencyCode == currencyCode.uppercased(),
+              currencyCode != "XXX", currencyCode != "XTS",
+              Locale.commonISOCurrencyCodes.contains(currencyCode),
+              TimeZone(identifier: exchangeTimeZoneIdentifier) != nil else { return nil }
+        self.currencyCode = currencyCode
+        self.rawUnitsPerMajor = rawUnitsPerMajor
+        self.sampling = sampling
+        self.exchangeTimeZoneIdentifier = exchangeTimeZoneIdentifier
+        self.provenance = provenance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case currencyCode, rawUnitsPerMajor, sampling, exchangeTimeZoneIdentifier, provenance
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard let validated = try Self(
+            currencyCode: values.decode(String.self, forKey: .currencyCode),
+            rawUnitsPerMajor: values.decode(RawUnitsPerMajor.self, forKey: .rawUnitsPerMajor),
+            sampling: values.decode(DailySampling.self, forKey: .sampling),
+            exchangeTimeZoneIdentifier: values.decode(String.self, forKey: .exchangeTimeZoneIdentifier),
+            provenance: values.decode(Provenance.self, forKey: .provenance)) else {
+            throw DecodingError.dataCorruptedError(forKey: .currencyCode, in: values,
+                debugDescription: "Invalid explicit denomination or daily session basis.")
+        }
+        self = validated
+    }
+
+    /// Preserve the provider's case before interpreting minor-unit conventions.
+    /// A missing or unrecognised symbol/currency/interval/calendar/time zone never
+    /// falls back to USD, GBP or a 252-day convention derived from the ticker.
+    static func yahooMetadata(_ meta: [String: Any]?, requestedSymbol: String) -> Self? {
+        guard let meta, let symbol = meta["symbol"] as? String,
+              symbol.uppercased() == requestedSymbol.uppercased(),
+              let raw = meta["currency"] as? String,
+              meta["dataGranularity"] as? String == "1d",
+              let instrument = meta["instrumentType"] as? String,
+              let zone = meta["exchangeTimezoneName"] as? String else { return nil }
+        let currency: String
+        let units: RawUnitsPerMajor
+        switch raw {
+        case "GBp", "GBX": currency = "GBP"; units = .hundredths
+        case "ZAc": currency = "ZAR"; units = .hundredths
+        default: currency = raw; units = .major
+        }
+        let sampling: DailySampling
+        switch instrument {
+        case "EQUITY", "ETF", "INDEX", "MUTUALFUND": sampling = .tradingDays252
+        case "CRYPTOCURRENCY": sampling = .continuousDays365
+        default: return nil
+        }
+        return Self(currencyCode: currency, rawUnitsPerMajor: units, sampling: sampling,
+                    exchangeTimeZoneIdentifier: zone, provenance: .yahooChartMetadata)
+    }
+
+    var quoteDenomination: StockSagePriceDenomination? {
+        guard provenance == .yahooChartMetadata else { return nil }
+        return StockSagePriceDenomination(currencyCode: currencyCode,
+            rawUnitsPerMajor: rawUnitsPerMajor == .major ? .major : .hundredths,
+            provenance: .yahooChartMetadata)
+    }
+
+    /// Session-date key in the provider's exchange time zone. Converting each
+    /// local date to a UTC date key avoids shifting an Asia/Pacific session into
+    /// yesterday merely because its opening timestamp is on yesterday's UTC day.
+    func sessionDay(_ date: Date) -> Int? {
+        guard date.timeIntervalSince1970.isFinite,
+              let zone = TimeZone(identifier: exchangeTimeZoneIdentifier) else { return nil }
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = zone
+        let parts = local.dateComponents([.year, .month, .day], from: date)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let canonical = utc.date(from: parts) else { return nil }
+        return Int(exactly: (canonical.timeIntervalSince1970 / 86_400).rounded(.down))
+    }
+}
+
+
+// MARK: - StockSagePriceHistory
+//
+// A daily OHLC candle history for one symbol (newest LAST) — the input the
+// indicators + advisor consume. Parallel arrays (kept equal-length by the parser)
+// make windows cheap to slice. Sendable so it crosses the fetch → main-actor hop.
+nonisolated struct StockSagePriceHistory: Sendable, Equatable {
+    let symbol: String
+    let dates: [Date]
+    let opens: [Double]
+    let highs: [Double]
+    let lows: [Double]
+    let closes: [Double]
+    let volumes: [Double]
+    var priceSource: StockSagePriceSource? = nil
+    var analyticsBasis: StockSageHistoryBasis? = nil
+
+    nonisolated var count: Int { closes.count }
+    nonisolated var latestClose: Double? { closes.last }
+}
+
+// MARK: - StockSageUniverse
+//
+// The "whole world" default watchlist: blue-chip names + benchmark indices across
+// every inhabited continent, in Yahoo symbology. Saudi/Tadawul leads (the owner's
+// home market); the rest spans the Americas, Europe, the Middle East, Asia and
+// Oceania so the Markets tab is genuinely global out of the box. The `market`
+// label (with a flag) is what the watchlist/heatmap show under each ticker, so
+// regions stay visually grouped in feed order. Extend freely — every downstream
+// layer is symbol-agnostic.
+enum StockSageUniverse {
+    // (friendly market label, tickers). Explicitly typed so the big literals
+    // type-check cheaply (Swift's inference chokes on a bare tuple-array).
+    //
+    // TWO source tiers, kept as separate literals for provenance/labeling, but as of the
+    // equity-2000 promotion (PLAN_2026-07-08_equity2000.md Stage 2, 2026-07-08) BOTH are
+    // bulk-fetched/analyzed — the pre-promotion "catalogExtra is searchable-only, never
+    // bulk-fetched" split no longer holds:
+    //   • `groups`       — the curated Saudi-first CORE (~210 names). Still `worldwide[0]`'s
+    //                      source, still what `StockSageUniverse.core`/`marketCount` key off
+    //                      of, and still the monitor's own background-cycle scope (review
+    //                      round-2 finding 1) — but no longer the WHOLE analyzed universe.
+    //   • `catalogExtra` — the ~2,210-name discovery long-tail. PROMOTED: now bulk-fetched and
+    //                      scanned exactly like `groups` (both feed `worldwide` — see its own
+    //                      doc comment below), not just searchable/one-tap-addable.
+    // Together they form `worldwide`/`catalog` (identical, deduped groups-first) — the full
+    // 2,420-name analyzed + searchable universe.
+
+    private static let groups: [(label: String, tickers: [String])] = [
+        // ── Home market first (owner directive: Aramco / Tadawul leads the universe) ──
+        ("🇸🇦 Tadawul (TASI)",     ["2222.SR", "1120.SR", "7010.SR", "2010.SR", "1180.SR", "2350.SR",
+                                    // ── Expansion (2026-06-27): verified large/mid-cap TASI constituents.
+                                    //    Aramco (2222.SR) stays first; all below are appended after it.
+                                    // Banks
+                                    "1010.SR", "1060.SR", "1150.SR", "1080.SR", "1140.SR",
+                                    // Materials / Petrochem
+                                    "1211.SR", "2020.SR", "2290.SR", "2380.SR", "2330.SR",
+                                    // Telecom
+                                    "7020.SR", "7030.SR",
+                                    // Consumer / Food
+                                    "2280.SR", "4190.SR", "6010.SR",
+                                    // Utilities / Transport
+                                    "5110.SR", "4030.SR",
+                                    // Healthcare
+                                    "4013.SR", "4014.SR",
+                                    // Insurance
+                                    "8010.SR", "8210.SR",
+                                    // Cement
+                                    "3030.SR"]),
+        // ── United States (mega/large cap, by sector) ──
+        ("🇺🇸 US Mega-cap Tech",   ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "AVGO", "TSLA", "ORCL", "AMD"]),
+        ("🇺🇸 US Semis & Hardware", ["INTC", "QCOM", "TXN", "MU", "AMAT", "ADI", "LRCX", "KLAC", "CSCO", "IBM"]),
+        ("🇺🇸 US Software",        ["CRM", "ADBE", "NOW", "INTU", "PANW", "SNPS", "CDNS", "NFLX"]),
+        ("🇺🇸 US Financials",      ["JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "V", "MA"]),
+        ("🇺🇸 US Health",          ["UNH", "JNJ", "LLY", "PFE", "MRK", "ABBV", "TMO", "ABT", "DHR", "AMGN"]),
+        ("🇺🇸 US Consumer",        ["HD", "MCD", "NKE", "SBUX", "COST", "WMT", "PG", "KO", "PEP", "DIS"]),
+        ("🇺🇸 US Energy & Industrials", ["XOM", "CVX", "COP", "BA", "CAT", "GE", "HON", "UPS", "RTX", "LMT"]),
+        ("📊 ETFs (broad & sector)", ["SPY", "QQQ", "DIA", "IWM", "VTI", "XLK", "XLF", "XLE", "XLV", "GLD", "SLV", "TLT"]),
+        // ── International (blue chips by exchange) ──
+        ("🇬🇧 London (LSE)",       ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L"]),
+        ("🇩🇪 Frankfurt (XETRA)",  ["SAP.DE", "SIE.DE", "ALV.DE", "BMW.DE"]),
+        ("🇫🇷 Paris (Euronext)",   ["MC.PA", "OR.PA", "AIR.PA", "TTE.PA"]),
+        ("🇯🇵 Tokyo (TSE)",        ["7203.T", "6758.T", "9984.T", "8306.T"]),
+        ("🇭🇰 Hong Kong (HKEX)",   ["0700.HK", "9988.HK", "3690.HK"]),
+        ("🇨🇳 Shanghai (SSE)",     ["600519.SS"]),
+        ("🇰🇷 Seoul (KRX)",        ["005930.KS", "000660.KS"]),
+        ("🇮🇳 Mumbai (NSE)",       ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS"]),
+        ("🇹🇼 Taiwan (TWSE)",      ["2330.TW", "2317.TW"]),
+        ("🇸🇬 Singapore (SGX)",    ["D05.SI", "O39.SI"]),
+        ("🇦🇺 Sydney (ASX)",       ["BHP.AX", "CBA.AX", "CSL.AX"]),
+        ("🇧🇷 São Paulo (B3)",     ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]),
+        ("🇲🇽 Mexico (BMV)",       ["AMXB.MX", "WALMEX.MX"]),
+        ("🇨🇦 Toronto (TSX)",      ["RY.TO", "SHOP.TO", "ENB.TO"]),
+        // ROG.SW removed 2026-07-09: persistent HTTP 404 on this service's own fetch path
+        // (retried + re-probed 5× same-day — dead on Yahoo, NOT a throttle), so it failed
+        // every live scan and only ever contributed to the "couldn't be fetched" line.
+        // Found by the (otherwise superseded) universe-1024 verification lane.
+        ("🇨🇭 Zurich (SIX)",       ["NESN.SW", "NOVN.SW"]),
+        ("🇳🇱 Amsterdam (Euronext)", ["ASML.AS", "ADYEN.AS"]),
+        ("🇪🇸 Madrid (BME)",       ["SAN.MC", "IBE.MC", "ITX.MC"]),
+        ("🇮🇹 Milan (Borsa)",      ["ENI.MI", "ISP.MI", "RACE.MI"]),
+        ("🇸🇪 Stockholm (OMX)",    ["VOLV-B.ST", "ERIC-B.ST"]),
+        ("🇦🇪 Dubai (DFM)",        ["EMAAR.AE", "DEWA.AE"]),   // Yahoo .AD/.DU don't price; ADX names (FAB/ADCB/ADNOC/ALDAR) have no working Yahoo code — DFM .AE is the only reliable UAE format (verified live 2026-06-27)
+        ("🇶🇦 Qatar (QSE)",        ["QNBK.QA", "IQCD.QA", "QIBK.QA", "MARK.QA"]),
+        ("🇪🇬 Egypt (EGX)",        ["COMI.CA"]),
+        ("🇿🇦 Johannesburg (JSE)", ["NPN.JO", "AGL.JO"]),
+        ("🌍 World indices",       ["^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX", "^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^N225", "^HSI", "^NSEI", "^TWII", "^STI", "^BVSP", "^AXJO", "^GSPTSE", "^TASI.SR"]),
+        // Forex (Yahoo `=X` pairs) — trades ~24×5; SAR included for the owner's home currency.
+        ("💱 Forex (24×5)",        ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDSAR=X", "USDCNY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X"]),
+    ]
+
+    // Discovery long-tail — PROMOTED (Stage 2, 2026-07-08): now bulk-fetched/analyzed exactly
+    // like `groups` (see the header comment above `groups`), not just searchable/addable.
+    // Real, liquid Yahoo tickers; if one ever fails to price, the caller says so honestly.
+    private static let catalogExtra: [(label: String, tickers: [String])] = [
+        // SQ removed 2026-07-09: persistent HTTP 404 (Block, Inc. trades as XYZ now — already
+        // in catalogExtra and verified fetchable, so coverage is unchanged). Found by the
+        // full-catalog CFNetwork sweep: the ONLY corpse among 2,419 symbols.
+        ("🇺🇸 US Tech & Growth",   ["GOOG", "MRVL", "ON", "MCHP", "NXPI", "SNOW", "PLTR", "CRWD", "DDOG", "ZS", "NET", "WDAY", "TEAM", "DELL", "HPQ", "UBER", "ABNB", "COIN", "PYPL", "SHOP", "MDB", "DOCU", "ROKU", "PINS"]),
+        ("🇺🇸 US Financials+",     ["SPGI", "MCO", "ICE", "CME", "COF", "USB", "PNC", "TFC", "BX", "KKR", "APO", "MET", "PRU", "AIG", "TRV"]),
+        ("🇺🇸 US Health+",         ["VRTX", "REGN", "BMY", "GILD", "CVS", "MDT", "ISRG", "ZTS", "SYK", "BDX", "HCA", "CI", "ELV", "BSX", "MRNA"]),
+        ("🇺🇸 US Consumer+",       ["LOW", "TGT", "TJX", "BKNG", "PM", "MDLZ", "CL", "EL", "KHC", "GIS", "KMB", "MNST", "YUM", "CMG", "MAR"]),
+        ("🇺🇸 US Energy/Industrial+", ["EOG", "SLB", "PSX", "MPC", "VLO", "OXY", "WMB", "KMI", "DE", "MMM", "GD", "NOC", "FDX", "EMR", "ETN", "ITW", "PH"]),
+        ("🇺🇸 US Comms/Utility/Materials", ["T", "VZ", "TMUS", "CMCSA", "CHTR", "NEE", "DUK", "SO", "D", "LIN", "SHW", "FCX", "NEM", "APD", "DOW"]),
+        ("🇺🇸 US Real Estate",     ["PLD", "AMT", "EQIX", "SPG", "O", "CCI", "PSA", "WELL"]),
+        ("📊 ETFs+ (broad/intl/bond)", ["VOO", "VEA", "VWO", "EFA", "EEM", "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC", "SMH", "SOXX", "ARKK", "USO", "HYG", "LQD", "VNQ", "SCHD", "DVY", "IEF", "AGG", "BND", "EWJ", "FXI", "EWZ", "INDA"]),
+        ("🇬🇧 London+",            ["BARC.L", "LLOY.L", "VOD.L", "RIO.L", "BATS.L", "DGE.L", "NWG.L", "TSCO.L"]),
+        ("🇩🇪 Frankfurt+",         ["BAS.DE", "BAYN.DE", "VOW3.DE", "MBG.DE", "DTE.DE", "DBK.DE", "IFX.DE", "ADS.DE"]),
+        ("🇫🇷 Paris+",             ["SAN.PA", "BNP.PA", "SU.PA", "AI.PA", "EL.PA", "CS.PA"]),
+        ("🇯🇵 Tokyo+",             ["6861.T", "9433.T", "6098.T", "7974.T", "8035.T", "4063.T"]),
+        ("🇭🇰 Hong Kong+",         ["0941.HK", "1299.HK", "0005.HK", "0388.HK", "1810.HK"]),
+        ("🇨🇳 Shanghai+",          ["601318.SS", "600036.SS", "601888.SS"]),
+        ("🇰🇷 Seoul+",             ["005380.KS", "035420.KS"]),
+        ("🇮🇳 Mumbai+",            ["ICICIBANK.NS", "BHARTIARTL.NS", "SBIN.NS", "HINDUNILVR.NS"]),
+        ("🌏 Asia-Pacific+",       ["2454.TW", "U11.SI", "NAB.AX", "WBC.AX", "WES.AX"]),
+        ("🌎 Americas+",           ["BBDC4.SA", "GFNORTEO.MX", "TD.TO", "CNR.TO", "BN.TO"]),
+        ("🇪🇺 Europe+",            ["UBSG.SW", "ZURN.SW", "INGA.AS", "PRX.AS", "BBVA.MC", "UCG.MI", "ATCO-A.ST", "INVE-B.ST"]),
+        ("💱 Forex+",              ["NZDUSD=X", "EURGBP=X", "EURJPY=X", "GBPJPY=X"]),
+        // ── 2000-stock expansion (2026-07-07): live-sourced (Nasdaq screener, mktcap-ranked),
+        //    EVERY symbol verified fetchable via the app's Yahoo v8 path (2001 checked, 6 dropped).
+        //    PROMOTED into the analyzed universe (PLAN_2026-07-08_equity2000.md Stage 2,
+        //    2026-07-08): these names now join the Find-Ideas scan via `worldwide` —
+        //    no longer "search-only, not auto-fetched" as originally landed.
+        ("🇺🇸 US Technology (2000-expansion)", ["SPCX", "TSM", "GOOGM", "GOOGN", "ASML", "ARM", "SNDK", "APH", "WDC", "SAP", "STX", "APP", "VRT", "PDD", "FTNT", "ASX", "NTES", "DASH", "ALAB", "NOK", "MSI", "MPWR", "COHR", "UMC", "STM", "TEL", "HPE", "NBIS", "FLEX", "CRDO", "CRWV", "XYZ", "INFY", "ADSK", "CBRS", "RBLX", "CLS", "MCHPP", "BIDU", "RDDT", "GFS", "ROP", "ERIC", "JBL", "MSTR", "STRF", "UI", "NTAP", "TWLO", "VEEV", "STRC", "Q", "CW", "SMCIP", "OTIS", "HUBB", "P", "OKTA", "FSLR", "MTSI", "ZM", "TSEM", "VRSN", "STRK", "STRD", "IOT", "QNT", "CTSH", "WIT", "SNX", "FLUT", "LSCC", "SITM", "IONQ", "RBRK", "AMKR", "CDW", "TOST", "SMCI", "GEN", "SSNC", "IREN", "TTMI", "NVMI", "CHKP", "PTC", "NTNX", "LOGI", "DOCN", "LDOS", "TYL", "AUR", "DT", "VICR", "U", "SMTC", "RMBS", "FROG", "AEIS", "SANM", "GWRE", "VSAT", "GDDY", "CACI", "FIG", "WULF", "PL", "TEM", "SIMO", "ALGM", "JKHY", "ARW", "HUBS", "VIAV", "BSY", "AAOI", "COMP", "SWKS", "FORM", "MANH", "TTD", "ABTC", "SAIL", "YMM", "FDS", "MTCH", "MXL", "MBLY", "QBTS", "SNAP", "ENS", "QRVO", "YOU", "CRUS", "BILI", "TTAN", "MRCY", "PLXS", "SLAB", "MQ", "SATA", "VSH", "HNGE", "AVT", "NAVN", "BB", "PAYC", "DBX", "PCOR", "CAMT", "ACMR", "BZ", "DSGX", "KLIC", "GLBE", "APPF", "S", "CVLT", "GDS", "PSN", "PATH", "PCTY", "INGM", "ESTC", "DUOL", "RGTI", "ENPH", "NICE", "ACIW", "OTEX", "QLYS", "GTLB", "DOX", "ZETA", "VRNS", "PEGA", "KVYO", "SRAD", "MARA", "NTSK", "OCTV", "SAIC", "SYNA", "UCTT", "LIF", "WAY", "TENB", "EPAM", "PI", "DIOD", "IPGP", "ACLS", "DOCS", "AXTI", "CLBT", "ONDS", "POWI", "BILL", "LFTO", "BOX", "MNDY", "OLED", "LASR", "NVTS", "OSIS", "JOYY", "XNDU", "PPLI", "AMBA", "SEDG", "FA", "PENG", "TDC", "QTWO", "CCC", "ICHR", "VECO", "RNG", "ADEA", "CARG", "AGYS", "DSC", "BHE", "PONY", "SOUN", "NTCT", "MGNI", "BRZE", "NIQ", "WK", "FSLY", "RUM", "GRND", "FRSH", "VISN", "WIX", "KC", "RGTIW", "KD", "INFQ", "NYAX", "STNE", "PAGS", "AVPT", "IMOS", "CMCM", "HIMX", "ALRM", "DJT", "INOD", "PDFS", "RAMP", "VNET", "SPSC", "PLUS", "ATHM", "INTA", "QUBT", "VERX"]),
+        ("🇺🇸 US Finance (2000-expansion)", ["HSBC", "RY", "MUFG", "SAN", "TD", "SMFG", "IBKR", "UBS", "BBVA", "HDB", "CB", "PGR", "MFG", "BMO", "HOOD", "IBN", "BNS", "CM", "BNY", "BCS", "ING", "LYG", "ITUB", "MRSH", "NWG", "AON", "DB", "MFC", "NU", "AJG", "ALL", "AFL", "FITB", "HBANL", "BMNP", "STT", "NDAQ", "AMP", "IX", "RKT", "SLF", "HBANM", "CBRE", "KB", "HBANZ", "ARES", "BSBR", "HIG", "BAP", "BBD", "HBAN", "PUK", "ACGL", "MTB", "SHG", "NTRS", "HBANP", "RJF", "BBDO", "CFG", "CINF", "AFRM", "CBOE", "WTW", "NMR", "WRB", "RF", "SYF", "TROW", "KEY", "MKL", "FCNCA", "LPLA", "PFG", "TW", "L", "SOFI", "BRO", "EFX", "BCH", "BPYPM", "EWBC", "BEN", "INVH", "BPYPP", "BPYPO", "CRCL", "BEKE", "AEG", "TPG", "BPYPN", "CG", "BSAC", "TRU", "JLL", "PNFP", "WF", "BNT", "OWL", "EG", "RGA", "APOS", "KKRS", "UNM", "ALLY", "PS", "VLYPN", "CRBG", "KLAR", "CNA", "AIZ", "SLMBP", "VLYPO", "RNR", "FUTU", "EVR", "VLYPP", "GL", "EQH", "ARCC", "FNF", "CET", "WBS", "IVZ", "FHN", "ERIE", "AFG", "CSGP", "HUT", "SF", "SEIC", "JEF", "WTFC", "UMBF", "RYAN", "BPOP", "ZION", "CIB", "ONB", "ORI", "GLXY", "SSB", "HLI", "CFR", "VIRT", "SNEX", "ONBPP", "ONBPO", "AMG", "PRI", "COLB", "FRHC", "WAL", "CIFR", "BMNR", "VOYA", "RIOT", "CBSH", "PB", "BOKF", "XP", "GGAL", "AXS", "VLY", "CHYM", "KNSL", "PRH", "PRS", "THG", "JXN", "FIGR", "LNC", "GJS", "TRNO", "CORZ", "CORZZ", "FAF", "OMF", "PJT", "CACC", "GBCI", "IFS", "FNB", "MAAS", "ACGLO", "FSV", "UBSI", "ACT", "MORN", "ABCB", "FLG", "MCY", "HWC", "LMND", "BMA", "AUB", "AVAL", "SEZL", "CGABL", "ESNT", "MTG", "PFH", "SIGI", "ENVA", "HOMB", "ASB", "AX", "VCTR", "RLI", "ACGLN", "MC", "OZK", "OBDC", "WTM", "BGC", "EBC", "STEP", "PIPR", "CORZW", "RDN", "DAVE", "CIGI", "ATHS", "TFSL", "FFIN", "GPGI", "MRX", "HASI", "OPEN", "CNO", "MAIN", "LAZ", "NNI", "SLM", "SFBS", "IBOC", "MRP", "FULT", "NP", "TCBI", "HLNE", "HCXY", "FHI", "PFSI", "OXLCM", "OXLCN", "OXLCZ", "UCB", "BBAR", "OXLCL", "HGTY", "CATY", "OXLCO", "MKTX", "FBP", "INDB", "CNS", "PDI", "WSFS", "CVBF", "BLSH", "MIAX", "RNST", "BWIN", "WSBC", "BANF", "BULL", "FIBK", "CII", "PLMR", "FG", "UNMA", "XXI", "BHF", "AGO", "ASBA", "FHB", "GNW", "FFBC", "BKU", "MCHB", "CBU", "NAN", "NIC", "UWMC", "NTRSO", "FULTP", "BTDR", "CLSK", "AB", "HG", "CURB", "VAC", "GBDC", "PRK", "ETOR", "SFNC", "BOH", "CSQ", "UPST", "CRVL", "CWK", "SBCF", "BANC", "NMIH", "FGN", "VTMX", "PFS", "SII", "HTGC", "EEFT", "APAM", "FBK", "KEEL", "ARX", "FSK", "SPNT", "UE", "WT", "AAMI", "WAFD", "NMRK", "GCMG", "FRME", "TRMK", "ZIONP", "TOWN", "TBBK", "GDV", "CUBI", "FBNC", "NBTB", "BBT", "INTR", "BUSE", "WSBCO", "SKWD", "NTB", "EFSC", "SLDE", "LCLN", "HCI", "SYBT", "BANR", "HAPN", "HTH", "CLBK", "NWBI", "MBIN", "BUSEP", "HMN", "AGM", "BLX", "PLGO", "OFG", "FCF"]),
+        ("🇺🇸 US Consumer Discretionary (2000-expansion)", ["BABA", "UL", "SPOT", "MELI", "ACN", "ECL", "HLT", "CVNA", "RCL", "BAM", "ORLY", "URI", "ROST", "PCAR", "WBD", "SE", "DAL", "RELX", "FAST", "BKR", "EA", "EBAY", "AZO", "TTWO", "VIK", "MSCI", "DHI", "HLN", "LYV", "UAL", "SYY", "TRI", "CCL", "KVUE", "TKO", "JD", "RYAAY", "CPNG", "QSR", "EXPE", "ASTS", "LVS", "SUNB", "CASY", "FICO", "TPR", "ECHO", "PPG", "FISV", "AER", "INIO", "CPRT", "FTI", "WSM", "TCOM", "DG", "IHG", "PHM", "LUV", "XPO", "SW", "ONON", "DLTR", "CPAY", "DRI", "CHD", "OMC", "USFD", "SNA", "FIS", "RBA", "GPN", "LEN", "SN", "PKG", "AMCR", "ROL", "DKS", "BURL", "ULTA", "AS", "APG", "H", "FDXF", "NVR", "MGA", "PFGC", "GPC", "BIP", "BR", "LTM", "SGI", "BBY", "NWS", "AKAM", "QXO", "WSO", "GRAB", "TSCO", "WCC", "GNRC", "YUMC", "ARMK", "DECK", "NWSA", "RRX", "TOL", "SWK", "WMG", "RPM", "GIB", "TME", "BWA", "UHAL", "DKNG", "HTHT", "PAC", "AVY", "APTV", "LULU", "MOD", "W", "TXRH", "AIT", "PAG", "ALLE", "MGM", "BROS", "NYT", "CLX", "AAL", "WMS", "BIPJ", "BJ", "CART", "HAS", "SCI", "AYI", "PSO", "MUSA", "SIRI", "GSAT", "PAYP", "GME", "DPZ", "AGX", "R", "WYNN", "FCFS", "LLYVK", "FIVE", "ALSN", "GIL", "LEVI", "LLYVA", "MSGS", "ASR", "TTC", "LTH", "IT", "ALV", "ACM", "CNM", "BLDR", "NCLH", "CHWY", "AOS", "BIRK", "LGN", "CAVA", "FRO", "SSD", "TTEK", "HQY", "DDS", "STN", "POOL", "EAT", "Z", "ZG", "RTO", "RSI", "AXTA", "BAH", "SGHC", "BIPH", "ECG", "KMX", "ETSY", "KEX", "MHK", "LAD", "GAP", "GOLF", "RRR", "TMHC", "LEA", "VSEC", "LKQ", "BYD", "BBUC", "VIPS", "NOV", "AN", "MMYT", "CPA", "GATX", "CROX", "M", "CHDN", "GTX", "VSXY", "MATX", "FND", "CZR", "WH", "IBP", "RUSHB", "WFRD", "PSMT", "URBN", "GXO", "LYFT", "MDA", "RUSHA", "SON", "ALK", "CAR", "REYN", "FTDR", "OMAB", "AMTM", "SPHR", "ADT", "MTH", "GNTX", "WEX", "STUB", "RELY", "MTN", "GLNG", "PTRN", "SEI", "HRB", "XMTR", "SITE", "G", "GBTG", "CHH", "UNF", "IEP", "BOOT", "CMBT", "EQPT", "TNL", "FCN", "FELE", "WING", "SKY", "CVCO", "DLO", "BBWI", "ATAT", "DOO", "RXO", "OPLN", "ELF", "BRC", "ANDG", "ATMU", "CAAP", "INSW", "TPC", "DORM", "BFH", "LION", "OLLI", "PLNT", "EXLS", "HGV", "FOUR", "WHD", "ANF", "BFAM", "GEO", "PLBL", "SKYW", "MHO", "IPAR", "CHEF", "ABG", "MANU", "CAKE", "STNG", "MAT", "WPP", "KBH", "MNSO", "YETI", "PII", "BATRA", "ZGN", "KFY", "MSGE", "HAFN", "PAY", "GPI", "CNK", "RHI", "AZUL", "AAP", "TDW", "NSIT", "BATRK", "CALY", "GRBK", "COLM", "SIG", "RH", "GPK", "ASH", "BWLP", "CSAN", "HNI", "EXPO", "PHIN", "MMS", "HWKN", "SBLK", "ASO", "UAA", "SHOO", "PK", "VC", "ZIM", "MGRC", "TRMD", "UA", "PENN", "DAN", "PATK", "UNFI", "OSW", "AEO", "DHT", "WLYB", "SAH", "CENT", "WLY", "HOG", "BCC", "ASTH", "ABM", "PTON", "LCII", "AERO", "TNET", "WU", "DRVN", "BLBD", "WHR", "CALX", "VVX", "FBYD", "PAYO", "TNK", "CENTA", "DNOW", "SHAK", "CMPR", "DAC", "CTOS", "MCRI", "JBLU", "FLYW", "NMM", "EZPW", "CPRI", "BKE", "CHA", "ALGT", "MLCO", "AIN", "BOBS", "NIPG", "ECO", "SHO"]),
+        ("🇺🇸 US Health Care (2000-expansion)", ["AZN", "NVS", "NVO", "BTI", "MO", "GSK", "SNY", "MCK", "COR", "ARGX", "MDLN", "CAH", "EW", "HUM", "BTSGU", "IDXX", "ALNY", "TEVA", "NTRA", "RVMD", "ONC", "IQV", "ALC", "RPRX", "CNC", "RMD", "BIIB", "GEHC", "ILMN", "DXCM", "PHG", "ROIV", "WST", "INSM", "DGX", "BNTX", "LH", "UTHR", "INCY", "GH", "BDRX", "STE", "VTRS", "ULS", "GMAB", "THC", "NBIX", "ZBH", "ASND", "MEDP", "JAZZ", "BBIO", "DVA", "COO", "EXEL", "BTSG", "IONS", "SOLV", "ALGN", "FMS", "ICLR", "SNN", "ELAN", "PEN", "AXSM", "SMMT", "MDGL", "ARWR", "RDY", "MOH", "BAX", "ABVX", "BMRN", "CRL", "TECH", "PODD", "KRYS", "GMED", "CYTK", "EHC", "APGE", "HSIC", "CORT", "NUVL", "ENSG", "HALO", "APLD", "UHS", "OSCR", "KYMR", "IBRX", "ALKS", "HIMS", "PRAX", "GKOS", "TGTX", "PTGX", "PCVX", "QGEN", "RGEN", "IMVT", "SYRE", "RYTM", "MIRM", "PACS", "PTCT", "LQDA", "COGT", "LNTH", "MSA", "SRRK", "LGND", "CHE", "TWST", "CGON", "BLCO", "BLTE", "CRSP", "TFX", "ERAS", "XENE", "STVN", "BLLN", "RDNT", "AMRX", "TVTX", "CELC", "LEGN", "DNTH", "MANE", "SHC", "ALHC", "CAI", "ORKA", "INDV", "GRFS", "DFTX", "KNSA", "VCYT", "LIVN", "VKTX", "NVST", "CRNX", "ACAD", "TNGX", "EWTX", "MMED", "MMSI", "LFST", "IRTC", "TLX", "DNLI", "NAMS", "CON", "ICUI", "GPCR", "CPRX", "DYN", "RCUS", "BKD", "BEAM", "RLAY", "WRBY", "OGN", "ALMS", "PBLS", "IDYA", "ADPT", "PRVA", "HAE", "NHC", "OPCH", "RARE", "ARQT", "ITGR", "ELVN", "RLX", "KLRA", "CLDX", "GRAL", "IRON", "TARS", "VERA", "ACHC", "RGC", "MBX", "SUPN", "IMNM", "ESTA", "CLOV", "SLBT", "QURE", "BCRX", "SLS", "TRVI", "NTLA", "NRIX", "NKTR", "XRAY", "TMDX", "AXGN", "PGNY", "TAK", "BHVN", "MLYS", "VCEL", "LMAT", "HTFL", "ABCL", "KOD", "PBH", "PHVS", "PRKS", "MD", "AGIO", "SGRY", "GENB", "BFLY", "ZLAB", "HRMY", "ADMA", "OCUL", "UFPT", "RXRX", "KARD", "RVMDW", "AVAH"]),
+        ("🇺🇸 US Industrials (2000-expansion)", ["TM", "UNP", "GLW", "HWM", "TT", "PWR", "ADP", "CMI", "RACE", "CSX", "JCI", "CP", "HONA", "TDG", "CNI", "NSC", "CRH", "CTAS", "BRKRP", "GM", "GWW", "FIX", "TER", "CARR", "LHX", "F", "KEYS", "AME", "RKLB", "ROK", "NUE", "HEI", "AXON", "MT", "FER", "GRMN", "ODFL", "HMC", "WAB", "VMC", "PAYX", "ESLT", "WAT", "A", "MLM", "EME", "STLD", "IR", "NTR", "CRS", "TDY", "MTZ", "TECK", "AMRZ", "DOV", "TS", "XYL", "SYM", "ATI", "JBHT", "MTD", "RIVN", "NVT", "MKSI", "FWONK", "FTAI", "VRSK", "RL", "FOXA", "FWONA", "VLTO", "CHRW", "ENTG", "STRL", "EXPD", "IFF", "SQM", "FOX", "LII", "FTV", "RBC", "RS", "DD", "ARXS", "MAIR", "CX", "BWXT", "ZTO", "NXT", "CF", "RGLD", "LYB", "ITT", "PKX", "STLA", "IEX", "BALL", "NDSN", "MAS", "WSE", "TXT", "ALB", "CLH", "J", "ONTO", "JHX", "CSL", "LECO", "CNH", "IESC", "AA", "XPEV", "DY", "ZBRA", "LI", "CR", "CCK", "RVTY", "NIO", "MLI", "GGG", "WTS", "TRMB", "PNR", "KNX", "EMBJ", "DRS", "OC", "SPXC", "HII", "TFII", "CGNX", "PSKY", "SAIA", "HL", "VMI", "SOLS", "DCI", "ESI", "SARO", "KTOS", "GTLS", "TKR", "WLK", "FLS", "BRKR", "OSK", "AAON", "AVAV", "JOBY", "AGCO", "GGB", "TX", "ZWS", "FSS", "MIDD", "ATR", "TEX", "BIO", "EMN", "RAL", "JBTM", "HXL", "LOAR", "XE", "NEU", "VFS", "NPO", "FLR", "ACA", "AVTR", "KRMN", "CMC", "LSTR", "MYRG", "GTES", "AWI", "MSM", "EXP", "MOS", "ST", "SSRM", "ICL", "GVA", "VFC", "MWH", "SNDR", "TFPM", "ROAD", "TV", "ESAB", "AIR", "NXST", "PRM", "MTRN", "BCPC", "SXT", "VSNT", "CE", "ALH", "BC", "TXG", "VVV", "PRIM", "SLGN", "REZI", "KNF", "KTB", "WSC", "KBR", "CECO", "CENX", "SIM", "AZZ", "CSW", "HRI", "CBT", "FLY", "BDC", "BETA", "BMI", "BCO", "GFF", "MDU", "SEB", "MIR", "CSTM", "LUNR", "VNT", "ACHR", "THO", "MWA", "AADX", "SMG", "SXI", "ITRI", "KAI", "HAYW", "AVNT", "PVH", "SMR", "UUUU", "CDNL", "LEU", "TTAM", "MEOH", "WDFC", "ARCB", "OUST", "FUL", "ATRO", "YSS", "CXT", "PSNY", "USLM", "KALU", "DCO", "POWWP", "TRN", "AMBP", "HUBG", "ATS", "FTAIM", "COHU", "KWR", "EFXT", "CC", "HSAI", "HLIO", "RDW", "WOR", "CHRN", "KMT", "LCID", "WERN", "NGVT", "BWNB", "DXPE", "ROG", "NWL", "NN", "AEHR", "ANDE", "OLN", "GRC", "AVEX", "ALG"]),
+        ("🇺🇸 US Real Estate (2000-expansion)", ["BN", "DLR", "VTR", "IRM", "EXR", "AGNCN", "AGNCO", "AGNCZ", "AGNCP", "AGNCM", "VICI", "AGNCL", "AVB", "EQR", "BNJ", "BNH", "EDU", "SBAC", "ESS", "KIM", "WY", "NLY", "MAA", "LAMR", "HST", "WPC", "SUI", "DOC", "REG", "OHI", "UDR", "AGNC", "ELS", "GLPI", "AMH", "CPT", "EGP", "BXP", "FRT", "AHR", "LINE", "CTRE", "BRX", "ADC", "CUBE", "NNN", "ARE", "FR", "RHP", "REXR", "JAN", "VNO", "STAG", "MAC", "HR", "EPRT", "RYN", "STWD", "KRG", "OUT", "LAUR", "TAL", "PECO", "FRMI", "RITM", "GHC", "CUZ", "SBRA", "COLD", "KRC", "EPR", "SKT", "HHH", "CVSA", "DHCNI", "CDP", "REGCP", "REGCO", "LOPE", "BNL", "IRT", "APLE", "LRN", "NHI", "SLG", "HIW", "NSA", "JOE", "LXP", "RWTO", "RWTN", "CXW", "BXMT", "DBRG", "DX", "AKR", "MPT", "IVT", "UTI", "FCPT", "UNIT", "MFAO", "MFAN", "DRH", "ADAMI", "ADAMM", "PMTU", "PRDO", "DHC", "ADAML", "ADAMN", "ARR", "PEB", "DEI", "NTST"]),
+        ("🇺🇸 US Consumer Staples (2000-expansion)", ["BUD", "SONY", "CTVA", "CCEP", "ABEV", "DEO", "FMX", "KDP", "ADM", "HSY", "KR", "STZ", "BG", "TSN", "MKC", "HRL", "JBS", "COKE", "SJM", "MICC", "SFD", "DAR", "PRMB", "CELH", "SFM", "TAP", "ACI", "PPC", "CPB", "CAG", "LW", "INGR", "KOF", "TBBB", "CALM", "POST", "COCO", "KN", "MZTI", "FIZZ", "TR", "FRPT", "GRDN"]),
+        ("🇺🇸 US Energy (2000-expansion)", ["SHEL", "BHP", "TTE", "ENB", "PBR", "BP", "BE", "CNQ", "EQNR", "E", "SU", "MPLX", "IMO", "FANG", "DVN", "CVE", "WDS", "EQT", "EC", "TPL", "HAL", "PBA", "WWD", "EXE", "YPF", "PAA", "PR", "OVV", "VNOM", "FPS", "SUN", "DINO", "APA", "AR", "LFUS", "POWL", "RRC", "SOBO", "RIG", "SSL", "VIST", "SM", "CHRD", "MTDR", "NE", "PBF", "LB", "VAL", "HESM", "PAGP", "CNX", "MGY", "MUR", "CRC", "HCC", "CRK", "CNR", "WBI", "OII", "LBRT", "PLUG", "SUNC", "PTEN", "DK", "CLMT", "EROC", "ARLP", "HP", "MGEE", "PARR", "CRGY", "GPOR", "BKV", "CVI", "BSM", "BTE", "DKL", "NESR", "BTU", "EROK", "WTTR", "SDRL", "TALO", "MNR"]),
+        ("🇺🇸 US Utilities (2000-expansion)", ["WM", "CEG", "NGG", "EPD", "AEP", "TRP", "ET", "RSG", "CIEN", "SRE", "TRGP", "SOMN", "OKE", "VST", "ETR", "LNG", "XEL", "EXC", "PCG", "WCN", "ED", "PEG", "WEC", "PPLC", "DTE", "AEE", "CQP", "NRG", "AXIA", "ATO", "FTS", "EIX", "CNP", "FE", "ES", "PPL", "VG", "AWK", "CMS", "BEP", "SOJC", "NI", "SOJD", "SBS", "EVRG", "LNT", "AQNB", "SOJE", "DUKB", "TLN", "FN", "WES", "KEP", "EMA", "DTM", "GFL", "BEPC", "SREA", "PNW", "ENLT", "WTRG", "AM", "AES", "OGE", "EMP", "EAI", "ENJ", "OKLO", "ELPC", "IDA", "FRVO", "KNTK", "UGI", "NFG", "BEPJ", "ORA", "CMSD", "CMSC", "SWX", "AROC", "CMSA", "TXNM", "ENIC", "CWST", "UGP", "POR", "CIG", "KGS", "NJR", "BKH", "BIPC", "OGS", "SR", "ENO", "PAM", "BEPI", "TGS", "EE", "AQN", "DTW", "NWE", "ELC", "BEPH", "TAC", "CWEN", "OTTR", "USAC", "KEN", "DTG", "DTB", "AVA", "AWR", "CWT", "CPK", "CTRI", "HTO", "HE", "CEPU", "RNW"]),
+        ("🇺🇸 US Materials (2000-expansion)", ["SCCO", "RIO", "AEM", "VALE", "B", "WPM", "CCJ", "AU", "FNV", "GFI", "KGC", "IP", "PAAS", "CDE", "AGI", "HMY", "SUZ", "IAG", "MP", "HBM", "EGO", "AG", "EQX", "BVN", "NXE", "SBSW", "FBIN", "OR", "CLF", "LPX", "BTG", "WFG", "UEC", "TREX", "UFPI", "ALM", "USAR", "ORLA", "SKE", "CGAU", "SA", "DNN", "AYA", "NG", "ERO", "PPTA", "FSM", "TGB", "EXK", "MTX", "SVM", "HYMC"]),
+        ("🇺🇸 US Telecom (2000-expansion)", ["CCZ", "ANET", "TBB", "AMX", "LITE", "VIV", "CHT", "VOD", "FFIV", "BCE", "RCI", "TU", "TIGO", "TLK", "SKM", "TIMB", "ESE", "KT", "DPC", "LUMN", "TEO", "IRDM", "TKC", "LBRDK", "LBRDA", "LILAP", "EXTR", "TDS", "VEON", "PHI", "LBTYB", "KYIV", "LBTYA", "LBTYK", "LBRDP", "AD", "IHS", "DGII", "ATEN"]),
+        ("🇺🇸 US Other (2000-expansion)", ["BRK-A", "BRK-B", "GEV", "FERG", "KSPI", "TPGXL", "CAE", "CBC", "IDCC", "NOVT", "OGC", "AUGO", "OTF", "DLB", "QS", "BELFB", "EMAT", "GEF", "NATL", "ARIS", "FLNC", "RUN", "AAUC", "BELFA", "VGNT", "DBD", "NMFCZ", "BGSI", "NOVTU", "TE", "ATKR", "PBI"]),
+    ]
+
+    // ── OWNER DIRECTIVE (2026-07-16): "ONLY KEEP TADAWUL AND NASDAQ" ────────────────────────
+    // The live universe is restricted to Tadawul (`.SR`) + NASDAQ-listed US names. The full
+    // curated `groups`/`catalogExtra` literals are KEPT below as the historical source of truth
+    // (rollback = delete this filter); `build(_:)` — the single choke point every accessor
+    // (`worldwide`/`catalog`/`core`) routes through — applies the filter, so all views of the
+    // universe stay consistent. NASDAQ membership is BAKED (the app carries no per-symbol
+    // exchange metadata): classified 2026-07-16 against AlphaVantage LISTING_STATUS (state=
+    // active, 14,189 rows; sanity anchors AAPL/MSFT/QQQ→NASDAQ, JPM/SPY/BRK-B→NYSE). Of the
+    // prior universe's 2,218 US names: 872 NASDAQ (kept), 1,341 other-exchange (dropped),
+    // 5 not in the active listing (AYA, BMNP, GOOGM, GOOGN, STRD — dropped). Everything else
+    // (other countries, crypto, FX, indices, non-NASDAQ ETFs) leaves the universe. FX needed
+    // for SAR conversions is fetched as INFRA by StockSageStore (never an idea/feed row);
+    // ^GSPC/^VIX regime+benchmark fetches are direct-by-symbol and unaffected.
+    nonisolated static let nasdaqListed: Set<String> = [
+        "AAL", "AAOI", "AAON", "AAPL", "ABCL", "ABNB", "ABTC", "ABVX", "ACAD", "ACGL",
+        "ACGLN", "ACGLO", "ACHC", "ACIW", "ACLS", "ACMR", "ACT", "ADAMI", "ADAML", "ADAMM",
+        "ADAMN", "ADBE", "ADEA", "ADI", "ADMA", "ADP", "ADPT", "ADSK", "AEHR", "AEIS",
+        "AEP", "AFRM", "AGIO", "AGNC", "AGNCL", "AGNCM", "AGNCN", "AGNCO", "AGNCP", "AGNCZ",
+        "AGYS", "AKAM", "ALAB", "ALGM", "ALGN", "ALGT", "ALHC", "ALKS", "ALM", "ALMS",
+        "ALNY", "ALRM", "AMAT", "AMBA", "AMD", "AMGN", "AMKR", "AMRX", "AMZN", "ANDE",
+        "APA", "APGE", "APLD", "APP", "APPF", "ARCB", "ARCC", "ARGX", "ARLP", "ARM",
+        "ARQT", "ARWR", "ARXS", "ASML", "ASND", "ASO", "ASTH", "ASTS", "ATAT", "ATRO",
+        "AUGO", "AUR", "AVAH", "AVAV", "AVGO", "AVPT", "AVT", "AXGN", "AXON", "AXSM",
+        "AXTI", "BANF", "BANR", "BATRA", "BATRK", "BBIO", "BCPC", "BCRX", "BDRX", "BEAM",
+        "BELFA", "BELFB", "BGC", "BHF", "BIDU", "BIIB", "BILI", "BKNG", "BKR", "BLBD",
+        "BLLN", "BLTE", "BMRN", "BND", "BNTX", "BOKF", "BPOP", "BPYPM", "BPYPN", "BPYPO",
+        "BPYPP", "BRKR", "BRKRP", "BRZE", "BSY", "BTDR", "BTSG", "BTSGU", "BULL", "BUSE",
+        "BUSEP", "BWIN", "BZ", "CACC", "CAI", "CAKE", "CALM", "CAMT", "CAR", "CARG",
+        "CART", "CASY", "CATY", "CBC", "CBRS", "CBSH", "CCC", "CCEP", "CDNL", "CDNS",
+        "CDW", "CECO", "CEG", "CELC", "CELH", "CENT", "CENTA", "CENX", "CG", "CGABL",
+        "CGNX", "CGON", "CHA", "CHDN", "CHEF", "CHKP", "CHRD", "CHRN", "CHRW", "CHTR",
+        "CHYM", "CIFR", "CIGI", "CINF", "CLBK", "CLBT", "CLDX", "CLMT", "CLOV", "CLSK",
+        "CMCSA", "CME", "CMPR", "COCO", "COGT", "COHU", "COIN", "COKE", "COLB", "COLM",
+        "COO", "CORT", "CORZ", "CORZW", "CORZZ", "COST", "CPB", "CPRT", "CPRX", "CRDO",
+        "CRNX", "CROX", "CRSP", "CRUS", "CRVL", "CRWD", "CRWV", "CSCO", "CSGP", "CSQ",
+        "CSX", "CTAS", "CTSH", "CVBF", "CVCO", "CVLT", "CWST", "CYTK", "CZR", "DASH",
+        "DAVE", "DBX", "DDOG", "DFTX", "DGII", "DHC", "DHCNI", "DIOD", "DJT", "DKNG",
+        "DLO", "DLTR", "DNLI", "DNTH", "DOCU", "DOO", "DORM", "DOX", "DPZ", "DRH",
+        "DRS", "DRVN", "DSC", "DSGX", "DUOL", "DVY", "DXCM", "DXPE", "DYN", "EA",
+        "EBAY", "EBC", "ECHO", "EEFT", "EFSC", "ELVN", "EMAT", "ENLT", "ENPH", "ENSG",
+        "ENTG", "EQIX", "EQPT", "ERAS", "ERIC", "ERIE", "ESLT", "ESTA", "ETOR", "EVRG",
+        "EWBC", "EWTX", "EXC", "EXE", "EXEL", "EXLS", "EXPE", "EXPO", "EXTR", "EZPW",
+        "FA", "FANG", "FAST", "FBNC", "FBYD", "FCFS", "FCNCA", "FELE", "FER", "FFBC",
+        "FFIN", "FFIV", "FHB", "FIBK", "FIGR", "FISV", "FITB", "FIVE", "FIZZ", "FLEX",
+        "FLNC", "FLY", "FLYW", "FORM", "FOX", "FOXA", "FRHC", "FRME", "FRMI", "FROG",
+        "FRPT", "FRSH", "FRVO", "FSLR", "FSLY", "FSV", "FTAI", "FTAIM", "FTDR", "FTNT",
+        "FULT", "FULTP", "FUTU", "FWONA", "FWONK", "GBDC", "GCMG", "GDS", "GEHC", "GEN",
+        "GENB", "GFS", "GGAL", "GH", "GILD", "GLBE", "GLNG", "GLPI", "GLXY", "GMAB",
+        "GNTX", "GOOG", "GOOGL", "GPCR", "GRAB", "GRAL", "GRFS", "GSAT", "GTLB", "GTX",
+        "HALO", "HAPN", "HAS", "HBAN", "HBANL", "HBANM", "HBANP", "HBANZ", "HIMX", "HLNE",
+        "HON", "HONA", "HOOD", "HQY", "HRMY", "HSAI", "HSIC", "HST", "HTFL", "HTHT",
+        "HTO", "HUBG", "HUT", "HWC", "HWKN", "HYMC", "IBKR", "IBOC", "IBRX", "ICHR",
+        "ICLR", "ICUI", "IDCC", "IDXX", "IDYA", "IEF", "IEP", "IESC", "ILMN", "IMNM",
+        "IMOS", "IMVT", "INCY", "INDB", "INDV", "INIO", "INOD", "INSM", "INTA", "INTC",
+        "INTR", "INTU", "IONS", "IPAR", "IPGP", "IRDM", "IREN", "IRON", "IRTC", "ISRG",
+        "ITRI", "JAZZ", "JBHT", "JBLU", "JD", "JKHY", "JOYY", "KALU", "KARD", "KC",
+        "KDP", "KEEL", "KHC", "KLAC", "KLIC", "KLRA", "KMB", "KNSA", "KOD", "KRYS",
+        "KSPI", "KTOS", "KYIV", "KYMR", "LAMR", "LASR", "LAUR", "LBRDA", "LBRDK", "LBRDP",
+        "LBTYA", "LBTYB", "LBTYK", "LCID", "LECO", "LEGN", "LFST", "LFTO", "LFUS", "LGN",
+        "LGND", "LI", "LIF", "LILAP", "LIN", "LINE", "LITE", "LIVN", "LKQ", "LLYVA",
+        "LLYVK", "LMAT", "LNT", "LNTH", "LOGI", "LOPE", "LPLA", "LQDA", "LRCX", "LSCC",
+        "LSTR", "LULU", "LUNR", "LYFT", "MAAS", "MANH", "MAR", "MARA", "MAT", "MBIN",
+        "MBLY", "MBX", "MCHB", "MCHP", "MCHPP", "MCRI", "MDB", "MDGL", "MDLN", "MDLZ",
+        "MEDP", "MELI", "MEOH", "META", "MGEE", "MGNI", "MGRC", "MIDD", "MIRM", "MKSI",
+        "MKTX", "MLCO", "MLYS", "MMED", "MMSI", "MMYT", "MNDY", "MNST", "MORN", "MPWR",
+        "MQ", "MRCY", "MRNA", "MRVL", "MRX", "MSFT", "MSTR", "MTCH", "MTSI", "MU",
+        "MWH", "MXL", "MYRG", "MZTI", "NAMS", "NATL", "NAVN", "NBIS", "NBIX", "NBTB",
+        "NDAQ", "NDSN", "NESR", "NFLX", "NICE", "NIPG", "NKTR", "NMFCZ", "NMIH", "NMRK",
+        "NN", "NOVT", "NOVTU", "NRIX", "NSIT", "NTAP", "NTCT", "NTES", "NTLA", "NTNX",
+        "NTRA", "NTRS", "NTRSO", "NTSK", "NUVL", "NVDA", "NVMI", "NVTS", "NWBI", "NWE",
+        "NWL", "NWS", "NWSA", "NXPI", "NXST", "NXT", "NYAX", "OCTV", "OCUL", "ODFL",
+        "OKTA", "OLED", "OLLI", "OMAB", "ON", "ONB", "ONBPO", "ONBPP", "ONC", "ONDS",
+        "OPCH", "OPEN", "ORKA", "ORLY", "OSIS", "OSW", "OTEX", "OTTR", "OUST", "OXLCL",
+        "OXLCM", "OXLCN", "OXLCO", "OXLCZ", "OZK", "PAA", "PAGP", "PANW", "PATK", "PAYO",
+        "PAYP", "PAYX", "PBLS", "PCAR", "PCTY", "PCVX", "PDD", "PDFS", "PECO", "PEGA",
+        "PENG", "PENN", "PEP", "PFG", "PGNY", "PHVS", "PI", "PLBL", "PLMR", "PLTR",
+        "PLUG", "PLUS", "PLXS", "PODD", "PONY", "POOL", "POWI", "POWL", "POWWP", "PPC",
+        "PPLI", "PPTA", "PRAX", "PRDO", "PRVA", "PSKY", "PSMT", "PSNY", "PTC", "PTCT",
+        "PTEN", "PTGX", "PTON", "PTRN", "PYPL", "QCOM", "QLYS", "QNT", "QQQ", "QRVO",
+        "QS", "QUBT", "QURE", "RARE", "RDNT", "REG", "REGCO", "REGCP", "REGN", "RELY",
+        "REYN", "RGC", "RGEN", "RGLD", "RGTI", "RGTIW", "RIOT", "RIVN", "RKLB", "RLAY",
+        "RMBS", "RNW", "ROAD", "ROIV", "ROKU", "ROP", "ROST", "RPRX", "RRR", "RUM",
+        "RUN", "RUSHA", "RUSHB", "RVMD", "RVMDW", "RXRX", "RYAAY", "RYTM", "SAIA", "SAIC",
+        "SAIL", "SANM", "SATA", "SBAC", "SBCF", "SBLK", "SBRA", "SBUX", "SEDG", "SEIC",
+        "SEZL", "SFD", "SFM", "SFNC", "SGRY", "SHC", "SHOO", "SHOP", "SIGI", "SIMO",
+        "SIRI", "SITM", "SKWD", "SKYW", "SLAB", "SLBT", "SLDE", "SLM", "SLMBP", "SLS",
+        "SMCI", "SMCIP", "SMH", "SMMT", "SMTC", "SNDK", "SNEX", "SNPS", "SNY", "SOFI",
+        "SOLS", "SOUN", "SOXX", "SPCX", "SPSC", "SRAD", "SRRK", "SSNC", "SSRM", "STEP",
+        "STLD", "STNE", "STRC", "STRF", "STRK", "STRL", "STX", "SUPN", "SWKS", "SYBT",
+        "SYM", "SYNA", "SYRE", "TARS", "TBBK", "TCBI", "TCOM", "TEAM", "TECH", "TEM",
+        "TENB", "TER", "TFSL", "TGTX", "TIGO", "TLN", "TLT", "TLX", "TMDX", "TMUS",
+        "TNGX", "TOWN", "TPG", "TPGXL", "TRI", "TRMB", "TRMD", "TRMK", "TROW", "TRVI",
+        "TSCO", "TSEM", "TSLA", "TTAN", "TTD", "TTEK", "TTMI", "TTWO", "TVTX", "TW",
+        "TWST", "TXG", "TXN", "TXRH", "UAL", "UBSI", "UCTT", "UFPI", "UFPT", "ULTA",
+        "UMBF", "UNIT", "UPST", "URBN", "USAR", "USLM", "UTHR", "VC", "VCEL", "VCTR",
+        "VCYT", "VECO", "VEON", "VERA", "VERX", "VFS", "VIAV", "VICR", "VISN", "VKTX",
+        "VLY", "VLYPN", "VLYPO", "VLYPP", "VNET", "VNOM", "VOD", "VRNS", "VRSK", "VRSN",
+        "VRTX", "VSAT", "VSEC", "VSNT", "VTRS", "WAFD", "WAY", "WBD", "WDAY", "WDC",
+        "WDFC", "WERN", "WFRD", "WING", "WIX", "WMG", "WMT", "WSBC", "WSBCO", "WSC",
+        "WSE", "WSFS", "WTFC", "WTW", "WULF", "WWD", "WYNN", "XE", "XEL", "XENE",
+        "XMTR", "XNDU", "XP", "XRAY", "Z", "ZBRA", "ZG", "ZION", "ZIONP", "ZLAB",
+        "ZM", "ZS"
+    ]
+
+    /// The universe-membership rule: Tadawul (`.SR`) or baked-NASDAQ. Everything else is out.
+    nonisolated static func isAllowedUniverseSymbol(_ symbol: String) -> Bool {
+        let up = symbol.uppercased()
+        return up.hasSuffix(".SR") || nasdaqListed.contains(up)
+    }
+
+    private static func build(_ gs: [(label: String, tickers: [String])]) -> [StockSageSymbol] {
+        gs.flatMap { g in
+            g.tickers.filter(isAllowedUniverseSymbol).map { StockSageSymbol(symbol: $0, market: g.label) }
+        }
+    }
+
+    /// Equity-2000 promotion (PLAN_2026-07-08_equity2000.md Stage 2): the analyzed universe
+    /// grows from the curated `groups` core to `groups` + the `catalogExtra` long-tail, so the
+    /// Find-Ideas scan covers the full catalog instead of only the bulk-fetched core. Same
+    /// dedup as `catalog` below (first occurrence wins) — groups come first in the flat-map so
+    /// a symbol listed in both keeps its GROUPS market label and groups-first ordering
+    /// (Aramco/Saudi-first invariant preserved: `groups`' first ticker is still `worldwide[0]`).
+    static let worldwide: [StockSageSymbol] = {
+        var seen: Set<String> = []
+        var out: [StockSageSymbol] = []
+        for s in build(groups) + build(catalogExtra) where seen.insert(s.symbol.uppercased()).inserted {
+            out.append(s)
+        }
+        return out
+    }()
+
+    /// Distinct exchanges/regions covered by the bulk-fetched core — surfaced in the live
+    /// banner ("N market groups"). Deliberately stays `groups.count` (NOT `worldwide`'s group
+    /// count) after the equity-2000 promotion: every banner string pairs it with
+    /// `worldwide.count` right beside it ("N market groups (M names)"), so the honest total
+    /// universe size is already shown separately — this stays the honest count of curated,
+    /// always-live-quoted groupings, not a claim about catalogExtra's group structure.
+    // Post-restriction (2026-07-16): the honest count of groups that still carry ≥1 kept
+    // name (Tadawul + the US sector groups' NASDAQ subsets) — `groups.count` (35) would
+    // overstate coverage ~2.3× after the Tadawul+NASDAQ restriction.
+    static let marketCount: Int = groups.filter { g in g.tickers.contains(where: isAllowedUniverseSymbol) }.count
+
+    /// The curated Saudi-first CORE only (`groups`, pre-promotion's whole universe) — no dedup
+    /// needed (`groups` alone has no cross-list collisions to resolve, unlike `worldwide`/`catalog`
+    /// which also merge in `catalogExtra`). Exposed for the monitor's background auto-cycle
+    /// (StockSageMonitor review round-2 finding 1): scoping the ~45s unattended loop to this
+    /// ~210-name core + the user's watchlist, instead of Stage 2's full 2,420-name `worldwide`,
+    /// avoids pulling the whole promoted universe unpaced on every cycle (feed-cooldown risk).
+    /// User-initiated paths (the manual refresh button, the Find-Ideas scan) are UNCHANGED and
+    /// still use `worldwide` — this accessor exists only for the background-cycle scope.
+    static let core: [StockSageSymbol] = build(groups)
+
+    /// The full searchable directory: now IDENTICAL to `worldwide` post-promotion (both are
+    /// groups+catalogExtra deduped groups-first) — kept as a distinct name because callers use
+    /// `catalog` for search/discovery semantics and `worldwide` for "the analyzed universe";
+    /// same dedup (first occurrence wins, so a core symbol keeps its core market label).
+    static let catalog: [StockSageSymbol] = {
+        var seen: Set<String> = []
+        var out: [StockSageSymbol] = []
+        for s in build(groups) + build(catalogExtra) where seen.insert(s.symbol.uppercased()).inserted {
+            out.append(s)
+        }
+        return out
+    }()
+
+    /// Case-insensitive catalog search for the add-ticker autocomplete: exact match
+    /// first, then prefix, then substring, then a market-label hit. Pure + bounded.
+    static func search(_ query: String, limit: Int = 8) -> [StockSageSymbol] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !q.isEmpty else { return [] }
+        var scored: [(sym: StockSageSymbol, score: Int)] = []
+        for s in catalog {
+            let sym = s.symbol.uppercased()
+            let score: Int
+            if sym == q { score = 0 }
+            else if sym.hasPrefix(q) { score = 1 }
+            else if sym.contains(q) { score = 2 }
+            else if s.market.uppercased().contains(q) { score = 3 }
+            else { continue }
+            scored.append((s, score))
+        }
+        return scored
+            .sorted { $0.score != $1.score ? $0.score < $1.score : $0.sym.symbol.count < $1.sym.symbol.count }
+            .prefix(limit).map(\.sym)
+    }
+}

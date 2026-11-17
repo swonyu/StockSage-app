@@ -1,0 +1,362 @@
+import Testing
+import Foundation
+@testable import StockSage
+
+// MARK: - Multi-currency exposure (pure)
+
+struct StockSageCurrencyTests {
+    typealias CC = StockSageCurrency
+
+    @Test func rawQuoteUnitsRemainDistinctFromHoldingValuation() {
+        for (symbol, label) in [("AAPL", "USD"), ("LLOY.L", "GBP minor units (100 = 1 GBP)"),
+            ("sol.jo", "ZAR minor units (100 = 1 ZAR)"), ("EURGBP=X", "GBP"),
+            ("2222.SR", "SAR"), ("UNKNOWN.ZZ", "quote currency unconfirmed")] {
+            #expect(CC.quoteUnitLabel(forSymbol: symbol) == label)
+        }
+    }
+
+    @Test func fxSelectionKeepsTheAcceptedRateAndClockTogether() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = StockSageQuote(price: 1, previousPrice: 1, time: now,
+                                 marketTime: now.addingTimeInterval(-73 * 3600), priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        let fresh = StockSageQuote(price: 0.5, previousPrice: 0.5, time: now.addingTimeInterval(-500),
+                                   marketTime: now.addingTimeInterval(-30), priceSource: .yahoo, denomination: SageFix.providerUnit("EUR"))
+        let observations: [(StockSageQuote?, Bool)] = [(old, false), (fresh, true)]
+        for forSizing in [true, false] {
+            let selected = CC.fxRateToUSD(currency: "EUR", observations: observations, forSizing: forSizing, now: now)
+            #expect(selected?.rate == 2)
+            #expect(selected?.marketTime == fresh.marketTime)
+            #expect(selected?.isFresh == true)
+            let rates = selected.map { ["EUR": $0.rate] } ?? [:]
+            #expect(StockSagePositionSizer.size(account: 10_000, riskFraction: 0.01, entry: 100, stop: 90,
+                                                symbol: "SAP.DE", fxRatesToUSD: rates, denomination: SageFix.fixtureDenomination(for: "SAP.DE"))?.shares == 5)
+        }
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(old, false)], forSizing: true, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(old, false)], forSizing: false, now: now)?.isFresh == false)
+    }
+
+    @Test func fxPlanningWindowUsesMarketTimeNotFetchTime() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ages: [TimeInterval] = [0, 72 * 3600, 72 * 3600 + 1]
+        for age in ages {
+            let q = StockSageQuote(price: 2, previousPrice: 2, time: now,
+                                   marketTime: now.addingTimeInterval(-age), priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+            let result = CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: true, now: now)
+            #expect((result?.rate != nil) == (age <= 72 * 3600))
+        }
+        for time in [Date?.none, now.addingTimeInterval(-80 * 3600)] {
+            let q = StockSageQuote(price: 2, previousPrice: 2, time: now, marketTime: time, priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+            let sized = CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: true, now: now)
+            let valuation = CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: false, now: now)
+            #expect(sized?.rate == nil)
+            #expect(valuation?.rate == 2)
+            #expect(valuation?.marketTime == time)
+            #expect(valuation?.isFresh == false)
+        }
+        let unknownSource = StockSageQuote(price: 2, previousPrice: 2, marketTime: now, denomination: SageFix.providerUnit("USD"))
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(unknownSource, false)], forSizing: true, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(unknownSource, false)], forSizing: false, now: now)?.isFresh == false)
+    }
+
+    @Test func fxRejectsSampleFutureAndUnusableValuesEvenForValuation() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let invalid = [
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: now, priceSource: .sample, denomination: SageFix.providerUnit("USD")),
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: now.addingTimeInterval(1), priceSource: .yahoo, denomination: SageFix.providerUnit("USD")),
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: Date(timeIntervalSince1970: .nan), priceSource: .yahoo, denomination: SageFix.providerUnit("USD")),
+            StockSageQuote(price: 2, previousPrice: 2, marketTime: Date(timeIntervalSince1970: 0), priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        ] + [0, -1, Double.nan, .infinity].map {
+            StockSageQuote(price: $0, previousPrice: 2, marketTime: now, priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        }
+        for q in invalid {
+            for sizing in [true, false] {
+                #expect(CC.fxRateToUSD(currency: "EUR", observations: [(q, false)], forSizing: sizing, now: now)?.rate == nil)
+            }
+        }
+        let tiny = StockSageQuote(price: .leastNonzeroMagnitude, previousPrice: 1, marketTime: now, priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        #expect(CC.fxRateToUSD(currency: "SAR", observations: [(tiny, true)], forSizing: false, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "USD", observations: [], forSizing: true, now: now)?.rate == 1)
+    }
+
+    @Test func fxChoosesNewestEligibleObservationThenStableSourceOrder() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = StockSageQuote(price: 1.5, previousPrice: 1.5,
+                                   marketTime: now.addingTimeInterval(-30), priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        let newer = StockSageQuote(price: 2, previousPrice: 2, marketTime: now, priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        let tie = StockSageQuote(price: 3, previousPrice: 3, marketTime: now, priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(older, false), (newer, false)], forSizing: true, now: now)?.rate == 2)
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(newer, false), (tie, false)], forSizing: true, now: now)?.rate == 2)
+        // Expiry cannot silently fall back to either formerly eligible observation.
+        #expect(CC.fxRateToUSD(currency: "EUR", observations: [(newer, false), (older, false)], forSizing: true,
+                                now: now.addingTimeInterval(72 * 3600 + 1))?.rate == nil)
+    }
+
+    @Test func infraFXRetainsLastGoodClockThroughFailedAndRejectedRefreshes() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let key = "USDSAR=X"
+        let initial = StockSageQuoteService.LiveQuote(symbol: key, price: 3.75, previousClose: 3.75,
+                                                      marketTime: now.addingTimeInterval(-10), priceSource: .yahoo, denomination: SageFix.providerUnit("SAR"))
+        let stored = StockSageStore.mergedInfraFX([:], incoming: [key: initial], now: now)
+        #expect(stored[key]?.price == 3.75)
+        #expect(stored[key]?.marketTime == initial.marketTime)
+        #expect(stored[key]?.priceSource == .yahoo)
+        #expect(StockSageStore.mergedInfraFX(stored, incoming: [:], now: now.addingTimeInterval(500)) == stored)
+        for stamp in [Date?.none, initial.marketTime, now.addingTimeInterval(-100), now.addingTimeInterval(1)] {
+            let rejected = StockSageQuoteService.LiveQuote(symbol: key, price: 99, previousClose: 99,
+                                                           marketTime: stamp, priceSource: .yahoo, denomination: SageFix.providerUnit("SAR"))
+            #expect(StockSageStore.mergedInfraFX(stored, incoming: [key: rejected], now: now) == stored)
+        }
+        let mismatch = StockSageQuoteService.LiveQuote(symbol: "EURUSD=X", price: 99, previousClose: 99,
+                                                       marketTime: now, priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        #expect(StockSageStore.mergedInfraFX(stored, incoming: [key: mismatch], now: now) == stored)
+        #expect(StockSageStore.mergedInfraFX(stored, incoming: [mismatch.symbol: mismatch], now: now) == stored)
+        for source in [StockSagePriceSource.sample, .yahoo] {
+            let bad = StockSageQuoteService.LiveQuote(symbol: key, price: source == .sample ? 99 : .infinity,
+                                                      previousClose: 99, marketTime: now, priceSource: source, denomination: SageFix.providerUnit("SAR"))
+            #expect(StockSageStore.mergedInfraFX(stored, incoming: [key: bad], now: now) == stored)
+        }
+        let newer = StockSageQuoteService.LiveQuote(symbol: key, price: 3.8, previousClose: 3.75,
+                                                    marketTime: now, priceSource: .yahoo, denomination: SageFix.providerUnit("SAR"))
+        let updated = StockSageStore.mergedInfraFX(stored, incoming: [key: newer], now: now)
+        #expect(updated[key]?.price == 3.8)
+        #expect(updated[key]?.marketTime == now)
+        let rate = CC.fxRateToUSD(currency: "SAR", observations: [(updated[key], true)], forSizing: true, now: now)
+        #expect(abs((rate?.rate ?? 0) - 1 / 3.8) < 1e-12)
+        let corrupt = StockSageQuote(price: 99, previousPrice: 99, marketTime: now.addingTimeInterval(1), priceSource: .yahoo, denomination: SageFix.providerUnit("USD"))
+        #expect(StockSageStore.mergedInfraFX([key: corrupt], incoming: [key: newer], now: now)[key]?.price == 3.8)
+        let undated = StockSageQuoteService.LiveQuote(symbol: key, price: 3.75, previousClose: 3.75, priceSource: .yahoo, denomination: SageFix.providerUnit("SAR"))
+        let seed = StockSageStore.mergedInfraFX([:], incoming: [key: undated], now: now)
+        #expect(seed[key]?.marketTime == nil)
+        #expect(CC.fxRateToUSD(currency: "SAR", observations: [(seed[key], true)], forSizing: true, now: now)?.rate == nil)
+        #expect(CC.fxRateToUSD(currency: "SAR", observations: [(seed[key], true)], forSizing: false, now: now)?.isFresh == false)
+    }
+
+    private func exp(_ b: CurrencyBreakdown, _ ccy: String) -> CurrencyExposure? {
+        b.exposures.first { $0.currency == ccy }
+    }
+
+    @Test func majorUnitValueNormalizesLondonPence() {
+        // BP.L: 100 shares × 400 pence = 40,000 pence raw → £400, NOT £40,000 (~100× bug).
+        #expect(CC.majorUnitValue(symbol: "BP.L", rawValue: 40_000) == 400)
+        #expect(CC.majorUnitValue(symbol: "bp.l", rawValue: 40_000) == 400)        // case-insensitive
+        // Johannesburg .JO is quoted in SA cents (ZAc) — same minor-unit convention as London.
+        // NPN.JO: 300,000 ZAc raw → R3,000, NOT R300,000 (~100× bug).
+        #expect(CC.majorUnitValue(symbol: "NPN.JO", rawValue: 300_000) == 3_000)
+        #expect(CC.majorUnitValue(symbol: "npn.jo", rawValue: 300_000) == 3_000)   // case-insensitive
+        // Non-minor-unit symbols are unchanged.
+        #expect(CC.majorUnitValue(symbol: "AAPL", rawValue: 40_000) == 40_000)
+        #expect(CC.majorUnitValue(symbol: "SAP.DE", rawValue: 1_000) == 1_000)
+    }
+
+    @Test func convertsAndWeightsWithoutFXFlagWhenSpread() {
+        let b = CC.breakdown(holdings: [(1000, "USD"), (100, "EUR"), (50, "GBP")],
+                             ratesToBase: ["EUR": 1.1, "GBP": 1.25], base: "USD")!
+        #expect(abs(b.totalBase - 1172.5) < 1e-9)               // 1000 + 110 + 62.5
+        #expect(abs(exp(b, "EUR")!.baseValue - 110) < 1e-9)
+        #expect(abs(exp(b, "GBP")!.baseValue - 62.5) < 1e-9)
+        #expect(abs(exp(b, "USD")!.weight - 1000.0 / 1172.5) < 1e-9)
+        #expect(b.exposures.map(\.currency) == ["USD", "EUR", "GBP"])  // largest first
+        #expect(b.concentration == nil && !b.hasFXRisk)         // no non-base > 25%
+        #expect(b.unpriced.isEmpty)
+    }
+
+    @Test func flagsConcentrationInOneNonBaseCurrency() {
+        let b = CC.breakdown(holdings: [(1000, "USD"), (1000, "EUR")],
+                             ratesToBase: ["EUR": 1.0], base: "USD")!
+        #expect(b.hasFXRisk)
+        #expect(b.concentration?.currency == "EUR")
+        #expect(abs(b.concentration!.weight - 0.5) < 1e-9)
+    }
+
+    @Test func excludesAndNamesUnpricedCurrencies() {
+        let b = CC.breakdown(holdings: [(1000, "USD"), (100, "JPY")],
+                             ratesToBase: [:], base: "USD")!
+        #expect(abs(b.totalBase - 1000) < 1e-9)                 // JPY dropped, not zero-valued
+        #expect(b.unpriced == ["JPY"])
+        #expect(b.exposures.map(\.currency) == ["USD"])
+    }
+
+    @Test func currencyForSymbolFromSuffix() {
+        #expect(CC.currencyForSymbol("AAPL") == "USD")       // US-listed
+        #expect(CC.currencyForSymbol("BTC-USD") == "USD")    // crypto priced in USD
+        #expect(CC.currencyForSymbol("2222.SR") == "SAR")
+        #expect(CC.currencyForSymbol("BP.L") == "GBP")
+        #expect(CC.currencyForSymbol("7203.T") == "JPY")
+        #expect(CC.currencyForSymbol("FOO.ZZ") == "ZZ")      // unknown → suffix (surfaces as unpriced)
+    }
+
+    @Test func currencyForSymbolMapsDubaiFinancialMarketSuffix() {
+        // EMAAR.AE / DEWA.AE are the app's own curated DFM universe tickers (.AD/.DU don't
+        // price on Yahoo). Must resolve to "AED", not fall through to the literal suffix "AE".
+        #expect(CC.currencyForSymbol("EMAAR.AE") == "AED")
+        #expect(CC.currencyForSymbol("DEWA.AE") == "AED")
+        #expect(CC.currencyForSymbol("emaar.ae") == "AED")   // case-insensitive
+    }
+
+    @Test func fxPairMapsToItsNonBaseLeg() {
+        #expect(CC.currencyForSymbol("EURUSD=X") == "EUR")   // long EUR vs USD → EUR exposure
+        #expect(CC.currencyForSymbol("USDJPY=X") == "JPY")   // base USD → the JPY leg
+        #expect(CC.currencyForSymbol("USDSAR=X") == "SAR")
+        #expect(CC.currencyForSymbol("EURGBP=X") == "EUR")   // cross (no USD) → its base
+        #expect(CC.currencyForSymbol("BTC-USD") == "USD")    // crypto unaffected
+    }
+
+    // MARK: - L10N-01: approxAmount currency-suffix rendering
+    //
+    // Hand-derived per L10N-01 (critique fleet #2): a figure in a symbol's own quote currency
+    // must not always render with "$" — a 1120.SR risk number in raw SAR read as USD misreads
+    // ~3.75× (SAR/USD). USD keeps the "≈$" prefix form; every other currency uses a code suffix.
+
+    @Test func approxAmountKeepsDollarPrefixForUSDSymbols() {
+        #expect(CC.approxAmount(188, symbol: "AAPL", denomination: SageFix.fixtureDenomination(for: "AAPL")) == "≈$188")
+        #expect(CC.approxAmount(188.4, symbol: "BTC-USD", denomination: SageFix.fixtureDenomination(for: "BTC-USD")) == "≈$188")   // crypto → USD, rounds to whole
+    }
+
+    @Test func approxAmountUsesCurrencyCodeSuffixForNonUSDSymbols() {
+        #expect(CC.approxAmount(188, symbol: "1120.SR", denomination: SageFix.fixtureDenomination(for: "1120.SR")) == "≈188 SAR")  // the exact misread case (SAR: no pence)
+        // Audit 2026-07-12 (wave-2 #3): a .L listing is quoted in PENCE, so a raw 400p at-risk amount
+        // is £4, NOT £400. The prior assertion "≈400 GBP" ENCODED the ~100× bug — re-derived from the
+        // spec (StockSageCurrency minorUnitSuffixes ÷100 for .L/.JO), not edited toward the old output.
+        #expect(CC.approxAmount(400, symbol: "BP.L", denomination: SageFix.fixtureDenomination(for: "BP.L")) == "≈4 GBP")
+        #expect(CC.approxAmount(1000, symbol: "7203.T", denomination: SageFix.fixtureDenomination(for: "7203.T")) == "≈1000 JPY")   // JPY: no minor-unit ÷100
+    }
+
+    @Test func guardsNothingConvertible() {
+        #expect(CC.breakdown(holdings: [], ratesToBase: ["EUR": 1.1], base: "USD") == nil)
+        #expect(CC.breakdown(holdings: [(100, "JPY")], ratesToBase: [:], base: "USD") == nil)
+    }
+
+    @Test func exposuresTieBreakDeterministicByCurrencyCode() {
+        // GBP and EUR land on the exact same baseValue (500) — Dictionary iteration order is
+        // randomized per-process, so without a secondary sort key the tie order (and thus which
+        // one `concentration` would pick, if both were flagged) would be nondeterministic.
+        let b = CC.breakdown(holdings: [(1000, "USD"), (500, "GBP"), (500, "EUR")],
+                             ratesToBase: ["GBP": 1.0, "EUR": 1.0], base: "USD")!
+        #expect(b.exposures.map(\.currency) == ["USD", "EUR", "GBP"])  // USD largest, then alphabetical tie-break
+
+        // Same tie, but both non-base legs above threshold — `concentration` must deterministically
+        // pick the alphabetically-first currency ("EUR"), not whichever the dictionary happened to yield.
+        let b2 = CC.breakdown(holdings: [(100, "USD"), (500, "GBP"), (500, "EUR")],
+                              ratesToBase: ["GBP": 1.0, "EUR": 1.0], base: "USD")!
+        #expect(b2.concentration?.currency == "EUR")
+    }
+
+    @Test func concentrationJustUnder25PercentNotFlagged() {
+        let b = StockSageCurrency.breakdown(
+            holdings: [(1000, "USD"), (333.33, "EUR")],
+            ratesToBase: ["EUR": 1.0], base: "USD", concentrationThreshold: 0.25)!
+        #expect(b.concentration == nil)
+        #expect(!b.hasFXRisk)
+    }
+
+    // MARK: - ALERT-FMT-1: shared adaptive price formatter (3-tier)
+    //
+    // Hand-derived from the SPEC shared by all four former duplicate sites (MarketsView,
+    // MarketsTodayActionsCard, StockSageTodayPlan, StockSageTradePlan — now aliases onto this):
+    // |v| >= 1 or == 0 -> %.2f ; |v| >= 0.01 -> %.4f ; else -> %.6f. Derived standalone via
+    // `swift /tmp/derive_adaptive_price.swift` (not by calling this function):
+    //   0.104 -> "0.1040", 0.099 -> "0.0990" (bare %.2f collapses BOTH to "0.10" — the bug
+    //   ALERT-FMT-1 fixes: a DOGE-USD-class stop/target pair reading identical in an alert push).
+
+    @Test func adaptivePriceSubDollarTierKeepsDogeStopAndTargetDistinct() {
+        // The exact hand-derived case named in the finding.
+        #expect(StockSageCurrency.adaptivePrice(0.104) == "0.1040")
+        #expect(StockSageCurrency.adaptivePrice(0.099) == "0.0990")
+        // Bare %.2f (the pre-fix behavior) collapses both to the same string — confirms the bug
+        // this formatter exists to avoid, without re-deriving from the implementation.
+        #expect(String(format: "%.2f", 0.104) == "0.10")
+        #expect(String(format: "%.2f", 0.099) == "0.10")
+        #expect(StockSageCurrency.adaptivePrice(0.104) != StockSageCurrency.adaptivePrice(0.099))
+    }
+
+    @Test func researchPriceGroupingPreservesPrecisionAndUngroupedText() {
+        #expect(CC.adaptivePrice(12345.67, grouped: true) == "12,345.67")
+        #expect(CC.adaptivePrice(12345.67) == "12345.67")
+        #expect(CC.adaptivePrice(-1234.5, grouped: true) == "-1,234.50")
+        #expect(CC.adaptivePrice(0, grouped: true) == "0.00")
+        #expect(CC.adaptivePrice(1, grouped: true) == "1.00")
+        #expect(CC.adaptivePrice(0.104, grouped: true) == "0.1040")
+        #expect(CC.adaptivePrice(0.099, grouped: true) == "0.0990")
+        #expect(CC.adaptivePrice(0.0099, grouped: true) == "0.009900")
+    }
+
+    @Test func adaptivePriceTierBoundaries() {
+        #expect(StockSageCurrency.adaptivePrice(0.0) == "0.00")        // == 0 → 2dp tier
+        #expect(StockSageCurrency.adaptivePrice(1.0) == "1.00")        // >= 1 → 2dp tier
+        #expect(StockSageCurrency.adaptivePrice(188.4) == "188.40")    // >= 1 → 2dp tier
+        #expect(StockSageCurrency.adaptivePrice(0.9999) == "0.9999")   // < 1, >= 0.01 → 4dp tier
+        #expect(StockSageCurrency.adaptivePrice(0.01) == "0.0100")     // boundary of 4dp tier (inclusive)
+        #expect(StockSageCurrency.adaptivePrice(0.0099) == "0.009900") // just under 0.01 → 6dp tier
+        #expect(StockSageCurrency.adaptivePrice(-0.104) == "-0.1040")  // sign preserved, tier by magnitude
+    }
+
+    // MARK: - Audit 2026-07-12 pass-2 — conversionCurrencyForSymbol (the rate² FX-pair fix)
+    //
+    // The DENOMINATION (quote) leg is the correct key for converting a holding TO USD. For a
+    // `…USD=X` pair the price is ALREADY in USD (quote leg), so it must key as "USD" (rate 1) — the
+    // EXPOSURE leg (currencyForSymbol) would key it as the base currency and re-multiply by the
+    // pair rate (rate²), inflating the value ~8–27%. This pins the contract for all 5 valuation
+    // call sites (headline total, allocation, currency-exposure, rebalance, open-heat).
+    @Test func conversionCurrencyKeysOnQuoteLegNotExposureLeg() {
+        // The bug's exact shape: EURUSD=X exposure leg is EUR, but its price is in USD.
+        #expect(StockSageCurrency.currencyForSymbol("EURUSD=X") == "EUR")          // exposure leg (risk)
+        #expect(StockSageCurrency.conversionCurrencyForSymbol("EURUSD=X") == "USD") // quote leg (valuation)
+        #expect(StockSageCurrency.conversionCurrencyForSymbol("GBPUSD=X") == "USD")
+        // USD-leading pair: quote leg is the non-USD currency, so it DOES need conversion (not rate²).
+        #expect(StockSageCurrency.conversionCurrencyForSymbol("USDJPY=X") == "JPY")
+        #expect(StockSageCurrency.conversionCurrencyForSymbol("USDSAR=X") == "SAR")
+        // A cross (no USD leg) keys on its quote leg.
+        #expect(StockSageCurrency.conversionCurrencyForSymbol("EURGBP=X") == "GBP")
+        // Non-FX symbols fall through to currencyForSymbol unchanged (the two agree).
+        for sym in ["AAPL", "1120.SR", "VOD.L", "BTC-USD", "^GSPC"] {
+            #expect(StockSageCurrency.conversionCurrencyForSymbol(sym) == StockSageCurrency.currencyForSymbol(sym))
+        }
+        // Malformed =X (not a 6-char pair) is safe: base.
+        #expect(StockSageCurrency.conversionCurrencyForSymbol("XYZ=X") == "USD")
+    }
+
+    // The honesty invariant the whole fix exists for: a single EURUSD=X holding priced at 1.08
+    // must value at price×shares in USD (rate 1), NOT price×shares×1.08 (rate²). Proven at the
+    // accessor level — the rate the valuation path looks up is keyed by conversionCurrencyForSymbol,
+    // and "USD" is subtracted from the FX-rate set / maps to 1.0, so no second multiply happens.
+    @Test func usdQuotedFXPairValuesAtRateOneNotRateSquared() {
+        let holding = "EURUSD=X"
+        // The valuation key is USD → the FX-rate table (which excludes/1.0-maps USD) applies rate 1.
+        #expect(StockSageCurrency.conversionCurrencyForSymbol(holding) == "USD")
+        // Contrast: the OLD (buggy) key was the exposure leg EUR, which the FX table would have
+        // multiplied by the EURUSD rate — the rate² inflation. This assertion documents the bug's
+        // signature so a regression (reverting the key) fails here.
+        #expect(StockSageCurrency.currencyForSymbol(holding) != StockSageCurrency.conversionCurrencyForSymbol(holding))
+    }
+
+    // Journal leg of the first-real-trade review (2026-07-16). Hand-derived from the L10N-01
+    // rule, never the implementation: USD rows keep the exact bare signed format the journal
+    // always showed; non-USD suffixes the quote-currency code; pence raw amounts normalize
+    // to major units (−4000 raw pence = −£40.00).
+    @Test func signedAmountLabelsNonUSDAndKeepsUSDByteIdentical() {
+        #expect(StockSageCurrency.signedAmount(150, symbol: "AAPL", denomination: SageFix.fixtureDenomination(for: "AAPL")) == "+150.00")
+        #expect(StockSageCurrency.signedAmount(-27.5, symbol: "AAPL", denomination: SageFix.fixtureDenomination(for: "AAPL")) == "-27.50")
+        #expect(StockSageCurrency.signedAmount(150, symbol: "2222.SR", denomination: SageFix.fixtureDenomination(for: "2222.SR")) == "+150.00 SAR")
+        #expect(StockSageCurrency.signedAmount(-4000, symbol: "SHEL.L", denomination: SageFix.fixtureDenomination(for: "SHEL.L")) == "-40.00 GBP")
+    }
+
+    // BATCH 10.3. Hand-derived from the suffix map at StockSageCurrency:175, never from the
+    // accessor. The VALUATION fallback ("FOO.ZZ" -> "ZZ") is deliberate and stays — no FX rate
+    // exists for "ZZ", so the holding correctly surfaces as unpriced. The PROSE accessor must
+    // return nil instead, because a suffix printed as a unit is a currency that does not exist.
+    @Test func knownQuoteCurrencyIsNilForSuffixesOutsideTheMap() {
+        #expect(CC.knownQuoteCurrency(forSymbol: "2222.SR") == "SAR")
+        #expect(CC.knownQuoteCurrency(forSymbol: "SHEL.L") == "GBP")
+        #expect(CC.knownQuoteCurrency(forSymbol: "7203.T") == "JPY")
+        #expect(CC.knownQuoteCurrency(forSymbol: "AAPL") == "USD")        // no suffix at all
+        #expect(CC.knownQuoteCurrency(forSymbol: "BTC-USD") == "USD")
+        #expect(CC.knownQuoteCurrency(forSymbol: "^GSPC") == "USD")
+        #expect(CC.knownQuoteCurrency(forSymbol: "000001.SZ") == nil)     // Shenzhen: unmapped
+        #expect(CC.knownQuoteCurrency(forSymbol: "035720.KQ") == nil)     // KOSDAQ: unmapped
+        #expect(CC.knownQuoteCurrency(forSymbol: "EQNR.OL") == nil)       // Oslo: unmapped
+        #expect(CC.knownQuoteCurrency(forSymbol: "FOO.ZZ") == nil)
+        #expect(CC.knownQuoteCurrency(forSymbol: "brk.b") == nil)         // a US share class is not a currency
+        // The valuation contract is untouched: the raw suffix still keys the FX lookup.
+        #expect(CC.conversionCurrencyForSymbol("000001.SZ") == "SZ")
+    }
+}

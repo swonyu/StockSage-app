@@ -1,0 +1,984 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A100000000000000000000W3 /* StockSageWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */; };
+		A100000000000000000000W4 /* StockSageWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A100000000000000000000W1 /* StockSageWidget.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A100000000000000000000B1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100000000000000000000A0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A100000000000000000000C0;
+			remoteInfo = StockSage;
+		};
+		A100000000000000000000WF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100000000000000000000A0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A100000000000000000000WA;
+			remoteInfo = StockSageWidget;
+		};
+		C60611160000000000000017 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100000000000000000000A0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C60611160000000000000001;
+			remoteInfo = StockSagePublishingUIQA;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A100000000000000000000W9 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A100000000000000000000W4 /* StockSageWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		A100000000000000000000C1 /* StockSageX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StockSageX.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000D1 /* StockSageTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockSageTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000W1 /* StockSageWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = StockSageWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StockSageWidgetSnapshot.swift; path = StockSage/Sources/StockSage/StockSageWidgetSnapshot.swift; sourceTree = SOURCE_ROOT; };
+		C60611160000000000000002 /* StockSagePublishingUIQA.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StockSagePublishingUIQA.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C6061116000000000000000E /* StockSagePublishingUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockSagePublishingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A100000000000000000000WG /* Exceptions for "StockSageWidget" folder in "StockSageWidget" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A100000000000000000000WA /* StockSageWidget */;
+		};
+		C6061116000000000000000B /* Shipping entry excluded only from QA target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				App/StockSageApp.swift,
+			);
+			target = C60611160000000000000001 /* StockSagePublishingUIQA */;
+		};
+		C6061116000000000000000C /* QA Info.plist is configuration only */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = C60611160000000000000001 /* StockSagePublishingUIQA */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A100000000000000000000E0 /* StockSage/Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StockSage/Sources;
+			sourceTree = "<group>";
+		};
+		A100000000000000000000E1 /* StockSageTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StockSageTests;
+			sourceTree = "<group>";
+		};
+		A100000000000000000000W5 /* StockSageWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A100000000000000000000WG /* Exceptions for "StockSageWidget" folder in "StockSageWidget" target */,
+			);
+			path = StockSageWidget;
+			sourceTree = "<group>";
+		};
+		C60611160000000000000003 /* Unchanged production source for QA */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C6061116000000000000000B,
+			);
+			path = StockSage/Sources;
+			sourceTree = "<group>";
+		};
+		C60611160000000000000004 /* StockSagePublishingUIQA */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C6061116000000000000000C,
+			);
+			path = StockSagePublishingUIQA;
+			sourceTree = "<group>";
+		};
+		C6061116000000000000000F /* StockSagePublishingUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StockSagePublishingUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A100000000000000000000F0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A100000000000000000000F1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A100000000000000000000W7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60611160000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60611160000000000000011 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4C572F4D304D41B7005CF717 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000W1 /* StockSageWidget.appex */,
+				A100000000000000000000W5 /* StockSageWidget */,
+				A100000000000000000000W2 /* StockSageWidgetSnapshot.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		A10000000000000000000090 = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000E0 /* StockSage/Sources */,
+				A100000000000000000000E1 /* StockSageTests */,
+				C60611160000000000000003 /* QA only */,
+				C60611160000000000000004 /* QA only */,
+				C6061116000000000000000F /* QA only */,
+				A10000000000000000000091 /* Products */,
+				4C572F4D304D41B7005CF717 /* Recovered References */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000091 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000C1 /* StockSageX.app */,
+				A100000000000000000000D1 /* StockSageTests.xctest */,
+				C60611160000000000000002 /* QA only */,
+				C6061116000000000000000E /* QA only */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A100000000000000000000C0 /* StockSage */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000C10 /* Build configuration list for PBXNativeTarget "StockSage" */;
+			buildPhases = (
+				A10000000000000000000C02 /* Sources */,
+				A100000000000000000000F0 /* Frameworks */,
+				A10000000000000000000C03 /* Resources */,
+				A100000000000000000000W9 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A100000000000000000000WE /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A100000000000000000000E0 /* StockSage/Sources */,
+			);
+			name = StockSage;
+			packageProductDependencies = (
+			);
+			productName = StockSage;
+			productReference = A100000000000000000000C1 /* StockSageX.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A100000000000000000000D0 /* StockSageTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000D10 /* Build configuration list for PBXNativeTarget "StockSageTests" */;
+			buildPhases = (
+				A10000000000000000000D02 /* Sources */,
+				A100000000000000000000F1 /* Frameworks */,
+				A10000000000000000000D03 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A100000000000000000000B0 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A100000000000000000000E1 /* StockSageTests */,
+			);
+			name = StockSageTests;
+			packageProductDependencies = (
+			);
+			productName = StockSageTests;
+			productReference = A100000000000000000000D1 /* StockSageTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A100000000000000000000WA /* StockSageWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A100000000000000000000WB /* Build configuration list for PBXNativeTarget "StockSageWidget" */;
+			buildPhases = (
+				A100000000000000000000W6 /* Sources */,
+				A100000000000000000000W7 /* Frameworks */,
+				A100000000000000000000W8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A100000000000000000000W5 /* StockSageWidget */,
+			);
+			name = StockSageWidget;
+			packageProductDependencies = (
+			);
+			productName = StockSageWidget;
+			productReference = A100000000000000000000W1 /* StockSageWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		C60611160000000000000001 /* StockSagePublishingUIQA */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C60611160000000000000008;
+			buildPhases = (
+				C60611160000000000000005,
+				C60611160000000000000006,
+				C60611160000000000000007,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C60611160000000000000003,
+				C60611160000000000000004,
+			);
+			name = StockSagePublishingUIQA;
+			packageProductDependencies = (
+			);
+			productName = StockSagePublishingUIQA;
+			productReference = C60611160000000000000002;
+			productType = "com.apple.product-type.application";
+		};
+		C6061116000000000000000D /* StockSagePublishingUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C60611160000000000000013;
+			buildPhases = (
+				C60611160000000000000010,
+				C60611160000000000000011,
+				C60611160000000000000012,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C60611160000000000000016,
+			);
+			fileSystemSynchronizedGroups = (
+				C6061116000000000000000F,
+			);
+			name = StockSagePublishingUITests;
+			packageProductDependencies = (
+			);
+			productName = StockSagePublishingUITests;
+			productReference = C6061116000000000000000E;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A100000000000000000000A0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					A100000000000000000000C0 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					A100000000000000000000D0 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = A100000000000000000000C0;
+					};
+					C60611160000000000000001 = {
+						CreatedOnToolsVersion = 27.2;
+					};
+					C6061116000000000000000D = {
+						CreatedOnToolsVersion = 27.2;
+						TestTargetID = C60611160000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000A10 /* Build configuration list for PBXProject "StockSage" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000090;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000091 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A100000000000000000000C0 /* StockSage */,
+				A100000000000000000000D0 /* StockSageTests */,
+				C60611160000000000000001 /* QA only */,
+				C6061116000000000000000D /* QA only */,
+				A100000000000000000000WA /* StockSageWidget */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A100000000000000000000W8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000C03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000D03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60611160000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60611160000000000000012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A100000000000000000000W6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000W3 /* StockSageWidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000C02 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000D02 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60611160000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60611160000000000000010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A100000000000000000000B0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A100000000000000000000C0 /* StockSage */;
+			targetProxy = A100000000000000000000B1 /* PBXContainerItemProxy */;
+		};
+		A100000000000000000000WE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = A100000000000000000000WA /* StockSageWidget */;
+			targetProxy = A100000000000000000000WF /* PBXContainerItemProxy */;
+		};
+		C60611160000000000000016 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C60611160000000000000001 /* StockSagePublishingUIQA */;
+			targetProxy = C60611160000000000000017 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A100000000000000000000WC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StockSageWidget/StockSageWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StockSageWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.Widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A100000000000000000000WD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StockSageWidget/StockSageWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StockSageWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.Widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A10000000000000000000A11 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000A12 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = WY272L3F3N;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A10000000000000000000C11 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = StockSage/StockSageX.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = StockSage/StockSageX.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				"ENABLE_DEBUG_DYLIB[sdk=iphoneos*]" = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSage;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSage;
+				PRODUCT_MODULE_NAME = StockSage;
+				PRODUCT_NAME = StockSageX;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				"SWIFT_STRICT_CONCURRENCY[sdk=macosx*]" = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000C12 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = StockSage/StockSageX.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = StockSage/StockSageX.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				"ENABLE_DEBUG_DYLIB[sdk=iphoneos*]" = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = StockSageX;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = SA.StockSage;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphonesimulator*]" = SA.StockSage;
+				PRODUCT_MODULE_NAME = StockSage;
+				PRODUCT_NAME = StockSageX;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				"SWIFT_STRICT_CONCURRENCY[sdk=macosx*]" = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A10000000000000000000D11 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				"SWIFT_STRICT_CONCURRENCY[sdk=macosx*]" = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockSageX.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StockSageX";
+			};
+			name = Debug;
+		};
+		A10000000000000000000D12 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSageTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				"SWIFT_STRICT_CONCURRENCY[sdk=macosx*]" = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockSageX.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StockSageX";
+			};
+			name = Release;
+		};
+		C60611160000000000000009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
+				SDKROOT = iphonesimulator;
+				SUPPORTED_PLATFORMS = iphonesimulator;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				SKIP_INSTALL = YES;
+				PRODUCT_NAME = StockSagePublishingUIQA;
+				PRODUCT_MODULE_NAME = StockSagePublishingUIQA;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.PublishingUIQA;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) STOCKSAGE_PUBLISHING_UIQA";
+				SWIFT_VERSION = 6.0;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks",);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StockSagePublishingUIQA/Info.plist;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ENABLE_DEBUG_DYLIB = NO;
+			};
+			name = Debug;
+		};
+		C6061116000000000000000A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
+				SDKROOT = iphonesimulator;
+				SUPPORTED_PLATFORMS = iphonesimulator;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				SKIP_INSTALL = YES;
+				PRODUCT_NAME = StockSagePublishingUIQA;
+				PRODUCT_MODULE_NAME = StockSagePublishingUIQA;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.PublishingUIQA;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) STOCKSAGE_PUBLISHING_UIQA";
+				SWIFT_VERSION = 6.0;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks",);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StockSagePublishingUIQA/Info.plist;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ENABLE_DEBUG_DYLIB = NO;
+			};
+			name = Release;
+		};
+		C60611160000000000000014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
+				SDKROOT = iphonesimulator;
+				SUPPORTED_PLATFORMS = iphonesimulator;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				SKIP_INSTALL = YES;
+				PRODUCT_NAME = StockSagePublishingUITests;
+				PRODUCT_MODULE_NAME = StockSagePublishingUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.PublishingUITests;
+				SWIFT_VERSION = 6.0;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks",);
+				GENERATE_INFOPLIST_FILE = YES;
+				TEST_TARGET_NAME = StockSagePublishingUIQA;
+			};
+			name = Debug;
+		};
+		C60611160000000000000015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
+				SDKROOT = iphonesimulator;
+				SUPPORTED_PLATFORMS = iphonesimulator;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				SKIP_INSTALL = YES;
+				PRODUCT_NAME = StockSagePublishingUITests;
+				PRODUCT_MODULE_NAME = StockSagePublishingUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = SA.StockSage.PublishingUITests;
+				SWIFT_VERSION = 6.0;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_PREVIEWS = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks",);
+				GENERATE_INFOPLIST_FILE = YES;
+				TEST_TARGET_NAME = StockSagePublishingUIQA;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A100000000000000000000WB /* Build configuration list for PBXNativeTarget "StockSageWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A100000000000000000000WC /* Debug */,
+				A100000000000000000000WD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000A10 /* Build configuration list for PBXProject "StockSage" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000A11 /* Debug */,
+				A10000000000000000000A12 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000C10 /* Build configuration list for PBXNativeTarget "StockSage" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000C11 /* Debug */,
+				A10000000000000000000C12 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000D10 /* Build configuration list for PBXNativeTarget "StockSageTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000D11 /* Debug */,
+				A10000000000000000000D12 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C60611160000000000000008 /* QA configuration list */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C60611160000000000000009 /* Debug */,
+				C6061116000000000000000A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C60611160000000000000013 /* QA configuration list */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C60611160000000000000014 /* Debug */,
+				C60611160000000000000015 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A100000000000000000000A0 /* Project object */;
+}

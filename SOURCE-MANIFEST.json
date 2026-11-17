@@ -1,0 +1,1990 @@
+[
+  {
+    "path": "StockSagePublishingUIQA/Info.plist",
+    "sha256": "d2fc7d83293de9a36dc5fc3c39ed4378a2fab3e8a4c3d9751883d26c15517165"
+  },
+  {
+    "path": "StockSagePublishingUIQA/PublishingUIQAApp.swift",
+    "sha256": "ca95c97cda25150b598817d2c13ed8f81679bfae5667f16d8ba64908e9ac477b"
+  },
+  {
+    "path": "StockSage.xcodeproj/project.pbxproj",
+    "sha256": "c3149b58e86e6d58dc1fa722490dd995a7b3dab5e968d572dc339cb28cbb2ddc"
+  },
+  {
+    "path": "StockSageWidget/StockSageWidget.entitlements",
+    "sha256": "344d96bbcaae0e508478d4bea4bf22bed2aed9d98700d1a5002653a4a16ad53c"
+  },
+  {
+    "path": "StockSageWidget/PrivacyInfo.xcprivacy",
+    "sha256": "a1d739462ef1849075b05cab9033ea309c667127f0c78858427b5bcc36f7a413"
+  },
+  {
+    "path": "StockSageWidget/StockSageWidget.swift",
+    "sha256": "9021edce696169e89d23dfe36cde0e5b713d667a3a75a0f7ab75153e2665847c"
+  },
+  {
+    "path": "StockSageWidget/Info.plist",
+    "sha256": "25f7e55e17e8a9eb728eac71270d7c594fc4524ad851d295f1a8a3ba6e14ba8b"
+  },
+  {
+    "path": "StockSageTests/StockSageNewListingReconcileTests.swift",
+    "sha256": "0df3bd9f31dc5bf2653ee4b348c0dcbac220b9829bcf3298f5a15d4494ada537"
+  },
+  {
+    "path": "StockSageTests/StockSageTrailingStopTests.swift",
+    "sha256": "107c29ac0c8c7447993ea64a0b0709032752694890c48807a90fd5116aa1a917"
+  },
+  {
+    "path": "StockSageTests/StockSageFilingsObservationTests.swift",
+    "sha256": "db6b652eb80f4ad9d4099833b04593f48e9f8ab5fe92391873866425ae094523"
+  },
+  {
+    "path": "StockSageTests/MarketsRefreshIntervalTests.swift",
+    "sha256": "e4777cdf1ebd8269204058dbd8caf16541c61b0ff21cfc02d42586e1f0c67fba"
+  },
+  {
+    "path": "StockSageTests/StockSageManualRecordPersistenceTests.swift",
+    "sha256": "5dd2b463a483d0d80e64de527f2328b35d73c8d41e2a83c66a6a3d8219422157"
+  },
+  {
+    "path": "StockSageTests/MarketSortTests.swift",
+    "sha256": "8031dd34208b802f8bfdb0356764192ee4857b7871c4f502ea3e03918f88a3b6"
+  },
+  {
+    "path": "StockSageTests/MarketsFirstScanCaptionTests.swift",
+    "sha256": "1e2216efb05d60ff4f54ca4dfe9e9edfc92ff345c119885a2dbd2744fcca5d65"
+  },
+  {
+    "path": "StockSageTests/MarketsIdeasTier2NoteCountTests.swift",
+    "sha256": "bc0e71fc7cbda9ea751605cdc4bdd8eb78d26c5ccfef3471edb65d1a3ab50c8f"
+  },
+  {
+    "path": "StockSageTests/StockSageMultiTimeframeTests.swift",
+    "sha256": "9f109dfc1fe9331c9d72900ab3016b9a82678aa2f0cf21205df71bab4c371eea"
+  },
+  {
+    "path": "StockSageTests/StockSageBenzingaClientTests.swift",
+    "sha256": "fd30bf42d614e9d049f1f789b13709085aaf54771d5a732f463df715a5d46af4"
+  },
+  {
+    "path": "StockSageTests/StockSageExpectedValueTests.swift",
+    "sha256": "0bdceef1e69143b9a2d58be51970e29ad819f05e33ebb96869e30b37b53f809c"
+  },
+  {
+    "path": "StockSageTests/StockSageCancelHonestyTests.swift",
+    "sha256": "68c7a2c0d121ca776d5839de4f669b19ffba5de1cd3baa22d723d1ad4ca331e7"
+  },
+  {
+    "path": "StockSageTests/StockSageModelHarnessTests.swift",
+    "sha256": "ee6ab0ee20bf0f7c1936189fb34fc1d3771899b099f74c36a1e5752fce2c17d5"
+  },
+  {
+    "path": "StockSageTests/MarketsUpdatedAgoLabelTests.swift",
+    "sha256": "99f8457f1840c29c0172daaea1779a61935e87dc34949b66d1601a48ff0ce056"
+  },
+  {
+    "path": "StockSageTests/StockSageCorrelationPrecheckTests.swift",
+    "sha256": "7598c93e38b54f895b75500da8b048c834cae678934c00b63bbb99e95a71398c"
+  },
+  {
+    "path": "StockSageTests/MarketsCardIsStaleTests.swift",
+    "sha256": "468ff4e3218ec56426cfc71b0cc46a078ed7ae7307528b2ec98fda4e12c374c2"
+  },
+  {
+    "path": "StockSageTests/StockSageCalibratedSizingTests.swift",
+    "sha256": "6251a47215a66a390b4bb2361006352c1b0c57a02bef99ad74a7f73d6561a84d"
+  },
+  {
+    "path": "StockSageTests/StockSageTestFixtures.swift",
+    "sha256": "2521055c5967353a8393ac4c9ca0be02c4adc55849027f666e37660fa156a121"
+  },
+  {
+    "path": "StockSageTests/StrategyBaselineMeasurementTests.swift",
+    "sha256": "1213469ee9a550a43ff5c8a4f20dcc7f13eb8e35df95d144fadcfa041be5385d"
+  },
+  {
+    "path": "StockSageTests/StockSageRewardRiskTests.swift",
+    "sha256": "2e01c4d60572c63c8b21ffd7761a30300225b85c2e6c78c5c2bb0661ccd2052c"
+  },
+  {
+    "path": "StockSageTests/StockSageWidgetSnapshotTests.swift",
+    "sha256": "7335d23aa388e2d9a9dd5562835116a227656223bd0e6a243c0d299c1109cbdb"
+  },
+  {
+    "path": "StockSageTests/StockSageMassiveEarningsTests.swift",
+    "sha256": "96df890cea4df801f1f7163660abf32a4577ae78d7371ec8fd5708c84062b77d"
+  },
+  {
+    "path": "StockSageTests/StockSageRiskOfRuinTests.swift",
+    "sha256": "bde5cad4d523c84a810b36162f48864c66273f46c6928f7e17df1b23a366c138"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystWatchPropertyTests.swift",
+    "sha256": "93b38bd2042d811fc9e0b83b74b04bc3165033224b2f768d4b6ea80e84fcaf8a"
+  },
+  {
+    "path": "StockSageTests/ExecutionQualityMathTests.swift",
+    "sha256": "10f7444b17a375fa84072680e7601b26d071dbc7e1f407c8fc90034dc4f79ac6"
+  },
+  {
+    "path": "StockSageTests/CatalystsNarrationAndIOSDatingTests.swift",
+    "sha256": "6fc99e8c69248898b94807a71978b0541852f44edee6b6d49f03ac15626cff3d"
+  },
+  {
+    "path": "StockSageTests/StockSageQwenDiagnosticsTests.swift",
+    "sha256": "a0e520876aa64f942b6fcfbc09045679d1bccd83af37d5441819059345e708f7"
+  },
+  {
+    "path": "StockSageTests/StockSageLocalModelStartupTests.swift",
+    "sha256": "87d862e0b5863b703cb4d559a02df6e64b0379c92a38a9da85ca6084f614b835"
+  },
+  {
+    "path": "StockSageTests/StockSageWeeklyTurnoverTests.swift",
+    "sha256": "e454293306b983c95baf947022a17c4b8ee245cc59f1173011ce37d61ab03d99"
+  },
+  {
+    "path": "StockSageTests/ToolPolicyTestLock.swift",
+    "sha256": "d417f23a60fe4027ece9ed3adc98542c1b7b7de86cdc436bf3509814cadc0115"
+  },
+  {
+    "path": "StockSageTests/StockSageLocalSentimentTests.swift",
+    "sha256": "8cf23b02d2def0f92cf8ccc7059e0dcda56444e597232232e5a2f95bc4cd233b"
+  },
+  {
+    "path": "StockSageTests/StockSagePortfolioBetaTests.swift",
+    "sha256": "dd406d71a1a91310f7e2dcf93009ed16b9e72845aff736fed40172a1ec94354f"
+  },
+  {
+    "path": "StockSageTests/StockSageGlossaryTests.swift",
+    "sha256": "31567dfbc03420c9e188f835c651e2e1875fe81d510a7712c4e2837d3ae4f981"
+  },
+  {
+    "path": "StockSageTests/StockSageClusterCheckTests.swift",
+    "sha256": "eb2c2e489e7d043392b608cbe7df9d4ed81ae51d91f763519768a96582bf7818"
+  },
+  {
+    "path": "StockSageTests/StockSageStockScreenerTests.swift",
+    "sha256": "839a95b3376bc2fd1fbfca51e3b94a1a832f984ca5bde6bcbc091baf43db7ba6"
+  },
+  {
+    "path": "StockSageTests/StockSageNumericalSafetyTests.swift",
+    "sha256": "f89a54031cea11650b3a2249248e71e33717dc8b108964b5fa168728bd608c23"
+  },
+  {
+    "path": "StockSageTests/StockSageFastLaneBoardsTests.swift",
+    "sha256": "1ec5ae04d9570785f3cd0c5356a55804dccaa8eb5397de1a64c2d0b2267aa82b"
+  },
+  {
+    "path": "StockSageTests/StockSageIdeaChipPlanTests.swift",
+    "sha256": "95482fef71ccd115014dbe9612351fce897d1f77457610378771a4370f7dabee"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchQualificationTests.swift",
+    "sha256": "bc3c3be39e1d17a959b3c527f51075e43122bfba550969afe77780b11febc819"
+  },
+  {
+    "path": "StockSageTests/StockSageNBBOFilterNoticeTests.swift",
+    "sha256": "5bbbd743f2c85df36b1237a6123f957e3e127f5553a31b1b494cfe2b525612c6"
+  },
+  {
+    "path": "StockSageTests/StockSageBackupTests.swift",
+    "sha256": "fc6ede24c0b802b5b5827c50122213e8585d907d9429ad2679ac9d0e24b6065a"
+  },
+  {
+    "path": "StockSageTests/StockSageOnDeviceAssistantTests.swift",
+    "sha256": "b31744b25189753353150f43d785c969dd4b7ce33f623873f951a2c0596898e9"
+  },
+  {
+    "path": "StockSageTests/StockSageLargecapReceiptTests.swift",
+    "sha256": "28960744cf361874819090433480342ef543c5e5c135f7489b45f7518f66b322"
+  },
+  {
+    "path": "StockSageTests/StockSageEarningsTests.swift",
+    "sha256": "ef33cbc263fcafe2b9f91aacdc94290cba0476516158ca0e0c9a05cef38b132c"
+  },
+  {
+    "path": "StockSageTests/CatalystsSectionTests.swift",
+    "sha256": "13f640d517a685ca24fb3ab6fb7992f47f5987854e1fefcb0338dc374c08efdc"
+  },
+  {
+    "path": "StockSageTests/StockSageVolStabilityTests.swift",
+    "sha256": "a38494341c99f201d2ca2511b1aaedb27ae67e0eebd29db6006716091bb5fb6b"
+  },
+  {
+    "path": "StockSageTests/StockSageStalenessTests.swift",
+    "sha256": "3c23da4d34c0802abbd6d5e087fe1ab0e5c8ed11c6cb5221a197f0fe6dd0ff4b"
+  },
+  {
+    "path": "StockSageTests/StockSageHistoryCacheTests.swift",
+    "sha256": "773a46122a81f20532b4ed715c04305fbf4cfb50db19e353306709c033a00ce6"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchReviewFilterTests.swift",
+    "sha256": "849d5a475172d08d26ec6dcafe0605503402fe56da2ef0ed8d933b9c9dfbc6d9"
+  },
+  {
+    "path": "StockSageTests/StockSageBacktestParityTests.swift",
+    "sha256": "f3e9367d6d6dfa72a75aefec40893377fee8ce3d302d50823185f4e2ede2a9dc"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchEvaluationTests.swift",
+    "sha256": "4c32d4629f561fb9a92143a3b66e7aee3854eb10f6a097e88c335b3956b85c00"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchQualityPresentationTests.swift",
+    "sha256": "5d929dd75af9522460415ec750f0a98679ceaf9f85811537a2d40a26a33be822"
+  },
+  {
+    "path": "StockSageTests/DesignSystemAccentTests.swift",
+    "sha256": "ed83c9ce6fe21340b87a76460c5a210a5688640061fcdea5ce4092a7699a6838"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystNarratorTests.swift",
+    "sha256": "25420a3e34033aebe783c5e58c95d1555a1b0dd02328071ebd0e2999666d165d"
+  },
+  {
+    "path": "StockSageTests/StockSageAlertSuppressionTests.swift",
+    "sha256": "da4c45c5d42e7895631232be898406178ca89b12550ae9a4440be6504b1543b7"
+  },
+  {
+    "path": "StockSageTests/StockSageNoCryptoTests.swift",
+    "sha256": "8f573b6278f6319640a3ba891c7ae97d03158c1d57fce0d3015e5299a744d280"
+  },
+  {
+    "path": "StockSageTests/StockSageInsiderTests.swift",
+    "sha256": "a8b6c6272bc99aeca6e4b2fba64eea5f1be807640ba8b48f449518ba65a18c12"
+  },
+  {
+    "path": "StockSageTests/StockSageModelsTests.swift",
+    "sha256": "ec45430bfbfa09dac12e857fca67811baa06ab30615ce366187d28378e33e1c5"
+  },
+  {
+    "path": "StockSageTests/StockSageJournalTests.swift",
+    "sha256": "f777e4b1d7ef4456fc05826727d9e436e48b7b9a9b1aecbae76b14b8c9663591"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystChainTests.swift",
+    "sha256": "c23905dd6113aa2bff9011999ff62ace0ad3a5152ae4cd2f615bfbf26f362c90"
+  },
+  {
+    "path": "StockSageTests/StockSageJournalCSVImportTests.swift",
+    "sha256": "e36dc55c8f934ae95abe34084e67da627e304d43c8a4191b50790bd74a2e92fa"
+  },
+  {
+    "path": "StockSageTests/CalibrationPersistRunTests.swift",
+    "sha256": "0b1ce56bf5e36531b65b19d4be5da359f3a958f247fa9c616022bcc80bbaa352"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchUniverseTests.swift",
+    "sha256": "cff428c9c2cc992ad7d9d110541f9535c5809e5406e6352d4aff2ef211b7f326"
+  },
+  {
+    "path": "StockSageTests/StockSageQAFixtureIdeasTests.swift",
+    "sha256": "8a76b6940767eab2e42095c187e3c28f8d11e2e3bd9f03f3b2e38b78e286024b"
+  },
+  {
+    "path": "StockSageTests/StockSageCryptoCostTests.swift",
+    "sha256": "e6890b9da9a19c2b28f65359a2813c72c5f3dc50bc52b51d6668f978710123ed"
+  },
+  {
+    "path": "StockSageTests/StockSageScanChunkingTests.swift",
+    "sha256": "7fd09cbfeeb76e7cd6bf71bc4ee1ddeaf77df661a5afb25230e645e60dadb4bc"
+  },
+  {
+    "path": "StockSageTests/StockSageBuildIdeasDirectTests.swift",
+    "sha256": "84393cc26680aa127cfb747bde1d187ecc0a885e035f48707ef7180a0c9b0ea1"
+  },
+  {
+    "path": "StockSageTests/StockSageBenzingaTests.swift",
+    "sha256": "b01bdef016d3c130964ab00656cf0653d3b2038cfab5bbc462164f12da0106e5"
+  },
+  {
+    "path": "StockSageTests/GeminiReportInvariantsTests.swift",
+    "sha256": "1249c79fbb607fabf2a981d1cebe8692613dd85d6d6a494074fb31206399a8af"
+  },
+  {
+    "path": "StockSageTests/StockSageIOSPresentationTests.swift",
+    "sha256": "cd52315095148bc8792eb1d62f438e04d59f136aa20aca16d5d91c11ed23aaca"
+  },
+  {
+    "path": "StockSageTests/StockSageJournalCSVTests.swift",
+    "sha256": "b6a37924a5eab1928703de75996f850e86a9416c6bb6e2bd249cd0311cd1f58f"
+  },
+  {
+    "path": "StockSageTests/StockSageRankScoreTests.swift",
+    "sha256": "acb659799816c096070384ae9f255f317ade6e51e6f673cfa4300463209ea9e1"
+  },
+  {
+    "path": "StockSageTests/StockSageIndicatorsTests.swift",
+    "sha256": "63d110808b6409fe3c5a228f41cdb8960efff721852cf834134b8a45d0c1180c"
+  },
+  {
+    "path": "StockSageTests/StockSageMomentumAssessmentTests.swift",
+    "sha256": "ab79027346feba9737359bbeab8193bbd086dc43f08b9075f259b147d99344da"
+  },
+  {
+    "path": "StockSageTests/StockSageMoneyInvariantSweepTests.swift",
+    "sha256": "0d067b99cc8c1bd1bd2a8e2296a0ca73771c460afddc1d3b640b8de815f6a217"
+  },
+  {
+    "path": "StockSageTests/StockSageDeflatedSharpeBoundaryTests.swift",
+    "sha256": "68a5a64dc11da0650664fd14f18b4217870df3ba4bd9a9726197d879325ddf48"
+  },
+  {
+    "path": "StockSageTests/StockSageMonitorTests.swift",
+    "sha256": "14db4ae5b1a7af4b02dbbdb297f9e41e509e1037f252e5403b5fe2997178c3f3"
+  },
+  {
+    "path": "StockSageTests/StockSageScanDeltaTests.swift",
+    "sha256": "8f072bc85b45e288c9d47ce743796ff1963a67570d00c5a0cbb9e9d541b1d7b0"
+  },
+  {
+    "path": "StockSageTests/MarketsSourceTagLabelTests.swift",
+    "sha256": "0eaaf31d92c6b5e2b1a4861746482b14476e4bcb36ee5954497850b6fe0b0f75"
+  },
+  {
+    "path": "StockSageTests/StockSageVolRegimeFloorTests.swift",
+    "sha256": "413a4e7d985dfb416b969d45a71fde7fbd625039c430dd9064c47b4f7177df5e"
+  },
+  {
+    "path": "StockSageTests/StockSageVelocityHistoryTests.swift",
+    "sha256": "f0f2d391777f693c1005b4f699cce42b88afb41f1c45d05bd0734883adadd0ab"
+  },
+  {
+    "path": "StockSageTests/StockSageTodayActionsProvenanceTests.swift",
+    "sha256": "09d29b29eaa8fa660fc54af16333bc6e5f628cc433539f67d9181e243adc85fb"
+  },
+  {
+    "path": "StockSageTests/StockSageNotificationAudioTests.swift",
+    "sha256": "64d41a38a70f79f77830e6e2157608b5c1b47296e9e3d952cda3c5469505d743"
+  },
+  {
+    "path": "StockSageTests/StockSageYahooCooldownTests.swift",
+    "sha256": "ea8c0a4add3948e5a83450b832eb274b226b907cf33a4d242a0306f45f67c30a"
+  },
+  {
+    "path": "StockSageTests/GeminiReportWave2Tests.swift",
+    "sha256": "a6d57e94819e44a7acbf9961a6f3f1978c65f6b62526391c0b7eca8034ac0453"
+  },
+  {
+    "path": "StockSageTests/StockSageAlertsTests.swift",
+    "sha256": "a6f906d241eccbd1b4b2a73a011b5bdf0180956265ebfcefe83ecaf6e2d8124d"
+  },
+  {
+    "path": "StockSageTests/StockSageLaunchTests.swift",
+    "sha256": "15a115033601c722082f0ad8f4c70ecd73a7a6f3017d98b7af3f3161b2011ae1"
+  },
+  {
+    "path": "StockSageTests/StockSageLiveStreamTests.swift",
+    "sha256": "b577f10ae1f0d5342267a7571a3d61f0a18f8b1693a8ee4f25a66379c5f5ed41"
+  },
+  {
+    "path": "StockSageTests/StockSagePositionSizerTests.swift",
+    "sha256": "46c92a03371fc53cf401bc0f14b191af11368d850ebc9182c520c67432221dc8"
+  },
+  {
+    "path": "StockSageTests/StockSagePortfolioTests.swift",
+    "sha256": "18633ddac080aa5d0487eb79b989f23f1e79813d6eda54f9b767b5039e2005c4"
+  },
+  {
+    "path": "StockSageTests/StockSageHealStaleQuotesTests.swift",
+    "sha256": "174a2a9450e4796d60328adffa0ee697f5cb3ff617434b267a57d7bffaa63526"
+  },
+  {
+    "path": "StockSageTests/StockSageMassiveEventsTests.swift",
+    "sha256": "5fd903f41fd5bcd563165df0b6a91e749ac33a547351f94f02189f0050a660c1"
+  },
+  {
+    "path": "StockSageTests/StockSageTadawulNamesTests.swift",
+    "sha256": "f33e0789ab057bf8f4689e356314dd6eae36177307c67e631191ea49c2ae7e57"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystWatchTests.swift",
+    "sha256": "50bbab76a0177f9a810d70ea8ebd8b07e3cef7839429287e2bd3ffa3eb769517"
+  },
+  {
+    "path": "StockSageTests/StockSageRegimeTests.swift",
+    "sha256": "34916608e2155cfc68f0f28d1f2405e379e841d830dbd1182abb9dfb78f54f39"
+  },
+  {
+    "path": "StockSageTests/MarketsEffectiveBetsTests.swift",
+    "sha256": "f7ba1f35a5f97eae93b24951201b0f6efcd9d51a146178659ab664a00101320a"
+  },
+  {
+    "path": "StockSageTests/StockSagePriceSourceTests.swift",
+    "sha256": "d8a853fb70e2b18c33fdc0292fd0b1cebb61b27d67bf8a27c5b38ba54b0034b1"
+  },
+  {
+    "path": "StockSageTests/StockSageCorrelationHeatTests.swift",
+    "sha256": "7c59470a1ebe4724d0c32204d0438a0def7e6c68d51ca59fba7222591b5e4f0e"
+  },
+  {
+    "path": "StockSageTests/StockSageBacktesterTests.swift",
+    "sha256": "96ac768e917b1a20509285f2197402afa299b3117c307b14adfca639ad55f242"
+  },
+  {
+    "path": "StockSageTests/StockSagePyramidTests.swift",
+    "sha256": "d2c685ef97a8bb4f3255e93b2eb1f095d0c9e59739a270504daa9221cd19112c"
+  },
+  {
+    "path": "StockSageTests/StockSageAIAssessmentTests.swift",
+    "sha256": "2a562e7490c71b5d9ad1508ffe8876c4d3bc7bd59b1741e74a41bcd992dc72f5"
+  },
+  {
+    "path": "StockSageTests/StockSageCorrelationPresentationTests.swift",
+    "sha256": "8dcf53e2ae5afa19e2389b6317d27358f916c9c7332f0f8eff28819e40311ecd"
+  },
+  {
+    "path": "StockSageTests/MarketSectionNavigationTests.swift",
+    "sha256": "69c65ee72c659a8160e7dce26477c620fbc9a3e8cef3efcdf3b6753852fb5ad1"
+  },
+  {
+    "path": "StockSageTests/DesignSystemMotionTests.swift",
+    "sha256": "efdd4bbf2d5fe9d1412e2c1b44c3a99f62f10c24ff15640917fae3a9adbedb4a"
+  },
+  {
+    "path": "StockSageTests/StockSageMomentumTests.swift",
+    "sha256": "523f802d235bdab61c19af6bc58fcba09cfbc51b9a77ed95d7ef0eccdcb0a3f0"
+  },
+  {
+    "path": "StockSageTests/StockSageCalibrationSnapshotTests.swift",
+    "sha256": "5cd7b1ff900f99b5533aff27a40d2e81168365b4432426a9e0ab590274efd43f"
+  },
+  {
+    "path": "StockSageTests/StockSageScreenerNewsTests.swift",
+    "sha256": "682f1f52a8b6c2876df8419a12229c945141c10a164265f1fbffe71f870547bf"
+  },
+  {
+    "path": "StockSageTests/StockSageRelativeStrengthTests.swift",
+    "sha256": "3e0732513d49821d0b9460c29433eda44c6e41bcd0c94feeb3ea14ffc10f62d4"
+  },
+  {
+    "path": "StockSageTests/StockSageLocalModelServerTests.swift",
+    "sha256": "d455e2b50a56538a49d816467192386705e905245ee6c2bffed537f1aba7a06f"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchRankingTests.swift",
+    "sha256": "ef69b93c0049de9d54e81ab7600f1cbf9d3f3c6826689ee372c9e7c8a8ca603f"
+  },
+  {
+    "path": "StockSageTests/StockSageLiquidityTests.swift",
+    "sha256": "81f863f766f6916dd1a83066c00531f1ce8cee859fa8bdb45fc160dc7de4c5bf"
+  },
+  {
+    "path": "StockSageTests/StockSageReturnShapeTests.swift",
+    "sha256": "b297361ae9192588f1163378534d633f536c2c3cdba92b8722d41a48b380ffe3"
+  },
+  {
+    "path": "StockSageTests/StockSageSectorRotationTests.swift",
+    "sha256": "7eb12858f813300369fd75ce13a7d74c279db934aead909fc2915a6048ea5179"
+  },
+  {
+    "path": "StockSageTests/StockSageMultiBrakeTests.swift",
+    "sha256": "4e5d64378ed1b7d4243ef7d7c1cb2999c99b276bdb53dd0eab842a649b50a199"
+  },
+  {
+    "path": "StockSageTests/StockSageStreamGapTests.swift",
+    "sha256": "0734c68d6453caac0b7300457984386554a12606d7c7aeac0c8b45a42153224a"
+  },
+  {
+    "path": "StockSageTests/StockSagePCATrialsTests.swift",
+    "sha256": "3eec537f40a8f4493c7444774f204357b70a49a18482b7f01543f4326ceccfbb"
+  },
+  {
+    "path": "StockSageTests/StockSageTrackedSymbolsTests.swift",
+    "sha256": "994453fbbbc7bae60e6249baa55f33c0041ddcf224607512bb5e9e13b2711891"
+  },
+  {
+    "path": "StockSageTests/StockSageIdeasCSVTests.swift",
+    "sha256": "29892fea9de5c6001a9fcc88379fd6f0a72b058b91177733c307b7a2b0f5fb81"
+  },
+  {
+    "path": "StockSageTests/StockSageTopFiveRankingTests.swift",
+    "sha256": "e80408f9535297542d3f6d3b4af7ca8246e76259c27c0a919f52bc8272acc198"
+  },
+  {
+    "path": "StockSageTests/StockSageRiskParityTests.swift",
+    "sha256": "daa064cef3cc5f9ff53ede71df3dc3e4a10e4e1a67ba31b4251fc0eeda312749"
+  },
+  {
+    "path": "StockSageTests/StockSageStaleVolumeCatalystTests.swift",
+    "sha256": "f5b0e660a4e5dad28287c121b5b8a7a57192537820a6cace61515e45125f074b"
+  },
+  {
+    "path": "StockSageTests/StockSageIngressSupersededMetricTests.swift",
+    "sha256": "c54ece46f9d8dfcf2139715b5e94112a72a91bf720538c88406e49f232b8203f"
+  },
+  {
+    "path": "StockSageTests/StockSageMassiveNewsTests.swift",
+    "sha256": "87c3dbdbeaf9130adc5e926df771f769bdb481e8bf2eb0eab73e215c0ec8b140"
+  },
+  {
+    "path": "StockSageTests/StockSageFeedIngressTests.swift",
+    "sha256": "4022d1a65ef5dfbd1134ba08783d75f2404f44e4e826a63e0ba042eff2644a87"
+  },
+  {
+    "path": "StockSageTests/StockSagePBOTests.swift",
+    "sha256": "07ae9e1fef5daa7bf7c7008de1cf1f3b7fc36445cf6e7f0791f6e5b5338205e9"
+  },
+  {
+    "path": "StockSageTests/PortfolioWidgetTests.swift",
+    "sha256": "cf76b96087772ea5b69930838471c2537763eaee60fc1ac6da33392b90055249"
+  },
+  {
+    "path": "StockSageTests/StockSageAnalystFeedTests.swift",
+    "sha256": "86c270ff23e7708276c4ae2de864acaf75b9bdf01df3ff78092610183ef1abed"
+  },
+  {
+    "path": "StockSageTests/StockSageGapRiskTests.swift",
+    "sha256": "17066906f36a5e45e5faec53f6dc9dfd1db87867f8c339903a8a036a8e4b04a6"
+  },
+  {
+    "path": "StockSageTests/StockSageAllocationOptimizerTests.swift",
+    "sha256": "33dc8a62fb7aaa32769d25c57ad6b2e797d3bf1e7fbe87083639680ada091dbd"
+  },
+  {
+    "path": "StockSageTests/StockSageSP500ConstituentsTests.swift",
+    "sha256": "e9149658a067730454f2dd49c53779b591db8266fba19be3658b045dbde5b61b"
+  },
+  {
+    "path": "StockSageTests/MarketsAccessibilityPresentationTests.swift",
+    "sha256": "dd5166b680d52d91be737712e2234b4413943238e629725c715ac0334308d55a"
+  },
+  {
+    "path": "StockSageTests/StockSageSameDayResearchTests.swift",
+    "sha256": "8ef780c151d0c8894a86d945fac0cb376a7a022dc17db2300c500d1688e2fcde"
+  },
+  {
+    "path": "StockSageTests/StockSageMonteCarloRuinTests.swift",
+    "sha256": "0d5bfe474afc328ff21c8b519714584f34e27b8604271c207ec3b12d166c5487"
+  },
+  {
+    "path": "StockSageTests/StockSagePaperAuditTests.swift",
+    "sha256": "2ececa33a61e89364c02eea0e8bc81b6ea2522d235793a495bb912621ee11134"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchHorizonCalendarTests.swift",
+    "sha256": "18fdf19962a483c0f6fec2ed3de24d3ec5615471a1402a41f4cc1f913899cacf"
+  },
+  {
+    "path": "StockSageTests/StockSageDeflatedSharpeTests.swift",
+    "sha256": "bc3eac1f289313d65e6c87eeb5e4246007304196cfbb94e40b30850866b5d76b"
+  },
+  {
+    "path": "StockSageTests/StockSageWhatIfTests.swift",
+    "sha256": "af453750401c9000f6f53c949fd44d4bb8f4bbd9427a4a82a024ba04bb43af5c"
+  },
+  {
+    "path": "StockSageTests/StockSageAlertsFlagPersistenceTests.swift",
+    "sha256": "32dd629a434274a877ba99df246222aa1da77d6674eb7e3aa3053fd5ddd260d1"
+  },
+  {
+    "path": "StockSageTests/StockSageMassiveTicksTests.swift",
+    "sha256": "938cd146530f3ad044e43b8f2c8bc2196ac51d4747e263e6fc34798d50e8b1f3"
+  },
+  {
+    "path": "StockSageTests/StockSageMomentumLayoutTests.swift",
+    "sha256": "b26389c7d3ecc3acb505366afa86686cad9d8479c6a05332b5d491d08cd88b1b"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchDiagnosticsTests.swift",
+    "sha256": "c61afcc3755d1323a3f27cd5c687f838eee96c19c6a47d8b235f8023503b132e"
+  },
+  {
+    "path": "StockSageTests/TradePnLTests.swift",
+    "sha256": "744dfee7c6920f8ad71029afb6359a40b5bcc60f820fb7866ffe1925ab0679d3"
+  },
+  {
+    "path": "StockSageTests/StockSageCorrelationClusterTests.swift",
+    "sha256": "ec44b9517b043a5261ece2750e2176d96c1bfc2bdc73d84d88ae530c046b4a6a"
+  },
+  {
+    "path": "StockSageTests/BacktestVerdictColorTests.swift",
+    "sha256": "997db27d0c20c8add153c851872470640def9b8cb86e9042a32a21bdb4c750e5"
+  },
+  {
+    "path": "StockSageTests/StockSageSectorTests.swift",
+    "sha256": "2cff8262d9c8d6f6b250f9325eeeca8533653b0696b9a0108f9dbfc2d8d06138"
+  },
+  {
+    "path": "StockSageTests/StockSageBenzingaConsumerTests.swift",
+    "sha256": "82ac9004fac4b445e2d2d474fb0e5c766113ebf215ac344b3e2f24b861fb87f9"
+  },
+  {
+    "path": "StockSageTests/StockSageFeedBannerLayoutTests.swift",
+    "sha256": "a13db534a5c9f47591f1e48f6af113705a59d2807b272e0b11a1c2f9642b6849"
+  },
+  {
+    "path": "StockSageTests/StockSagePaperTraderTests.swift",
+    "sha256": "91cb4d6d21cf7e15e1b1ec8b84b599ba5623977a94b06858516a7c20dc59d135"
+  },
+  {
+    "path": "StockSageTests/StockSageBreadthCoverageTests.swift",
+    "sha256": "93e9929933fdefdfb4f9d8ed853d2d13c3a83aff273c1250aa4983fe2f4ec277"
+  },
+  {
+    "path": "StockSageTests/StockSageMathInvariantTests.swift",
+    "sha256": "fde3812cb494d637d5d2489932edb619ededb1ea76ef8bfb74cbfe2fb1aaa8d1"
+  },
+  {
+    "path": "StockSageTests/StockSageNotificationBudgetTests.swift",
+    "sha256": "ad9787287233315a27f7a1fad697e066713a1bdcc6bc1217df0c614f2a7b6fb7"
+  },
+  {
+    "path": "StockSageTests/StockSageSeasonalityTests.swift",
+    "sha256": "c710513e962009e8feb0f38b11672f68feac9b428c8c2233d5fecfe48c4a2c24"
+  },
+  {
+    "path": "StockSageTests/StockSageLiveDataFooterTests.swift",
+    "sha256": "5a1847654ebdc179df2453bec698dd733a38d338513eeba3824742524a39779e"
+  },
+  {
+    "path": "StockSageTests/StockSageHorizonResearchTests.swift",
+    "sha256": "852dcd71b43705819a40203c8ed9b33a213b44b3df4feda1b415a1777989bcda"
+  },
+  {
+    "path": "StockSageTests/MarketsStaleQuoteAgeTests.swift",
+    "sha256": "7c4c2e0850c9bbba768427c9d46480bf1b3c0dca7e90e2ae80b2d700be24a566"
+  },
+  {
+    "path": "StockSageTests/StockSageMassiveSplitsTests.swift",
+    "sha256": "26297e4c7d6a6965b8a66a2427f079a0a0c6360bd2db682c283fc3ba02c85e70"
+  },
+  {
+    "path": "StockSageTests/StockSageDisclosureParseTests.swift",
+    "sha256": "f4ff8f21987a9be52a88fe9aef1f7f403d844850663f86fc82fb344d4311ca4e"
+  },
+  {
+    "path": "StockSageTests/StockSageCalibrationSelectorTests.swift",
+    "sha256": "17be354682d819c00ea826cc335db1dc120fefb74b7543faa35414bfd7e2611c"
+  },
+  {
+    "path": "StockSageTests/MarketsPolledQuoteMergeTests.swift",
+    "sha256": "b75689718a0421ea78887358b9ae3db6cedcbe2ef898ce38a50a54c6a178dfc7"
+  },
+  {
+    "path": "StockSageTests/OrdinalStrengthTests.swift",
+    "sha256": "13dff1e7d069745bc45e8ee4e839c90145ed5e05fd93592fe887e23bd3041e94"
+  },
+  {
+    "path": "StockSageTests/SheetCandidateNavigationTests.swift",
+    "sha256": "3c22bf0dc924fe2f36190df522015840281e46ef5d2eb77575044721095f1a2a"
+  },
+  {
+    "path": "StockSageTests/StockSageDecisionSnapshotTests.swift",
+    "sha256": "17644c4ca4dda722033b835c79be34a7f93a304b6271320c8b76293f768b4fd9"
+  },
+  {
+    "path": "StockSageTests/IdeaDetailLifecycleTests.swift",
+    "sha256": "da54ec91cb42c9affd2ce19a26665035a8d8ae6868e727d189cf56a28c194406"
+  },
+  {
+    "path": "StockSageTests/StockSageAdvisorTests.swift",
+    "sha256": "b47e5345adbe52e9fae43622e576b3a678710944cca9f1d90b24540324a8f8be"
+  },
+  {
+    "path": "StockSageTests/StockSageInsiderActivityPresentationTests.swift",
+    "sha256": "306de07be04efe231442ea6dee732f4fe1ad8f01281cb4fdfa2fadad83a92416"
+  },
+  {
+    "path": "StockSageTests/StockSageRunPodGemmaTests.swift",
+    "sha256": "f3d4d0ee2e3d8506efb344c153c1df1c0938549e55e3ac356e592b71b97d9840"
+  },
+  {
+    "path": "StockSageTests/StockSageTomGateTests.swift",
+    "sha256": "992e0465c45fd2a05ede803104445abfa35a899f254cbc37ec43332cd8f8194c"
+  },
+  {
+    "path": "StockSageTests/StockSageNBBOTests.swift",
+    "sha256": "8be2bce24b30d990b14e7c5768f0618f7742a63c8e024076676b061c562e48d6"
+  },
+  {
+    "path": "StockSageTests/StockSageIdeaProjectionTests.swift",
+    "sha256": "7cb46b4aa10e9a28edf59e55e5d20899a254588cc361ac1b54b84f139759fa5b"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchReceiptStoreTests.swift",
+    "sha256": "ecab9ff6bac0daaa28aecd15724467e12e5637f6e13b14a994383d653aafb1ad"
+  },
+  {
+    "path": "StockSageTests/StockSageSECRequestTests.swift",
+    "sha256": "b484af528a85133af2f52437e0db51d358f55325f7579d5bab28d6697d3d96f9"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchFreshnessTests.swift",
+    "sha256": "8c3edc7ebf570c690b7ac0224aa99d716564b42184be3170d0e183febc260e0f"
+  },
+  {
+    "path": "StockSageTests/StockSageMicrocapMonitorTests.swift",
+    "sha256": "8dbde306fc82deb7f9532bc2576f3bc5da2e2f0a5322d1195c8beb12116a930b"
+  },
+  {
+    "path": "StockSageTests/StockSageNetEdgeTests.swift",
+    "sha256": "bccd2ee5fcafb783b1ca4872ffc1bccacc368a241b79757831908b2015564cf0"
+  },
+  {
+    "path": "StockSageTests/StockSageRecordWriterTests.swift",
+    "sha256": "964ba789a321987a8b55847ab13de23761824b530000d0a3c8d337880af61994"
+  },
+  {
+    "path": "StockSageTests/StockSageWithholdingNoteTests.swift",
+    "sha256": "f5e707fa67bbaaeb9a37ccac8385d4c780ed0ce3b4f0ebd6b98bf6c657fc511f"
+  },
+  {
+    "path": "StockSageTests/StockSageKellyTests.swift",
+    "sha256": "9b76a770a2b7c4a426ef5eaa141047c0db99e58426a5b8105f6d8bcfed05fca5"
+  },
+  {
+    "path": "StockSageTests/StockSageTradePlanTests.swift",
+    "sha256": "6a89bdb56ad8e0b14031e05b85bbd3077754ac135acd2f2e6f2620d504d6871a"
+  },
+  {
+    "path": "StockSageTests/StockSageLayoutFixtures.swift",
+    "sha256": "528fbfbc945f5d2355de2661f433425e85c9f130e7db709282c1aa757f51f425"
+  },
+  {
+    "path": "StockSageTests/StockSageNewsOutcomeTests.swift",
+    "sha256": "61f2501e0a5dc982ebfe50a2428c6ce7d5acbe239b0e3686f1448985dc953568"
+  },
+  {
+    "path": "StockSageTests/MarketsRegimeWarningNeededTests.swift",
+    "sha256": "56b7a76a6d59c4e93dd2dd757face0e195c33b522781eebc1e821f8b05908f0f"
+  },
+  {
+    "path": "StockSageTests/StockSageTodayPlanRankedTests.swift",
+    "sha256": "2175e3f2957b3660a4c50a45f41a1fee018b493d96f93d667aec81a821e50e3d"
+  },
+  {
+    "path": "StockSageTests/StockSagePaperMarkProvenanceTests.swift",
+    "sha256": "23372296781483f375bb864006065bb2e820300fab16444eae9f1afc53cbcd78"
+  },
+  {
+    "path": "StockSageTests/StockSageIdeasMissingTests.swift",
+    "sha256": "b8df35b5cc678934d5fb9bb3d92f7ed536ac1d5fd9a8c1d8328ff1b109726839"
+  },
+  {
+    "path": "StockSageTests/MarketsPriceFlashDecayTests.swift",
+    "sha256": "183320aa466820fa1dbbf0c457e0b6686eeb1cf1a7ec1e535f16162b05314250"
+  },
+  {
+    "path": "StockSageTests/StockSageTelegramTests.swift",
+    "sha256": "5e413820cf018c8419c57eafa25bc55d97276ba06203faf148594a5154bbf6a0"
+  },
+  {
+    "path": "StockSageTests/StockSageMomentumQualityTests.swift",
+    "sha256": "74ea33341ebc133ad9c1df49ae5e2d9881c89460ac5eb76f9085c8e59da6910e"
+  },
+  {
+    "path": "StockSageTests/MarketsFreshnessStaleTests.swift",
+    "sha256": "59b8dcdd92f9ef226b0bc5892664cceb18b53de4945cf88316c50f0cfa7243fb"
+  },
+  {
+    "path": "StockSageTests/StockSageCodexResearchTests.swift",
+    "sha256": "a27f2bd51b6e042aa50e18e039b1423afeb2df2a83ced3bad3579a19e8a33869"
+  },
+  {
+    "path": "StockSageTests/SparkSeriesTests.swift",
+    "sha256": "b94e58eae6502f8c352eb641b1e1c3c03314ebe297bd275d02eb1bae0529553d"
+  },
+  {
+    "path": "StockSageTests/ToolPolicyTests.swift",
+    "sha256": "a38e6b53f28a9a6a98ee54d43c852f1c8ee7d6419d04e3261ebf6066a930bcae"
+  },
+  {
+    "path": "StockSageTests/StockSageHistoryBoundaryTests.swift",
+    "sha256": "0523a6ec1429284884f79b6fb5963eeb8c5756bd12b69ba7924b17db44a5a4a0"
+  },
+  {
+    "path": "StockSageTests/StockSageRiskFlagsTests.swift",
+    "sha256": "747ff55b93a740679479e471d7161012f8fd2d195495ab9f6a70dd4993eb0da0"
+  },
+  {
+    "path": "StockSageTests/StockSagePerfProbeTests.swift",
+    "sha256": "71af421a5af81ee708df6359109d2f6e9ff76648110577b3857a5e8e7c09b02f"
+  },
+  {
+    "path": "StockSageTests/StockSageIndicatorBoundaryTests.swift",
+    "sha256": "d9a6de00d05f7b14671e72de3916ebfb199ab0a334abaf14bf44003fefc394be"
+  },
+  {
+    "path": "StockSageTests/StockSageQuoteCacheTests.swift",
+    "sha256": "ee638480a031bcb29317d0f534191387a5de0d659223d81e80ef74918918107e"
+  },
+  {
+    "path": "StockSageTests/StockSageTodayPlanTests.swift",
+    "sha256": "753cbbf9b545eaf946124ce5dba4bc6ef7826afbbb18d6f055493bb9d1542d4c"
+  },
+  {
+    "path": "StockSageTests/StockSageAllocationTests.swift",
+    "sha256": "883e2f9dd2f7dd3f22975236d2a84255c408d8f6a45f60dac55cbaa7b0d483c5"
+  },
+  {
+    "path": "StockSageTests/StockSageSlippageTests.swift",
+    "sha256": "7453e040527b3af6eb72b84d81c00be9c178833d5c51af6f9c78e5b74012fcac"
+  },
+  {
+    "path": "StockSageTests/StockSageRecordedMoneyTests.swift",
+    "sha256": "ca5957fb9230435fdaeffde12f4e95d13df1d14f95773670e537ddbe5393b6ab"
+  },
+  {
+    "path": "StockSageTests/StockSagePaperStatisticsSafetyTests.swift",
+    "sha256": "2768fba04f3620d02649831636a1fc7687fa3cbac842856b057064af423625d8"
+  },
+  {
+    "path": "StockSageTests/StockSageFastLaneThresholdTests.swift",
+    "sha256": "5bd8dced3aa52c083d5a1929a28e3cce11045f7e3d334302f48b93a7da91f1c9"
+  },
+  {
+    "path": "StockSageTests/StockSageConvictionCalibrationTests.swift",
+    "sha256": "eceeb3bc391f746b11f70b36c014dd43132c24cf8f573c1715539b4f681bb200"
+  },
+  {
+    "path": "StockSageTests/StockSageQuoteServiceTests.swift",
+    "sha256": "84ac5c127dbe5abcdaf98e44e54b5a02fcab55587753e0b06fce51bf2251a7ad"
+  },
+  {
+    "path": "StockSageTests/StockSageTradeGateTests.swift",
+    "sha256": "c3e5f2717a2696af31933b748c76909b15c36198bc2a01a71dd406a5cf444c2e"
+  },
+  {
+    "path": "StockSageTests/StockSageAlertDecisionTests.swift",
+    "sha256": "22f1421819fdef5c8f5d1f59c4ccae640655ccf66a0897a68fd977fcf232744c"
+  },
+  {
+    "path": "StockSageTests/StockSagePortfolioAnalyticsTests.swift",
+    "sha256": "996ee75729107409e98e6b63570a74b195a8b1f01ed82b5887576ce778778726"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchLeadsImportTests.swift",
+    "sha256": "8cc6f4af7e4e8086805a0c427b7864d1aedcb8065db65b85116a0959b98aa2ad"
+  },
+  {
+    "path": "StockSageTests/StockSageExecutionTimingTests.swift",
+    "sha256": "57445d105ccae17c5578965e242f54efd07ff93c3ae5962fad002fc7e856fef3"
+  },
+  {
+    "path": "StockSageTests/StockSageJournalCoverageTests.swift",
+    "sha256": "351ffec64076a556b50266fc0714c438f39af9b5f558006ba1c9802c2fdeb24a"
+  },
+  {
+    "path": "StockSageTests/StockSageInputTests.swift",
+    "sha256": "431a17dd2cf0ac3522d51a38333b33e9d0fa0f9855259e82fa74143edf144670"
+  },
+  {
+    "path": "StockSageTests/StockSageConvictionScalerTests.swift",
+    "sha256": "5af5b2e582f5a14e03f6208e383703a9ac86a0d7dad1f274f67818c106be6409"
+  },
+  {
+    "path": "StockSageTests/MarketsPriceFlashDirectionTests.swift",
+    "sha256": "d6c8583b915dae01a67f5dd9d9a7efa35b33b2a94b07fd7cb47473dd450c8306"
+  },
+  {
+    "path": "StockSageTests/StockSageBacktestTests.swift",
+    "sha256": "3b982886e3bccc5e4f15663ed0fe22a2fa6871c6ba3179427fab85bf8fa17780"
+  },
+  {
+    "path": "StockSageTests/StockSageModelIdentityMigrationTests.swift",
+    "sha256": "b779a0d59e4e4f0ad0be0c368d0bfedba6277259749f67b9644c77133ca4e724"
+  },
+  {
+    "path": "StockSageTests/StockSageRebalanceTests.swift",
+    "sha256": "deba0f2357d513ba89fd93b4118e135e63fe406e1f0cb9d63cccb9965e4dd6c5"
+  },
+  {
+    "path": "StockSageTests/StockSageSECFundamentalsTests.swift",
+    "sha256": "076b4c75715d3ea6fcfe674d7bfa59a39aca21c2029527c2393f1ccf84de9372"
+  },
+  {
+    "path": "StockSageTests/StockSageHorizonAnalyzeTests.swift",
+    "sha256": "f4bbdb0eba5c2b7ebe4a5f49a0a6b08a829a123cf2ac29733d1f0d44579f5543"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystProjectionTests.swift",
+    "sha256": "bbd78591642743218cca6eb6a83d54161eb97cb37929d871f271b77e50f33b00"
+  },
+  {
+    "path": "StockSageTests/StockSageNetCostSimTests.swift",
+    "sha256": "4ac4ad6270073f68e6de997691a485d8a60e3f7c19e42f78431441598cd55a3e"
+  },
+  {
+    "path": "StockSageTests/StockSageHoldingOverlapTests.swift",
+    "sha256": "0795736d2c0d03aa4a50d877b010ae6ab1f6b9d05ddd5adb3f6102901a1fddb1"
+  },
+  {
+    "path": "StockSageTests/StockSageVolRegimeTests.swift",
+    "sha256": "6802bb7cd7159d74fc0f1430b3b0682947f7cf43d588334a47aedf5ff90a4f78"
+  },
+  {
+    "path": "StockSageTests/StockSageCompoundingHorizonTests.swift",
+    "sha256": "e34c71d99fc64f60b66517df7074433f8f1513567ea7ced044f5e7d5d56af759"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystRecordCacheTests.swift",
+    "sha256": "32c6cf215e758a5de800092ece72e3347c2b76bacbd2e03276257ac9ff1224dd"
+  },
+  {
+    "path": "StockSageTests/StockSageCatalystTests.swift",
+    "sha256": "e620b375399c13280fc09e8ffb671bdfc2bd75535788d2c60a1d68d477831a71"
+  },
+  {
+    "path": "StockSageTests/StockSageTechnicalSnapshotTests.swift",
+    "sha256": "92b16e369c99fc65416646a586b24807664f4111f79c7d61fb9004631a06db2b"
+  },
+  {
+    "path": "StockSageTests/StockSageResearchHistoryTests.swift",
+    "sha256": "dca30ab70d425708fc5cb763f7c7d591ce200aafb8e61074507f8986c0094cc7"
+  },
+  {
+    "path": "StockSageTests/TomFlagTestLock.swift",
+    "sha256": "a70aa6e743cebd1073953e5f28af0033d201bee776a55f57c1a30668d460a720"
+  },
+  {
+    "path": "StockSageTests/StockSageLiveAlertTests.swift",
+    "sha256": "3cacf531b2e5829b36c45f4e4716745dcaea2073b5c108d130b6e7fa33c4cccf"
+  },
+  {
+    "path": "StockSageTests/StockSagePriceDenominationTests.swift",
+    "sha256": "7a8586e4e3b5e92513b76a93259bfe724283c37147b2e24993e7518c4011acfd"
+  },
+  {
+    "path": "StockSageTests/StockSagePhoneOfflineCoreTests.swift",
+    "sha256": "381b2d51a1db72b220a42406cc84b4ce7aef62387f90f2bf36dcf61e7f22eb48"
+  },
+  {
+    "path": "StockSageTests/StockSageRiskParityVsEqualTests.swift",
+    "sha256": "6c214fce8c353be3ff40dd25e845bbfd9d610bda67789e743776e8224380af15"
+  },
+  {
+    "path": "StockSageTests/StockSageManagedModelLifecycleTests.swift",
+    "sha256": "5bf42ca89fc5caa1484f7c7800c8919adad5b28412e9f0029abe1f87a9fc26c2"
+  },
+  {
+    "path": "StockSageTests/LiveUniverseVerificationTests.swift",
+    "sha256": "7e22d05e638bb05f700e03a4111b099c8558f85935ca30430809ab270ca2095a"
+  },
+  {
+    "path": "StockSageTests/BrowseMarketsFilterTests.swift",
+    "sha256": "04e8cb5ed7c1af56faee18ef7d9a5649b4d9b989877524231dfe59f6fcd64e71"
+  },
+  {
+    "path": "StockSageTests/StockSageChatTests.swift",
+    "sha256": "f55da3400a2ba43dbd9920eb87a80f1d203c0e9e080e4104d74fbfa66d91f58d"
+  },
+  {
+    "path": "StockSageTests/StockSageRefuseListTests.swift",
+    "sha256": "e918f756995bb187201ccbb8bc4e2afc8dd42fcb82957497b11fcf9546bb8fcf"
+  },
+  {
+    "path": "StockSageTests/StockSageCapitalAllocatorTests.swift",
+    "sha256": "7b62e5a9f238dd20034f138e985a32c130ac6f5951eb4f3a92735c429616c2dc"
+  },
+  {
+    "path": "StockSageTests/MarketsSignalBlockCountTests.swift",
+    "sha256": "332a85c212623042395a1d81eafbb4322b52617d1e3177ad0b4c3e88da8779c3"
+  },
+  {
+    "path": "StockSageTests/StockSageTests.swift",
+    "sha256": "f415a33c5e4a29d94179862fff155fd45ab05b9199f55233253af2434868342f"
+  },
+  {
+    "path": "StockSageTests/StockSagePreviousCloseTests.swift",
+    "sha256": "2f0d1aa1317e7e8eb709c16dfe0a8f234fd29b62f5eb40d053feffaaea093cf6"
+  },
+  {
+    "path": "StockSageTests/StockSagePartialLadderTests.swift",
+    "sha256": "7191ccdaf30799fbca13fd841930d524d7050d60e4ac8a74239bcbdabb55549b"
+  },
+  {
+    "path": "StockSageTests/StockSagePaperAutomationTests.swift",
+    "sha256": "c66200045e2cf80a8fbee077ffcf8dd233526de2de98ae6f112a8ff7fd98a20c"
+  },
+  {
+    "path": "StockSageTests/StockSageLossLimitTests.swift",
+    "sha256": "6ef144860c43532b2edf13a455a900952cea6bc1b91b70bf45dbfa082bdaf932"
+  },
+  {
+    "path": "StockSageTests/StockSageLeverageTests.swift",
+    "sha256": "3df9a1c3a18408e3b3c8704996519a15e34e8cbba4e75cf82666808d22a96470"
+  },
+  {
+    "path": "StockSageTests/StockSageHonestyGuardTests.swift",
+    "sha256": "ef7d18975af2e36778abb38ba81b304d9e6fd6b7dd07809e43fbdb1c08717089"
+  },
+  {
+    "path": "StockSageTests/StockSageMarketHoursTests.swift",
+    "sha256": "ae62d73b6d076f51e6fbcd2d0b7a21d9913050e100012c3c3edbe57f9149e890"
+  },
+  {
+    "path": "StockSageTests/StockSageCurrencyTests.swift",
+    "sha256": "cd9541c949c353ca9d4c08f1dd1449b038cd85ab6a1dad44d1232917be2a2d84"
+  },
+  {
+    "path": "StockSageTests/StockSageFirstQuoteTests.swift",
+    "sha256": "de57dc6a5ae2858b9f016bd2d0325e5a9f12feaeb7f759e9a8a5757ae061c7c3"
+  },
+  {
+    "path": "StockSageTests/StockSageBoundaryTests.swift",
+    "sha256": "ec2490629c49cd7782a0dbd9bd459c118a9ca4a93d741ec184454de45fe2d906"
+  },
+  {
+    "path": "StockSageTests/StockSageTimeStopTests.swift",
+    "sha256": "5332a3b1709024460b7f4b788a06c342deebe91a478c4f535b5c59913692bd33"
+  },
+  {
+    "path": "StockSageTests/StockSageTopFiveRankingSectionTests.swift",
+    "sha256": "9a30018dffce07b09148a4784d6d44bb0e639b4038af441ad87a7d2e4bd8ad20"
+  },
+  {
+    "path": "StockSageTests/StockSageModelSetupWindowRouteTests.swift",
+    "sha256": "503b6be5e3fc25e1470265dd46c44e232268561b2317896b5365f7d673f85932"
+  },
+  {
+    "path": "StockSageTests/StockSageStrategyBacktestTests.swift",
+    "sha256": "2b9a5679cbd2864887a9760a4226f19399a1028fbb37f906ffd6bbc10074f45e"
+  },
+  {
+    "path": "StockSageTests/StockSageDrawdownTests.swift",
+    "sha256": "3e1d5f5124a765dbdca691369285c3fb3706dcbdc7d701c1b3dde5dc2198fefa"
+  },
+  {
+    "path": "StockSageTests/StockSageRedundantTickTests.swift",
+    "sha256": "b6d0a5268ad95aed08f17a07418be809449e67b5673bf38c532529bacb2401fa"
+  },
+  {
+    "path": "StockSageTests/StockSagePriceAlertTests.swift",
+    "sha256": "662d9f84e79a858f21d80081ebf05961051b82d940b324d9e008e1a95252050a"
+  },
+  {
+    "path": "StockSageTests/StockSageWatchlistTests.swift",
+    "sha256": "d186eecaa5ceb659d262c6c79bfaabfa48264c300df7670f1ed757b5a8bc583b"
+  },
+  {
+    "path": "StockSageTests/StockSageMassiveShortInterestTests.swift",
+    "sha256": "79d1e87e258afa3883f55cbff7b28b43291e60e3b226d11a0aab1e15b7ccb401"
+  },
+  {
+    "path": "StockSageTests/StockSageFundamentalsTests.swift",
+    "sha256": "dba7feb284e61c91dbfce3852eacfc004c58984f7083577aeade85b6762626e9"
+  },
+  {
+    "path": "StockSageTests/StockSageUniverseTests.swift",
+    "sha256": "fd5cf1a1d2caed45c90fbc888b8a4caa7b17b15226c79457d65e4524e983b98b"
+  },
+  {
+    "path": "StockSageTests/StockSageKnapsackTruncationTests.swift",
+    "sha256": "7e44987fbb8e1b8e0a82b0654205dc75f34232a181ed74ca50eadf55ce49e73e"
+  },
+  {
+    "path": "StockSageTests/StockSagePortfolioHeatTests.swift",
+    "sha256": "c534dd96063e99433cddbd0d26a8c0c5ddf31de4da860e64bb553d9dc8616fbd"
+  },
+  {
+    "path": "StockSageTests/StockSageMicrocapScreenTests.swift",
+    "sha256": "d0401086e3dac1f71bdb1aeb2ed234c0f2858f3c5ae7fa39be0bd34e8249c0a3"
+  },
+  {
+    "path": "StockSageTests/StockSageTickSizeTests.swift",
+    "sha256": "75dc6bdbf05aaf50415c3a1a5b55cf3b7f86719538321b9446095452ea11da92"
+  },
+  {
+    "path": "StockSageTests/StockSageTopFiveAdapterTests.swift",
+    "sha256": "3506405593d2b4ab31a7349142ebaf21214af00549e5caa6321c568f60f4c6c8"
+  },
+  {
+    "path": "StockSageTests/StockSageSpokenProvenanceTests.swift",
+    "sha256": "c1fd2951ed1f6bc572ccc3a7a60c909e01fc901cd307a9b478fdf1ddac4d12cb"
+  },
+  {
+    "path": "StockSagePublishingUITests/StockSagePublishingUITests.swift",
+    "sha256": "593c486fa70222bf99f4b46e107e7bc15cb319c9edded2061d8d519a4d49db3f"
+  },
+  {
+    "path": "StockSage/StockSageX.entitlements",
+    "sha256": "344d96bbcaae0e508478d4bea4bf22bed2aed9d98700d1a5002653a4a16ad53c"
+  },
+  {
+    "path": "StockSage/Sources/PrivacyInfo.xcprivacy",
+    "sha256": "d1628d996c078936a49db99d4fe5e4ebbc493e9e32435376e144f1dbf56d976d"
+  },
+  {
+    "path": "StockSage/Sources/DesignSystem/DesignSystem.swift",
+    "sha256": "e0a0a353e12d60824b27103ee91dcb946dda11d27a4c87f9efcf1c10a5cb9dbd"
+  },
+  {
+    "path": "StockSage/Sources/App/AppSettings.swift",
+    "sha256": "612f6af791f776892c395c9d3378d58726e82d2c74a802aa9f5740cfc462f5d8"
+  },
+  {
+    "path": "StockSage/Sources/App/PortfolioWidget.swift",
+    "sha256": "cc02b8aaf5c2f140da7fee754152371a0ab44e413d045909d20fca5779681560"
+  },
+  {
+    "path": "StockSage/Sources/App/ToolPolicy.swift",
+    "sha256": "757fc51e3195ac610c8c63b72cefd72d0d765d57c589477fd96504858c264e4b"
+  },
+  {
+    "path": "StockSage/Sources/App/StockSageApp.swift",
+    "sha256": "f021a4dc042481be9ee6dccbabb4389d43bb9902227660b74d1ef691576621bf"
+  },
+  {
+    "path": "StockSage/Sources/App/StockSageIntents.swift",
+    "sha256": "b9f8a21c2441e28b2c25c1fc4b5116ba377019987d9d54f1bd54ebe820266aa9"
+  },
+  {
+    "path": "StockSage/Sources/App/StockSageMenuBar.swift",
+    "sha256": "2a7d577fd4a13503596386b70a1e9ee5de1107bc2eb626f922780b27af95fd20"
+  },
+  {
+    "path": "StockSage/Sources/App/StockSageSettings.swift",
+    "sha256": "fe79809f1bbbc4f96ca31afcfc19e07c9636e8feb80a9f57460b9a03eccb6869"
+  },
+  {
+    "path": "StockSage/Sources/App/StockSageTelemetry.swift",
+    "sha256": "4d7f201d627416b225165a22ec61339fc4b2c85600a2130b1ce7fe71e3aa954f"
+  },
+  {
+    "path": "StockSage/Sources/App/StockSageModelSetupWindowRoute.swift",
+    "sha256": "222263df0e188c5efe24849b9c70aea613488bae6f053512d4e17e61a3186e48"
+  },
+  {
+    "path": "StockSage/Sources/Assets.xcassets/Contents.json",
+    "sha256": "80b0b2e5ce5f42d06c9cea0234147e7f2bea58ef205c47ce3a82f0abe4b64465"
+  },
+  {
+    "path": "StockSage/Sources/Views/CatalystsSection.swift",
+    "sha256": "ee9c17b538cc582e1dd287b6c307b6b6517e17ccf4b33d2fe153fddb67d22bb5"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePersonalSizerView.swift",
+    "sha256": "670bf043df85c9cdd1f16434e0ac71c9657fb02ac6cf903a6ab5c12bb0f64404"
+  },
+  {
+    "path": "StockSage/Sources/Views/MarketsView.swift",
+    "sha256": "3b94d99a1cca8ff0f78787cd49f3b1028964af6982f55e947fa5ab7ee3059f4b"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageScreenerNewsView.swift",
+    "sha256": "0d5904522abcc325827e176a02b24ab21f1e7a9dc2c9c8b0fc5209c795749068"
+  },
+  {
+    "path": "StockSage/Sources/Views/Sparkline.swift",
+    "sha256": "04c1aa262b79988e4ceb082b2dc34993d577de68172420cb6f2a1066e0163a6c"
+  },
+  {
+    "path": "StockSage/Sources/Views/CorrelationMatrixView.swift",
+    "sha256": "83aabcda7e7acc7a8668a0ba4193436d4398fc42e19e4c0aaf61bc674f37f28e"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageStockScreenerView.swift",
+    "sha256": "1a0e06dfce945fb639c87dfd2a4242e668b93f9184da0186e575cfc3b515a78e"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageDesktopNavigation.swift",
+    "sha256": "b82dbe1e321d9797a57a5ec87831ace53d9daab2d1eaddfc9620390ef919fc17"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageTelegramSetupView.swift",
+    "sha256": "7b07a3a10ea37dfe948907d56152b20f8103d79e842f96a91536f77548c3a8b9"
+  },
+  {
+    "path": "StockSage/Sources/Views/MarketSessionClockView.swift",
+    "sha256": "882925f4fb01351b797e4614f84f340c5d5f8c4bc27ecf56fea8b8b03ebeba90"
+  },
+  {
+    "path": "StockSage/Sources/Views/BrowseMarketsView.swift",
+    "sha256": "4c41b8e9297a92e884873877b29575bcffa132bbf873ef022de48574d903413d"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageResearchEvaluationView.swift",
+    "sha256": "7f6c2330f32c797d19a80769180430ee555d658d70a2160c0fe1f732278cb64b"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageAIAssessmentView.swift",
+    "sha256": "53bdc881899ba572b561b34dab863cf257ed7345998179beda458f952b16105a"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageAnalystFeedView.swift",
+    "sha256": "5aa7e0169a4fd325d6f2d98f55530fe61f97072e0268f0f40361700c0dd41865"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageResearchReviewFilter.swift",
+    "sha256": "dd5d606979046fcd864f157fd656d792deb30fedb50e7f2ba6b13ed381cd8695"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageTopFiveRankingSection.swift",
+    "sha256": "3bcef06a75ddfd88a9010cf3bcaaf11083ad99bfb01aef1942cb5f50c67348c1"
+  },
+  {
+    "path": "StockSage/Sources/Views/ExecutionQualityPanel.swift",
+    "sha256": "541164f00e363fdbe202e38694a5a512b6b62343dd9004406e81f29dc368a017"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePersonalBackupView.swift",
+    "sha256": "9e4af304c816259c48a2cdc546a08cb052fa385cf97cf7b8a47f676707af91aa"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageMicrocapActivityView.swift",
+    "sha256": "2450c10564020658349d308e87659569635eeab34ad1001455e448cbaaf42bc1"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageResearchModesPanel.swift",
+    "sha256": "ebc569eeaecbf7bb2b87422e61098f0d8d6c2663b1d94ee4ba5f60ce1b901f71"
+  },
+  {
+    "path": "StockSage/Sources/Views/PlanShareButton.swift",
+    "sha256": "1a5fa279b3addaba5f6e13516c8fc4ed065e02602d64312fd2bf2dee1ddef968"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePaperAutomationPanel.swift",
+    "sha256": "68b58ca8524f07948eb64f672c8167e5f0fcfbc71cf937110be560a96fffbd6a"
+  },
+  {
+    "path": "StockSage/Sources/Views/IOSSettingsSheet.swift",
+    "sha256": "cc542faaafa4fa7101166f783b1b5acfbde45a673f37867986a6713515bfadb8"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageInsiderActivityPresentation.swift",
+    "sha256": "f717136a3d7938694ea3b5b66b780ab940cbfcf81ab18ca4356920a246b7df8e"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageChatSection.swift",
+    "sha256": "8099bb4354d7cef9df8121eb22a4db1596df21807290b5341663341aa3a3fcb2"
+  },
+  {
+    "path": "StockSage/Sources/Views/PlatformShims.swift",
+    "sha256": "74af6b6fdce53ca67ed41cd2108ca9c4aac4d18a60170ad175ea029145f3d8dc"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageWhatsAppMessagesView.swift",
+    "sha256": "c35d75488dc4794fe85b1ba70d5c7d27585ccb5f4e3246ef97ff88ff6740ef34"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePersonalJournalView.swift",
+    "sha256": "06afc4cc32aab5a5519f1b3d0a849c00d44a0f0209c1ab658a94b4b56ce34ed6"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePersonalPricesView.swift",
+    "sha256": "e9dca3443e9bab503f1442967ac08e7063225398f9b4d31f9ff5762bf94aed2d"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageResearchHistoryView.swift",
+    "sha256": "3c5d90f93c22bcf3534def688a07a8821ae7a29b2d3102421aa89e0dd46fdd61"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePersonalInputs.swift",
+    "sha256": "19eba7018a35ce2134cf6c307de835bc480d11db43d0358c09134cffe48cbc3a"
+  },
+  {
+    "path": "StockSage/Sources/Views/OnboardingSheet.swift",
+    "sha256": "ca4147f4df499fcb6ed2ece099d31e731e417e4656245071be1c1f56484522be"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageVolumeAlertForm.swift",
+    "sha256": "ed429194f05909d5b6a4bc30d96fd0fc52ae80f909574d5a0279d0baa0a185d9"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageNBBOView.swift",
+    "sha256": "c2cb358695b47867aadadb291ee9e1498f82852f3bffef52646205e9510eb6df"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageResearchQualityPresentation.swift",
+    "sha256": "fc186764da91459af1e88ac3cd971814546fa741479d6a29256bddb0039f9a35"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSagePortfolioHoldingsView.swift",
+    "sha256": "ba552d0e0fecd99f42cf5d7c41568d60a2bb7dcdf0f0f0997628520c1e362964"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageResearchTable.swift",
+    "sha256": "552d76587cad23e0fc86695eef09579af5f7e9c1b9b2e18bb62cf0f327856453"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageNotificationAudioSettings.swift",
+    "sha256": "6999db67a64e382cc8a488f0bdda1a08c08954b011996a9fb1fa95527a37f0e1"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageMomentumView.swift",
+    "sha256": "5035d9a6bc8b96e75d6a4213c4ff35eaa72131ff52946d9e81b378f045ef1e7d"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageMassiveKeyField.swift",
+    "sha256": "a177a0e798289231516239424fca4db9d6db18d3dc2c4f3e13d88a462f976279"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageLocalSentimentView.swift",
+    "sha256": "99316e43d07b1e4867be70d3833f7d57316fc70ba64a542c9072d3fc09a129b7"
+  },
+  {
+    "path": "StockSage/Sources/Views/MarketsTodayActionsCard.swift",
+    "sha256": "0c967507b86a772b9143465d0bc80a6db2fdfd8591dfbf6021bb4915bcb19395"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageSameDayResearchPanel.swift",
+    "sha256": "63fae5827495e174df2d1a3d12c8d84062e7541632c655782961005801b057e2"
+  },
+  {
+    "path": "StockSage/Sources/Views/IdeaDetailEvidence.swift",
+    "sha256": "fff99e76e94c7c4271fba27e71471f5f1ddde3756645af22dfbdad19b0dcb920"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageBenzingaEvidenceView.swift",
+    "sha256": "a8bbc71930f2b8ae9d3543b7dc8df80e03c6af095733c80ac2326412fde2d380"
+  },
+  {
+    "path": "StockSage/Sources/Views/StockSageTapeView.swift",
+    "sha256": "645072b96e7b313833937fba258699a1baf44f154fc3cea39fa531566ebfd23d"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageKelly.swift",
+    "sha256": "f51072326c97f17d0318fb8a87b4a92957f55d0e657dda33e1ec77eca44d60e9"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePaperAutomation.swift",
+    "sha256": "e988b23e287681d7a3658060c0a72efbfea4b9d4c435f928412411cdf2abfcda"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLiquidity.swift",
+    "sha256": "59190ac799f3d0e733d9a301e0a4a94a08723d32ecffbfa66b39568e5fb8774a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLocalModelStartup.swift",
+    "sha256": "37422bdd38d31ece8ac14ce3a884c679c77ad6e10952bb23936758e3cba679c8"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCurrency.swift",
+    "sha256": "b816648ffb391ea03d3374538554ae67e5314054a852765a81306405b969b7c6"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassiveTicks.swift",
+    "sha256": "35ca99d55287c7da6c704e8a5502af028a8cef9b0054cb275f576c5fcefca8e6"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNBBO.swift",
+    "sha256": "e31a10176d73a97f515d041dcd2b13df7351014896e2b6927165a5814d45aa11"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRiskParity.swift",
+    "sha256": "4f0b6ede306fba9c735b1e62d8f41665d444112d55baefbbd7e9111d695de046"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassiveEvents.swift",
+    "sha256": "9447665b7ee133cf76eb071acc697097a6160ab5b7d8e891941d2f0b998c6ffc"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageFileLock.swift",
+    "sha256": "3dcf3d90801212330b66562c07ce8aaf65387f36b76ac515d427c6553b1b3590"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageExecutionTiming.swift",
+    "sha256": "bdf4db3ce6ea800d14071dc5f4c3f0d2d38bfe4265a0d3daf926a76fe694a859"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageJournalCSV.swift",
+    "sha256": "d8fda62041a6cea28a123468a3289322611e85b1127780dbe9a5d11c8f846c50"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchQualification.swift",
+    "sha256": "f672568885c7ea508d4652effb6ef1dcd27e8c3c88c30700e1960316653bc0d0"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSameDayResearch.swift",
+    "sha256": "41911027ac33586147ea556e1cdd7fb16baadfb6b9da0dd7682022ea23511f4c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageHoldingOverlap.swift",
+    "sha256": "751c6377fe093a21b45760e0ec946f9636d31057beb9bc5ba3f77d394ed0ebf2"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSP500Constituents.swift",
+    "sha256": "05ed6a8042a52f71acd73362f842c3c27ce08c1726674d8b4098df0cfd1a779f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCorrelationCluster.swift",
+    "sha256": "65a2b2b68c5917eedbf1f68925925475c1560f86b10fe79a3b1ac65910484c5f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageWithholdingNote.swift",
+    "sha256": "8cfa16e77a311b60a41222f855b5e4adf20a26b006c60f5e0417f1f8ca2d9526"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageVolRegime.swift",
+    "sha256": "93755464d493794919bef94b81e15c44f247e93ff44cb768394e28be55ae9b89"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTrailingStop.swift",
+    "sha256": "51a5461d150386bc64ffac7d34111006add70ebe338152e4db2b125f7d46811b"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTickSize.swift",
+    "sha256": "bf560ca458d53663d740f6f2b2c74d5d0c5c441db984e49baaf4ba7e07d3bdcf"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCatalystProjection.swift",
+    "sha256": "0d9cfd18ac83fab061978f78b3419909188451fdbc04d779e83cbe1b5be71a4f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRegime.swift",
+    "sha256": "dfefa858cc6eb9b7d82647d2da625055dd843b38250948a180f2d29426c72ea9"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageVelocityHistory.swift",
+    "sha256": "b291e01e634b8a63a4f4fce552d6143dfbed46856d1b3fa79e817ae910819c7e"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTodayPlan.swift",
+    "sha256": "e1a4f8eb4cc746ae89a09e2d4fd7f2e273780bf6123c6c1b9203ab39852e230f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageIdeaChipPlan.swift",
+    "sha256": "58dde3c74a11b1b71eebaa78155e7975f7bb937dc6ee550c7a4603c2062b512d"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCatalyst.swift",
+    "sha256": "57f18c1460b28222a44b80467a72210bcee428b22d48353a340e7b1de53030f4"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageInsider.swift",
+    "sha256": "5a58b248de48ec78f24f21a7e3f591ca2ed114625bef89acd8b1a1708a8c1eb8"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageBackup.swift",
+    "sha256": "a27982b1a85d5838136ecbdaef21f9d537716c13572ebaca1647a277d237ad84"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageWidgetSnapshot.swift",
+    "sha256": "664d1ed12802a12d377ca0874afb501a53ed92453d91768c361c138571d82a46"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSECFundamentals.swift",
+    "sha256": "ddec3a1c746e62e6883451d12b899d5e256b2a31104856047f54e2ebf0f5d5c1"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassiveSplits.swift",
+    "sha256": "3a0dda3c814b418faaceffa0dd969acb6ae747e27746260a3e31d53f05d465a7"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAdvisor.swift",
+    "sha256": "d8984ba3789d6b3f554023f9494bde3febaab0593fd749be92bc128c62625761"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePaperTrader.swift",
+    "sha256": "4adead139080d56bd6bf4bc3ba15329c8161b1cf1d588658006712dae226389f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTradeGate.swift",
+    "sha256": "c71aef2543fcafc6a114125ad57045cb8d6927619cf1a3f78e421f7228b5af4d"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePBO.swift",
+    "sha256": "b189357ae945dbd8ec2499581a2a68a1b713daa6d916d7b4c54cc08acdaa018a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchHistory.swift",
+    "sha256": "265a9480db4e9e58085c83429068c23f08e858f29e6ca2bc2e9c1c4bd3f828ed"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAlertDecision.swift",
+    "sha256": "e7b132b30fd0a38b570d10b33e7a9850679546819e7937213d3574781585c35e"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLossLimit.swift",
+    "sha256": "60d7eb899f209c3d0a370772e2f7861efe27afa190de109fe021243bcc86d015"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRecordDeletions.swift",
+    "sha256": "86b27bfe08da9bc743f3b4e999ca227fded847e470edb2b27d9bfd573c390c8a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCompoundingHorizon.swift",
+    "sha256": "37ef575375d3140f81db5a0d3c96a1c434639bc0721321ec90ff369bbb9af684"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCodexResearch.swift",
+    "sha256": "f4df4037cf01cd8ce766dbbfaa253d7c333c419caf0ae15db64920104151af37"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchReceiptStore.swift",
+    "sha256": "ecac477417445b4f50d13596f411283a080fdb1d53c03a8c6886ef89de634ce5"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageHTTP.swift",
+    "sha256": "0b29459f5ce4c207e593de1482bbc5c57b731ae28f5ee9e466209635edb2b32c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchRanking.swift",
+    "sha256": "7e21971aceac4afca456a7a2d6714a493fea4bfb60fdf16a9e2b8be914f37ed6"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNotificationBudget.swift",
+    "sha256": "5d647c64b6c758389dedec6fb91b0972e42e6f27b723b4ef56606298935be393"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRiskFlags.swift",
+    "sha256": "92629b509306ec1cab4351ab6c32fba65b5efd522d436c300f2a61175de2fe6c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRecordStorage.swift",
+    "sha256": "3b3d8eb0607a8ede20dbd0061738715ad3daeebbf8356d0f827c27f442f0b1fb"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNotificationHandler.swift",
+    "sha256": "df885478554ba089c3179a344b39c2a66f34ba904e1295bed3df78e39fa7d827"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLocalSentiment.swift",
+    "sha256": "01e78e75d164f1ba63f80cc9ee0bf8df0f0965b5d642238330c30fa0beb6004a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageGapRisk.swift",
+    "sha256": "cf29afc79fee4a10e830a26ff17ed163bd23767e0e040de2399a949eba0db0c0"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNotificationRouter.swift",
+    "sha256": "de441a594e304f7fd1dafa272947cdd3c8a4ad888d45812f10ee1ca37d278b64"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePaperAudit.swift",
+    "sha256": "5d8c838d121b6851fc51ef08c0977a59681f35bd193c274aef8c44680c9ed6fb"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTopFiveRanking.swift",
+    "sha256": "159ef46505ebcf142bde2c6ce94730c79ac3e3cad8378a9391cfab232bfb22fc"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCatalystNarrator.swift",
+    "sha256": "cbd3cd811efa3d0609cc6d32b7dec74913d8415532fc724bcdc10a307fcc758a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMonitor.swift",
+    "sha256": "2e6092b7364b4f82edac7655e3aa59fe5f3f2eded1235082035da572934cb25a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageDisclosureService.swift",
+    "sha256": "7d56c6b548d2e16b83d235307b27a25bdc543aed7f5f661a68e76ffbca247ae4"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchExport.swift",
+    "sha256": "52e47e09893c5feaa148746927d996aada62c49939626f1921f54a9d79f6df54"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRefuseList.swift",
+    "sha256": "3c5931077f181fff7a3a7ea8207e83e13cb0fbb38869508fbf04868baf2fc0fc"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePartialLadder.swift",
+    "sha256": "bf98f6e7cad660aaada08a78b092096449af940381e134ae6cd5761a753fad35"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageWhatIf.swift",
+    "sha256": "24c76731537277f07acf3f0ddae98763382e50f3e68273911bda8b851772ed4e"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageStore+QuoteMerge.swift",
+    "sha256": "0443596c2c2748ed11ed7042a20200ef3bc1aed9889e88024fe4502f9969562e"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCatalystChain.swift",
+    "sha256": "9ffa11b21e7856826990c344a5425369aace3fdd79c949c5308c9b10f04b1a77"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTadawulNames.swift",
+    "sha256": "cff0ce3c98029cf16f40636485b0021379c4598f417967fb9d532be06e904691"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTradePlan.swift",
+    "sha256": "411c076ed77d1fe199b3e2f327986b7628a9eff28cb264fd13609cb4ef26b077"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTimeStop.swift",
+    "sha256": "167005c742453fe674528fa6be2a372f4de0213834b25dbff80de110660236d3"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAIAssessment.swift",
+    "sha256": "38e5c4342805a2d63cd595f455ad15c84296d93568f301b7c18f07737f7753ba"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassiveCredential.swift",
+    "sha256": "75d0370f5f7cacc24e8114002840ed3de7c6fbe29334061b20b9e07c415b0e0c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageJournal.swift",
+    "sha256": "2cc8a20efaa7c2361220627a93eae373cde18fb8b558108d1a4b86cd12ae2ae6"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageJournalCSVImport.swift",
+    "sha256": "2f126db7e8204a1128ffabc1cc25c8fb7915b76de2c3b8088b1410cfead736c0"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchInstrument.swift",
+    "sha256": "862604b4fed9fc6ce9409bcbc36d2cf749f5556e10a4da0b04627ecd3f216429"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRelativeStrength.swift",
+    "sha256": "4ceff9c8e49b5bc0ce09efb6b415d02412a2b870292a06418fe7277b761e763f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNewsService.swift",
+    "sha256": "04f5047da5e43aa01eb5dd026cc7970d57a3305aeadabc414951b79aa2cb04e3"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTechnicalSnapshot.swift",
+    "sha256": "fee47d4d1ec1f9df935a410088e27a7f738d0b8733d5fff1ea8976d0c0cb1415"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageTelegram.swift",
+    "sha256": "180517e7f661c77138db9242248e23a321b08b3c37e6997157c9956123b879d0"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSectorRotation.swift",
+    "sha256": "0abab1a9c7fe4ff9208d66063d3bc0d2f87232a638ce65c76d29dba4469ecd05"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageDrawdownScenario.swift",
+    "sha256": "67f70d1d668bcb064a2a75bfbee2755d92a985ab5c3bda851af0429d3059b42a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMicrocapMonitor.swift",
+    "sha256": "5cc74f32820d7f2c73941fb6f1b49cc79a7d313f8cb6dda6590f1d0ce4fc13c5"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageStrategyBacktest.swift",
+    "sha256": "17c2b537eaa03f375396f2c027287153d33ab2fe4305417f7a9b900388011ac0"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePortfolio.swift",
+    "sha256": "e604cb4aba6a3c8acfba7c1a3a1c592776013697bfc2d9a9dadbaf660d1755bf"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMultiTimeframe.swift",
+    "sha256": "d4e3dc849b167225fc6e892ea52d0650c1341de3c0ef0f36927561a58cfda010"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageEarnings.swift",
+    "sha256": "1e9c5000841106fb0eca1e2b00f97a62812430a9f842912958d69612b4a66c3c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMomentum.swift",
+    "sha256": "57793b8b77ae6796af276b7d49c7216f37423a9e4f6507ad30426f0af6da0c30"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePCATrials.swift",
+    "sha256": "d2489d86a104347b54de1b5193c48d2eab22ecc82842606c60bc46fb3a4a6a61"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAlerts.swift",
+    "sha256": "94ba4291808ae8fa1cff7da5bc31f292a38c36fd56886e834d13710f076f54a2"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePriceDenomination.swift",
+    "sha256": "ba1df0fe8f1c3f0e4d085de8c2e56bef5d4e7b141805cff8a6aa07f2717d7a69"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageQuoteService.swift",
+    "sha256": "55b43c03cc61269c4f4c250d16c6b3a57a286c7ac7dd7937a2d3934015dc3d61"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageBenzinga.swift",
+    "sha256": "98c2be54729fc3dd686ac00b32bf628659a716e74f0d140e7a07ed502777238a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageChat.swift",
+    "sha256": "56046d63dab66109ba8829d359c9a780a1c0a44e05f7b539de48d2e578066b9c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageStore.swift",
+    "sha256": "9f746a04c81e2fa912ee9dd05812d5bbaec87ee265d9238b208d2612d7674c57"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCapitalAllocator.swift",
+    "sha256": "9778630ea0b3babd48438c994c81746909878624aae0d8d6383bf9a7e06e4b54"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageQuoteCache.swift",
+    "sha256": "3336d3b3dd6461edfe699ea7256446f3a5c2e29e0b7733993843e34a51b9a662"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageOnDeviceAssistant.swift",
+    "sha256": "8132c48349632addf32a6a1c8b6c14ffe16d87d8ecdab5e237512738b5e7279b"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassiveEarnings.swift",
+    "sha256": "8810d5a0d9fd910fd69b400ab54ee26a7f382b149670407063ad6c02930f2f15"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassiveShortInterest.swift",
+    "sha256": "5df6f621c845de48d5ea6bf70cc0ec3652b43d62766cbd952b1d9d013de949d6"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAlertSound.swift",
+    "sha256": "d0ac9ccb77a5207c344bd83a868214b1334aaad606557ba992fe2e2fb4f19cd0"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageModels.swift",
+    "sha256": "3b8cb6000b360d4113ae0a18eb3ecc40438663c7d7db384227193e4e3e4d3069"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchHorizonCalendar.swift",
+    "sha256": "5d7ab4041a0437a3a7a6b3f7fac77cdfe0be59f9d4f8f6e5368030e431760a32"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageHistoryCache.swift",
+    "sha256": "47f8064b3dfc7482df004e030fda4cba9c1952e0ea666a42e25804401c79df59"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageIdeaProjection.swift",
+    "sha256": "7bad898156112e7822074abed4ff1cb3a040dcbe60273e4d02d8035e8d9d00e4"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageIdeasCSV.swift",
+    "sha256": "ce2471d9bb36824da3a1f9970727ab52e0612632bae6230c4be0b0e32691d571"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageScreenerNews.swift",
+    "sha256": "84393571019898762065ea2eceea166f0f410b051108172c3e648b08adcfea52"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchEvaluation.swift",
+    "sha256": "5bef96ad3c02433718875769f5aadf9e8b7c2fe445924339762306debfa51180"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNetCostSim.swift",
+    "sha256": "a4cbb2a6428cc1154a57420834fa3e321b5b78076080357b9cc0b8262a16f91e"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMomentumAssessment.swift",
+    "sha256": "0d69a43d80f803fba3d86560abf17891ad00f03cc09e1fe3021a64386391d340"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageDeflatedSharpe.swift",
+    "sha256": "39d2c4e34b6361540d4bec24457b2f588d84b36244ca43c37f1405e656b69773"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePriceAlert.swift",
+    "sha256": "35fedef7551be2a23834a13e67948d7e675d5ee68988d4bcdb88056c2fde10e6"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLiveStream.swift",
+    "sha256": "d7e099ee27ade11ca79a880428e22ee7e526510b960a57088ce382a484135c31"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageInput.swift",
+    "sha256": "d11a80a0fc17e2510760187a455cd82c03d37165f6b6b2349691ded9f43d1b75"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAllocation.swift",
+    "sha256": "7aea242263250cd65fd55445cb456d0502b2c02bf63ca4c09e0260f119a44f39"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageVolStability.swift",
+    "sha256": "dff3054fd75ffccb569e522eb58c98120036f503ced1e373e2d84b6110681c43"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchDiagnostics.swift",
+    "sha256": "3ad7fabcfd4259277cf1af2d3951c6c64ac8dcff0b3fb56c7e7cab9605b8b62d"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCatalystRecordCache.swift",
+    "sha256": "cd9ebafe10b7fb3ef201f9b4119405836a27292ef4dcd5d6fad310b5b41b208e"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePyramid.swift",
+    "sha256": "9544141e2f3f9d6fc8ddc33b013ef332ad45c8f16108eba89c432923825b97ee"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMarketHours.swift",
+    "sha256": "8d89a166052844fa732a9098f0cdc3ce07e99980ce4de40825733a8e17c3e891"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageAllocationOptimizer.swift",
+    "sha256": "52c4de4c0fdf6bb52bf922f3eaa226e0f823b1a9d0d55c77c73b9310cfe59f79"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRecordedValuation.swift",
+    "sha256": "36c69cc02c1f8b524a7458b04a10372a2b164852e67bcce80ca9eabafa3c9dbd"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSector.swift",
+    "sha256": "7112f4bfdf3a0f66bd5ecd4ea6a8296535e47546e85e08bd0e6858b7397a8703"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageModelIdentityMigration.swift",
+    "sha256": "531e890a411ff12c0c160658e78d843aa125f700619072fc5ba6e78fdf3661cd"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchUniverse.swift",
+    "sha256": "b25dcc779ee52e558fc3e22583c2d8f435a5d1278c34a6e7f5a48692a9545586"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageIndicators.swift",
+    "sha256": "a31b55a73a652e2703fbca33ca139185808d4d720529d60448a6185853cfe1f3"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageDrawdown.swift",
+    "sha256": "10a966125a1fb83f1e46c4aa50d78eb5ef3ce1239a9150b445bae4d619272a87"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePortfolioAnalytics.swift",
+    "sha256": "6a62e5ff44534775c0f7900869639226f6a0e2f6b030838f25a5d27369a79225"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageNetEdge.swift",
+    "sha256": "c965abcedd68adac2748a4260e616452acc72fd18501bf1f1ae3ecb691f8cefb"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMonteCarloRuin.swift",
+    "sha256": "1a8b40b50cf704bd10826478954dea4b4d31beb640d3fe7394207815fc4b8dfd"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageClusterCheck.swift",
+    "sha256": "31fee08258d4670d94e9879d9b18f084830dc9e8a3a393a77441ef5172ad3fdb"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePortfolioHeat.swift",
+    "sha256": "3104f36e45cff646bac2515e346d1c5aa4f792a13445d123863c537e7a1a3cc2"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageReturnShape.swift",
+    "sha256": "394aed1273fcae9fd78a7be0a599a4effc390601d2e12520ed0a3c5a38ebabc1"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageFundamentals.swift",
+    "sha256": "3b461ca889501446362bb430e7eda1ddcacfa0f422e5473ab13859047b82a803"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageDecisionSnapshot.swift",
+    "sha256": "936c66da8aaafb775ab34704260c0568e56e5217e83f156444ee70bafe061d74"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageConvictionCalibration.swift",
+    "sha256": "88d1e1e0ef4fb7063e03583b8b9fa51cc831825191b25aaa50925cc0ba41e9b2"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCorrelationPrecheck.swift",
+    "sha256": "def1d3916b509dcd0e1f63d266731ddac727e7c1a2eadda1fff573f6a9725f40"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSagePositionSizer.swift",
+    "sha256": "45302ed17810977119e0faff93c7e7827bc87b10426c3a5498177f8736c68e80"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSignalEngine.swift",
+    "sha256": "4f8172d73d4eae909237528ee35565e31e9e75aaf84cb44138634d6d283a3ad9"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLocalModelServer.swift",
+    "sha256": "edc4b94d70d6cc0858e6ae14e05b6b9ded9d4c2debf35f62b6b5f22e86661c3f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageScanDelta.swift",
+    "sha256": "93330ce1929165f1220d1f06405d1da458df8561f0f130a6b9963ed31b247c42"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageHorizonResearch.swift",
+    "sha256": "e302409b3d695ee60929c272b9b217337de632c75159af249f1acbde68528ded"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageSeasonality.swift",
+    "sha256": "7d61163ca46a658700556e8461dbeacae18641b55d1b20af4af678dd849ba817"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageStockScreener.swift",
+    "sha256": "a91159bae506515cd40ed7bef2b1824a949434187bbe23015c39c038aa0db955"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMomentumStream.swift",
+    "sha256": "37c5d5851de75b077eb661118e99655772f56faee5ff1c11e6be87513bd87a94"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageScanChunking.swift",
+    "sha256": "a3f3a796288550cafb924dd7feb3424ef83c1b96ae4254a88714816ea5b73df7"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchLeads.swift",
+    "sha256": "3d14e3a539daeed3daae2abc677d3126e263399a3b5845a15bd4200098b23754"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMicrocapScreen.swift",
+    "sha256": "951c86638f0e6034f43567b6d25268a64680cea8c7229fd3ce0e9cb860df4e3d"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageBriefingService.swift",
+    "sha256": "162fa5a2c0c741326c59b3d40f2c7098d491278c0b314510004e2d88059c5517"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageBacktester.swift",
+    "sha256": "17e6bf2f4a13a6d5d528046c31329f5b23557cfaeee6060ec11f0fa32a49f4e9"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRebalance.swift",
+    "sha256": "4488b1bb5697920ce69679dbbc49b2021ce3c32a0bb9b473d7b941c4eb8c4efb"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageLeverage.swift",
+    "sha256": "036ba3a2b3bb7096ae06d09dfc68d946eb551e6f80364d305fedccf3a9396169"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageCatalystWatch.swift",
+    "sha256": "2c3cee35d0163cfcf4b58ecc9dcf8a53c5de315885eece8d376938e30ed320f4"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageConvictionScaler.swift",
+    "sha256": "913b6aeaa76cac6d6222b9871ba916e2d36a4d70cfd8b402857c935b72aecf71"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageManualPriceBook.swift",
+    "sha256": "36c471d7c678a0cf91d9f89e1b5ee03a49ea429d663fa8005d8fb6498bcff464"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageBenzingaClient.swift",
+    "sha256": "174bac0c080135dee063f5fb6a59e62a4430edc23481fb949230fc9e12d9a195"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageGlossary.swift",
+    "sha256": "798a79350b27aadeccaa64a737c9fe5af2611be36a72451489eacc02376650f2"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageExpectedValue.swift",
+    "sha256": "8ede34c5e05cb4c1f610d6b7c0811cc32fe433f4c711c96597804f33977a2dca"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageFeedIngress.swift",
+    "sha256": "47c29424eacc29304354e06cdc7820327e9680aafb4b0d1eb5803a2f6638af3c"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageMassive.swift",
+    "sha256": "1ba2f4b766169620a3c6dec7d0e59f424d62b33964ad3db3d07cc8e8ccbfa68f"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageRewardRisk.swift",
+    "sha256": "c2471301b48004d7c3c26c614501fe2c2a23a85e864c898f480a61336489d24a"
+  },
+  {
+    "path": "StockSage/Sources/StockSage/StockSageResearchFreshness.swift",
+    "sha256": "4600b900eefb030108d40af4d7a3b996cc922b55e20556085824f85cfab2b8fa"
+  },
+  {
+    "path": "StockSage/Sources/Assets.xcassets/AppIcon.appiconset/Contents.json",
+    "sha256": "86b9b4b014353c51dbeff799e14e2e0e479bd45851e1c868c7318fa54c7c8af8"
+  },
+  {
+    "path": "StockSage/Sources/Assets.xcassets/AccentColor.colorset/Contents.json",
+    "sha256": "d69a6b2443593e7b92d7770b354d99746d0b76f946450c452a38f1b10486218a"
+  },
+  {
+    "path": "StockSage.xcodeproj/project.xcworkspace/contents.xcworkspacedata",
+    "sha256": "7f3b00b5c3fdb45242d7b87e1e5c4e25d1fa8129a16c94295ecc4e8ea2235c5f"
+  },
+  {
+    "path": "StockSage.xcodeproj/xcshareddata/xcodecloud/manifest.json",
+    "sha256": "9ed9a4063593a8e4cc90911a12afc8bcb8520abc61a81fbdeb05214ab22c7b02"
+  },
+  {
+    "path": "StockSage.xcodeproj/xcshareddata/xcschemes/StockSage.xcscheme",
+    "sha256": "6abb79a988873c75037f9695e38d9467a0cb25b23200256ac8b14f2177d1b6e1"
+  },
+  {
+    "path": "StockSage.xcodeproj/xcshareddata/xcschemes/StockSagePublishingUI.xcscheme",
+    "sha256": "3fbfb6171596200f58c78a987cf9cc9c2f0fbc25535cc0f0ad3bd12986337233"
+  }
+]

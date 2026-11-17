@@ -1,0 +1,55 @@
+import Testing
+import Foundation
+@testable import StockSage
+
+// Per-row quote staleness: crypto (24/7) flags fast, equities/FX tolerate an overnight gap but
+// flag a multi-day weekend/holiday close. Fixed `now` so the dates are deterministic.
+@MainActor
+struct StockSageStalenessTests {
+    private func sym(_ ticker: String, at marketTime: Date?) -> StockSageSymbol {
+        StockSageSymbol(symbol: ticker, market: "M",
+                        quotes: [StockSageQuote(price: 100, previousPrice: 100, marketTime: marketTime)])
+    }
+
+    @Test func equityToleratesOvernightCryptoFlagsFast() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        // Equity: a 1-day-old quote is fine (overnight), a 60h one (a long weekend) is stale.
+        #expect(sym("AAPL", at: now.addingTimeInterval(-24 * 3600)).isStale(asOf: now) == false)
+        #expect(sym("AAPL", at: now.addingTimeInterval(-60 * 3600)).isStale(asOf: now) == true)
+        // Crypto trades 24/7 → tighter: fresh at 3h, stale by 12h.
+        #expect(sym("BTC-USD", at: now.addingTimeInterval(-3 * 3600)).isStale(asOf: now) == false)
+        #expect(sym("BTC-USD", at: now.addingTimeInterval(-12 * 3600)).isStale(asOf: now) == true)
+        // FAIL-CLOSED (owner-signed contract change 2026-07-27, Gemini-report item 2):
+        // no quote / no market time → can't VERIFY freshness → STALE. The alert gate must
+        // never pass unverifiable data; the stale-self-heal retry re-fetches such rows.
+        #expect(StockSageSymbol(symbol: "AAPL", market: "M").isStale(asOf: now) == true)
+        #expect(sym("AAPL", at: nil).isStale(asOf: now) == true)
+    }
+
+    @Test func closeableQuoteAsOfIgnoresAlwaysOnCrypto() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let freshCrypto = sym("BTC-USD", at: now.addingTimeInterval(-60))         // 24/7 → always live
+        let staleEquity = sym("AAPL", at: now.addingTimeInterval(-72 * 3600))     // days-old weekend close
+        // The "live" banner's freshness must reflect the CLOSEABLE (equity) board, not the crypto quote.
+        #expect(StockSageStore.closeableQuoteAsOf([freshCrypto, staleEquity]) == now.addingTimeInterval(-72 * 3600))
+        // All-crypto board → nil (no closeable asset; crypto genuinely is live).
+        #expect(StockSageStore.closeableQuoteAsOf([freshCrypto]) == nil)
+    }
+
+    @Test func sharedFreshnessRuleMatchesPerClassTolerances() {
+        // The one rule used by BOTH the display badge and the price-alert firing gate.
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(-60 * 3600), asOf: now))
+        #expect(!StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(-24 * 3600), asOf: now))
+        #expect(StockSageQuoteFreshness.isStale(symbol: "BTC-USD", marketTime: now.addingTimeInterval(-12 * 3600), asOf: now))
+        #expect(!StockSageQuoteFreshness.isStale(symbol: "BTC-USD", marketTime: now.addingTimeInterval(-3 * 3600), asOf: now))
+        // A stamp in the FUTURE gave a negative age, which is never greater than the tolerance,
+        // so a fail-closed gate read it as fresh. Pinned from both sides so the skew allowance
+        // cannot be widened into a hole.
+        #expect(StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(3600), asOf: now))
+        #expect(!StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: now.addingTimeInterval(-30), asOf: now))
+        // nil market time → STALE (fail-closed, owner-signed 2026-07-27 — unverifiable
+        // freshness must never pass the alert gate).
+        #expect(StockSageQuoteFreshness.isStale(symbol: "AAPL", marketTime: nil, asOf: now))
+    }
+}

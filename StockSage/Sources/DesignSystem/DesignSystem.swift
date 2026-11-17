@@ -1,0 +1,382 @@
+import SwiftUI
+
+// MARK: - Design System
+enum DS {
+
+    // MARK: Spacing
+    enum Space {
+        static let xxs: CGFloat = 4
+        static let xs:  CGFloat = 8
+        static let sm:  CGFloat = 10
+        static let md:  CGFloat = 14
+        static let lg:  CGFloat = 18
+        static let xl:  CGFloat = 24
+        static let xxl: CGFloat = 32
+    }
+
+    // MARK: Corner radii
+    enum Radius {
+        static let well:   CGFloat = 6   // small icon-well container (24-28 pt square)
+        static let small:  CGFloat = 8
+        static let chip:   CGFloat = 12
+        static let card:   CGFloat = 14
+        static let bubble: CGFloat = 16
+        static let field:  CGFloat = 20
+        static let modal:  CGFloat = 24
+        static let icon:   CGFloat = 10
+    }
+
+    // MARK: Semantic colors
+    enum Palette {
+        // Muted rose-magenta. The asset is shared with native control tint.
+        // Keep white-label fills dark enough for AA; use the lighter sibling for
+        // text/icons on dark surfaces. Financial/status colors remain separate.
+        static let accent        = Color("AccentColor")
+        static let accentText    = Color(.sRGB, red: 214 / 255.0, green: 163 / 255.0, blue: 191 / 255.0)
+        // One charcoal canvas on Mac and iPhone; magenta belongs to controls.
+        static let bgTop         = Color(red: 0.094, green: 0.094, blue: 0.102)
+        static let bgBottom      = bgTop
+        static let surface       = Color(.sRGB, red: 41 / 255.0, green: 41 / 255.0, blue: 45 / 255.0)
+        static let surfaceAlt    = Color(.sRGB, red: 36 / 255.0, green: 36 / 255.0, blue: 40 / 255.0)
+        static let surfaceStroke = Color(.sRGB, red: 69 / 255.0, green: 69 / 255.0, blue: 75 / 255.0)
+        static let hairline      = surfaceStroke
+        nonisolated static let textPrimary   = Color.white
+        nonisolated static let textSecondary = Color(.sRGB, red: 184 / 255.0, green: 184 / 255.0, blue: 194 / 255.0)
+        /// Interactive boundaries are stronger than decorative card separators.
+        static func inputStroke(increasedContrast: Bool) -> Color {
+            increasedContrast ? textSecondary
+                : Color(.sRGB, red: 133 / 255.0, green: 133 / 255.0, blue: 142 / 255.0)
+        }
+        static let success       = Color.green
+        static let danger        = Color.red
+        static let successSoft   = Color(red: 0.45, green: 0.85, blue: 0.55)
+        static let warningSoft   = Color(red: 1.0,  green: 0.72, blue: 0.35)
+        /// Softened red for SMALL danger TEXT on dark surfaces (chips/labels): system
+        /// red measures ~3.7–4.3:1 there — under WCAG AA 4.5:1 for sub-18pt text —
+        /// while this swatch clears AA on every ideas-surface background (5.01 / 4.72 /
+        /// 5.99:1; derivation in PLAN_2026-07-03_ux_wave2_design_system.md §D). Keep
+        /// `danger` for icons, fills and strokes (non-text 3:1 bar). Mirrors the
+        /// successSoft/warningSoft precedent; A11Y_BUGHUNT #12's swatch, lightened
+        /// 0.45→0.50 to clear the detail sheet's lighter chip background.
+        static let dangerSoft    = Color(red: 1.0,  green: 0.50, blue: 0.50)
+    }
+
+    // MARK: Typography
+    // The ideas-surface type scale lives in MarketsView's @ScaledMetric mvFontNN
+    // tokens and their semantic aliases (fontCardTitle, fontChipLabel, …) — a
+    // Dynamic-Type-aware modular ladder ratified by visual QA. Only tokens with
+    // live app-wide consumers belong here; the parent app's chat-scale ladder
+    // was deleted in the macOS 27 overhaul (2026-07-16).
+    enum Typography {
+        static let titleM = Font.system(.headline, design: .rounded, weight: .semibold)
+    }
+
+    // MARK: Motion
+    enum Motion {
+        static let spring   = Animation.spring(response: 0.35, dampingFraction: 0.85)
+        static let snappy   = Animation.spring(response: 0.28, dampingFraction: 0.80)
+        static let press    = Animation.timingCurve(0.32, 0.72, 0.0, 1.0, duration: 0.18)
+        static let fade     = Animation.timingCurve(0.32, 0.72, 0.0, 1.0, duration: 0.22)
+        static let smooth   = Animation.timingCurve(0.32, 0.72, 0.0, 1.0, duration: 0.45)
+        static let cinematic = Animation.timingCurve(0.22, 0.61, 0.36, 1.0, duration: 0.80)
+        static let magnetic = Animation.interpolatingSpring(stiffness: 220, damping: 18)
+        static let stagger   = Animation.timingCurve(0.34, 0.0, 0.66, 1.0, duration: 0.32)
+        static let entrance  = Animation.timingCurve(0.22, 0.61, 0.36, 1.0, duration: 0.55)
+        /// The Code tab's signature curve (matches its local `lux`), promoted
+        /// to a shared token so the chat composer/welcome animate identically.
+        static let lux       = Animation.timingCurve(0.32, 0.72, 0.0, 1.0, duration: 0.40)
+    }
+
+    // MARK: Elevation
+    // Retuned for the darker canvas (macOS 27 overhaul): on near-black, small
+    // hard shadows read as dirt — depth comes from softer, larger, slightly
+    // stronger ones.
+    enum Elevation {
+        static let shadow1 = (color: Color.black.opacity(0.28), radius: CGFloat(8),  y: CGFloat(3))
+        static let shadow2 = (color: Color.black.opacity(0.40), radius: CGFloat(14), y: CGFloat(6))
+        static let shadow3 = (color: Color.black.opacity(0.50), radius: CGFloat(24), y: CGFloat(10))
+        static func accentGlow(_ intensity: Double = 0.24) -> (color: Color, radius: CGFloat, y: CGFloat) {
+            (Palette.accent.opacity(intensity), 12, 4)
+        }
+    }
+
+    // MARK: Bezel
+    enum Bezel {
+        static let outerRadius:  CGFloat = 22
+        static let innerRadius:  CGFloat = 17
+        static let shellPadding: CGFloat = 5
+        static let shellFill        = Palette.surfaceAlt
+        static let shellStroke      = Color.white.opacity(0.09)
+        static let coreFill         = Palette.surface
+        static let coreInnerHighlight = LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)],
+            startPoint: .top, endPoint: .bottom)
+        /// Subtle fill for machined card containers — the background layer under
+        /// the coreInnerHighlight stroke. Matches all per-view inline cards.
+        /// Opaque charcoal keeps the card stable across different parent surfaces.
+        /// Card sites chain .fill(cardFill).strokeBorder(coreInnerHighlight) on ONE
+        /// shape view (goal-2 merge, 2026-07-16): identical pixels to the old
+        /// 2-shape ZStack, one less view+layer per card — switch-commit work.
+        static let cardFill = Color(red: 0.137, green: 0.137, blue: 0.149)
+    }
+
+    // MARK: Gradients
+    enum Gradient {
+        /// The canvas wash — base layer of `DSCanvasBackground` and the detail
+        /// sheet's owner-drawn root (QA snapshot path needs an opaque backing).
+        static let bg = LinearGradient(colors: [Palette.bgTop, Palette.bgBottom],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+// MARK: - DSCanvasBackground
+/// The same opaque canvas behind native navigation and content on both platforms.
+struct DSCanvasBackground: View {
+    var body: some View {
+        DS.Palette.bgTop
+    }
+}
+
+/// Applied outside value animations so children cannot reintroduce motion.
+struct DSReducedMotion: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
+    }
+}
+
+/// Opaque custom-field chrome, including a stronger Increase Contrast boundary.
+struct DSInputSurface: ViewModifier {
+    var cornerRadius: CGFloat = DS.Radius.small
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .background(DS.Palette.surface, in: RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(DS.Palette.inputStroke(increasedContrast: contrast == .increased),
+                            lineWidth: contrast == .increased ? 2 : 1)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
+// MARK: - Components
+// Parent-app components with zero standalone consumers (CircleIconButton,
+// SuggestionCard, SuperGrokBadge, Primary/Secondary/PressableStyle, the Bezel
+// view) were deleted in the macOS 27 overhaul (2026-07-16) — verified dead by
+// repo-wide grep including StockSageTests. The DS.Bezel token namespace stays:
+// the card recipes consume it inline.
+
+// MARK: - Button styles
+/// Gravity-pull press: 0.97 settle on the lux curve — heavier and more
+/// deliberate than a plain press-curve settle. Use on tinted pill/capsule CTAs
+/// that provide their own chrome (brand gradient, accent border, etc.).
+/// Moved from CodeView so all tabs share one definition. (Marathon EN)
+struct LuxPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration c: Configuration) -> some View {
+        c.label
+            .opacity(isEnabled ? 1 : 0.45)
+            .scaleEffect(reduceMotion || !isEnabled ? 1 : (c.isPressed ? 0.97 : 1))
+            .animation(reduceMotion ? nil : DS.Motion.lux, value: c.isPressed)
+    }
+}
+
+// MARK: - PriceFlash
+/// W3 (owner: "live prices … seamless and look cool"): a 600ms fade of a translucent
+/// success/danger tint BEHIND a price (or price-derived) Text when the value it tracks moves.
+/// Direction is computed PURELY from old vs new (`direction(from:to:)`, pure/testable — a
+/// straddle at equal price flashes nothing, since "the price didn't move" and "we don't know"
+/// must not read as a fabricated up/down). No-op under Reduce Motion (a11y: no unrequested
+/// motion). Apply via `.priceFlash(_:)` with the RAW numeric price driving the Text beside it —
+/// the SAME value that Text's own `.animation(DS.Motion.smooth, value:)` already keys on.
+struct PriceFlash: ViewModifier {
+    enum Direction: Equatable { case up, down }
+
+    /// `nonisolated static` and side-effect-free — testable with no view, no `@State`, no clock
+    /// (MarketsPriceFlashDirectionTests). nil at the exact straddle (equal price, or either side
+    /// missing): a poll re-confirming the same price is a real, common outcome and must not be
+    /// dressed up as a move.
+    nonisolated static func direction(from old: Double?, to new: Double?) -> Direction? {
+        guard let old, let new, new != old else { return nil }
+        return new > old ? .up : .down
+    }
+
+    /// The flash's whole state: which way the price last moved, and the decay timer currently
+    /// running (nil when nothing is flashing).
+    struct FlashState: Equatable {
+        var direction: Direction?
+        var timer: UUID?
+    }
+
+    /// Apply a move. The colour always follows the LATEST direction so it never reports a stale
+    /// one, but a RUNNING timer is deliberately kept rather than restarted.
+    ///
+    /// Restarting it is what made the tint permanent: the stream publishes four times a second, so
+    /// a moving symbol changes price more often than the 600 ms decay, and every change cancelled
+    /// and re-armed the timer. The row stayed lit for as long as the symbol kept trading, which
+    /// makes a flash meaningless — the same way a haptic that fires on every tick stops meaning
+    /// "a refresh landed". One decay per burst instead.
+    ///
+    /// `nonisolated static` and side-effect-free, like `direction(from:to:)` above: testable with
+    /// no view, no `@State` and no clock.
+    nonisolated static func applying(_ incoming: Direction, to state: FlashState,
+                                     newTimer: UUID) -> FlashState {
+        FlashState(direction: incoming, timer: state.timer ?? newTimer)
+    }
+
+    /// The decay landed: clear both so the next burst can arm a fresh timer.
+    nonisolated static func expired() -> FlashState { FlashState() }
+
+    let price: Double?
+    @State private var flash = FlashState()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let tint: Color = flash.direction == .up ? DS.Palette.successSoft : DS.Palette.dangerSoft
+        content
+            .background(
+                tint.opacity(flash.direction != nil ? 0.18 : 0)
+                    .animation(.easeOut(duration: 0.6), value: flash.direction)
+            )
+            .onChange(of: price) { old, new in
+                guard !reduceMotion, let dir = Self.direction(from: old, to: new) else { return }
+                flash = Self.applying(dir, to: flash, newTimer: UUID())
+            }
+            .task(id: flash.timer) {
+                guard flash.timer != nil else { return }
+                do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+                guard !Task.isCancelled else { return }
+                flash = Self.expired()
+            }
+            .onChange(of: reduceMotion) { _, reduced in
+                if reduced { flash = Self.expired() }
+            }
+    }
+}
+
+extension View {
+    func priceFlash(_ price: Double?) -> some View { modifier(PriceFlash(price: price)) }
+}
+
+// MARK: - Elevation helper
+extension View {
+    func dsShadow(_ e: (color: Color, radius: CGFloat, y: CGFloat)) -> some View {
+        shadow(color: e.color, radius: e.radius, y: e.y)
+    }
+
+    /// RTL-aware block layout for PLAIN-text LLM output: when `text` contains
+    /// Arabic script, flips to right-to-left + trailing alignment (mirrors the
+    /// verified `LiveTranscriptionView.lineView` pattern — the outer `.frame`
+    /// resolves `.trailing` in the parent LTR context = the right edge, while the
+    /// inner layoutDirection gives the text correct RTL bidi). Latin/English is a
+    /// pure no-op (LTR + leading). NOT for Markdown/code surfaces — those need
+    /// structural bidi (code blocks must stay LTR), handled separately.
+    func rtlAware(_ text: String) -> some View {
+        let rtl = text.range(of: "\\p{Arabic}", options: .regularExpression) != nil
+        return environment(\.layoutDirection, rtl ? .rightToLeft : .leftToRight)
+            .frame(maxWidth: .infinity, alignment: rtl ? .trailing : .leading)
+    }
+}
+
+// STANDALONE DEVIATION (extraction @ fc8f383): the parent's CloudKeyHintBanner (a
+// Chat/Code-tab LLM cloud-key notice referencing LocalLLM) was removed here — it is not a
+// Markets component and the standalone has no LLM stack. No Markets view referenced it.
+
+// MARK: - DSSegmentPicker
+/// Dark-themed sliding-pill segments, with a native phone menu when space or text size requires it.
+/// Selection indicator slides between segments via `matchedGeometryEffect`.
+/// Usage: `DSSegmentPicker(cases: MyEnum.allCases, selection: $binding) { $0.title }`
+struct DSSegmentPicker<T: Hashable>: View {
+    let cases: [T]
+    @Binding var selection: T
+    let label: (T) -> String
+    @Namespace private var ns
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(iOS)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    #endif
+
+    var body: some View {
+        #if os(iOS)
+        if dynamicTypeSize.isAccessibilitySize {
+            menuPicker
+        } else {
+            ViewThatFits(in: .horizontal) {
+                segments.fixedSize(horizontal: true, vertical: false)
+                menuPicker
+            }
+        }
+        #else
+        segments
+        #endif
+    }
+
+    #if os(iOS)
+    private var menuPicker: some View {
+        Picker("Selection", selection: $selection) {
+            ForEach(cases, id: \.self) { item in
+                Text(label(item)).tag(item)
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .font(.subheadline.weight(.semibold))
+        .frame(minWidth: 44, minHeight: 44)
+    }
+    #endif
+
+    private var segments: some View {
+        HStack(spacing: 2) {
+            ForEach(cases, id: \.self) { item in
+                Button {
+                    var transaction = Transaction(animation: reduceMotion ? nil : DS.Motion.spring)
+                    transaction.disablesAnimations = reduceMotion
+                    withTransaction(transaction) { selection = item }
+                } label: {
+                    Text(label(item))
+                        #if os(iOS)
+                        .font(.subheadline.weight(.semibold))
+                        #else
+                        .font(.system(size: 12, weight: .semibold))
+                        #endif
+                        .foregroundStyle(selection == item ? Color.white : DS.Palette.textSecondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        #if os(iOS)
+                        .frame(minWidth: 44, minHeight: 44)
+                        #endif
+                        .frame(maxWidth: .infinity)
+                        .background {
+                            if selection == item {
+                                Capsule()
+                                    .fill(DS.Palette.accent)
+                                    .matchedGeometryEffect(id: "segPill", in: ns)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(label(item))
+                .accessibilityAddTraits(selection == item ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(DS.Palette.surface, in: Capsule())
+        .overlay(Capsule().stroke(
+            LinearGradient(colors: [Color.white.opacity(0.14), Color.white.opacity(0.04)],
+                           startPoint: .top, endPoint: .bottom), lineWidth: 1))
+        // A caller's group label must not replace each option's own accessible name.
+        .accessibilityElement(children: .contain)
+    }
+}

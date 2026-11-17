@@ -1,0 +1,385 @@
+import Foundation
+
+/// Deterministic, explainable Top-5 selection for a completed 1-7/7-14 research run.
+///
+/// This NEVER calls a model and never rewrites an action, a receipt, or the strict qualification
+/// gate: `StockSageResearchQualification.Receipt.isQualified`/`exclusions()` are read, not changed.
+/// It only decides ORDER and which five eligible, fully-checked candidates are shown, from
+/// already-captured evidence (technical confluence, insider transactions, catalysts, freshness).
+/// Every run of `rank(...)` on the same inputs produces byte-identical output.
+enum StockSageTopFiveRanking {
+    nonisolated static let version = 1
+
+    // Documented, fixed constants so a reviewer or test can hand-verify every threshold without
+    // reading the scoring body. Changing any of these is a scoring-behavior change, not a bugfix.
+    nonisolated static let staleCapturePenalty = -50.0
+    nonisolated static let contradictoryBasisPenalty = -50.0
+    nonisolated static let noCatalystPenalty = -10.0
+    nonisolated static let contraryConfluencePenaltyPerCheck = -2.0
+    /// An insider transaction older than this contributes zero weight.
+    nonisolated static let insiderDecayWindowDays = 14.0
+    /// 2+ distinct owners, same direction, within this window count as a cluster.
+    nonisolated static let insiderClusterWindowDays = 7.0
+    nonisolated static let insiderClusterMultiplier = 1.5
+    /// At most this many of the final five may share one concentration key (sector, or catalyst
+    /// identity when sector is unknown) unless the material-advantage margin below is met.
+    nonisolated static let maximumPerConcentrationKey = 2
+    /// The minimum score lead a concentrated candidate must hold over the best available
+    /// different-key alternative to be kept despite exceeding the concentration cap.
+    nonisolated static let materialAdvantageMargin = 5.0
+
+    nonisolated enum QualificationStatus: String, Codable, Sendable {
+        case qualified, notQualified
+    }
+
+    /// Every component is independently inspectable; nothing is folded into an opaque total
+    /// without also keeping the pieces. `counterevidence` and `hardPenalties` are always <= 0.
+    nonisolated struct ScoreComponents: Codable, Equatable, Sendable {
+        let horizonFit: Double
+        let technicalConfluence: Double
+        let catalystQuality: Double
+        let liquidity: Double
+        let evidenceFreshness: Double
+        let insiderRelevance: Double
+        let counterevidence: Double
+        let hardPenalties: Double
+        var total: Double {
+            horizonFit + technicalConfluence + catalystQuality + liquidity
+                + evidenceFreshness + insiderRelevance + counterevidence + hardPenalties
+        }
+    }
+
+    /// One insider transaction's ACTUAL contribution to `insiderRelevance`, so the weight beside
+    /// a rank is exact, never a re-derived approximation. Every `InsiderTransaction` this system
+    /// captures is already an open-market Form 4 purchase or sale by construction — the parser
+    /// (StockSageMassiveEvents) only accepts transaction codes P and S, never option exercises,
+    /// awards, or plan grants — so no separate open-market flag is needed to make that distinction.
+    nonisolated struct InsiderSignal: Codable, Equatable, Sendable {
+        let direction: StockSageMassiveEvents.InsiderTransaction.Direction
+        let ownerName: String
+        let ageDays: Double
+        /// Signed: positive for a purchase's contribution, negative for a sale's. Freshness- and
+        /// cluster-adjusted. This is a SCORE WEIGHT, never a claim about the insider's motive.
+        let contribution: Double
+    }
+
+    nonisolated struct Ranked: Codable, Equatable, Sendable {
+        let rank: Int
+        let symbol: String
+        /// The model's REAL original action. Never fabricated into Buy/Strong Buy for a fallback row.
+        let action: String
+        let status: QualificationStatus
+        let components: ScoreComponents
+        let insiderSignals: [InsiderSignal]
+        /// Populated only when `status == .notQualified`: the receipt's own exclusion reasons.
+        let failedGates: [String]
+        /// Populated only when a hard penalty applied: which ones and why.
+        let hardPenaltyReasons: [String]
+    }
+
+    nonisolated struct Result: Codable, Equatable, Sendable {
+        let version: Int
+        let horizon: String
+        /// Exactly `min(5, pool.count)`, ranks 1...N ascending, most preferred first.
+        let ranked: [Ranked]
+        /// True when the concentration guard changed the ranking that raw score alone would have produced.
+        let concentrationGuardApplied: Bool
+        /// Absent only in legacy serialized rankings; never inferred on restore.
+        var scoredAt: Date? = nil
+    }
+
+    /// One eligible, fully-checked candidate. `sector` and `catalystIdentity` may be nil when
+    /// unknown; the concentration guard degrades gracefully to no-op when both are nil for a
+    /// candidate (it is simply never grouped with anything).
+    nonisolated struct Candidate: Sendable {
+        let symbol: String
+        let action: String
+        let sector: String?
+        let catalystIdentity: String?
+        let qualification: StockSageResearchQualification.Receipt
+        let insiderTransactions: [StockSageMassiveEvents.InsiderTransaction]
+        /// False when the adapter's own structural validation of `qualification` (symbol,
+        /// horizon, action, evidence keys, capture time — the same check `Scan.isEligible`
+        /// already applies) failed. A receipt that fails this can never read as Qualified here,
+        /// however its own `isQualified` computes; the candidate still appears with its real
+        /// action and an explicit reason, it is simply never trusted as a qualified pass.
+        let isReceiptValid: Bool
+
+        init(symbol: String, action: String, sector: String? = nil, catalystIdentity: String? = nil,
+             qualification: StockSageResearchQualification.Receipt,
+             insiderTransactions: [StockSageMassiveEvents.InsiderTransaction] = [],
+             isReceiptValid: Bool = true) {
+            self.symbol = symbol; self.action = action; self.sector = sector
+            self.catalystIdentity = catalystIdentity; self.qualification = qualification
+            self.insiderTransactions = insiderTransactions; self.isReceiptValid = isReceiptValid
+        }
+        fileprivate var isQualified: Bool { isReceiptValid && qualification.isQualified }
+    }
+
+    /// Pure and deterministic. `now` drives freshness decay only; pass the run's own evidence
+    /// clock, never a live wall-clock read inside a test.
+    nonisolated static func rank(_ pool: [Candidate], horizon: StockSageHorizonResearch.Horizon, now: Date) -> Result {
+        let scored = pool.map { candidate -> (Candidate, ScoreComponents, [InsiderSignal], [String]) in
+            let (components, signals, penaltyReasons) = score(candidate, horizon: horizon, now: now)
+            return (candidate, components, signals, penaltyReasons)
+        }
+        // Score descending, symbol ascending as the final tie-break, within each group.
+        func byScore(_ lhs: (Candidate, ScoreComponents, [InsiderSignal], [String]),
+                    _ rhs: (Candidate, ScoreComponents, [InsiderSignal], [String])) -> Bool {
+            if lhs.1.total != rhs.1.total { return lhs.1.total > rhs.1.total }
+            return lhs.0.symbol < rhs.0.symbol
+        }
+        // The qualified quota is filled COMPLETELY before any fallback is even considered: the
+        // concentration guard runs SEPARATELY within each group, so it can never demote a
+        // qualified candidate to make room for a not-qualified "diversifying" alternative. This
+        // is what guarantees insider evidence (or any other component) can never by itself
+        // promote a hard-gate failure over a pass.
+        let qualifiedSorted = scored.filter { $0.0.isQualified }.sorted(by: byScore)
+        let notQualifiedSorted = scored.filter { !$0.0.isQualified }.sorted(by: byScore)
+        let (qualifiedChosen, qualifiedGuardApplied) = applyConcentrationGuard(qualifiedSorted, need: 5)
+        let remaining = 5 - qualifiedChosen.count
+        let (fallbackChosen, fallbackGuardApplied) = remaining > 0
+            ? applyConcentrationGuard(notQualifiedSorted, need: remaining) : ([], false)
+        let final = qualifiedChosen + fallbackChosen
+        let ranked = final.prefix(5).enumerated().map { index, entry -> Ranked in
+            let (candidate, components, signals, penaltyReasons) = entry
+            let status: QualificationStatus = candidate.isQualified ? .qualified : .notQualified
+            var failedGates = status == .notQualified ? candidate.qualification.reasons : []
+            if status == .notQualified, !candidate.isReceiptValid {
+                failedGates.append("The qualification receipt failed adapter validation (symbol, horizon, action, evidence or capture time mismatch); it cannot be trusted as qualified.")
+            }
+            return Ranked(rank: index + 1, symbol: candidate.symbol, action: candidate.action, status: status,
+                components: components, insiderSignals: signals,
+                failedGates: failedGates, hardPenaltyReasons: penaltyReasons)
+        }
+        return Result(version: version, horizon: horizon.rawValue, ranked: ranked,
+            concentrationGuardApplied: qualifiedGuardApplied || fallbackGuardApplied, scoredAt: now)
+    }
+
+    /// Shared pure adapter for the live completion and verification of the original full checks.
+    nonisolated static func capture(listings: [StockSageHorizonResearch.Listing],
+        results: [String: StockSageHorizonResearch.Result], horizon: StockSageHorizonResearch.Horizon,
+        at clock: Date) -> Result? {
+        guard results.count == listings.count, Set(results.keys) == Set(listings.map(\.ticker)), !listings.isEmpty else { return nil }
+        let candidates = listings.compactMap { listing -> StockSageTopFiveRanking.Candidate? in
+            guard let result = results[listing.ticker], let verdict = result.verdict,
+                  let qualification = result.qualification else { return nil }
+            // Reuse the SAME structural validator `isEligible` already applies, rather than
+            // trusting any non-nil receipt: symbol, requested horizon, evidence citations and
+            // capture time must all be internally consistent. A receipt that fails this can
+            // never read as Qualified below, but the candidate still appears with its real
+            // action and an explicit reason — this never hides a legitimate Hold/Avoid row.
+            let citedKeys = result.evidenceReceipt?.citedKeys ?? []
+            let valid = StockSageResearchQualification.valid(qualification, symbol: listing.ticker,
+                horizon: horizon.rawValue, at: result.at, citedKeys: citedKeys)
+            return .init(symbol: listing.ticker, action: verdict.action.rawValue,
+                catalystIdentity: qualification.candidateCatalysts.first?.identity,
+                qualification: qualification, insiderTransactions: result.insiderTransactions,
+                isReceiptValid: valid && qualification.originalAction == verdict.action.rawValue)
+        }
+        guard !candidates.isEmpty else { return nil }
+        return StockSageTopFiveRanking.rank(candidates, horizon: horizon, now: clock)
+    }
+
+    nonisolated static func valid(_ result: Result) -> Bool {
+        guard result.version == version, StockSageHorizonResearch.Horizon(rawValue: result.horizon) != nil,
+              let clock = result.scoredAt, clock.timeIntervalSince1970.isFinite,
+              !result.ranked.isEmpty, result.ranked.count <= 5,
+              Set(result.ranked.map(\.symbol)).count == result.ranked.count else { return false }
+        return result.ranked.enumerated().allSatisfy { index, row in
+            let c = row.components
+            return row.rank == index + 1 && StockSageHorizonResearch.validTicker(row.symbol)
+                && TradeAdvice.Action(rawValue: row.action) != nil
+                && [c.horizonFit, c.technicalConfluence, c.catalystQuality, c.liquidity,
+                    c.evidenceFreshness, c.insiderRelevance, c.counterevidence, c.hardPenalties, c.total].allSatisfy(\.isFinite)
+                && (row.status != .qualified || row.failedGates.isEmpty)
+                && row.insiderSignals.allSatisfy { !$0.ownerName.isEmpty && $0.ageDays.isFinite && $0.ageDays >= 0 && $0.contribution.isFinite }
+        }
+    }
+
+    private nonisolated static func score(_ candidate: Candidate, horizon: StockSageHorizonResearch.Horizon,
+                                          now: Date) -> (ScoreComponents, [InsiderSignal], [String]) {
+        let receipt = candidate.qualification
+        let m = receipt.measurements
+
+        // Horizon fit: the measured historical return over the SELECTED horizon, capped so one
+        // outsized reading cannot dominate the total. 0 when unmeasured — a gap, not a penalty.
+        let horizonFit = (m.horizonReturnPercent.map { min(max($0, 0), 20) } ?? 0) / 20 * 10
+
+        // Technical confluence: reuses Task 8's neutral verdict directly. insufficient scores 0
+        // (a data gap), never negative — missing data is never treated as negative evidence.
+        let technicalConfluence: Double
+        switch receipt.confluence?.verdict {
+        case .aligned: technicalConfluence = 10
+        case .mixed: technicalConfluence = 5
+        case .conflicted, .insufficient, nil: technicalConfluence = 0
+        }
+
+        // Catalyst quality: a CITED qualifying record only; an offered-but-uncited catalyst
+        // cannot buy points it was never credited for supporting the action.
+        let catalystQuality: Double = receipt.citedQualifyingKeys.isEmpty ? 0
+            : (receipt.candidateCatalysts.first { receipt.citedQualifyingKeys.contains($0.key) }?.kind == .publicInsiderFiling ? 8 : 6)
+
+        // Liquidity: the same measured volume ratio the strict screen itself requires >= 1.5 for;
+        // here it is a smooth 0-10 score instead of a pass/fail bar, capped at 4x.
+        let liquidity = (m.volumeRatio.map { min($0, 4) } ?? 0) / 4 * 10
+
+        // Evidence freshness: linear decay from the run's own evidence clock, 1 point per stale
+        // hour, floored at 0. This is about DATA age, not the technical bar date.
+        let freshnessHours = max(0, now.timeIntervalSince(receipt.evidenceAsOf) / 3600)
+        let evidenceFreshness = max(0, 10 - freshnessHours)
+
+        // Insider relevance: the first-class signal. Every transaction is scored individually so
+        // its exact, signed contribution is visible beside the rank; sales are never dropped and
+        // never scored as if they were purchases.
+        let signals = insiderSignals(for: candidate, now: now)
+        let insiderRelevance = signals.reduce(0) { $0 + $1.contribution }
+
+        // Counterevidence: each contrary confluence check is evidence AGAINST the setup, reused
+        // directly from Task 8 rather than re-derived. Always <= 0.
+        let contraryChecks = [receipt.confluence?.trendAlignment, receipt.confluence?.momentumDirection,
+            receipt.confluence?.volatilitySuitability, receipt.confluence?.liquidityConfirmation,
+            receipt.confluence?.resistanceDistance].filter { $0 == .contrary }.count
+        let counterevidence = Double(contraryChecks) * contraryConfluencePenaltyPerCheck
+
+        // Hard penalties: flat, named, and surfaced by reason string, distinct from the smooth
+        // components above. Stale/unverified capture and a contradictory technical basis are
+        // penalized heavily rather than merely scoring zero in one component.
+        var reasons: [String] = []
+        var hardPenalties = 0.0
+        if !receipt.criticalCaptureReady {
+            hardPenalties += staleCapturePenalty
+            reasons.append("Critical capture identity, currency, access or timing is unverified.")
+        }
+        if receipt.confluence?.verdict == .insufficient, receipt.confluence?.reasons.contains(where: {
+            $0.contains("reference close") || $0.contains("session") || $0.contains("symbol")
+        }) == true {
+            hardPenalties += contradictoryBasisPenalty
+            reasons.append("The technical snapshot's basis contradicts the qualification measurements.")
+        }
+        if receipt.candidateCatalysts.isEmpty {
+            hardPenalties += noCatalystPenalty
+            reasons.append("No dated catalyst record was offered at all.")
+        }
+
+        return (ScoreComponents(horizonFit: horizonFit, technicalConfluence: technicalConfluence,
+            catalystQuality: catalystQuality, liquidity: liquidity, evidenceFreshness: evidenceFreshness,
+            insiderRelevance: insiderRelevance, counterevidence: counterevidence, hardPenalties: hardPenalties),
+            signals, reasons)
+    }
+
+    /// Freshness-decayed, direction-signed, cluster-boosted. A purchase contributes positively,
+    /// a sale contributes negatively — this is a QUANTITATIVE SCORE WEIGHT, never a claim about
+    /// motive, and never described as momentum. Fully decayed (zero weight) past the decay window.
+    private nonisolated static func insiderSignals(for candidate: Candidate, now: Date) -> [InsiderSignal] {
+        typealias Transaction = StockSageMassiveEvents.InsiderTransaction
+        let base = 6.0
+        let transactions = candidate.insiderTransactions
+
+        /// A transaction is trustworthy only when its own dates are internally consistent AND
+        /// not in the future relative to this scoring pass. Decoded/cached data is not
+        /// re-validated by the network parser, so this scoring boundary is the last line of
+        /// defense: invalid raw evidence contributes nothing rather than being clamped to a
+        /// full-weight, age-zero score.
+        func isValid(_ transaction: Transaction) -> Bool {
+            transaction.transactionDate <= transaction.filingDate && transaction.transactionDate <= now
+        }
+
+        // Distinct owners, not transaction rows, trading the SAME direction within the window —
+        // "multiple insiders" means multiple people, not one person filing twice.
+        var distinctOwnersInWindow: [Transaction.Direction: Set<String>] = [:]
+        for transaction in transactions where isValid(transaction) {
+            let ageDays = now.timeIntervalSince(transaction.transactionDate) / 86_400
+            guard ageDays <= insiderClusterWindowDays else { continue }
+            distinctOwnersInWindow[transaction.direction, default: []].insert(transaction.ownerName)
+        }
+
+        // A Form 4/A amendment corrects the original filing; it is not a second, additional
+        // trade (StockSageMassiveEvents already documents this distinction at parse time).
+        // Group by the economic identity of the trade (owner, date, direction); when a group
+        // contains an amendment, only its LAST amendment scores — every other record in the
+        // group remains a visible, zero-contribution signal so the evidence is never hidden.
+        struct EconomicKey: Hashable { let owner: String; let date: Date; let direction: Transaction.Direction }
+        var groupIndices: [EconomicKey: [Int]] = [:]
+        for (index, transaction) in transactions.enumerated() {
+            let key = EconomicKey(owner: transaction.ownerName, date: transaction.transactionDate, direction: transaction.direction)
+            groupIndices[key, default: []].append(index)
+        }
+        var representativeIndex: [Int: Int] = [:]
+        for (_, indices) in groupIndices {
+            if let lastAmendment = indices.filter({ transactions[$0].amendment }).last {
+                for index in indices { representativeIndex[index] = lastAmendment }
+            } else {
+                for index in indices { representativeIndex[index] = index }
+            }
+        }
+
+        return transactions.enumerated().map { index, transaction in
+            let ageDays = max(0, now.timeIntervalSince(transaction.transactionDate) / 86_400)
+            guard isValid(transaction), representativeIndex[index] == index else {
+                // Invalid raw evidence, or superseded by another record's amendment: the
+                // transaction remains a visible signal, but contributes nothing to the score.
+                return InsiderSignal(direction: transaction.direction, ownerName: transaction.ownerName,
+                    ageDays: ageDays, contribution: 0)
+            }
+            let decay = max(0, 1 - ageDays / insiderDecayWindowDays)
+            let clustered = ageDays <= insiderClusterWindowDays
+                && (distinctOwnersInWindow[transaction.direction]?.count ?? 0) >= 2
+            let magnitude = base * decay * (clustered ? insiderClusterMultiplier : 1)
+            let signed = transaction.direction == .purchase ? magnitude : -magnitude
+            return InsiderSignal(direction: transaction.direction, ownerName: transaction.ownerName,
+                ageDays: ageDays, contribution: signed)
+        }
+    }
+
+    /// Greedily fills the five FINAL slots directly (not a reorder-then-truncate), so a skip
+    /// actually excludes a candidate from the top five rather than merely moving it later in a
+    /// list that gets truncated anyway. At most `maximumPerConcentrationKey` of the final five may
+    /// share one concentration key, UNLESS the concentrated candidate's lead over the best
+    /// available different-key alternative is at least `materialAdvantageMargin`, OR there are
+    /// not enough remaining candidates left to reach five without it (a "light" guard degrades
+    /// gracefully rather than shorting the required five). Never promotes a not-qualified
+    /// candidate ahead of a qualified one: `sorted`'s qualified-first partition is preserved
+    /// because a skipped candidate is only ever pushed past OTHERS STILL TO COME, never ahead.
+    /// `need` is the number of slots THIS call is trying to fill — 5 for the qualified group, or
+    /// whatever remains after it for the not-qualified fallback group. Running the guard
+    /// separately per qualification tier (see `rank(...)`) is what guarantees it can only ever
+    /// trade concentration diversity for MORE of the SAME tier, never against the other tier.
+    private nonisolated static func applyConcentrationGuard(
+        _ sorted: [(Candidate, ScoreComponents, [InsiderSignal], [String])], need: Int
+    ) -> ([(Candidate, ScoreComponents, [InsiderSignal], [String])], Bool) {
+        func key(_ candidate: Candidate) -> String? { candidate.sector ?? candidate.catalystIdentity }
+        var chosen: [(Candidate, ScoreComponents, [InsiderSignal], [String])] = []
+        var skipped: [(Candidate, ScoreComponents, [InsiderSignal], [String])] = []
+        var counts: [String: Int] = [:]
+        var applied = false
+        for (index, entry) in sorted.enumerated() {
+            guard chosen.count < need else { break }
+            guard let k = key(entry.0) else { chosen.append(entry); continue }
+            let count = counts[k, default: 0]
+            if count < maximumPerConcentrationKey {
+                counts[k] = count + 1
+                chosen.append(entry)
+                continue
+            }
+            // Over the cap for this key. Skipping is only affordable when enough OTHER
+            // candidates remain after this one to still reach `need` without it.
+            let remainingAfter = sorted.count - (index + 1)
+            let stillNeeded = need - chosen.count
+            if remainingAfter >= stillNeeded {
+                let alternative = sorted[(index + 1)...].first { key($0.0) != k }
+                if let alternative, entry.1.total - alternative.1.total < materialAdvantageMargin {
+                    skipped.append(entry)
+                    applied = true
+                    continue
+                }
+            }
+            counts[k] = count + 1
+            chosen.append(entry)
+        }
+        // Only reached if this group itself had fewer than `need` candidates overall; top up
+        // from whatever was skipped rather than coming back short.
+        for entry in skipped where chosen.count < need { chosen.append(entry) }
+        return (chosen, applied)
+    }
+}

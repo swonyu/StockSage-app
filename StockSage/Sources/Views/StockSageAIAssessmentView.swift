@@ -1,0 +1,200 @@
+import SwiftUI
+
+/// Same primary badge on Ideas, Catalysts and detail. Technical action remains explicit.
+struct StockSageAIBadge: View {
+    let idea: StockSageIdea
+    @ObservedObject var store: StockSageStore
+    @ObservedObject private var ai = StockSageAIAssessments.shared
+
+    var body: some View {
+        let record = ai.record(for: idea, store: store)
+        let action = record?.verdict.action ?? .avoid
+        VStack(alignment: .leading, spacing: 2) {
+            Text(ai.label(for: idea, store: store))
+                .font(.caption2.bold())
+                .foregroundStyle(MarketsView.actionTextColorForTest(action))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: true)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(MarketsView.actionColorForTest(action), in: Capsule())
+            Text("Rules: \(idea.advice.action.rawValue)").font(.caption2).foregroundStyle(.secondary)
+            if let record {
+                Text("Snapshot \(record.timeLabel)").font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ai.accessibility(for: idea, store: store))
+    }
+}
+
+/// Readable audit trail next to the immutable rules-derived plan, with an explicit retry.
+struct StockSageAIAssessmentPanel: View {
+    let idea: StockSageIdea
+    @ObservedObject var store: StockSageStore
+    @ObservedObject private var ai = StockSageAIAssessments.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RequestControls(hasRecord: ai.records[idea.symbol] != nil,
+                            hasDraft: ai.drafts[idea.symbol] != nil,
+                            activeSymbol: ai.activeSymbol, isSampleData: store.isSampleData) {
+                Task { await ai.assess(idea, store: store, force: true) }
+            }
+            Text("Unvalidated AI opinion; can misstate. Not a probability or permission to execute. Levels, sizing, rankings and trade controls below remain Rules-based.")
+                .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Assessing captures bounded Benzinga product evidence via Massive and existing news fallback when needed. EODHD is disabled. Missing and partial coverage stay explicit.")
+                .font(.caption).foregroundStyle(.secondary)
+            if ai.activeSymbol == idea.symbol {
+                ProgressView("Assessing the dated facts…")
+            } else if let error = ai.errors[idea.symbol] {
+                Text(error).font(.callout).foregroundStyle(DS.Palette.warningSoft)
+            }
+            Self.snapshots(draft: ai.drafts[idea.symbol], record: ai.records[idea.symbol],
+                           recordIsCurrent: ai.record(for: idea, store: store) != nil,
+                           isAssessing: ai.activeSymbol == idea.symbol)
+        }
+        .padding(12)
+        .background(DS.Bezel.cardFill, in: RoundedRectangle(cornerRadius: DS.Radius.card))
+    }
+
+    /// Render captured values without owning request or Store state.
+    @ViewBuilder static func snapshots(draft: StockSageAIAssessment.Draft?,
+                                       record: StockSageAIAssessment.Record?,
+                                       recordIsCurrent: Bool, isAssessing: Bool) -> some View {
+        if let draft {
+            let content = Group {
+                Text("Unverified AI draft — not a validated badge").font(.subheadline.bold())
+                    .foregroundStyle(DS.Palette.warningSoft)
+                Text(verbatim: draft.displayText).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Text("Model: \(draft.config.model) · snapshot \(draft.context.asOf.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if draft.context.omittedResearchLeads > 0 {
+                    Text("\(draft.context.omittedResearchLeads) optional WhatsApp leads omitted to fit the model context. Verified facts retained.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let captured = draft.context.benzinga {
+                    StockSageBenzingaEvidenceView(capturedSnapshot: captured)
+                }
+                DisclosureGroup("Original model response and supplied facts") {
+                    Text(verbatim: draft.text).textSelection(.enabled).font(.caption)
+                    ForEach(Array(draft.context.facts.enumerated()), id: \.offset) { index, fact in
+                        Text(verbatim: "F\(index + 1): \(fact)").font(.caption).textSelection(.enabled)
+                    }
+                    if let research = draft.context.research, !research.messages.isEmpty {
+                        Text(verbatim: research.prompt).font(.caption).textSelection(.enabled)
+                    }
+                }
+            }
+            #if os(macOS)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    content.fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #else
+            content
+            #endif
+        }
+        if let record {
+            let content = Group {
+                if !recordIsCurrent {
+                    Text("Previous assessment — stale or unavailable; not the current badge.")
+                        .font(.caption.bold()).foregroundStyle(DS.Palette.warningSoft)
+                }
+                Text("\(record.verdict.action.rawValue) · snapshot \(record.timeLabel)").font(.subheadline.bold())
+                Text(record.verdict.reason).fixedSize(horizontal: false, vertical: true)
+                Text("Counter-case: " + record.verdict.risk).fixedSize(horizontal: false, vertical: true)
+                Text("Model: " + record.config.model).font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Text("Cited facts: " + record.verdict.evidence.joined(separator: ", ")).font(.caption)
+                if record.context.omittedResearchLeads > 0 {
+                    Text("\(record.context.omittedResearchLeads) optional WhatsApp leads omitted to fit the model context. Verified facts retained.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                DisclosureGroup("Facts supplied to this assessment") {
+                    ForEach(Array(record.context.facts.enumerated()), id: \.offset) { index, fact in
+                        Text("F\(index + 1): \(fact)").font(.caption).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if let captured = record.context.benzinga {
+                    StockSageBenzingaEvidenceView(capturedSnapshot: captured)
+                }
+                if let news = record.context.news, !news.isEmpty {
+                    DisclosureGroup("News sources used for this snapshot") {
+                        CatalystsSection.sourceList(news.map { .init(news: $0) })
+                    }
+                }
+                if let research = record.context.research {
+                    DisclosureGroup("WhatsApp research leads · \(research.messages.count) · unverified export snapshot") {
+                        Text("Not live. Reimport newer exports to update the feed. Dates use \(research.timezone).")
+                            .font(.caption).foregroundStyle(DS.Palette.warningSoft)
+                        ForEach(research.messages, id: \.id) { message in
+                            Text(verbatim: "\(message.source) · \(message.date.ISO8601Format())\n\(message.text)")
+                                .font(.caption).textSelection(.enabled)
+                        }
+                    }
+                }
+                Text("The quote above is the original snapshot, not a refreshed execution price.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            #if os(macOS)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    content.fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #else
+            content
+            #endif
+        } else if !isAssessing {
+            Text("No accepted AI assessment yet. The badge will not fall back to a rules verdict.")
+                .font(.caption).foregroundStyle(.secondary)
+                #if os(macOS)
+                .fixedSize(horizontal: false, vertical: true)
+                #endif
+        }
+    }
+
+    struct RequestControls: View {
+        let hasRecord: Bool
+        let hasDraft: Bool
+        let activeSymbol: String?
+        let isSampleData: Bool
+        let request: () -> Void
+
+        var title: String { hasRecord || hasDraft ? "Reassess" : "Assess with AI" }
+        var disabledReason: String? {
+            var reasons: [String] = []
+            if isSampleData { reasons.append("Assessments are unavailable with sample data. Switch to market data to assess an idea.") }
+            if let activeSymbol { reasons.append("Assessment in progress for \(activeSymbol). Wait for it to finish before starting another assessment.") }
+            return reasons.isEmpty ? nil : reasons.joined(separator: " ")
+        }
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { headerContent }
+                    VStack(alignment: .leading, spacing: 8) { headerContent }
+                }
+                if let disabledReason {
+                    Text(disabledReason).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        @ViewBuilder private var headerContent: some View {
+            Text("AI assessment · next trading week").font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(title, action: request)
+                .disabled(activeSymbol != nil || isSampleData)
+                .touchHitArea()
+        }
+    }
+}
