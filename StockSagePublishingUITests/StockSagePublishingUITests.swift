@@ -84,6 +84,190 @@ final class StockSagePublishingUITests: XCTestCase {
     }
 
     @MainActor
+    func testStopRiskRequiresExplicitChoiceLarge() throws {
+        try explicitStopRisk("calculator-large", size: "large")
+    }
+
+    @MainActor
+    func testStopRiskRequiresExplicitChoiceAccessibility5() throws {
+        try explicitStopRisk("calculator-accessibility5", size: "accessibility5")
+    }
+
+    @MainActor
+    func testClearChatKeepsDraftAndWatchlistLarge() throws {
+        try clearChatKeepsOtherRecords("chat-clear-large", size: "large")
+    }
+
+    @MainActor
+    func testClearChatKeepsDraftAndWatchlistAccessibility5() throws {
+        try clearChatKeepsOtherRecords("chat-clear-accessibility5", size: "accessibility5")
+    }
+
+    @MainActor
+    private func explicitStopRisk(_ name: String, size: String) throws {
+        let app = try start(name)
+        defer { app.terminate() }
+        try unique(app.tabBars.buttons, "Library").tap()
+        try require(app.navigationBars["Library"].waitForExistence(timeout: 8), "Open the real Library")
+        let link = app.buttons["library.open.calculator"]
+        try revealPersonal(link, in: app)
+        try unique(app.buttons, "library.open.calculator").tap()
+        try require(app.navigationBars["Stop-risk calculator"].waitForExistence(timeout: 8), "Open the production stop-risk calculator")
+        let risk = try unique(app.textFields, "personalSizer.risk")
+        try revealPersonal(risk, in: app)
+        try require(fieldIsEmptyValue(risk), "Risk must be the user's explicit choice, with no prefilled percentage")
+        let result = app.descendants(matching: .any).matching(identifier: "personalSizer.result")
+        try require(!result.firstMatch.exists, "An untouched calculator must not present a position size")
+        actions.append("open-real-calculator-with-empty-risk")
+        try capture("risk-initially-empty", app: app)
+
+        try enterPersonal("USD", identifier: "denomination.currency", app: app)
+        try enterPersonal("10000", identifier: "personalSizer.account", app: app)
+        try enterPersonal("100", identifier: "personalSizer.entry", app: app)
+        try enterPersonal("90", identifier: "personalSizer.stop", app: app)
+        try require(fieldIsEmptyValue(risk) && !result.firstMatch.exists,
+                    "All other valid inputs must not supply or infer a risk percentage")
+        actions.append("valid-USD-major-inputs-with-risk-untouched-no-result")
+        try capture("risk-still-required", app: app)
+
+        try enterPersonal("1", identifier: "personalSizer.risk", app: app)
+        try require(result.firstMatch.waitForExistence(timeout: 5), "An explicit valid risk choice must enable the actual calculation")
+        for label in ["10 whole shares", "Planned stop risk: ≈$100", "Notional: ≈$1000",
+                      "Notional is 10.00% of the entered account."] {
+            let value = try unique(app.staticTexts, label)
+            try revealPersonal(value, in: app)
+            try require(fullyVisible(value, in: app), "Each calculated value must be readable at the requested text size")
+        }
+        actions.append("explicit-1-percent-10-shares-100-USD-risk-1000-USD-notional")
+        try capture("explicit-risk-calculation", app: app)
+
+        try revealPersonal(risk, in: app)
+        try require(risk.value as? String == "1", "Clear only the percentage entered during this journey")
+        risk.tap()
+        try require(app.keyboards.firstMatch.waitForExistence(timeout: 3), "Native editing requires the actual keyboard")
+        risk.typeText(XCUIKeyboardKey.delete.rawValue)
+        let done = try unique(app.buttons, "personalInput.done")
+        try require(fullyVisible(done, in: app), "The production Done action must remain reachable")
+        done.tap()
+        try require(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Done must dismiss the real keyboard after clearing")
+        try require(fieldIsEmptyValue(risk), "Deleting the explicit risk must leave it empty without restoring a default")
+        try require(result.firstMatch.waitForNonExistence(timeout: 3), "Clearing risk must remove the previous calculated result")
+        actions.append("clear-real-risk-field-and-remove-result")
+        try capture("risk-cleared-no-result", app: app)
+        try finish(size, app: app)
+    }
+
+    @MainActor
+    private func chatQuestionField(in app: XCUIApplication) throws -> XCUIElement {
+        let field = try unique(app.descendants(matching: .any), "Question or watchlist command")
+        try require([XCUIElement.ElementType.textField, .textView].contains(field.elementType),
+                    "Use the production editable Chat field, never a fixture status label")
+        return field
+    }
+
+    @MainActor
+    private func enterChatDraft(_ text: String, in app: XCUIApplication) throws {
+        let field = try chatQuestionField(in: app)
+        try revealPersonal(field, in: app)
+        try require(fieldIsEmptyValue(field), "The isolated Chat input must be empty before entering this draft")
+        field.tap()
+        try require(app.keyboards.firstMatch.waitForExistence(timeout: 3), "Chat entry requires the real keyboard")
+        field.typeText(text)
+        let done = try unique(app.buttons, "Dismiss keyboard")
+        try require(fullyVisible(done, in: app), "Chat's production keyboard dismissal must remain reachable")
+        done.tap()
+        try require(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Chat Done must dismiss the native keyboard")
+        try require(field.value as? String == text, "Chat must retain the exact text entered through its real field")
+    }
+
+    @MainActor
+    private func openClearChatDialog(in app: XCUIApplication) throws {
+        let options = app.buttons["Chat options"]
+        try revealPersonal(options, in: app)
+        try unique(app.buttons, "Chat options").tap()
+        let clear = try unique(app.buttons, "Clear history")
+        try require(clear.isEnabled && fullyVisible(clear, in: app), "Clear history must be a reachable real menu action")
+        clear.tap()
+        let messages = app.staticTexts.matching(NSPredicate(format: "label == %@",
+            "Deletes submitted Chat turns and their captured facts from this app. Your unsent draft and other records remain. Screenshots and copies outside the app are unaffected."))
+        try require(messages.firstMatch.waitForExistence(timeout: 8), "The actual complete deletion explanation must exist")
+        try require(messages.count == 1, "The complete deletion explanation must be unique")
+        let message = messages.element(boundBy: 0)
+        try require(fullyVisible(message, in: app), "The complete truthful iOS deletion explanation must be readable")
+        for title in ["Cancel", "Delete history"] {
+            let choice = try unique(app.buttons, title)
+            try require(choice.isEnabled && fullyVisible(choice, in: app), "Both native deletion choices must be visible and reachable")
+        }
+    }
+
+    @MainActor
+    private func requireAAPLWatchlist(in app: XCUIApplication) throws {
+        try unique(app.tabBars.buttons, "Watchlist").tap()
+        try require(app.navigationBars["Watchlist"].waitForExistence(timeout: 8), "Return to the real independent watchlist")
+        let record = app.buttons["personalPrice.record.AAPL"]
+        try revealPersonal(record, in: app)
+        let uniqueRecord = try unique(app.buttons, "personalPrice.record.AAPL")
+        try require(fullyVisible(uniqueRecord, in: app),
+                    "The locally added AAPL record must remain available independently of Chat history")
+        try require(!app.staticTexts["personalPrice.error"].exists, "The watchlist must not report a storage error")
+    }
+
+    @MainActor
+    private func clearChatKeepsOtherRecords(_ name: String, size: String) throws {
+        let app = try start(name)
+        defer { app.terminate() }
+        let command = "add AAPL to my watchlist"
+        let draft = "Draft retained - test only"
+        try unique(app.tabBars.buttons, "Chat").tap()
+        try require(app.navigationBars["Chat"].waitForExistence(timeout: 8), "Open the real Chat page")
+        try enterChatDraft(command, in: app)
+        let add = app.buttons["Add to watchlist"]
+        try revealPersonal(add, in: app)
+        let localAction = try unique(app.buttons, "Add to watchlist")
+        try require(localAction.isEnabled && fullyVisible(localAction, in: app), "The recognized local-only command must be available without a model")
+        localAction.tap()
+        let reply = try unique(app.staticTexts, "Added AAPL to your watchlist.")
+        try revealPersonal(reply, in: app)
+        try require(fullyVisible(reply, in: app), "The actual local watchlist action must finish before deletion is tested")
+        let submittedField = try chatQuestionField(in: app)
+        try require(fieldIsEmptyValue(submittedField), "Only successful submission clears the original command draft")
+        actions.append("submit-real-local-AAPL-watchlist-command")
+        try capture("completed-local-command", app: app)
+        try enterChatDraft(draft, in: app)
+        try openClearChatDialog(in: app)
+        actions.append("read-complete-phone-clear-confirmation-and-both-choices")
+        try capture("clear-confirmation", app: app)
+        try unique(app.buttons, "Cancel").tap()
+        try require(app.buttons["Delete history"].waitForNonExistence(timeout: 3), "Cancel must dismiss the destructive confirmation")
+        try require(app.staticTexts[command].exists && reply.exists, "Cancel must retain the submitted turn and completed local reply")
+        let cancelledField = try chatQuestionField(in: app)
+        try require(cancelledField.value as? String == draft, "Cancel must retain the exact unsent draft")
+        actions.append("cancel-keeps-submitted-turn-and-unsent-draft")
+        try requireAAPLWatchlist(in: app)
+        actions.append("cancel-keeps-independent-AAPL-record")
+        try capture("cancel-keeps-watchlist", app: app)
+        try unique(app.tabBars.buttons, "Chat").tap()
+        let restoredField = try chatQuestionField(in: app)
+        try require(restoredField.value as? String == draft, "Tab navigation must retain the unsent draft")
+        try openClearChatDialog(in: app)
+        try unique(app.buttons, "Delete history").tap()
+        try require(app.buttons["Delete history"].waitForNonExistence(timeout: 3), "Delete must dismiss its confirmation")
+        try require(app.staticTexts[command].waitForNonExistence(timeout: 3) && !reply.exists,
+                    "Deleting Chat history must remove its submitted question and reply")
+        try require(!app.buttons["chat.reviewIssues"].exists && !app.staticTexts["chat.warning.0"].exists,
+                    "Successful deletion must not hide an input or saving error")
+        let retained = try chatQuestionField(in: app)
+        try revealPersonal(retained, in: app)
+        try require(retained.value as? String == draft, "Deletion must preserve the exact unsent draft promised by the dialog")
+        actions.append("delete-removes-submitted-turn-keeps-exact-unsent-draft-no-error")
+        try capture("deleted-history-retained-draft", app: app)
+        try requireAAPLWatchlist(in: app)
+        actions.append("delete-keeps-independent-AAPL-record")
+        try capture("deleted-history-kept-watchlist", app: app)
+        try finish(size, app: app)
+    }
+
+    @MainActor
     private func personalRecords(_ name: String, size: String) throws {
         let app = try start(name)
         defer { app.terminate() }
@@ -202,7 +386,8 @@ final class StockSagePublishingUITests: XCTestCase {
         let app = XCUIApplication(bundleIdentifier: bundleID)
         app.launchArguments = ["-set_offlineOnly", "YES", "-set_webAccess", "NO",
                                "--publishing-case", name, "--publishing-run-id", runID]
-        if name.hasPrefix("navigation-") || name.hasPrefix("personal-records-") { app.launchArguments.append("--qa") }
+        if name.hasPrefix("navigation-") || name.hasPrefix("personal-records-")
+            || name.hasPrefix("calculator-") || name.hasPrefix("chat-clear-") { app.launchArguments.append("--qa") }
         app.launchEnvironment = [:]
         var ready = false
         defer { if !ready { app.terminate() } }

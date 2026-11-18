@@ -67,7 +67,13 @@ struct StockSageChatSection: View {
             .onDisappear { cancel() }
             .confirmationDialog("Delete local Chat history?", isPresented: $confirmClear) {
                 Button("Delete history", role: .destructive) { chat.clear() }
-            } message: { Text("Deletes this conversation, including unsaved turns and source snapshots. It cannot erase screenshots or server logs.") }
+            } message: {
+                #if os(iOS)
+                Text("Deletes submitted Chat turns and their captured facts from this app. Your unsent draft and other records remain. Screenshots and copies outside the app are unaffected.")
+                #else
+                Text("Deletes this conversation, including unsaved turns and source snapshots. It cannot erase screenshots or server logs.")
+                #endif
+            }
     }
 
     private var contentPadding: CGFloat {

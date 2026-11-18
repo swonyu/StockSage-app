@@ -443,8 +443,19 @@ enum StockSageCatalystNarrator {
     /// `#if DEBUG` print at the call site above, never in what a viewer reads.
     nonisolated static func humanOnDeviceError(_ error: Error) -> String {
         if error is CancellationError { return "The explanation request was cancelled." }
-        return (error as? StockSageOnDeviceFailure)?.message
-            ?? "The on-device explanation did not complete. Your captured app facts remain available."
+        if let failure = error as? StockSageOnDeviceFailure { return failure.message }
+        // Raw SDK errors may reach this explanation boundary too. Normalize
+        // their category without exposing private diagnostic context.
+        switch StockSageSystemModelGenerator.failure(error) {
+        case .contextLimit:
+            return "The on-device explanation exceeds its context limit. Ask for a smaller set of captured facts."
+        case .refused:
+            return "Apple Intelligence declined this explanation under a content guardrail or refusal. Your captured app facts remain available."
+        case .failed:
+            return "The on-device explanation did not complete. Your captured app facts remain available."
+        case let failure:
+            return failure.message
+        }
     }
 
     /// The local-server counterpart of `explainOnDevice(_:)`: same facts/prompt/number-fence

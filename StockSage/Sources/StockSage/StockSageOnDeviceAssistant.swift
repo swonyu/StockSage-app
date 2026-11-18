@@ -312,9 +312,12 @@ final class StockSageSystemModelGenerator: StockSageOnDeviceGenerating {
         #endif
     }
 
-    static func failure(_ error: Error) -> StockSageOnDeviceFailure {
+    nonisolated static func failure(_ error: Error) -> StockSageOnDeviceFailure {
         if let failure = error as? StockSageOnDeviceFailure { return failure }
         #if canImport(FoundationModels)
+        // Modern error symbols require the bundled Xcode 27 SDK, not only a
+        // runtime availability check on a binary compiled with Xcode 26.
+        #if compiler(>=6.4)
         if #available(iOS 27.0, macOS 27.0, *) {
             if let modelError = error as? LanguageModelError {
                 switch modelError {
@@ -335,14 +338,20 @@ final class StockSageSystemModelGenerator: StockSageOnDeviceGenerating {
         } else {
             return legacyFailure(error)
         }
+        #else
+        // Xcode 26-linked binaries keep the legacy error contract on newer OSes.
+        return legacyFailure(error)
+        #endif
         #endif
         return .failed
     }
 
     #if canImport(FoundationModels)
+    #if compiler(>=6.4)
     @available(iOS, introduced: 26.0, obsoleted: 27.0)
     @available(macOS, introduced: 26.0, obsoleted: 27.0)
-    private static func legacyFailure(_ error: Error) -> StockSageOnDeviceFailure {
+    #endif
+    nonisolated private static func legacyFailure(_ error: Error) -> StockSageOnDeviceFailure {
         guard let modelError = error as? LanguageModelSession.GenerationError else { return .failed }
         switch modelError {
         case .assetsUnavailable: return .unavailable("Apple Intelligence is not ready on this device.")

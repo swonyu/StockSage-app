@@ -26,7 +26,11 @@ private struct PublishingCase {
         "navigation-restore-legacy": .init(name: "navigation-restore-legacy", route: "navigation", textSize: .large, textName: "large", category: .large),
         "navigation-restore-chat": .init(name: "navigation-restore-chat", route: "navigation", textSize: .large, textName: "large", category: .large),
         "personal-records-large": .init(name: "personal-records-large", route: "personal", textSize: .large, textName: "large", category: .large),
-        "personal-records-accessibility3": .init(name: "personal-records-accessibility3", route: "personal", textSize: .accessibility3, textName: "accessibility3", category: .accessibilityExtraLarge)
+        "personal-records-accessibility3": .init(name: "personal-records-accessibility3", route: "personal", textSize: .accessibility3, textName: "accessibility3", category: .accessibilityExtraLarge),
+        "calculator-large": .init(name: "calculator-large", route: "calculator", textSize: .large, textName: "large", category: .large),
+        "calculator-accessibility5": .init(name: "calculator-accessibility5", route: "calculator", textSize: .accessibility5, textName: "accessibility5", category: .accessibilityExtraExtraExtraLarge),
+        "chat-clear-large": .init(name: "chat-clear-large", route: "chat-clear", textSize: .large, textName: "large", category: .large),
+        "chat-clear-accessibility5": .init(name: "chat-clear-accessibility5", route: "chat-clear", textSize: .accessibility5, textName: "accessibility5", category: .accessibilityExtraExtraExtraLarge)
     ]
 }
 
@@ -81,7 +85,8 @@ private final class PublishingContext: ObservableObject {
         let localPortfolio = StockSagePortfolio(userDefaults: localDefaults)
         let localJournal = StockSageJournalStore(defaults: localDefaults)
         let symbols: [String]
-        if value.route == "browse" || value.route == "navigation" || value.route == "personal" {
+        if value.route == "browse" || value.route == "navigation" || value.route == "personal"
+            || value.route == "calculator" || value.route == "chat-clear" {
             let candidate = StockSageStore(defaults: localDefaults,
                 heldSymbols: { localPortfolio.positions.map(\.symbol) }, journalTrades: { localJournal.trades })
             precondition(candidate.watchlistPersistenceError == nil && candidate.addSymbolError == nil,
@@ -230,7 +235,8 @@ private struct PublishingRoot: View {
     @ObservedObject var context: PublishingContext
     var body: some View {
         Group {
-            if context.fixture.route == "navigation" || context.fixture.route == "personal" {
+            if context.fixture.route == "navigation" || context.fixture.route == "personal"
+                || context.fixture.route == "calculator" || context.fixture.route == "chat-clear" {
                 MarketsView(chatSession: context.chat, store: context.store!,
                     portfolio: context.portfolio, journal: context.journal)
                     .defaultAppStorage(context.defaults)

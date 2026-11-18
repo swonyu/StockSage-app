@@ -2,7 +2,7 @@ import SwiftUI
 
 struct StockSagePersonalSizerView: View {
     @State private var account = ""
-    @State private var risk = "1"
+    @State private var risk = ""
     @State private var entry = ""
     @State private var stop = ""
     @State private var currency = ""
